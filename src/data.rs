@@ -2489,7 +2489,7 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
 }
 
 ///
-/// Used by `element_offsets` to pad tuple-element offsets so each
+/// Used by `element_stack_offsets` to pad tuple-element offsets so each
 /// element lands on its natural-alignment boundary — a tuple
 /// `(byte, integer)` has `_0` at offset 0 and `_1` at offset 8 (not 1).
 /// Mirrors the alignment table in `LinkedFieldGroup::group_alignment`'s
@@ -2535,7 +2535,7 @@ fn element_offsets_alignment_max(types: &[Type]) -> u8 {
 /// For tuples this returns the **atomic group size** —
 /// alignment-padded so each element lands on its natural-alignment
 /// boundary.  Matches `LinkedFieldGroup::group_size`'s packing so
-/// the runtime read path (`element_offsets`) and the storage layout
+/// the runtime read path (`element_stack_offsets`) and the storage layout
 /// (`calculate_positions_with_groups`) agree on every byte offset.
 #[must_use]
 pub fn element_stack_size(t: &Type) -> usize {
@@ -2639,10 +2639,15 @@ pub fn element_storage_offsets(types: &[Type]) -> Vec<usize> {
 /// returns `[0, 8]` (not `[0, 1]`) — `_1` (integer, align 8) needs
 /// an 8-byte boundary, so 7 bytes of padding follow `_0`.
 ///
-/// This matches `LinkedFieldGroup::group_member_offsets` exactly,
-/// so storage layout (synthetic `__tuple<…>` struct via
-/// `calculate_positions_with_groups`) and runtime reads (via
-/// codegen / `read_tuple_at_wide`) compute the same offsets.
+/// Enforces the STACK half of @FR-L-Tuple.  A tuple has two layout views and the rule
+/// requires them to compute the SAME offsets: this one, and the STORAGE view (the
+/// synthetic `__tuple<…>` struct via `calculate_positions_with_groups`, read back by
+/// [`stored_tuple_offsets`]).  This function matches
+/// `LinkedFieldGroup::group_member_offsets` exactly, which is what makes them agree.
+///
+/// ⚠ Picking the wrong view does not fail — it returns a plausible offset from the other
+/// model.  @PLN114 split the one ambiguous `element_offsets` into these two named
+/// functions so a call site has to say which it means.
 #[must_use]
 pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(types.len());
@@ -2658,6 +2663,9 @@ pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
 /// Resolve per-element byte offsets for a STORED tuple via the synthetic
 /// `__tuple<…>` struct's post-finish field positions.
 ///
+/// Enforces the STORAGE half of @FR-L-Tuple — the twin of [`element_stack_offsets`],
+/// which the rule requires to agree with it byte for byte.
+///
 /// Returns `Some(offsets)` when:
 /// - `tuple_def` has registered the synthetic struct, AND
 /// - `Stores::finish_type` has assigned `position` to every field
@@ -2665,12 +2673,12 @@ pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
 ///
 /// Returns `None` in any other situation (struct not yet registered,
 /// not yet finished, or wrong arity) so callers can fall back to
-/// `element_offsets` for early-parse paths.
+/// `element_stack_offsets` for early-parse paths.
 ///
 /// **Why this exists**: storage reads / writes for tuple elements MUST
 /// use the same field offsets that ordinary struct fields use via
 /// `OpGetInt` / `OpSetInt`.  Routing through the synthetic struct's
-/// finished layout (rather than recomputing via `element_offsets`)
+/// finished layout (rather than recomputing via `element_stack_offsets`)
 /// means any divergence between the two paths is detected immediately
 /// — and keeps a single source of truth for stored-tuple field
 /// offsets.
@@ -2816,7 +2824,7 @@ mod renumber_frame_deps_tests {
 #[cfg(test)]
 mod tuple_stack_layout_tests {
     //! Stack-level tuple layout tests.  `element_size` and
-    //! `element_offsets` operate at stack widths — every
+    //! `element_stack_offsets` operate at stack widths — every
     //! `Type::Integer` reports 8 bytes regardless of `forced_size`,
     //! `Type::Text` reports `size_of::<Str>()` (16 bytes), etc.
     //! Used by codegen for STACK tuples (`Value::TupleGet` on

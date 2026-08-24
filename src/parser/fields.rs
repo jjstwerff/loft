@@ -1806,7 +1806,7 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // Stored tuples MUST use the synthetic `__tuple<…>` struct's
         // post-finish field positions (the same offsets used by
         // `OpGetInt` for ordinary struct fields).  Falls back to the
-        // alignment-aware `element_offsets` only on early-parse paths
+        // alignment-aware `element_stack_offsets` only on early-parse paths
         // before `finish_type` has run.
         let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
             &self.data,

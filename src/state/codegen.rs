@@ -30,7 +30,7 @@ use std::collections::HashSet;
 /// position so stored-tuple reads use the SAME field offset that
 /// `OpSetInt` / `OpGetInt` would use for an ordinary struct field.
 ///
-/// Falls back to the alignment-aware `data::element_offsets`
+/// Falls back to the alignment-aware `data::element_stack_offsets`
 /// calculation when the synthetic struct hasn't been registered
 /// yet (e.g. very early parse stages before `tuple_def` runs).
 /// In practice the caller path always reaches this AFTER
@@ -40,7 +40,7 @@ fn stored_tuple_field_offset(data: &Data, database: &Stores, elems: &[Type], idx
         return offsets[idx];
     }
     // Defensive fallback: stack-width offsets (atomic-aware after the
-    // 2026-04-28 element_offsets update).  Reaches this branch only
+    // 2026-04-28 element_stack_offsets update).  Reaches this branch only
     // when the synthetic struct hasn't been registered or finish()
     // hasn't run — rare paths during early parse / partial state.
     crate::data::element_stack_offsets(elems)[idx] as u16
@@ -535,7 +535,7 @@ impl State {
                 // T1.4: generate each element onto contiguous stack slots.
                 let mut types = Vec::new();
                 // @PLN114 — "contiguous" here means the PACKED layout every reader
-                // uses (`element_offsets`: a `DbRef` element occupies 12B), but each
+                // uses (`element_stack_offsets`: a `DbRef` element occupies 12B), but each
                 // element is pushed by an op whose own stack step is 8-rounded (16B
                 // for a `DbRef`).  Nothing reconciles the two, so a tuple built here
                 // and read by a callee silently disagrees about where element i is:
@@ -562,7 +562,7 @@ impl State {
                             usize::from(*got),
                             want[i],
                             "@PLN114 [{caller}]: tuple element {i} lands at +{got}B but \
-                             every reader expects +{expect}B (element_offsets for \
+                             every reader expects +{expect}B (element_stack_offsets for \
                              {types:?}) — the element push advances by the 8-rounded \
                              stack step while the layout is packed",
                             caller = stack.data.def(stack.def_nr).name(),
@@ -673,7 +673,7 @@ impl State {
                     let elem_tp = elems[idx].clone();
                     // Look up the synthetic struct's field position via
                     // the LinkedFieldGroup, falling back to the legacy
-                    // `element_offsets` calculation for shapes whose
+                    // `element_stack_offsets` calculation for shapes whose
                     // synthetic struct hasn't been registered (defensive —
                     // tuple_def is normally called eagerly during parse).
                     let elem_offset = ref_tuple_field_offset(elems, idx);

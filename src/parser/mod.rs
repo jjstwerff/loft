@@ -8606,7 +8606,7 @@ impl Parser {
             }
             Type::Tuple(elems) => {
                 // Plan-06 phase 4d: tuple struct field read.  Each
-                // element is read from `pos + element_offsets[i]`
+                // element is read from `pos + element_stack_offsets[i]`
                 // using the same OpGet* opcodes that ordinary struct
                 // fields use; the assembled stack tuple matches the
                 // shape `Type::Tuple(...)` consumers expect.

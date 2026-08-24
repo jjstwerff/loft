@@ -6523,7 +6523,7 @@ impl State {
         // A byte-by-byte `put_stack::<u8>` advanced stack_pos by stack_step(1) = 8
         // PER BYTE under LOFT_ALIGN, smearing the packed tuple buffer (p.0@0, p.1@8)
         // across 16 separate 8-byte slots; the worker body then reads tuple fields at
-        // the raw `element_offsets` [0, 8] into that smeared layout → padding zeros →
+        // the raw `element_stack_offsets` [0, 8] into that smeared layout → padding zeros →
         // every worker returned 0 (sum collected as 0).  A block copy keeps the buffer
         // byte-identical to `read_tuple_at_wide`'s raw layout the worker reads.
         // Identity when off (step(1) == 1, so the old byte loop was already contiguous).

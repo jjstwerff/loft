@@ -243,11 +243,40 @@ misattached doc had been there for as long as `classify_vec_bind` has existed, i
 to every lint because both functions had *something* above them. Following the citations
 one by one is what surfaced it.
 
-**Open:** the wider surface is not swept, by design (`doc-quality` says not to sweep a
-file during unrelated work). The route stays the one the owner named — a cited site should
-read *"this enforces `@FR-X`, here is how"*, and `scripts/rule_tags.py sites <tag>`
-enumerates them. **13 of 285 rules are cited, so tag adoption is the rate limiter**, not
-the rewriting: the next tranche of sweepable sites only exists once more rules are cited.
+#### B4b — cite, then sweep: the loop run twice (2026-08-24)
+
+**13 → 21 rules cited, 24 → 38 citation sites.** Two tranches: `layout.md` (L-Struct,
+L-Enum, L-Total, L-Tuple, L-Sound) and `coroutines.md` (G-Return, G-Call, G-Done).
+
+**Citing is a stronger instrument than sweeping.** Writing *"this enforces `@FR-X`"*
+forces you to name the rule and then check that the code in front of you is what the rule
+says — and that check is what fails. The layout tranche alone turned up:
+
+| found | what it was |
+|---|---|
+| **`L-Tuple` named a function that no longer exists** | The rule said element offsets are `element_offsets`. @PLN114 had split that into `element_stack_offsets` (stack view) and the storage view *specifically so a site must declare which it means* — and the rule still named the ambiguous one it abolished. The rule now names BOTH and states that their agreement is part of the rule. |
+| **13 stale `element_offsets` references in comments** | Same rename, never followed through. |
+| **1 stale reference in a runtime diagnostic** | `@PLN114 [{caller}]: … (element_offsets for {types:?})` — a `debug_assert!` message pointing an engineer at a function that does not exist. |
+| **`calc.rs` named the wrong caller** | *"Called by `typedef.rs` during type resolution."* Its only caller is `Stores::finish_type`. |
+| **`typedef.rs` claimed a call it does not make** | Its header said `actual_types` "compute[s] field positions via `calc::calculate_positions`". It does not — positions are assigned later by `Stores::finish`. Its own inline comments said so, contradicting its header. |
+
+The stale rule is the one that matters: **a formal rule naming a renamed function is worse
+than an uncited one**, because it reads as authoritative and sends the reader to a symbol
+that is not there. Nothing but citing it would have compared the two.
+
+**And a general lesson about the direction of the doctrine.** `formal/`'s rule is *"the
+rules do not change to match the code; the code changes to match the rules."* That governs
+SEMANTICS. It does not license a rule to keep a stale implementation NAME — updating the
+name (and, here, splitting one view into the two the code now distinguishes) makes the rule
+say what it always meant. Reading it as "never touch the rule" would have preserved the
+error.
+
+**Open:** the wider surface is still not swept, by design (`doc-quality` says not to sweep
+a file during unrelated work). **21 of 285 rules are cited, so tag adoption remains the
+rate limiter** — each tranche of citations creates the next tranche of sweepable sites.
+`scripts/rule_tags.py list` shows which rules have no citation yet; the families with the
+clearest enforcement sites are the small ones (`concurrency.md` 4, `interfaces.md` 6,
+`grammar.md` 9, `capabilities.md` 9).
 
 #### C — process / skills
 

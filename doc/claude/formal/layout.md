@@ -116,13 +116,23 @@ change even though the field pointer is unchanged.
               position; size(τ) is the packed total.  A field access is H[r ⊕ off(τ, f)].
   (L-Enum)    an enum is a 1-byte discriminant; a data-carrying variant (EnumValue) is
               [tag byte] followed by the variant's fields (L-Struct packing).
-  (L-Tuple)   a tuple (τ₀,…,τₙ) is a synthetic __tuple<…> struct; element offsets are element_offsets
-              (natural-alignment packing) — off = the next position ≥ the element's alignment.
+  (L-Tuple)   a tuple (τ₀,…,τₙ) is a synthetic __tuple<…> struct.  Element offsets are
+              natural-alignment packing — off = the next position ≥ the element's alignment —
+              and a tuple has TWO layout views that must compute the SAME offsets: the STACK
+              view (data::element_stack_offsets / element_stack_size) and the STORAGE view
+              (the synthetic struct, calc::calculate_positions_with_groups, read back by
+              data::stored_tuple_offsets).  Their agreement is part of the rule, not an
+              implementation detail.
 ```
 
 **In words.** Fields are packed largest-alignment first, so the record has no wasted padding and
 every field lands on its natural boundary. Enums carry a 1-byte tag; a variant with data is that
 tag plus the variant's own fields. A tuple is stored as a hidden struct, packed the same way.
+
+⚠ A tuple lives in two places — on the stack and in a record — and the two are computed by
+different code. That is why `L-Tuple` names both and requires them to agree: @PLN114 split the
+one ambiguous `element_offsets` into the two named views precisely so a site has to declare which
+it means, and a site that picks the wrong one reads a plausible offset from the wrong model.
 
 ### Nullability is a sentinel, not a layout
 
