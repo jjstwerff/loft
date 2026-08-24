@@ -3685,18 +3685,14 @@ impl Parser {
     /// One home, because the answer is shared by the `??` null check, the `if` / `while`
     /// / `assert` condition, and the `!x` null test — three places that must agree about
     /// which values `rec` speaks for.
+    ///
+    /// The list itself now lives in [`crate::data::is_dbref`], which asks the layout rather
+    /// than restating the variants; this keeps the name and the `.base()` peel the null-check
+    /// callers rely on.  Two homes for one predicate is what this collapses: `is_dbref` was
+    /// added on 2026-08-24 without checking whether the FULL list already had a home — the
+    /// search was made for the SHORT one and stopped there.
     pub(crate) fn is_heap_handle(tp: &Type) -> bool {
-        matches!(
-            tp.base(),
-            Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-                | Type::Enum(_, true, _)
-        )
+        crate::data::is_dbref(tp.base())
     }
 
     /// Bring a CONDITION to `boolean` — the `if` / `while` position, where LOFT.md

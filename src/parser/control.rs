@@ -1489,17 +1489,7 @@ impl Parser {
             // `return if cond { ... } else { ... }` correctly.
             let if_unified = !self.first_pass
                 && context == "return from block"
-                && matches!(
-                    result,
-                    Type::Reference(_, _)
-                        | Type::Vector(_, _)
-                        | Type::Enum(_, true, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+                && crate::data::is_dbref(result)
                 && matches!(l[last].unspan(), Value::If(_, _, _))
                 && self.unify_if_branches_work_refs(&mut l[last]).is_some();
             if if_unified {

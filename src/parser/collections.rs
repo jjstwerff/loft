@@ -3765,17 +3765,7 @@ use #count instead"
     pub(crate) fn par_return_size(&mut self, ret_type: &Type, fn_d_nr: u32) -> i32 {
         if matches!(ret_type, Type::Text(_)) {
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
-        } else if matches!(
-            ret_type,
-            Type::Reference(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        } else if crate::data::is_dbref(ret_type) {
             // Reference mode — workers return a DbRef into their own
             // store; main deep-copies via copy_from_worker.  Plan-06
             // phase 1 G1: struct-enum returns (Enum variants with
@@ -4021,17 +4011,8 @@ use #count instead"
         // allocator (8d.3 in `run_parallel_queue_ref`) ensures
         // worker-written DbRefs already live in parent namespace
         // so cross-worker collision is eliminated.
-        let early_route_ref_queue = matches!(
-            ret_type,
-            Type::Reference(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) && fn_d_nr != u32::MAX
+        let early_route_ref_queue = crate::data::is_dbref(ret_type)
+            && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
             && buf_drop_ref_d_nr != u32::MAX;
@@ -4408,17 +4389,8 @@ use #count instead"
         // Late-gate matches early-gate (see comment above).
         // ARC.md A6.d: keyed-collection returns share the ref path
         // (DbRef to backing record + type-driven rebase walk).
-        let route_ref_queue = matches!(
-            ret_type,
-            Type::Reference(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) && fn_d_nr != u32::MAX
+        let route_ref_queue = crate::data::is_dbref(ret_type)
+            && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
             && buf_drop_ref_d_nr != u32::MAX;

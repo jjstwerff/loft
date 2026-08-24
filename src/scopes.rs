@@ -5562,18 +5562,7 @@ impl Scopes {
         // freed, and short-circuiting the whole iteration on `return_sources`
         // would leak it (the enum-vector param-return `show()` regression).
         let suppress_source = |function: &Function, v: u16| {
-            return_sources.contains(&v)
-                && matches!(
-                    function.tp(v),
-                    Type::Reference(_, _)
-                        | Type::Vector(_, _)
-                        | Type::Enum(_, true, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+            return_sources.contains(&v) && crate::data::is_dbref(function.tp(v))
         };
         for v in vars {
             if v == ret_var || suppress_source(function, v) {

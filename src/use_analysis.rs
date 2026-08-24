@@ -2323,17 +2323,7 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
 /// that is here without carrying a store would be worse: the set would read complete while
 /// protecting nothing, which is the loft#981 use-after-free.
 fn is_protectable_store_type(tp: &Type) -> bool {
-    matches!(
-        tp,
-        Type::Reference(_, _)
-            | Type::Vector(_, _)
-            | Type::Enum(_, true, _)
-            | Type::Hash(_, _, _)
-            | Type::Sorted(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-    )
+    crate::data::is_dbref(tp)
 }
 
 /// loft#1029 — the variable slots whose STORES an argument's value can lie in, or

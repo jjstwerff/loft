@@ -4323,6 +4323,10 @@ pub fn ref_tuple_element_ok(tp: &Type) -> bool {
 /// same generator over a `vector` was fine.
 ///
 /// Enforces @FR-Col-Store (the store-backed set) and @FR-L-Scalar's complement.
+///
+/// `Parser::is_heap_handle` is the same question with a `.base()` peel and delegates here;
+/// it predates this function, which was added without checking whether the FULL list already
+/// had a home — the search was made for the SHORT one and stopped there.
 #[must_use]
 pub fn is_dbref(tp: &Type) -> bool {
     matches!(

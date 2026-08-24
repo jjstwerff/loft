@@ -3763,30 +3763,11 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
             .attributes
             .iter()
             .any(|a| matches!(a.typedef, Type::Text(_)));
-        let has_ref_param = def.attributes.iter().any(|a| {
-            matches!(
-                a.typedef,
-                Type::Reference(_, _)
-                    | Type::Vector(_, _)
-                    | Type::Enum(_, true, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
-        });
-        let has_ref_ret = matches!(
-            def.returned,
-            Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        );
+        let has_ref_param = def
+            .attributes
+            .iter()
+            .any(|a| crate::data::is_dbref(&a.typedef));
+        let has_ref_ret = crate::data::is_dbref(&def.returned);
 
         // If any param or return is a Ref, prepend LoftStore as first C-ABI param.
         if has_ref_param || has_ref_ret {

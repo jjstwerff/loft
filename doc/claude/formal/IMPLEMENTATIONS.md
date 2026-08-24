@@ -90,7 +90,7 @@ Status: ☐ to assess · ⚠ drift found · ✅ merged · ⛔ deliberately separ
 | 2 | **is this carried as a DbRef** (`Reference\|Vector\|Enum(_,true,_)`) | `@FR-Col-Store` — home is `data::is_dbref` | 43 → **3 fixed**, 40 to read | ⚠ **the short list is a BUG source** — see § The DbRef set below. Home exists now; the remaining 41 each need reading, since some may legitimately want only three |
 | 3 | **is this a KEYED collection** (`Hash\|Index\|Radix\|Sorted\|Trie`) | `@FR-Col-Hash` · `-Sorted` · `-Index` · `-Spatial` · `-Trie` | 16 → **1** | ✅ **merged onto `vectors::is_keyed`** — see § The keyed collections below |
 | 4 | **is this a collection** (keyed `+ Vector`) | `@FR-Col-Store` | 10 | ☐ home EXISTS (`vectors::is_collection`, now cited) and is literally `is_keyed(tp) \|\| Vector` — so #3 and #4 differ by that variant BY DESIGN, not by drift. The inline copies remain to convert. |
-| 5 | **is this a DbRef-represented type** (`+Radix\|Trie` over #2) | `layout.md`; `element_stack_size`'s DbRef group | **8** | ☐ `coalesce_not_null`'s heap-DbRef branch is one of these — the branch loft#1065 recursed into |
+| 5 | **is this a DbRef-represented type** | `@FR-Col-Store` — home is `data::is_dbref` | 11 → **1** | ✅ **merged**, IR byte-identical on 854/854. And it found a duplicate home I had just created myself — see below |
 | 6 | **the narrow integer widths** (`Byte\|Int\|Short\|ShortRaw`) | `@FR-L-Narrow` (width set) · `@FR-L-Null` (the encoding) | 6 → **5 cited, 1 excluded** | ✅ **evaluated — and only 3 of them are the same question.** See § The narrow widths below. |
 | 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | `calls.md` F-Drop / F-Block | **9 + 13** | ☐ two variants; establish whether `BreakWith` belongs to the same question |
 | 8 | **which `Value` shapes hold a statement list** (`Insert\|Parallel\|Tuple`) | `operational.md` | **8** | ☐ a `Value` list rather than a `Type` list; the audit script only reads `Type::` today |
@@ -224,6 +224,30 @@ path it takes instead is right.
 So the short list is **not** wrong at the remaining 40: three sites were, and they are fixed.
 The sentinel is what makes that a measurement rather than an opinion, and it cost a fraction of
 what reading forty sites would have.
+
+## Checklist #5, and the duplicate I created while writing the checklist (2026-08-24)
+
+Ten sites spelled the FULL eight-variant DbRef list inline; all ten now call
+`data::is_dbref`. Emitted IR is **byte-identical on 854 of 854** `tests/scripts`, so this one
+really was the pure conversion #3 was.
+
+⚠ **The tenth site was `Parser::is_heap_handle` — an existing home for exactly this
+predicate**, carrying the doc *"One home, because the answer is shared by the `??` null check,
+the `if`/`while`/`assert` condition, and the `!x` null test."*
+
+`data::is_dbref` was added earlier the same day, for the coroutine fix. It is a **second home
+for a predicate that already had one**, created by me, in the middle of the work whose entire
+subject is that duplicates get written because nobody looks. The reason is exact and worth
+keeping: I searched for a home for the SHORT three-variant list, found none, and stopped. I
+never searched for a home for the FULL list — the one I was about to write.
+
+That is the failure mode this file exists to catch, and it caught it, but only on the NEXT
+family. What would have caught it at the time is asking the question about **the predicate I
+was creating**, not about the list I was replacing.
+
+`is_heap_handle` now delegates to `is_dbref`, keeping its name and the `.base()` peel its
+null-check callers rely on; both ends carry a note saying which came first and why the search
+missed it.
 
 ## Not mergeable — recorded so the question is not reopened
 
