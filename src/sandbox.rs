@@ -11,6 +11,11 @@
 //! group-membership admission, @PLN86 step 2.3).  Deny-by-default: a `group#right`
 //! capability link is permitted only when an `allow` entry has the same right and
 //! its group is a dotted-segment prefix of the link's group.
+//!
+//! Enforces @FR-Cap-Deny — no rule admitting an expression means it is rejected AT LOAD,
+//! never at the call — and holds the policy that @FR-Cap-Call, @FR-Cap-Read and
+//! @FR-Cap-Write consult.  @FR-Cap-Trusted is enforced by [`reachable_set`], where a
+//! trusted symbol is a leaf: its body is the host's contract and is not walked.
 
 use crate::data::{Data, DefType, Position, Type, Value};
 use std::collections::{HashMap, HashSet};
@@ -67,7 +72,15 @@ impl SandboxProfile {
     }
 
     /// True iff a symbol's `group#right` capability link `token` is granted by this
-    /// profile.  **Deny-by-default**: a grant matches only when the RIGHT is exactly
+    /// profile.
+    ///
+    /// Enforces @FR-Cap-Call — a gated call is admitted only when its `g#r` token is in the
+    /// policy (or its library is allow-listed, which `allows_lib` answers) — and with it
+    /// @FR-Cap-Deny, the closing rule: this function returning `false` is what makes an
+    /// expression REJECTED AT LOAD rather than at the call.  Every `false` here is a
+    /// program that will not run, so widening the match widens the sandbox.
+    ///
+    /// **Deny-by-default**: a grant matches only when the RIGHT is exactly
     /// equal AND the grant's group is a dotted-segment prefix of the link's group —
     /// so `"game#read"` grants `"game.entity#read"` but NOT `"game#update"` (a
     /// different right) or `"gameover#read"` (not a segment boundary).  A token (or
@@ -366,16 +379,20 @@ fn parse_str_list(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// @PLN86 step 1.3 — the **sandbox-reachable set**: the transitive closure of
-/// references (calls + fn-ref literals) from every sandboxed def, **descending
-/// only into other sandboxed defs**.  A trusted / allow-listed symbol is a
-/// *leaf* — recorded (the admission walk capability-checks it) but not descended,
-/// because its body is the host's contract (§4 / L-host).  `sandboxed` maps each
+/// The **sandbox-reachable set**: the transitive closure of references (calls + fn-ref
+/// literals) from every sandboxed def, **descending only into other sandboxed defs**.
+///
+/// Enforces @FR-Cap-Trusted — a trusted / allow-listed symbol is a *leaf*: recorded, so the
+/// admission walk still capability-checks the reference to it, but never descended into,
+/// because its body is the host's contract (§4 / L-host) rather than sandboxed code.
+/// Descending would ask the host's own implementation to satisfy the script's profile.  `sandboxed` maps each
 /// sandboxed def_nr to its profile (the parser's `def_sandbox`).
 ///
 /// Returns every reachable def_nr: the sandboxed entries, the sandboxed defs
-/// descended into, and the trusted leaves they reference.  Step 2.3 capability-
-/// checks the non-sandboxed members.
+/// descended into, and the trusted leaves they reference.  Step 2.3 capability-checks
+/// **only the non-sandboxed members** — which is @FR-Cap-Own: what a script does to data
+/// it OWNS is free, and only reaching into the host is checked.  So the sandboxed /
+/// non-sandboxed split this function computes is exactly the Cap-Own boundary.
 #[must_use]
 pub fn reachable_set(
     data: &Data,

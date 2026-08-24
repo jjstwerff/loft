@@ -271,12 +271,30 @@ name (and, here, splitting one view into the two the code now distinguishes) mak
 say what it always meant. Reading it as "never touch the rule" would have preserved the
 error.
 
-**Open:** the wider surface is still not swept, by design (`doc-quality` says not to sweep
-a file during unrelated work). **21 of 285 rules are cited, so tag adoption remains the
-rate limiter** — each tranche of citations creates the next tranche of sweepable sites.
-`scripts/rule_tags.py list` shows which rules have no citation yet; the families with the
-clearest enforcement sites are the small ones (`concurrency.md` 4, `interfaces.md` 6,
-`grammar.md` 9, `capabilities.md` 9).
+#### B4c — concurrency, interfaces, grammar, capabilities (2026-08-24)
+
+**21 → 39 rules cited, 38 → 63 citation sites.** What each family exposed:
+
+| family | found by citing |
+|---|---|
+| **concurrency** | `scopes::is_par_safe` and `par_unsafe_reason` have **no production caller** — 18 tests, `#[allow(dead_code)]`, and *"phase 5b proper hooks it"*. The same scaffolding-without-a-consumer shape as `Value::ParFor`. ⚠ **Not a rule deviation**, and getting that right mattered: `C-Impure` says an impure worker is UNDEFINED, not that the compiler must refuse it, so `concurrency.md`'s `OPEN: 0` is correct on its own terms. The analyser is the D8 *diagnostic* that was planned on top, never wired. Both now say so instead of implying a temporary state. |
+| **interfaces** | `check_satisfaction`'s doc named `instantiate_generic` — a function that has **never existed under that name** in any commit. The real one is `try_generic_instantiation`, which had **no doc comment at all**. `parse_interface` still said *"semantic satisfaction checking comes in I5/I6"*; it shipped. |
+| **grammar** | The precedence table carried one bare line of comment (*"Operators ordered on their precedence"*) for the thing that defines `G-Prec`, and **associativity is not in it at all** — it is decided where `parse_operators` hands the RHS a precedence. Both now cite, and the table says which rule it is *not*. |
+| **capabilities** | Nothing stale — the cleanest family. `reachable_set`'s sandboxed / non-sandboxed split turned out to be the `Cap-Own` boundary and the `Cap-Trusted` leaf rule at once, which the citation now states. |
+
+⚠ **I got a citation wrong and the check caught it.** I wrote that `Cap-Trusted` and
+`Cap-Own` were "decided by the admission walk before it reaches here" — plausible, and
+false: both are decided in `sandbox.rs` itself, by `reachable_set`. Verifying each claim
+against the code before committing it is the discipline this thread exists to enforce, and
+it is easy to skip precisely when writing the citation feels like documentation rather than
+analysis. Two claims about `**` right-associativity and `as` were checked the same way and
+held (`operators.rs:3513` states it outright).
+
+**Open:** the wider surface is still not swept, by design. **39 of 285 rules cited.** The
+remaining families are the big ones — `types.md` (56), `binding.md` (30), `matching.md`
+(22), `heap.md` (21), `collections.md` (21), `operational.md` (20) — where a rule usually
+has many enforcement sites rather than one, so the work per rule is larger and the payoff
+(a `sites <tag>` query that returns everything enforcing it) is bigger.
 
 #### C — process / skills
 

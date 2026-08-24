@@ -2498,9 +2498,12 @@ use #count instead"
                 } else {
                     i32::from(hash_tp_id)
                 };
-                // A `par` loop discards a hash's order across worker threads, so it
-                // skips the O(n log n) key sort and walks the buckets raw.  A radix
-                // has a natural order and its walk is already ordered (no sort), so
+                // Enforces @FR-C-Order's keyed exception.  A sequential `for x in h` is
+                // KEY-ordered; a `par` one is the hash's UNSORTED bucket walk, because the
+                // parallel queue has no use for key order — so it skips the O(n log n) key
+                // sort.  The two orders differing is stated by the rule, not a divergence.
+                //
+                // A radix has a natural order and its walk is already ordered (no sort), so
                 // it uses the same builder in every case (@PLN48).
                 let is_par =
                     matches!(&self.lexer.peek().has, LexItem::Identifier(kw) if kw == "par");

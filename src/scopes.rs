@@ -8055,10 +8055,13 @@ use crate::data::{ImpureCategory, Purity};
 /// workers).  `CallRef` (runtime fn-ref) callsites pessimise to
 /// `false` — the actual callee is not statically known.
 ///
-/// Currently no production caller — phase 5b proper hooks the
-/// analyser into codegen so par worker fns that return false here
-/// produce a compile error per D8 diagnostics.  The accessor +
-/// helpers carry `#[allow(dead_code)]` until then.
+/// ⚠ NOT WIRED TO ANYTHING.  Nothing calls this outside its own tests, so no program is
+/// rejected for an impure par worker today.  That is not a missing gate against the rules:
+/// @FR-C-Impure says an impure worker's result is UNDEFINED, not that the compiler must
+/// refuse it — the contract is "make the worker pure", and conformance is differential
+/// (concurrency.md § Deviations).  This classifier is the DIAGNOSTIC that DESIGN.md D8
+/// wants on top of that, and its consumer has never been written.  Keep or delete it as a
+/// deliberate choice; do not read the `#[allow(dead_code)]` as a temporary state.
 #[allow(dead_code)]
 #[must_use]
 pub fn is_par_safe(data: &Data, d_nr: u32) -> bool {
@@ -8337,7 +8340,8 @@ mod par_safety_tests {
 /// compile-error diagnostic body, matching D8's example error
 /// shape with `--> file:line` + offending construct + fix-it.
 ///
-/// Currently no production caller — phase 5b proper hooks it.
+/// ⚠ NOT WIRED TO ANYTHING — the reason-string twin of [`is_par_safe`], and unreached for
+/// the same reason.  See there.
 #[allow(dead_code)]
 #[must_use]
 pub fn par_unsafe_reason(data: &Data, d_nr: u32) -> Option<String> {

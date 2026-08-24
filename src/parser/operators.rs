@@ -3506,6 +3506,9 @@ impl Parser {
             self.expr_not_null = false;
             let mut second_code = Value::Null;
             let second_pos = self.lexer.peek_pos().clone();
+            // Enforces @FR-G-Assoc — this is the ONE place associativity is decided, since
+            // the level table (`parser/mod.rs::OPERATORS`) carries precedence only.
+            //
             // `**` is RIGHT-associative — `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, matching
             // maths and most languages, so the maker never carries a surprise here.  Its RHS
             // therefore parses at the SAME precedence (it recurses into a following `**`),
