@@ -91,6 +91,20 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# `--yes` means "a human decided and is not here to type it".  The second half of
+# that is only true at a terminal: with no TTY on stdin the flag asserts a human
+# who cannot be present, which is exactly the shape a script or an agent has.
+# Refuse there and point at `--expect`, which makes the same claim CHECKABLE.
+# (An interactive `--yes` still works, and `registry_maintain.sh` inherits this
+# session's stdin, so its own `--yes` passes from a terminal and refuses from a
+# pipe just the same.)
+if [ "$YES" = 1 ] && [ ! -t 0 ]; then
+    echo "!! --yes with no terminal on stdin: nothing can confirm this." >&2
+    echo "   Use --expect <pkg>@<ver> — it binds the signature to what you named" >&2
+    echo "   and refuses anything else in the diff, which is what --yes cannot do." >&2
+    exit 2
+fi
+
 here=$(cd "$(dirname "$0")/.." && pwd)
 KG="$here/target/release/loft-keygen"
 if [ ! -x "$KG" ]; then
