@@ -1218,10 +1218,12 @@ impl DepEntry {
 /// is a borrower — skip-free, with the single owner freeing once.  An EMPTY list therefore
 /// reads as "owner".
 ///
-/// ⚠ That reading is a PROXY, not the fact (loft#723): a borrow whose dep list was never
-/// populated also has an empty list, and reads as an owner.  The repair is a second carried
-/// fact, [`crate::variables::Function::is_skip_free`], which vetoes the proxy — so in
-/// practice the model has two facts where its rules name one.
+/// ⚠ That reading is @FR-O-Proxy, and it is NOT the oracle (loft#723): a borrow whose dep
+/// list was never populated also has an empty list, and reads as an owner.  @FR-O-Oracle
+/// (`use_analysis::ownership_of`) is the real derivation and does not consult this list at
+/// all.  A site that FREES on the empty-list proxy must also consult @FR-O-Override
+/// ([`crate::variables::Function::is_skip_free`]), which is the veto that makes the proxy
+/// safe at a free site.
 #[derive(Clone, Debug, Default)]
 pub struct Deps {
     items: Vec<u16>,

@@ -432,10 +432,27 @@ None of the three is redundant: `owned_refs` carries a temporal fact (*latest* a
 and a loop-depth fact that a type-level dep list structurally cannot, which is why the
 transition free is gated on it and not on `deps`.
 
-The gap is therefore not "15 sites forgot the veto" — it is that **which fact a lifetime
-decision should read is nowhere written down**, so a reader cannot tell a site that
-legitimately reads one from a site that reached for the wrong one. That is a question for
-`ownership.md`'s rules, which currently describe a one-fact model the code does not have.
+The gap was therefore not "15 sites forgot the veto" — it was that **which fact a lifetime
+decision should read was nowhere written down**, so a reader could not tell a site that
+legitimately reads one from a site that reached for the wrong one.
+
+✅ **`ownership.md` now names all four** (2026-08-24), and the fourth is the one that
+reframes the rest:
+
+| rule | fact | implemented at |
+|---|---|---|
+| `@FR-O-Oracle` | the own-vs-borrow derivation, from the IR | `use_analysis::ownership_of` |
+| `@FR-O-Proxy` | empty `deps` as a stand-in for "owner" — unsound alone | `Type::depend().is_empty()`, 24 sites |
+| `@FR-O-Override` | the never-free veto that makes the proxy safe at a free | `Function::is_skip_free` |
+| `@FR-O-Latest` | latest assignment's ownership + the LOOP DEPTH it was taken at | `Scopes::owned_refs` |
+
+**`deps` is not the oracle.** `ownership_of` derives own-vs-borrow from the IR — a store
+mint is `Owned`, a projection is `Borrowed(base)`, a call resolves through the callee's
+return summary — and it **never consults `deps`**. The two are independent derivations of
+the same question, which is why they can disagree, and loft#723 is what that looks like.
+
+`O-Proxy` carries the first checkable obligation in this space: *a site that FREES on the
+empty-deps proxy must also consult `O-Override`.*
 
 ⚠ This qualifies a **CLOSED** deviation. `D-own-1` (closed 2026-07-04) records *"the LAST
 per-site ownership re-derivation is now GONE"* and *"every free/copy/move reads `deps`"*.

@@ -104,12 +104,14 @@ struct Scopes {
     /// whose filtered return deps are empty, a deep-copied var, …), mapped to the loop
     /// depth (`loops.len()`) at that assignment.
     ///
-    /// ⚠ **The THIRD ownership fact.** @FR-O-Deps names one — `deps` — and
-    /// [`crate::variables::Function::is_skip_free`] is the second, the veto for the
-    /// empty-deps proxy.  This is the third, and it is not redundant with either: it
-    /// carries a TEMPORAL fact (the *latest* assignment) and a LOOP-DEPTH fact, neither of
-    /// which a type-level dep list can express.  `scan_set`'s ownership-transition free is
-    /// gated on this rather than on `deps` for exactly that reason.
+    /// Enforces @FR-O-Latest — a memo of @FR-O-Oracle's answer plus the loop depth at
+    /// which the assignment was taken.
+    ///
+    /// ⚠ Not redundant with `deps` or with @FR-O-Override: it carries a TEMPORAL fact (the
+    /// *latest* assignment) and a LOOP-DEPTH fact, neither of which a type-level dep list
+    /// can express.  `scan_set`'s ownership-TRANSITION free is gated on this and not on
+    /// `deps` for exactly that reason — freeing at the wrong loop depth would release the
+    /// previous iteration's viewed store.
     /// When such a var is reassigned with a BORROW, its merged static type
     /// already carries deps, so codegen's dep-empty pre-Set free never fires —
     /// `scan_set` emits an explicit `OpFreeRef(v)` for the orphaned store

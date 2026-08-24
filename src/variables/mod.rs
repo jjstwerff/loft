@@ -2974,9 +2974,10 @@ impl Function {
     /// Must no `OpFreeRef` ever be emitted for `v`?  Its contract is exactly that
     /// sentence, and nothing weaker.
     ///
-    /// ⚠ **This is the SECOND ownership fact, and the model's rules name only the first.**
-    /// @FR-O-Deps says every store-lifetime decision derives from `deps`, and the way sites
-    /// read `deps` for ownership is `tp.depend().is_empty()` — which is only a PROXY: it
+    /// Enforces @FR-O-Override — the never-free veto.
+    ///
+    /// ⚠ It exists because @FR-O-Proxy is unsound alone.  The way sites read `deps` for
+    /// ownership is `tp.depend().is_empty()` — which is only a PROXY: it
     /// answers "owned" for a borrow whose dep list was never populated (loft#723).  A `??`
     /// subject of `Reference` type is exactly that shape — the parser materialises it into
     /// `__ncc_N` and marks it here, while its type keeps empty deps.  So this flag has to

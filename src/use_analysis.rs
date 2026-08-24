@@ -2515,6 +2515,11 @@ pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
 #[must_use]
 /// Answers @FR-O-Owner for one value: which single thing owns this store.  Every heap store
 /// has exactly one owner at any moment, and this is where that is decided.
+///
+/// This IS @FR-O-Oracle — the one own-vs-borrow derivation, taken from the IR (a store mint
+/// is `Owned`, a projection is `Borrowed(base)`, a call resolves through the callee's return
+/// summary).  ⚠ It does NOT read `deps`: the dep list is a separate, cheaper stand-in for
+/// the same question (@FR-O-Proxy) that is unsound alone.  A chokepoint should read here.
 pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
     ownership_of_with(data, d_nr, value, &function_defs(data, d_nr))
 }
