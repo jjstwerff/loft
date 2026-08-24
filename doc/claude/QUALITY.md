@@ -367,8 +367,8 @@ same way; both are larger than a single sitting.
 
 `STABILITY_ROADMAP.md` still owns these: Plan-53 cluster 2 S4 (parked WIP, M), @PLN130's 504
 uncovered copy sites (L, cost unestablished), gate 4 durability (@PLN43, needs an in-or-out
-decision), H6 `i32::MIN` (deferred).  **The branch is 34 commits ahead of `origin/main` with no
-PR**, so none of the above is on main.
+decision), H6 `i32::MIN` (deferred).  **On `main` as of 2026-08-24** — PR #1084 absorbed the
+bulk of this thread; the branch now carries only the tranches after it.
 
 ### The catch-all audit — every type-driven op choice, classified (2026-08-22)
 
