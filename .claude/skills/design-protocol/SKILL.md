@@ -342,9 +342,13 @@ unambiguous, and a bare rule name is usually neither.
   in either says they are different rules.
 
 So mint a **tag**: a sigil you reserve for this purpose, so it cannot occur by accident in
-prose, plus a name that no other tag is a prefix of. Keep the tags in one registry and let a
-cheap check enforce three things — every citation resolves to a registered tag, no tag is
-defined twice, and no tag is a prefix of another. Those three are what make step 2's count
+prose, plus a rule that makes a match *exact*. Sub-rules make prefixes hard to avoid — a
+general rule and its refinements naturally share a stem — so the cheaper route is usually not
+to forbid prefixes but to **specify the boundary**: a citation matches the tag only when the
+next character cannot continue a tag. (Word-boundary matching often will not do this for you;
+if your names contain `-` or `_`, those already read as boundaries.) Keep the tags in one
+registry and let a cheap check enforce that every citation resolves to a registered tag, that
+no tag is defined twice, and that the boundary rule holds. Those three are what make step 2's count
 *trustworthy* rather than merely suggestive; without them the number is a lower bound you
 cannot size.
 

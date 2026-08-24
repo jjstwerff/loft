@@ -25,37 +25,45 @@ rules that must stay free to diverge. The verdict column is the judgement the sc
 > same set of types — they are not the same question, and the merge below only holds because
 > both derive from ONE deeper fact (the layout), which is what the shared home names.
 
-## ⚠ Prerequisite — the rules have NAMES, not TAGS
+## Prerequisite — rule TAGS, and what the measurement actually said
 
-The checklist below, and any generated rule→site index, rests on being able to grep a rule
-and get exactly its sites. Measured 2026-08-24, `formal/` cannot yet do that:
+The checklist below, and any generated rule→site index, rests on being able to grep a rule and
+get exactly its sites. Measured 2026-08-24:
 
 | | |
 |---|---|
-| distinct rule-like names | **361** |
-| **prefix collisions** — grepping one rule also returns others | **33** |
-| names with 2+ hyphens (a naive regex splits these) | 44 |
-| rules mentioned anywhere in `src/` | **83 of 361**, across 185 file-hits |
+| rules with a definition line in `formal/` | **356** |
+| rule-like names appearing anywhere | 361 |
+| **prefix collisions among DEFINED rules** | **23** |
+| family prefixes used in prose that are NOT rules | 5 — `B-Ref`, `D-op`, `D-own`, `D-cap`, `D-op-null` |
+| rules mentioned anywhere in `src/` | **83 of 361**, across 185 file-hits (a mention, not yet a citation) |
 
-`grep B-Ref` returns `B-Ref-Alias`, `B-Ref-Write`, `B-Ref-Reshape`, `B-Ref-Uniform`,
-`B-Ref-Read`, `B-Ref-Intro`, `B-Ref-Lvalue`, `B-Ref-NotTarget`, `B-Ref-StoredRef`,
-`B-Ref-AnnotationOnly` — ten other rules. So "count the sites of `B-Ref`" is not answerable,
-and neither is "which rule does this site enforce?".
+The real collisions are between a rule and its own sub-rules: `@B-View` / `@B-View-Base`,
+`@T-Ref` / `@T-Ref-El`, `@P-Cap` / `@P-Cap-Fresh`, `@F-Target` / `@F-Target-Pos`. A plain
+`grep B-View` sweeps in its sub-rules, and `\b` does not help — `-` is already a word boundary.
 
-**This project already solved this problem once and did not reuse the answer.**
-[CLAUDE.md § Tracker tags](../../CLAUDE.md) opens with *"`@`-prefixed so regex is
-unambiguous"* — `@P259`, `@PLN3`, `@F7`. Issues, plans and features got unambiguous tags;
-the formal rules, which are cited far more often from code, never did.
+⚠⚠ **Two corrections to earlier numbers in this file, both measurement artifacts of mine, and
+the second is the more embarrassing one.**
 
-⚠ `B-View-Base` was added on 2026-08-24 and is itself one of the 33 collisions — a new one,
-created two commits before this was measured. The convention does not hold by care.
+1. The first pass reported **0** prefix collisions. The rule-name regex could not span a second
+   hyphen, so it split `B-Ref-Alias` into `B-Ref` + `Ref-Alias` and never saw a multi-hyphen
+   name. A zero from an instrument that cannot represent the thing it is counting is not a
+   measurement.
+2. The corrected pass then reported **33**, headlined by *"`grep B-Ref` returns ten other
+   rules"*. `B-Ref` **is not a rule** — it is a family prefix that only ever appears in prose,
+   with no definition line. Counting mentions instead of definitions inflated 23 to 33 and put
+   a non-rule at the top of the evidence. Separating DEFINED from MENTIONED is what fixed it,
+   and it is the same lesson as the rest of this file: the instrument has to know what it is
+   counting.
 
-**What a tag has to provide** (see the `design-protocol` skill, § anchor the question on the
-RULE): a reserved sigil so it cannot occur by accident in prose; no tag a prefix of another;
-one registry; and a check that every citation resolves, no tag is defined twice, and no tag
-prefixes another. Until that exists, the site counts in the checklist below are lower bounds
-you cannot size, and `scripts/rule_predicate_audit.py`'s shape-matching is the only working
-instrument.
+**The convention** is written up in [README.md § Rule tags](README.md) and
+[CLAUDE.md § Tracker tags](../../CLAUDE.md): `@`-tag every rule, cite the tag at each
+enforcing site, match with an explicit boundary (`@Name` not followed by `[-A-Za-z0-9]`) rather
+than renaming the 23, and treat only a DEFINED rule as a citation target.
+
+Until the citations exist, the site counts in the checklist below are **lower bounds you cannot
+size**, and `scripts/rule_predicate_audit.py`'s shape-matching is the only working instrument —
+which is precisely the weaker anchor the convention replaces.
 
 ## Already merged — do not redo
 

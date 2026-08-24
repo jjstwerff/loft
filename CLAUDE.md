@@ -92,6 +92,17 @@ the `features-check` drift guard fails on hand-edits).
 File a NEW plan as a `loft-lang/plans` issue with one `status:*` + one `subject:*` label. Look refs
 up with `./scripts/idx` (`make index` first if stale; `./scripts/idx help` for queries).
 
+**A FORMAL RULE is `@`-tagged too — `@B-Copy`, `@T-Ref`, `@O-Deps`** — and a code site that
+enforces one CITES it, so *"which sites enforce this rule?"* is a grep rather than an
+archaeology. Distinguishable from the tracker tags by shape (those end in digits). Two things
+the convention needs, both measured rather than assumed
+([formal/IMPLEMENTATIONS.md](doc/claude/formal/IMPLEMENTATIONS.md)):
+**match with an explicit boundary** — 23 of the 356 defined rules are a prefix of another
+(`@B-View` vs `@B-View-Base`, `@T-Ref` vs `@T-Ref-El`), so a citation matches `@Name` only when
+what follows is not `[-A-Za-z0-9]`; and **cite only a DEFINED rule** — `B-Ref`, `D-op`, `D-own`,
+`D-cap`, `D-op-null` are family PREFIXES that appear in prose and are not rules, so they are
+never a citation target.
+
 ## Architecture — execution path
 
 ```
