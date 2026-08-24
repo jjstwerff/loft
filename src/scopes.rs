@@ -1357,6 +1357,11 @@ fn prepend_to_scope(node: &mut Value, target: u16, ni: Value) -> Option<Value> {
             prepend_to_scope(e, target, ni)
         }
         Value::Span(b) => prepend_to_scope(&mut b.1, target, ni),
+        // No `BreakWith` arm on purpose: this relocation is BEST-EFFORT and its fallback —
+        // leaving the null-init at body position 0 — is correct, which is what the @PLN57
+        // cluster-I false alarm established (a confined block off the control-flow spine,
+        // e.g. a `map`/`filter`/lambda body, cannot be reached either).  Adding the arm
+        // would relocate in one more shape; it would not fix anything.
         Value::Return(b) | Value::Drop(b) | Value::Yield(b) => prepend_to_scope(b, target, ni),
         _ => Some(ni),
     }
@@ -3583,7 +3588,15 @@ fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
                     walk_check(op, function, fn_name);
                 }
             }
+            // All FOUR value wrappers, not three: a `break with <expr>` carries an inner
+            // value exactly as `return` / `drop` / `yield` do, and omitting it meant a
+            // `Set(v, Null)` nested in a call argument under one was never checked — a
+            // missed diagnostic for the very corruption this walker exists to report.
+            // `BreakWith` needs its own arm because it carries a label alongside the value.
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+                walk_check(inner, function, fn_name);
+            }
+            Value::BreakWith(_, inner) => {
                 walk_check(inner, function, fn_name);
             }
             _ => {}

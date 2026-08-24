@@ -92,7 +92,7 @@ two of the three families done so far split rather than merged.
 | 2 | **is this carried as a DbRef** | 43 | ✅ **closed** — 3 sites wrong (2 real bugs, both fixed), the other 40 cleared by a corpus-wide SENTINEL rather than by reading. Only 4 ever see a keyed collection, and all 4 probe correct against their own documented failure modes |
 | 4 | **is this a collection** (keyed `+ Vector`) | 13 | ✅ **merged** onto `vectors::is_collection` (the one that DERIVES it). Three homes existed, not one; IR byte-identical 854/854 |
 | 5 | **is this DbRef-represented** | 11 | ✅ **merged onto `data::is_dbref`**, IR byte-identical on 854/854. Turned up a duplicate home (`Parser::is_heap_handle`) that `is_dbref` itself had duplicated — see IMPLEMENTATIONS.md |
-| 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | 9 + 13 | ☐ two variants — settle whether `BreakWith` is the same question before citing |
+| 7 | **the value-carrying `Value` wrappers** | 59 | ✅ **evaluated — FOUR questions, not one**; not mergeable (arms, not predicates). One validator gap fixed (`walk_check` missed `BreakWith`), one omission documented as deliberate |
 | 8 | **which `Value` shapes hold a statement list** | 8 | ☐ a `Value` list, not `Type`/`Parts` — widen `rule_predicate_audit.py` again first |
 | 1 | scalar — the 5 remaining BARE sites | 5 | ⚠ adopting `is_scalar` ADDS value enums at each: a behaviour change per site, one probe each. Not a sweep |
 

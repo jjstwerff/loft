@@ -92,7 +92,7 @@ Status: ☐ to assess · ⚠ drift found · ✅ merged · ⛔ deliberately separ
 | 4 | **is this a collection** (keyed `+ Vector`) | `@FR-Col-Store` — home is `vectors::is_collection` | 13 → **1** | ✅ **merged**, IR byte-identical on 854/854. THREE homes existed, not one — see below |
 | 5 | **is this a DbRef-represented type** | `@FR-Col-Store` — home is `data::is_dbref` | 11 → **1** | ✅ **merged**, IR byte-identical on 854/854. And it found a duplicate home I had just created myself — see below |
 | 6 | **the narrow integer widths** (`Byte\|Int\|Short\|ShortRaw`) | `@FR-L-Narrow` (width set) · `@FR-L-Null` (the encoding) | 6 → **5 cited, 1 excluded** | ✅ **evaluated — and only 3 of them are the same question.** See § The narrow widths below. |
-| 7 | **what TERMINATES a block** (`Drop\|Return\|Yield`, `+BreakWith`) | `calls.md` F-Drop / F-Block | **9 + 13** | ☐ two variants; establish whether `BreakWith` belongs to the same question |
+| 7 | **the value-carrying `Value` wrappers** | `@FR-F-Drop` / `@FR-F-Block` | 32 + 13 + 9 + 3 + 2 | ✅ **evaluated — FOUR questions, not one.** Not mergeable; one real gap fixed. See below |
 | 8 | **which `Value` shapes hold a statement list** (`Insert\|Parallel\|Tuple`) | `operational.md` | **8** | ☐ a `Value` list rather than a `Type` list; the audit script only reads `Type::` today |
 
 ## The narrow widths, evaluated with the tags (checklist #6, 2026-08-24)
@@ -272,6 +272,38 @@ which is why the instrument matters more than the discipline.
 only one of the three that cannot drift from `is_keyed`, because it is defined in terms of it.
 The other two would have needed updating by hand had a keyed kind been added — the exact
 maintenance the merge removes.
+
+## Checklist #7 — four questions wearing one name (2026-08-24)
+
+`Return` appears in five near-variant arm sets, and the temptation is to read them as one
+"terminator" question spelled five ways. They are not. Naming them is the deliverable, because
+merging them would be the too-early-abstraction failure with real consequences:
+
+| set | sites | the question | verdict |
+|---|---|---|---|
+| `Drop \| Return` | **32** | the **function-body TAIL** wrapper (`result_var`, `tail_if_has_null_arm`, `push_text_arms_into`) | ⛔ separate — a `yield` is not a function tail (the generator RESUMES after it) and a `break with` is a LOOP tail |
+| `BreakWith \| Drop \| Return \| Yield` | 13 | a node that **wraps an inner value** — the generic walker shape | the complete set |
+| `Drop \| Return \| Yield` | 9 | the same walker question, three of the four | 7 of 9 carry a SEPARATE `BreakWith` arm (it takes a label as well as a value, so it cannot share one); 2 did not |
+| `BreakWith \| Return` · `Break \| BreakWith \| Continue \| Return` | 3 · 2 | **loop exit** | ⛔ separate again |
+
+**The one real gap, fixed.** `scopes::walk_check` — the `check_arg_ref_allocs` validator that
+reports a `Set(v, Null)` nested inside a call argument, the shape that "corrupts the CallRef arg
+layout (A5.6)" — walked `Return`/`Drop`/`Yield` and not `BreakWith`. A violation under a
+`break with f(…)` was therefore never reported. It is a missed DIAGNOSTIC rather than a wrong
+answer, and adding the arm can only report more.
+
+**The other gap is deliberate and now says so.** `scopes::prepend_to_scope` omits `BreakWith`
+too, but that relocation is BEST-EFFORT with a correct fallback — leaving the null-init at body
+position 0 — which is exactly what the @PLN57 cluster-I false alarm established when the same
+walker could not reach a `map`/`filter`/lambda body either. Adding the arm would relocate in one
+more shape; it would not fix anything. The comment now records that so the next reader does not
+"complete" it.
+
+⚠ **These are match ARMS, not predicates, and that changes the tool.** The merged families (#1,
+#3, #4, #5) were membership tests that collapse to a shared function. An arm set has a *body*
+per site, so there is nothing to call — the reusable artefact here is the TABLE above, not a
+helper. Recognising which kind you have is what stops a merge being attempted where it cannot
+land.
 
 ## Not mergeable — recorded so the question is not reopened
 
