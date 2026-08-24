@@ -25,6 +25,38 @@ rules that must stay free to diverge. The verdict column is the judgement the sc
 > same set of types — they are not the same question, and the merge below only holds because
 > both derive from ONE deeper fact (the layout), which is what the shared home names.
 
+## ⚠ Prerequisite — the rules have NAMES, not TAGS
+
+The checklist below, and any generated rule→site index, rests on being able to grep a rule
+and get exactly its sites. Measured 2026-08-24, `formal/` cannot yet do that:
+
+| | |
+|---|---|
+| distinct rule-like names | **361** |
+| **prefix collisions** — grepping one rule also returns others | **33** |
+| names with 2+ hyphens (a naive regex splits these) | 44 |
+| rules mentioned anywhere in `src/` | **83 of 361**, across 185 file-hits |
+
+`grep B-Ref` returns `B-Ref-Alias`, `B-Ref-Write`, `B-Ref-Reshape`, `B-Ref-Uniform`,
+`B-Ref-Read`, `B-Ref-Intro`, `B-Ref-Lvalue`, `B-Ref-NotTarget`, `B-Ref-StoredRef`,
+`B-Ref-AnnotationOnly` — ten other rules. So "count the sites of `B-Ref`" is not answerable,
+and neither is "which rule does this site enforce?".
+
+**This project already solved this problem once and did not reuse the answer.**
+[CLAUDE.md § Tracker tags](../../CLAUDE.md) opens with *"`@`-prefixed so regex is
+unambiguous"* — `@P259`, `@PLN3`, `@F7`. Issues, plans and features got unambiguous tags;
+the formal rules, which are cited far more often from code, never did.
+
+⚠ `B-View-Base` was added on 2026-08-24 and is itself one of the 33 collisions — a new one,
+created two commits before this was measured. The convention does not hold by care.
+
+**What a tag has to provide** (see the `design-protocol` skill, § anchor the question on the
+RULE): a reserved sigil so it cannot occur by accident in prose; no tag a prefix of another;
+one registry; and a check that every citation resolves, no tag is defined twice, and no tag
+prefixes another. Until that exists, the site counts in the checklist below are lower bounds
+you cannot size, and `scripts/rule_predicate_audit.py`'s shape-matching is the only working
+instrument.
+
 ## Already merged — do not redo
 
 | rule / question | the ONE home | why it was merged |

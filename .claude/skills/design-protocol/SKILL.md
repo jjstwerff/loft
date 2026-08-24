@@ -329,6 +329,33 @@ site that enforces it *say which rule it obeys*. A citation costs a comment, and
 written at the only moment the fact is reliably known: while you are making that site obey
 the rule. Later, nobody has to reconstruct it.
 
+**A name is not yet an anchor — it has to be a TAG.** "Named" is carrying more weight there
+than it looks: for a citation to be findable *by a machine* the name must be unique and
+unambiguous, and a bare rule name is usually neither.
+
+- **prose collision** — the name reads as ordinary words, so a search returns discussion
+  as well as enforcement, and you cannot tell the count from the noise;
+- **prefix collision** — one rule's name begins another's, so searching the general rule
+  silently sweeps in the specific ones (and a search for a specific one misses sites that
+  spell it generally);
+- **namespace collision** — two areas independently pick the same short name, and nothing
+  in either says they are different rules.
+
+So mint a **tag**: a sigil you reserve for this purpose, so it cannot occur by accident in
+prose, plus a name that no other tag is a prefix of. Keep the tags in one registry and let a
+cheap check enforce three things — every citation resolves to a registered tag, no tag is
+defined twice, and no tag is a prefix of another. Those three are what make step 2's count
+*trustworthy* rather than merely suggestive; without them the number is a lower bound you
+cannot size.
+
+The tag is also the **rename unit**. Without one, renaming a rule silently rots every
+citation and nothing reports it. With one, the rename is mechanical and the check names the
+sites you missed.
+
+**Mint the tag when you write the rule.** Retrofitting tags across a corpus that already has
+both rules and enforcement sites is the expensive path, and it is the path you are on from
+the moment you decide the rules are obvious enough not to need them.
+
 Three things fall out, and the third is not available any other way:
 
 - **the search becomes a lookup** — *does this already exist?* is answered by grepping the
