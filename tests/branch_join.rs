@@ -100,49 +100,6 @@ fn main() {\n\
 \x20 println(\"{y978_read(b, false)}\");\n\
 }\n";
 
-/// loft#1081 / D-own-8 — the same one-path fact, at a join BOUND to a local the
-/// function then RETURNS.
-///
-/// Each arm mints its own backing store; the join's `deps` names ONE of them, and
-/// `get_free_vars`' three `in_ret` legs all read that one fact — so the sibling arm was
-/// freed unconditionally at scope exit, on the very path that returns it.  The caller
-/// then held a freed store and the allocator handed the slot straight back on the next
-/// call, so consecutive calls ALIASED.
-///
-/// The values are deliberately distinct per call: equal ones would have agreed with the
-/// bug.  Interp answered correctly (it leaks there instead of recycling, so the leak was
-/// hiding the use-after-free); `--native` — the DEFAULT backend — printed the third
-/// call's values for all three bindings.  So this cell is not a backend-agreement test:
-/// the expected string is written out, and both backends are held to it.
-const RETURNED_ARM: &str = r#"fn pick1081(m: boolean, a: float, b: float) -> vector<float> {
-  v: vector<float> = if m { [a, b] } else { [a] };
-  v
-}
-fn main() {
-  r1 = pick1081(true, 1.0, 2.0);
-  r2 = pick1081(true, 30.0, 40.0);
-  r3 = pick1081(true, 500.0, 600.0);
-  s1 = pick1081(false, 7.0, 0.0);
-  s2 = pick1081(false, 9.0, 0.0);
-  println("{r1[0] ?? -1.0} {r1[1] ?? -1.0} {r2[0] ?? -1.0} {r2[1] ?? -1.0} {r3[0] ?? -1.0} {r3[1] ?? -1.0} {s1[0] ?? -1.0} {s2[0] ?? -1.0} {len(s1)}");
-}
-"#;
-
-/// The `match` spelling of the same join, interleaving the two arms so that a store
-/// freed on EITHER path is recycled by the call after it.
-const RETURNED_ARM_MATCH: &str = r#"fn pick1081m(k: integer, a: float, b: float) -> vector<float> {
-  v: vector<float> = match k { 0 => [a, b], _ => [a] };
-  v
-}
-fn main() {
-  a1 = pick1081m(0, 11.0, 12.0);
-  b1 = pick1081m(1, 21.0, 0.0);
-  a2 = pick1081m(0, 31.0, 32.0);
-  b2 = pick1081m(1, 41.0, 0.0);
-  println("{a1[0] ?? -1.0} {b1[0] ?? -1.0} {a2[0] ?? -1.0} {b2[0] ?? -1.0} {a1[1] ?? -1.0} {a2[1] ?? -1.0} {len(a1)} {len(b1)}");
-}
-"#;
-
 fn write_temp(tag: &str, src: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("loft_978_{tag}_{}.loft", std::process::id()));
     std::fs::write(&path, src).expect("write probe");
@@ -286,35 +243,10 @@ fn harness_can_fail() {
     );
 }
 
-// ── loft#1081: a join arm must survive the call that returned it ────────────────────
-
-/// Run `src` on both backends and hold each to `expected` — the values, not agreement.
-fn assert_both_backends_print(tag: &str, src: &str, expected: &str) {
-    let path = write_temp(tag, src);
-    for backend in ["--interpret", "--native"] {
-        let (ok, stdout, stderr) = run(backend, &path, &[]);
-        assert!(
-            ok && stdout.trim() == expected,
-            "[{backend}/{tag}] expected `{expected}`\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        );
-    }
-    let _ = std::fs::remove_file(&path);
-}
-
-#[test]
-fn a_returned_join_arm_survives_the_next_call() {
-    assert_both_backends_print(
-        "1081_returned_arm",
-        RETURNED_ARM,
-        "1 2 30 40 500 600 7 9 1",
-    );
-}
-
-#[test]
-fn a_returned_match_join_arm_survives_the_next_call() {
-    assert_both_backends_print(
-        "1081_returned_arm_match",
-        RETURNED_ARM_MATCH,
-        "11 21 31 41 12 32 2 1",
-    );
-}
+// loft#1081 / D-own-8 lives one file over: a vector-valued join BOUND to a local the
+// function then returns was NRVO-renamed onto the caller's buffer, which a join REBINDS
+// rather than builds into — abandoning the buffer and handing back an arm store with no
+// owner.  Its guard is `tests/scripts/1081-a-join-bound-to-a-returned-local.loft`, where
+// the wrap harness's leak gate pins the stores alongside the values (both halves are
+// needed: silencing the leak by freeing the DELIVERED store passes one and fails the
+// other).  Kept there rather than duplicated here.

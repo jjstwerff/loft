@@ -1448,8 +1448,21 @@ impl State {
             Type::Reference(_, d) | Type::Enum(_, _, d) => d,
             _ => Deps::none(),
         };
+        // A `__vdb_N` vector backing is never allocated HERE: the `OpDatabase` that
+        // fills it sits at the BUILD site, which may be CONDITIONAL — an
+        // `if c { v = [..] }` rebind, and equally a vector literal that is one ARM of a
+        // branch (`v = if c { [a] } else { [b] }`, loft#1081).  On the path not taken the
+        // eagerly-allocated store is never named again and is never typed, so it is the
+        // `kt=65535 ?` the leak report cannot even name — the same interp-only shape the
+        // `skip_free` note below describes, from the other direction.  It buys nothing on
+        // the path that IS taken either: `alloc_record_at` allocates fresh from a null
+        // sentinel.  The function prologue already sentinel-inits every `__vdb` slot
+        // (#260 Fix B, `def_code` above), so this is the one site that undid it.
+        // @FR-O-Derived: free placement is derived from the ownership fact, and a store
+        // no binding's fact ever names has no derivable free.
+        let vdb_backing = stack.function.name(v).starts_with("__vdb");
         if dep.is_empty() {
-            if stack.function.is_inline_ref(v) || stack.function.is_skip_free(v) {
+            if vdb_backing || stack.function.is_inline_ref(v) || stack.function.is_skip_free(v) {
                 // Inline-ref temporaries must not allocate a database store at null-init
                 // time.  A real store is assigned later via OpPutRef when the method
                 // returns.  Writes DbRef{store_nr:u16::MAX} at slot; Stores::free

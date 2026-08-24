@@ -104,13 +104,15 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24; its Face B closed the same day, Face A open) — D-own-7
+OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A open) — D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
 axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
-rather than from an oracle at all, and how its second face (a use-after-free answering wrong
-on the DEFAULT backend) was found by varying the position of the same join.
+rather than from an oracle at all, and how its second face was found by varying the POSITION
+of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
+answer: the interpreter retained what `--native` recycled, so the defect was filed at its
+mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
 
 ### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
 
@@ -156,8 +158,8 @@ demonstrably do not.  So the join's wrong ALLOCATION answer stays a real deviati
 panic has a different producer — a reminder that a mechanism which explains the var table is
 not thereby the cause.
 
-**Face B — the store freed on the path that returns it (loft#1081, CLOSED 2026-08-24).**
-The same one-path fact, at a join BOUND to a local the function then returns:
+**Face B — a returned local the promotion should never have renamed (loft#1081, CLOSED
+2026-08-24).**  The same one-path fact, at a join BOUND to a local the function returns:
 
 ```loft
 fn pick(m: boolean, a: float, b: float) -> vector<float> {
@@ -166,34 +168,53 @@ fn pick(m: boolean, a: float, b: float) -> vector<float> {
 }
 ```
 
-Each arm mints its own backing (`__vdb_1`, `__vdb_2`); the join's fact names ONE of them,
-and `get_free_vars`' three `in_ret` legs all read that fact — so the sibling arm is freed
-unconditionally at scope exit, on the very path that returns it.  The caller then holds a
-freed store, and the allocator hands the slot straight back on the next call: **three calls
-answered the THIRD call's values for all three bindings on `--native`**, with no
-diagnostic.  The interpreter answered correctly, because there the same defect LEAKS
-instead of recycling — the leak was hiding the use-after-free, and `--native` is the
-default backend.
+`ref_return` NRVO-**renames** `v` onto the caller's return buffer.  That is right for
+`v = [a]`, where the literal BUILDS into the buffer — and wrong here, because a join does
+not build into its destination: each arm mints its own backing and the assignment REBINDS
+the slot (`PutRef`).  So the buffer is abandoned the moment the join runs and the arm
+store is handed back with no owner.  `(O-Owner)` is violated twice by one return: two
+stores, zero owners.  The same join written at the function TAIL was always clean, because
+there each arm materialises into `__retbuf` and frees its own backing — the BOUND spelling
+simply never reached that path.
 
-Closed by the witness `(O-Complete)` already licenses for a Join (D-own-6's @P290 bracket
-is the same shape): a scope-exit free of a `DbRef` local at a returning exit is emitted as
-`OpFreeRefIfDistinct(v, ret_var)` — free `v` unless it IS what this return is handing
-over.  Which arm ran is a run-time fact a flow-insensitive `deps` cannot hold, so the
-returned value witnesses it.  Conservative in the safe direction: where the sibling arm
-ran, the two are distinct stores and the free happens exactly as before.  Site:
-`scopes.rs::get_free_vars`, citing `@FR-O-Owner` / `@FR-O-Move`.  Guard:
-`tests/scripts/1081-join-arm-freed-on-the-path-that-returns-it.loft`.
+It surfaced as three symptoms, and only the smallest was filed:
 
-**What Face B's closure does NOT fix, and says so.**  The store is no longer freed while
-live — it is now not freed at all.  The callee's join REBINDS the promoted return buffer
-(`PutRef`) instead of building into it, so the caller frees the buffer it allocated
-(`__ref_1`) and never frees the store it actually received.  Measured on the same probe:
-one leaked `main_vector<float>` per call, plus one untyped `kt=65535` store per call —
-the un-taken arm's `__vdb_N`, eagerly allocated by `gen_set_first_ref_null`'s `OpInitRef`
-and never named again (`vector_db` already cures exactly this for a REBIND param and
-says why in its own comment; the arm case is the same conditional `OpDatabase` and is not
-covered).  A leak is the safe direction from a use-after-free that answers wrong, and it
-is what D-own-7 traded for too — but it is a trade, not a closure.
+* **one leaked vector per call**, both backends — the arm store nobody owns;
+* **an untyped `kt=65535` store per call**, interpreter only — the un-taken arm's
+  `__vdb_N`, eagerly allocated by `gen_set_first_ref_null` and never named again;
+* **a silent wrong answer on `--native`, the DEFAULT backend** — the sibling arm was also
+  freed at scope exit on the path that returns it, so the allocator handed the slot
+  straight back and three calls answered the THIRD call's values for all three bindings.
+  The interpreter answered correctly *because it leaked*: the leak was masking the
+  use-after-free, which is why this arrived as a leak report.  Once the eager-allocation
+  half was fixed the mask came off and the wrong answer showed on both backends.
+
+Closed at the promotion, which is where the unsound step is: `classify_ret_promotion`
+refuses the rename for a Vector local bound to a branch join
+(`Parser::var_bound_to_branch`, citing @FR-O-Owner / @FR-O-Move), so the candidate drops
+to `Bind` — the local keeps its own store and is copied into a separate `__retbuf` at the
+return, the shape the tail join already used.  Companion: a `__vdb_N`'s entry null-init is
+now the non-allocating sentinel (`gen_set_first_ref_null`, @FR-O-Derived), because its
+`OpDatabase` sits at a BUILD site that may be conditional — the function prologue already
+sentinel-inits every `__vdb` slot (#260 Fix B) and this was the one site that undid it.
+
+The verdict is STRUCTURAL (does the body contain `Set(v, If …)`) rather than
+ownership-based, because it is needed on PASS 1: `vector_db` runs only on pass 2, so on
+pass 1 the binding's deps are still empty and no arm has minted anything.  A verdict that
+differed across passes would move the hidden buffer argument between them.
+
+⚠ **A first fix here was reverted as inert.**  Making the scope-exit free a runtime witness
+(`OpFreeRefIfDistinct(v, ret_var)`) removed the wrong answer and left both leaks — a trade,
+not a closure.  Once the promotion was fixed at its source, no control could falsify the
+witness any more, so it came out: a guard that cannot fail proves nothing, and it had
+already cost one native regression (`E0425` — a block-local `ret_var` is not in scope where
+the free is emitted).
+
+Guard: `tests/scripts/1081-a-join-bound-to-a-returned-local.loft` — values AND the wrap
+harness's leak gate, both halves falsified by disabling the fix (57 leaked stores, and both
+value cells red on both backends).  Neither half implies the other: silencing the leak by
+freeing the DELIVERED store passes the leak gate and fails every assertion.
+
 
 **The cure Face A needs is a rule decision.**  A binding whose value OWNS on some path
 must own a store on every path.  That means a mixed-ownership

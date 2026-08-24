@@ -727,23 +727,31 @@ mod tests {
         // monorepo (bare repo → org-relative under loft-lang)
         assert_eq!(
             release_url(&mk(Some("loft-libs-core"), None)).as_deref(),
-            Some("https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+            Some(
+                "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
+            )
         );
         // explicit owner/repo
         assert_eq!(
             release_url(&mk(Some("acme/widgets"), None)).as_deref(),
-            Some("https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+            Some(
+                "https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
+            )
         );
         // no `repository` — the origin remote answers, and it answers the same
         // url `loft publish` emits from the same remote.
         assert_eq!(
             release_url(&mk(None, Some("loft-lang/loft-libs-world"))).as_deref(),
-            Some("https://github.com/loft-lang/loft-libs-world/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+            Some(
+                "https://github.com/loft-lang/loft-libs-world/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
+            )
         );
         // `repository` outranks the remote (a package released from elsewhere).
         assert_eq!(
             release_url(&mk(Some("acme/widgets"), Some("loft-lang/loft-libs-world"))).as_deref(),
-            Some("https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz")
+            Some(
+                "https://github.com/acme/widgets/releases/download/crypto-v0.2.1/crypto-0.2.1.tar.gz"
+            )
         );
         // neither: a refusal, and the summary says so instead of printing a url.
         assert_eq!(release_url(&mk(None, None)), None);

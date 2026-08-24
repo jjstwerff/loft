@@ -9718,6 +9718,47 @@ impl Parser {
     /// exit, so a tail viewing it must be materialised (copied) rather than
     /// escaping as a borrow. False ⇒ `v` is defined in an enclosing scope (an
     /// outer local / param returned by the block) — a genuine borrow to keep.
+    /// loft#1081 / D-own-8 — is `v` BOUND to a branch join (`v = if c { … } else { … }`)?
+    ///
+    /// Such a local must not be NRVO-RENAMED onto the caller's return buffer.  The rename
+    /// makes the buffer the assignment's destination, and a join does not BUILD into its
+    /// destination — each arm mints its own backing and the assignment REBINDS the slot
+    /// (`PutRef`).  So the caller's buffer is abandoned the moment the join runs, and the
+    /// arm store is handed back with no owner: one leaked vector per call, on both
+    /// backends.  The same join written at the function TAIL is clean, because there every
+    /// arm materialises into `__retbuf` and frees its own backing — the BOUND spelling
+    /// simply never reaches that path.  Refusing the rename drops it to `Bind`, which
+    /// keeps the local and copies it into a separate buffer at the return.
+    ///
+    /// Enforces @FR-O-Owner and @FR-O-Move: the rebind leaves the caller's buffer with no
+    /// owner AND hands back a store the caller's binding does not name, so a single return
+    /// produces two zero-owner stores where the rule allows none.
+    ///
+    /// Structural, not ownership-based, because the verdict is needed on PASS 1: `vector_db`
+    /// runs only on pass 2, so on pass 1 the binding's deps are still empty and the arms
+    /// have not minted anything yet.  A verdict that differed across passes would move the
+    /// ABI (the hidden buffer argument) between them.  `match` lowers to nested `If`, so
+    /// one shape covers both spellings.
+    fn var_bound_to_branch(l: &[Value], v: u16) -> bool {
+        fn rhs_is_branch(node: &Value) -> bool {
+            match node.unspan() {
+                Value::If(_, _, _) => true,
+                Value::Block(bl) => bl.operators.last().is_some_and(rhs_is_branch),
+                Value::Insert(ops) => ops.last().is_some_and(rhs_is_branch),
+                _ => false,
+            }
+        }
+        fn scan(op: &Value, v: u16) -> bool {
+            match op.unspan() {
+                Value::Set(w, rhs) => *w == v && rhs_is_branch(rhs),
+                Value::Insert(ops) => ops.iter().any(|o| scan(o, v)),
+                Value::Block(bl) => bl.operators.iter().any(|o| scan(o, v)),
+                _ => false,
+            }
+        }
+        l.iter().any(|op| scan(op, v))
+    }
+
     fn block_defines_var(l: &[Value], v: u16) -> bool {
         l.iter().any(|op| Self::stmt_defines_var(op, v))
     }
@@ -11517,9 +11558,16 @@ impl Parser {
         // projection), so this is field-projection-of-a-local only.
         let returns_own_field =
             self.return_field_base_var(body.last().unwrap_or(&Value::Null)) == Some(v);
+        // loft#1081 / D-own-8 — see `var_bound_to_branch`: a vector local bound to a
+        // branch join is REBOUND, not built into, so renaming it onto the caller's
+        // buffer abandons that buffer.  Vector only: a record return re-mints its
+        // destination through `materialize_return_into` and was measured clean here.
+        let bound_to_vector_join = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
+            && Self::var_bound_to_branch(body, v);
         let allow_rename = !(bound_already
             || reassigned
             || returns_own_field
+            || bound_to_vector_join
             // A1b — the site-value (g's buffer) must NOT rename onto __retbuf (that
             // aliases the borrowed subject into the return); fall through to Bind so
             // the return materialises an owned copy into a distinct __retbuf.
