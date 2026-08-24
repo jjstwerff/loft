@@ -1657,6 +1657,13 @@ ci-miri:  ## @PLAN53: run the loft interpreter under Miri (hard-UB gate). SLOW (
 		cargo +nightly miri test --test issues -- --exact \
 		p213_struct_field_basic_int
 
+.PHONY: o-proxy-check
+o-proxy-check:  ## @FR-O-Proxy: does every free on the empty-deps proxy consult the override?
+	@# An empty dep list does not mean "owner" — it means nothing recorded a dep, which is
+	@# also true of a borrow nobody populated (loft#723).  Gated by
+	@# `doc_hygiene::o_proxy_frees_consult_the_override`, which runs this same script.
+	@python3 scripts/o_proxy_check.py
+
 .PHONY: ir-schema-check ir-schema-regen
 ir-schema-check:  ## Is src/ir_schema_gen.rs still what tools/ir_schema/ir.loft generates?
 	@# The generated file IS the store layout (record sizes, field offsets, the Node

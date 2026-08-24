@@ -454,6 +454,37 @@ the same question, which is why they can disagree, and loft#723 is what that loo
 `O-Proxy` carries the first checkable obligation in this space: *a site that FREES on the
 empty-deps proxy must also consult `O-Override`.*
 
+### ✅ That obligation is now enforced (2026-08-24)
+
+`scripts/o_proxy_check.py`, gated by `doc_hygiene::o_proxy_frees_consult_the_override` and
+runnable as `make o-proxy-check`. 20 positive proxy sites, 8 negated, **0 violations**.
+
+**Three discriminations, each of which was a false positive first:**
+
+1. **`!tp.depend().is_empty()` is a different question** — "is this a borrow?" — and needs
+   no override, since a borrow is not freed either way. 8 of the 28 sites are this form.
+2. **The free must be in the region the condition GATES**, not merely nearby. A 20-line
+   window bled across a function boundary and accused `dispatch::materialises_element`, a
+   classifier that frees nothing.
+3. **Comments are not code.** Matching `OpFreeRef` in prose accused `codegen.rs`'s
+   element-materialise arm, whose comment *discusses* a pre-Set free.
+
+⚠ **And the check was VACUOUS until a probe caught it.** Deliberately removing
+`!is_skip_free(v)` from the loft#723 site — the exact regression the rule exists for — did
+not fire it: for a `let NAME = <cond>;` the region collected the *lines mentioning* `NAME`,
+while the free lives inside the block one of those lines opens. Fixing that made the probe
+fire **and immediately turned up a real site the earlier version had hidden.**
+
+**The site it found:** `generation/dispatch.rs`'s `owned_ref_reassign` freed on the proxy
+with no override — while its own comment says it mirrors "the interpreter's predicate", and
+the interpreter's twin has consulted the override since loft#723. Two backends reading
+different facts for the same decision is what `O-NoDiverge` exists to forbid.
+
+**Latent, and said so.** No shape reproduced a fault — including the `??`-materialiser
+shape the code names, under `LOFT_POISON` and `LOFT_STRICT_STORES` and the native leak
+check. Closed anyway, because the rule is what says which fact a free may read, and the
+asymmetry between backends is a defect in its own right.
+
 ⚠ This qualifies a **CLOSED** deviation. `D-own-1` (closed 2026-07-04) records *"the LAST
 per-site ownership re-derivation is now GONE"* and *"every free/copy/move reads `deps`"*.
 Both remain true in the letter — these sites do read `deps`. What is not true is the

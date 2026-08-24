@@ -1592,3 +1592,32 @@ fn ir_schema_gen_matches_its_loft_source() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+/// Every site that FREES on the empty-`deps` proxy must consult the never-free override.
+///
+/// `formal/ownership.md` @FR-O-Proxy. An empty dep list does not mean "owner" — it means
+/// "nothing recorded a dep here", which is also true of a borrow nobody populated, so
+/// freeing on it alone releases a store someone else owns (loft#723).
+///
+/// Shells out to the same script a person runs, so the gate and the tool cannot drift.
+#[test]
+fn o_proxy_frees_consult_the_override() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new("python3")
+        .arg(root.join("scripts/o_proxy_check.py"))
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("SKIP o_proxy_frees_consult_the_override: python3 unavailable ({e})");
+            return;
+        }
+    };
+    assert!(
+        out.status.success(),
+        "@FR-O-Proxy violated:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

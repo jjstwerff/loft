@@ -196,6 +196,14 @@ impl Output<'_> {
                     Type::Reference(_, _) | Type::Enum(_, true, _)
                 )
                 && variables.tp(var).depend().is_empty()
+                // @FR-O-Proxy — the empty dep list is only a PROXY for ownership, so a
+                // free taken on it must consult @FR-O-Override.  The interpreter's twin
+                // (`state/codegen.rs`'s `owned_ref`) already does; this one did not, which
+                // made the two backends read different facts for the same decision — the
+                // asymmetry @FR-O-NoDiverge exists to forbid.  Latent when found (no shape
+                // reproduced a fault, including under LOFT_POISON / LOFT_STRICT_STORES),
+                // and closed because the rule is what says which fact a free may read.
+                && !variables.is_skip_free(var)
                 // A fresh-store-producing rhs: a call, an inline object `Insert`,
                 // or a `Block` that builds a new store (the `nullable_unwrap_copy`
                 // / `ncc` materialisers — `chosen = v[i] ?? d`).  A bare `Var` rhs
