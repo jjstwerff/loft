@@ -267,8 +267,8 @@ fn fn_native_compilable(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> b
 fn walk(v: &Value, data: &Data, visited: &mut HashSet<u32>) -> bool {
     match v {
         // The native backend cannot emit these (concurrency / coroutine) — see
-        // `generation/emit.rs` (Parallel/ParFor emit a non-code comment).
-        Value::Parallel(_) | Value::ParFor(_) | Value::Yield(_) => false,
+        // `generation/emit.rs` (Parallel emits a non-code comment).
+        Value::Parallel(_) | Value::Yield(_) => false,
         // Dynamic dispatch: the runtime callee is unknown → can't prove native.
         Value::CallRef(_, _) => false,
         // A static call: the callee must itself be native, and so must the args.
@@ -280,11 +280,9 @@ fn walk(v: &Value, data: &Data, visited: &mut HashSet<u32>) -> bool {
         Value::Span(b) => walk(&b.1, data, visited),
         Value::Block(b) | Value::Loop(b) => b.operators.iter().all(|x| walk(x, data, visited)),
         Value::Insert(vs) | Value::Tuple(vs) => vs.iter().all(|x| walk(x, data, visited)),
-        Value::Set(_, x)
-        | Value::Return(x)
-        | Value::BreakWith(_, x)
-        | Value::Drop(x)
-        | Value::TuplePut(_, _, x) => walk(x, data, visited),
+        Value::Set(_, x) | Value::Return(x) | Value::Drop(x) | Value::TuplePut(_, _, x) => {
+            walk(x, data, visited)
+        }
         Value::If(c, t, e) => {
             walk(c, data, visited) && walk(t, data, visited) && walk(e, data, visited)
         }

@@ -306,13 +306,49 @@ fn corpus() -> Vec<PathBuf> {
 /// not for one that merely fails there: a wasm failure is the divergence this test is
 /// built to report, and hiding one behind this marker is the exact misuse to refuse.
 fn wasm_opt_out(path: &Path) -> Option<String> {
+    marker(path, "@ORACLE_NO_WASM:")
+}
+
+/// Read one `// @ORACLE_*: <why>` declaration out of a corpus program's header.
+///
+/// Every opt-out this file honours is spelled the same way and read the same way, because
+/// three copies of "scan the header for a tag" is how two of them come to disagree about
+/// what counts as the header.  A marker must sit in the leading comment block: an opt-out
+/// buried beside the code it excuses is one a reader of the file will not see.
+fn marker(path: &Path, tag: &str) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     text.lines()
         .take_while(|l| l.trim_start().starts_with("//") || l.trim().is_empty())
-        .find_map(|l| {
-            l.split_once("@ORACLE_NO_WASM:")
-                .map(|(_, why)| why.trim().to_string())
-        })
+        .find_map(|l| l.split_once(tag).map(|(_, why)| why.trim().to_string()))
+}
+
+/// The reason a corpus program produces NO output, when it declares one.
+///
+/// A program says so in its own header — `// @ORACLE_STATIC_REJECT: <why>` — and every
+/// other program must actually RUN.  This is [`wasm_opt_out`]'s rule one level up: a leg
+/// that drops out silently reads as a leg that agreed, and so does a whole PROGRAM.  Two
+/// backends that both refuse to compile something agree perfectly, so a corpus program
+/// which stops compiling stops testing its axis and the sweep still reports green.
+///
+/// Measured, not hypothetical: `01-nested-arith-in-runtime.loft` — whose stated axis is a
+/// native-only codegen shape that "shows up here and NOWHERE in the interpreter" — had
+/// rotted into a static reject (a dynamic vector index types nullable under C80, and the
+/// program predates that) and was contributing nothing, while the oracle passed.
+fn static_reject_opt_out(path: &Path) -> Option<String> {
+    marker(path, "@ORACLE_STATIC_REJECT:")
+}
+
+/// The reason a corpus program exits NON-ZERO on purpose, when it declares one.
+///
+/// `31-assertion-halt.loft` added the halting axis and its header states the rule this
+/// completes: *"an exit code alone cannot tell a program that stopped at the right place
+/// from one that never started."*  The oracle compares the two backends' exit codes to each
+/// OTHER and never to zero, so a program that begins faulting on both — the shape a shared
+/// mistake takes — is still perfect agreement.  That is what makes an `assert` inside a
+/// corpus program worth writing: without this check a self-test failing identically on both
+/// backends is indistinguishable from a pass.
+fn halt_opt_out(path: &Path) -> Option<String> {
+    marker(path, "@ORACLE_HALTS:")
 }
 
 /// Run the whole corpus on both backends; a divergence on ANY program is a
@@ -328,6 +364,71 @@ fn oracle_corpus_agrees_across_backends() {
         let native = run_mode("--native", &path, &[("LOFT_NATIVE_LEAK_CHECK", "1")]);
         let mut d = divergences(&interp, &native);
         d.extend(driver_agreement(&dump, &interp, &native));
+        // A program that produced nothing tested nothing, however perfectly the backends
+        // agreed about it.  Declaring the reject is what separates `19-reject-type-mismatch`,
+        // whose whole subject IS the reject, from a program that quietly stopped compiling.
+        match (
+            normalise_stdout(&interp.stdout).is_empty(),
+            static_reject_opt_out(&path),
+        ) {
+            (true, None) => d.push(format!(
+                "produced no output, so it exercised nothing — the backends agreed about a \
+                 program that never ran. If the reject IS the subject, say so in the header \
+                 with `// @ORACLE_STATIC_REJECT: <why>`; otherwise fix the program.\n    \
+                 interp stderr = {:?}",
+                normalise_stderr(&interp.stderr)
+                    .chars()
+                    .take(300)
+                    .collect::<String>()
+            )),
+            (false, Some(why)) => d.push(format!(
+                "declares `@ORACLE_STATIC_REJECT: {why}` but DID produce output — drop the \
+                 marker, or the next program to rot into silence inherits its exemption"
+            )),
+            _ => {}
+        }
+        // …and a program that RAN must CHECK ITSELF.  The corpus asserts that the two
+        // backends agree, which two backends wrong in the same way satisfy perfectly —
+        // measured three times over this cycle (the tuple-`&` local, the Join-arm
+        // ownership, the JSON walker), each identical on both sides and each invisible
+        // here.  An in-program `assert` is the only channel that says what a value must
+        // BE rather than what it must MATCH, so a corpus program without one can only
+        // ever report agreement.  A statically-rejected program is exempt because it
+        // never runs; nothing else is.
+        if static_reject_opt_out(&path).is_none()
+            && !std::fs::read_to_string(&path).is_ok_and(|t| t.contains("assert("))
+        {
+            d.push(
+                "has no `assert` — it can only report that the backends AGREE, which two \
+                 backends wrong the same way also do. Give it the expected values, derived \
+                 from the rules rather than read off a run."
+                    .to_string(),
+            );
+        }
+        // …and a program that RAN must also have FINISHED.  Comparing the two backends'
+        // exit codes to each other cannot see a program that faults on both, which is
+        // exactly the shape a shared mistake takes — and it is what an `assert` written
+        // inside a corpus program needs, since a self-check failing on both backends is
+        // otherwise indistinguishable from agreement.
+        if static_reject_opt_out(&path).is_none() {
+            match (interp.exit_code, halt_opt_out(&path)) {
+                (Some(0), Some(why)) => d.push(format!(
+                    "declares `@ORACLE_HALTS: {why}` but exited 0 — drop the marker, or the \
+                     next program to start faulting inherits its exemption"
+                )),
+                (code, None) if code != Some(0) => d.push(format!(
+                    "exited {code:?}, not 0 — the backends agreeing on a FAULT is not the \
+                     same as agreeing on an answer, and an `assert` in this program would \
+                     fail exactly this way. If halting IS the subject, say so in the header \
+                     with `// @ORACLE_HALTS: <why>`.\n    interp stderr = {:?}",
+                    normalise_stderr(&interp.stderr)
+                        .chars()
+                        .take(300)
+                        .collect::<String>()
+                )),
+                _ => {}
+            }
+        }
         // THIRD backend: headless WASM (wasm32-wasip2 / wasmtime), when the toolchain is present.
         // wasm shares the native Rust generator, so a shape that compiles native but breaks wasm —
         // OR breaks BOTH (the compound-&& / format-hook / text-if class this cycle) — is caught here.

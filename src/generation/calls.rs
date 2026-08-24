@@ -262,6 +262,12 @@ impl Output<'_> {
                 // An argument RefVar is already &mut DbRef — pass it
                 // directly instead of dereferencing with *var_name.
                 write!(w, "var_{name}")?;
+            } else if crate::generation::is_raw_tuple_link(caller_vars, *nr) {
+                // A `&`-bound tuple LOCAL holds a raw `*mut (…)`, so `&mut var_b` would
+                // hand the callee a reference to the POINTER.  Re-borrow through it to
+                // give the `&(…)` parameter the `&mut (…)` it declares — the caller's
+                // own tuple, which is what the callee is there to write.
+                write!(w, "unsafe {{ &mut *var_{name} }}")?;
             } else {
                 // A local RefVar alias (#257) is a plain `DbRef` — borrow
                 // it so the callee gets the &mut DbRef it expects.

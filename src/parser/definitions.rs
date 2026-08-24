@@ -2139,28 +2139,10 @@ impl Parser {
                     if reference {
                         // loft#1006 — a `&(…)` reference tuple reaches its elements through the
                         // tuple's stored DbRef with the `(ref, offset)` ops a struct field uses,
-                        // and only the SCALAR kinds are laid out for that. A heap element got as
-                        // far as codegen and died there, as an internal compiler error naming a
-                        // Rust type (`RefTupleGet: unsupported element type Text(Deps { … })`).
-                        // Refusing at the signature costs the same program nothing and says what
-                        // to write; implementing it is layout work, not a missing opcode — the
-                        // op table alone answers an out-of-bounds store.
-                        if !self.first_pass
-                            && let Type::Tuple(ref elems) = tp
-                            && let Some(bad) =
-                                elems.iter().find(|e| !crate::data::ref_tuple_element_ok(e))
-                        {
-                            let bad_name = bad.name(&self.data);
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "a `&` reference tuple may only hold scalar elements, and this \
-                                 one holds `{bad_name}` — take the tuple by value and return a \
-                                 new one, or use a struct, whose fields of any type write \
-                                 through a `&` parameter"
-                            );
-                        }
-                        Type::RefVar(Box::new(tp))
+                        // and only the SCALAR kinds are laid out for that. `ref_var_type` is the
+                        // one place that decides, shared with the annotated-local and `b = &a`
+                        // positions so a `&` refused here cannot be accepted there.
+                        self.ref_var_type(tp)
                     } else {
                         tp
                     }
@@ -2643,15 +2625,7 @@ impl Parser {
         // wrapper was a loophole around that decision.  Checked in
         // pass 2 (layout complete).
         if !self.first_pass
-            && matches!(
-                tp,
-                Type::Vector(_, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_collection(&tp)
             && self.type_carries_closure(&tp)
         {
             diagnostic!(
@@ -3396,14 +3370,19 @@ impl Parser {
             self.data.value_structs.insert(d_nr);
         }
         self.lexer.token("{");
-        // #91: collect init field dependency info for circular detection.
-        let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();
+        // #91: collect init field dependency info for circular detection, each with the
+        // position of the field NAME.  The check can only run once every field is known,
+        // by which time the construct — and `report_pos` with it — is at the closing `}`;
+        // a struct has many fields and "somewhere in this struct" is not an answer.
+        let mut init_deps: Vec<(String, Vec<String>, crate::lexer::Position)> = Vec::new();
         loop {
             self.lexer.has_token("pub");
             // @PLN40 — a `const` field is write-once at construction.  Consume the
             // keyword (if present) and mark the field once it has parsed; see
             // doc/claude/plans/40-const-fields/.
             let is_const = self.lexer.has_keyword("const");
+            // The field name is the current token, so this is its START.
+            let field_pos = self.lexer.peek_pos().clone();
             let Some(a_name) = self.lexer.has_identifier() else {
                 diagnostic!(self.lexer, Level::Error, "Expect attribute");
                 self.context = context;
@@ -3424,7 +3403,11 @@ impl Parser {
                 self.mark_const_field(d_nr, &a_name);
             }
             if !self.init_field_deps.is_empty() {
-                init_deps.push((a_name.clone(), self.init_field_deps.clone()));
+                init_deps.push((
+                    a_name.clone(),
+                    self.init_field_deps.clone(),
+                    field_pos.clone(),
+                ));
             }
             if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
@@ -3942,21 +3925,28 @@ impl Parser {
     }
 
     /// #91: DFS cycle detection on init field dependencies.
-    fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>)]) {
-        let names: HashSet<String> = init_deps.iter().map(|(n, _)| n.clone()).collect();
-        for (start, deps) in init_deps {
+    fn check_circular_init(&mut self, init_deps: &[(String, Vec<String>, Position)]) {
+        let names: HashSet<String> = init_deps.iter().map(|(n, _, _)| n.clone()).collect();
+        for (start, deps, start_pos) in init_deps {
             let mut visited: Vec<String> = vec![start.clone()];
             let mut stack = deps.clone();
             while let Some(dep) = stack.pop() {
                 if dep == *start {
                     visited.push(start.clone());
                     let path = visited.join(" -> ");
-                    diagnostic!(self.lexer, Level::Error, "circular init dependency: {path}");
+                    // Each cycle is reported at the field it STARTS from, which is the
+                    // field the message names first — so two cycles through the same
+                    // fields land on two different lines, as they read.
+                    self.lexer.pos_diagnostic(
+                        Level::Error,
+                        start_pos,
+                        &format!("circular init dependency: {path}"),
+                    );
                     break;
                 }
                 if names.contains(&dep) && !visited.contains(&dep) {
                     visited.push(dep.clone());
-                    if let Some((_, subdeps)) = init_deps.iter().find(|(n, _)| *n == dep) {
+                    if let Some((_, subdeps, _)) = init_deps.iter().find(|(n, _, _)| *n == dep) {
                         stack.extend(subdeps.clone());
                     }
                 }
@@ -4894,8 +4884,8 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
             visit_constant_vars(inner, f)
         }
 
-        // No variable of their own — recurse.  The `u16` on `Break`/`Continue`/
-        // `BreakWith` is a loop level, not a variable, so it is left alone.
+        // No variable of their own — recurse.  The `u16` on `Break`/`Continue` is a
+        // loop level, not a variable, so it is left alone.
         Value::Span(b) => visit_constant_vars(&mut b.1, f),
         Value::Call(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
             args.iter_mut().all(|a| visit_constant_vars(a, f))
@@ -4903,9 +4893,7 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
         Value::Block(bl) | Value::Loop(bl) => {
             bl.operators.iter_mut().all(|o| visit_constant_vars(o, f))
         }
-        Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
-            visit_constant_vars(b, f)
-        }
+        Value::Return(b) | Value::Drop(b) | Value::Yield(b) => visit_constant_vars(b, f),
         Value::If(c, t, e) => {
             visit_constant_vars(c, f) && visit_constant_vars(t, f) && visit_constant_vars(e, f)
         }
@@ -4930,8 +4918,7 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
         | Value::TupleGet(..)
         | Value::TuplePut(..)
         | Value::FnRef(..)
-        | Value::FnRefDnr(_)
-        | Value::ParFor(_) => false,
+        | Value::FnRefDnr(_) => false,
     }
 }
 
@@ -5040,9 +5027,7 @@ pub(crate) fn default_replayable_in_place(value: &crate::data::Value, site: Defa
                 && default_replayable_in_place(t, site)
                 && default_replayable_in_place(e, site)
         }
-        Value::Return(b) | Value::Drop(b) | Value::BreakWith(_, b) | Value::Yield(b) => {
-            default_replayable_in_place(b, site)
-        }
+        Value::Return(b) | Value::Drop(b) | Value::Yield(b) => default_replayable_in_place(b, site),
 
         // Literals name nothing.
         Value::Null
@@ -5067,8 +5052,7 @@ pub(crate) fn default_replayable_in_place(value: &crate::data::Value, site: Defa
         | Value::TupleGet(..)
         | Value::TuplePut(..)
         | Value::FnRef(..)
-        | Value::FnRefDnr(_)
-        | Value::ParFor(_) => false,
+        | Value::FnRefDnr(_) => false,
 
         // `unspan` above already peeled the outer wrapper; peel any nested one too.
         Value::Span(b) => default_replayable_in_place(&b.1, site),

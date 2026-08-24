@@ -183,15 +183,8 @@ impl Parser {
     }
 
     pub(crate) fn is_collection_type(tp: &Type) -> bool {
-        matches!(
-            tp,
-            Type::Vector(_, _)
-                | Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        )
+        // One home: `vectors::is_collection` (formal/IMPLEMENTATIONS.md #4).
+        crate::parser::vectors::is_collection(tp)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -840,14 +833,19 @@ impl Parser {
             // The refusal was never a namespace rule, only this path: `for turn`
             // and `fn go(turn: integer)` accepted the name throughout.
             //
-            // The `:` peek is what @P392 added: without it the typed-local form
-            // produced a function-ref `Value::Int`, back in parse_assign the
-            // `if let Value::Var(_) = code` arm did not match, the `:` was never
-            // consumed, and the user saw a confusing `Expect token ;`.  Binding
-            // yields the `Value::Var` that arm needs, so the form parses.
+            // The typed local is what @P392 added: without it the form produced a
+            // function-ref `Value::Int`, back in parse_assign the `if let
+            // Value::Var(_) = code` arm did not match, the `:` was never consumed,
+            // and the user saw a confusing `Expect token ;`.  Binding yields the
+            // `Value::Var` that arm needs, so the form parses.  It lived here as a
+            // local `peek_token(":")` beside `at_binding_name` until loft#1079,
+            // where the flat-`def_nr` site ABOVE — which has only the one
+            // predicate — returned first for a `both:` function and reproduced the
+            // exact `Expect token ;` @P392 had cured here.  Now all three forms
+            // come from `at_binding_name`, so the sites cannot disagree again.
             if fn_d_nr != u32::MAX
                 && matches!(self.data.def_type(fn_d_nr), DefType::Function)
-                && !(self.at_binding_name() || self.lexer.peek_token(":"))
+                && !self.at_binding_name()
             {
                 *code = Value::Int(fn_d_nr as i32);
                 self.data.def_used(fn_d_nr);
@@ -3267,15 +3265,7 @@ impl Parser {
             // the canonical `[]`.
             // Filled by the brace scan below when `{}` is what stands here.
             let mut braces_span: Option<(u32, u32, u32)> = None;
-            let empty_braces = matches!(
-                td_base,
-                Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-                    | Type::Index(_, _, _)
-            ) && {
+            let empty_braces = crate::parser::vectors::is_collection(&td_base) && {
                 let link = self.lexer.link();
                 // loft#1003 — each brace's own position, taken before it is consumed, so the
                 // fix can spell `{}` -> `[]` as an edit.  Both are needed: `{ }` is the same
@@ -3559,7 +3549,22 @@ impl Parser {
             new_object = true;
             self.data.set_referenced(td_nr, self.context, Value::Null);
             let ret = self.data.def(td_nr).returned();
-            let w = self.vars.work_refs(ret, &mut self.lexer);
+            // loft#1078 — the SECOND pass-2-only arm of this same function, and it kept the
+            // shared counter after loft#848 moved its sibling above off it.  Same failure,
+            // one arm over: `fn pick(c) -> S { w = S{a:7}; r = if c { S{a:9} } else { w }; r }`
+            // mints nothing here on pass 1 (the view-return materialiser takes `__ref_1` and
+            // `ref_return` renames it onto the return buffer), so on pass 2 this literal is
+            // handed the name pass 1 left on that buffer — `return_buffer()` resolves the
+            // buffer BY NAME, so the arm's record and the return destination became one
+            // slot.  The return then re-mints it with `OpDatabase` before copying, and the
+            // fresh arm answered `0` on BOTH backends while the borrow arm was correct.
+            // A pass-2-only mint site draws from the pass-2 sequence — see
+            // `Vars::work_ref_p2`.
+            let w = if crate::keys::p2_object_workref_enabled() {
+                self.vars.work_refs_p2(ret, &mut self.lexer)
+            } else {
+                self.vars.work_refs(ret, &mut self.lexer)
+            };
             let tp = i32::from(self.data.def(td_nr).known_type());
             list.push(v_set(w, Value::Null));
             list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(tp)]));
@@ -3798,14 +3803,7 @@ impl Parser {
     /// Whether this collection kind is KEYED, which is what makes a group form at all — a
     /// pair of plain `vector` fields over one element type stays two collections.
     fn is_keyed_collection(tp: &Type) -> bool {
-        matches!(
-            tp,
-            Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        )
+        crate::parser::vectors::is_keyed(tp)
     }
 
     /// Advise when ONE literal fills two members of a linked collection group (loft#926).
@@ -4086,15 +4084,7 @@ impl Parser {
             // Prime it here too, and note this covers keyed collections as well: a
             // `hash<T[k]> = []` failed identically, and `text` never did because it is not
             // header-shaped.
-            if matches!(
-                &tp,
-                Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            ) {
+            if crate::parser::vectors::is_collection(&tp) {
                 // loft#924 — a group member's header was already zeroed with its
                 // siblings', ahead of every fill. Writing it again here is what made
                 // an OMITTED view field lose the records the primary already holds:
@@ -4358,15 +4348,7 @@ impl Parser {
             list.push(v_if(not_null, Value::Insert(present), Value::Null));
             return;
         }
-        if matches!(
-            td_base,
-            Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-                | Type::Index(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(&td_base) {
             // loft#917 — `H { xs: null }` on a field declared `?`.  The header prime in
             // `parse_object` has already zeroed the slot, and zero is the EMPTY collection;
             // leaving it there is what made `xs: null` and `xs: []` byte-identical and

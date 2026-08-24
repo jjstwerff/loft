@@ -376,3 +376,39 @@ pub fn cached_default() -> (Data, Stores) {
     });
     (data.clone(), db.clone())
 }
+
+/// The one reader for a `// @EXPECT_…` annotation, so the interpreter and native runners
+/// cannot disagree about what a file DECLARES.
+///
+/// An annotation is a comment line whose text begins with the tag; anything else — a
+/// sentence in the file header that happens to name the tag — declares nothing.  The
+/// distinction is load-bearing because the native runner skips a whole file on the
+/// strength of it: reading the tag with a plain `contains` dropped five scripts from that
+/// suite for a comment recording that the file had STOPPED being an expected-error case,
+/// `93-vector-advanced.loft`'s forty-nine assertions among them.
+///
+/// Returns the text after the tag, so a caller that wants the pattern and a caller that
+/// only wants "is one present" read the same rule.
+#[allow(dead_code)]
+pub fn expect_tag<'a>(line: &'a str, tag: &str) -> Option<&'a str> {
+    let comment = line.trim().strip_prefix("//")?;
+    comment.trim().strip_prefix(tag)
+}
+
+/// Does this source declare an expected parse/scope ERROR?  Such a file never reaches
+/// execution — `wrap` stops at "errors consumed" and the native runner skips it — so
+/// every runtime assertion in it is inert.
+#[allow(dead_code)]
+pub fn declares_expect_error(source: &str) -> bool {
+    source
+        .lines()
+        .any(|l| expect_tag(l, "@EXPECT_ERROR:").is_some())
+}
+
+/// Does this source declare an expected FAILURE (a compile panic or a failing assert)?
+#[allow(dead_code)]
+pub fn declares_expect_fail(source: &str) -> bool {
+    source
+        .lines()
+        .any(|l| expect_tag(l, "@EXPECT_FAIL").is_some())
+}

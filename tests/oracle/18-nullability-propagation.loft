@@ -10,17 +10,35 @@ fn honest_div(a: integer, b: integer) -> integer? { a / b }
 fn first_tag(v: vector<Slot>) -> text { (v[0] ?? Slot { id: 0, tag: "?" }).tag ?? "none" }
 
 fn main() {
-    // div-by-zero yields null and CONTINUES (both backends); ?? discharges it.
-    println("d0={honest_div(10, 0) ?? -1} d2={honest_div(10, 2) ?? -1}");
+    // Every cell is a PAIR — the null case beside the present one — because a backend
+    // that returned null for everything, or for nothing, agrees with itself on half of
+    // them.  The fallbacks are distinct values so a wrong one names itself.
+    d0 = honest_div(10, 0) ?? -1;
+    d2 = honest_div(10, 2) ?? -1;
+    assert(d0 == -1, "10/0 is null, so `??` supplies -1; got {d0}");
+    assert(d2 == 5, "10/2 is 5 and is NOT discharged to the fallback; got {d2}");
+    println("d0={d0} d2={d2}");
     // a chain of ?? over out-of-range indexing
     xs = [1, 2, 3];
-    println("oob={xs[9] ?? -7} in={xs[1] ?? -7}");
+    oob = xs[9] ?? -7; inr = xs[1] ?? -7;
+    assert(oob == -7, "index 9 of a 3-vector is null (C80), not a wrapped element; got {oob}");
+    assert(inr == 2, "index 1 is the second element; got {inr}");
+    println("oob={oob} in={inr}");
     // optional field: null vs present, discharged directly
     slots = [Slot { id: 1, tag: null }, Slot { id: 2, tag: "gold" }];
     a = slots[0] ?? Slot { id: 0, tag: "?" };
     b = slots[1] ?? Slot { id: 0, tag: "?" };
-    println("tag0={a.tag ?? "NULL"} tag1={b.tag ?? "NULL"} first={first_tag(slots)}");
+    t0 = a.tag ?? "NULL"; t1 = b.tag ?? "NULL"; ft = first_tag(slots);
+    assert(t0 == "NULL", "an explicitly-null optional field reads null; got `{t0}`");
+    assert(t1 == "gold", "…and a present one keeps its text; got `{t1}`");
+    // The loft#500 shape: a nested-ncc optional-TEXT return.  `first_tag` reaches a
+    // present element whose tag is null, so the INNER `??` fires and the outer does not.
+    assert(ft == "none", "slots[0] exists but its tag is null, so the inner ?? gives `none`; got `{ft}`");
+    println("tag0={t0} tag1={t1} first={ft}");
     // null threaded through arithmetic then discharged
     n: integer? = null;
-    println("nullarith={(n ?? 0) + 5} sum={honest_div(20, 4) ?? 0}");
+    na = (n ?? 0) + 5; sm = honest_div(20, 4) ?? 0;
+    assert(na == 5, "a discharged null is 0, so 0 + 5 = 5; got {na}");
+    assert(sm == 5, "20/4 = 5; got {sm}");
+    println("nullarith={na} sum={sm}");
 }

@@ -725,8 +725,9 @@ impl Stores {
             slot != u16::MAX,
             "store table exhausted: 65535 stores live at once (store_nr is \
              u16; 65535 is the null sentinel).  This usually indicates a \
-             store leak — run with LOFT_STORES=summary to list live stores \
-             by type."
+             store leak — run with LOFT_STORES=timeline, which lists the live \
+             stores by type and says whether they are a LEAK or a large but \
+             clean working set."
         );
         if slot >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
@@ -1312,7 +1313,7 @@ impl Stores {
     /// the leak-check preview) buried the signal in store numbers; naming the culprit
     /// directly (e.g. `kt=68 ChunkKey×6026`) is what pinpointed the @P317 native
     /// ref-local leak.  Used by `LOFT_NATIVE_LEAK_CHECK` (native) and
-    /// `LOFT_STORES=summary` (interp).
+    /// `LOFT_STORES=timeline` (interp).
     #[must_use]
     pub fn collect_store_leaks(&self) -> Vec<String> {
         let mut by_type: std::collections::BTreeMap<(u16, &str), usize> =
@@ -2989,7 +2990,36 @@ impl Stores {
                     }
                 }
             }
-            _ => {}
+            // The kinds with nothing to claim, each saying why — the arm set is
+            // EXHAUSTIVE on purpose, so a new `Parts` variant fails the build here
+            // instead of silently joining the not-copied set.  Its sibling
+            // `validate_claims` was made exhaustive for the same reason a day earlier;
+            // this is the keystone Cluster C folded every source enumeration onto, so a
+            // kind missing from it is a kind the deep-copy walks past.
+            //
+            // A non-text `Base` and the four narrow-integer widths hold a VALUE in the
+            // record's own bytes.  The block copy that precedes this walk already moved
+            // those bytes; there is no second record to claim.
+            Parts::Base
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::ShortRaw(_, _)
+            | Parts::Int(_, _) => {}
+            // A stored 12-byte `DbRef` — the closure half of a `fn(…)` struct field — is
+            // deliberately NOT re-pointed: the copy keeps the source's pointer and ALIASES
+            // its closure record, which is why a bound fn-ref field read is marked
+            // `skip_free` (`tests/scripts/85-poison-return-tail-uaf.loft` t5).
+            //
+            // ⚠ That is sound only because the copy can never outlive the source, and
+            // what guarantees it lives in ANOTHER file: #318 refuses a capturing-closure
+            // holder as a return value, as a collection element and as a field of another
+            // struct, and a fn-ref struct field admits ONE capture shape program-wide.
+            // Measured 2026-08-22 — every escape route is refused at compile time, and
+            // the two legal copies (passed down by value; copied out of an inner scope)
+            // answer correctly on both backends under `LOFT_POISON=1` with store churn.
+            // Relax any of those refusals and this arm becomes a use-after-free with
+            // nothing at this site to catch it.
+            Parts::DbRef => {}
         }
     }
 

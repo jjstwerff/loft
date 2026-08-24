@@ -15,18 +15,28 @@ fn adder(base: integer, factor: integer) -> fn(integer) -> integer {
 fn main() {
   f = adder(100, 5);
   g = adder(1000, 2);   // a second record must NOT reuse the first's store
-  print("f3={f(3)} f0={f(0)} g3={g(3)}\n"); // 115, 100, 1006
+  f3 = f(3); f0 = f(0); g3 = g(3);
+  // If the second factory call reused the first's capture record (the H2 store-reuse
+  // bug) `f3` would read `g`'s base — so the two closures are checked against each
+  // other's constants, not just against a total.
+  assert(f3 == 115, "100 + 3*5, from f's OWN captures; got {f3}");
+  assert(f0 == 100, "100 + 0*5 — f's base survives the second factory call; got {f0}");
+  assert(g3 == 1006, "1000 + 3*2, from g's own captures; got {g3}");
+  print("f3={f3} f0={f0} g3={g3}\n");
 
   // map over a vector (inferred `|x|` lambda), then sum
   v = [1, 2, 3, 4];
   doubled = v.map(|x| { x * 5 });
   sd = 0;
   for x in doubled { sd += x; }
-  print("sumdoubled={sd}\n"); // (1+2+3+4)*5 = 50
+  assert(sd == 50, "(1+2+3+4)*5 = 50; got {sd}");
+  print("sumdoubled={sd}\n");
 
   // filter, then sum
   kept = v.filter(|x| { x > 2 });
   sk = 0;
   for x in kept { sk += x; }
-  print("sumkept={sk} keptlen={len(kept)}\n"); // 3+4=7, len 2
+  assert(sk == 7, "3+4 = 7; got {sk}");
+  assert(len(kept) == 2, "two of four are > 2; got {len(kept)}");
+  print("sumkept={sk} keptlen={len(kept)}\n");
 }

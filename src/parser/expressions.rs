@@ -116,11 +116,11 @@ fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
-/// Descent comes from `Value::for_each_child`, so a new compound variant
-/// cannot be silently missed (A15).  The hand-rolled predecessor treated
-/// `BreakWith` as a leaf and missed a `Set` inside its value — the unified
-/// walker descends it (pass-2 wave 2 widening; the wider answer is the
-/// correct null-init insertion point).
+/// Descent comes from `Value::for_each_child`, the one place that knows the IR
+/// tree's shape, so every compound variant is reached and a new one is inherited
+/// rather than needing an arm here (A15).  The answer is deliberately the WIDE
+/// one: a `Set` at any depth counts, because the first statement that assigns the
+/// temporary is the correct null-init insertion point wherever it sits.
 fn inline_ref_set_in(val: &Value, r: u16) -> bool {
     val.any_node(&mut |n| matches!(n, Value::Set(v, _) if *v == r))
 }
@@ -262,7 +262,6 @@ fn ir_mentions_var(val: &Value, target: u16) -> bool {
         }
         Value::Set(_, body)
         | Value::Return(body)
-        | Value::BreakWith(_, body)
         | Value::Drop(body)
         | Value::TuplePut(_, _, body)
         | Value::Yield(body) => ir_mentions_var(body, target),
@@ -275,12 +274,6 @@ fn ir_mentions_var(val: &Value, target: u16) -> bool {
             ir_mentions_var(a, target) || ir_mentions_var(b, target) || ir_mentions_var(c, target)
         }
         Value::Span(b) => ir_mentions_var(&b.1, target),
-        Value::ParFor(b) => {
-            ir_mentions_var(&b.input, target)
-                || ir_mentions_var(&b.worker, target)
-                || ir_mentions_var(&b.threads, target)
-                || ir_mentions_var(&b.body, target)
-        }
     }
 }
 
@@ -314,7 +307,6 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
         | Value::Return(v)
         | Value::Drop(v)
         | Value::Yield(v)
-        | Value::BreakWith(_, v)
         | Value::TuplePut(_, _, v) => substitute_value(v, from, to),
         Value::Iter(_, a, b, c) => {
             substitute_value(a, from, to);
@@ -330,12 +322,6 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
         // wrapped node.
         Value::Span(b) => substitute_value(&mut b.1, from, to),
         // Plan-06 spine step 3 — recurse into all child Values.
-        Value::ParFor(b) => {
-            substitute_value(&mut b.input, from, to);
-            substitute_value(&mut b.worker, from, to);
-            substitute_value(&mut b.threads, from, to);
-            substitute_value(&mut b.body, from, to);
-        }
         // Leaf variants.
         Value::Null
         | Value::Int(_)
@@ -515,11 +501,9 @@ impl Parser {
                 self.wrap_value_text_dest(t);
                 self.wrap_value_text_dest(e);
             }
-            Value::Return(x)
-            | Value::Drop(x)
-            | Value::Yield(x)
-            | Value::BreakWith(_, x)
-            | Value::TuplePut(_, _, x) => self.wrap_value_text_dest(x),
+            Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::TuplePut(_, _, x) => {
+                self.wrap_value_text_dest(x)
+            }
             Value::Iter(_, a, b, c) => {
                 self.wrap_value_text_dest(a);
                 self.wrap_value_text_dest(b);
@@ -531,12 +515,6 @@ impl Parser {
                 }
             }
             Value::Span(b) => self.wrap_value_text_dest(&mut b.1),
-            Value::ParFor(b) => {
-                self.wrap_value_text_dest(&mut b.input);
-                self.wrap_value_text_dest(&mut b.worker);
-                self.wrap_value_text_dest(&mut b.threads);
-                self.wrap_value_text_dest(&mut b.body);
-            }
             _ => {}
         }
     }
@@ -858,7 +836,7 @@ impl Parser {
                 self.rotate_retbufs_in(e, in_loop, partners);
             }
             Value::Span(b) => self.rotate_retbufs_in(&mut b.1, in_loop, partners),
-            Value::Set(_, b) | Value::Return(b) | Value::Drop(b) | Value::BreakWith(_, b) => {
+            Value::Set(_, b) | Value::Return(b) | Value::Drop(b) => {
                 self.rotate_retbufs_in(b, in_loop, partners);
             }
             _ => {}
@@ -1403,14 +1381,14 @@ use a separate collection or add after the loop"
         false
     }
 
-    /// Apply the operator `op` to an already-parsed LHS and parse the RHS,
-    /// then rewrite `code` into the assignment IR. Returns `Type::Void`.
-    // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
+    /// Decides @FR-B-Copy vs @FR-B-View / @FR-B-View-Base for a whole-value vector bind:
+    /// off an OWNED base a collection projection copies, off a BORROWED one it views.
+    ///
+    /// The pure selector for the C86 whole-value vector bind at `parse_assign_op`'s copy
+    /// branch — the rule rationale lives on the `VecBind` variants, and the branch applies
+    /// mechanics only.  Runs on BOTH passes: `change_var` re-types per pass, and emission
+    /// is pass-2, so a pass-1 answer that differs is a re-type, not a disagreement.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    /// The pure selector for the C86 whole-value vector bind at
-    /// `parse_assign_op`'s copy branch — rule rationale on the `VecBind`
-    /// variants; the branch applies mechanics only.  Fires on BOTH passes
-    /// (`change_var` re-types per pass; emission is pass-2).
     fn classify_vec_bind(
         &self,
         code: &Value,
@@ -1532,14 +1510,7 @@ use a separate collection or add after the loop"
         // deliberately not `is_equal`, and `convert` has no arm for the pair, so the
         // carve-out is named here rather than widened into either of them.
         if let Type::Vector(src_elem, _) = s_type
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(f_type)
             && f_type.content().is_equal(src_elem)
         {
             return false;
@@ -1781,6 +1752,9 @@ use a separate collection or add after the loop"
         out
     }
 
+    /// Apply the operator `op` to an already-parsed LHS and parse the RHS, then rewrite
+    /// `code` into the assignment IR.  Returns `Type::Void`.
+    // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_assign_op(
         &mut self,
@@ -1835,14 +1809,7 @@ use a separate collection or add after the loop"
         // before reaching it.
         if op == "+="
             && var_nr != u16::MAX
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(f_type)
             && self.lexer.peek_token("[")
         {
             let elm_tp = f_type.content();
@@ -1907,14 +1874,7 @@ use a separate collection or add after the loop"
         //    do not correspond and the transparent-construction path owns that shape.
         if op == "+="
             && var_nr != u16::MAX
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(f_type)
             && let elm_tp = f_type.content()
             && let Type::Reference(elm_d, _) = &elm_tp
             && !self.data.def(*elm_d).name.starts_with("__nullable<")
@@ -2041,10 +2001,18 @@ use a separate collection or add after the loop"
             // (interp: `GetStackRef` deref; native: the record DbRef by value, the #257
             // alias shape).  A heap source additionally marks `p` non-owning (skip_free):
             // `o` frees the record, not the alias.
+            // A TUPLE local joins the scalars here rather than the heap sources below:
+            // it lives in the frame, so `OpCreateStack` gives exactly the stack ref a
+            // `&(…)` PARAMETER is already handed at its call site, and the element ops
+            // read it at the same `(ref, offset)` pair.  Without this arm the `&` reached
+            // no lowering at all — `b = &a` silently COPIED the tuple (B-Ref-Alias says
+            // it must LINK), and `b: &(integer, integer) = a` typed `b` as a reference
+            // over a value, so the interpreter read an element as a store index and
+            // `--native` handed the user a raw `E0308` (D-tup-2).
             let stack_src = match *code.unspan() {
                 Value::Var(src)
                     if is_scalar(self.vars.tp(src))
-                        || matches!(self.vars.tp(src), Type::Reference(..)) =>
+                        || matches!(self.vars.tp(src), Type::Reference(..) | Type::Tuple(_)) =>
                 {
                     Some(src)
                 }
@@ -2090,7 +2058,16 @@ use a separate collection or add after the loop"
                 // no `Deps` slot (`depending` is the identity there), which is
                 // consistent: a scalar `&` binder owns no store, so there is no
                 // free decision to derive.
-                s_type = Type::RefVar(Box::new(if is_ref { inner.depending(src) } else { inner }));
+                let linked = if is_ref { inner.depending(src) } else { inner };
+                // An ANNOTATED binding was already gated when the annotation was parsed —
+                // and that is the site that has to hold it, because a `&(…) = <not a
+                // variable>` never reaches this lowering at all.  Here the gate covers the
+                // other spelling, `b = &a`, whose element types nothing has looked at yet.
+                s_type = if var_nr != u16::MAX && self.vars.is_annotated(var_nr) {
+                    Type::RefVar(Box::new(linked))
+                } else {
+                    self.ref_var_type(linked)
+                };
             } else if let Some(eref) = heap_ref {
                 amp_unlowered = false;
                 // `c`/`r` holds the field/element DbRef; interp reads/writes it via the
@@ -2100,6 +2077,33 @@ use a separate collection or add after the loop"
                 *code = eref;
                 s_type = Type::RefVar(Box::new(s_type));
             }
+        }
+        // A `&` of a tuple PLACE (`b = &v[0]`, `b = &s.pair`) reaches no lowering above,
+        // and unlike the struct projection below it cannot be left alone: a tuple place is
+        // read ELEMENT-WISE into a fresh by-value tuple before the `&` is ever seen, so
+        // there is no place left to link to.  Declining is what binding.md B-Ref-Reshape
+        // prescribes where the link cannot be honoured — *"loft will not quietly downgrade
+        // the reference to a copy"* — and quietly downgrading is exactly what happened:
+        // `b.0 = 9` wrote the copy, the source was unchanged, no diagnostic was issued, and
+        // both backends agreed, so the differential could not see it either (D-tup-2).
+        if amp_unlowered
+            && !self.first_pass
+            && matches!(
+                s_type.base(),
+                Type::Tuple(_) | Type::RefVar(_) if matches!(
+                    if let Type::RefVar(ref i) = *s_type.base() { i.base() } else { s_type.base() },
+                    Type::Tuple(_)
+                )
+            )
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a `&` reference to a tuple ELEMENT or FIELD is not a live link — a tuple \
+                 place is read element by element, so there is nothing left to point at. \
+                 Bind the tuple to a local first and take `&` of that, or write the \
+                 element back explicitly"
+            );
         }
         // @PLN130 F9 step 2 — the `&` reached no lowering, so record it on the VARIABLE:
         // the IR is about to lose it entirely.  A marker rather than `Type::RefVar` on
@@ -2387,17 +2391,7 @@ use a separate collection or add after the loop"
         // the LHS type).  Strict rule: vector push MUST use `+= [elem]`
         // (explicit brackets).  Falls through to the diagnostic below
         // when the RHS doesn't match the concat shape.
-        if op == "+="
-            && var_nr != u16::MAX
-            && matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
-        {
+        if op == "+=" && var_nr != u16::MAX && crate::parser::vectors::is_keyed(f_type) {
             let elm_tp = f_type.content();
             if !elm_tp.is_unknown() && elm_tp.is_equal(&s_type) {
                 if !self.first_pass {
@@ -3150,14 +3144,7 @@ use a separate collection or add after the loop"
             return Type::Void;
         }
         if let Some(kt) = keyed_kt
-            && matches!(
-                s_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_keyed(&s_type)
             && !matches!(code, Value::Insert(_) | Value::Null)
         {
             // `s = s` self-assign — emit nothing rather than clear+recopy
@@ -3319,15 +3306,7 @@ use a separate collection or add after the loop"
             && var_nr == u16::MAX
             && op == "+="
             && dbref_append_target
-            && matches!(
-                f_type,
-                Type::Vector(_, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && crate::parser::vectors::is_collection(f_type)
             && matches!(code, Value::Insert(_))
         {
             let elm_tp = f_type.content();
@@ -3792,7 +3771,20 @@ use a separate collection or add after the loop"
     /// stdlib functions.  Two shapes bind, and before loft#756 only the first
     /// was recognised:
     ///
-    /// * `name = …` / `name: T = …` — the next token is `=` (never `==`).
+    /// * `name = …` — the next token is `=` (never `==`).
+    /// * the TYPED local `name: T = …`, where the next token is the `:` of the
+    ///   annotation.  loft#1079 — this arm was written into the doc above from
+    ///   the day loft#756 was closed, but only ONE of the three call sites
+    ///   actually peeked the `:` (@P392, in the bare-function-reference path of
+    ///   `parse_var`).  The site above it — the flat `def_nr(name)` lookup —
+    ///   never did, so a `both:` stdlib function, which registers a `Dynamic`
+    ///   definition under its RAW spelling as well as `n_<name>`, matched there
+    ///   and returned before the `:`-aware site was reached.  `exp: integer = 5`
+    ///   then left the `:` unconsumed and the user saw *"Expect token ;"* on a
+    ///   line whose syntax is correct.  A `self:` method (no `n_`/raw entry) and
+    ///   a plain global (no raw entry) both bound fine, which is why the failure
+    ///   read as "stdlib names are reserved" when the real axis is how the
+    ///   receiver is declared.
     /// * an element of a tuple destructuring, `(a, trim) = pair()`, where the
     ///   next token is the `,` or `)` of the LHS list.  Missing this made the
     ///   two assignment forms disagree about what a legal binding name is:
@@ -3802,8 +3794,17 @@ use a separate collection or add after the loop"
     ///
     /// `in_tuple_lhs` is only ever set for a `( … ) =` statement, so the `,`
     /// and `)` arms cannot fire on an ordinary parenthesised expression.
+    ///
+    /// The `:` arm excludes `::` and `:=`, which START with a colon and bind
+    /// nothing — the same pair [`crate::lexer::Lexer::peek_named_arg`] excludes
+    /// when it decides whether an `ident :` opens a named argument.  A named
+    /// argument is the other `ident :` that is not a binding, and it never
+    /// reaches here: the argument-list parser consumes the name first.
     pub(crate) fn at_binding_name(&self) -> bool {
         (self.lexer.peek_token("=") && !self.lexer.peek_token("=="))
+            || (self.lexer.peek_token(":")
+                && !self.lexer.peek_token("::")
+                && !self.lexer.peek_token(":="))
             || (self.in_tuple_lhs && (self.lexer.peek_token(",") || self.lexer.peek_token(")")))
     }
 
@@ -3905,7 +3906,10 @@ use a separate collection or add after the loop"
                 // `vector` arm), so a `vector<S>` annotation already arrives
                 // rewritten; no per-site hook here.
                 let tp = if is_ref {
-                    Type::RefVar(Box::new(tp))
+                    // D-tup-2 — the SAME admitted-element gate the signature uses; before it
+                    // was shared, a `&(text, text)` LOCAL sailed past the refusal a `&(text,
+                    // text)` PARAMETER got and reached codegen as an internal compiler error.
+                    self.ref_var_type(tp)
                 } else {
                     tp
                 };

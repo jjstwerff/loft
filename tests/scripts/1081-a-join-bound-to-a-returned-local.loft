@@ -1,0 +1,182 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A vector-valued `if` BOUND to a local the function then returns — D-own-8 in
+// `formal/ownership.md`, both of its faces on one shape.
+//
+// Each arm mints its own backing store, and the join's `deps` fact names ONE of them for
+// BOTH paths.  Two things went wrong on that one fact:
+//
+//   * the SIBLING arm was freed unconditionally at scope exit — on the very path that
+//     RETURNS it.  The caller then held a freed store and the allocator handed the slot
+//     straight back on the next call, so consecutive calls aliased: on `--native` three
+//     calls answered the THIRD call's values for all three bindings, silently.  The
+//     interpreter answered correctly because there the same defect LEAKS instead of
+//     recycling — the leak was hiding the use-after-free.
+//   * the local was NRVO-RENAMED onto the caller's return buffer.  A join does not BUILD
+//     into its destination; each arm mints and the assignment REBINDS the slot.  So the
+//     buffer was abandoned the moment the join ran and the arm store came back with no
+//     owner — one leaked vector per call, on BOTH backends, plus (interpreter-only) the
+//     un-taken arm's eagerly allocated, never-typed `kt=65535` backing.
+//
+// The same join written at the function TAIL was always clean, because there every arm
+// materialises into `__retbuf` and frees its own backing.  The cure routes the bound
+// spelling to the same place: refuse the rename, keep the local, copy it into the buffer
+// at the return, and free each arm's backing against the buffer as the runtime witness
+// `(O-Complete)` licenses for a Join.
+//
+// This file pins the VALUES; the harness's leak gate pins the stores.  Both halves are
+// needed and neither implies the other — a "fix" that silenced the leak by freeing the
+// DELIVERED store would pass the leak gate and fail every assertion here, which is the
+// over-free this shape sits one step away from.  The values are distinct per call on
+// purpose: equal ones would have agreed with the bug.
+
+fn pick1081(m: boolean, a: float, b: float) -> vector<float> {
+  v: vector<float> = if m { [a, b] } else { [a] };
+  v
+}
+
+fn pick_match1081(k: integer, a: float, b: float) -> vector<float> {
+  v: vector<float> = match k { 0 => [a, b], _ => [a] };
+  v
+}
+
+struct P1081 { px: float }
+fn pick_struct1081(m: boolean, a: float, b: float) -> vector<P1081> {
+  v: vector<P1081> = if m { [P1081 { px: a }, P1081 { px: b }] } else { [P1081 { px: a }] };
+  v
+}
+
+// The join arms spelled as CALLS rather than literals — the arm still owns a fresh store,
+// it just arrives through a return buffer of its own.
+fn two1081(a: float, b: float) -> vector<float> { [a, b] }
+fn one1081(a: float) -> vector<float> { [a] }
+fn pick_calls1081(m: boolean, a: float, b: float) -> vector<float> {
+  v: vector<float> = if m { two1081(a, b) } else { one1081(a) };
+  v
+}
+
+// ── the shapes that were ALWAYS clean and must stay clean ───────────────────────────────
+fn pick_noif1081(a: float) -> vector<float> {
+  v: vector<float> = [a];
+  v
+}
+fn pick_tail1081(m: boolean, a: float, b: float) -> vector<float> {
+  if m { [a, b] } else { [a] }
+}
+fn pick_imperative1081(m: boolean, a: float, b: float) -> vector<float> {
+  v: vector<float> = [a];
+  if m { v += [b]; }
+  v
+}
+// A join bound to a local that is NOT returned — no promotion, so no rename to refuse.
+fn sum_local1081(m: boolean, a: float, b: float) -> float {
+  v: vector<float> = if m { [a, b] } else { [a] };
+  t = 0.0;
+  for s in v { t += s; }
+  t
+}
+// A borrow arm against a fresh arm: the result must still be the caller's own value, and
+// the parameter it may alias must survive the call.
+fn keep_or_new1081(m: boolean, src: vector<float>) -> vector<float> {
+  v: vector<float> = if m { [99.0] } else { src };
+  v
+}
+
+fn test_a_returned_join_arm_survives_the_next_call() {
+  r1 = pick1081(true, 1.0, 2.0);
+  r2 = pick1081(true, 30.0, 40.0);
+  r3 = pick1081(true, 500.0, 600.0);
+  assert((r1[0] ?? -1.0) == 1.0, "r1[0] is 1.0, got {r1[0] ?? -1.0}");
+  assert((r1[1] ?? -1.0) == 2.0, "r1[1] is 2.0, got {r1[1] ?? -1.0}");
+  assert((r2[0] ?? -1.0) == 30.0, "r2[0] is 30.0, got {r2[0] ?? -1.0}");
+  assert((r2[1] ?? -1.0) == 40.0, "r2[1] is 40.0, got {r2[1] ?? -1.0}");
+  assert((r3[0] ?? -1.0) == 500.0, "r3[0] is 500.0, got {r3[0] ?? -1.0}");
+  assert((r3[1] ?? -1.0) == 600.0, "r3[1] is 600.0, got {r3[1] ?? -1.0}");
+}
+
+fn test_the_other_arm_is_the_same_shape() {
+  s1 = pick1081(false, 7.0, 0.0);
+  s2 = pick1081(false, 9.0, 0.0);
+  assert((s1[0] ?? -1.0) == 7.0, "s1[0] is 7.0, got {s1[0] ?? -1.0}");
+  assert((s2[0] ?? -1.0) == 9.0, "s2[0] is 9.0, got {s2[0] ?? -1.0}");
+  assert(len(s1) == 1, "the one-element arm stays one element, got {len(s1)}");
+}
+
+fn test_the_two_arms_interleaved() {
+  a1 = pick1081(true, 11.0, 12.0);
+  b1 = pick1081(false, 21.0, 0.0);
+  a2 = pick1081(true, 31.0, 32.0);
+  b2 = pick1081(false, 41.0, 0.0);
+  assert((a1[0] ?? -1.0) == 11.0, "a1[0] is 11.0, got {a1[0] ?? -1.0}");
+  assert((b1[0] ?? -1.0) == 21.0, "b1[0] is 21.0, got {b1[0] ?? -1.0}");
+  assert((a2[0] ?? -1.0) == 31.0, "a2[0] is 31.0, got {a2[0] ?? -1.0}");
+  assert((b2[0] ?? -1.0) == 41.0, "b2[0] is 41.0, got {b2[0] ?? -1.0}");
+  assert(len(a1) == 2 && len(b1) == 1, "arm lengths 2 and 1, got {len(a1)} and {len(b1)}");
+}
+
+fn test_a_match_join_is_the_same_join() {
+  m1 = pick_match1081(0, 3.0, 4.0);
+  m2 = pick_match1081(0, 50.0, 60.0);
+  assert((m1[0] ?? -1.0) == 3.0, "m1[0] is 3.0, got {m1[0] ?? -1.0}");
+  assert((m1[1] ?? -1.0) == 4.0, "m1[1] is 4.0, got {m1[1] ?? -1.0}");
+  assert((m2[1] ?? -1.0) == 60.0, "m2[1] is 60.0, got {m2[1] ?? -1.0}");
+}
+
+fn test_call_shaped_arms_are_the_same_shape() {
+  c1 = pick_calls1081(true, 5.0, 6.0);
+  c2 = pick_calls1081(true, 70.0, 80.0);
+  c3 = pick_calls1081(false, 90.0, 0.0);
+  assert((c1[0] ?? -1.0) == 5.0, "c1[0] is 5.0, got {c1[0] ?? -1.0}");
+  assert((c1[1] ?? -1.0) == 6.0, "c1[1] is 6.0, got {c1[1] ?? -1.0}");
+  assert((c2[0] ?? -1.0) == 70.0, "c2[0] is 70.0, got {c2[0] ?? -1.0}");
+  assert((c3[0] ?? -1.0) == 90.0, "c3[0] is 90.0, got {c3[0] ?? -1.0}");
+}
+
+fn test_a_record_element_type_is_the_same_shape() {
+  p1 = pick_struct1081(true, 1.5, 2.5);
+  p2 = pick_struct1081(true, 80.5, 90.5);
+  assert((p1[0] ?? P1081 { px: -1.0 }).px == 1.5, "p1[0].px is 1.5");
+  assert((p1[1] ?? P1081 { px: -1.0 }).px == 2.5, "p1[1].px is 2.5");
+  assert((p2[0] ?? P1081 { px: -1.0 }).px == 80.5, "p2[0].px is 80.5");
+}
+
+fn test_a_borrow_arm_neither_leaks_nor_steals_its_source() {
+  src: vector<float> = [4.0, 5.0, 6.0];
+  k1 = keep_or_new1081(false, src);
+  k2 = keep_or_new1081(true, src);
+  assert(len(k1) == 3, "the borrow arm answers the source's length, got {len(k1)}");
+  assert((k1[2] ?? -1.0) == 6.0, "k1[2] is 6.0, got {k1[2] ?? -1.0}");
+  assert((k2[0] ?? -1.0) == 99.0, "k2[0] is 99.0, got {k2[0] ?? -1.0}");
+  // The source must be untouched by either call — the over-free neighbour.
+  assert(len(src) == 3, "src keeps its 3 elements, got {len(src)}");
+  assert((src[0] ?? -1.0) == 4.0, "src[0] is still 4.0, got {src[0] ?? -1.0}");
+}
+
+fn test_the_shapes_without_a_returned_join_stay_clean() {
+  n1 = pick_noif1081(5.0);
+  n2 = pick_noif1081(6.0);
+  assert((n1[0] ?? -1.0) == 5.0, "no-join n1 is 5.0, got {n1[0] ?? -1.0}");
+  assert((n2[0] ?? -1.0) == 6.0, "no-join n2 is 6.0, got {n2[0] ?? -1.0}");
+
+  t1 = pick_tail1081(true, 13.0, 14.0);
+  t2 = pick_tail1081(true, 15.0, 16.0);
+  assert((t1[0] ?? -1.0) == 13.0, "tail join t1 is 13.0, got {t1[0] ?? -1.0}");
+  assert((t2[1] ?? -1.0) == 16.0, "tail join t2 is 16.0, got {t2[1] ?? -1.0}");
+
+  i1 = pick_imperative1081(true, 17.0, 18.0);
+  i2 = pick_imperative1081(true, 19.0, 20.0);
+  assert((i1[1] ?? -1.0) == 18.0, "imperative i1 is 18.0, got {i1[1] ?? -1.0}");
+  assert((i2[1] ?? -1.0) == 20.0, "imperative i2 is 20.0, got {i2[1] ?? -1.0}");
+
+  assert(sum_local1081(true, 2.0, 3.0) == 5.0, "unreturned join sums both arms");
+  assert(sum_local1081(false, 2.0, 3.0) == 2.0, "unreturned join sums the short arm");
+}
+
+fn test_many_calls_do_not_accumulate_stores() {
+  // Per-CALL, not once: the leak was one vector per evaluation, so a loop is what makes
+  // it unmistakable in the leak report — and the sum is what makes an over-free visible.
+  t = 0.0;
+  for i in 0..40 { for s in pick1081(i % 2 == 0, 1.0, -1.0) { t += s; } }
+  assert(t == 20.0, "forty calls sum to 20, got {t}");
+}

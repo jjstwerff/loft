@@ -18,18 +18,28 @@ fn main() {
   c = Counter { n: 10, tags: ["init"] };
   bump(c, 5);        // &-ref: caller must see the writes
   bump(c, 7);
-  print("n={c.n} tags={len(c.tags)}\n"); // n=22, tags=3
+  assert(c.n == 22, "10 + 5 + 7 written through the `&` param; got {c.n}");
+  assert(len(c.tags) == 3, "`init` plus one `bumped` per call; got {len(c.tags)}");
+  print("n={c.n} tags={len(c.tags)}\n");
 
   // nested field read + write through an element
   v = [Counter { n: 1, tags: [] }, Counter { n: 2, tags: [] }];
   v[0].n += 100;
   v[1].tags += ["x"];
-  print("v0n={v[0].n} v1tags={len(v[1].tags)}\n"); // 101, 1
+  v0n = (v[0] ?? Counter { n: -1, tags: [] }).n;
+  assert(v0n == 101, "a write through a vector element lands in the element; got {v0n}");
+  assert(len((v[1] ?? Counter { n: 0, tags: [] }).tags) == 1, "…and reaches only that element");
+  print("v0n={v0n} v1tags={len(v[1].tags)}\n");
 
-  // a plain (non-&) param must NOT grow the caller's vector
+  // A plain (non-`&`) struct parameter still SHARES its record, so growing one of its
+  // vector FIELDS is visible to the caller — calls.md `F-ParamHeap` names `p.field += …`
+  // among the mutations that write through.  What stays local is REPLACING the whole
+  // parameter (`F-ParamRebind`), which is a different act; this file's comment used to
+  // claim `still 1`, conflating the two, and nothing ever compared the claim to the run.
   d = Counter { n: 0, tags: ["a"] };
   add_local(d);
-  print("dtags={len(d.tags)}\n"); // still 1 — local append not visible
+  assert(len(d.tags) == 2, "`p.field += …` on a shared heap param IS visible (F-ParamHeap); got {len(d.tags)}");
+  print("dtags={len(d.tags)}\n");
 }
 
 fn add_local(c: Counter) {

@@ -533,6 +533,57 @@ for finding where you owe one is asking what a *worked example* for the function
 would have to assert — that question names the outside values by construction,
 which is how this one was found.
 
+### The set a suite RUNS is not the set it CONTAINS (`LOFT_TRACE_ASSERTS`)
+
+The third shape of self-satisfaction, and the quietest: an `assert` that is written,
+compiled, and **never executed**.  Nothing reports it.  A skipped file prints a `skip`
+line and passes; a function nobody calls costs a compile and no more; a branch never
+taken looks exactly like one that held.  Measured in 2026-08: **81 of `tests/scripts`'
+9 803 assert sites had never run**, across three mechanisms nobody had reason to suspect
+(QUALITY.md § *81 assertions the corpus contained and never ran*).
+
+`LOFT_TRACE_ASSERTS=<path>` appends `file:line` for every `assert` that EXECUTES.  The
+hook is in `n_assert`, which is both the interpreter's implementation and the one a
+`--native` binary links, so one setting covers both backends and every process a suite
+spawns (it appends, never truncates).  Diff the trace against the `assert(` sites in the
+source and the silent ones are named:
+
+```sh
+LOFT_TRACE_ASSERTS=/tmp/ran.txt cargo test --release --test wrap loft_suite
+# then: every `assert(` line in tests/scripts that has no `file:line` in /tmp/ran.txt
+```
+
+It reads the position the COMPILER injected into the call, so it doubles as a check on
+that: a whole file tracing at a constant offset from its own source means the injected
+line is wrong, which is how loft#625's mechanism was found at a second site (a failing
+assert printed **another** assert's source under its caret).
+
+Two things make an assertion unreachable often enough to be gated, both in `tests/wrap.rs`
+and both proven able to fire:
+
+* **`a_refusal_file_carries_no_runtime_assertions`** — a firing `@EXPECT_ERROR:` stops the
+  whole file: `run_test` returns at *"ok (errors consumed)"* and `native_scripts` skips
+  it.  So a file asserts a refusal **or** it runs; the corpus convention for both is a
+  companion file (`102`/`102b`, `36`/`36b`, `1067`/`1067b`).  An `assert` inside an
+  `@EXPECT_ERROR` function is fine — it is the use that makes the refused expression
+  matter.
+* **`every_assertion_is_reachable_from_the_entry_point`** — when a file has a `main`, both
+  runners execute ONLY `main`; every other zero-parameter function is dropped.  Call it
+  from `main` or delete it.
+
+Both are UNDER-approximations on purpose: neither can see a branch never taken, and both
+allow the deliberate dual guard (`432b`, `751`), where an `@EXPECT_ERROR`-annotated `main`
+carries assertions that run only if the refusal ever regresses.  `LOFT_TRACE_ASSERTS` is
+how the rest gets re-measured — a report, not a gate, because a gate over 9 800 sites
+would need a line-numbered allow-list and would rot.
+
+⚠ **A skip is a decision that can take a second thing with it.**  `native_scripts` decided
+to skip on `src.contains("@EXPECT_ERROR")` over the whole file, so five scripts — 79
+assertions, `93-vector-advanced.loft`'s 49 among them — left the native suite because a
+comment in each *mentioned* the tag while recording that the file had STOPPED being a
+refusal case.  Both runners now read one `common::expect_tag`.  When two harnesses ask
+the same question, they get one implementation of it.
+
 ---
 
 ## Database backends: sqlite gates CI, all four are the local bar
@@ -1152,7 +1203,7 @@ Guarded by `tests/store_memory_limit.rs`.
 CALL SITES only, so resolving an arbitrary allocation pc through it returns the
 nearest span *below* — routinely in an unrelated function. A diagnostic that sends
 the reader to the wrong file costs more than one that stays quiet, so the report
-prints the pc and stops there; `LOFT_STORES=summary` resolves the same pc against the
+prints the pc and stops there; `LOFT_STORES=timeline` resolves the same pc against the
 denser per-run table.
 
 ## Hang guard (`LOFT_MAX_OPS`)

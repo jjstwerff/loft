@@ -18,9 +18,11 @@
 // just the first) and a CAPTURING one (whose slot is 20 bytes, and whose capture is the
 // half historically written four bytes wide).
 //
-// Its negative half is `test_no_expected_type_is_still_refused`: the diagnostic must
-// still fire where nothing names a signature, or this file would pass on a compiler that
-// simply stopped checking.
+// Its negative half lives in `1067b-lambda-no-expected-type-refused.loft`: the diagnostic
+// must still fire where nothing names a signature, or this file would pass on a compiler
+// that simply stopped checking. It is a SEPARATE file because a firing `@EXPECT_ERROR`
+// stops the whole file before execution — while the two shared one, every assertion below
+// was compiled and never run.
 //
 // A TUPLE member was the one position left out at first, and the reason is worth keeping:
 // a `fn(…)` in a tuple could not be CALLED back out of one whatever spelling put it there
@@ -134,23 +136,6 @@ fn test_a_void_returning_lambda_in_a_field_works() {
   // A void `fn(integer)` field has no return to infer from, so only the PARAMETER can
   // come from the expected type — the cell that would fail if the hint needed a return.
   assert(seen == 9, "void-returning lambda in a field: got {seen}");
-}
-
-// The negative half. Widening the rule must not turn it into "never check": where
-// NOTHING names a signature there is still no type to infer, and the diagnostic that says
-// so — naming the cure — has to survive. Without this cell, a compiler that simply
-// stopped reporting would pass every cell above.
-// @EXPECT_ERROR: Cannot infer type for lambda parameter 'x'
-fn test_no_expected_type_is_still_refused() {
-  // A bare binding names no signature, so there is nothing for `x` to be.
-  //
-  // The body neither names `x` nor CALLS the lambda, and both omissions are deliberate:
-  // an uninferred parameter used in the body also draws a follow-on "Unknown variable",
-  // and calling an uninferred fn-ref cascades into syntax errors. Both are pre-existing
-  // wreckage AFTER the diagnostic; this cell is about the diagnostic itself, so it pins
-  // exactly one.
-  a = |x| { 5 };
-  assert(true, "unreached");
 }
 
 fn main() {

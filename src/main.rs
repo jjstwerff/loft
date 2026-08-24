@@ -2956,7 +2956,7 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     let tag = format!("{}-v{}", pkg.name, pkg.version);
     let tarball_filename = format!("{}-{}.tar.gz", pkg.name, pkg.version);
 
-    let (org, repo) = match git_remote_org_repo(pkg_path) {
+    let (org, repo) = match package::git_remote_org_repo(pkg_path) {
         Some(v) => v,
         None => {
             eprintln!(
@@ -3082,40 +3082,6 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
         eprintln!("[publish] next step: open registry PR with the entry above");
     }
     0
-}
-
-/// Parse `git remote get-url origin` output for the github
-/// org + repo.  Handles `https://github.com/<org>/<repo>(.git)?`
-/// and `git@github.com:<org>/<repo>(.git)?` shapes.  Returns
-/// `None` when the remote isn't a github URL.
-#[cfg(feature = "registry")]
-fn git_remote_org_repo(pkg_path: &std::path::Path) -> Option<(String, String)> {
-    let out = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(pkg_path)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let url = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    let stripped = url
-        .strip_prefix("https://github.com/")
-        .or_else(|| url.strip_prefix("git@github.com:"))?
-        .strip_suffix(".git")
-        .unwrap_or_else(|| {
-            url.strip_prefix("https://github.com/")
-                .or_else(|| url.strip_prefix("git@github.com:"))
-                .unwrap_or("")
-        })
-        .to_string();
-    let mut parts = stripped.splitn(2, '/');
-    let org = parts.next()?.to_string();
-    let repo = parts.next()?.trim_end_matches(".git").to_string();
-    if org.is_empty() || repo.is_empty() {
-        return None;
-    }
-    Some((org, repo))
 }
 
 /// Check whether a GitHub release at `<tag>` exists and carries
@@ -3763,30 +3729,11 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
             .attributes
             .iter()
             .any(|a| matches!(a.typedef, Type::Text(_)));
-        let has_ref_param = def.attributes.iter().any(|a| {
-            matches!(
-                a.typedef,
-                Type::Reference(_, _)
-                    | Type::Vector(_, _)
-                    | Type::Enum(_, true, _)
-                    | Type::Sorted(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
-        });
-        let has_ref_ret = matches!(
-            def.returned,
-            Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        );
+        let has_ref_param = def
+            .attributes
+            .iter()
+            .any(|a| crate::data::is_dbref(&a.typedef));
+        let has_ref_ret = crate::data::is_dbref(&def.returned);
 
         // If any param or return is a Ref, prepend LoftStore as first C-ABI param.
         if has_ref_param || has_ref_ret {
@@ -10079,7 +10026,7 @@ for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
 loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
   mem=memory||instance.exports.memory;
   loftInstallEnv(instance, mem);
-  // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
+  // @P321(c) Phase 3b: decode base64 PNG assets to RGBA bytes before
   // loft_start so the wasm-side imaging bridge looks them up sync.
   ctrl.assets=await decodeLoftAssets(ctrl.assets);{fonts_await}
   if(instance.exports.asyncify_start_unwind){{

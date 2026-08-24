@@ -3,6 +3,9 @@
 //
 // @PLN89 differential-oracle corpus — AXIS: a program that HALTS.
 //
+// @ORACLE_HALTS: the halt IS the subject — a failed `assert` must render and exit
+// identically on both backends.
+//
 // The oracle has compared exit codes since it was built, and until this file no program
 // in the corpus ever exited non-zero: all thirty ran to completion, so the exit-code
 // channel agreed by never being exercised.  That is the same shape as a green check that

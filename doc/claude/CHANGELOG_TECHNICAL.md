@@ -9,6 +9,99 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### 81 assertions the corpus never ran, and the wrong line one of them reported (2026-08-23)
+
+**Instrument.** `LOFT_TRACE_ASSERTS=<path>` appends `file:line` for every `assert` that
+EXECUTES, from `n_assert` — the interpreter's implementation and the one a `--native`
+binary links, so one setting covers both backends and every process a suite spawns.
+Diffed against the `assert(` sites in the source it names the assertions a suite contains
+and never runs, which no channel a suite reports can distinguish from passing ones.
+
+**Result over `tests/scripts`: 9 722 sites executed, 81 never.** Three mechanisms:
+a firing `@EXPECT_ERROR:` stops the whole file (52 — including all 21 of
+`1067-lambda-expected-type.loft`'s positive half, in a file whose own header says the
+negative cell exists so a compiler that stopped checking could not pass it); a file with
+`main` runs only `main`, so every other zero-parameter function is dropped (21, in
+`05-enums.loft` and `06-structs.loft`); and 8 deliberate. A fourth, native-only:
+`native_scripts` skipped on `src.contains("@EXPECT_ERROR")` over the whole source, so five
+files — 79 assertions, `93-vector-advanced.loft`'s 49 among them — left that suite because
+a comment in each *mentioned* the tag while recording the file had STOPPED being a refusal
+case. Both runners now read one `common::expect_tag`; native 801 → 806 scripts.
+
+**The live bug it found.** The trace records the position the COMPILER injected, and every
+assert in `685-mutated-scalar-param-capture.loft` traced exactly seven lines early
+(`50-tuples.loft`, five). `Lexer::to` moves the reporting position without moving the read
+cursor, and the tokenizer keeps incrementing it — so a seek never undone shifts the caret,
+runtime spans and injected `assert` lines for the rest of the file by one constant.
+`parse_function` wraps its warning passes in a save/restore whose comment states exactly
+this hazard; `check_ref_mutations` (needless-`&` / `needless-const-parameter`) runs
+eighteen lines above that save. A failing assert on line 184 printed line 177's source —
+itself an `assert` — under this one's message, on both backends, with no other signal.
+
+**Fix at the chokepoint, not a second save/restore:** `to()` records where it seeked FROM
+and the next token scanned from source restores it, so a missing restore costs the one
+diagnostic it was made for. A file switch clears the pending seek — without that the first
+token of a `use`d file inherited the previous file's line (`88-imports`, `850*`, −13 to
+−20). Guard `runtime_warnings.rs::a_seek_to_a_warning_site_does_not_shift_later_positions`,
+proven able to fail.
+
+**Ratchets** (`tests/wrap.rs`, both proven able to fire):
+`a_refusal_file_carries_no_runtime_assertions` and
+`every_assertion_is_reachable_from_the_entry_point`. Both are under-approximations by
+construction and allow the documented dual guard (`432b`, `751`). Full account:
+[QUALITY.md § 81 assertions the corpus contained and never ran](QUALITY.md).
+
+
+### A Join whose arms each own a store: one leak and two silent wrong answers (loft#1078, 2026-08-23)
+
+**Symptom.** `fn pick(c) -> S { w = S { a: 7 }; if c { S { a: 9 } } else { w } }` retained
+one record per call — the value was right, only the ownership was wrong, so a single call
+looked clean and only a loop showed it. `loft_planet` reached ~16,000 retained records per
+planet, and four planets exhausted the 65,535-entry `store_nr` table.
+
+**Cause.** `w` is renamed onto the hidden return buffer (NRVO), so the `else` arm delivers
+the buffer and the `if` arm delivers a different store. `scopes::free_vars` reaches this
+class through three legs, and the one covering *"several owned candidates, one winner"*
+excluded every ARGUMENT. Right for a user parameter, which belongs to the caller; wrong for
+the promoted buffer, the one argument that is really a local this function minted.
+loft#1022 had already written that carve-out down and applied it inside its own gate,
+noting that loft#688's leg "cannot claim it here because it excludes anything in
+`sources`" — the sibling leg three lines up needed the identical sentence.
+
+**Two more, found by moving the axes the report pinned** (return position and arm count),
+both `silent-wrong` and both IDENTICAL on the two backends, so the interp-vs-native
+differential was structurally blind to them:
+
+* **Two owned locals** (`if c { u } else { w }`) — the first is renamed onto the buffer and
+  the second's copy leg emits `OpDatabase(buf); OpCopyRecord(<tail that reads buf>, buf)`.
+  The re-mint destroys the store the copy is about to read, so `u` answered a zeroed record.
+  A three-arm `match` broke only its FIRST arm, which named the RENAME as the mechanism.
+  New verdict `RetPromotion::SkipJoinArm`: a named local is not deep-copied into a buffer the
+  tail reads — it stays a plain local, and the conditional free above releases the loser.
+* **Bound, then returned** (`r = if c { … } else { w }; r`) — loft#848's class one arm over.
+  `parser/objects.rs`'s value-position `Object` arm is `!first_pass`-guarded, so it mints on
+  pass 2 only; on the shared `__ref_N` counter it was handed the name pass 1 had left on the
+  return buffer, and `return_buffer()` resolves that buffer BY NAME. It now draws from
+  `__ref_p2_N`, as loft#848 already made its sibling arm do.
+
+Collections and text were measured clean on the same shape — each carries its own
+aliasing-aware delivery — so the guard is scoped to the record path that re-mints.
+
+**Opt-out.** `LOFT_NO_P2_OBJECT_WORKREF=1` restores the shared counter: the A/B on one binary
+and the first bisect step for a wrong value out of a struct literal in value position. It is
+the THIRD independent guard on the collapse `LOFT_NO_A1B` and `LOFT_NO_WORKREF_STEPOVER` also
+guard, which is why `oracle_flags_the_a1b_wrong_plan` now disables all three to have a defect
+to catch — that test going green is how the independence was measured rather than argued.
+
+**Guard.** `tests/scripts/1078-join-arms-that-each-own-a-store.loft`, 10 cells on both
+backends, falsified on a pristine worktree at `f7a57124`: the value cells by assertion, the
+leak cell by the wrap leak gate (`1 store(s) leaked at program exit: kt=78 S1078×39`).
+`formal/ownership.md` gained D-own-7, opened and closed the same day.
+
+Also: the store-table-exhaustion panic advised `LOFT_STORES=summary`, which has never been an
+accepted value — it now names `timeline`, the one that answers the leak-vs-working-set
+question. Two stale doc-comment echoes of the same non-value corrected with it.
+
 ### A browser page can read a store out of its own filesystem (@PLN146 F4, 2026-08-22)
 
 **Symptom.** `store_load` on a `--html` page answered `false` for every path — politely,
@@ -6253,7 +6346,7 @@ which is what the reader already degrades an unknown tag to.
 
 **An absent `text?` is stored as the sentinel `"\0"`, not as a null pointer**, so
 it reached the JSON escaper and came back as the one-character string
-`" "` — a present, corrupt value where the program meant nothing. It is the
+`"\0"` (a one-character string holding a NUL) — a present, corrupt value where the program meant nothing. It is the
 same absence the null-pointer branch beside it already rendered as `null`, so it
 renders the same way. That is the distinction the type exists to carry: SQL NULL
 and `''` stay different answers across a round trip instead of collapsing.

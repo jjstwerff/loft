@@ -73,20 +73,39 @@ integer)`), pass one, and unpack it at the caller. Returning a tuple is the idio
 ### Reference tuples — `&(…)` writes the caller's elements in place
 
 ```
-  (T-Ref)     a parameter may be declared `&(τ₁, …, τₙ)`.  It denotes the CALLER's tuple: a
-              projection `p.i` reads the caller's element and an assignment `p.i = e` writes it,
-              both through the tuple's stored reference at the element's own offset — the same
-              `(ref, offset)` pair an ordinary struct FIELD uses (binding.md B-Ref).
+  (T-Ref)     a BINDING may be declared `&(τ₁, …, τₙ)` — a parameter, or a local written
+              either way binding.md B-Ref-Intro allows (`b: &(…) = a`, `b = &a`).  It denotes
+              the bound tuple itself: a projection `p.i` reads that tuple's element and an
+              assignment `p.i = e` writes it, both through the tuple's stored reference at the
+              element's own offset — the same `(ref, offset)` pair an ordinary struct FIELD
+              uses (binding.md B-Ref).  For a parameter the tuple is the CALLER's; for a local
+              it is the source variable's, and both are stack-backed, so the two positions are
+              one mechanism and not two.
   (T-Ref-El)  every τᵢ must be one of `integer` (any width), `float`, `single`, `character`,
               `boolean` — the types laid out for that pair.  Any other element type is a STATIC
               error naming the offending type; it is never a runtime fault and never an ICE.
+              The rule is asked wherever the `&` is WRITTEN, so a `&(…)` a signature refuses
+              cannot be accepted at a local.
+  (T-Ref-Src) the source of a `&(…)` local is a tuple VARIABLE.  A tuple ELEMENT or FIELD
+              (`b = &v[0]`, `b = &s.pair`) is a STATIC error: a tuple place is read element by
+              element into a fresh by-value tuple, so no place survives for the link to name.
+              Declining is binding.md B-Ref-Reshape's rule — where the link cannot be honoured
+              loft refuses the program rather than downgrading it to a copy.
 ```
 
 **In words.** `fn sw(p: &(integer, integer)) { t = p.0; p.0 = p.1; p.1 = t }` swaps the caller's
-tuple in place — that is what a reference tuple is for. The admitted element types are exactly
-the scalars the element opcodes are laid out for, and the boundary is enforced at the SIGNATURE,
-so a program either compiles and behaves identically on both backends or is refused where it is
-written.
+tuple in place — that is what a reference tuple is for. The same annotation on a LOCAL means the
+same thing (`a = (1, 2); b: &(integer, integer) = a; b.0 = 5` leaves `a.0 == 5`), because both
+name a tuple sitting in a frame and reach it the same way. The admitted element types are exactly
+the scalars the element opcodes are laid out for, and the boundary is enforced wherever the `&`
+is written, so a program either compiles and behaves identically on both backends or is refused
+where it is written.
+
+The restriction belongs to the STACK-backed reference tuple this annotation builds. The
+record-backed one a `for` loop binds over a `vector<(…)>` is a different construction reaching a
+real record, and it admits any element type — `for t in [("a", "b")] { t.0 }` is correct on both
+backends, and writing `t.0` there reaches the vector. Reading `T-Ref-El` as a fact about tuples
+rather than about this binding is the mistake that boundary invites.
 
 A `text`, collection, struct or function-reference element is refused. This is a layout
 limitation, not a missing opcode: `OpGetText` / `OpSetText` exist and take the same
@@ -98,7 +117,8 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-OPEN: **1**, and bounded by the oracle note below.
+OPEN: **0** (2026-08-23) — D-tup-2 closed the day the rule it needed was written down.
+Bounded by the oracle note below.
 
 > **D-tup-1 — CLOSED (2026-08-20) — the reference tuple has a rule.** This doc specified
 > construction, projection, destructuring and returns and said nothing about `&(τ₁, …, τₙ)` —
@@ -121,27 +141,54 @@ OPEN: **1**, and bounded by the oracle note below.
 > not sufficient: a list is only consulted where somebody calls it, and only one of the two sites
 > that build a `RefVar(Tuple)` does.
 
-> **D-tup-2 — OPEN (2026-08-20) — the admitted-element rule is not asked at every construction
-> site.** `T-Ref-El` names which element types a `&(…)` admits, and `data::ref_tuple_element_ok`
-> is the single list that answers it. The *signature* path consults it
-> (`parser/definitions.rs`), so a `&(text, text)` PARAMETER is refused with the rule's message.
-> A `&`-annotated **local** is built at a second site (`parser/expressions.rs`) that never asks:
+> **D-tup-2 — CLOSED (2026-08-23) — the admitted-element rule is now asked at every
+> construction site, and the local path it exposed is implemented.** `T-Ref-El` names which
+> element types a `&(…)` admits and `data::ref_tuple_element_ok` is the single list that answers
+> it, but only the *signature* path consulted it. `Parser::ref_var_type` is now the one place a
+> `&` in source becomes a `Type::RefVar`, so the parameter, the annotated local and the inferred
+> `b = &a` all ask it, and a `&(…)` a signature refuses cannot be accepted at a local. Guard
+> `tests/scripts/reference-tuple-local-binding.loft` (what must work) +
+> `102-expected-errors.loft` (the four refusals); proven to fail on a pristine tree at
+> `1e9d7910` — 6 of 7 cells on `--interpret`, 7 of 7 on `--native`.
 >
-> ```
-> a = ("p", "q");
-> b: &(text, text) = a;
-> b.0 = "x";
-> ```
+> ⚠ **The entry named the ICE, and the ICE was the mild half.** Measured across positions and
+> element types rather than at the filed cell, the whole `&(…)` LOCAL was unimplemented, at every
+> element type including the admitted ones, and the loudness varied with what the tuple happened
+> to hold:
 >
-> reaches codegen and dies as an internal compiler error on BOTH backends
-> (`RefTuplePut: unsupported element type Text`, `state/codegen.rs`). With a struct element it
-> reads *"Store access out of bounds … the reference is corrupt"*, and even the ADMITTED
-> `&(integer, integer)` reaches an index-out-of-bounds in `database/allocation.rs` — so this is
-> not one bad element type, it is the whole `T-Ref` rule going unenforced on the local path.
+> | written | was |
+> |---|---|
+> | `b = &a` | the `&` was **DROPPED**: the IR typed `b` a plain tuple and copied it, so `b.0 = 5` left `a` untouched, silently, on both backends |
+> | `b: &(integer, integer) = a` | typed a reference over a value — the interpreter read an ELEMENT as a store index (`(7, 9)` gave *"index is 9"*) and `--native` handed the user a raw rustc `E0308` |
+> | `b: &(boolean, boolean) = a` | answered `truefalse` where the swap says `falsetrue`, **exit code 0** |
+> | `b: &(float, float) = a` | answered `null` for a present element |
+> | `b: &(text, text) = a` | the filed ICE |
 >
-> The fix the rule asks for is to move the check to the **type-construction chokepoint** where a
-> `RefVar(Tuple)` is formed, rather than adding a second call beside the first — a second call
-> site would be the same shape as the three lists D-tup-1 collapsed.
+> So the register read `OPEN: 1` against a `silent-wrong` and a wrong-answer cell that no
+> deviation named, because the entry inherited the ICE from the report that raised it. **Both
+> backends agreed on every one of those**, which is why the tuple differential the doc leans on
+> (D-op-1) was structurally blind: the two implementations were wrong in the same way.
+>
+> The fix is the one the rule asked for — the chokepoint, not a second call beside the first —
+> plus the mechanism the chokepoint then had to have something to admit: a tuple local lives in
+> the FRAME, so it joins the scalars at `OpCreateStack`, which is exactly the stack ref a `&(…)`
+> PARAMETER is already handed at its call site. Native represents the local link as the raw
+> `*mut (…)` @PLN87 L1 gives every local link (raw so the source stays readable beside it, which
+> is legal loft and not legal Rust borrowing), and two sites now read one predicate,
+> `generation::is_raw_tuple_link`, to decide it — the element base and the call that forwards
+> the local to a `&(…)` parameter.
+>
+> ⚠ **`T-Ref-El` is a fact about this BINDING, not about tuples.** Measured while picking the
+> chokepoint: the record-backed `RefVar(Tuple)` a `for` loop builds over a `vector<(text, text)>`
+> reads and WRITES its elements correctly on both backends. It reaches a real record, so the
+> layout limitation the refusal exists for does not apply to it. Putting the gate in a universal
+> `RefVar(Tuple)` constructor would have refused a shape that works — which is why the
+> chokepoint is *the `&` written in source*, and why `T-Ref` now says stack-backed out loud.
+>
+> The one shape left refused rather than linked is a tuple PLACE (`b = &v[0]`, `b = &s.pair`),
+> now `T-Ref-Src`. It used to bind silently to a COPY — `b.0 = 9` wrote the copy and the source
+> was unchanged, with no diagnostic and both backends agreeing. B-Ref-Reshape settles what to do
+> there: loft declines rather than downgrading a reference to a copy.
 
 > **D-tup-3 — CLOSED (2026-08-20) — a nullable element at a tuple POSITION.** This doc
 > specified construction, projection, destructuring and returns, and `types.md` @PLN25

@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The package entry.  Empty of anything the test reads: what loft#1080 is about is a
+// MODULE of this package (`grid1080`) being reachable both by its bare name from
+// outside and as this package's own module from inside, and the entry only has to
+// exist for the directory to be a package at all.
+
+pub fn issue1080_pkg_name() -> text {
+  "issue1080_pkg"
+}

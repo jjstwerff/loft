@@ -21,6 +21,11 @@ description: >-
   symptom but not its cause, or repeated probes won't converge (non-monotonic,
   "sometimes it happens"), treat that as a blind instrument, not a hard bug —
   upgrade the tool to ATTRIBUTE the effect to its cause before guessing at a fix.
+  ALSO applies BEFORE you write: a predicate, type list, helper or routine that may
+  ALREADY EXIST elsewhere in this project or in a library it can use — and especially
+  when PORTING or RE-TARGETING something that already works, which does not feel like
+  new work. A duplicate is a decision NEVER MADE rather than one made badly, so more
+  care cannot find it; an instrument can.
   Routes to the matrix-first protocol and Design Protocol 1.
 user-invocable: true
 ---
@@ -268,6 +273,34 @@ N families, or an invariant spelled out so it's explicit rather than hidden in
 cleverness). The tell triggers the search for a missing invariant; finding one →
 shorter + robust; honestly finding none → the length is essential, accept it. The
 alarm did its job by making you check.
+
+## The second always-on sensor — "has this already been written?"
+
+*The tell* above fires on code you have **written**. This one fires **before** you write
+it: the moment you are about to add a predicate, a type list, a helper, or a routine, ask
+whether it already exists — in another module here, or in a library the project can
+already use.
+
+It costs seconds, and it is not something care can replace. A duplicate implementation is
+rarely a decision made badly; it is a decision **never made** — the other copy lives in a
+file the current task gave you no reason to open, so the question never arose. Care
+operates on what is in front of you, and the second copy is precisely what is not.
+
+Two moments carry most of the risk, and neither of them feels like design:
+
+- **fixing at a site** — adding the check *here too*, rather than asking where the check
+  lives. That is how one rule ends up with N implementations that then drift apart, and a
+  drifted copy is worse than a copy: it looks like the thing it is not.
+- **porting or re-targeting** — a new backend, an output format, a self-contained build.
+  It reads as *moving* something that already exists, so *does this exist?* feels already
+  answered. Notice what the constraint actually forbids: it forbids **depending** on the
+  original, which is not a licence to **re-derive** it.
+
+Answer it with an instrument rather than memory — and if the project has none, the cheap
+one is minutes of scripting. The full treatment, including what such a tool looks for, how
+to anchor the question on named rules once the system outgrows one head, and the symmetric
+error of merging two things that are merely equal *today*, is the **`design-protocol`
+sibling skill**, § *Before you write it*.
 
 ## The blind-instrument tell — upgrade the eyes, don't guess
 

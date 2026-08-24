@@ -931,6 +931,28 @@ view: view-refresh
 #   5. Run `loft --html doc/brick-buster.html ...25-brick-buster.loft`.
 #   6. Sanity-check the output HTML: doctype + loft_start + > 5kB.
 #   7. Print the file:// URL so the user can click through.
+# ── Brick Buster's sprite pack ─────────────────────────────────────
+#
+# The atlas is drawn ONCE, into a content pack the game reads, rather
+# than by 180 lines of fill_rect on every launch (@PLN146 F4).  Both
+# `make game` and `make play` need the pack on disk first.
+#
+# `loft build` has no assets-only mode — it would compile-check the
+# whole game to reach the asset phase — so this runs the script
+# directly.  That makes the script path a SECOND spelling of the
+# `run` in tools/brick-buster/loft.toml's `[[build.asset]]`, and
+# `doc_hygiene::brick_buster_pack_step_matches_its_manifest` pins the
+# two together so they cannot drift apart silently.
+.PHONY: brick-buster-pack
+brick-buster-pack:
+	@echo "  drawing Brick Buster's sprite pack ..."
+	@./target/release/loft --interpret tools/brick-buster/pack_atlas.loft \
+	    >/tmp/loft_bb_pack.log 2>&1 || { \
+	    echo "    FAIL: sprite pack — see /tmp/loft_bb_pack.log"; \
+	    tail -20 /tmp/loft_bb_pack.log; exit 1; }
+	@test -s tools/brick-buster/assets/bb.blobs.store || { \
+	    echo "    FAIL: pack_atlas.loft produced no assets/bb.blobs.store"; exit 1; }
+
 game:
 	@echo "  [1/7] building host binary + libloft.rlib ..."
 	@# `--bin loft` alone does not always produce the top-level
@@ -953,6 +975,7 @@ game:
 	@test -f target/release/libloft.rlib || { \
 	    echo "    FAIL: target/release/libloft.rlib missing (needed for proc-macros)"; exit 1; }
 	@echo "  [5/7] compiling Brick Buster to self-contained HTML ..."
+	@$(MAKE) --no-print-directory brick-buster-pack
 	@./target/release/loft --html doc/brick-buster.html \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    tools/brick-buster/25-brick-buster.loft \
@@ -1099,6 +1122,7 @@ play:
 	@# budget on call-ABI / null-sentinel bookkeeping the optimiser
 	@# normally elides.  Cold compile is ~6s; cached binary survives
 	@# across runs.
+	@$(MAKE) --no-print-directory brick-buster-pack
 	@./target/release/loft --native-release \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    tools/brick-buster/25-brick-buster.loft

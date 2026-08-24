@@ -40,9 +40,21 @@ fn main() {
     tr = build_tree(10);
     ts = [Node { v: 7, kids: [] }, Node { v: 8, kids: [] }];
     dp = deep_pick(ts, 1);
-    println("loop_cv={loop_cv(a, vs)}");        // 6
-    println("mixed={mixed(a, vs)}");            // 22
-    println("empty={loop_cv(a, [])}");          // 0 (empty-loop path frees the copy)
-    println("tree={tr.v} kids={len(tr.kids)}"); // 10 1
-    println("deep={dp.v} vs={len(vs)}");        // 8 3
+    lc = loop_cv(a, vs);
+    mx = mixed(a, vs);
+    em = loop_cv(a, []);
+    // The native bug this file is named for whole-store-freed a borrowed view, which
+    // corrupts a VALUE rather than crashing — so every number here is checked against
+    // hand arithmetic, not against the other backend.
+    assert(lc == 6, "1+2+3 read through the ncc-borrow reassign; got {lc}");
+    assert(mx == 22, "1,+1=2; +2=4,+4=8; +3=11,+11=22; got {mx}");
+    assert(em == 0, "the empty-loop path never runs the ncc and frees its own copy; got {em}");
+    assert(tr.v == 10 && len(tr.kids) == 1, "the tree survives its builder's return; got {tr.v} {len(tr.kids)}");
+    assert(dp.v == 8, "index 1 of a two-element vector is the second node; got {dp.v}");
+    assert(len(vs) == 3, "…and the source vector is untouched by any of it; got {len(vs)}");
+    println("loop_cv={lc}");
+    println("mixed={mx}");
+    println("empty={em}");
+    println("tree={tr.v} kids={len(tr.kids)}");
+    println("deep={dp.v} vs={len(vs)}");
 }

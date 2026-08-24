@@ -8,6 +8,15 @@ fn main() {
     up = "hello world".to_uppercase();
     parts = "a,b,c,d".split(',');
     n = 42; f = "val={n} hex done";
+    // Text is a Rust `String` on native and a store record on the interpreter, so every
+    // one of these is a different mechanism on each side.  The whole VALUE is asserted,
+    // not a length: a truncation and a mis-join both keep the length plausible.
+    assert(s == "ab0-ab1-ab2-ab3-", "four appended segments in order; got `{s}`");
+    assert(r == "X0-X1-X2-X3-", "every `ab` replaced, not just the first; got `{r}`");
+    assert(up == "HELLO WORLD", "case maps across the space too; got `{up}`");
+    assert(len(parts) == 4, "`a,b,c,d` splits into four; got {len(parts)}");
+    assert((parts[0] ?? "?") == "a", "the first field is `a`; got `{parts[0] ?? "?"}`");
+    assert(f == "val=42 hex done", "interpolation substitutes the value; got `{f}`");
     println("built={s}");
     println("replaced={r} upper={up}");
     println("parts_len={len(parts)} first={parts[0] ?? \"?\"} fmt={f}");

@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 W2 — does the loft rasteriser draw what Pillow draws?
+//
+// Reads a case file, renders each case on a 48x48 canvas and prints the alpha
+// mask as one line of 0/1 per case.  `w2_raster.py` generates the cases, renders
+// the same ones through Pillow, and diffs.  Every difference is this port's bug:
+// the goldens the corpus is measured against came out of Pillow.
+//
+//   W2_CASES=cases.txt loft --interpret --lib <repo>/drawing/src probes/w2_raster.loft
+use graphics;
+use raster;
+
+const CW = 48;
+const CH = 48;
+
+fn num(t: text) -> float { t as float ?? 0.0 }
+
+fn points(parts: const vector<text>, from: integer) -> vector<raster::Pt> {
+  pts: vector<raster::Pt> = [];
+  for i in from..len(parts) {
+    xy = parts[i]?.split(',');
+    if len(xy) == 2 { pts += [raster::pt(num(xy[0]?), num(xy[1]?))]; }
+  }
+  pts
+}
+
+fn main() {
+  src = env_variable("W2_CASES");
+  if src == "" { println("W2_CASES unset"); return }
+  ink = graphics::rgba(200, 40, 30, 255);
+  for line in file(src).lines() {
+    if line.trim() == "" { continue }
+    parts = line.trim().split(' ');
+    kind = parts[0]?;
+    cv = graphics::canvas(CW, CH, 0);
+    if kind == "P" {
+      pts = points(parts, 1);
+      fill_poly(cv, pts, ink);
+    } else if kind == "T" {
+      pts = points(parts, 1);
+      thin_line(cv, pts, ink);
+    } else if kind == "W" {
+      pts = points(parts, 1);
+      a = pts[0]?;
+      b = pts[1]?;
+      // `ImageDraw.line` splits at width 1: anything wider is a filled quad, and
+      // width 1 (or 0) is the Bresenham walk.  Route the same way or the two
+      // disagree on eight of these cases and the port looks broken.
+      w = parts[len(parts) - 1]? as integer ?? 1;
+      if w <= 1 { thin_line(cv, pts, ink); }
+      else { wide_line(cv, a.ptx, a.pty, b.ptx, b.pty, ink, w); }
+    }
+    row = "";
+    for i in 0..(CW * CH) {
+      row += if ((cv.data[i]? >> 24) & 255) != 0 { "1" } else { "0" };
+    }
+    println(row);
+  }
+}

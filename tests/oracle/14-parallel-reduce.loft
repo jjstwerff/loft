@@ -5,8 +5,13 @@ fn sq(x: integer) -> integer { x * x }
 fn main() {
     data = [1, 2, 3, 4, 5, 6, 7, 8];
     total = 0;
-    for item in data par(r = sq(item), 4) { total += r; }   // 1+4+9+...+64 = 204
+    for item in data par(r = sq(item), 4) { total += r; }
     count = 0;
-    for item in data par(r2 = sq(item), 2) { if r2 % 2 == 0 { count += 1; } }  // even squares: 4,16,36,64 = 4
+    for item in data par(r2 = sq(item), 2) { if r2 % 2 == 0 { count += 1; } }
+    // Hand-summed from the definition: a par reduction that dropped or double-counted a
+    // chunk is the failure this file exists for, and it would still AGREE across backends
+    // if both dispatchers dropped the same one.
+    assert(total == 204, "1+4+9+16+25+36+49+64 = 204, got {total}");
+    assert(count == 4, "the even squares are 4,16,36,64, got {count}");
     println("par_sum={total} even_count={count}");
 }

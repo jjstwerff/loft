@@ -33,6 +33,51 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A failed `assert` names the line it is on
+
+If a function above it took a `const` (or a `&`) parameter it never modifies, every
+message after that function pointed at the wrong line — always by the same amount, so
+nothing looked odd:
+
+```
+error: assertion failed: repeat call, two params
+  --> game.loft:177:1
+177 |   assert(inner == 13, "by-value: callee sees its own writes");
+```
+
+The message belongs to line 184; line 177 is a different assertion, which is what made
+the report so convincing.  The caret of a warning, the file and line in a runtime error,
+and the line a failed `assert` prints all come from the same place, so all three moved
+together.  They are right now, and a test file whose nineteen assertions had all been
+reporting seven lines early reads correctly again.
+
+### A function that picks between a fresh value and a local no longer piles up records
+
+This shape is everywhere, and it was leaking one record on every call:
+
+```loft
+fn pick(c: boolean) -> Wind {
+  w = prevailing(…);
+  if c { Wind { … } } else { w }     // `w` on the arm that is NOT taken
+}
+```
+
+The answer was always right, so nothing looked wrong — until the calls added up.  A
+climate model calling it once per tile per season retained about 16,000 records per
+planet, and a program holding four planets at once died with *"store table exhausted"*.
+Now the record that loses the branch is released, and the count stays flat however
+many times you call it.
+
+Two neighbours of the same shape were answering **wrongly**, quietly, and are fixed with
+it: a choice between *two* locals gave you a blank record instead of the first one
+(`if c { u } else { w }` handed back an empty `u`), and writing the choice down before
+returning it (`r = if c { … } else { w }; r`) blanked the fresh side the same way.  Both
+gave the same wrong answer whether you ran interpreted or native, which is why they had
+gone unnoticed.
+
+If you had worked around any of this by making both arms build a fresh value, that code
+is still correct — you can now simply return the local.
+
 ### A browser page can bring its own assets
 
 A `--html` page has no disk, so a program that reads a pack could only get it over the
@@ -48,7 +93,7 @@ path = "assets/game.pack"
 same line of loft works either way:
 
 ```loft
-ok = store_load(q, "assets/game.pack")   # from disk, and from inside the page
+ok = store_load(q, "assets/game.pack")   // from disk, and from inside the page
 ```
 
 Add `source = "build/game.pack"` when the file is generated somewhere else — `path`

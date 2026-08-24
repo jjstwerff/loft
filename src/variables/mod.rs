@@ -2805,6 +2805,19 @@ impl Function {
             self.variables[nr as usize].source = lexer.at();
             break nr;
         };
+        // A `__ref_N` name identifies a SITE, and only within one pass.  The two passes
+        // claim the names in different orders — a callee declared later in the file has
+        // no known return type on pass 1, so the call mints no buffer, and on pass 2 it
+        // does — so the same name is a different site each time.  `add_variable` states
+        // the same thing for the TYPE and lets pass 2 win; the per-site FLAGS follow the
+        // same rule, and this mint is where the new site claims them.
+        //
+        // `skip_free` is the one that carries: `unregister_work_ref` sets it to record
+        // that a ref has no uses left, and a freshly minted buffer is by definition a ref
+        // that has one.  Leaving it set says "borrows, needs no store" to
+        // `gen_set_first_vector_null`, and the callee then receives `DbRef::NULL` where
+        // its return buffer belongs (loft#1082).
+        self.variables[v as usize].skip_free = false;
         self.trace_work_ref(v, tp);
         self.work_refs.insert(v);
         v
@@ -2825,11 +2838,20 @@ impl Function {
         if std::env::var_os("LOFT_TRACE_WORKREF").is_none() {
             return;
         }
+        // `arg=` is the half that decides whether a reuse is harmless or a collision, and
+        // the trace could not say it — including for its own headline example (loft#872's
+        // out-param landing on a promoted return buffer).  A work-ref name is scratch, so
+        // pass 2 re-resolving it to the same scratch slot is the intended reuse; the same
+        // name resolving to an ARGUMENT means `ref_return` promoted it to the return buffer
+        // on pass 1 and a different role is now being handed the buffer.  Filtering a corpus
+        // sweep on `arg=yes` is what separates the two: 138 same-name-two-sites hits across
+        // `tests/scripts` are almost all the benign kind (loft#1078).
         eprintln!(
-            "[workref] fn={} -> v{} {} tp={tp:?} at {}",
+            "[workref] fn={} -> v{} {} arg={} tp={tp:?} at {}",
             self.name,
             v,
             self.variables[v as usize].name,
+            if self.is_argument(v) { "yes" } else { "no" },
             std::panic::Location::caller()
         );
     }

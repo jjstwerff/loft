@@ -46,7 +46,7 @@ pair `⟨code, env⟩`: the lambda body plus a captured environment (the outer v
   (L-Fn)     fn(p₁…pₙ) -> R { body }  AND  |p₁…pₙ| { body } / || { body }   both evaluate to a
              closure ⟨body, env⟩ where env captures every OUTER variable the body references but
              does not bind.  The two forms are equivalent modulo type-annotation ergonomics.
-  (L-Ref)    a bare function name f (in a value position / fn-typed context) is a fn-ref value —
+  (L-FnRef)  a bare function name f (in a value position / fn-typed context) is a fn-ref value —
              a closure with an empty environment.
 ```
 

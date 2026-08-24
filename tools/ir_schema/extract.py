@@ -28,7 +28,7 @@ import sys
 IR_ENUMS = {"TypeT", "Node", "DbParts", "DbContent"}
 IR_STRUCTS = {
     "Position", "Key", "SortKey", "NameRef", "NameNr", "IntegerSpec",
-    "Block", "ParForBody", "Attribute", "Variable", "Function",
+    "Block", "Attribute", "Variable", "Function",
     "LinkedFieldGroup", "Definition", "Data",
     # @PLN11 D2a — database type-schema types (Stores.types).
     "DbField", "EnumPair", "KeyField", "DbType", "Bundle",
@@ -69,7 +69,7 @@ def main(path: str) -> int:
     # Pass 2: TWO-PHASE emit (mirrors the IR doc's "(1) shells, (2) fields").
     # Phase 1 = every `let tN = db.structure/enumerate("IrName"…)` declaration,
     # so all type ids are bound before any field references them — fixes the
-    # forward refs `NdBlock.block -> Block`, `NdParFor.body -> ParForBody`
+    # forward refs `NdBlock.block -> Block`
     # (finding 3: generated def order is NOT dependency-respecting).
     # Phase 2 = the field/value/vector/byte_enum lines, in original order.
     field_re = re.compile(r"db\.(field|value)\((t\d+),")

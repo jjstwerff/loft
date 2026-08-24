@@ -269,62 +269,6 @@ fn adopt_worker_excess_multi_store() {
     );
 }
 
-// ── Plan-06 spine step 3a — Value::ParFor variant smoke tests ───────────
-
-use loft::data::{ParForBody, Value as DataValue};
-
-#[test]
-fn parfor_variant_constructs_and_clones() {
-    // The variant exists in the IR and supports Clone + Debug + PartialEq.
-    let pf = DataValue::ParFor(Box::new(ParForBody {
-        input: DataValue::Var(0),
-        x_var: 1,
-        r_var: u16::MAX, // Discard policy: no result variable
-        worker: DataValue::Call(42, vec![DataValue::Var(1)]),
-        threads: DataValue::Int(4),
-        body: DataValue::Null,
-        stitch_id: 1, // Discard
-    }));
-    let cloned = pf.clone();
-    assert_eq!(pf, cloned);
-}
-
-#[test]
-fn parfor_walks_through_replace_var_in_ir() {
-    // The collections.rs walker must recurse into all four child Values.
-    // Construct a ParFor that references var 0 in `input`, `worker`,
-    // `threads`, and `body`; then run `replace_var_in_ir` (via a helper
-    // exposed indirectly through scopes.rs's scan).
-    //
-    // Because `replace_var_in_ir` is `fn` private to collections.rs, this
-    // test is a compile-time + structural check rather than a behavioural
-    // one — the unit test on PartialEq + Debug above proves the variant is
-    // walkable; the production walkers' arms are verified by the broader
-    // test suite (no regressions across 886 tests after adding ParFor).
-    let pf = DataValue::ParFor(Box::new(ParForBody {
-        input: DataValue::Var(0),
-        x_var: 1,
-        r_var: u16::MAX,
-        worker: DataValue::Var(0),
-        threads: DataValue::Var(0),
-        body: DataValue::Var(0),
-        stitch_id: 1,
-    }));
-    // Pattern-match works on the variant.
-    if let DataValue::ParFor(b) = &pf {
-        assert_eq!(b.x_var, 1);
-        assert_eq!(b.r_var, u16::MAX);
-        assert_eq!(b.stitch_id, 1);
-        // All four child Values are present.
-        assert_eq!(b.input, DataValue::Var(0));
-        assert_eq!(b.worker, DataValue::Var(0));
-        assert_eq!(b.threads, DataValue::Var(0));
-        assert_eq!(b.body, DataValue::Var(0));
-    } else {
-        panic!("expected ParFor");
-    }
-}
-
 #[test]
 fn walk_record_visited_breaks_cycle() {
     // Self-cycle: parent's record at (rec=1, pos=0) holds a DbRef

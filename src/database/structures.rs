@@ -831,21 +831,11 @@ impl Stores {
         at: usize,
     ) -> Result<(), WalkErr> {
         // `null` at any target position resets to the target's default — mirrors the
-        // legacy scanner's first-line behaviour and keeps round-tripping correct.
-        // Which default is the FIELD's question, not the type's: JSON `null` into a
-        // field declared non-null lands as that type's zero, because the sentinel a
-        // type-only answer would write is a value DN1 says the slot cannot hold
-        // (loft#870).
+        // legacy scanner's first-line behaviour and keeps round-tripping correct.  Which
+        // default is the FIELD's question, not the type's, and
+        // [`Self::write_absent_value`] is where that question is answered.
         if matches!(parsed, crate::json::Parsed::Null) {
-            // A field that DECLARES a default answers with it — `null` and an omitted
-            // key are the same question, so they get the same answer (loft#876).
-            if let Some(f) = self.declared_field(rec_tp, field)
-                && self.write_declared_default(&f, rec_tp, field, to)
-            {
-                return Ok(());
-            }
-            let nullable = self.field_declared_nullable(rec_tp, field);
-            self.set_default_value_nullable(tp, nullable, Absent::Final, to);
+            self.write_absent_value(tp, rec_tp, field, to);
             return Ok(());
         }
         let mismatch = || WalkErr {
@@ -1014,38 +1004,13 @@ impl Stores {
                 }
                 Ok(())
             }
-            Parts::Byte(from, _null) => {
+            // The four narrow-integer encodings (@FR-L-Narrow) live in `write_narrow_value`,
+            // so this walker and the `JsonValue` one spell a narrow slot's bytes the same way.
+            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _) => {
                 let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
-                #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to).set_byte(to.rec, to.pos, from, n as i32);
-                Ok(())
-            }
-            Parts::Short(from, _null) => {
-                let Some(n) = parsed.as_i64() else {
-                    return Err(mismatch());
-                };
-                #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to).set_short(to.rec, to.pos, from, n as i32);
-                Ok(())
-            }
-            Parts::ShortRaw(from, _null) => {
-                let Some(n) = parsed.as_i64() else {
-                    return Err(mismatch());
-                };
-                #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to)
-                    .set_i16_raw(to.rec, to.pos, from, n as i32);
-                Ok(())
-            }
-            Parts::Int(_from, _null) => {
-                let Some(v) = parsed.as_i64() else {
-                    return Err(mismatch());
-                };
-                #[allow(clippy::cast_possible_truncation)]
-                let raw = if v == i64::MIN { i32::MIN } else { v as i32 };
-                self.store_mut(to).set_i32_raw(to.rec, to.pos, raw);
+                self.write_narrow_value(tp, n, to);
                 Ok(())
             }
             // Plan-06 phase 4d.C step 2: stored DbRef pointer has no
@@ -1142,21 +1107,16 @@ impl Stores {
                     pos: fld + u32::from(f.position),
                 };
                 // A key the JSON simply omits is the same question as one written
-                // `null`, and gets the same answer — the FIELD's default (loft#870).
-                // A field that DECLARES one answers with it (loft#876); otherwise the
-                // type's absent value stands.
-                let f = f.clone();
-                if !self.write_declared_default(&f, tp, f_nr as u16, &slot) {
-                    self.set_default_value_nullable(f.content, f.nullable, Absent::Final, &slot);
-                }
+                // `null`, and gets the same answer (loft#870).
+                self.write_absent_value(f.content, tp, f_nr as u16, &slot);
             }
         }
         Ok(())
     }
 
     /// Schema-driven primitive write.  `tp` is one of the
-    /// low-numbered base-type IDs (0 = int32/Reference, 1 = long,
-    /// 2 = single, 3 = float, 4 = bool, 5 = text, 6 = Reference).
+    /// low-numbered base-type IDs (0 = integer, 1 = long, 2 = single,
+    /// 3 = float, 4 = bool, 5 = text, 6 = character).
     /// `at` is the byte offset where this primitive was parsed —
     /// reported on the [`WalkErr`] of any type mismatch so users
     /// see the real position instead of byte 0.
@@ -1174,11 +1134,40 @@ impl Stores {
             path: path.clone(),
         };
         match tp {
-            0 | 6 => {
+            0 => {
                 let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
                 self.store_mut(to).set_int(to.rec, to.pos, n);
+                Ok(())
+            }
+            6 => {
+                // `character` is FOUR bytes.  It shared type 0's arm — an 8-byte
+                // `set_int` — because the doc comment above called type 6 "Reference";
+                // the extra word ran into whatever field the layout put next, so
+                // `{"tail":5,"c3":99,"c2":98,"c1":97}` into
+                // `T { c1, c2, c3: character, tail: integer }` answered `a`, NUL, NUL, 5.
+                // Only the LAST character written survived, which is why document order
+                // decided whether the corruption showed. Same spill loft#1014 fixed in
+                // `emit_typed_null`, at a site that pre-dated the shared width rule.
+                //
+                // On the wire a character is the one-character STRING `to_json` writes;
+                // a NUMBER is also accepted as its codepoint, which is the only form
+                // this arm used to take.
+                let cp = if let crate::json::Parsed::Str(t) = parsed {
+                    let mut cs = t.chars();
+                    match (cs.next(), cs.next()) {
+                        (Some(c), None) => u32::from(c),
+                        _ => return Err(mismatch()),
+                    }
+                } else {
+                    let Some(n) = parsed.as_i64() else {
+                        return Err(mismatch());
+                    };
+                    u32::try_from(n).map_err(|_| mismatch())?
+                };
+                #[allow(clippy::cast_possible_wrap)]
+                self.store_mut(to).set_i32_raw(to.rec, to.pos, cp as i32);
                 Ok(())
             }
             1 => {
@@ -1284,6 +1273,90 @@ impl Stores {
         let mut path = Vec::new();
         self.walk_parsed_into(&parsed, f.content, rec_tp, field, slot, &mut path, 0)
             .is_ok()
+    }
+
+    /// What a slot holds when the document hands it no usable value — an omitted key, an
+    /// explicit `null`, or a value the slot's type cannot hold.  All three are the same
+    /// question, and this is the ONE place that answers it.
+    ///
+    /// Enforces @FR-L-Null: a nullable field has the SAME bytes as its not-null form, so
+    /// "what does an absent field hold?" is the DECLARATION's question, not the type's.
+    ///
+    /// A field that DECLARES a default answers with it (loft#876).  Otherwise the type's
+    /// absent value stands, which per [`formal/layout.md`] `(L-Null)` is the null sentinel
+    /// inside the slot's own bytes when the slot is nullable, and the type's zero when it
+    /// is not — a null written into a non-null slot is a value `(N-Decl)` says it cannot
+    /// hold (loft#870).
+    ///
+    /// `tp` is the slot's content type; `rec_tp` and `field` name the declaration to
+    /// consult.  A target that is not a declared field — a top-level cast target, a
+    /// collection element — carries `field == u16::MAX` and takes the nullable answer.
+    ///
+    /// ⚠ Both JSON walkers must ask HERE rather than answer for themselves.  Four things
+    /// have to agree for an absent field to read back correctly — the declared default, the
+    /// not-null integer sentinel, the one-byte width's absence code, and the boolean's —
+    /// and a second implementation gets to disagree on each of them independently, with no
+    /// error at any of the four.
+    ///
+    /// [`formal/layout.md`]: ../../../doc/claude/formal/layout.md
+    pub fn write_absent_value(&mut self, tp: u16, rec_tp: u16, field: u16, slot: &DbRef) {
+        if let Some(f) = self.declared_field(rec_tp, field)
+            && self.write_declared_default(&f, rec_tp, field, slot)
+        {
+            return;
+        }
+        let nullable = self.field_declared_nullable(rec_tp, field);
+        self.set_default_value_nullable(tp, nullable, Absent::Final, slot);
+    }
+
+    /// Write `n` into a NARROW integer slot through the encoding its `Parts` declares,
+    /// answering whether `tp` was a narrow integer at all — `false` lets a caller fall
+    /// through to its own dispatch.
+    ///
+    /// Enforces @FR-L-Null for the narrow widths — the write twin of `narrow_is_null`.
+    ///
+    /// The four encodings disagree about where the null code sits: `Byte` and `Short`
+    /// store `value - min + 1` and reserve the raw code for absence, `ShortRaw` stores
+    /// `value - min` directly, and `Int` is a raw `i32` whose null is `i32::MIN`.  That
+    /// makes the encoding part of the slot's LAYOUT, so it lives at one address.  A second
+    /// writer re-deriving it does not fail loudly: it writes plausible bytes that decode to
+    /// the wrong value, or to absence, for present input.
+    pub fn write_narrow_value(&mut self, tp: u16, n: i64, slot: &DbRef) -> bool {
+        enum Enc {
+            Byte(i32),
+            Short(i32),
+            ShortRaw(i32),
+            Int,
+        }
+        if tp == u16::MAX || tp <= 6 {
+            return false;
+        }
+        // Copy the encoding out before taking the store's mutable borrow.  Every narrow
+        // `Parts` carries just `(min, nullable)`, so this clones no field list.
+        let enc = match self.types[tp as usize].parts {
+            Parts::Byte(from, _) => Enc::Byte(from),
+            Parts::Short(from, _) => Enc::Short(from),
+            Parts::ShortRaw(from, _) => Enc::ShortRaw(from),
+            Parts::Int(_, _) => Enc::Int,
+            _ => return false,
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let v = n as i32;
+        let store = self.store_mut(slot);
+        // The setters answer whether the value FIT the slot's range; out-of-range is
+        // theirs to handle (they store the slot's default) and both walkers have always
+        // let that stand.  The answer here is the narrower question the caller asked:
+        // was this a narrow slot at all?
+        let _fits = match enc {
+            Enc::Byte(from) => store.set_byte(slot.rec, slot.pos, from, v),
+            Enc::Short(from) => store.set_short(slot.rec, slot.pos, from, v),
+            Enc::ShortRaw(from) => store.set_i16_raw(slot.rec, slot.pos, from, v),
+            // `i64::MIN` is the wide null, and it must not truncate to a live `i32`.
+            Enc::Int => {
+                store.set_i32_raw(slot.rec, slot.pos, if n == i64::MIN { i32::MIN } else { v })
+            }
+        };
+        true
     }
 
     /**

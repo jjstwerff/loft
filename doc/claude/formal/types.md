@@ -203,6 +203,17 @@ the type:
 | a narrow `Integer` (`u8`/`i8`/`u16`/`i16`/`i32`) | in-band sentinel = its top stored value (`u8` → `255`); excluded from `τ?`'s non-null range |
 | `Bool` | in-band sentinel `255` |
 | `Char` | in-band sentinel codepoint `0` (collides with a literal `'\0'`) |
+
+> **The sentinel is the type's, not each reader's — measured 2026-08-22.** loft#1014 made
+> every site that WRITES a character agree on codepoint 0; five sites that READ one, or put
+> a character on the wire, still spelled it their own way, and `Stores::is_null`'s character
+> arm was unreachable as well as wrong. An absent character therefore serialised as a SPACE,
+> and `to_json()` emitted the loft literal `'q'` — not JSON — so a struct with a character
+> field could not round-trip through loft's own parser. On the wire a character is now a
+> one-character JSON **string**; a number is still read as its codepoint. Guarded by
+> `tests/scripts/character-across-the-json-surface.loft` on both backends, and the reason
+> the interpolation channel still differs (concatenation skips a bare `'\0'`) is the
+> collision this row names. QUALITY.md § `character` on the JSON surface.
 | `Float` / `Single` | in-band sentinel = a reserved `NaN` |
 | a reference | out-of-band `nullref` (a reserved `DbRef`; no collision) |
 | a struct `S` as a `vector` element | the tagged **`__nullable<S>`** enum (discriminant + payload; no collision) |

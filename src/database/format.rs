@@ -1174,7 +1174,7 @@ impl ShowDb<'_> {
                 if text_val == crate::state::STRING_NULL && (self.json || self.loft) {
                     // loft#769 — an ABSENT `text?` is stored as the sentinel string
                     // `"\0"`, not as a null pointer, so it reached the escaper and
-                    // came back as the one-character string `" "`: a present,
+                    // came back as the one-character string holding a NUL: a present,
                     // corrupt value where the program meant nothing. It is the same
                     // absence the null-pointer branch above renders, so it renders
                     // the same way — which is what keeps SQL NULL distinct from `''`
@@ -1192,11 +1192,29 @@ impl ShowDb<'_> {
                 }
             }
         } else if self.known_type == 6 {
+            // `character`.  Its in-band null is CODEPOINT 0 (`formal/types.md`), which is
+            // what `Stores::is_null` answers on now; the `i != u32::MAX` this used to test
+            // was a fourth spelling of the sentinel, so a null character element rendered
+            // as the NUL character rather than as `null` (`['a',null,'c']` printed
+            // `['a',' ','c']`, while reading the element answered null).
             let i = self.store().get_u32_raw(self.rec, self.pos);
-            if i != u32::MAX
-                && let Some(ch) = char::from_u32(i)
-            {
-                write!(s, "'{ch}'").unwrap();
+            let ch = if i == 0 { None } else { char::from_u32(i) };
+            match ch {
+                // JSON has no character literal, so a character goes on the wire as a
+                // one-character STRING.  It used to emit the loft spelling `'q'` in JSON
+                // mode too, which is not JSON at all: `to_json()` on any struct with a
+                // character field produced a document loft's OWN parser rejected, losing
+                // every other field with it.  The loft render keeps `'q'`.
+                Some(c) if self.json => {
+                    let mut one = String::new();
+                    one.push(c);
+                    write_json_escaped(s, &one);
+                }
+                Some(c) => write!(s, "'{c}'").unwrap(),
+                // Every mode spells absence the same way, as the other widths do — a
+                // `vector<integer?>` element renders `null` in the plain display too, and
+                // a character that rendered as NOTHING put `['a',,'c']` on the screen.
+                None => s.push_str("null"),
             }
         } else if (self.known_type as usize) < self.stores.types.len() {
             match &self.stores.types[self.known_type as usize].parts {

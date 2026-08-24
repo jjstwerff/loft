@@ -17,8 +17,14 @@ fn build_sorted() -> sorted<SRec[sk]> {
 }
 fn main() {
     h = build_hash();
-    total = 0; for r in h { total += r.v; }        // 150 (order-independent sum)
+    total = 0; for r in h { total += r.v; }
+    // A hash has no promised walk ORDER (concurrency.md C-Order), so only the
+    // order-independent sum is asserted — asserting a hash order here would pin an
+    // implementation detail the rules deliberately leave free.
+    assert(total == 150, "50 + 80 + 20 = 150, in whatever order the hash walks; got {total}");
     s = build_sorted();
-    order = ""; for e in s { order = order + "{e.sk}"; }  // "123" (sorted ascending)
+    order = ""; for e in s { order = order + "{e.sk}"; }
+    // A `sorted` DOES promise key order, so here the order itself is the claim.
+    assert(order == "123", "a sorted collection walks in ascending key order; got `{order}`");
     println("hash_sum={total} sorted_order={order}");
 }

@@ -505,10 +505,6 @@ impl State {
             }
             ValueType::Return => self.gen_return(node.return_inner(), stack),
             ValueType::Drop => self.gen_drop(node.drop_inner(), stack),
-            ValueType::BreakWith => {
-                self.generate_node(node.breakwith_inner(), stack, false);
-                self.gen_break(node.breakwith_nr(), stack)
-            }
             ValueType::If => self.gen_if(node.if_cond(), node.if_then(), node.if_else(), stack),
             ValueType::Yield => {
                 // CO1.3c: emit the yielded expression, then OpCoroutineYield.
@@ -616,9 +612,6 @@ impl State {
             ValueType::Iter => {
                 panic!("Iter node should have been rewritten before codegen")
             }
-            ValueType::ParFor => panic!(
-                "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
-            ),
             // @PLN11 G2/M3.5 — FnRef on the stack: [d_nr i64][closure DbRef],
             // 8 + 12 B (P249 widened d_nr from 4).  add_op already advances
             // stack.position.
@@ -696,6 +689,7 @@ impl State {
                         Type::Single => stack.add_op("OpGetSingle", self),
                         Type::Character => stack.add_op("OpGetCharacter", self),
                         Type::Boolean => stack.add_op("OpGetBoolean", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpGetEnum", self),
                         // Unreachable: `ref_tuple_element_ok` refuses anything this
                         // match cannot emit, at the signature, with a message naming the
                         // element type.  The two lists are one list on purpose —
@@ -808,6 +802,7 @@ impl State {
                         Type::Single => stack.add_op("OpSetSingle", self),
                         Type::Character => stack.add_op("OpSetCharacter", self),
                         Type::Boolean => stack.add_op("OpSetBoolean", self),
+                        Type::Enum(_, false, _) => stack.add_op("OpSetEnum", self),
                         // Unreachable — see the RefTupleGet arm above.
                         _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
                     }
@@ -876,10 +871,11 @@ impl State {
                     Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
                     // `OpPutText`, like every sibling here and like the three other
                     // element-write matches in this file — NOT `OpAppendText`, which pops a
-                    // different amount and made a text-element write land one index high
-                    // (loft#1004): `t.0 = "X"` on a `(text, text)` wrote `.1`, a write to the
-                    // LAST element fell off the end and was silently lost, and a write onto a
-                    // non-text neighbour segfaulted the interpreter.
+                    // DIFFERENT amount, so every text-element write lands one index high.
+                    //
+                    // ⚠ That misalignment is mostly silent: on a `(text, text)`, `t.0 = "X"`
+                    // writes `.1`, a write to the LAST element falls off the end with nothing
+                    // reported, and only a write onto a non-text neighbour faults. (loft#1004)
                     Type::Text(_) => stack.add_op("OpPutText", self),
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                         stack.add_op("OpPutRef", self);
@@ -1446,8 +1442,19 @@ impl State {
             Type::Reference(_, d) | Type::Enum(_, _, d) => d,
             _ => Deps::none(),
         };
+        // A `__vdb_N` vector backing allocates at its BUILD site, never here.  That site
+        // can be conditional — an `if c { v = [..] }` rebind, or a literal that is one ARM
+        // of a branch — and an eager store on the path not taken is never named again and
+        // never typed, so nothing can free it and the leak report cannot even say what it
+        // held (`kt=65535 ?`).  Enforces @FR-O-Derived: a free is derived from the
+        // ownership fact, so a store no binding's fact ever names has no derivable free.
+        //
+        // The eager store buys nothing on the taken path either — `alloc_record_at`
+        // allocates fresh from a null sentinel — and the function prologue already
+        // sentinel-inits every `__vdb` slot (`def_code` above).  (loft#1081.)
+        let vdb_backing = stack.function.name(v).starts_with("__vdb");
         if dep.is_empty() {
-            if stack.function.is_inline_ref(v) || stack.function.is_skip_free(v) {
+            if vdb_backing || stack.function.is_inline_ref(v) || stack.function.is_skip_free(v) {
                 // Inline-ref temporaries must not allocate a database store at null-init
                 // time.  A real store is assigned later via OpPutRef when the method
                 // returns.  Writes DbRef{store_nr:u16::MAX} at slot; Stores::free
@@ -1948,15 +1955,7 @@ impl State {
             // `scan_set` no longer elides keyed `Set(v, Null)`.  Without this
             // arm it would fall to `set_var` → `gen_put_var` → panic (no keyed
             // OpPut* arm).
-            if matches!(
-                stack.function.tp(v),
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            ) && *value == Value::Null
-            {
+            if crate::parser::vectors::is_keyed(stack.function.tp(v)) && *value == Value::Null {
                 self.gen_keyed_null(stack, v, false);
                 return;
             }
@@ -2704,15 +2703,7 @@ impl State {
             }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
-        } else if matches!(
-            stack.function.tp(v),
-            Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) && *value == Value::Null
-        {
+        } else if crate::parser::vectors::is_keyed(stack.function.tp(v)) && *value == Value::Null {
             self.gen_set_first_keyed_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
             self.gen_set_first_tuple_null(stack, v);
@@ -4755,7 +4746,7 @@ impl State {
 /// that never produces a value at the join point.
 fn is_divergent(node: IrNode) -> bool {
     match node.kind() {
-        ValueType::Return | ValueType::Break | ValueType::BreakWith | ValueType::Continue => true,
+        ValueType::Return | ValueType::Break | ValueType::Continue => true,
         // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
         // raw-Return check misses it. Walk the last op of Insert/Block to recover
         // divergence for these wrappers.
@@ -4803,10 +4794,6 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         Value::Line(_) => {} // source-line markers: skip
         Value::Var(n) => eprint!("{}", vars.name(*n)),
         Value::Break(n) => eprint!("break({n})"),
-        Value::BreakWith(n, inner) => {
-            eprint!("break({n}) ");
-            print_ir(inner, data, vars, depth);
-        }
         Value::Continue(n) => eprint!("continue({n})"),
         Value::Keys(keys) => eprint!("keys({keys:?})"),
         Value::Set(v, inner) => {
@@ -4922,7 +4909,7 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         // `Span` wraps every expression with a source position — unwrap it so
         // the dump reads cleanly.
         Value::Span(b) => print_ir(&b.1, data, vars, depth),
-        // Rare IR nodes (FnRefDnr, ParFor, …) printed opaquely; this is a
+        // Rare IR nodes (FnRefDnr, …) printed opaquely; this is a
         // debug-only dumper.  The catch-all also keeps `print_ir` exhaustive in
         // debug-assertions builds (e.g. under cargo-fuzz) as new variants land.
         _ => eprint!("<ir>"),

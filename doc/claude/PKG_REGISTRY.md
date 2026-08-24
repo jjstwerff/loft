@@ -923,7 +923,8 @@ Borrowed from Debian's `Release.gpg` / `InRelease`.
    key never leaves the card, and PIN + touch are the confirmation.
    If no card is present, signing **falls back to a local key file**
    (`~/.loft/trust-root/registry-signing-key.bin`) behind a typed
-   `yes` prompt. Either way:
+   `yes` prompt — or, for a scripted or agent-driven publish, behind
+   **`--expect <pkg>@<ver>`** (see § The third route below). Either way:
    - **Schema gate first**: `scripts/registry_schema_gate.sh` runs
      `tools/validate.py`'s gate 1 out of the checkout being signed, and
      `registry-sign.sh` refuses on a rejection.  It IMPORTS the deployed
@@ -956,6 +957,62 @@ Borrowed from Debian's `Release.gpg` / `InRelease`.
 4. Clients fetch both files.  Verify the signature over the bytes
    of `index.json`.  Refuse to use an unsigned/invalid-sig index
    unless `--allow-unsigned` is passed.
+
+### The third route — `--expect`, a confirmation that CHECKS
+
+A typed `yes` asserts that a human looked.  It verifies nothing, and
+the failure that matters is not "nobody looked" but "somebody looked
+and the diff carried something they did not read": one real run
+published four packages and ALSO rewrote four unrelated descriptions,
+losing `ssh`'s **"Native-only"** — the one fact a consumer needs before
+choosing it.  Every gate stayed green, because none of them reads a
+description (§ The first-`description` gotcha in the publish runbook).
+
+`scripts/registry-sign.sh --expect drawing@0.1.0` (repeatable) binds the
+signature to the versions the maintainer NAMED.  The run refuses unless
+the diff, against its base:
+
+- introduces **exactly** the named `<pkg>@<ver>` set — nothing more;
+- **removes** no package and no version;
+- leaves every other package's `description` / `homepage` /
+  `categories` / `yanked` **byte-identical**.
+
+On a match it signs with no prompt; on any mismatch it exits non-zero
+and names which of the four rules broke.  It requires a real diff base
+(`--since`, or the auto-picked one) and refuses without one — a claim
+about what CHANGED is meaningless with nothing to have changed from.
+
+This is **stricter than the prompt it replaces**, which is what makes
+it an acceptable substitute rather than a bypass: it answers the exact
+concern § Why laptop signing states below — "CI signing would sign
+whatever lands in `main` — no human gate" — by making *whatever lands*
+impossible to sign, while the key still never leaves the maintainer's
+machine.  `--yes` remains the unchecked escape hatch and should not be
+reached for when `--expect` will do.
+
+Proven able to refuse, on the live index: an unasked-for version, a
+rewritten description, a deleted package and a wrong version number
+each turn the run red, and the named version alone signs.
+
+`--yes` additionally **refuses when stdin is not a terminal**.  It means
+"a human decided and is not here to type it", and the second half is
+only true at a terminal — with no TTY the flag asserts a human who
+cannot be present, which is exactly the shape a script has.  That is
+also what lets the signer be allow-listed in a permission config
+without the allow-list widening anything: a permission rule cannot tell
+`--expect drawing@0.1.0` from `--yes`, and the script can.
+
+**For a batch, `registry_maintain.sh --only <pkg>[,<pkg>]`** does the
+whole publish — package, tag, release, index entry — for exactly the
+named libraries, and hands the signer an `--expect` for each one it
+actually published.  The filter is applied before the pre-flight (which
+runs each worklist lib's suite, so filtering afterwards would spend
+minutes on libraries nobody asked for), foreign PRs and staged
+submissions are reported but **not acted on** — merging one would put a
+version in the index the signer then refuses, *after* the merge landed
+on the remote — and a name with nothing to publish is an error rather
+than a quiet no-op.  So four library versions cost one command and no
+prompt, with the signature bound to all four.
 
 ### Why laptop signing, not CI
 

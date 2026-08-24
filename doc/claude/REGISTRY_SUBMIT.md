@@ -74,8 +74,8 @@ git tag crypto-v0.2.1              # MONOREPO:  <pkg>-v<version>
 git push --tags
 ```
 
-Tell `loft package` which scheme to emit via `[package] repository` in
-`loft.toml`:
+The tag is always `<pkg>-v<version>`, and the repo it lives at comes from
+`[package] repository` when the manifest declares one:
 
 ```toml
 [package]
@@ -83,8 +83,14 @@ name = "crypto"
 version = "0.2.1"
 repository = "loft-libs-core"      # → tag crypto-v0.2.1 at loft-lang/loft-libs-core
                                    #   (a value with "/" is a full owner/repo)
-                                   # omit → legacy loft-<pkg> repo + bare v<version>
 ```
+
+Undeclared is fine: both commands then read the package directory's own
+`git remote get-url origin`, which is how a monorepo package gets a correct url
+without a manifest line.  With neither, the url is REFUSED rather than guessed —
+`loft package` used to invent a `loft-lang/loft-<pkg>` repo that exists for no
+package in any `loft-libs-*` monorepo, so the two commands printed different
+urls for the same package and only the registry's fetch caught it (loft#1083).
 
 The version in the tag MUST match `[package] version` — the registry's
 reproducible-build re-check (gate 3) clones the tag and re-runs `loft package`.
@@ -94,6 +100,12 @@ reproducible-build re-check (gate 3) clones the tag and re-runs `loft package`.
 ```sh
 loft package
 ```
+
+> `loft publish --dry-run` prints the same entry with `subpath` and the `api`
+> surface snapshot filled in, so prefer it when you have the checkout in hand.
+> Both derive the `url` from the same place, so they cannot disagree (loft#1083).
+> Neither fills `deps` — a monorepo declares none, so copy them from the
+> previous version's entry.
 
 Output in cwd:
 
@@ -187,7 +199,8 @@ fields are required in a `submissions/` file (§ 4 below).
 
 > **Two things a programmatic edit gets wrong** (learned publishing crypto
 > 0.3.3): for a **multi-package repo** (e.g. `loft-libs-core`), copy the existing
-> entries' **`subpath`** field (`"subpath": "crypto"`) — `loft package` omits it.
+> entries' **`subpath`** field (`"subpath": "crypto"`) — `loft package` omits it,
+> while `loft publish --dry-run` emits it (and the `api` surface snapshot) for you.
 > And if you edit `index.json` with a script, **match the file's CURRENT
 > unicode convention** — check whether descriptions carry raw `—` or escaped
 > `—` and pass the matching `ensure_ascii` to `json.dump`, then verify

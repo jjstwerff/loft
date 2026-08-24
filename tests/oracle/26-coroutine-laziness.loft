@@ -6,25 +6,67 @@
 // still saw every side effect of every iteration (loft#836).  It is tested now, and the
 // interleaving is what proves it: the values alone are identical either way, which is why
 // the value-only oracle could report full agreement while the two backends disagreed.
-fn straight_line() -> iterator<integer> {
-    print("a ");
+// The interleaving is recorded as well as printed, so the claim is CHECKED and not merely
+// compared against the other backend.  It has to go through a struct: a heap parameter
+// shares its record (calls.md F-ParamHeap) and a record is not a frame, so the generator
+// can write it across a yield.  Two things a reader will otherwise try:
+//
+//   - a `&text` parameter cannot do this job — a `&` parameter on a generator is rustc
+//     E0106 on `--native` (the frame is a heap value that can outlive the borrow);
+//   - a TEXT field used to make the generator EAGER on `--native`, because the field
+//     write's temp is freed at block exit and that free lands after the yield, which the
+//     lazy recogniser read as "a statement after the yield".  Recording the trace as text
+//     is what found it; the free is now hoisted above the suspend and both spellings are
+//     lazy.  The DIGIT trace below stays as the primary because it depends on no text
+//     machinery at all, and `test_a_text_field_trace_is_lazy_too` carries the text one.
+//
+// The order is a decimal numeral read left to right: a leading 1 to keep the first digit,
+// then `i` for each value the generator produces and 9 for each one the consumer receives.
+// Lazy gives 1,0,9,1,9; running the generator to completion first would give
+// 1,0,1,2,3,4,9,9 — so the two answers are far apart rather than off by one.
+struct Trace { n: integer }
+struct Words { w: text }
+
+fn straight_line(t: Trace) -> iterator<integer> {
+    print("a "); t.n = t.n * 10 + 1;
     yield 1;
-    print("b ");
+    print("b "); t.n = t.n * 10 + 2;
     yield 2;
-    print("c ");
+    print("c "); t.n = t.n * 10 + 3;
     yield 3;
 }
 
-fn in_a_loop() -> iterator<integer> {
+fn worded(t: Words) -> iterator<integer> {
     for i in 0..5 {
-        print("p{i} ");
+        print("q{i} "); t.w += "q{i} ";
+        yield i;
+    }
+}
+
+fn in_a_loop(t: Trace) -> iterator<integer> {
+    for i in 0..5 {
+        print("p{i} "); t.n = t.n * 10 + i;
         yield i;
     }
 }
 
 fn main() {
-    for x in straight_line() { print("g{x} "); }          // a g1 b g2 c g3
+    t1 = Trace { n: 1 };
+    for x in straight_line(t1) { print("g{x} "); t1.n = t1.n * 10 + 9; }
     print("\n");
-    for x in in_a_loop() { print("g{x} "); if x >= 1 { break; } }   // p0 g0 p1 g1
+    // This is the assertion the file was written for and could not make: a backend that
+    // ran the generator to completion and buffered the yields produces the SAME VALUES in
+    // the same order, and differs ONLY in when the side effects happen (loft#836).
+    assert(t1.n == 1192939, "a,g1,b,g2,c,g3 — seven events, ending with the third consume; got {t1.n}");
+    t2 = Trace { n: 1 };
+    for x in in_a_loop(t2) { print("g{x} "); t2.n = t2.n * 10 + 9; if x >= 1 { break; } }
     print("\n");
+    assert(t2.n == 10919, "a `break` stops the generator's loop too — iterations 2..4 never run; got {t2.n}");
+    // The same claim through a TEXT field, which is the spelling that was eager on
+    // `--native` until the trailing free was hoisted above the suspend.  It is here rather
+    // than in place of the digits because it is the shape a regression would break first.
+    t3 = Words { w: "" };
+    for x in worded(t3) { print("w{x} "); t3.w += "w{x} "; if x >= 1 { break; } }
+    print("\n");
+    assert(t3.w == "q0 w0 q1 w1 ", "a text-field trace interleaves the same way; got `{t3.w}`");
 }

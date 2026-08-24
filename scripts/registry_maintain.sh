@@ -25,6 +25,14 @@
 # release + notes, re-checks every tarball sha256, then signs/commits/pushes),
 # use `scripts/registry-sign.sh --pr <N>` instead — the per-PR signing path.
 #
+#   --only P[,P...]  publish EXACTLY these own libraries and nothing else: the
+#                    worklist is filtered to them (before the pre-flight, so no
+#                    time is spent on libraries nobody asked for), foreign PRs and
+#                    staged submissions are reported but NOT acted on, and the
+#                    signer is handed `--expect <name>@<ver>` for each one — so a
+#                    run that somehow changed anything else REFUSES instead of
+#                    signing it.  A name with nothing to publish is an error.
+#                    This is the agent-safe form; it needs no `--yes`.
 #   --dry-run        gather + print the worklist, change nothing
 #   --yes            skip the confirmation prompt
 #   --key <file>     Ed25519 private key (default: $LOFT_REGISTRY_KEY, else
@@ -37,11 +45,13 @@ DRY=0
 YES=0
 KEY="${LOFT_REGISTRY_KEY:-$HOME/.loft/trust-root/registry-signing-key.bin}"
 REG_DIR="${LOFT_REGISTRY_DIR:-}"
+ONLY=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
         --yes) YES=1 ;;
         --key) KEY="$2"; shift ;;
+        --only) ONLY="$2"; shift ;;
         --registry-dir) REG_DIR="$2"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -121,6 +131,35 @@ for name, pkg in sorted(index.items()):
         foreign.append(f"{name}\t{newest}\t{parts[0]}/{parts[1]}")
 open(f"{tmp}/foreign.tsv", "w").write("\n".join(foreign) + ("\n" if foreign else ""))
 EOF
+
+# ── --only: this run publishes exactly these, and nothing else ────────────────
+# Applied HERE, before the pre-flight below, for two reasons.  The pre-flight runs
+# each worklist lib's whole suite and downloads its release tarball, so filtering
+# after it would spend minutes on libraries nobody asked for — and a lib blocked
+# there prints a scary failure for work that was never in scope.
+#
+# A name that is not in the worklist is an ERROR, not a quiet no-op: `--only
+# drawing` on a registry that already has drawing means one of us is wrong about
+# what needs publishing, and finishing silently is the answer that hides it.
+if [ -n "$ONLY" ]; then
+    : > "$tmp/only_work.tsv"
+    miss=""
+    for want in ${ONLY//,/ }; do
+        hits=$(awk -F'\t' -v n="$want" '$1 == n' "$tmp/work.tsv")
+        if [ -z "$hits" ]; then miss="$miss $want"; else printf '%s\n' "$hits" >> "$tmp/only_work.tsv"; fi
+    done
+    if [ -n "$miss" ]; then
+        echo "!! --only names $(echo "$miss" | wc -w) package(s) with nothing to publish:$miss" >&2
+        echo "   Each is either absent from $ORG/loft-libs-*, or its loft.toml version is" >&2
+        echo "   already the newest in the registry index.  Bump the version, or drop the name." >&2
+        exit 2
+    fi
+    sort -u "$tmp/only_work.tsv" > "$tmp/work.tsv"
+    echo "--only: $(wc -l < "$tmp/work.tsv") own lib(s); foreign PRs and staged submissions are"
+    echo "        reported below but NOT acted on — they would change the index this run is"
+    echo "        about to bind its signature to."
+fi
+
 
 # Foreign upstream drift: does the author's repo have a newer release tag than
 # the registry?  Informational only — the author publishes, not us.
@@ -284,6 +323,11 @@ fi
 # — refusing to load" for every consumer).  So skip the unmergeable PR, record
 # it, and carry on to the sign step, which re-signs the resulting index.
 SKIPPED_PRS=()
+# `--only` binds this run's signature to the named libraries (see the sign step),
+# so merging someone else's PR here would put a version in the index that the
+# signer then refuses — AFTER the merge already landed on the remote, leaving a
+# changed index.json with a stale signature.  Report them, act on none.
+[ -n "$ONLY" ] && : > "$tmp/prs.tsv"
 while IFS=$'\t' read -r num _author state _title; do
     if [ "$state" != green ]; then
         echo "skipping $ORG/registry#$num ($state — review by hand)"
@@ -346,7 +390,7 @@ sha256_of() { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[
 # RELIABILITY: one own-lib that can't publish (missing release asset, package
 # error) must not abort the rest — skip it, record it, keep going so the others
 # publish and the index still gets signed.
-published=()
+published=(); EXPECTS=()
 SKIPPED_LIBS=()
 while IFS=$'\t' read -r name ver repo libdir _why; do
     echo "publishing $name $ver from $repo ..."
@@ -491,6 +535,10 @@ EOF
         echo "  ⚠ index update failed — skipping $name $ver"; SKIPPED_LIBS+=("$name-$ver"); continue
     fi
     published+=("$name-$ver")
+    # `<name>@<ver>` as well as `<name>-<ver>`: the signer keys on the first and
+    # a package name may itself contain a `-`, so splitting the message form back
+    # apart would be a guess.  Two spellings, one append site.
+    EXPECTS+=("$name@$ver")
 done < "$tmp/work.tsv"
 
 # ── submissions/ drain (C96 key-absent path) ─────────────────────────────────
@@ -504,6 +552,9 @@ done < "$tmp/work.tsv"
 DRAINED=(); REVIEW_SUBS=(); FAILED_SUBS=()
 for sub in "$REG_DIR"/submissions/*.json; do
     [ -e "$sub" ] || continue
+    # Same reason as the PR merge above: folding a submission would change the
+    # index this run is about to bind its signature to.
+    [ -n "$ONLY" ] && { echo "  --only: leaving $(basename "$sub") staged"; continue; }
     read -r s_name s_ver s_repo s_tag s_sub < <(python3 - "$sub" <<'PYEOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -590,7 +641,20 @@ git -C "$REG_DIR" --no-pager diff --stat index.json || true
 # Re-signing here is also what fixes a `gh pr merge` that changed index.json on
 # the remote without re-signing — the routine must never leave it unsigned.
 sign_args=(--registry-dir "$REG_DIR" --key "$KEY" --message "publish: ${published[*]:-PR merges / re-sign}")
-[ "$YES" = 1 ] && sign_args+=(--yes)
+if [ -n "$ONLY" ]; then
+    # `--only` already said what this run is for, and the loop above recorded what
+    # it actually did.  Handing those to the signer as `--expect` closes the gap
+    # between the two: if the index carries anything else — a version this run did
+    # not publish, a removal, another package's description rewritten — it refuses
+    # rather than signing it.  That is also the confirmation, so no `--yes`.
+    if [ ${#EXPECTS[@]} -eq 0 ]; then
+        echo "--only published nothing — not signing (the index is unchanged by this run)." >&2
+        exit 0
+    fi
+    for e in "${EXPECTS[@]}"; do sign_args+=(--expect "$e"); done
+elif [ "$YES" = 1 ]; then
+    sign_args+=(--yes)
+fi
 "$here/scripts/registry-sign.sh" "${sign_args[@]}"
 
 echo

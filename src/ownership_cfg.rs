@@ -98,7 +98,7 @@ impl Builder {
     /// escaping an inner loop is a known-deferred edge case — see IMPL.md 1.3).
     fn has_transfer(v: &Value) -> bool {
         match v.unspan() {
-            Value::Return(_) | Value::Break(_) | Value::BreakWith(..) | Value::Continue(_) => true,
+            Value::Return(_) | Value::Break(_) | Value::Continue(_) => true,
             Value::Loop(_) => false,
             other => {
                 let mut found = false;
@@ -144,7 +144,7 @@ impl Builder {
                 self.edge(cur, e);
                 None
             }
-            Value::Break(n) | Value::BreakWith(n, _) => {
+            Value::Break(n) => {
                 self.op(cur, "Break".into());
                 let t = self.loop_exit(*n);
                 self.edge(cur, t);

@@ -330,46 +330,6 @@ impl<'a> IrNode<'a> {
         }
     }
 
-    /// `ParFor` source expression (the `vector<T>` being iterated).
-    #[must_use]
-    pub fn parfor_input(&self) -> IrNode<'a> {
-        self.parfor_child(|b| &b.input, ds::PARFOR_INPUT, "parfor_input")
-    }
-
-    /// `ParFor` per-row worker call expression.
-    #[must_use]
-    pub fn parfor_worker(&self) -> IrNode<'a> {
-        self.parfor_child(|b| &b.worker, ds::PARFOR_WORKER, "parfor_worker")
-    }
-
-    /// `ParFor` thread-count expression.
-    #[must_use]
-    pub fn parfor_threads(&self) -> IrNode<'a> {
-        self.parfor_child(|b| &b.threads, ds::PARFOR_THREADS, "parfor_threads")
-    }
-
-    /// `ParFor` sequential main-thread body.
-    #[must_use]
-    pub fn parfor_body(&self) -> IrNode<'a> {
-        self.parfor_child(|b| &b.body, ds::PARFOR_BODY, "parfor_body")
-    }
-
-    /// Shared reader for the four child expressions of `ParFor`.  The store
-    /// backing holds them inside a boxed-of-one `ParForBody` record rather than
-    /// directly on the node, so the offset is read through `par_for_rec`.
-    fn parfor_child(
-        &self,
-        pick: impl Fn(&'a crate::data::ParForBody) -> &'a Value,
-        off: u32,
-        who: &str,
-    ) -> IrNode<'a> {
-        match *self {
-            IrNode::Native(Value::ParFor(b)) => IrNode::Native(pick(b)),
-            IrNode::Store(s, n) => IrNode::Store(s, n.par_for_rec(s).field_vec(off).get(0, s)),
-            IrNode::Native(_) => kind_panic(who, self),
-        }
-    }
-
     /// Call `f` once per direct child expression — the backing-agnostic mirror
     /// of [`Value::for_each_child`], and the ONE place that knows the IR tree's
     /// shape for `IrNode` walkers.
@@ -391,7 +351,6 @@ impl<'a> IrNode<'a> {
             K::Block | K::Loop => self.as_block().operators().iter().for_each(&mut *f),
             K::Set => f(self.set_inner()),
             K::Return => f(self.return_inner()),
-            K::BreakWith => f(self.breakwith_inner()),
             K::Drop => f(self.drop_inner()),
             K::Yield => f(self.yield_inner()),
             K::TuplePut => f(self.tupleput_inner()),
@@ -405,12 +364,6 @@ impl<'a> IrNode<'a> {
                 f(self.iter_create());
                 f(self.iter_next());
                 f(self.iter_init());
-            }
-            K::ParFor => {
-                f(self.parfor_input());
-                f(self.parfor_worker());
-                f(self.parfor_threads());
-                f(self.parfor_body());
             }
             // Leaves — no child expressions.
             K::RawExpr
@@ -619,26 +572,6 @@ impl<'a> IrNode<'a> {
             IrNode::Native(Value::Set(_, b)) => IrNode::Native(b),
             IrNode::Store(s, n) => store_child(s, n, ds::NDSET_INNER),
             IrNode::Native(_) => kind_panic("set_inner", self),
-        }
-    }
-
-    /// `BreakWith` loop number.
-    #[must_use]
-    pub fn breakwith_nr(&self) -> u16 {
-        match *self {
-            IrNode::Native(Value::BreakWith(v, _)) => *v,
-            IrNode::Store(s, n) => n.field_int(s, ds::NDBREAKWITH_N) as u16,
-            IrNode::Native(_) => kind_panic("breakwith_nr", self),
-        }
-    }
-
-    /// `BreakWith` value expression.
-    #[must_use]
-    pub fn breakwith_inner(&self) -> IrNode<'a> {
-        match *self {
-            IrNode::Native(Value::BreakWith(_, b)) => IrNode::Native(b),
-            IrNode::Store(s, n) => store_child(s, n, ds::NDBREAKWITH_INNER),
-            IrNode::Native(_) => kind_panic("breakwith_inner", self),
         }
     }
 
@@ -904,7 +837,6 @@ fn native_value_kind(v: &Value) -> ValueType {
         Value::Set(_, _) => K::Set,
         Value::Return(_) => K::Return,
         Value::Break(_) => K::Break,
-        Value::BreakWith(_, _) => K::BreakWith,
         Value::Continue(_) => K::Continue,
         Value::If(_, _, _) => K::If,
         Value::Loop(_) => K::Loop,
@@ -918,7 +850,6 @@ fn native_value_kind(v: &Value) -> ValueType {
         Value::FnRef(_, _, _) => K::FnRef,
         Value::FnRefDnr(_) => K::FnRefDnr,
         Value::Parallel(_) => K::Parallel,
-        Value::ParFor(_) => K::ParFor,
         Value::RawExpr(_) => K::RawExpr,
     }
 }
@@ -1033,7 +964,6 @@ mod tests {
             Value::Return(Box::new(Value::Int(99))),
             Value::Drop(Box::new(Value::Var(4))),
             Value::Set(3, Box::new(Value::Int(8))),
-            Value::BreakWith(1, Box::new(Value::Var(2))),
             Value::Yield(Box::new(Value::Int(5))),
             Value::If(
                 Box::new(Value::Boolean(true)),
@@ -1134,13 +1064,6 @@ mod tests {
                 ValueType::Set => {
                     assert_eq!(nat.set_var(), sto.set_var());
                     assert_eq!(nat.set_inner().int_value(), sto.set_inner().int_value());
-                }
-                ValueType::BreakWith => {
-                    assert_eq!(nat.breakwith_nr(), sto.breakwith_nr());
-                    assert_eq!(
-                        nat.breakwith_inner().var_nr(),
-                        sto.breakwith_inner().var_nr()
-                    );
                 }
                 ValueType::Yield => {
                     assert_eq!(nat.yield_inner().int_value(), sto.yield_inner().int_value());

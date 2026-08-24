@@ -362,6 +362,105 @@ fix-on-save applies.
    `tests/error_messages/cases/48_advice_points_at_the_function_it_names.loft`, whose
    fixture deliberately ends in a `next_function_marker` no caret may land on.
 
+5. **A seek to a diagnostic site is not free — it moves what every LATER position is read
+   from.** `Lexer::to` points the reporting position at a declaration a whole-body pass is
+   complaining about; it does **not** move the read cursor, and the tokenizer keeps
+   incrementing that reporting position on every physical line it pulls afterwards. So a
+   seek left standing shifts the caret of every diagnostic in the rest of the file, the
+   `file:line` of a runtime span, and the line the compiler injects into `assert` — all by
+   the same constant, which is what makes it read as correct. Measured: a needless-`const`
+   parameter made all nineteen assertions of one test file report seven lines early, so a
+   failure printed **another** assert's source under this one's message (loft#625's
+   mechanism, at a site that fix did not reach).
+
+   The seek now ends at the next token scanned from source, so a missing restore costs the
+   one diagnostic it was made for. A pass that emits several diagnostics and then keeps
+   parsing still restores explicitly (`let p = lexer.at(); … lexer.to(p);`) — a position
+   read back with `at()` before that next token still sees the seek. Guard:
+   `runtime_warnings.rs::a_seek_to_a_warning_site_does_not_shift_later_positions`; the
+   corpus-wide re-measure is `LOFT_TRACE_ASSERTS`
+   ([TESTING.md](TESTING.md#the-set-a-suite-runs-is-not-the-set-it-contains-loft_trace_asserts)),
+   which reads exactly this injected line.
+
+6. **The cursor is one token AHEAD of what the parser has decided about, and `diagnostic!`
+   now attributes to the consumed source when that token has crossed a line.**
+   `Lexer::position` is the scan cursor: the END of the token the parser is *holding*. A
+   check that can only run once a construct is complete — a write to a `const` parameter, a
+   nullable reaching a non-null slot, a capture inside a `parallel` arm — raises with the
+   cursor already advanced to the next token. While that token is on the same line both
+   answers agree, which is exactly why this looked right for years: loft statements usually
+   end in `;`, and the `;` keeps the cursor on the statement's own line. Drop it — which the
+   language invites, being expression-oriented — and the caret follows the cursor to
+   wherever the next token happens to be:
+
+   ```loft
+   fn f(a: const integer) {
+     a = 42        // ← the error is here
+   }               // ← the caret was HERE, and blank lines between them moved it further
+   ```
+
+   `Lexer::report_pos` is the one place that decides this: a diagnostic goes to the end of
+   the CONSUMED source (`Lexer::prev_end`) whenever the current token starts on a later
+   line, and to the cursor otherwise, so the existing same-line column contract is
+   untouched. A deliberate `Lexer::to` seek (item 5) outranks both — that position was
+   chosen — and the position is only used when it belongs to the same file.
+
+   **A site that really is about the token the parser is HOLDING says so, at the site.**
+   Three do: `'struct' definitions must be at file scope` and the `..hi` open-range refusal
+   are raised while looking at the offending keyword, and `unreachable-code` is raised
+   holding the first token of the unreachable statement. All three now name their position
+   (`Lexer::specific` / `pos_diagnostic_coded`) with a comment saying why — the same shape as the 48 sites already reaching for
+   `Lexer::peek_pos`. That claim can only be made by the site; the default cannot guess it,
+   and measuring proved it: attributing *every* diagnostic to the consumed source moved 107
+   of 248 `parse_errors` fixtures, and the ones that moved were syntax errors about the
+   current token, all of them worse.
+
+   The gain was not only the missing line. Two diagnostics were pointing at an entirely
+   **different construct**: `circular init dependency` landed on the `fn` after the struct,
+   and `Not all code paths return a value — function 'classify'` landed on the function
+   *after* `classify`. Two more were on their function's closing `}` — the deferred
+   `OpMinInt` arity errors and `Unknown field Point.z` — and now land on the expression.
+   `Expect token ;` now points where the `;` belongs rather than at the line below it.
+
+   The corpus-wide re-measure is `scripts/diag_position_audit.py` (a report, not a gate — the
+   position twin of `LOFT_TRACE_ASSERTS`): its sharp filter, *the caret sits on a line that is
+   nothing but a closing brace*, went **19 → 4 → 0** across two passes.
+
+   Guards: `parse_errors.rs::a_diagnostic_names_its_own_line_{whatever_follows_it,
+   with_no_terminator, across_blank_lines}` — one statement in three layouts, asserting
+   they AGREE rather than a hand-picked line, since a hand-picked expectation only ever
+   pins the layout it was written for. The first cell is the one that always passed; it is
+   in the file to show what hid the other two. `a_current_token_diagnostic_still_names_the_
+   current_token` pins the opt-out direction. All proven able to fail by disabling
+   `report_pos`.
+
+7. **A whole-CONSTRUCT check must still name the part it is about, and `report_pos` cannot
+   guess which part.** The default of item 6 is right and not enough for a check that can only
+   run once a whole construct is complete: its consumed source genuinely ends at the closing
+   brace, so the caret lands there. That is correct and useless — a struct has many fields, and
+   *"somewhere in this struct"* is not an answer. Each such site holds a better position:
+
+   | check | now points at | how |
+   |---|---|---|
+   | `circular init dependency` | the field the cycle STARTS from | the field name's position, threaded through `init_deps` |
+   | a generator's discarded tail value | the tail expression | `l[last].span_pos()` — a call is already span-wrapped at its `(` |
+   | a tail conversion (narrowing, `not null`) | the tail statement | `block_result`'s `tail_pos`, captured per statement by the block loop |
+
+   Two cost nothing to reach: `tail_pos` was already a parameter of `block_result` and used by
+   exactly one check, and the N-Store tail check next to it already read `span_pos()`. Only
+   `circular init` needed a new datum. Measure before widening a site: three of the four
+   narrowing POSITIONS (assignment, argument, struct-literal field) already named their own
+   line — only the return tail did not — so the fixture pins all four, or a later change could
+   move the working three unnoticed.
+
+   ⚠ **Seek with `Lexer::to`, end with `Lexer::end_seek` — never with a second `to`.** Seeking
+   back leaves `seek_return` pending, and `report_pos` reads a live seek as a deliberate choice
+   and stops attributing to the consumed source. So every diagnostic the pass raises AFTER the
+   seek silently reverts to the scan cursor. Measured: seeking around the block-tail conversion
+   that way sent `Not all code paths return a value — function 'classify'` back onto the
+   FOLLOWING function, which is the same defect item 6 had just removed. `missing_return_not_null`
+   is the guard that caught it.
+
 ## See also
 
 - [COPY_DIAGNOSTICS.md](COPY_DIAGNOSTICS.md) — the copy-vs-borrow model behind `avoidable-copy`.

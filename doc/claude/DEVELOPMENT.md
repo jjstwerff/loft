@@ -103,6 +103,23 @@ The branch is merged to main via a single PR when all items pass CI.
   **scratchpad copy** after any resolution or diagnostic change (a suite run inside a
   consumer's tree writes `native-auto/` and `.loft/` and is not read-only).
 
+  **`scripts/revalidate_libs_local.sh` is that, for the whole registry** — one library is
+  the advice the incident produced and the gate is all 40. It reads the matrix from
+  `../loft-registry/index.json` (the workflow's own source), extracts each release TAG with
+  `git archive` so the sibling clones are never written to, runs the suite, and re-classifies
+  a failure exactly as the workflow does. Run it after any `src/**` or `default/**` change
+  that a library could notice. `--self-test` first if you are about to trust a green: it
+  injects a compile break and a runtime break and asserts the two are reported DIFFERENTLY.
+  A SKIP is not a pass — it means that repo is not cloned beside this one.
+
+  ⚠ That self-test earned its place immediately: it found the shipped gate misclassifying.
+  `loft --dump` WRITES a `tests/.loft` cache directory beside the file it compiles, the glob
+  `*.loft` matches that name, and `find` streams through a process substitution — so the
+  re-classification loop could be handed the directory it had just created, fail to `--dump`
+  it, and report a **runtime/environment failure as a COMPILE-BREAK**: a shipped library
+  falsely accused of a freeze violation, on any package with two or more test files. Both
+  copies now use `find -type f`.
+
   So **bundle many subjects into ONE PR**, even unrelated ones — a docs/tooling
   stream, a compiler soundness fix and a language feature ride together. A branch the
   owner asks for is a branch to ACCUMULATE on, not one to PR when its first issue is

@@ -450,6 +450,16 @@ fn scrub_generated_crate_refs(src: &[u8]) -> Vec<u8> {
 /// hash of its defining FILE appended — two same-named fns can only come from
 /// different files (the parser rejects an in-file redefinition), so the pair
 /// (name, defining file) is unique program-wide.
+///
+/// That last sentence is a DEPENDENCY on the loader, not a property of this
+/// function: it holds only while one file is parsed into one source.  When a
+/// module reachable under two names was parsed twice, both copies hashed the
+/// same path, every duplicated function was emitted under one identifier, and
+/// the cdylib would not compile — 55 × `error[E0428] … defined multiple times`,
+/// each pair carrying an IDENTICAL hash, which is what distinguishes it from
+/// #305's two genuinely different files.  The guard is
+/// `Parser::source_loaded_from`, which is keyed on the canonical path for the
+/// same reason this is (loft#1080).
 #[must_use]
 pub fn disambiguated_fn_ident(dups: &HashSet<String>, def: &crate::data::Definition) -> String {
     let name = def.name();
@@ -770,6 +780,43 @@ pub(crate) fn tuple_elem_type(
         _ => return None,
     };
     elems.get(idx as usize).cloned()
+}
+
+/// Render the base a tuple element access hangs off, and say whether reaching it is
+/// `unsafe` — `("var_x", false)` or `("(*var_x)", true)`.
+///
+/// Reach for this in every position that emits `<base>.<idx>` for a tuple, so the READ
+/// and the WRITE cannot disagree about whether the base needs a dereference.  Both facts
+/// come from one call because they are one decision: a base that needs the deref needs
+/// the `unsafe` too, and answering them separately is how the two arms would drift.
+///
+/// Three spellings arrive here and only one derefs: a by-value local and a `&(…)`
+/// PARAMETER are `(i64, i64)` and `&mut (i64, i64)`, which Rust auto-derefs, while a
+/// `&`-bound LOCAL (`b = &a`, `b: &(integer, integer) = a`) holds the raw `*mut (i64, i64)`
+/// @PLN87 L1 gives every local link — raw so the source stays readable beside the link,
+/// which is legal loft and not legal Rust borrowing.
+#[must_use]
+pub(crate) fn tuple_base(vars: &crate::variables::Function, var: u16) -> (String, bool) {
+    let name = sanitize(vars.name(var));
+    if is_raw_tuple_link(vars, var) {
+        (format!("(*var_{name})"), true)
+    } else {
+        (format!("var_{name}"), false)
+    }
+}
+
+/// True when `var` is a `&`-bound tuple LOCAL, which native represents as a raw
+/// `*mut (…)` rather than the `&mut (…)` a `&(…)` PARAMETER gets.
+///
+/// Every position that hands such a variable to Rust asks this — the element base
+/// ([`tuple_base`]) and the call site that forwards it to a `&(…)` parameter — so the
+/// representation is decided once.  Two sites reading one predicate is the shape
+/// loft#1006 wanted and did not have: there, three copies of the admitted-element list
+/// disagreed and a program died at codegen because of it.
+#[must_use]
+pub(crate) fn is_raw_tuple_link(vars: &crate::variables::Function, var: u16) -> bool {
+    !vars.is_argument(var)
+        && matches!(vars.tp(var), Type::RefVar(inner) if matches!(inner.base(), Type::Tuple(_)))
 }
 
 /// True when tuple element `idx` of `var` is TEXT — nullable or not.  The predicate
@@ -1116,14 +1163,10 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
                     walk(a, path, next_id, first_set, hoist);
                 }
             }
-            Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+            Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
                 walk(x, path, next_id, first_set, hoist);
             }
             Value::Span(b) => walk(&b.1, path, next_id, first_set, hoist),
-            Value::ParFor(b) => {
-                walk(&b.input, path, next_id, first_set, hoist);
-                scoped!(&b.worker);
-            }
             _ => {}
         }
     }
@@ -1240,15 +1283,9 @@ enum FieldPhase {
 fn is_collection_field(tp: &Type) -> bool {
     // Radix backs `spatial<T[x,y]>` (@PLN48) — same Phase-2 bare-type
     // reference shape as Hash, so it is classified alongside the family.
-    matches!(
-        tp,
-        Type::Vector(_, _)
-            | Type::Sorted(_, _, _)
-            | Type::Hash(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-    )
+    // One home: `vectors::is_collection`, which DERIVES this as `is_keyed(tp) || Vector`
+    // rather than restating the six variants (formal/IMPLEMENTATIONS.md #4).
+    crate::parser::vectors::is_collection(tp)
 }
 
 /// A "bare" runtime type (no loft definition) that `output_init` must
@@ -1443,7 +1480,7 @@ fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
                 walk(data, def_nr, b2, counts);
                 walk(data, def_nr, c, counts);
             }
-            Value::Return(v) | Value::BreakWith(_, v) | Value::Drop(v) | Value::Yield(v) => {
+            Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
                 walk(data, def_nr, v, counts);
             }
             Value::Call(_, args) => {
@@ -4665,16 +4702,8 @@ extern crate loft;"
                     continue;
                 }
                 let tp = vars.tp(v);
-                let is_scalar = matches!(
-                    tp,
-                    Type::Integer(_)
-                        | Type::Float
-                        | Type::Single
-                        | Type::Boolean
-                        | Type::Character
-                        | Type::Enum(_, false, _)
-                );
-                if !is_scalar {
+                // One home: `data::is_scalar` (formal/IMPLEMENTATIONS.md #1).
+                if !crate::data::is_scalar(tp) {
                     continue;
                 }
                 let tp_str = rust_type(tp, &Context::Variable);

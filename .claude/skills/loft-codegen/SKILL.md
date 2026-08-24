@@ -124,6 +124,29 @@ native compile is NOT landable. When they diverge on the same IR (one clean, one
 wrong/E0425), that divergence is the bug — neither "the suite is green" nor "interp
 works" closes it.
 
+## Before you add the arm: does this predicate already exist?
+
+Emitters accrete duplicates faster than anything else in the tree, because a fix arrives at
+ONE site and the sibling that asks the same question is in another file. Measured here:
+"is this a keyed collection" was spelled **sixteen** times — a `pub(crate)` helper, a second
+private helper with the same variants reordered, and fourteen inline `matches!` copies — so
+adding a keyed kind meant finding sixteen places.
+
+So before adding a match arm or a type list, ask where that question already lives:
+
+- `python3 scripts/rule_predicate_audit.py` — the same variant set at 2+ sites
+  (`--near` for lists differing by exactly ONE variant, which is drift already present);
+- `python3 scripts/rule_tags.py sites <Rule>` / `./scripts/idx tag:@FR-<Rule>` — every site
+  that CITES a formal rule, which finds duplicates that share no code;
+- `doc/claude/formal/IMPLEMENTATIONS.md` — the checklist of predicates already merged, and
+  the pairs deliberately kept apart.
+
+⚠ **Equal today is not the same rule.** The narrow-width family had five sites spelling one
+list and only three were the same question — the other two write a RAW slot where the three
+write an encoded field, and their own comments said so. Merging on the list alone would have
+folded a raw-slot writer onto an encoded-field writer. Read what each site asks; cite the
+rule it enforces; leave a note where two look alike and must stay apart.
+
 ## Stop conditions (revert, don't push through)
 
 - You're editing the compiler but cannot point at the working bytecode you intend to

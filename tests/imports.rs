@@ -532,3 +532,91 @@ fn issue853_a_library_free_fn_outranks_a_stdlib_method_of_the_same_name() {
         );
     }
 }
+
+// ── loft#1080: one FILE, two names, two parses ────────────────────────────────
+
+/// loft#1080 — a module reachable under two names must be loaded ONCE.
+///
+/// A package's own module is keyed `<pkg>::<module>` so that no other package can take
+/// the name from under it, and that is exactly what lets one file arrive at the loader
+/// twice: a program OUTSIDE the package `use`s the module by its bare name, then a file
+/// INSIDE the package `use`s the same module and computes the qualified key, which is
+/// absent — so the same file is parsed into a SECOND source.
+///
+/// Nothing downstream survives that. The bare name is then rebound to the second source,
+/// leaving the first source's definitions unreachable but still present, and both
+/// symptoms follow from that one cause:
+///
+/// * every bare call becomes AMBIGUOUS, and the message names a module the author never
+///   wrote — *"`grid_value` is declared by more than one module here —
+///   `issue1080_pkg::grid1080::grid_value` and `src2::grid_value`"*, `src2` being the
+///   orphaned second source. That is what this fixture hits, on both backends.
+/// * where the program is big enough to reach native codegen, every duplicated function
+///   is emitted twice under ONE identifier: `disambiguated_fn_ident` separates same-named
+///   functions by hashing their defining FILE, on the stated ground that two of them can
+///   only come from different files — so a second parse of one file defeats it and the
+///   generated cdylib will not compile. The reporting project got 55 ×
+///   `error[E0428] … loft_shared_n_…_mafed3b7f is defined multiple times`, each pair
+///   carrying an IDENTICAL hash, which is the tell that it is one file twice rather than
+///   loft#305's two different files.
+///
+/// The issue was filed as "the same library reachable at two paths", and it is not: it
+/// reproduces from a SINGLE `--lib`, and the reporter's second copy on disk was a
+/// coincidence of the invocation. What decides it is the package manifest above the lib
+/// directory, which is what gives the inside-the-package `use` its qualified key.
+///
+/// Both values are asserted, not just that it compiles: deduplicating by dropping one of
+/// the two loads would also make the ambiguity go away, and only the answers say the
+/// surviving load is the right one.
+#[test]
+fn issue1080_a_module_reached_by_two_names_is_loaded_once() {
+    let s = sep_str();
+    let main = format!("tests{s}lib{s}issue1080_main.loft");
+    let libs = format!("tests{s}lib{s}issue1080_pkg{s}src");
+    for backend in ["--interpret", "--native"] {
+        let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+            .arg(backend)
+            .arg("--lib")
+            .arg(&libs)
+            .arg(&main)
+            .env("LOFT_ERRORS", "compact")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("failed to invoke the loft binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("flat=7 inside=8"),
+            "{backend}: the bare `use grid1080` from outside the package and the \
+             `issue1080_pkg::grid1080` one from inside it name ONE file, so both routes \
+             must reach the one `grid_value` (7) and the module built on it (8); \
+             got stdout {stdout:?} stderr {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// loft#1080 control — two DIFFERENT files that happen to share a module name must still
+/// be told apart.
+///
+/// The fix keys the "already loaded" test on the CANONICAL PATH, so it collapses one file
+/// reached twice and nothing else. Were it keyed on the module's short name instead, this
+/// pair would silently become one module — the failure loft#912 and loft#949 exist to
+/// report, arrived at from the opposite direction.
+///
+/// `dupname_a` and `dupname_b` each declare a bare `Chunk` / `shared()` / `SHARED_C`, and
+/// the refusal that names both packages is asserted by
+/// `a_bare_name_two_packages_declare_is_refused_in_either_order` above. Re-running it here
+/// is the point: this test fails if the dedup ever widens from "the same file" to "the
+/// same name".
+#[test]
+fn issue1080_two_different_files_of_one_name_are_still_distinct() {
+    for file in ["dupname_ab_main.loft", "dupname_ba_main.loft"] {
+        let p = parse_lib_main(file);
+        let msgs = errors_of(&p);
+        assert!(
+            msgs.contains("dupname_a::Chunk") && msgs.contains("dupname_b::Chunk"),
+            "{file}: two distinct files must stay two modules, however alike their names: \
+             {msgs}"
+        );
+    }
+}

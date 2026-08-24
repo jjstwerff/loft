@@ -1171,6 +1171,46 @@ fn main() {
     );
 }
 
+/// A warning pass that seeks the lexer to its diagnostic site must not move the position
+/// every LATER diagnostic in the file is derived from.  `check_ref_mutations` (the
+/// `needless-const-parameter` / needless-`&` pass) seeks with `Lexer::to` and runs OUTSIDE
+/// the save/restore that wraps the other per-function warning passes, so every position
+/// after such a function was short by the distance of that seek: in
+/// `685-mutated-scalar-param-capture.loft` all nineteen `assert`s reported seven lines
+/// early, and a failure printed ANOTHER assert's source under the caret while carrying
+/// this one's message.
+///
+/// It is `assert` that makes the damage reach a user rather than only a caret: the line
+/// the compiler injects into the call is read from the same cursor.  So the cell asserts
+/// both ends — the advice lands on the `const` it is about, and the failure that comes
+/// AFTER it names its own line.
+#[test]
+fn a_seek_to_a_warning_site_does_not_shift_later_positions() {
+    let source = "\
+fn scaled(n: const integer) -> integer {
+  n * 2
+}
+fn main() {
+  assert(scaled(2) == 5, \"MARK\");
+}
+";
+    let (_stdout, diag, code) = run_with_warnings("const_param_seek", source);
+    assert!(
+        diag.contains("needless-const-parameter") && diag.contains(".loft:1:14"),
+        "the advice points at the `const` token on line 1; got stderr={diag:?}"
+    );
+    assert!(
+        diag.contains("assertion failed: MARK"),
+        "the assert must fail so its position is reported; got stderr={diag:?}"
+    );
+    assert!(
+        diag.contains(".loft:5:") && !diag.contains(".loft:2:"),
+        "the failing assert is on line 5; a dangling reporting seek made it report line 2 \
+         (the body of `scaled`); got stderr={diag:?}"
+    );
+    assert_eq!(code, Some(1), "a failed assert exits 1");
+}
+
 // ── @PLN46 W2 — `#null_safe` param annotation (skip pattern 6) ───────────────
 
 /// A fault-prone expression passed DIRECTLY to a `#null_safe` function is not

@@ -1,12 +1,21 @@
 // Collection combinators (map/filter/comprehension) — closure lowering + the
-// nested vector-builder differ across backends; results must agree.
+// nested vector-builder differ across backends; results must agree, and the
+// assertions say what they must agree ON.
 fn main() {
     xs = [1, 2, 3, 4, 5, 6];
     doubled = xs.map(|x| { x * 2 });
     evens = xs.filter(|x| { x % 2 == 0 });
     comp = [for x in xs { x * x }];
-    s1 = 0; for d in doubled { s1 += d; }        // 42
-    s2 = 0; for e in evens { s2 += e; }          // 12
-    s3 = 0; for c in comp { s3 += c; }           // 91
+    s1 = 0; for d in doubled { s1 += d; }
+    s2 = 0; for e in evens { s2 += e; }
+    s3 = 0; for c in comp { s3 += c; }
+    assert(s1 == 42, "2*(1+..+6) = 42, got {s1}");
+    assert(s2 == 12, "2+4+6 = 12, got {s2}");
+    assert(s3 == 91, "1+4+9+16+25+36 = 91, got {s3}");
+    // A length is what a wrong-but-agreeing filter would still get right, so it is
+    // asserted separately from the sums rather than instead of them.
+    assert(len(doubled) == 6, "map preserves length, got {len(doubled)}");
+    assert(len(evens) == 3, "three of six are even, got {len(evens)}");
+    assert(len(comp) == 6, "the comprehension spans xs, got {len(comp)}");
     println("map_sum={s1} filter_sum={s2} comp_sum={s3} lens={len(doubled)} {len(evens)} {len(comp)}");
 }

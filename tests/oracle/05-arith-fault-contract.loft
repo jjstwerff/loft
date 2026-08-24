@@ -8,18 +8,36 @@
 // is deterministic and the program produces output on either main.
 
 fn main() {
+  // Each fault is BOUND before it is asserted and printed.  The fallback is what proves
+  // the fault happened at all — reading `-1` back means the division really did answer
+  // null, and an implementation that quietly computed something else would agree with
+  // the other backend just as happily.
   z = 0;
-  print("div={(10 / z) ?? -1}\n");        // div-by-zero, discharged -> -1
-  print("mod={(10 % z) ?? -2}\n");        // mod-by-zero, discharged -> -2
-  print("fdiv={(0.0 / 0.0) ?? -3.0}\n");  // float NaN (null), discharged -> -3.0
+  d = (10 / z) ?? -1;
+  assert(d == -1, "div-by-zero is null, so `??` supplies -1; got {d}");
+  print("div={d}\n");
+  m = (10 % z) ?? -2;
+  assert(m == -2, "mod-by-zero is null, so `??` supplies -2; got {m}");
+  print("mod={m}\n");
+  fd = (0.0 / 0.0) ?? -3.0;
+  assert(fd == -3.0, "0.0/0.0 is a NaN, which IS null, so `??` supplies -3.0; got {fd}");
+  print("fdiv={fd}\n");
 
   big = 9223372036854775807;              // i64::MAX
-  print("ovf={(big + 1) ?? -4}\n");       // overflow, discharged -> -4
-  print("ovfm={(big * 2) ?? -5}\n");      // overflow, discharged -> -5
+  ov = (big + 1) ?? -4;
+  assert(ov == -4, "i64::MAX + 1 overflows to null, not to a wrapped value; got {ov}");
+  print("ovf={ov}\n");
+  ovm = (big * 2) ?? -5;
+  assert(ovm == -5, "i64::MAX * 2 overflows to null; got {ovm}");
+  print("ovfm={ovm}\n");
 
   // null is contagious: a null operand makes the op null (E-NullArg), then `??`
   // supplies the fallback.
   bad = (10 / z) ?? null;
-  print("contag={(bad + 1) ?? -6}\n");    // null + 1 = null -> -6
-  print("cmp={bad == null}\n");           // null compares true against the sentinel
+  ct = (bad + 1) ?? -6;
+  assert(ct == -6, "null + 1 is null (E-NullArg), so `??` supplies -6; got {ct}");
+  print("contag={ct}\n");
+  cm = bad == null;
+  assert(cm, "a null compares equal to null rather than being unordered; got {cm}");
+  print("cmp={cm}\n");
 }

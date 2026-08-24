@@ -1976,7 +1976,7 @@ fn control_flow_escapes(node: &crate::data::Value, loop_depth: u32) -> bool {
     use crate::data::Value;
     match node.unspan() {
         Value::Return(_) | Value::Yield(_) => true,
-        Value::Break(_) | Value::Continue(_) | Value::BreakWith(_, _) => loop_depth == 0,
+        Value::Break(_) | Value::Continue(_) => loop_depth == 0,
         Value::Loop(b) => b
             .operators
             .iter()

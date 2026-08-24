@@ -264,6 +264,17 @@ enum RetPromotion {
         buf_var: u16,
         substitute: bool,
     },
+    /// loft#1078 — this candidate is one arm of a runtime JOIN whose OTHER arm was
+    /// already renamed onto the return buffer, so the tail READS the buffer.  `Bind`'s
+    /// copy leg would emit `OpDatabase(buf); OpCopyRecord(<tail reading buf>, buf)` —
+    /// the re-mint destroys the very store the copy is about to read, and the renamed
+    /// arm answers a zeroed record (`if c { u } else { w }` gave `0` for `u` on both
+    /// backends, and a three-arm `match` broke only its first arm).  Stay a plain
+    /// local instead: the join delivers one store, and the multi-source
+    /// `OpFreeRefIfDistinct` leg in `scopes::free_vars` frees the losers — the same
+    /// lowering the single-named-local shape already uses and which loft#1078's own
+    /// leak fix proved out.
+    SkipJoinArm,
     /// Vector / struct-Enum returns on LAMBDAS still grow the arity in place:
     /// a lambda is defined at its literal site and invoked via CallRef, so no
     /// earlier caller can hold a short arg list.  PASS-1 growth on a plain fn
@@ -373,12 +384,9 @@ fn tail_has_tuple_leaf(value: &Value, vars: &crate::variables::Function) -> bool
 
 /// Check if the last meaningful expression in a block is divergent.
 fn is_block_divergent(ops: &[Value]) -> bool {
-    ops.iter().rev().any(|v| {
-        matches!(
-            v,
-            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_)
-        )
-    })
+    ops.iter()
+        .rev()
+        .any(|v| matches!(v, Value::Return(_) | Value::Break(_) | Value::Continue(_)))
 }
 
 /// Collected match arm data for enum/struct-enum match expressions.
@@ -690,10 +698,18 @@ impl Parser {
             };
             if let Some(kw) = bad_kw {
                 if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
+                    // About the token the parser is HOLDING, not about anything it has
+                    // consumed: the offending keyword is still the current token here
+                    // (`token(kw)` below is what consumes it).  So this site names its
+                    // position rather than taking `report_pos`'s consumed-source default,
+                    // which would put the caret on the line above.
+                    let at = self.lexer.peek();
+                    self.lexer.specific(
+                        &at,
                         Level::Error,
-                        "'{kw}' definitions must be at file scope, not inside a function or block"
+                        &format!(
+                            "'{kw}' definitions must be at file scope, not inside a function or block"
+                        ),
                     );
                 }
                 // Consume the offending declaration: skip until the matching
@@ -721,11 +737,16 @@ impl Parser {
             // Warn about unreachable code after an unconditional terminator.
             if let Some(kind) = terminated {
                 if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
+                    // About the token the parser is HOLDING — the first token of the
+                    // unreachable statement, which is what the caret should sit on.  So
+                    // this site names its position rather than taking `report_pos`'s
+                    // consumed-source default, which would point at the terminator above.
+                    let at = self.lexer.peek().position;
+                    self.lexer.pos_diagnostic_coded(
                         Level::Warning,
-                        code = "unreachable-code",
-                        "Unreachable code after {kind}"
+                        &at,
+                        "unreachable-code",
+                        &format!("Unreachable code after {kind}"),
                     );
                     self.lexer.fix_last(crate::diagnostics::Fix {
                         kind: crate::diagnostics::FixKind::Mechanical,
@@ -793,7 +814,7 @@ impl Parser {
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
                 Value::Return(_) => terminated = Some("return"),
-                Value::Break(_) | Value::BreakWith(_, _) => terminated = Some("break"),
+                Value::Break(_) => terminated = Some("break"),
                 Value::Continue(_) => terminated = Some("continue"),
                 _ => {}
             }
@@ -1392,9 +1413,32 @@ impl Parser {
                 return tp;
             }
             let last = l.len() - 1;
-            // CO1.3c: generator bodies return void (values come from yield),
-            // so suppress the void-vs-iterator mismatch.
+            // CO1.3c: generator bodies return void (values come from yield), so the
+            // void-vs-iterator mismatch is not an error.
+            //
+            // But "its tail is not the return value" is not the same as "do not look at its
+            // tail", and this used to be written as the second.  A generator body whose tail
+            // IS a value — `fn make() -> iterator<integer> { counting(1) }` — then sailed
+            // through: the value was dropped, `--interpret` answered an EMPTY sequence with
+            // no diagnostic, and `--native` panicked inside `alloc_coroutine`.  That is the
+            // tail-expression spelling of the `return <expr>` this file refuses in
+            // `parse_return`; refusing one and not the other would leave the rule asked at
+            // one of its two construction sites, which is the shape loft#1006 already was.
             let is_generator = matches!(result, Type::Iterator(_, _));
+            if is_generator && !self.first_pass && !matches!(*t, Type::Void | Type::Never) {
+                let msg = "a generator's body produces values only through `yield`, so this \
+                           tail value is discarded — `for v in <generator>() { yield v; }` \
+                           forwards another generator's values, and a bare statement ends \
+                           the body";
+                // The tail is what the message is about, and a call already carries its own
+                // span (wrapped at the `(` on pass 2).  Prefer it: the block-tail check can
+                // only run once the block is closed, so the default lands on the `}`.
+                if let Some(tail) = l[last].span_pos().cloned() {
+                    self.lexer.pos_diagnostic(Level::Error, &tail, msg);
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "{msg}");
+                }
+            }
             let ignore = is_generator
                 || (matches!(*t, Type::Void | Type::Never)
                     && (matches!(l[last], Value::Return(_)) || definitely_returns(&l[last])));
@@ -1442,17 +1486,7 @@ impl Parser {
             // `return if cond { ... } else { ... }` correctly.
             let if_unified = !self.first_pass
                 && context == "return from block"
-                && matches!(
-                    result,
-                    Type::Reference(_, _)
-                        | Type::Vector(_, _)
-                        | Type::Enum(_, true, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+                && crate::data::is_dbref(result)
                 && matches!(l[last].unspan(), Value::If(_, _, _))
                 && self.unify_if_branches_work_refs(&mut l[last]).is_some();
             if if_unified {
@@ -1537,13 +1571,27 @@ impl Parser {
                     .or_else(|| Some(self.data.def(self.context).position().clone()));
                 self.n_store_violation(t, result, "the return value", at.as_ref());
             }
-            if !tuple_rewritten
-                && !if_unified
-                && !vec_match_candidate
-                && !vec_arm_handled
-                && !self.convert(&mut l[last], t, result)
-                && !ignore
-            {
+            // A tail conversion is checked once the block is CLOSED, so `report_pos`
+            // would attribute anything it raises to the `}`.  `tail_pos` is the tail
+            // statement's own first token (captured per statement by the block loop), and
+            // a bare-var tail carries no span of its own — measured: `fn f(n: integer) ->
+            // i32 { n }` reported the narrowing on the closing brace while the same
+            // narrowing in an assignment, an argument and a struct-literal field all
+            // named their own line.  Seek for the duration and restore.
+            let needs_convert =
+                !tuple_rewritten && !if_unified && !vec_match_candidate && !vec_arm_handled;
+            let converted = if needs_convert {
+                self.lexer.to((tail_pos.line, tail_pos.pos));
+                let done = self.convert(&mut l[last], t, result);
+                // `end_seek`, not a second `to`: the diagnostics raised just below are
+                // block-tail checks too, and a seek left standing switches `report_pos`
+                // off for them.
+                self.lexer.end_seek();
+                done
+            } else {
+                true
+            };
+            if needs_convert && !converted && !ignore {
                 // for function bodies with `not null` return, downgrade to a warning.
                 if context == "return from block"
                     && self.context != u32::MAX
@@ -2089,15 +2137,7 @@ impl Parser {
         ls.iter().all(|&v| {
             v >= self.vars.count()
                 || attr_names.contains_key(self.vars.name(v))
-                || !matches!(
-                    self.vars.tp(v),
-                    Type::Vector(_, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+                || !crate::parser::vectors::is_collection(self.vars.tp(v))
         })
     }
 
@@ -2335,9 +2375,6 @@ impl Parser {
                 }
                 Self::substitute_work_ref(body, from, to);
             }
-            Value::BreakWith(_, body) => {
-                Self::substitute_work_ref(body, from, to);
-            }
             Value::Return(body) | Value::Drop(body) | Value::Yield(body) => {
                 Self::substitute_work_ref(body, from, to);
             }
@@ -2367,10 +2404,6 @@ impl Parser {
                 Self::substitute_work_ref(c, from, to);
             }
             Value::Span(b) => Self::substitute_work_ref(&mut b.1, from, to),
-            Value::ParFor(b) => {
-                Self::substitute_work_ref(&mut b.input, from, to);
-                Self::substitute_work_ref(&mut b.worker, from, to);
-            }
             Value::Var(_)
             | Value::Int(_)
             | Value::Long(_)
@@ -2717,8 +2750,7 @@ impl Parser {
             | Value::TuplePut(_, _, b)
             | Value::Return(b)
             | Value::Drop(b)
-            | Value::Yield(b)
-            | Value::BreakWith(_, b) => Self::count_cv_assignments(b, cv),
+            | Value::Yield(b) => Self::count_cv_assignments(b, cv),
             Value::Span(b) => Self::count_cv_assignments(&b.1, cv),
             Value::Call(_, a)
             | Value::CallRef(_, a)
@@ -2739,9 +2771,6 @@ impl Parser {
                 Self::count_cv_assignments(a, cv)
                     + Self::count_cv_assignments(b, cv)
                     + Self::count_cv_assignments(c, cv)
-            }
-            Value::ParFor(b) => {
-                Self::count_cv_assignments(&b.input, cv) + Self::count_cv_assignments(&b.worker, cv)
             }
             _ => 0,
         };
@@ -2797,9 +2826,7 @@ impl Parser {
                 Value::Set(slot, body) | Value::TuplePut(slot, _, body) => {
                     (*slot == v && !matches!(body.unspan(), Value::Null)) || walk(body, v)
                 }
-                Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
-                    walk(b, v)
-                }
+                Value::Return(b) | Value::Drop(b) | Value::Yield(b) => walk(b, v),
                 Value::Span(b) => walk(&b.1, v),
                 Value::Call(_, args)
                 | Value::CallRef(_, args)
@@ -2809,7 +2836,6 @@ impl Parser {
                 Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|op| walk(op, v)),
                 Value::If(c, t, f) => walk(c, v) || walk(t, v) || walk(f, v),
                 Value::Iter(_, a, b, c) => walk(a, v) || walk(b, v) || walk(c, v),
-                Value::ParFor(b) => walk(&b.input, v) || walk(&b.worker, v),
                 _ => false,
             }
         }
@@ -6768,12 +6794,17 @@ impl Parser {
         // silently encoded as Value::Null and either never match
         // (interpreter) or crash native codegen (E0308: `()` vs i32).
         if self.lexer.peek_token("..") {
-            diagnostic!(
-                self.lexer,
+            // About the token the parser is HOLDING — the `..` that opens the pattern,
+            // consumed just below.  So this site names its position rather than taking
+            // `report_pos`'s consumed-source default, which is the `{` of the `match`
+            // on the line above.
+            let at = self.lexer.peek();
+            self.lexer.specific(
+                &at,
                 Level::Error,
                 "open-ended range pattern `..hi` is not supported in match arms — \
                  write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
-                 or use a guard like `n if n < hi`"
+                 or use a guard like `n if n < hi`",
             );
             // Consume the `..` so the rest of the arm parses cleanly.
             self.lexer.token("..");
@@ -9476,7 +9507,6 @@ impl Parser {
             | Value::Return(inner)
             | Value::Drop(inner)
             | Value::Yield(inner)
-            | Value::BreakWith(_, inner)
             | Value::TuplePut(_, _, inner) => self.patch_tret_call(inner, force),
             Value::Span(b) => self.patch_tret_call(&mut b.1, force),
             Value::Iter(_, a, b, c) => {
@@ -9670,6 +9700,43 @@ impl Parser {
     /// exit, so a tail viewing it must be materialised (copied) rather than
     /// escaping as a borrow. False ⇒ `v` is defined in an enclosing scope (an
     /// outer local / param returned by the block) — a genuine borrow to keep.
+    /// Is `v` BOUND to a branch join (`v = if c { … } else { … }`)?  Ask before renaming a
+    /// local onto the caller's return buffer: a local this answers `true` for may not be.
+    ///
+    /// Enforces @FR-O-Owner / @FR-O-Move.  The rename is sound only where the local's value
+    /// is BUILT INTO the buffer, as a literal is.  A join is not: each arm mints its own
+    /// backing and the assignment REBINDS the slot (`PutRef`), so the buffer ends up with
+    /// no owner and the arm's store is handed back to a caller whose binding does not name
+    /// it — two stores with no owner, from one return.  Refusing the rename leaves the
+    /// candidate on `Bind`, which keeps the local and copies it into a separate `__retbuf`;
+    /// that is the delivery a join written at the function TAIL already takes.
+    ///
+    /// The question is STRUCTURAL rather than a reading of `deps` because the answer is
+    /// needed on pass 1, where the deps are still empty (`vector_db` runs only on pass 2).
+    /// The two passes must agree here — the verdict decides whether the function takes a
+    /// hidden buffer argument, so a verdict that differed would move the ABI between them.
+    /// `match` lowers to nested `If`, so one shape covers both spellings.  (loft#1081,
+    /// D-own-8 in `formal/ownership.md`.)
+    fn var_bound_to_branch(l: &[Value], v: u16) -> bool {
+        fn rhs_is_branch(node: &Value) -> bool {
+            match node.unspan() {
+                Value::If(_, _, _) => true,
+                Value::Block(bl) => bl.operators.last().is_some_and(rhs_is_branch),
+                Value::Insert(ops) => ops.last().is_some_and(rhs_is_branch),
+                _ => false,
+            }
+        }
+        fn scan(op: &Value, v: u16) -> bool {
+            match op.unspan() {
+                Value::Set(w, rhs) => *w == v && rhs_is_branch(rhs),
+                Value::Insert(ops) => ops.iter().any(|o| scan(o, v)),
+                Value::Block(bl) => bl.operators.iter().any(|o| scan(o, v)),
+                _ => false,
+            }
+        }
+        l.iter().any(|op| scan(op, v))
+    }
+
     fn block_defines_var(l: &[Value], v: u16) -> bool {
         l.iter().any(|op| Self::stmt_defines_var(op, v))
     }
@@ -9687,6 +9754,9 @@ impl Parser {
     ///
     /// Only the CONTRIBUTED side is filtered. The arm the result type is taken from
     /// keeps its own marker, because that is what says which store the result owns.
+    /// Enforces @FR-O-Complete for the arm side: what an arm CONTRIBUTES to the
+    /// join's borrow set.  The join's own owned-vs-borrowed reconciliation lives in
+    /// [`Type::joined_deps`], which cites the same rule.
     fn arm_join_type(&self, arm: &Value, tp: &Type) -> Type {
         let Some(deps) = tp.borrow_deps() else {
             return tp.clone();
@@ -10096,9 +10166,7 @@ impl Parser {
     /// diagnostic still fires.
     fn arm_yields_text(arm: &Value) -> bool {
         match arm.unspan() {
-            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => {
-                false
-            }
+            Value::Return(_) | Value::Break(_) | Value::Continue(_) => false,
             Value::Null => false,
             Value::Block(bl) => bl.operators.last().is_some_and(Self::arm_yields_text),
             Value::Insert(ops) => ops.last().is_some_and(Self::arm_yields_text),
@@ -11115,9 +11183,7 @@ impl Parser {
                 Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| walk(o, cv)),
                 Value::If(c, t, e) => walk(c, cv) || walk(t, cv) || walk(e, cv),
                 Value::Iter(_, c, n, e) => walk(c, cv) || walk(n, cv) || walk(e, cv),
-                Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
-                    walk(x, cv)
-                }
+                Value::Return(x) | Value::Drop(x) | Value::Yield(x) => walk(x, cv),
                 Value::Span(b) => walk(&b.1, cv),
                 _ => false,
             }
@@ -11249,7 +11315,7 @@ impl Parser {
                     collect(n, v, nr, temps);
                     collect(e, v, nr, temps);
                 }
-                Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+                Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
                     collect(x, v, nr, temps);
                 }
                 Value::Span(b) => collect(&b.1, v, nr, temps),
@@ -11466,9 +11532,16 @@ impl Parser {
         // projection), so this is field-projection-of-a-local only.
         let returns_own_field =
             self.return_field_base_var(body.last().unwrap_or(&Value::Null)) == Some(v);
+        // A vector local bound to a branch join is REBOUND, not built into, so it cannot
+        // carry the rename — `var_bound_to_branch` states the rule.  Vector only: a record
+        // return re-mints its destination through `materialize_return_into`, so the rebind
+        // has nothing to abandon there.
+        let bound_to_vector_join = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
+            && Self::var_bound_to_branch(body, v);
         let allow_rename = !(bound_already
             || reassigned
             || returns_own_field
+            || bound_to_vector_join
             // A1b — the site-value (g's buffer) must NOT rename onto __retbuf (that
             // aliases the borrowed subject into the return); fall through to Bind so
             // the return materialises an owned copy into a distinct __retbuf.
@@ -11482,6 +11555,24 @@ impl Parser {
                 buf_attr,
                 chain_site: ctx.site == RetSite::MidReturn && is_work_ref,
             };
+        }
+        // loft#1078 — the buffer a named local would be COPIED into is READ by the tail.
+        // A RECORD return only: `materialize_return_into` re-mints the destination with
+        // `OpDatabase` before the copy evaluates its source, so a destination the source
+        // reads is destroyed first.  The collection and text returns carry their own
+        // aliasing-aware delivery (`OpReplaceVector` is a documented no-op when the
+        // source still aliases the buffer, and the B5-L3 text hoist copies first), and
+        // both were measured clean on this shape — narrowing here keeps the guard on the
+        // path that actually re-mints.
+        let tail_reads_buffer = matches!(
+            ctx.ret.ret_promo_base(),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && !is_work_ref
+            && self.return_buffer().is_some_and(|(_, buf_var)| {
+                buf_var != v && body.last().is_some_and(|t| t.reads_var(buf_var))
+            });
+        if tail_reads_buffer {
+            return RetPromotion::SkipJoinArm;
         }
         // loft#938 gate 5 of 5 — the classification that EMITS the delivery into `__retbuf`.
         if ctx.is_plain_fn
@@ -11544,9 +11635,7 @@ impl Parser {
         }
         fn walk(op: &Value, borrowers: &std::collections::HashSet<u16>) -> bool {
             match op {
-                Value::Return(inner) | Value::BreakWith(_, inner) => {
-                    borrowers.iter().any(|&w| inner.reads_var(w))
-                }
+                Value::Return(inner) => borrowers.iter().any(|&w| inner.reads_var(w)),
                 Value::Span(b) => walk(&b.1, borrowers),
                 Value::Insert(ops) | Value::Parallel(ops) => ops.iter().any(|o| walk(o, borrowers)),
                 Value::Block(bl) | Value::Loop(bl) => {
@@ -11738,7 +11827,8 @@ impl Parser {
                     RetPromotion::SkipDelivered
                     | RetPromotion::SkipReassigned
                     | RetPromotion::MergeOnly
-                    | RetPromotion::SkipInnerRef => {}
+                    | RetPromotion::SkipInnerRef
+                    | RetPromotion::SkipJoinArm => {}
                     // loft#974 — a shape that carries its own delivery takes the borrow
                     // fact and nothing else: no buffer rename, no bind, no arity growth.
                     // Every leg below rewrites where the value LIVES, and this return
@@ -12020,6 +12110,37 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Expect no expression after return"
+                );
+                *val = Value::Return(Box::new(Value::Null));
+                return;
+            }
+            // A GENERATOR has no `return`.  `coroutines.md` (G-Call) makes any function
+            // whose return type is `iterator<T>` a generator, and in that model values come
+            // only from `yield`: (G-Done) says reaching the end without a further yield
+            // leaves the iterator done, so a returned value has nothing it could mean and
+            // ending early is what `break` already does.
+            //
+            // A valued return used to be accepted and DISCARDED.
+            // `fn make() -> iterator<integer> { return counting(1); }` — an author
+            // delegating to another generator — gave an EMPTY sequence on `--interpret`
+            // with no diagnostic, and panicked inside `alloc_coroutine` ("RefCell already
+            // borrowed") on `--native`.  Refusing is what binding.md B-Ref-Reshape
+            // prescribes for the same situation elsewhere: where the language cannot honour
+            // what was written it declines the program rather than answering quietly.
+            //
+            // The message names `break` and not a bare `return;` deliberately — both cures
+            // were measured on both backends, and only `break` works.  `detect_lazy_for`
+            // (generation/coroutine.rs) rejects a `return` outright, so such a generator
+            // falls back to the eager buffer, whose factory cannot emit a mid-body return
+            // either (rustc E0308: the factory's type is `Box<dyn LoftCoroutine>`).
+            if !self.first_pass && matches!(r_type, Type::Iterator(_, _)) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a generator has no `return` — it produces values only through `yield`, \
+                     so this value would be discarded. Use `break` to end it early, or \
+                     forward another generator's values with \
+                     `for v in <generator>() {{ yield v; }}`"
                 );
                 *val = Value::Return(Box::new(Value::Null));
                 return;
@@ -12356,6 +12477,19 @@ impl Parser {
                 // OpCopyRecord, then return `__ref_1`.  Mirrors the
                 // Vector arm's OpAppendVector treatment.
             }
+        } else if !self.first_pass && matches!(r_type, Type::Iterator(_, _)) {
+            // A bare `return;` in a generator: the same rule as the valued one above, and
+            // it gets the same message.  It was already refused — as the generic "Expect
+            // expression after return", because the check reads "the declared type is not
+            // Void" as "a value is required" and a generator's declared type is
+            // `iterator<T>`.  That message sends the author to ADD a value, which is the
+            // one thing the rule forbids.
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a generator has no `return` — use `break` to end it early, or forward \
+                 another generator's values with `for v in <generator>() {{ yield v; }}`"
+            );
         } else if !self.first_pass && r_type != Type::Void {
             diagnostic!(self.lexer, Level::Error, "Expect expression after return");
         }
@@ -14018,7 +14152,7 @@ impl Parser {
                     self.collect_parallel_violations(x, encl, out);
                 }
             }
-            Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
+            Value::Return(b) | Value::Drop(b) | Value::Yield(b) => {
                 self.collect_parallel_violations(b, encl, out);
             }
             Value::If(c, t, e) => {

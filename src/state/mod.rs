@@ -2868,18 +2868,7 @@ impl State {
     /// (struct / vector / struct-enum / collection), as opposed to an inline scalar,
     /// text, or simple enum.
     fn is_heap_type(tp: &crate::data::Type) -> bool {
-        use crate::data::Type;
-        matches!(
-            tp,
-            Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-                | Type::Enum(_, true, _)
-        )
+        crate::data::is_dbref(tp)
     }
 
     /// @PLN16 M1a — if frame local `name` holds a **heap** value (a `DbRef` slot:

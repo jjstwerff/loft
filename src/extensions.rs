@@ -1105,7 +1105,7 @@ fn exported_name_at(ptr: *const ()) -> Option<String> {
     }
     let pe = rd32(0x3C) as usize;
     if rd32(pe) != 0x0000_4550 {
-        return None; // not `PE  `
+        return None; // not the PE signature `P`,`E`,NUL,NUL
     }
     // The export directory's RVA sits at a different offset in PE32 vs PE32+, and the
     // magic in the optional header is what tells them apart.

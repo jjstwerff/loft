@@ -361,48 +361,6 @@ pub fn compute_intervals(
                 depth + 1,
             );
         }
-        Value::ParFor(b) => {
-            // Plan-06 spine step 3 — recurse into each child Value.  x_var
-            // and r_var are bound by the worker; on the main-thread side
-            // (body), they may appear as Var reads which the recursion picks
-            // up naturally.
-            compute_intervals(
-                &b.input,
-                function,
-                free_text_nr,
-                free_ref_nr,
-                create_stack_nr,
-                seq,
-                depth + 1,
-            );
-            compute_intervals(
-                &b.worker,
-                function,
-                free_text_nr,
-                free_ref_nr,
-                create_stack_nr,
-                seq,
-                depth + 1,
-            );
-            compute_intervals(
-                &b.threads,
-                function,
-                free_text_nr,
-                free_ref_nr,
-                create_stack_nr,
-                seq,
-                depth + 1,
-            );
-            compute_intervals(
-                &b.body,
-                function,
-                free_text_nr,
-                free_ref_nr,
-                create_stack_nr,
-                seq,
-                depth + 1,
-            );
-        }
         // P240 fix (2026-05-11): tuple-literal reads.  Without explicit
         // arms, `Return(Tuple([Var(a), Var(b)]))` fell through to the
         // catch-all below — Var(a) and Var(b) were never visited so
@@ -473,7 +431,7 @@ pub fn compute_intervals(
         // underflow under `LOFT_SLOT_V2=drive` (the coroutine `nums()` in
         // `p226_vector_literal_in_yield_across_simple_arms`).  Recurse so
         // yield/break/parallel-interior writes get real live intervals.
-        Value::Yield(inner) | Value::BreakWith(_, inner) => {
+        Value::Yield(inner) => {
             compute_intervals(
                 inner,
                 function,

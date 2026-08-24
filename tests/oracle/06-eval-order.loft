@@ -15,12 +15,20 @@ fn note(log: &text, tag: text, v: integer) -> integer {
 fn main() {
   // `a + b * c`: `*` binds tighter, but the OPERANDS still evaluate left to
   // right, so the side-effect log is "abc" and the value is 1 + 2*3 = 7.
+  //
+  // The ORDER assertion is the one that matters here.  A backend that evaluated the `*`
+  // subtree first still computes 7, so the value alone cannot tell the two apart — only
+  // the log can, and only if something checks it.
   log = "";
   r = note(log, "a", 1) + note(log, "b", 2) * note(log, "c", 3);
+  assert(r == 7, "1 + 2*3 = 7 whatever the order; got {r}");
+  assert(log == "abc", "operands reduce left to right (E-Left), so the log is `abc`; got `{log}`");
   print("r={r} order={log}\n");
 
   // nested calls keep source order too
   log2 = "";
   r2 = note(log2, "x", 10) - note(log2, "y", 4);
-  print("r2={r2} order2={log2}\n"); // r2 = 6, order2 = xy
+  assert(r2 == 6, "10 - 4 = 6; got {r2}");
+  assert(log2 == "xy", "left operand first across a call boundary too; got `{log2}`");
+  print("r2={r2} order2={log2}\n");
 }

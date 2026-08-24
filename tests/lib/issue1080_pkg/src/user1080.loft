@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A second module of the same package that `use`s the first.  Being INSIDE the package
+// is what makes this `use` take the `issue1080_pkg::grid1080` key rather than the bare
+// one the main program used — the two different names for one file that loft#1080 is.
+
+use grid1080;
+
+pub fn grid_value_plus_one() -> integer {
+  grid_value() + 1
+}

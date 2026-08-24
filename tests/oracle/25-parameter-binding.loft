@@ -7,9 +7,18 @@ fn mutate_heap(e: E) { e.h = 99; }                       // heap share — calle
 fn reassign_heap(v: vector<integer>) { v = [7, 7]; }     // whole reassign — local, no write-back
 fn make() -> vector<integer> { [1, 2, 3] }               // independent return
 fn main() {
-    x = 5; inc_scalar(x);                                 // x stays 5
-    o = E { h: 1 }; mutate_heap(o);                       // o.h becomes 99
-    w = [1, 2]; reassign_heap(w);                         // w[0] stays 1
-    a = make(); a[0] = 88; b = make();                    // b independent of a
-    println("x={x} o_h={o.h} w0={w[0]} b0={b[0]}");       // 5 99 1 1
+    // Every line below is a DIFFERENT answer under a different parameter contract, which
+    // is why each is asserted rather than merely compared: two backends that both shared
+    // a scalar, or both wrote a reassignment back, would agree and be wrong together.
+    x = 5; inc_scalar(x);
+    assert(x == 5, "a scalar parameter COPIES, so the caller is unchanged; got {x}");
+    o = E { h: 1 }; mutate_heap(o);
+    assert(o.h == 99, "a heap parameter SHARES, so a field write is visible; got {o.h}");
+    w = [1, 2]; reassign_heap(w);
+    assert((w[0] ?? -1) == 1, "reassigning the whole parameter is LOCAL — no write-back; got {w[0] ?? -1}");
+    assert(len(w) == 2, "…and the caller's vector keeps its own length; got {len(w)}");
+    a = make(); a[0] = 88; b = make();
+    assert((b[0] ?? -1) == 1, "each return is independent, so writing `a` cannot reach `b`; got {b[0] ?? -1}");
+    assert((a[0] ?? -1) == 88, "…and the write to `a` did land; got {a[0] ?? -1}");
+    println("x={x} o_h={o.h} w0={w[0]} b0={b[0]}");
 }

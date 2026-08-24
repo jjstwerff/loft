@@ -104,10 +104,183 @@ exactly what makes the operational rules hold on native as well as interp.
 
 ## Deviations
 
-OPEN: **0** (2026-08-20) — **D-own-6 is CLOSED**; the five original D-own deviations remain
-resolved.  Read the entry below for what its oracle now varies before treating this zero as a
-measurement: it rested on a Join corpus that pinned the argument spelling, and moving that one
-axis found six leaking spellings nobody had asked about.
+OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A open) — D-own-7
+opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
+remain resolved.  Read those entries for what their oracles vary before treating any zero
+here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
+axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
+rather than from an oracle at all, and how its second face was found by varying the POSITION
+of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
+answer: the interpreter retained what `--native` recycled, so the defect was filed at its
+mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
+
+`(O-Complete)` requires the fact PER BINDING, PER PATH — "every binding, including every
+`match`/`if` arm".  A join whose arms disagree produces ONE fact for BOTH paths:
+
+```loft
+line = if len(pts) > 2 { smooth_pts(pts, flags, false) } else { pts };
+```
+
+The then-arm is a call returning a freshly-owned vector; the else-arm is a bare local.
+`arm_join_type` strips only the deps an arm MINTED (loft#978), and `joined_deps` then
+UNIONS, so `{} ∪ {pts}` = `{pts}` and `LOFT_VAR_TABLE` shows the binding typed
+`def deps=[pts]` — a BORROW.  On the owning path the fact is false.
+
+**One fact, two questions — and it is only right for one of them.**  `joined_deps`'
+own doc-comment justifies the union as the reading "no arm can contradict: it can only
+keep a store alive longer than one arm needed, never free one another arm still holds."
+That is true of the question the union was written for — *what must stay alive?*  It is
+false of the OTHER question the same `deps` list answers — *does this binding need a
+backing store of its own?*  `vectors.rs::vector_needs_db` asks it as
+`self.vars.tp(vec).depend().is_empty()`, so a union that is non-empty says "borrows,
+needs no store" about a value that OWNS on the path that runs.  Conservative for
+liveness is anti-conservative for allocation.  Two named hazards meet here: an empty dep
+list read as *owned*, and one derived fact with two homes.
+
+**Face A — the allocation answer (OPEN).**  A borrow-typed slot owns no store, so a
+whole-value assignment into it has nowhere to land.  The false fact reduces to ~55 lines — a
+`for` over a vector of structs whose vector fields are copied into locals, then the mixed join
+— reproducing `pf_line def deps=[pf_cp]` and `pf_wids def deps=[pf_cw]` exactly as filed.
+No wrong answer or crash is yet attributed to it; it is a false FACT looking for its symptom.
+
+⚠ **loft#1082's panic was NOT this, and is now CLOSED elsewhere.**  Measured in a scratchpad
+copy of the `drawing` package: replacing BOTH joins with imperative `for`-append loops — either
+alone, or both — left `index out of bounds … 65535` exactly where it was.  The cause was a
+two-pass work-ref collision with nothing to do with ownership at a join: `ref_return`'s
+`Bind { substitute: true }` unregisters a substituted-away `__ref_N` (which also sets
+`skip_free`), the `__ref_N` numbering DRIFTS between passes when a callee declared later in the
+file mints a buffer on pass 2 that pass 1 did not, and `work_refs` re-minting that name
+re-registered the ref while leaving `skip_free` standing.  `gen_set_first_vector_null` reads
+`skip_free` as "do not allocate", so the buffer reached the callee as `DbRef::NULL`.  Fixed by
+clearing the flag on re-mint; guard
+`tests/scripts/1082-a-re-minted-work-ref-is-not-the-one-substituted-away.loft`.
+A mechanism that explains the var table is not thereby the cause.
+
+**Face B — a returned local the promotion should never have renamed (loft#1081, CLOSED
+2026-08-24).**  The same one-path fact, at a join BOUND to a local the function returns:
+
+```loft
+fn pick(m: boolean, a: float, b: float) -> vector<float> {
+  v: vector<float> = if m { [a, b] } else { [a] };
+  v
+}
+```
+
+`ref_return` NRVO-**renames** `v` onto the caller's return buffer.  That is right for
+`v = [a]`, where the literal BUILDS into the buffer — and wrong here, because a join does
+not build into its destination: each arm mints its own backing and the assignment REBINDS
+the slot (`PutRef`).  So the buffer is abandoned the moment the join runs and the arm
+store is handed back with no owner.  `(O-Owner)` is violated twice by one return: two
+stores, zero owners.  The same join written at the function TAIL was always clean, because
+there each arm materialises into `__retbuf` and frees its own backing — the BOUND spelling
+simply never reached that path.
+
+It surfaced as three symptoms, and only the smallest was filed:
+
+* **one leaked vector per call**, both backends — the arm store nobody owns;
+* **an untyped `kt=65535` store per call**, interpreter only — the un-taken arm's
+  `__vdb_N`, eagerly allocated by `gen_set_first_ref_null` and never named again;
+* **a silent wrong answer on `--native`, the DEFAULT backend** — the sibling arm was also
+  freed at scope exit on the path that returns it, so the allocator handed the slot
+  straight back and three calls answered the THIRD call's values for all three bindings.
+  The interpreter answered correctly *because it leaked*: the leak was masking the
+  use-after-free, which is why this arrived as a leak report.  Once the eager-allocation
+  half was fixed the mask came off and the wrong answer showed on both backends.
+
+Closed at the promotion, which is where the unsound step is: `classify_ret_promotion`
+refuses the rename for a Vector local bound to a branch join
+(`Parser::var_bound_to_branch`, citing @FR-O-Owner / @FR-O-Move), so the candidate drops
+to `Bind` — the local keeps its own store and is copied into a separate `__retbuf` at the
+return, the shape the tail join already used.  Companion: a `__vdb_N`'s entry null-init is
+now the non-allocating sentinel (`gen_set_first_ref_null`, @FR-O-Derived), because its
+`OpDatabase` sits at a BUILD site that may be conditional — the function prologue already
+sentinel-inits every `__vdb` slot (#260 Fix B) and this was the one site that undid it.
+
+The verdict is STRUCTURAL (does the body contain `Set(v, If …)`) rather than
+ownership-based, because it is needed on PASS 1: `vector_db` runs only on pass 2, so on
+pass 1 the binding's deps are still empty and no arm has minted anything.  A verdict that
+differed across passes would move the hidden buffer argument between them.
+
+⚠ **A first fix here was reverted as inert.**  Making the scope-exit free a runtime witness
+(`OpFreeRefIfDistinct(v, ret_var)`) removed the wrong answer and left both leaks — a trade,
+not a closure.  Once the promotion was fixed at its source, no control could falsify the
+witness any more, so it came out: a guard that cannot fail proves nothing, and it had
+already cost one native regression (`E0425` — a block-local `ret_var` is not in scope where
+the free is emitted).
+
+Guard: `tests/scripts/1081-a-join-bound-to-a-returned-local.loft` — values AND the wrap
+harness's leak gate, both halves falsified by disabling the fix (57 leaked stores, and both
+value cells red on both backends).  Neither half implies the other: silencing the leak by
+freeing the DELIVERED store passes the leak gate and fails every assertion.
+
+
+**The cure Face A needs is a rule decision.**  A binding whose value OWNS on some path
+must own a store on every path.  That means a mixed-ownership
+join types as OWNED and the borrowing arm MATERIALISES a copy — which is not a new rule
+but `(O-Move)`'s existing sentence for the callee case ("if the return *borrows* a
+parameter … the caller COPIES to obtain its own store"), and the model's own doctrine that
+the compiler always finds a lowering, "copying when it cannot prove an alias is safe".
+Half of it has been tried and measured to fail: making the owning arm win the union types
+the binding owned but emits no `OpDatabase` for it, so the destination is still absent.
+Both halves have to land together.
+
+**What is NOT the cause, each eliminated by its own run.**  Reassigning over a field view;
+passing local copies instead of field views; `LOFT_NO_CONF_RECOVER=1` (store confinement);
+loft2's move-elide / DbRef-set work (`812aac5d` fixed the INVERSE — a borrow read as an
+owned store); and blanket `mark_inline_ref` on every `__vdb_N` to stop the eager
+allocation, which ALSO relocates the null-init and broke the tail-`if` return promotion
+(a tail join answered `0` instead of `5`).  The eager-allocation fix therefore needs a
+marker that changes alloc-vs-sentinel WITHOUT changing init order.
+
+**Reductions.**  Face B reduces to nine lines (above).  Face A's false FACT reduces to
+~55 lines.  loft#1082's PANIC does not reduce yet: the same tail-return-out-of-a-loop shape
+written out on its own runs clean on BOTH backends, with the `const` parameter, the nested
+caller loop and the struct-with-vector-field source all present — four constructed reductions
+now.  The reliable oracle is a scratchpad COPY of the `drawing` package driven through `--lib`
+(`Fronds … bow=0.16`, parse only, no render), which bisects freely and is how the tail-return
+boundary was found; their tree stays untouched.
+
+
+### D-own-7 — CLOSED (2026-08-23, loft#1078): every arm of a Join that OWNS a store is a candidate the free must name
+
+`(O-Derived)` says free a local iff it owns its store and does not transfer it out.  A tail
+`if`/`match` whose arms each own a store transfers exactly ONE of them, so the others are
+locals that must be freed — and the promoted NRVO buffer is one of those arms.
+
+`fn pick(c) -> S { w = S { a: 7 }; if c { S { a: 9 } } else { w } }` renames `w` onto the
+hidden return buffer, so the `else` arm delivers the buffer and the `if` arm delivers a
+different store.  `scopes::free_vars` reaches the losers through three legs — a null arm
+(@PLN85 A.1), a promoted buffer no arm names (loft#688), and arms that disagree about
+ownership (loft#1022) — and the multi-source leg that covers *"several owned candidates, one
+winner"* excluded every ARGUMENT.  That exclusion is right for a user parameter, which belongs
+to the caller, and wrong for the one argument that is really a local this function minted.
+loft#1022's own comment had already named the carve-out and applied it inside its own gate;
+the multi-source leg needed the same one.  One orphan per call, both backends, invisible in a
+single call — `loft_planet` retained ~16,000 records per planet and four planets exhausted the
+65,535-entry `store_nr` table.
+
+**What the oracle held fixed, and what moving it found.** The filed report varied *what the
+non-taken arm names* (a local, a parameter, a vector element) and held the RETURN POSITION and
+the arm COUNT fixed.  Moving those two found two `silent-wrong` defects the leak had hidden,
+neither of them an ownership fact:
+
+* **Two owned locals** — the first is renamed onto the buffer, and the second's copy leg emits
+  `OpDatabase(buf); OpCopyRecord(<tail that reads buf>, buf)`.  The re-mint destroys the store
+  the copy is about to read, so the renamed arm answered a zeroed record.  A three-arm `match`
+  broke only its FIRST arm, which is the tell that the buffer RENAME is the mechanism and the
+  join is not.
+* **Bound, then returned** (`r = if c { … } else { w }; r`) — not a tail join at all.  This is
+  loft#848's class one arm over: the pass-2-only object-literal mint still drew from the shared
+  `__ref_N` counter, so pass 2 handed it the name pass 1 had left on the return buffer, and
+  `return_buffer()` resolves that buffer BY NAME.  The arm's record and the return destination
+  became one slot.
+
+Both answered wrong IDENTICALLY on the two backends, so `(O-NoDiverge)` held while
+`(O-Owner)` did not — a reminder that backend agreement is not an oracle.  Guard:
+`tests/scripts/1078-join-arms-that-each-own-a-store.loft`, both halves falsified on a pristine
+worktree at `f7a57124` (the value cells by assertion, the leak cell by the wrap leak gate).
 
 ### D-own-6 — CLOSED (2026-08-20, loft#1029): the runtime Join witness now covers every argument it can name
 

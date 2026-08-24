@@ -305,22 +305,20 @@ impl PartialOrd<Str> for &str {
 pub struct Key {
     pub type_nr: i8,
     pub position: u16,
-    /// The field's storage START — the `min` of a `Parts::Byte` / `Parts::Short`, which
-    /// is what those two widths subtract when they store a value and must add back when
-    /// they read one (loft#812).
+    /// The field's storage START: the `min` a `Parts::Byte` / `Parts::Short` subtracts
+    /// when it stores a value and adds back when it reads one.
     ///
-    /// It has to travel WITH the key because the comparison happens in `compare_key` /
-    /// `hash_ref` / `get_key`, none of which can see the type table. Before this field
-    /// they passed a literal `0`, so the record side decoded `val - min` while the lookup
-    /// side had the user's `val`: the two differed by exactly `min` and never compared
-    /// Equal. A key declared `i8`, `i16` or `integer limit(min, max)` with a non-zero
-    /// `min` therefore inserted fine, counted fine, and could never be looked up. Ordering
-    /// survived, because subtracting a constant is monotonic — only equality was wrong,
-    /// which is why it read as "the record is missing" rather than as a decode bug.
+    /// It travels WITH the key because the comparison happens in `compare_key` /
+    /// `hash_ref` / `get_key`, none of which can see the type table — so without it a
+    /// narrow key cannot be decoded from the key alone.
     ///
     /// `0` for every width that stores raw (`integer`, `long`, `text`, `float`, `single`,
-    /// `Parts::Int`, `Parts::ShortRaw`) — for those it is inert, and it is also the
-    /// correct value for a `u8` / `u16` whose range starts at zero.
+    /// `Parts::Int`, `Parts::ShortRaw`) — inert there, and also the correct value for a
+    /// `u8` / `u16` whose range starts at zero.
+    ///
+    /// ⚠ A wrong `start` breaks EQUALITY only. Ordering survives it, because subtracting
+    /// a constant is monotonic — so the symptom is "the record is missing" from a lookup
+    /// whose insert and count both worked, not a decode error. (loft#812)
     pub start: i32,
 }
 
@@ -699,10 +697,12 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 ///
 /// # What it is for
 ///
-/// Without it `-> vector<T>?` gets no buffer, so nothing delivers into one and the caller
-/// inherits whatever store the callee allocated — a fresh one per loop turn against a single
-/// scope-exit free. That is loft#938's leak. The NON-nullable twin of the same function is
-/// clean because its callee normalises every arm into the caller's buffer:
+/// The buffer is what makes ownership INVARIANT at the call site. With one, the callee
+/// normalises every arm into the caller's buffer and the caller always owns the result;
+/// without one, `-> vector<T>?` has nothing to deliver into, so the caller inherits
+/// whatever store the callee happened to allocate — a fresh one per loop turn against a
+/// single scope-exit free, which leaks. The ABI removes the variance rather than deciding
+/// it. The non-nullable twin has always been clean for exactly this reason:
 ///
 /// ```text
 /// if n == 1 { OpClearVector(__retbuf); OpAppendVector(__retbuf, v, 0);       __retbuf }
@@ -710,20 +710,19 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 ///             OpFreeRef(__vdb_1);                                            __retbuf }
 /// ```
 ///
-/// So ownership never varies at the call site, and it does not need to: the ABI removes the
-/// variance rather than deciding it. `Optional` was simply blind at every gate on the way.
+/// # The shape question, and where it must be asked
 ///
-/// # Why it took seven gates
+/// `Optional(Vector)` and `Vector` share one runtime layout, so **a bare `matches!` on
+/// `Type::Vector` silently excludes the nullable form**. Every gate on the delivery path has
+/// to peel first — [`Type::ret_promo_base`] / [`Type::ret_promo_peels`] do it, and are the
+/// identity when this is off, which is what makes the opt-out exact.
 ///
-/// `Optional(Vector)` and `Vector` share one runtime layout, so every gate that asked the
-/// shape question with a bare `matches!` silently excluded the nullable form. Six were peeled
-/// when the mechanism was built ([`Type::ret_promo_base`] / [`Type::ret_promo_peels`], still
-/// the identity when this is off, so the opt-out is exact). The seventh outlived that sweep
-/// because it asks about the returned VALUE rather than the return TYPE:
-/// `fresh_owned_vector_deps` matched `Type::Vector` on the returned LOCAL's own type, and
-/// `v = src(i); return v;` types `v` as `Optional(Vector)`. So `block_result`'s tail intercept
-/// never fired, `ref_return` was never called for that function at all, and the arm handed
-/// back its own store while the caller's buffer stayed untouched and was freed empty.
+/// ⚠ Peeling is not enough on its own: a gate must also ask about the **return TYPE**, not
+/// the returned VALUE. `v = src(i); return v;` types the local `v` as `Optional(Vector)`, so
+/// a gate reading the local's own type (as `fresh_owned_vector_deps` does) sees a shape the
+/// return type never had. When that gate misses, `block_result`'s tail intercept does not
+/// fire and `ref_return` is never called for the function at all — the arm hands back its own
+/// store while the caller's buffer stays untouched and is freed empty. Nothing reports it.
 ///
 /// It needed [`optional_dep_peel`] with it, and neither alone is an improvement — see there.
 ///
@@ -740,9 +739,10 @@ pub fn shadowed_by_method_lint_enabled() -> bool {
 /// the `Bind` leg in `ref_return` deliberately does NOT peel.
 ///
 /// Reach for [`trace_ret_promotion`] first — it prints an ENTER line per `ref_return` call and
-/// a verdict line per candidate, and the difference between "no verdict" and "no ENTER" is
-/// which of the two upstream gates you are looking at. Then `LOFT_STRICT_STORES=1`: every
-/// value here is correct in every state of the bug, so a green run without it is not evidence.
+/// a verdict line per candidate, and the difference between "no verdict" and "no ENTER" tells
+/// you which of the two gates above you are looking at. Then `LOFT_STRICT_STORES=1`: every
+/// VALUE this path produces is correct whether or not delivery worked, so a green run without
+/// it is not evidence — only the store census distinguishes the two.
 #[must_use]
 pub fn nullable_ret_buffer() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -862,6 +862,26 @@ pub fn a1b_materialise_enabled() -> bool {
 pub fn work_ref_stepover_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| !env_set("LOFT_NO_WORKREF_STEPOVER"))
+}
+
+/// loft#1078: a pass-2-only object literal draws from the pass-2 work-ref sequence —
+/// **DEFAULT ON**.  `parser/objects.rs`'s value-position `Object` arm is guarded by
+/// `!self.first_pass`, so it mints on pass 2 only; on the shared `__ref_N` counter its
+/// position therefore shifts relative to pass 1, and it was handed the name pass 1 had left
+/// on the promoted return buffer.  `return_buffer()` resolves that buffer BY NAME, so the
+/// literal's record and the return destination became one slot and the return re-minted it
+/// with `OpDatabase` before copying — the fresh arm of `r = if c { S{a:9} } else { w }; r`
+/// answered `0` on both backends.  This is loft#848's cure applied to the sibling arm of the
+/// same function.  Opt OUT with `LOFT_NO_P2_OBJECT_WORKREF` (restores the shared counter, and
+/// with it the collision): the A/B on one binary, and the first bisect step for a wrong value
+/// out of a struct literal in value position.  It is the THIRD independent guard on the
+/// collapse `LOFT_NO_A1B` and `LOFT_NO_WORKREF_STEPOVER` also guard, which is why
+/// `oracle_flags_the_a1b_wrong_plan` has to disable all three to have a defect to catch.
+/// One cached env read.  See `Vars::work_ref_p2`.
+#[must_use]
+pub fn p2_object_workref_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_P2_OBJECT_WORKREF"))
 }
 
 /// loft#953: a copy may not claim a buffer the CALLER owns — **DEFAULT ON**. `OpCopyRecord`'s
@@ -1553,24 +1573,50 @@ pub fn uaf_freed_pc_at_gen(slot: u16, want_gen: u32) -> Option<(u32, u32, u16)> 
 #[must_use]
 #[inline]
 pub fn store<'a>(r: &DbRef, stores: &'a [Store]) -> &'a Store {
-    debug_assert!(
-        (r.store_nr as usize) < stores.len(),
-        "DbRef store_nr {} out of bounds (allocations.len() = {})",
-        r.store_nr,
-        stores.len()
-    );
-    &stores[r.store_nr as usize]
+    match stores.get(r.store_nr as usize) {
+        Some(s) => s,
+        None => bad_store_nr(r, stores.len()),
+    }
 }
 
 #[must_use]
 pub fn mut_store<'a>(r: &DbRef, stores: &'a mut [Store]) -> &'a mut Store {
-    debug_assert!(
-        (r.store_nr as usize) < stores.len(),
-        "DbRef store_nr {} out of bounds (allocations.len() = {})",
-        r.store_nr,
-        stores.len()
+    let len = stores.len();
+    match stores.get_mut(r.store_nr as usize) {
+        Some(s) => s,
+        None => bad_store_nr(r, len),
+    }
+}
+
+/// Reports a `DbRef` a store accessor cannot resolve, and never returns.
+///
+/// Reaching it is always a COMPILER bug, never a user one, so the message says so and
+/// names which of the two shapes it is.  A null `store_nr` is the interesting one:
+/// `DbRef::NULL` means an ABSENT value, and [`DbRef::is_null`] is the single home for
+/// testing it — "every store accessor consults it before dereferencing, so an absent
+/// value never indexes `stores[u16::MAX]`".  So a null arriving HERE places the fault
+/// upstream, on whatever published an absent value where a real store was required, and
+/// the message points the reader there.
+///
+/// Split out and `#[cold]` so the accessors keep exactly the bounds branch they already
+/// had.  It carries the numbers in every build: a `debug_assert!` would say nothing in
+/// the only build a user runs (loft#1082).
+#[cold]
+#[inline(never)]
+fn bad_store_nr(r: &DbRef, len: usize) -> ! {
+    assert!(
+        !r.is_null(),
+        "compiler bug: a NULL DbRef reached a store accessor (rec={}, pos={}; {len} \
+         stores).  `DbRef::NULL` means an ABSENT value and every accessor is contracted \
+         to test `is_null()` first — so the producer of this reference published an \
+         absent value where a real store was required.",
+        r.rec,
+        r.pos
     );
-    &mut stores[r.store_nr as usize]
+    panic!(
+        "compiler bug: DbRef store_nr {} is out of range ({len} stores; rec={}, pos={})",
+        r.store_nr, r.rec, r.pos
+    );
 }
 
 #[must_use]

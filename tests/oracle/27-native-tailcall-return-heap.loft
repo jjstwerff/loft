@@ -101,12 +101,32 @@ fn main() {
   v += ["vec0"];
   root = json_parse("{{\"b\":\"json\"}}");
 
-  println("a1={a1_struct_tail(d)}");               // world
-  println("a2={a2_vec_tail(v)}");                   // vec0
-  println("a3={a3_opt_caller(d) ?? \"NULL\"}");     // world
-  println("a4={a4_ctor_arg_tail(d, 5)}");           // (empty — no key "5")
-  println("a5={a5_struct_ret_tail(d).name}");       // world
-  println("a6={a6_opt_callee_discharge(d)}");       // world
-  println("a7={a7_match_arm_tail(root)}");          // json
-  println("a8={a8_a(d)}");                          // world
+  // Every shape here failed as a rustc error rather than a wrong value, which is why the
+  // file could get away with printing only.  Asserting them adds the half a compile
+  // failure cannot reach: a tail buffer delivered but filled from the WRONG arm still
+  // compiles, and `a4`'s deliberately EMPTY answer is where that would show first.
+  a1 = a1_struct_tail(d);
+  a2 = a2_vec_tail(v);
+  a3 = a3_opt_caller(d) ?? "NULL";
+  a4 = a4_ctor_arg_tail(d, 5);
+  a5 = a5_struct_ret_tail(d).name;
+  a6 = a6_opt_callee_discharge(d);
+  a7 = a7_match_arm_tail(root);
+  a8 = a8_a(d);
+  assert(a1 == "world", "the struct-param tail returns the body; got `{a1}`");
+  assert(a2 == "vec0", "the vector-param tail returns element 0; got `{a2}`");
+  assert(a3 == "world", "a text? caller delivers the same text, not null; got `{a3}`");
+  assert(a4 == "", "there is no key `5`, so the tail is EMPTY — not the body; got `{a4}`");
+  assert(a5 == "world", "the struct-returning tail carries its name field; got `{a5}`");
+  assert(a6 == "world", "the optional callee is present, so `??` does not fire; got `{a6}`");
+  assert(a7 == "json", "the match-arm tail reaches the JSON string, not the `_` arm; got `{a7}`");
+  assert(a8 == "world", "a two-level tail chain still delivers; got `{a8}`");
+  println("a1={a1}");
+  println("a2={a2}");
+  println("a3={a3}");
+  println("a4={a4}");
+  println("a5={a5}");
+  println("a6={a6}");
+  println("a7={a7}");
+  println("a8={a8}");
 }

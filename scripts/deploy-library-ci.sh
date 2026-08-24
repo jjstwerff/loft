@@ -7,6 +7,7 @@
 #
 #   library-ci.yml   → loft-lang/loft   (the build gate; packages listed per repo)
 #   fpm-apply.yml    → loft-lang/.github (label `fixed-pending-merge` on a Fixes push)
+#                      …and the LABEL itself, which is a repo setting rather than a file
 #   fpm-strip.yml    → loft-lang/.github (strip it again when the issue closes)
 #
 # Each repo's packages are computed from its actual package dirs (a dir with a
@@ -56,6 +57,23 @@ for r in $repos; do
     cd "$tmp/$r"
     pkgs=$(for d in */; do [ -f "${d}loft.toml" ] && basename "$d"; done | sort)
     if [ -z "$pkgs" ]; then echo "  $r: no packages — skip"; exit 0; fi
+
+    # The label the fpm-apply workflow applies is a REPO SETTING, not a file, so
+    # pushing the workflow never creates it.  Every loft-libs-* repo got the
+    # workflow here and none got the label, and the failure waited until the first
+    # PR that actually carried a `Fixes #N`: `'fixed-pending-merge' not found`,
+    # exit 1, on a job that has nothing to do with the change under review.
+    #
+    # It goes BEFORE the "already unified" early-out below on purpose — that
+    # early-out is why this never self-healed, since a repo whose workflows are
+    # current skips every step after it.  `gh label create` is idempotent with
+    # `--force`, so re-running costs one API call and fixes a missing label.
+    if [ "$DRY" = 0 ]; then
+      gh label create fixed-pending-merge --repo "$ORG/$r" --force \
+        --color 2da44e \
+        --description "Fixed/implemented on the branch; only merge remains. Auto-closes on merge." \
+        > /dev/null 2>&1 || echo "  $r: WARNING could not ensure the fixed-pending-merge label"
+    fi
     json=$(printf '%s\n' $pkgs | python3 -c 'import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
 
     mkdir -p .github/workflows

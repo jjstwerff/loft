@@ -655,8 +655,6 @@ pub enum Value {
     Return(Box<Value>),
     /// Break out of the n-th loop
     Break(u16),
-    /// Break out of the n-th loop with a value
-    BreakWith(u16, Box<Value>),
     /// Continue the n-th loop
     Continue(u16),
     /// Conditional statement
@@ -695,34 +693,6 @@ pub enum Value {
     FnRefDnr(u16),
     /// Parallel { arm1; arm2; } — each arm runs concurrently.
     Parallel(Vec<Value>),
-    /// Plan-06 PRIORITY.md spine step 3 — fused for-par IR shape
-    /// (DESIGN.md D7).  Captures the streaming-only par construct
-    /// `for x in input par(r=worker(x), threads) { body }` without
-    /// materialising a result vector.  Heap-boxed because the
-    /// variant carries 5 child `Value`s plus 3 small fields and
-    /// would otherwise grow `size_of::<Value>()` past the 32-byte
-    /// budget that every `Vec<Value>` allocation pays for.
-    ///
-    /// Field layout (mirrors the design doc's struct):
-    ///   * `input`  — expression of type `vector<T>`
-    ///   * `x_var`  — variable bound to each input element
-    ///   * `r_var`  — bound to worker result; `u16::MAX` when the
-    ///     stitch policy is Discard (no result name)
-    ///   * `worker` — call expression evaluated by workers per row
-    ///   * `threads` — expression of type integer
-    ///   * `body`   — sequential block on the main thread
-    ///   * `stitch_id` — `Stitch` policy: 0=Concat, 1=Discard,
-    ///     2=Reduce, 3=Queue.  Numeric here so `data.rs` does not
-    ///     need to import the typed `Stitch` enum from `parallel.rs`
-    ///     (avoids a cross-module dependency); codegen converts to
-    ///     the typed enum via the same id mapping.  Reduce/Queue
-    ///     policy payloads (fold_fn, capacity) come from companion
-    ///     fields added when their runtimes land in spine steps 4+9.
-    ///
-    /// Currently dead code — spine step 3a (this commit) lands the
-    /// variant + walker arms only.  Steps 3b (codegen) and 3c
-    /// (parser detection) follow.
-    ParFor(Box<ParForBody>),
     /// Plan 09 phase 00 step 0.7 — codegen-internal "raw expression"
     /// passthrough.
     ///
@@ -741,19 +711,6 @@ pub enum Value {
     /// see this variant — the catch-all `_ =>` arms in those walkers
     /// suffice as a defensive default.
     RawExpr(String),
-}
-
-/// Plan-06 PRIORITY.md spine step 3 — payload for `Value::ParFor`.
-/// Heap-boxed so the variant fits the 32-byte budget.
-#[derive(Debug, PartialEq, Clone)]
-pub struct ParForBody {
-    pub input: Value,
-    pub x_var: u16,
-    pub r_var: u16,
-    pub worker: Value,
-    pub threads: Value,
-    pub body: Value,
-    pub stitch_id: u8,
 }
 
 #[allow(dead_code)]
@@ -868,7 +825,6 @@ impl Value {
             Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().for_each(&mut *f),
             Value::Set(_, inner)
             | Value::Return(inner)
-            | Value::BreakWith(_, inner)
             | Value::Drop(inner)
             | Value::Yield(inner)
             | Value::TuplePut(_, _, inner) => f(inner),
@@ -881,12 +837,6 @@ impl Value {
                 f(a);
                 f(b);
                 f(c);
-            }
-            Value::ParFor(b) => {
-                f(&b.input);
-                f(&b.worker);
-                f(&b.threads);
-                f(&b.body);
             }
             // Leaves — no child expressions.
             Value::RawExpr(_)
@@ -942,7 +892,6 @@ impl Value {
             Value::Block(bl) | Value::Loop(bl) => bl.operators.iter_mut().for_each(&mut *f),
             Value::Set(_, inner)
             | Value::Return(inner)
-            | Value::BreakWith(_, inner)
             | Value::Drop(inner)
             | Value::Yield(inner)
             | Value::TuplePut(_, _, inner) => f(inner),
@@ -955,12 +904,6 @@ impl Value {
                 f(a);
                 f(b);
                 f(c);
-            }
-            Value::ParFor(b) => {
-                f(&mut b.input);
-                f(&mut b.worker);
-                f(&mut b.threads);
-                f(&mut b.body);
             }
             // Leaves — no child expressions.
             Value::RawExpr(_)
@@ -1021,7 +964,6 @@ impl Value {
             | Value::CallRef(x, _)
             | Value::Iter(x, _, _, _) => *x == v,
             Value::FnRef(_, w, _) => *w == v,
-            Value::ParFor(b) => b.x_var == v || b.r_var == v,
             _ => false,
         })
     }
@@ -1283,6 +1225,9 @@ impl Deps {
     /// OWNED — no borrow, either space.  The most load-bearing convention
     /// in the codebase (`is_empty()` gates the free logic).
     #[must_use]
+    /// Carries @FR-O-Borrow's representation: EMPTY means owned, non-empty names what the
+    /// value aliases.  The distinction the whole model rests on — `is_empty()` is what
+    /// @FR-O-Derived reads to place a free.
     pub fn none() -> Deps {
         #[cfg(debug_assertions)]
         {
@@ -2114,6 +2059,10 @@ impl Type {
     }
 
     #[must_use]
+    /// The single fact @FR-O-Deps names: every store-lifetime decision — free placement,
+    /// adopt-vs-copy, move-vs-clone, drop — reads THIS, and re-deriving any of them from a
+    /// codegen condition instead is what that rule calls the bug.  Both backends read it,
+    /// which is @FR-O-NoDiverge.
     pub fn depend(&self) -> Vec<u16> {
         let mut v = Vec::new();
         match self {
@@ -4288,27 +4237,83 @@ pub fn v_if(test: Value, t: Value, f: Value) -> Value {
     Value::If(Box::new(test), Box::new(t), Box::new(f))
 }
 
-/// May a `&(…)` reference tuple hold an element of this type (loft#1006)?
+/// May a `&(…)` reference tuple hold an element of this type?
+///
+/// The admitted-element set for a `&(…)`; the heap half is refused under @FR-D-bind-11.
 ///
 /// A reference tuple's element is read and written through the tuple's stored DbRef with
 /// the same `(ref, offset)` opcodes an ordinary struct FIELD uses, so the admitted set is
-/// exactly the set those opcode pairs are laid out for.  This is the ONE list: the
-/// signature guard and both `RefTupleGet` / `RefTuplePut` arms read it, because loft#1006
-/// was three lists disagreeing — the guard admitted `single` and a function reference that
-/// codegen then died on, and refused `boolean`, which every layer could always have
-/// handled.
+/// exactly the set those opcode pairs are laid out for.  This is the ONE list — the
+/// signature guard and both `RefTupleGet` / `RefTuplePut` arms read it, so the set the
+/// compiler ADMITS and the set codegen can EMIT cannot disagree.
 ///
-/// `text` is refused, and the opcode pair is not what it is missing: `OpGetText` /
-/// `OpSetText` exist and take the same `(ref, offset)`, but a reference tuple's storage is
-/// not a record with a text SLOT the way a struct is, so wiring them up read out of bounds
-/// on the interpreter (SIGSEGV) and would not compile on `--native`.  Implementing it is
-/// layout work; until then the signature says so and names the element type.  A struct
-/// takes its place — its fields of any type write through a `&` parameter.
+/// `text` is refused, and the missing piece is not the opcode pair: `OpGetText` /
+/// `OpSetText` exist and take the same `(ref, offset)`.  A reference tuple's storage is not
+/// a record with a text SLOT the way a struct is, so those opcodes would address memory the
+/// tuple does not own.  Admitting `text` is layout work, not a guard change.  Until then a
+/// struct takes its place — its fields of any type write through a `&` parameter.
 #[must_use]
 pub fn ref_tuple_element_ok(tp: &Type) -> bool {
+    is_scalar(tp.base())
+}
+
+/// Is `tp` carried as a `DbRef` — a handle into a store rather than an inline value?
+///
+/// The authority is the layout: [`element_stack_size`] gives exactly these eight
+/// `size_of::<DbRef>()`, and any site deciding "does this travel as a handle?" is asking
+/// that same question.
+///
+/// Enforces @FR-Col-Store (the store-backed set) and @FR-L-Scalar's complement.
+///
+/// ⚠ Spelled inline, this list drifts SHORT in one specific way: the three obvious kinds
+/// (`Reference` / `Vector` / struct-`Enum`) get written and the five keyed collections are
+/// forgotten, because they are reached by key and do not look like references at the call
+/// site.  A short list is not a compile error anywhere — it routes a handle down the
+/// scalar path — so call this function rather than restating it.
+///
+/// `Parser::is_heap_handle` is the same question with a `.base()` peel, and delegates here.
+#[must_use]
+pub fn is_dbref(tp: &Type) -> bool {
     matches!(
-        tp.base(),
-        Type::Integer(_) | Type::Float | Type::Single | Type::Character | Type::Boolean
+        tp,
+        Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
+            | Type::Enum(_, true, _)
+    )
+}
+
+/// Is `tp` a SCALAR — a value that lives inline in its slot and owns no store?
+///
+/// The one home for a membership test written at several sites and already drifted between
+/// them: `generation`'s two copies included `Enum(_, false, _)` and
+/// [`ref_tuple_element_ok`] did not, so `&(Col, Col)` over a value enum was refused while
+/// `&(boolean, boolean)` was admitted — with an identical 1-byte layout
+/// (`element_stack_size`: `Boolean | Enum(_, false, _) => 1`).  Two spellings of one list
+/// disagreeing is the shape loft#1006 was.
+///
+/// A value enum is a scalar; a STRUCT-enum (`Enum(_, true, _)`) is not — it carries a
+/// `DbRef` like a `Reference`.  `text` is not: its stack form is a 16-byte `Str` borrow
+/// against a 4-byte record handle, which is the whole of `binding.md` D-bind-11.
+///
+/// See [formal/types.md](../doc/claude/formal/types.md) for the scalar/heap split and
+/// [formal/IMPLEMENTATIONS.md](../doc/claude/formal/IMPLEMENTATIONS.md) for the other sites
+/// still spelling this list inline — adopting them changes behaviour per site and each needs
+/// its own probe, which is why they are a checklist and not a sweep.
+#[must_use]
+pub fn is_scalar(tp: &Type) -> bool {
+    matches!(
+        tp,
+        Type::Integer(_)
+            | Type::Float
+            | Type::Single
+            | Type::Character
+            | Type::Boolean
+            | Type::Enum(_, false, _)
     )
 }
 
@@ -8057,10 +8062,6 @@ impl Data {
             }
             Value::Insert(i) => self.show_insert(write, vars, i, indent),
             Value::Break(v) => write!(write, "break({v})"),
-            Value::BreakWith(v, expr) => {
-                write!(write, "break({v}) ")?;
-                self.show_code(write, vars, expr, indent, false)
-            }
             Value::Continue(v) => write!(write, "continue({v})"),
             Value::If(test, t, f) => {
                 write!(write, "if ")?;
@@ -8119,30 +8120,6 @@ impl Data {
             }
             // Plan-07 phase 1 — Span is transparent in pretty-print.
             Value::Span(b) => self.show_code(write, vars, &b.1, indent, start),
-            Value::ParFor(b) => {
-                let stitch_name = match b.stitch_id {
-                    0 => "concat",
-                    1 => "discard",
-                    2 => "reduce",
-                    3 => "queue",
-                    _ => "?",
-                };
-                write!(write, "par_for[{stitch_name}](x={}, r=", b.x_var)?;
-                if b.r_var == u16::MAX {
-                    write!(write, "_")?;
-                } else {
-                    write!(write, "{}", b.r_var)?;
-                }
-                write!(write, ", input=")?;
-                self.show_code(write, vars, &b.input, 0, false)?;
-                write!(write, ", worker=")?;
-                self.show_code(write, vars, &b.worker, 0, false)?;
-                write!(write, ", threads=")?;
-                self.show_code(write, vars, &b.threads, 0, false)?;
-                writeln!(write, ", body=")?;
-                self.show_code(write, vars, &b.body, indent + 1, true)?;
-                write!(write, ")")
-            }
             // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
             // pretty-print should never see it (it's only created during
             // native emission, downstream of this IR walker).

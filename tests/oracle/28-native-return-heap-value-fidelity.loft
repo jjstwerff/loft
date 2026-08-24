@@ -39,15 +39,30 @@ fn b3_ctor_arg_opt(v: vector<float>) -> float? {
 }
 
 fn main() {
+  // Each shape returned a HEALTHY-LOOKING wrong value: an empty vector, or a non-null
+  // 0.0 that no `?? d` can catch.  So the assertions name the exact values, and the
+  // lengths separately — an empty return still has a length, and it is the wrong one.
   a = b1_field_local(3);
-  println("b1={a[0] ?? -1},{a[1] ?? -1},{a[2] ?? -1} len={len(a)}");   // 0,10,20 len=3
+  a0 = a[0] ?? -1; a1 = a[1] ?? -1; a2 = a[2] ?? -1;
+  assert(len(a) == 3, "#488 returned this EMPTY on native; it holds three; got {len(a)}");
+  assert(a0 == 0 && a1 == 10 && a2 == 20, "the local struct's field vector arrives intact; got {a0},{a1},{a2}");
+  println("b1={a0},{a1},{a2} len={len(a)}");
 
   mr = MatchResult { pts: [7, 8, 9], gaps: 1 };
   c = b2_field_param(mr);
-  println("b2={c[0] ?? -1},{c[2] ?? -1} len={len(c)}");                // 7,9 len=3
+  c0 = c[0] ?? -1; c2 = c[2] ?? -1;
+  assert(len(c) == 3, "the field-of-PARAM variant holds three too; got {len(c)}");
+  assert(c0 == 7 && c2 == 9, "…with both ends intact; got {c0},{c2}");
+  println("b2={c0},{c2} len={len(c)}");
 
   vf: vector<float> = [];
   vf += [42.5];
   h = b3_ctor_arg_opt(vf);
-  println("b3={h ?? -1.0}");                                           // 42.5
+  hv = h ?? -1.0;
+  // The dangerous cell: the corruption was a non-null 0.0, so `?? -1.0` would NOT have
+  // fired and every downstream value flattened silently.  Asserting the value is the
+  // only thing that can see it.
+  assert(hv == 42.5, "a float? through a CONSTRUCTED text argument keeps its value; got {hv}");
+  assert(hv != 0.0, "…and specifically is not the zeroed corruption, which is non-null");
+  println("b3={hv}");
 }

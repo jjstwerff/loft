@@ -8,6 +8,7 @@
 // Controls: arrows/A/D to move, Escape to quit.
 use graphics;
 use shapes;
+use assets;
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -109,186 +110,51 @@ SP_SHIELD = 7;
 
 // ── Sprite atlas ─────────────────────────────────────────────────────
 
-fn build_atlas() -> graphics::Canvas {
-  // 4x5 grid, 32x32 per cell = 128x160
-  // Row 0: small icons for brick overlay
-  // Row 1: (continued)
-  // Row 2-3: large pickup icons
-  // Row 4: ball animation (normal + 3 squash frames)
-  at = graphics::canvas(128, 160, 0);
+// Where the packed atlas lives, spelled exactly as `pack_atlas.loft` spells it.
+// Both files sit in this directory and a path a program passes resolves against
+// the PROGRAM's own directory, so the two spellings name one pair of files —
+// and `[[embed]]` in loft.toml carries those same names into the browser page
+// (@PLN146 F4).
+PACK_BASE = "assets/bb";
+PAGE_NAME = "atlas";
+PAGE_BLOB = "page/atlas";
 
-  // Cel-shaded look: draw every filled shape as a dark outline (1 px
-  // wider on each side) first, then the coloured body on top.  The
-  // outline colour is a near-black with full alpha so it reads well
-  // against both the bricks and the canvas background.
-  ol = graphics::rgba(20, 20, 24, 240);
-
-  // Small brick-corner icons (8x8, drawn at center of each 32x32 cell)
-  // S_IC_EXTEND (0) — white ↔
-  at.fill_rect(11, 141, 10,  5, ol);
-  at.fill_rect( 9, 139,  5,  9, ol);
-  at.fill_rect(18, 139,  5,  9, ol);
-  at.fill_rect(12, 142,  8,  3, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(10, 140,  3,  7, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(19, 140,  3,  7, graphics::rgba(255, 255, 255, 230));
-  // S_IC_EXPLODE (1) — white skull
-  at.fill_circle(32 + 16, 142, 6, ol);
-  at.fill_circle(32 + 16, 142, 5, graphics::rgba(255, 230, 200, 240));
-  at.fill_rect(32 + 13, 140, 2, 2, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 17, 140, 2, 2, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 14, 146, 4, 2, graphics::rgba(40, 40, 40, 255));
-  // S_IC_BALLOON (2) — red balloon
-  at.fill_circle(64 + 16, 140, 6, ol);
-  at.fill_circle(64 + 16, 140, 5, graphics::rgba(255, 70, 70, 240));
-  at.fill_circle(64 + 14, 138, 2, graphics::rgba(255, 150, 150, 130));
-  at.vline(64 + 16, 145, 148, graphics::rgba(200, 200, 200, 200));
-  // S_IC_NEWROW (3) — blue ⬇
-  at.fill_rect(96 + 13, 135,  6, 10, ol);
-  at.fill_rect(96 +  9, 141, 14,  5, ol);
-  at.fill_rect(96 + 12, 144,  8,  4, ol);
-  at.fill_rect(96 + 14, 136,  4,  8, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 10, 142, 12,  3, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 13, 145,  6,  2, graphics::rgba(130, 180, 255, 200));
-  // S_IC_MULTI (4) — white circles
-  at.fill_circle( 8, 96 + 14, 5, ol);
-  at.fill_circle(18, 96 + 10, 4, ol);
-  at.fill_circle(20, 96 + 17, 4, ol);
-  at.fill_circle( 8, 96 + 14, 4, graphics::rgba(255, 255, 255, 230));
-  at.fill_circle(18, 96 + 10, 3, graphics::rgba(230, 230, 255, 200));
-  at.fill_circle(20, 96 + 17, 3, graphics::rgba(210, 210, 255, 180));
-  // S_IC_FIRE (5) — orange flame
-  at.fill_rect(32 + 13, 96 + 5,  6, 14, ol);
-  at.fill_rect(32 + 11, 96 + 9, 10, 10, ol);
-  at.fill_rect(32 + 14, 96 + 3,  4,  6, ol);
-  at.fill_rect(32 + 14, 96 + 6,  4, 12, graphics::rgba(255, 150, 0, 240));
-  at.fill_rect(32 + 12, 96 + 10,  8,  8, graphics::rgba(255,  90, 0, 220));
-  at.fill_rect(32 + 15, 96 + 4,  2,  4, graphics::rgba(255, 220, 50, 200));
-  // S_IC_SHIELD (6) — blue shield
-  at.fill_rect(64 +  8, 96 + 7, 16,  8, ol);
-  at.fill_rect(64 + 10, 96 + 13, 12,  5, ol);
-  at.fill_rect(64 + 12, 96 + 16,  8,  4, ol);
-  at.fill_rect(64 +  9, 96 + 8, 14,  6, graphics::rgba(80, 160, 255, 240));
-  at.fill_rect(64 + 11, 96 + 14, 10,  3, graphics::rgba(80, 140, 230, 220));
-  at.fill_rect(64 + 13, 96 + 17,  6,  2, graphics::rgba(80, 120, 210, 200));
-  at.hline(64 + 10, 64 + 22, 96 + 9, graphics::rgba(200, 230, 255, 120));
-
-  // Large pickup icons — fill most of 32x32 cell
-  // S_PK_EXTEND (7) at (96, 32) — large green ↔
-  at.fill_rect(96 +  3, 96 + 11, 26, 10, ol);
-  at.fill_rect(96 +  1, 96 + 7,  8, 18, ol);
-  at.fill_rect(96 + 23, 96 + 7,  8, 18, ol);
-  at.fill_rect(96 +  4, 96 + 12, 24,  8, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 +  2, 96 + 8,  6, 16, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 + 24, 96 + 8,  6, 16, graphics::rgba(60, 230, 80, 255));
-  // S_PK_EXPLODE (8) at (0, 64) — large red skull
-  at.fill_circle(16, 64 + 14, 13, ol);
-  at.fill_circle(16, 64 + 14, 12, graphics::rgba(230, 50, 50, 255));
-  at.fill_rect(10, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(18, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(11, 64 + 20, 10, 4, graphics::rgba(40, 40, 40, 255));
-  // S_PK_BALLOON (9) at (32, 64) — large red balloon
-  at.fill_circle(32 + 16, 64 + 12, 11, ol);
-  at.fill_circle(32 + 16, 64 + 12, 10, graphics::rgba(240, 60, 60, 255));
-  at.fill_circle(32 + 12, 64 + 8,  4, graphics::rgba(255, 130, 130, 130));
-  at.vline(32 + 16, 64 + 22, 64 + 30, graphics::rgba(200, 200, 200, 255));
-  // S_PK_NEWROW (10) at (64, 64) — large blue ⬇
-  at.fill_rect(64 + 11, 64 + 1, 10, 18, ol);
-  at.fill_rect(64 +  5, 64 + 13, 22,  8, ol);
-  at.fill_rect(64 +  9, 64 + 19, 14,  7, ol);
-  at.fill_rect(64 + 12, 64 + 24,  8,  6, ol);
-  at.fill_rect(64 + 12, 64 + 2,  8, 16, graphics::rgba(60, 110, 240, 255));
-  at.fill_rect(64 +  6, 64 + 14, 20,  6, graphics::rgba(60, 110, 240, 255));
-  at.fill_rect(64 + 10, 64 + 20, 12,  5, graphics::rgba(60, 110, 240, 230));
-  at.fill_rect(64 + 13, 64 + 25,  6,  4, graphics::rgba(60, 110, 240, 200));
-  // S_PK_MULTI (11) at (96, 64) — large white balls
-  at.fill_circle(96 + 10, 64 + 16, 8, ol);
-  at.fill_circle(96 + 22, 64 + 10, 7, ol);
-  at.fill_circle(96 + 24, 64 + 22, 6, ol);
-  at.fill_circle(96 + 10, 64 + 16, 7, graphics::rgba(255, 255, 255, 255));
-  at.fill_circle(96 + 22, 64 + 10, 6, graphics::rgba(230, 230, 255, 230));
-  at.fill_circle(96 + 24, 64 + 22, 5, graphics::rgba(210, 210, 255, 210));
-  // S_PK_FIRE (12) at (0, 96) — large flame
-  at.fill_rect(11, 32 + 5, 10, 24, ol);
-  at.fill_rect( 7, 32 + 11, 18, 18, ol);
-  at.fill_rect(12, 32 + 1,  8, 10, ol);
-  at.fill_rect(13, 32 - 1,  6,  6, ol);
-  at.fill_rect(12, 32 + 6,  8, 22, graphics::rgba(255, 140, 0, 255));
-  at.fill_rect( 8, 32 + 12, 16, 16, graphics::rgba(255,  80, 0, 240));
-  at.fill_rect(13, 32 + 2,  6,  8, graphics::rgba(255, 210, 20, 230));
-  at.fill_rect(14, 32 + 0,  4,  4, graphics::rgba(255, 240, 80, 180));
-  // S_PK_SHIELD (13) at (32, 96) — large blue shield
-  at.fill_rect(32 +  5, 32 + 3, 22, 14, ol);
-  at.fill_rect(32 +  8, 32 + 15, 16,  8, ol);
-  at.fill_rect(32 + 11, 32 + 21, 10,  6, ol);
-  at.fill_rect(32 +  6, 32 + 4, 20, 12, graphics::rgba(60, 150, 255, 255));
-  at.fill_rect(32 +  9, 32 + 16, 14,  6, graphics::rgba(60, 130, 240, 240));
-  at.fill_rect(32 + 12, 32 + 22,  8,  4, graphics::rgba(60, 110, 220, 220));
-  at.hline(32 + 8, 32 + 24, 32 + 5, graphics::rgba(180, 220, 255, 120));
-
-  // S_HEART (14) — lives icon, cel-shaded red heart oriented with
-  // the point facing DOWN (standard heart).  Within-cell Y is
-  // mirrored because the canvas upload flips texture rows — so a
-  // sprite drawn with lobes at canvas-top would render with lobes at
-  // screen-bottom.  Here we put the lobes at canvas-bottom of the
-  // cell so they land at screen-top, giving a point-down heart.
-  at.fill_circle(64 +  9, 32 + 19, 8, ol);
-  at.fill_circle(64 + 23, 32 + 19, 8, ol);
-  at.fill_circle(64 +  9, 32 + 19, 7, graphics::rgba(230, 60, 70, 255));
-  at.fill_circle(64 + 23, 32 + 19, 7, graphics::rgba(230, 60, 70, 255));
-  // Triangular body: rows above the lobes, shrinking toward the tip
-  // (at canvas-top of cell = screen-bottom of the rendered sprite).
-  for ht_i in 0..10 {
-    ht_w = 14 - ht_i;
-    ht_x = 64 + 16 - ht_w;
-    at.fill_rect(ht_x - 1, 32 + 14 - ht_i, 2 * ht_w + 2, 1, ol);
-    at.fill_rect(ht_x,     32 + 14 - ht_i, 2 * ht_w,     1, graphics::rgba(230, 60, 70, 255));
+// The sprite atlas, read from the pack the `atlas` build step wrote.
+//
+// It used to be DRAWN here, 180 lines of fill_rect re-run on every launch of
+// every target.  A missing pack is fatal and says so on the way out: a game
+// that draws nothing because its art never arrived is exactly the silent
+// failure this replaces.
+fn load_atlas() -> graphics::Canvas {
+  pk = assets::new_pack();
+  if !assets::pack_read(pk, PACK_BASE) {
+    println("brick-buster: no sprite pack at {PACK_BASE} — run `loft build`");
+    return graphics::canvas(1, 1, 0);
   }
-  // Highlight — small white glint on the upper-left lobe (screen
-  // orientation), which is canvas-bottom-left after the Y-flip.
-  at.fill_circle(64 +  6, 32 + 22, 2, graphics::rgba(255, 210, 215, 200));
-
-  // Ball frames — row 4, y=128.  Each sprite fills most of its 32x32
-  // cell so that when rendered at BALL_SIZE (22 px) the visible ball
-  // is almost the full draw size, not a tiny dot centred in a cell.
-  // All drawn "squashed vertically" (wide-flat) so the runtime can
-  // render a horizontal-axis bounce by swapping draw width <-> height.
-  //
-  // Art pattern: dark outline, white body, small highlight for a
-  // cel-shaded 3D cue.
-
-  // S_BALL_NORMAL (16) at (0, 128) — perfect round ball, d=28
-  at.fill_circle( 0 + 16, 16, 14, ol);
-  at.fill_circle( 0 + 16, 16, 13, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle( 0 + 12, 12,  4, graphics::rgba(255, 255, 255, 255));
-
-  // S_BALL_SQUASH1 (17) at (32, 128) — first contact: ~28 wide x 22 tall
-  // Stadium = rect + two end caps.
-  at.fill_circle(32 +  9, 16, 11, ol);
-  at.fill_circle(32 + 23, 16, 11, ol);
-  at.fill_rect  (32 +  9, 5, 14, 22, ol);
-  at.fill_circle(32 +  9, 16, 10, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(32 + 23, 16, 10, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (32 +  9, 6, 14, 20, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(32 + 12, 12,  3, graphics::rgba(255, 255, 255, 255));
-
-  // S_BALL_SQUASH2 (18) at (64, 128) — peak squash: ~30 wide x 14 tall
-  at.fill_circle(64 +  8, 16, 7, ol);
-  at.fill_circle(64 + 24, 16, 7, ol);
-  at.fill_rect  (64 +  8, 9, 16, 14, ol);
-  at.fill_circle(64 +  8, 16, 6, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(64 + 24, 16, 6, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (64 +  8, 10, 16, 12, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (64 + 11, 12,  4,  2, graphics::rgba(255, 255, 255, 255));
-
-  // S_BALL_RELEASE (19) at (96, 128) — mid-recovery: ~26 wide x 24 tall
-  at.fill_circle(96 + 11, 16, 12, ol);
-  at.fill_circle(96 + 21, 16, 12, ol);
-  at.fill_rect  (96 + 11, 4, 10, 24, ol);
-  at.fill_circle(96 + 11, 16, 11, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(96 + 21, 16, 11, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (96 + 11, 5, 10, 22, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(96 + 13, 12,  3, graphics::rgba(255, 255, 255, 255));
-
+  info = pk.pages[PAGE_NAME];
+  if info == null {
+    println("brick-buster: the sprite pack has no `{PAGE_NAME}` page");
+    return graphics::canvas(1, 1, 0);
+  }
+  res: hash<assets::Blob[bl_key]> = [];
+  _ = assets::prefetch(res, assets::blobs_path(PACK_BASE), [PAGE_BLOB]);
+  blob = res[PAGE_BLOB];
+  if blob == null {
+    println("brick-buster: the sprite pack has no `{PAGE_BLOB}` pixels");
+    return graphics::canvas(1, 1, 0);
+  }
+  // Straight-alpha RGBA, four bytes a texel, exactly as `pack_atlas.loft`
+  // wrote them — `graphics` blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA, so
+  // nothing premultiplies on either side of the pack.
+  at = graphics::canvas(info.pi_w, info.pi_h, 0);
+  for i in 0..(info.pi_w * info.pi_h) {
+    cr = blob.bl_bytes[i * 4]?;
+    cg = blob.bl_bytes[i * 4 + 1]?;
+    cb = blob.bl_bytes[i * 4 + 2]?;
+    ca = blob.bl_bytes[i * 4 + 3]?;
+    at.set_pixel(i % info.pi_w, i / info.pi_w,
+                 (ca << 24) | (cr << 16) | (cg << 8) | cb);
+  }
   at
 }
 
@@ -438,7 +304,7 @@ fn main() {
     return;
   }
 
-  br_atlas = build_atlas();
+  br_atlas = load_atlas();
   br_painter = graphics::create_painter_2d(SCREEN_W, SCREEN_H);
   br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 5, graphics::painter_vao(br_painter));
 

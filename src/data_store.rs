@@ -46,22 +46,20 @@ pub(crate) const DISC_VAR: u8 = 15;
 pub(crate) const DISC_SET: u8 = 16;
 pub(crate) const DISC_RETURN: u8 = 17;
 pub(crate) const DISC_BREAK: u8 = 18;
-pub(crate) const DISC_BREAK_WITH: u8 = 19;
-pub(crate) const DISC_CONTINUE: u8 = 20;
-pub(crate) const DISC_IF: u8 = 21;
-pub(crate) const DISC_LOOP: u8 = 22;
-pub(crate) const DISC_DROP: u8 = 23;
-pub(crate) const DISC_ITER: u8 = 24;
-pub(crate) const DISC_KEYS: u8 = 25;
-pub(crate) const DISC_TUPLE: u8 = 26;
-pub(crate) const DISC_TUPLE_GET: u8 = 27;
-pub(crate) const DISC_TUPLE_PUT: u8 = 28;
-pub(crate) const DISC_YIELD: u8 = 29;
-pub(crate) const DISC_FN_REF: u8 = 30;
-pub(crate) const DISC_FN_REF_DNR: u8 = 31;
-pub(crate) const DISC_PARALLEL: u8 = 32;
-pub(crate) const DISC_PAR_FOR: u8 = 33;
-pub(crate) const DISC_RAW_EXPR: u8 = 34;
+pub(crate) const DISC_CONTINUE: u8 = 19;
+pub(crate) const DISC_IF: u8 = 20;
+pub(crate) const DISC_LOOP: u8 = 21;
+pub(crate) const DISC_DROP: u8 = 22;
+pub(crate) const DISC_ITER: u8 = 23;
+pub(crate) const DISC_KEYS: u8 = 24;
+pub(crate) const DISC_TUPLE: u8 = 25;
+pub(crate) const DISC_TUPLE_GET: u8 = 26;
+pub(crate) const DISC_TUPLE_PUT: u8 = 27;
+pub(crate) const DISC_YIELD: u8 = 28;
+pub(crate) const DISC_FN_REF: u8 = 29;
+pub(crate) const DISC_FN_REF_DNR: u8 = 30;
+pub(crate) const DISC_PARALLEL: u8 = 31;
+pub(crate) const DISC_RAW_EXPR: u8 = 32;
 
 // Field byte offsets within each variant's record, relative to the record's
 // `pos`.  The `enum` discriminant byte is always at 0.  The layout packs the
@@ -95,8 +93,6 @@ pub(crate) const NDSET_VAR: u32 = 8;
 pub(crate) const NDSET_INNER: u32 = 4;
 pub(crate) const NDRETURN_INNER: u32 = 4;
 pub(crate) const NDBREAK_N: u32 = 8;
-pub(crate) const NDBREAKWITH_N: u32 = 8;
-pub(crate) const NDBREAKWITH_INNER: u32 = 4;
 pub(crate) const NDCONTINUE_N: u32 = 8;
 pub(crate) const NDIF_COND: u32 = 4;
 pub(crate) const NDIF_T: u32 = 8;
@@ -124,18 +120,6 @@ pub(crate) const NDSPAN_INNER: u32 = 4;
 pub(crate) const SPAN_POS_LINE: u32 = 8; // Position base (8) + Position.line (0)
 pub(crate) const SPAN_POS_POS: u32 = 16; // + Position.pos (8)
 pub(crate) const SPAN_POS_FILE: u32 = 24; // + Position.file (16)
-/// Offset of `NdParFor`'s box-of-one `vector<ParForBody>` HANDLE, and the
-/// offsets INSIDE the `ParForBody` record it holds (reached via
-/// [`Node::par_for_rec`]).  Same move as `NdBlock` above, for the same reason.
-pub(crate) const NDPARFOR_BODY: u32 = 4;
-pub(crate) const PARFORBODY_STRIDE: u32 = 40;
-pub(crate) const PARFOR_X_VAR: u32 = 0;
-pub(crate) const PARFOR_R_VAR: u32 = 8;
-pub(crate) const PARFOR_STITCH_ID: u32 = 16;
-pub(crate) const PARFOR_INPUT: u32 = 24;
-pub(crate) const PARFOR_WORKER: u32 = 28;
-pub(crate) const PARFOR_THREADS: u32 = 32;
-pub(crate) const PARFOR_BODY: u32 = 36;
 
 // `NdKeys` holds a `vector<Key>`; every IR vector is inline `Parts::Vector`
 // (probed — none promoted to a linked `Array`), so a stride-parameterised
@@ -467,7 +451,6 @@ pub enum ValueType {
     Set,
     Return,
     Break,
-    BreakWith,
     Continue,
     If,
     Loop,
@@ -481,7 +464,6 @@ pub enum ValueType {
     FnRef,
     FnRefDnr,
     Parallel,
-    ParFor,
     RawExpr,
     Other(u8),
 }
@@ -632,7 +614,6 @@ impl Value {
             DISC_SET => ValueType::Set,
             DISC_RETURN => ValueType::Return,
             DISC_BREAK => ValueType::Break,
-            DISC_BREAK_WITH => ValueType::BreakWith,
             DISC_CONTINUE => ValueType::Continue,
             DISC_IF => ValueType::If,
             DISC_LOOP => ValueType::Loop,
@@ -646,7 +627,6 @@ impl Value {
             DISC_FN_REF => ValueType::FnRef,
             DISC_FN_REF_DNR => ValueType::FnRefDnr,
             DISC_PARALLEL => ValueType::Parallel,
-            DISC_PAR_FOR => ValueType::ParFor,
             DISC_RAW_EXPR => ValueType::RawExpr,
             other => ValueType::Other(other),
         }
@@ -692,13 +672,6 @@ impl Value {
     #[must_use]
     pub fn block_rec(&self, stores: &Stores) -> Record {
         self.field_recvec(NDBLOCK_BLOCK, BLOCK_STRIDE)
-            .get(0, stores)
-    }
-
-    /// The `ParForBody` record this `NdParFor` points at.
-    #[must_use]
-    pub fn par_for_rec(&self, stores: &Stores) -> Record {
-        self.field_recvec(NDPARFOR_BODY, PARFORBODY_STRIDE)
             .get(0, stores)
     }
 
@@ -770,12 +743,6 @@ impl Value {
         let b = self.field_recvec(NDBLOCK_BLOCK, BLOCK_STRIDE).push(stores);
         b.set_field_str(stores, BLOCK_NAME, name);
         b
-    }
-
-    /// Push `NdParFor`'s box-of-one `ParForBody` and return it.
-    pub fn write_par_for(&self, stores: &mut Stores) -> Record {
-        self.field_recvec(NDPARFOR_BODY, PARFORBODY_STRIDE)
-            .push(stores)
     }
 
     /// Write this slot as `NdLoop` with `name` — same inlined `Block` layout as
@@ -1219,7 +1186,6 @@ mod tests {
         assert_eq!(disc(ids.nd_set), DISC_SET);
         assert_eq!(disc(ids.nd_return), DISC_RETURN);
         assert_eq!(disc(ids.nd_break), DISC_BREAK);
-        assert_eq!(disc(ids.nd_break_with), DISC_BREAK_WITH);
         assert_eq!(disc(ids.nd_continue), DISC_CONTINUE);
         assert_eq!(disc(ids.nd_if), DISC_IF);
         assert_eq!(disc(ids.nd_loop), DISC_LOOP);
@@ -1233,7 +1199,6 @@ mod tests {
         assert_eq!(disc(ids.nd_fn_ref), DISC_FN_REF);
         assert_eq!(disc(ids.nd_fn_ref_dnr), DISC_FN_REF_DNR);
         assert_eq!(disc(ids.nd_parallel), DISC_PARALLEL);
-        assert_eq!(disc(ids.nd_par_for), DISC_PAR_FOR);
         assert_eq!(disc(ids.nd_raw_expr), DISC_RAW_EXPR);
 
         // TypeT discriminants — every variant.
@@ -1288,8 +1253,6 @@ mod tests {
         assert_eq!(pos(ids.nd_set, "inner"), NDSET_INNER);
         assert_eq!(pos(ids.nd_return, "inner"), NDRETURN_INNER);
         assert_eq!(pos(ids.nd_break, "n"), NDBREAK_N);
-        assert_eq!(pos(ids.nd_break_with, "n"), NDBREAKWITH_N);
-        assert_eq!(pos(ids.nd_break_with, "inner"), NDBREAKWITH_INNER);
         assert_eq!(pos(ids.nd_continue, "n"), NDCONTINUE_N);
         assert_eq!(pos(ids.nd_if, "cond"), NDIF_COND);
         assert_eq!(pos(ids.nd_if, "t"), NDIF_T);
@@ -1318,17 +1281,8 @@ mod tests {
         assert_eq!(span_base + pos(ids.position, "line"), SPAN_POS_LINE);
         assert_eq!(span_base + pos(ids.position, "pos"), SPAN_POS_POS);
         assert_eq!(span_base + pos(ids.position, "file"), SPAN_POS_FILE);
-        // `NdParFor.body` and `NdBlock.block` are box-of-one HANDLES now, so the
-        // sub-struct offsets are its own — not a base plus a relative.
-        assert_eq!(pos(ids.nd_par_for, "body"), NDPARFOR_BODY);
-        assert_eq!(u32::from(stores.size(ids.par_for_body)), PARFORBODY_STRIDE);
-        assert_eq!(pos(ids.par_for_body, "x_var"), PARFOR_X_VAR);
-        assert_eq!(pos(ids.par_for_body, "r_var"), PARFOR_R_VAR);
-        assert_eq!(pos(ids.par_for_body, "stitch_id"), PARFOR_STITCH_ID);
-        assert_eq!(pos(ids.par_for_body, "input"), PARFOR_INPUT);
-        assert_eq!(pos(ids.par_for_body, "worker"), PARFOR_WORKER);
-        assert_eq!(pos(ids.par_for_body, "threads"), PARFOR_THREADS);
-        assert_eq!(pos(ids.par_for_body, "body"), PARFOR_BODY);
+        // `NdBlock.block` is a box-of-one HANDLE, so the sub-struct offsets are its
+        // own — not a base plus a relative.
         assert_eq!(u32::from(stores.size(ids.block)), BLOCK_STRIDE);
 
         // `vector<Key>` element layout (the generic RecVector stride + fields).

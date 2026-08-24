@@ -5,7 +5,7 @@
 
 use crate::calc;
 use crate::data::IntegerSpec;
-use crate::database::{Field, Parts, Stores};
+use crate::database::{Field, Parts, Stores, TYPEVAR_ROW_PREFIX};
 use crate::keys::Content;
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -2310,10 +2310,21 @@ impl Stores {
         if rec == 0 {
             return true;
         }
-        if known_type < 6 {
+        if known_type <= 6 {
             match known_type {
                 0 => store.get_int(rec, pos) == i64::MIN,
-                6 => store.get_u32_raw(rec, pos) == u32::MAX,
+                // `character` — 4 bytes, and its in-band sentinel is CODEPOINT 0, which
+                // `formal/types.md` reserves even for a non-null slot (`0 as character`
+                // reads null) and loft#1014 made every other site agree on.
+                //
+                // This arm sat under `known_type < 6` and so could never run, and the
+                // `u32::MAX` it tested was not the sentinel either — two ways of being
+                // wrong that cancelled into "a character slot is never null".  The write
+                // side puts 0 there, so an ABSENT character then rendered as a value: a
+                // struct printed `a:' '` and `to_json()` put a SPACE on the wire where
+                // the field should have been omitted, while `x.a == null` answered true.
+                // One absent value, two answers.
+                6 => store.get_u32_raw(rec, pos) == 0,
                 1 => store.get_long(rec, pos) == i64::MIN,
                 2 => store.get_single(rec, pos).is_nan(),
                 3 => store.get_float(rec, pos).is_nan(),
@@ -2340,23 +2351,67 @@ impl Stores {
             // dropped from `{x:j}` output.  (Was `handle == 0`, which omitted
             // empty vectors and broke the save→load round-trip.)
             false
-        } else if let Parts::Byte(_, nullable) = &self.types[known_type as usize].parts {
+        } else {
+            // A narrow integer answers from its own home; anything else is not nullable
+            // in a way this walk can see.
+            self.narrow_is_null(store, rec, pos, known_type)
+                .unwrap_or_default()
+        }
+    }
+
+    /// Is the NARROW-integer slot at `(rec, pos)` holding its null code?  `None` when
+    /// `known_type` is not a narrow integer, so a caller can fall through to its own
+    /// dispatch.
+    ///
+    /// One home for the four widths, because the read side and the write side have to
+    /// agree about a code that is invisible in the bytes: `Byte` reserves the raw code
+    /// `255`, `Short`'s `+1` encoding reserves the raw code `0` (which `get_short` maps
+    /// to `i32::MIN`), `ShortRaw` reserves the top code, and `Int` is a raw `i32` whose
+    /// null is `i32::MIN`.
+    ///
+    /// ⚠ A width with no arm here does not fail loudly — it reads as NOT NULL.  An absent
+    /// field then survives into output as its sentinel NUMBER (an absent `i32?` renders as
+    /// `-2147483648`) while the same slot read through this function answers null, so the
+    /// two disagree with nothing to report.  That asymmetry is why all four widths live in
+    /// one function rather than as inline arms per caller: [STABILITY_REDFLAGS] Cluster D
+    /// names the class — *"one width-fact, N drifting copies"*.
+    ///
+    /// Enforces @FR-L-Null for the narrow widths — the read twin of `write_narrow_value`.
+    ///
+    /// Write twins: [`Self::write_narrow_value`] for a value, and
+    /// `set_default_value_nullable`'s narrow arms for the absent code.
+    ///
+    /// [STABILITY_REDFLAGS]: ../../../doc/claude/STABILITY_REDFLAGS.md
+    #[must_use]
+    pub fn narrow_is_null(
+        &self,
+        store: &crate::store::Store,
+        rec: u32,
+        pos: u32,
+        known_type: u16,
+    ) -> Option<bool> {
+        if known_type == u16::MAX || known_type <= 6 {
+            return None;
+        }
+        match self.types[known_type as usize].parts {
             // The sentinel is the RAW stored code, so read it with NO offset: `get_byte`
-            // answers `stored + min`, and testing THAT against the sentinel only works
+            // answers `stored + min`, and testing THAT against the sentinel only holds
             // when `min` is 0.  A `limit(10, 255)?` slot answered `265 == 255` — never
             // true — so its null rendered as the number 265.
-            *nullable && store.get_byte(rec, pos, 0) == 255
-        } else if let Parts::Short(_, nullable) = &self.types[known_type as usize].parts {
+            Parts::Byte(_, nullable) => Some(nullable && store.get_byte(rec, pos, 0) == 255),
             // The `+1` encoding reserves the stored code 0 for null, and `get_short`
-            // maps that to `i32::MIN`.  The old test (`== 65535`) could not fire at all,
+            // maps that to `i32::MIN`.  An older test (`== 65535`) could not fire at all,
             // so every nullable 2-byte slot rendered its null as `-2147483648`.
-            *nullable && store.get_short(rec, pos, 0) == i32::MIN
-        } else if let Parts::ShortRaw(_, nullable) = &self.types[known_type as usize].parts {
+            Parts::Short(_, nullable) => Some(nullable && store.get_short(rec, pos, 0) == i32::MIN),
             // The direct encoding reserves the top code.  `get_i16_raw` answers
-            // `stored + min`, never `i32::MIN`, so this test could not fire either.
-            *nullable && store.get_short_full(rec, pos, 0) == i32::from(u16::MAX)
-        } else {
-            false
+            // `stored + min`, never `i32::MIN`, so that test could not fire either.
+            Parts::ShortRaw(_, nullable) => {
+                Some(nullable && store.get_short_full(rec, pos, 0) == i32::from(u16::MAX))
+            }
+            // The width that had no arm: a raw `i32` whose reserved code is `i32::MIN`,
+            // which is also exactly what the write side puts there.
+            Parts::Int(_, nullable) => Some(nullable && store.get_i32_raw(rec, pos) == i32::MIN),
+            _ => None,
         }
     }
 
@@ -2666,16 +2721,59 @@ impl Stores {
             _ => true,
         }
     }
-
     /// For EnumValue types, return the parent enum's size (which covers
     /// the largest variant).  For all other types, return their own size.
     /// B2-runtime: unit enum variants may have a smaller type size than
     /// the parent enum needs.  The Database opcode must claim enough
     /// space for `set_default_value` to initialize all fields.
+    ///
+    /// # Panics
+    ///
+    /// When `tp` is a generic's TYPE VARIABLE row.  Every record allocation reaches
+    /// here with its type row in hand, and a template's row surviving substitution is
+    /// a compiler bug whose only other symptom is a field read at the wrong offset —
+    /// see the comment in the body (loft#1070).
     pub fn enum_parent_size(&self, tp: u16) -> u16 {
         if tp == u16::MAX {
             return 0;
         }
+        // loft#1070 — a generic's TYPE VARIABLE has a runtime row (`__typevar_T`,
+        // registered by `typedef::fill_database` so a template body can be parsed at
+        // all), and a record must never be allocated with it.  `Parser::
+        // retarget_parametric_type_rows` re-points every row a monomorph inherited
+        // from its template, on the invariant that after substitution the type
+        // variable does not exist, so every surviving reference to its row is stale
+        // BY CONSTRUCTION and there is no case where keeping one is right.  This is
+        // that invariant, checked where the record is actually born.
+        //
+        // It is here because this is the one call every record allocation makes with
+        // the type row still in hand — both `OpDatabase` twins (`state/io.rs`,
+        // `codegen_runtime.rs`) and the placement arena — so a single site covers
+        // both backends without the interp/native mirror being written twice.
+        //
+        // ⚠ It is checked at RUNTIME, and unconditionally, because the failure it
+        // replaces has no other signal.  A record built to the placeholder's layout
+        // reads a field out of the wrong word: `f<T>(x: T, c: boolean) -> T { if c {
+        // y: T = x; y } else … }` answered `4294967198` for the `-7` it was handed,
+        // on both backends, with no diagnostic and no crash.  What made loft#1070
+        // diagnosable at all was the leak warning naming `__typevar_T` — so a version
+        // of the same defect that FREES correctly would have been completely silent,
+        // and the leak gate is not the guard it looked like.
+        //
+        // The message says "compiler bug" because it is one: no loft program can
+        // provoke this by being wrong, only by finding a lowering site that
+        // `retarget_parametric_type_rows` does not reach — it finds rows by the op's
+        // own declaration naming the argument `tp` / `…_tp`, which is a convention,
+        // not a checked fact.  Measured silent across the 4310-test corpus, so it
+        // costs a comparison that fails on the first byte for every real type name.
+        assert!(
+            !self.types[tp as usize].name.starts_with(TYPEVAR_ROW_PREFIX),
+            "internal compiler error: a record is being allocated with a generic \
+             TYPE VARIABLE's row ({}, kt={tp}) — a template's layout escaped \
+             substitution, so its fields would be read at the wrong offsets. \
+             Please report this program at https://github.com/loft-lang/loft/issues",
+            self.types[tp as usize].name
+        );
         let own_size = self.types[tp as usize].size;
         // Check if any type in the system is an Enum whose variants include tp.
         // If so, use the Enum's size (which is the max of all variants).
@@ -2945,6 +3043,47 @@ impl Type {
         self.field_groups
             .iter()
             .filter(|g| matches!(g.kind, crate::data::LinkedFieldKind::Index))
+    }
+}
+
+#[cfg(test)]
+mod typevar_row_tests {
+    use super::{Stores, TYPEVAR_ROW_PREFIX};
+
+    /// loft#1070 — allocating a record with a generic's TYPE VARIABLE row is refused.
+    ///
+    /// The guard cannot be provoked from loft source: `retarget_parametric_type_rows`
+    /// re-points every inherited row, and the whole 4310-test corpus runs without it
+    /// firing. That is exactly why it is tested here instead — a tripwire nobody has
+    /// shown can trip is indistinguishable from one that matches nothing, and this
+    /// class's defect (a prefix spelled at the minting site and again at the checking
+    /// site) is the way it would silently stop matching.
+    ///
+    /// It builds the row through the same public API `typedef::fill_database` uses, and
+    /// names it with the shared constant rather than a literal, so a renamed prefix
+    /// moves both ends together.
+    #[test]
+    #[should_panic(expected = "TYPE VARIABLE's row")]
+    fn a_record_may_not_be_allocated_with_a_type_variable_row() {
+        let mut s = Stores::new();
+        let tp = s.structure(&format!("{TYPEVAR_ROW_PREFIX}T"), 0);
+        let _ = s.enum_parent_size(tp);
+    }
+
+    /// The control: an ordinary type of a similar shape must still answer its size.
+    ///
+    /// Without it a guard that refused every allocation would pass the cell above.
+    #[test]
+    fn an_ordinary_row_still_answers_its_size() {
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("T", 0);
+        s.field(tp, "value", int_c);
+        s.finish();
+        assert!(
+            s.enum_parent_size(tp) > 0,
+            "a real struct named `T` is not the type-variable row and must size normally"
+        );
     }
 }
 

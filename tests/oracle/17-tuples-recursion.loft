@@ -1,12 +1,20 @@
 // Tuples + recursion — the tuple slot layout and the recursive call/return stack
 // are lowered very differently (native Rust stack vs interp frame); values agree.
+//
+// The assertions are the point of the file as much as the prints: agreeing with the
+// other backend is not the same as being RIGHT, and every value below was derived from
+// the definition of `fib` rather than read off a run.
 fn fib(n: integer) -> integer { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
 fn divmod(a: integer, b: integer) -> (integer, integer) { (a / b ?? 0, a % b ?? 0) }
 fn main() {
-    println("fib10={fib(10)}");                 // 55
+    f10 = fib(10);
+    assert(f10 == 55, "fib(10) is 55, got {f10}");
+    println("fib10={f10}");
     dm = divmod(17, 5);
-    println("div={dm.0} mod={dm.1}");           // 3 2
+    assert(dm.0 == 3 && dm.1 == 2, "17 divmod 5 is (3, 2), got ({dm.0}, {dm.1})");
+    println("div={dm.0} mod={dm.1}");
     // recursion accumulating into a running total
     total = 0; for i in 0..8 { total += fib(i); }
-    println("fib_sum={total}");                 // 0+1+1+2+3+5+8+13 = 33
+    assert(total == 33, "fib 0..7 is 0+1+1+2+3+5+8+13 = 33, got {total}");
+    println("fib_sum={total}");
 }

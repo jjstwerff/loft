@@ -14,9 +14,16 @@ fn apply_all(f: fn(integer) -> integer, xs: vector<integer>) -> integer {
 fn main() {
     s = make_scaler(Base { v: 10 }, 3);
     t = make_scaler(Base { v: 100 }, 2);   // a second record must not reuse the first's store
-    // s: (10+3)+(10+6)+(10+9)=48 ; t: (100+2)+(100+4)=206
-    println("s={apply_all(s, [1, 2, 3])} t={apply_all(t, [1, 2])}");
+    sv = apply_all(s, [1, 2, 3]);
+    tv = apply_all(t, [1, 2]);
+    // The captured STRUCT is the axis: if the second factory call reused the first's
+    // record, `s` would start reading base 100 and the totals swap character entirely.
+    assert(sv == 48, "(10+3)+(10+6)+(10+9) = 48 from s's own captured Base; got {sv}");
+    assert(tv == 206, "(100+2)+(100+4) = 206 from t's; got {tv}");
+    println("s={sv} t={tv}");
     // a stored closure applied twice — the record must survive between calls
     inc = make_scaler(Base { v: 0 }, 1);
-    println("inc={inc(5) + inc(5)}");       // 5 + 5 = 10
+    iv = inc(5) + inc(5);
+    assert(iv == 10, "5 + 5 — the capture record outlives the first application; got {iv}");
+    println("inc={iv}");
 }

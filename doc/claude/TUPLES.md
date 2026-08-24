@@ -321,7 +321,18 @@ qualified names](LOFT.md)). Before loft#756 only `name = …` was recognised as 
 binding, so a destructured element resolved to the definition instead and the author
 got *"Tuple destructuring requires plain variable names"* about a name that is exactly
 that, plus an arity error counting the names that had been dropped.
-`Parser::at_binding_name` is the single predicate both forms read.
+`Parser::at_binding_name` is the single predicate every binding form reads — three of
+them now: `name = …`, the typed local `name: T = …`, and the destructured element. The
+typed local was described as living there from the day loft#756 closed, but was in fact
+a second predicate spelled beside it at ONE of the three call sites, and loft#1079 is
+what that cost: a `both:` function registers a definition under its raw spelling as well
+as `n_<name>`, the site WITHOUT the extra predicate matched it first, and
+`exp: integer = 5` failed to parse while `exp = 5` was fine. Folding it in is what stops
+the sites disagreeing again.
+
+An annotated destructuring LHS — `(a, b): (integer, text) = t` — is not a form loft has;
+it is refused for every name, including one nothing else declares. The annotation goes
+on the tuple being destructured, as in the block above.
 
 `parse_match` dispatches on the subject type. `Type::Tuple` falls into the catch-all
 and emits "match requires an enum, struct, or scalar type" — not yet handled.

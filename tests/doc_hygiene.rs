@@ -1249,6 +1249,51 @@ fn readme_brick_buster_line_count_is_current() {
     );
 }
 
+/// @PLN146 F4 — the Makefile and the manifest name ONE atlas packer, not two.
+///
+/// `tools/brick-buster/loft.toml` declares the packer as a `[[build.asset]]` `run`,
+/// which is what `loft build` / `loft check` execute.  `make game` and `make play`
+/// cannot go through `loft build` — it has no assets-only mode and would
+/// compile-check the whole game to reach the asset phase — so the Makefile names the
+/// script itself.  That is two hand-written spellings of one fact, and the failure
+/// when they drift is quiet: the Makefile keeps building whatever the OLD path points
+/// at while the manifest describes something else, so `make game` ships a stale pack
+/// and `loft build` a fresh one.
+///
+/// Pin them: the `run` the manifest declares must be the path the Makefile invokes,
+/// and the `outputs` it promises must be what the Makefile checks for.
+#[test]
+fn brick_buster_pack_step_matches_its_manifest() {
+    let toml = fs::read_to_string("tools/brick-buster/loft.toml").expect("brick-buster loft.toml");
+    let run = toml
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("run"))
+        .and_then(|r| r.split('"').nth(1).map(str::to_string))
+        .expect("loft.toml must declare a [[build.asset]] `run`");
+    let makefile = fs::read_to_string("Makefile").expect("Makefile");
+    let invoked = format!("tools/brick-buster/{run}");
+    assert!(
+        makefile.contains(&invoked),
+        "loft.toml's [[build.asset]] runs `{run}`, but the Makefile never invokes \
+         `{invoked}` — the two spellings of the atlas packer have drifted."
+    );
+    // Every declared output must be something the Makefile can see is absent.
+    for out in toml
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("outputs"))
+        .and_then(|o| o.split('[').nth(1))
+        .and_then(|o| o.split(']').next())
+        .expect("loft.toml must declare [[build.asset]] `outputs`")
+        .split(',')
+        .filter_map(|o| o.split('"').nth(1))
+    {
+        assert!(
+            makefile.contains(&format!("tools/brick-buster/{out}")) || out.ends_with(".meta.store"),
+            "loft.toml promises `{out}` but nothing in the Makefile checks for it."
+        );
+    }
+}
+
 /// @PLN78 step 6 — the installer's target triples must be ones a release publishes.
 ///
 /// `scripts/install.sh` derives the artifact name from `uname`, and
@@ -1403,4 +1448,104 @@ fn repro_matrix_covers_every_published_triple() {
             );
         }
     }
+}
+
+/// No source file may contain a byte that makes `grep` treat it as BINARY, because a
+/// binary file is skipped SILENTLY — no match, no warning, no non-zero exit.
+///
+/// Measured 2026-08-22: one stray NUL, pasted into a comment in
+/// `src/database/format.rs` that was quoting the one-character string a bug produced,
+/// made `grep`/`ripgrep` classify all 99 KB of it as data. Every `grep -rn` over `src/`
+/// had been missing that file — including the sweep that was at that moment auditing
+/// type-driven `match` arms, which is how it surfaced: the backtrace named a function
+/// (`ShowDb::has_visible_field`) that `grep -rn` insisted did not exist anywhere.
+///
+/// That is worth a gate rather than a fix, because the failure mode is invisible in both
+/// directions: the file looks fine in an editor, and the search that misses it reports
+/// success. loft's development model runs on grepping this tree (CLAUDE.md § Key
+/// commands, `scripts/idx`), so a file the tools cannot see is a hole in the method, not
+/// just in one search.
+#[test]
+fn no_source_file_is_invisible_to_grep() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p
+                .extension()
+                .is_some_and(|x| x == "rs" || x == "loft" || x == "md")
+            {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for root in ["src", "doc/claude", "tests/scripts", "default"] {
+        walk(std::path::Path::new(root), &mut files);
+    }
+    assert!(
+        files.len() > 500,
+        "the walk found only {} files — it is not looking where it thinks",
+        files.len()
+    );
+
+    let mut bad = Vec::new();
+    for p in &files {
+        let Ok(bytes) = fs::read(p) else { continue };
+        // A NUL is what actually trips grep's binary heuristic; report the offset and
+        // line so the fix is a one-character edit rather than a hunt.
+        if let Some(off) = bytes.iter().position(|b| *b == 0) {
+            let line = bytes[..off].iter().filter(|b| **b == b'\n').count() + 1;
+            bad.push(format!("{}:{line} (byte {off})", p.display()));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "these files contain a NUL byte, so grep skips them silently:\n  {}\n\
+         Replace the stray byte — a comment quoting a NUL should describe it in words.",
+        bad.join("\n  ")
+    );
+}
+
+/// Every `@FR-<Rule>` citation resolves to a rule `doc/claude/formal/` actually defines, and
+/// no rule is defined twice.
+///
+/// The citations are what make "which sites enforce this rule?" a lookup instead of an
+/// archaeology (CLAUDE.md § Tracker tags; `formal/README.md` § Rule tags).  That only holds
+/// while they resolve, and a citation rots silently: the rule gets renamed, or its entry is
+/// edited away, and the comment still reads correctly.  Both failure modes were REAL before
+/// this gate existed — `L-Ref` was two different rules in two docs, and `D-bind-11`'s entry
+/// had been deleted by an edit whose slice anchor sat inside it while its register line still
+/// said `OPEN: 1`.  Nothing else noticed either; a failed citation is what surfaced them.
+///
+/// `scripts/rule_tags.py check` is the same command a person runs by hand, so the gate and
+/// the tool cannot drift.  Skipped (not failed) where `python3` is unavailable — this is a
+/// consistency check, not a capability the build depends on.
+#[test]
+fn every_rule_citation_resolves() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new("python3")
+        .arg(root.join("scripts/rule_tags.py"))
+        .arg("check")
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("SKIP every_rule_citation_resolves: python3 unavailable ({e})");
+            return;
+        }
+    };
+    assert!(
+        out.status.success(),
+        "rule-tag citations are inconsistent:\n{}{}\n\
+         Run `python3 scripts/rule_tags.py check` to reproduce; \
+         `list` shows every defined rule and `sites <tag>` the citations of one.",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
 }

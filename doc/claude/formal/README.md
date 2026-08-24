@@ -179,6 +179,46 @@ closures): per-rule, the single falsifiable claim, its both-backends status, and
 guard that pins it. Where ROADMAP tracks *deviations to close*, VERIFICATION tracks *rules to
 pin* — the concrete plan to drive the differential oracle down from every area to every rule.
 
+## Rule tags — `@Name`, and the code cites them
+
+A rule is only an anchor for the code if it can be found **exactly**. Each rule carries an
+`@FR-` tag (`@FR-B-Copy`, `@FR-T-Ref`, `@FR-Col-Order`) — the family shape CLAUDE.md § Tracker
+tags reserves, *"`@`-prefixed so regex is unambiguous"*, with its own namespace because a bare
+`@Name` is not unambiguous: `@` already carries `@P259` / `@PLN3` / `@F7` / `@AAA-###` and the
+corpus annotations `@ARGS` / `@NAME` / `@IGNORE` / `@EXPECT_ERROR`. Measured: a bare-`@` reading
+of `src/` returned 4142 hits, not one of them a rule. A site that enforces a rule names it in a comment, at the one moment the fact
+is reliably known: while making that site obey it.
+
+What that buys, and none of it is available from a rule NAME alone:
+
+- **the duplication question becomes a lookup** — *does this rule already have an
+  implementation?* is `scripts/rule_tags.py sites B-Copy`, not a guess at which code shape someone chose;
+- **the re-assertion count is a query** — a rule's sites ARE its citations, so it stays right
+  as code moves, instead of being re-derived per investigation;
+- **merge-or-not is arbitrated** — two sites citing ONE rule are candidates to merge; two
+  citing different rules stay apart however alike they look today.
+
+**Two constraints the measurement forced** (numbers in [IMPLEMENTATIONS.md](IMPLEMENTATIONS.md)):
+
+1. **Match with an explicit boundary.** 21 of the 285 defined rules are a prefix of another —
+   `@FR-B-View` / `@FR-B-View-Base`, `@FR-T-Ref` / `@FR-T-Ref-El`. A plain
+   `grep @FR-B-View` sweeps in its own sub-rules, and `\b` does not help because `-` is already a
+   word boundary. So a citation matches `@Name` only when the next character is not
+   `[-A-Za-z0-9]`. **Renaming those 23 is deliberately NOT the fix** — the sub-rule names are
+   meaningful, and a matcher that is right by construction beats 23 renames plus the churn.
+2. **Only a DEFINED rule is a citation target.** `B-Ref`, `D-op`, `D-own`, `D-cap` and
+   `D-op-null` read like rules and are family PREFIXES used in prose — no definition line
+   exists for them. A citation naming one is an error, which is exactly what the resolve check
+   catches.
+
+**Adopt honestly rather than completely.** A citation naming a rule that does not exist is
+worth failing on from the first day; *every rule has at least one citation* tightens as coverage
+grows (5 rules cited across 7 sites at the time of writing). Any rule→site index is **generated** from the citations, never maintained beside
+them — a second copy of where the rules live is the defect this convention exists to remove.
+
+The generic form of this argument, for any project: the `design-protocol` skill, § *As the
+system grows, anchor the question on the RULE, not on the code*.
+
 ## Deviation entry format
 
 ```

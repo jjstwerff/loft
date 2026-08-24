@@ -242,3 +242,11 @@ fn harness_can_fail() {
         "the harness must report a failing script as failing"
     );
 }
+
+// loft#1081 / D-own-8 lives one file over: a vector-valued join BOUND to a local the
+// function then returns was NRVO-renamed onto the caller's buffer, which a join REBINDS
+// rather than builds into — abandoning the buffer and handing back an arm store with no
+// owner.  Its guard is `tests/scripts/1081-a-join-bound-to-a-returned-local.loft`, where
+// the wrap harness's leak gate pins the stores alongside the values (both halves are
+// needed: silencing the leak by freeing the DELIVERED store passes one and fails the
+// other).  Kept there rather than duplicated here.

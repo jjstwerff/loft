@@ -2019,6 +2019,40 @@ impl Parser {
     /// So this says so, at the declaration, with the one-line cure. It replaces an internal
     /// compiler error — and, once the rest of loft#944 was fixed, something worse: a body
     /// that ran on the interpreter and read its first member back as `0` on `--native`.
+    /// Wrap `tp` as the reference type a user-written `&` denotes, refusing an element
+    /// type a reference tuple cannot address.
+    ///
+    /// This is the ONE place a `&` in source becomes a `Type::RefVar`, so
+    /// [`tuples.md` `T-Ref-El`](../../doc/claude/formal/formal/tuples.md) is asked wherever
+    /// the annotation is written — a parameter, an annotated local, or an inferred
+    /// `b = &a`.  It used to be asked at the signature only, so the same `&(text, text)`
+    /// that a parameter refused reached codegen from a local and died there as an internal
+    /// compiler error on both backends (D-tup-2).  Route every new `&` position through
+    /// here rather than repeating the check beside it: a second copy of the admitted list
+    /// is the shape loft#1006 already was.
+    ///
+    /// The restriction is on the STACK-backed reference tuple this annotation builds.  A
+    /// record-backed one — the `RefVar(Tuple)` a `for` loop binds over a vector of tuples —
+    /// reaches its elements through a real record and admits any element type; it is built
+    /// elsewhere and does not come through here.
+    pub(crate) fn ref_var_type(&mut self, tp: Type) -> Type {
+        if !self.first_pass
+            && let Type::Tuple(ref elems) = tp
+            && let Some(bad) = elems.iter().find(|e| !crate::data::ref_tuple_element_ok(e))
+        {
+            let bad_name = bad.name(&self.data);
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a `&` reference tuple may only hold scalar elements, and this \
+                 one holds `{bad_name}` — take the tuple by value and return a \
+                 new one, or use a struct, whose fields of any type write \
+                 through a `&` parameter"
+            );
+        }
+        Type::RefVar(Box::new(tp))
+    }
+
     fn refuse_forward_tuple_returns(&mut self, adopted: &[(u32, Type)]) {
         if adopted.is_empty() {
             return;
@@ -3651,18 +3685,14 @@ impl Parser {
     /// One home, because the answer is shared by the `??` null check, the `if` / `while`
     /// / `assert` condition, and the `!x` null test — three places that must agree about
     /// which values `rec` speaks for.
+    ///
+    /// The list itself now lives in [`crate::data::is_dbref`], which asks the layout rather
+    /// than restating the variants; this keeps the name and the `.base()` peel the null-check
+    /// callers rely on.  Two homes for one predicate is what this collapses: `is_dbref` was
+    /// added on 2026-08-24 without checking whether the FULL list already had a home — the
+    /// search was made for the SHORT one and stopped there.
     pub(crate) fn is_heap_handle(tp: &Type) -> bool {
-        matches!(
-            tp.base(),
-            Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-                | Type::Enum(_, true, _)
-        )
+        crate::data::is_dbref(tp.base())
     }
 
     /// Bring a CONDITION to `boolean` — the `if` / `while` position, where LOFT.md
@@ -4061,14 +4091,7 @@ impl Parser {
                 return true;
             }
             check_type = &r;
-        } else if matches!(
-            is_type,
-            Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        } else if crate::parser::vectors::is_keyed(is_type) {
             // A keyed-collection handle IS a `DbRef`, so it satisfies a bare
             // `reference` parameter unchanged — no conversion op.  Used by
             // `store_persist_bind`, whose `bind_path` snapshots the whole
@@ -4418,14 +4441,7 @@ impl Parser {
             // `store_persist_bind`.
             if let Type::Reference(r, _) = should
                 && *r == self.data.def_nr("reference")
-                && matches!(
-                    test_type,
-                    Type::Hash(_, _, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+                && crate::parser::vectors::is_keyed(test_type)
             {
                 return true;
             }
@@ -7273,16 +7289,6 @@ impl Parser {
                     data,
                 )),
             ),
-            Value::BreakWith(n, val) => Value::BreakWith(
-                n,
-                Box::new(Self::substitute_type_in_value(
-                    *val,
-                    tv_nr,
-                    concrete,
-                    iter_stride,
-                    data,
-                )),
-            ),
             Value::Yield(val) => Value::Yield(Box::new(Self::substitute_type_in_value(
                 *val,
                 tv_nr,
@@ -7407,15 +7413,7 @@ impl Parser {
     /// (a standalone `[]` leaks).  Here that position IS this parse, so the same
     /// sub-parse route serves both.
     fn monomorph_default(&mut self, concrete: &Type) -> Option<(Value, Type)> {
-        if matches!(
-            concrete,
-            Type::Vector(_, _)
-                | Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(concrete) {
             return Some(self.subparse_default("[]", concrete));
         }
         self.build_default(concrete)
@@ -11625,8 +11623,38 @@ impl Parser {
         // module, and every bare name it exports, is its own.
         let bare_qualifier = spelling.is_empty();
         let key = format!("{pkg}::{module}");
-        if self.data.use_exists(&key) {
-            let lib_source = self.data.get_source(&key);
+        // loft#1080 — the module may already be loaded under a DIFFERENT name.  This key
+        // is deliberately `<pkg>::<module>` so no other package can take the name from
+        // under it, and that is exactly what lets one FILE arrive here twice: an entry
+        // script OUTSIDE the package `use`s the module by its bare name and loads it
+        // flat, then a file INSIDE the package `use`s the same module, computes the
+        // qualified key, finds it absent — and parses the same file into a SECOND source.
+        //
+        // Nothing downstream survives that.  `use_alias` below then rebinds the bare
+        // name to the second source, so the first source's definitions are unreachable
+        // but still present, and native codegen emits every one of them a second time:
+        // `disambiguated_fn_ident` distinguishes same-named functions by hashing their
+        // defining FILE, on the stated ground that "two same-named fns can only come
+        // from different files" — which is precisely the assumption a second parse of
+        // one file breaks.  The generated cdylib then failed to compile with 55 ×
+        // `error[E0428]: the name `loft_shared_n_…_mafed3b7f` is defined multiple times`,
+        // and each pair carried an IDENTICAL hash, which is the tell that it is one file
+        // twice rather than #305's two different files.
+        //
+        // `use_paths` (loft#912) already records the canonical file behind every loaded
+        // name for exactly this question — "is this the same module" — so ask it, and
+        // take the same already-loaded path a repeated `use` of the qualified key takes:
+        // alias the key onto the source that exists and do not read the file again.
+        let existing = if self.data.use_exists(&key) {
+            Some(self.data.get_source(&key))
+        } else {
+            self.source_loaded_from(f)
+        };
+        if let Some(lib_source) = existing {
+            if !self.data.use_exists(&key) {
+                self.data.use_alias(&key, lib_source);
+                self.record_use_path(&key, f);
+            }
             if let Some(a) = alias {
                 self.data.use_alias(a, lib_source);
             } else if bare_qualifier {
@@ -11676,6 +11704,33 @@ impl Parser {
     /// canonicalised, because the same file is reached by different spellings (a
     /// relative `../pkg_dep/src/x.loft` here, an absolute one there) and only the
     /// canonical form answers "is this the same module".
+    /// The source a file is ALREADY loaded into, or `None` if it has not been read.
+    ///
+    /// The reverse of [`Self::record_use_path`], over the same canonical paths, and the
+    /// answer to "is this the same module" that a name-keyed `use_exists` cannot give:
+    /// one file is reachable under more than one name (a bare `use grid;` from outside a
+    /// package and the `<pkg>::grid` key from inside it), and parsing it twice puts two
+    /// copies of every definition in `Data` (loft#1080).
+    fn source_loaded_from(&self, f: &str) -> Option<u16> {
+        let p = std::path::Path::new(f);
+        let canonical = p
+            .canonicalize()
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+        // Every id that names this file, not just one of them: `use_paths` outlives a
+        // single pass (it is the parser's, while `use_names` is reset between the two),
+        // so it holds names from the previous pass that this pass has not re-bound yet.
+        // Taking the FIRST match out of a `HashMap` and giving up when it happened to be
+        // one of those made the answer depend on hash order — the two passes then loaded
+        // different files and tripped the H5 cross-pass divergence guard.
+        self.use_paths
+            .iter()
+            .filter(|(_, loaded)| **loaded == canonical)
+            .map(|(id, _)| self.data.get_source(id))
+            .find(|src| *src != u16::MAX)
+    }
+
     fn record_use_path(&mut self, id: &str, f: &str) {
         let p = std::path::Path::new(f);
         let canonical = p
@@ -13814,7 +13869,7 @@ impl Parser {
     /// Plan-06 spine step 5 — find each `Set(v, Call(par_for_d_nr, ...))`
     /// occurrence in the IR tree and push `v` into `result`.  Recurses
     /// through every compound variant (Block / Loop / If / Insert /
-    /// Iter / Span / ParFor) so a par assignment buried inside an `if`
+    /// Iter / Span) so a par assignment buried inside an `if`
     /// branch or a sub-block is still found.
     fn collect_par_assignments(val: &Value, par_for_d_nr: u32, result: &mut Vec<u16>) {
         match val {
@@ -13854,16 +13909,10 @@ impl Parser {
             Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
                 Self::collect_par_assignments(v, par_for_d_nr, result);
             }
-            Value::BreakWith(_, v) | Value::TuplePut(_, _, v) => {
+            Value::TuplePut(_, _, v) => {
                 Self::collect_par_assignments(v, par_for_d_nr, result);
             }
             Value::Span(b) => Self::collect_par_assignments(&b.1, par_for_d_nr, result),
-            Value::ParFor(b) => {
-                Self::collect_par_assignments(&b.input, par_for_d_nr, result);
-                Self::collect_par_assignments(&b.worker, par_for_d_nr, result);
-                Self::collect_par_assignments(&b.threads, par_for_d_nr, result);
-                Self::collect_par_assignments(&b.body, par_for_d_nr, result);
-            }
             _ => {}
         }
     }
@@ -13920,25 +13969,10 @@ impl Parser {
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
                 Self::classify_var_uses(inner, v, streaming, other);
             }
-            Value::BreakWith(_, inner) | Value::TuplePut(_, _, inner) => {
+            Value::TuplePut(_, _, inner) => {
                 Self::classify_var_uses(inner, v, streaming, other);
             }
             Value::Span(b) => Self::classify_var_uses(&b.1, v, streaming, other),
-            Value::ParFor(b) => {
-                // The input position is streaming-equivalent (par
-                // dispatcher iterates).  worker/threads/body are
-                // ordinary expression contexts.
-                if let Value::Var(u) = &b.input
-                    && *u == v
-                {
-                    *streaming += 1;
-                } else {
-                    Self::classify_var_uses(&b.input, v, streaming, other);
-                }
-                Self::classify_var_uses(&b.worker, v, streaming, other);
-                Self::classify_var_uses(&b.threads, v, streaming, other);
-                Self::classify_var_uses(&b.body, v, streaming, other);
-            }
             _ => {}
         }
     }

@@ -101,18 +101,41 @@ fn b_coalesce(k: integer) -> text {
 }
 
 fn main() {
-  println("b_int_hit={b_int(1)}");                 // ab
-  println("b_int_miss={b_int(9)}");                // (empty)
-  println("b_bool={b_bool(true)}");                // ab
-  println("b_text={b_text(\"hit\")}");             // ab
-  println("b_if={b_if(1)}");                       // ab
-  println("b_local={b_local(1)}");                 // [ab]
-  println("b_used={b_used(1)}");                   // ab!
-  println("b_three_1={b_three(1)}");               // ab
-  println("b_three_2={b_three(2)}");               // x!
-  println("b_three_d={b_three(7)}");               // (empty)
-  println("b_lit={b_literal_callee(1)}");          // lit
-  println("b_wild={b_single_wildcard(0)}");        // ab
-  println("b_call={b_plain_call(0)}");             // ab
-  println("b_coalesce={b_coalesce(1)}");           // ab
+  // The two EMPTY answers are the load-bearing ones.  A branch-bind that failed to
+  // deliver produces an empty text, so "empty" is both a correct answer here and the
+  // symptom — and only asserting which cells must be empty tells them apart.
+  hit = b_int(1); miss = b_int(9);
+  bl = b_bool(true); tx = b_text("hit"); ifv = b_if(1);
+  loc = b_local(1); usd = b_used(1);
+  t1 = b_three(1); t2 = b_three(2); td = b_three(7);
+  lit = b_literal_callee(1); wld = b_single_wildcard(0);
+  cal = b_plain_call(0); coa = b_coalesce(1);
+  assert(hit == "ab", "the matching arm's computed text is delivered; got `{hit}`");
+  assert(miss == "", "no arm matches 9, so the result is EMPTY by design; got `{miss}`");
+  assert(bl == "ab", "a boolean scrutinee reaches the same delivery; got `{bl}`");
+  assert(tx == "ab", "…and a text scrutinee; got `{tx}`");
+  assert(ifv == "ab", "a tail `if` delivers like a tail `match`; got `{ifv}`");
+  assert(loc == "[ab]", "a local bound from the branch is then decorated; got `{loc}`");
+  assert(usd == "ab!", "a branch result USED after the bind, not just returned; got `{usd}`");
+  assert(t1 == "ab", "arm 1 of three; got `{t1}`");
+  assert(t2 == "x!", "arm 2 — a different arm, a different text; got `{t2}`");
+  assert(td == "", "the default arm of three is EMPTY by design; got `{td}`");
+  assert(lit == "lit", "a literal-bodied callee needs no buffer and still arrives; got `{lit}`");
+  assert(wld == "ab", "a single wildcard arm; got `{wld}`");
+  assert(cal == "ab", "a plain call in the branch; got `{cal}`");
+  assert(coa == "ab", "the `??` discharge does not fire on a present value; got `{coa}`");
+  println("b_int_hit={hit}");
+  println("b_int_miss={miss}");
+  println("b_bool={bl}");
+  println("b_text={tx}");
+  println("b_if={ifv}");
+  println("b_local={loc}");
+  println("b_used={usd}");
+  println("b_three_1={t1}");
+  println("b_three_2={t2}");
+  println("b_three_d={td}");
+  println("b_lit={lit}");
+  println("b_wild={wld}");
+  println("b_call={cal}");
+  println("b_coalesce={coa}");
 }

@@ -22,6 +22,14 @@ fn to_text(self: D, spec: text) -> text {
 fn main() {
   a = D { ms: 2 };
   c = a == mk(2) && a < mk(5) && a > mk(0);   // three lifted value-struct calls across a chained &&
+  // #533 was the format hook SELECTING the wrong branch or dropping the spec, which
+  // yields a plausible-looking string — so each spec is asserted against the exact text
+  // it must produce, not merely printed for comparison.
+  assert(c, "2 == 2 && 2 < 5 && 2 > 0 — all three lifted calls hold");
+  bare = "{a}"; hex = "{a:hex}"; pad = "{a:pad}";
+  assert(bare == "2", "the no-spec arm renders the raw value; got `{bare}`");
+  assert(hex == "0x2", "the `hex` spec reaches the `#x` arm; got `{hex}`");
+  assert(pad == "002", "the `pad` spec reaches the `03` arm, not the hex one; got `{pad}`");
   println("cmp={c}");
   println("bare={a}");
   println("hex={a:hex}");

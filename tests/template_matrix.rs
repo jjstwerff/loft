@@ -678,8 +678,8 @@ cross_mode!(
 // DbRef, found i64`); interp returned silent garbage / SIGSEGV.
 // Workaround was to hoist the operator into a typed local first
 // (covered by `u3_b1a_addable_pair_with_hoisted_sum` already in
-// the matrix).  Fix: added Value::Tuple, TuplePut, BreakWith,
-// Yield, CallRef arms to substitute_type_in_value.
+// the matrix).  Fix: added Value::Tuple, TuplePut, Yield and
+// CallRef arms to substitute_type_in_value.
 cross_mode!(
     u3_b1a_addable_inline_pair_with_sum,
     r#"

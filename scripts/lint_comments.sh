@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 #
 # Comment-quality detector for src/ (and lib/**/src/) — the runnable
-# Check behind doc/claude/DOC_QUALITY.md.  It flags two waste patterns,
+# Check behind doc/claude/DOC_QUALITY.md.  It flags three waste patterns,
 # so doc quality is *evaluated, not asserted*:
 #
 #   1. History stamps — plan tags, phase/cluster/arc refs, bare dates in
@@ -11,6 +11,12 @@
 #   2. Change-narration — comments that describe a past edit ("removed",
 #      "used to misroute", "previously inlined") instead of the code as
 #      it is now.
+#   3. Incident-subject — comments organised around the BUG rather than
+#      the contract ("panicked", "silently wrong", "never fired", "the
+#      hole").  A different axis from 1 and 2: such a comment is often
+#      present-tense and stamp-free and still answers a question nobody
+#      has any more.  See DOC_QUALITY.md § B2 — the fix is to CONVERT the
+#      story into the rule it contains, not to delete it.
 #
 # ADVISORY by design: it never fails CI and never edits.  A flagged line
 # is a REVIEW HINT, not a verdict (a live `#NNN` / doc pointer is a
@@ -39,6 +45,7 @@
 #   scripts/lint_comments.sh -c         # counts only (the thermometer)
 #   scripts/lint_comments.sh tags       # only history stamps
 #   scripts/lint_comments.sh history    # only change-narration
+#   scripts/lint_comments.sh incident   # only incident-subject (§ B2)
 
 set -u
 cd "$(dirname "$0")/.."
@@ -50,11 +57,26 @@ if [ -z "$FILES" ]; then echo "no source files found"; exit 0; fi
 
 TAGS_RE='(@PLAN|@P[0-9]|plan-[0-9]|phase [0-9]|cluster [0-9]|arc [A-Z]|[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{2})'
 HIST_RE='\b(removed|no longer|used to [a-z]+|previously [a-z]+ed|formerly|changed from)\b'
+# The incident as the comment's SUBJECT (§ B2).
+#
+# Deliberately a strong UNDER-approximation, and the reason is precision: this axis is
+# semantic ("is the bug the subject?"), not lexical, so the obvious failure vocabulary
+# is mostly innocent in this codebase.  Measured before narrowing: `SIGSEGV` is what
+# `crash_report.rs` installs a handler for, `the hole` is Robin Hood hashing and the
+# lexer's unclosed brace, `silently dropped` describes a live spoof-check, `never
+# reported` is a contract statement, and `loft#885's hoisted reads` names a mechanism
+# by its issue — a POINTER, which rule 2 explicitly keeps.  A noisy thermometer gets
+# ignored, so only phrasings that are almost never innocent are kept.
+#
+# The rest of this axis is a REVIEW question, not a grep: run the deletion test in
+# DOC_QUALITY.md § B2 on the comment in front of you.
+INCIDENT_RE='\b(before the fix|regressed|answered (wrong|the FALLBACK)|(was|were) silently (wrong|lost|excluded|misrouted)|the bug was)\b'
 
 # Emit "path:lineno:content" for every flagged comment line (both patterns).
 collect_raw() {
   { grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -E "$TAGS_RE"
     grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$HIST_RE"
+    grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$INCIDENT_RE"
   } | sort -u
 }
 
@@ -127,9 +149,10 @@ top)
   ;;
 
 *)
-  # Report modes: report (default) | -c/--counts | tags | history
+  # Report modes: report (default) | -c/--counts | tags | history | incident
   tag_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ec "$TAGS_RE")
   hist_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Eic "$HIST_RE")
+  inc_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Eic "$INCIDENT_RE")
 
   if [ "$cmd" != "-c" ] && [ "$cmd" != "--counts" ]; then
     if [ "$cmd" = "report" ] || [ "$cmd" = "tags" ]; then
@@ -143,6 +166,12 @@ top)
       grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$HIST_RE" || echo "  (none)"
       echo
     fi
+    if [ "$cmd" = "report" ] || [ "$cmd" = "incident" ]; then
+      echo "== Incident-subject (documents the bug, not the contract) =="
+      echo "   (DOC_QUALITY.md § B2 — CONVERT the story into its rule, do not delete it)"
+      grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$INCIDENT_RE" || echo "  (none)"
+      echo
+    fi
     if [ "$cmd" = "report" ]; then
       echo "== Biggest offenders (files by flagged comment lines) =="
       collect_raw | sed 's/:.*//' | sort | uniq -c | sort -rn | head -15
@@ -153,6 +182,7 @@ top)
 
   echo "history-stamp comment lines : $tag_n"
   echo "change-narration comment lines : $hist_n"
+  echo "incident-subject comment lines : $inc_n"
   echo "(advisory thermometer — never fails CI)"
   ;;
 esac

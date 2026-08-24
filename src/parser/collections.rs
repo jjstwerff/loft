@@ -41,11 +41,9 @@ pub(crate) fn find_text_coll(v: &Value, target: u32) -> Option<Value> {
         Value::If(c, t, e) => find_text_coll(c, target)
             .or_else(|| find_text_coll(t, target))
             .or_else(|| find_text_coll(e, target)),
-        Value::Set(_, x)
-        | Value::Return(x)
-        | Value::Drop(x)
-        | Value::Yield(x)
-        | Value::BreakWith(_, x) => find_text_coll(x, target),
+        Value::Set(_, x) | Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
+            find_text_coll(x, target)
+        }
         Value::Span(b) => find_text_coll(&b.1, target),
         _ => None,
     }
@@ -963,6 +961,13 @@ impl Parser {
             parent_tp,
             fn_attr: lhs_fn_attr,
         } = *lhs;
+        if std::env::var("LOFT_PROBE_TS").is_ok() && !self.first_pass {
+            eprintln!(
+                "TS {}:{} op={op} f_type={f_type:?} src_tp={src_tp:?}\n   to={to:?}\n   val={val:?}",
+                self.lexer.pos().file,
+                self.lexer.pos().line
+            );
+        }
         // Intercept `h[key] = null` → remove the key from hash/index/sorted
         if let Some(result) = self.towards_set_hash_remove(to, val, op, f_type) {
             return result;
@@ -1197,6 +1202,9 @@ impl Parser {
         ) && op == "="
             && !matches!(to, Value::Var(_))
         {
+            if std::env::var("LOFT_PROBE_TS").is_ok() {
+                eprintln!("TS   -> copy_ref branch TAKEN");
+            }
             return self.copy_ref(to, val, f_type.base());
         }
         // loft#821 — `v[i] = t` on a `vector<(…)>`.  A tuple element is stored INLINE, so
@@ -1359,15 +1367,7 @@ impl Parser {
             ops.push(write);
             return v_block(ops, Type::Void, "fn_ref_slot_set");
         }
-        if matches!(
-            *f_type,
-            Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(f_type) {
             if let Value::Var(nr) = to.unspan() {
                 if self.const_write_blocked(*nr, op) {
                     diagnostic!(
@@ -2565,15 +2565,9 @@ use #count instead"
                 // doesn't know how to walk the tree/hashmap layout.
                 // Pre-materialise into a `vector<reference<T>>` and
                 // re-route par() to use the materialised vector.
-                if matches!(
-                    in_type,
-                    Type::Sorted(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                ) && let Some((mat_fill_ir, mat_var, mat_in_type)) =
-                    self.materialise_keyed_for_par(&in_type, &expr)
+                if crate::parser::vectors::is_keyed(&in_type)
+                    && let Some((mat_fill_ir, mat_var, mat_in_type)) =
+                        self.materialise_keyed_for_par(&in_type, &expr)
                 {
                     let combined_fill = if fill == Value::Null {
                         mat_fill_ir
@@ -2817,21 +2811,32 @@ use #count instead"
             // generator (they allocate in the state store, which is freed
             // with the generator).  Bind the loop var as a BORROW of the
             // generator (dep on gen_var): the consumer's scope machinery
-            // must never emit a per-iteration OpFreeRef for it, which
-            // whole-store-freed the generator's state store (the store
-            // recycled under allocation pressure → corrupted worklists) and
-            // tripped the #306 stack-store guard on the exhausted null.
+            // must never emit a per-iteration OpFreeRef for it.  Such a free
+            // releases the generator's whole STATE STORE, not one record — the
+            // store is then recycled under allocation pressure with the
+            // generator still live, and the exhausted-null read trips the #306
+            // stack-store guard well after the corruption.
+            //
+            // The test is EVERY DbRef-carried type, not the three obvious ones: a keyed
+            // collection is handed over as a handle exactly as a `Reference` or `Vector`
+            // is.  `data::is_dbref` is the one home for that set (@FR-Col-Store).
+            //
+            // ⚠ A short list here does not skip a nicety — it inverts this arm.  The loop
+            // var binds WITHOUT the dep, the scope machinery reads it as an owner, and the
+            // per-iteration free this arm exists to PREVENT is exactly what gets emitted.
             if gen_var != u16::MAX
                 && matches!(in_type, Type::Iterator(_, _))
-                && matches!(
-                    var_tp,
-                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-                )
+                && crate::data::is_dbref(&var_tp)
             {
                 let dep_tp = match var_tp.clone() {
                     Type::Reference(d, _) => Type::Reference(d, crate::data::Deps::frame1(gen_var)),
                     Type::Enum(d, m, _) => Type::Enum(d, m, crate::data::Deps::frame1(gen_var)),
                     Type::Vector(e, _) => Type::Vector(e, crate::data::Deps::frame1(gen_var)),
+                    Type::Hash(d, k, _) => Type::Hash(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Sorted(d, k, _) => Type::Sorted(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Index(d, k, _) => Type::Index(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Radix(d, k, _) => Type::Radix(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Trie(d, k, _) => Type::Trie(d, k, crate::data::Deps::frame1(gen_var)),
                     other => other,
                 };
                 self.change_var_type(for_var, &dep_tp);
@@ -2883,11 +2888,9 @@ use #count instead"
                         Value::If(c, t, e) => find_vec_coll(c, gvn, vrn)
                             .or_else(|| find_vec_coll(t, gvn, vrn))
                             .or_else(|| find_vec_coll(e, gvn, vrn)),
-                        Value::Set(_, x)
-                        | Value::Return(x)
-                        | Value::Drop(x)
-                        | Value::Yield(x)
-                        | Value::BreakWith(_, x) => find_vec_coll(x, gvn, vrn),
+                        Value::Set(_, x) | Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
+                            find_vec_coll(x, gvn, vrn)
+                        }
                         Value::Span(b) => find_vec_coll(&b.1, gvn, vrn),
                         _ => None,
                     }
@@ -3751,17 +3754,7 @@ use #count instead"
     pub(crate) fn par_return_size(&mut self, ret_type: &Type, fn_d_nr: u32) -> i32 {
         if matches!(ret_type, Type::Text(_)) {
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
-        } else if matches!(
-            ret_type,
-            Type::Reference(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        } else if crate::data::is_dbref(ret_type) {
             // Reference mode — workers return a DbRef into their own
             // store; main deep-copies via copy_from_worker.  Plan-06
             // phase 1 G1: struct-enum returns (Enum variants with
@@ -4007,17 +4000,8 @@ use #count instead"
         // allocator (8d.3 in `run_parallel_queue_ref`) ensures
         // worker-written DbRefs already live in parent namespace
         // so cross-worker collision is eliminated.
-        let early_route_ref_queue = matches!(
-            ret_type,
-            Type::Reference(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) && fn_d_nr != u32::MAX
+        let early_route_ref_queue = crate::data::is_dbref(ret_type)
+            && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
             && buf_drop_ref_d_nr != u32::MAX;
@@ -4394,17 +4378,8 @@ use #count instead"
         // Late-gate matches early-gate (see comment above).
         // ARC.md A6.d: keyed-collection returns share the ref path
         // (DbRef to backing record + type-driven rebase walk).
-        let route_ref_queue = matches!(
-            ret_type,
-            Type::Reference(_, _)
-                | Type::Enum(_, true, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) && fn_d_nr != u32::MAX
+        let route_ref_queue = crate::data::is_dbref(ret_type)
+            && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
             && buf_drop_ref_d_nr != u32::MAX;
@@ -5381,7 +5356,6 @@ use #count instead"
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
                 Self::renumber_frame_var(inner, from, to);
             }
-            Value::BreakWith(_, inner) => Self::renumber_frame_var(inner, from, to),
             Value::Span(b) => Self::renumber_frame_var(&mut b.1, from, to),
             Value::Iter(v, a, b, c) => {
                 if *v == from {
@@ -5443,7 +5417,6 @@ use #count instead"
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
                 Self::remap_var_deep(inner, from, to);
             }
-            Value::BreakWith(_, inner) => Self::remap_var_deep(inner, from, to),
             Value::Span(b) => Self::remap_var_deep(&mut b.1, from, to),
             Value::Iter(v, a, b, c) => {
                 if *v == from {
@@ -6006,7 +5979,7 @@ use #count instead"
 
 /// Recursively rename variable `from` to `to` everywhere in `val` — as a READ
 /// (`Value::Var` and the other var-carrying reads) AND as a BINDING TARGET (the
-/// slot of `Set`/`BreakWith`/`TuplePut`/`Iter` and a block's `scope`).  Unlike
+/// slot of `Set`/`TuplePut`/`Iter` and a block's `scope`).  Unlike
 /// `replace_var_in_ir` (which rewrites reads only, leaving binding targets), this
 /// is a total substitution: after it, `from` no longer appears anywhere.
 ///
@@ -6055,7 +6028,7 @@ pub(crate) fn rename_var(val: &mut Value, from: u16, to: u16) {
                 rename_var(op, from, to);
             }
         }
-        Value::Set(t, body) | Value::BreakWith(t, body) | Value::TuplePut(t, _, body) => {
+        Value::Set(t, body) | Value::TuplePut(t, _, body) => {
             if *t == from {
                 *t = to;
             }
@@ -6078,12 +6051,6 @@ pub(crate) fn rename_var(val: &mut Value, from: u16, to: u16) {
             rename_var(c, from, to);
         }
         Value::Span(b) => rename_var(&mut b.1, from, to),
-        Value::ParFor(b) => {
-            rename_var(&mut b.input, from, to);
-            rename_var(&mut b.worker, from, to);
-            rename_var(&mut b.threads, from, to);
-            rename_var(&mut b.body, from, to);
-        }
     }
 }
 
@@ -6130,7 +6097,6 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
         }
         Value::Set(_, body)
         | Value::Return(body)
-        | Value::BreakWith(_, body)
         | Value::Drop(body)
         | Value::TuplePut(_, _, body)
         | Value::Yield(body) => {
@@ -6150,12 +6116,6 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
         // wrapped node.
         Value::Span(b) => replace_var_in_ir(&mut b.1, target, replacement),
         // Plan-06 spine step 3 — recurse into all child Values.
-        Value::ParFor(b) => {
-            replace_var_in_ir(&mut b.input, target, replacement);
-            replace_var_in_ir(&mut b.worker, target, replacement);
-            replace_var_in_ir(&mut b.threads, target, replacement);
-            replace_var_in_ir(&mut b.body, target, replacement);
-        }
         // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
         // synthetic value; the parser walker never produces or sees it.
         Value::RawExpr(_) => {}

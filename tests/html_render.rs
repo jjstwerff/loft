@@ -121,6 +121,12 @@ fn locate_fresh_brick_buster(root: &Path) -> Option<PathBuf> {
     // < bundle there.
     let stale_vs = [
         root.join("tools/brick-buster/25-brick-buster.loft"),
+        // The atlas is DRAWN by this script into a pack the page carries via
+        // `[[embed]]` (@PLN146 F4), so an edit to it changes the page's pixels
+        // without touching the game source.  Left out, the bundle would look
+        // fresh while showing the previous build's art.
+        root.join("tools/brick-buster/pack_atlas.loft"),
+        root.join("tools/brick-buster/assets/bb.blobs.store"),
         root.join("target/wasm32-unknown-unknown/release/libloft.rlib"),
     ];
     for dep in &stale_vs {

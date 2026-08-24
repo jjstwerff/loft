@@ -82,6 +82,9 @@ impl State {
             &self.database.types[db_tp as usize].parts,
             Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
         ) {
+            // @FR-L-Narrow classifies the width; the ENCODING here is deliberately not the
+            // one that rule's field form uses, so this site must not be folded onto
+            // `write_narrow_value` however alike the two type lists look.
             // Narrow-integer values sit in an 8B variable slot stored raw as i64
             // (OpPutInt), not via the +1-encoded Parts::Byte/Short encoding that
             // structs use (nor the i32::MIN null sentinel of Parts::Int).
@@ -311,6 +314,8 @@ impl State {
                 &self.database.types[db_tp as usize].parts,
                 Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
             ) {
+                // @FR-L-Narrow classifies the width; the raw-slot ENCODING below is not the
+                // field form, so this is not a fold candidate — see the write twin above.
                 // Narrow-integer reads (byte/short/int) target a u8/u16/i32
                 // variable whose stack slot is 8 bytes (Phase 2c integer
                 // width) and holds a raw i64 — not the +1-encoded form that

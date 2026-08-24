@@ -1357,6 +1357,10 @@ fn prepend_to_scope(node: &mut Value, target: u16, ni: Value) -> Option<Value> {
             prepend_to_scope(e, target, ni)
         }
         Value::Span(b) => prepend_to_scope(&mut b.1, target, ni),
+        // This relocation is BEST-EFFORT: where no arm reaches, the fallback — leaving the
+        // null-init at body position 0 — is correct, so an unreached shape costs placement
+        // quality and never correctness.  A confined block off the control-flow spine (a
+        // `map`/`filter`/lambda body) is the standing example.
         Value::Return(b) | Value::Drop(b) | Value::Yield(b) => prepend_to_scope(b, target, ni),
         _ => Some(ni),
     }
@@ -1655,10 +1659,15 @@ fn move_elide(data: &mut Data) {
                 &mut dest,
                 &mut ambiguous,
             );
+            // A destination TOUCHED between the source's build and the copy cannot take the
+            // retarget: the write would move ahead of that access.  See
+            // `collect_move_disturbed`.
+            let mut disturbed: HashSet<u16> = HashSet::new();
+            collect_move_disturbed(&code, &mo, mo.op_copy_record, 0, &dest, &mut disturbed);
             let ready: HashSet<u16> = dest
                 .keys()
                 .copied()
-                .filter(|s| !ambiguous.contains(s))
+                .filter(|s| !ambiguous.contains(s) && !disturbed.contains(s))
                 .collect();
             if !ready.is_empty() {
                 move_rewrite(&mut code, &ready, &dest, &mo);
@@ -1688,6 +1697,7 @@ fn move_elide(data: &mut Data) {
                 &mut code,
                 &con_sources,
                 &co,
+                &mo,
                 &bad_containers,
                 &escaping,
                 &mut skip,
@@ -1786,6 +1796,106 @@ fn collect_move_dest(
             ambiguous,
         );
     });
+}
+
+/// Does `node` mention variable `v` anywhere inside it?
+fn mentions_var(node: &Value, v: u16) -> bool {
+    if matches!(node.unspan(), Value::Var(x) if *x == v) {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |c| {
+        if !found && mentions_var(c, v) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Sources whose retarget would move the destination's WRITE across a statement that touches
+/// that destination.
+///
+/// [`move_rewrite`] retargets the source's construction ops onto the destination and drops the
+/// copy, so the destination is written at the CONSTRUCTION's position instead of at the copy's.
+/// That is sound only while nothing in between touches the destination.  The guards in
+/// [`collect_move_dest`] all ask whether the destination is a STABLE container; none of them
+/// asks whether it is READ, and that is the hole:
+///
+/// ```text
+///   for p in v { held = Tg { name: p.0.name }; p.0 = p.1; p.1 = held; }
+/// ```
+///
+/// `held`'s build moves into `p.1`, so `p.0 = p.1` then copies the NEW value back and the swap
+/// answers `x|x` where it wants `y|x` — silently, on both backends.
+///
+/// Read by BOTH move shapes — the Record copy (`OpCopyRecord(src, dst)`, source at arg 0) and
+/// the Construct append (`OpAppendVector(dst, src)`, source at arg 1) — because they had the
+/// same hole and two copies of one predicate is the shape loft#1006 was.  B1.3d already carried
+/// this guard for its own rewrite (`try_replace_one`: *"`base`'s BUILD must not read the
+/// destination container"*), which is what the other two were missing.
+///
+/// Conservative by BASE variable: any mention of the destination's base container between the
+/// two points disqualifies the move.  The source's own construction ops are excluded (they are
+/// what gets retargeted), so `o.f = T { x: o.g }` — building FROM the container into it — is
+/// still admitted.  A slot-exact test would admit a few more and cannot be spelled reliably:
+/// two spellings of one slot is the shape loft#1006 was.
+fn collect_move_disturbed(
+    node: &Value,
+    mo: &MoveOps,
+    copy_op: u32,
+    src_arg: usize,
+    dest: &HashMap<u16, Value>,
+    out: &mut HashSet<u16>,
+) {
+    let scan = |ops: &[Value], out: &mut HashSet<u16>| {
+        for (copy_idx, op) in ops.iter().enumerate() {
+            let Value::Call(d, args) = op.unspan() else {
+                continue;
+            };
+            if *d != copy_op {
+                continue;
+            }
+            let Some(Value::Var(s)) = args.get(src_arg).map(Value::unspan) else {
+                continue;
+            };
+            let Some(slot) = dest.get(s) else { continue };
+            let Some(base) = base_var_of(slot, mo) else {
+                continue;
+            };
+            // Where `s` is first defined in THIS list; absent (built in another block) is
+            // treated as "from the top", which is the conservative reading.
+            let def_idx = ops
+                .iter()
+                .position(|o| match o.unspan() {
+                    Value::Set(v, _) => *v == *s,
+                    Value::Call(d2, a2) => {
+                        *d2 == mo.op_database
+                            && matches!(a2.first().map(Value::unspan), Some(Value::Var(v)) if *v == *s)
+                    }
+                    _ => false,
+                })
+                .unwrap_or(0);
+            if def_idx >= copy_idx {
+                continue;
+            }
+            for between in &ops[def_idx + 1..copy_idx] {
+                // The source's OWN construction ops are what the rewrite retargets, so they
+                // are not a disturbance — that is what keeps `o.f = T { x: o.g }` elidable.
+                let writes_source = matches!(between.unspan(), Value::Call(_, a)
+                    if matches!(a.first().map(Value::unspan), Some(Value::Var(v)) if *v == *s));
+                if !writes_source && mentions_var(between, base) {
+                    out.insert(*s);
+                    break;
+                }
+            }
+        }
+    };
+    match node.unspan() {
+        Value::Block(b) => scan(&b.operators, out),
+        Value::Insert(ops) => scan(ops, out),
+        _ => {}
+    }
+    node.for_each_child(&mut |c| collect_move_disturbed(c, mo, copy_op, src_arg, dest, out));
 }
 
 /// Vars defined by `OpNewRecord` (`_elm_N = OpNewRecord(…)`) — the transient element slots the
@@ -1976,6 +2086,7 @@ fn construct_move_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
     co: &ConstructOps,
+    mo: &MoveOps,
     bad_containers: &HashSet<u16>,
     escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
@@ -2000,6 +2111,14 @@ fn construct_move_rewrite(
         &mut container,
     );
 
+    // A destination TOUCHED between the source's build and the append cannot take the retarget:
+    // the append would move ahead of that access.  `escaping` above guards the SOURCE being read
+    // in between and this is its missing twin — measured, `seen = len(b.v); b.v += tmp` reported
+    // the POST-append length, and `for x in c.v { t2 += [...] } c.v += t2` retargeted the loop's
+    // appends onto the vector the loop was ITERATING and grew it without bound.
+    let mut disturbed: HashSet<u16> = HashSet::new();
+    collect_move_disturbed(code, mo, co.op_append, 1, &dest, &mut disturbed);
+
     // Ready = found a unique append destination + a backing wrapper, AND provably reorder-free.
     let ready: HashSet<u16> = con_sources
         .iter()
@@ -2011,6 +2130,7 @@ fn construct_move_rewrite(
                 // A source READ between its build and the move (or grown by appends) can't be built
                 // directly into the destination — leave it a copy.
                 && !escaping.contains(s)
+                && !disturbed.contains(s)
                 // B1.3b handles a PURE append (`x.field += src`). If the field is CLEARED anywhere
                 // it is a whole-vector REPLACE (`x.field = src`, an `OpClearVector` + append) — a
                 // simple retarget would leave the clear stranded after the retargeted build (empties
@@ -3414,17 +3534,7 @@ fn record_adopts_capture(data: &Data, function: &Function, record: u32, a: usize
     // rather than a borrow (@P302).
     let tp = function.tp(v);
     let dep = tp.depend();
-    dep.is_empty()
-        || (dep.len() == 1
-            && dep[0] == v
-            && matches!(
-                tp,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            ))
+    dep.is_empty() || (dep.len() == 1 && dep[0] == v && crate::parser::vectors::is_keyed(tp))
 }
 
 /// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a
@@ -3477,6 +3587,9 @@ fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
                     walk_check(op, function, fn_name);
                 }
             }
+            // Every value-WRAPPING node, not a chosen subset: the shape this walker
+            // reports — a `Set(v, Null)` nested inside a call argument — can sit under any
+            // of them, so one omitted wrapper is a silently missed diagnostic.
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
                 walk_check(inner, function, fn_name);
             }
@@ -3592,23 +3705,6 @@ impl Scopes {
                     Value::Break(*lv)
                 } else {
                     ls.push(Value::Break(*lv));
-                    Value::Insert(ls)
-                }
-            }
-            Value::BreakWith(lv, val) => {
-                let scanned_val = self.scan(val, function, data);
-                let mut ls = self.get_free_vars(
-                    function,
-                    data,
-                    self.loops[self.loops.len() - *lv as usize - 1],
-                    &Type::Void,
-                    u16::MAX,
-                    &HashSet::new(),
-                );
-                if ls.is_empty() {
-                    Value::BreakWith(*lv, Box::new(scanned_val))
-                } else {
-                    ls.push(Value::BreakWith(*lv, Box::new(scanned_val)));
                     Value::Insert(ls)
                 }
             }
@@ -3926,21 +4022,6 @@ impl Scopes {
                     Value::with_span(b.0.clone(), scanned)
                 }
             }
-            Value::ParFor(b) => {
-                // Plan-06 spine step 3 — recurse into each child Value.
-                // No new scope is opened by ParFor itself: the worker fn
-                // runs in a worker State (separate scope), and `body`
-                // runs in the enclosing scope on the main thread.
-                Value::ParFor(Box::new(crate::data::ParForBody {
-                    input: self.scan(&b.input, function, data),
-                    x_var: b.x_var,
-                    r_var: b.r_var,
-                    worker: self.scan(&b.worker, function, data),
-                    threads: self.scan(&b.threads, function, data),
-                    body: self.scan(&b.body, function, data),
-                    stitch_id: b.stitch_id,
-                }))
-            }
             _ => val.clone(),
         }
     }
@@ -4001,14 +4082,7 @@ impl Scopes {
         // through so codegen's keyed reassign arm clears in place.
         if self.var_scope.contains_key(&v)
             && *value == Value::Null
-            && !matches!(
-                function.tp(v),
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
+            && !crate::parser::vectors::is_keyed(function.tp(v))
         {
             return Value::Insert(Vec::new());
         }
@@ -4690,6 +4764,9 @@ impl Scopes {
                 .is_some_and(|&a| data.def(self.d_nr).attributes()[a].hidden)
     }
 
+    /// Enforces @FR-O-Derived: free placement is DERIVED, not decided — a local is freed
+    /// iff it owns its store and does not transfer it out, once, at scope exit.  A
+    /// per-site heuristic anywhere else in codegen is the bug that rule names.
     fn free_vars(
         &mut self,
         is_return: bool,
@@ -4782,13 +4859,30 @@ impl Scopes {
             // through the same hoist + `OpFreeRefIfDistinct` leg the null-arm
             // join uses; view sources (non-empty deps) stay suppressed as
             // borrows.
+            //
+            // loft#1078 — the promoted NRVO buffer is one of those owned sources,
+            // and `is_argument` alone excluded it.  `fn pick(c) -> S { w = S{a:7};
+            // if c { S{a:9} } else { w } }` renames `w` onto the hidden buffer, so
+            // both arms name an owned candidate and exactly one wins; on the arm
+            // that does NOT deliver `w`, the store `w` minted is returned by nobody
+            // and freed by nobody — one orphan per call, which is the same u16
+            // store-table exhaustion loft#688 and loft#1022 each closed for their
+            // own shape.  The carve-out is the one those two already established:
+            // a user PARAMETER belongs to the caller and the callee frees none of
+            // it, while the promoted buffer is the one argument that is really a
+            // local this function minted (`is_promoted_ret_buffer` — hidden attr,
+            // renamed off `__retbuf`).  It reaches here rather than loft#688's leg
+            // because that leg excludes anything in `sources`, and the owning arm
+            // puts it there — the identical reason loft#1022 restated the carve-out
+            // in its own gate.
             if sources.len() > 1 {
                 for &v in &sources {
                     if matches!(
                         function.tp(v),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
                     ) && function.tp(v).depend().is_empty()
-                        && !function.is_argument(v)
+                        && (!function.is_argument(v)
+                            || self.is_promoted_ret_buffer(function, data, v))
                         && !null_arm_record_sources.contains(&v)
                     {
                         null_arm_record_sources.push(v);
@@ -5446,18 +5540,7 @@ impl Scopes {
         // freed, and short-circuiting the whole iteration on `return_sources`
         // would leak it (the enum-vector param-return `show()` regression).
         let suppress_source = |function: &Function, v: u16| {
-            return_sources.contains(&v)
-                && matches!(
-                    function.tp(v),
-                    Type::Reference(_, _)
-                        | Type::Vector(_, _)
-                        | Type::Enum(_, true, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Radix(_, _, _)
-                        | Type::Trie(_, _, _)
-                )
+            return_sources.contains(&v) && crate::data::is_dbref(function.tp(v))
         };
         for v in vars {
             if v == ret_var || suppress_source(function, v) {
@@ -5594,13 +5677,7 @@ impl Scopes {
                 let owns = dep.is_empty()
                     || (dep.len() == 1
                         && dep[0] == v
-                        && matches!(
-                            function.tp(v),
-                            Type::Sorted(_, _, _)
-                                | Type::Hash(_, _, _)
-                                | Type::Index(_, _, _)
-                                | Type::Radix(_, _, _) | Type::Trie(_, _, _)
-                        ));
+                        && crate::parser::vectors::is_keyed(function.tp(v)));
                 // Plan-57 Phase B (Mechanism B), widened by #323: a
                 // Reference-typed capture — a boxed `__cell_<T>` AND, per
                 // P260's storage rule, any plain struct capture — is OWNED
@@ -9163,7 +9240,7 @@ fn guard_refs(
                 guard_refs(a, target, free_ref_nr, stack, lca);
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             guard_refs(v, target, free_ref_nr, stack, lca)
         }
         Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
@@ -9179,12 +9256,6 @@ fn guard_refs(
             guard_refs(inner, target, free_ref_nr, stack, lca);
         }
         Value::Span(b) => guard_refs(&b.1, target, free_ref_nr, stack, lca),
-        Value::ParFor(b) => {
-            guard_refs(&b.input, target, free_ref_nr, stack, lca);
-            guard_refs(&b.worker, target, free_ref_nr, stack, lca);
-            guard_refs(&b.threads, target, free_ref_nr, stack, lca);
-            guard_refs(&b.body, target, free_ref_nr, stack, lca);
-        }
         _ => {}
     }
 }
@@ -9209,7 +9280,7 @@ fn escapes_value(v: &Value, target: u16) -> bool {
 
 fn guard_escapes(node: &Value, target: u16) -> bool {
     node.any_node(&mut |n| match n {
-        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => escapes_value(v, target),
+        Value::Return(v) | Value::Yield(v) => escapes_value(v, target),
         // The block's VALUE is its last operator; if that hands out the local
         // (directly or in a tuple/literal), it escapes (block-result `x = {
         // …; a }` U3; `return (a, n)` t2).
@@ -9238,14 +9309,14 @@ fn confine_reassign_safe(code: &Value, local: u16) -> bool {
 
 /// Shared dominance walk behind the two Plan-57 soundness gates
 /// (pass-3 dedupe: the two walkers were 80 identical lines apart, and the
-/// stronger one had silently lost the `ParFor` arm).  `dom` = "every read
+/// stronger one had silently lost a child arm).  `dom` = "every read
 /// of `local` here is preceded by a non-null assignment that definitely
 /// executed".  The two gates differ ONLY in:
 /// - the START value (`confine_reassign_safe` starts false — a definite
 ///   reassignment must precede any read; `store_dead_after_block` starts
 ///   true — the fn-level init counts);
 /// - `invalidate_conditional` (`store_dead_after_block` only): a
-///   reassignment inside an `If`/`Loop`/`Iter`/`ParFor` body INVALIDATES
+///   reassignment inside an `If`/`Loop`/`Iter` body INVALIDATES
 ///   dominance — afterwards `local` may hold that block's confined store.
 ///
 /// A read of `local` while `!dom` clears `ok`.
@@ -9327,7 +9398,7 @@ fn dominance_walk(node: &Value, local: u16, dom: bool, ok: &mut bool, inv: bool)
             }
             d
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             dominance_walk(v, local, dom, ok, inv);
             dom
         }
@@ -9339,18 +9410,6 @@ fn dominance_walk(node: &Value, local: u16, dom: bool, ok: &mut bool, inv: bool)
             dom
         }
         Value::Span(b) => dominance_walk(&b.1, local, dom, ok, inv),
-        Value::ParFor(b) => {
-            let mut d = dominance_walk(&b.input, local, dom, ok, inv);
-            d = dominance_walk(&b.worker, local, d, ok, inv);
-            d = dominance_walk(&b.threads, local, d, ok, inv);
-            dominance_walk(&b.body, local, d, ok, inv);
-            // The parallel body is conditional from the caller's view.
-            if inv && assigns_local(node, local) {
-                false
-            } else {
-                d
-            }
-        }
         _ => dom,
     }
 }
@@ -9840,7 +9899,7 @@ fn store_liveness_walk(
                 store_liveness_walk(op, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             store_liveness_walk(v, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
         }
         Value::Span(b) => {
@@ -9886,7 +9945,7 @@ fn contains_alloc_unconditional(node: &Value, store: u16, db_nr: u32) -> bool {
             .iter()
             .any(|o| contains_alloc_unconditional(o, store, db_nr)),
         Value::Span(b) => contains_alloc_unconditional(&b.1, store, db_nr),
-        // If / Loop / Parallel / Iter / ParFor — conditional, so an alloc inside is
+        // If / Loop / Parallel / Iter — conditional, so an alloc inside is
         // NOT unconditional.
         _ => false,
     }
@@ -9924,9 +9983,7 @@ fn holder_retained(node: &Value, holders: &HashSet<u16>) -> bool {
         Value::Insert(xs) | Value::Tuple(xs) | Value::Parallel(xs) => {
             xs.iter().any(|x| holder_retained(x, holders))
         }
-        Value::Return(v) | Value::Yield(v) | Value::Drop(v) | Value::BreakWith(_, v) => {
-            holder_retained(v, holders)
-        }
+        Value::Return(v) | Value::Yield(v) | Value::Drop(v) => holder_retained(v, holders),
         Value::TuplePut(_, _, v) => holder_retained(v, holders),
         Value::Iter(_, c, n, e) => {
             holder_retained(c, holders)
@@ -9934,12 +9991,6 @@ fn holder_retained(node: &Value, holders: &HashSet<u16>) -> bool {
                 || holder_retained(e, holders)
         }
         Value::Span(b) => holder_retained(&b.1, holders),
-        Value::ParFor(b) => {
-            holder_retained(&b.input, holders)
-                || holder_retained(&b.worker, holders)
-                || holder_retained(&b.threads, holders)
-                || holder_retained(&b.body, holders)
-        }
         _ => false,
     }
 }
@@ -10393,7 +10444,7 @@ fn tag_stores(
                 );
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             tag_stores(
                 v,
                 db_nr,

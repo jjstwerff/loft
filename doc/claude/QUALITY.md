@@ -76,6 +76,203 @@ un-ignored and passing).  See CHANGELOG.md.
 
 Items below are "what to BUILD" derived from the design content in this document.  Each row links to the section that holds the full design.  Three clusters: JSON, Native runtime, Compiler-blocker.
 
+### OPEN WORK — the rule-tag / duplication thread (2026-08-24)
+
+The concrete queue for the thread that runs from `formal/IMPLEMENTATIONS.md`.  Each row names
+the next ACTION, not the topic.  Status: ☐ open · ⚠ needs a decision · ✅ done.
+
+**Where this thread came from, so the queue below reads as more than housekeeping.** The premise
+is an owner diagnosis, not a metric: *"most of the code in loft is not from an early
+implementation but from fixing bugs, and during that bug fixing a lot of duplications were
+written without design — so we have structure, but in that structure we have multiple
+implementations, often in multiple files."* The response has three parts, and two are done:
+
+1. **Anchor duplication on the RULES, not on the code** — a formal rule is the thing two
+   implementations are both claiming to implement, so it is the only stable place to ask "is this
+   the same question?". Rules therefore needed unique names: `@FR-<Rule>` tags, defined in
+   `formal/`, cited from the code, resolved by `scripts/rule_tags.py`, indexed by `./scripts/idx`,
+   and gated by `doc_hygiene::every_rule_citation_resolves`. ✅ shipped.
+2. **Work the duplications the tags expose** — the eight-family checklist in
+   `formal/IMPLEMENTATIONS.md`. ✅ all eight evaluated; four merged, four split with the reason
+   recorded. The split verdicts matter as much as the merges: three of the eight were *different
+   questions sharing a variant list*, and merging them would have been the early-abstraction
+   failure the diagnosis warns about.
+3. **Make the sensor fire without being asked** — the blind spot is activation, not capability
+   (*"if you think about the issue you will do the correct thing; but without it you build a lot
+   of correct things and still miss the correct design"*). Trigger lines now live in
+   `design-protocol`, `engineering-rigor` and `loft-codegen`, and each duplication question has a
+   TOOL so the answer does not depend on remembering. ⚠ the one unmeasured part is whether the
+   triggers actually fire — see C.
+
+**State in one line:** the checklist is finished, the tooling is in place, and the two dead IR
+variants are removed (B3); what remains is three spec decisions (B), one missing drift guard
+(B3a), one queued documentation rewrite (B4), one unrun measurement (C), and a branch with **no
+PR**.
+
+#### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
+
+13 of 285 rules cited, across 24 sites (`python3 scripts/rule_tags.py check`).  Each row is one
+family from the checklist; the work is *read each site, decide which rule it enforces, cite it* —
+and the reading is the point: **four of the eight families split rather than merged**, and each
+split is a merge that would have coupled two rules that must stay free to differ.
+
+| # | family | sites | next action |
+|---|---|---|---|
+| 3 | **is this a KEYED collection** | 16 | ✅ **merged onto `vectors::is_keyed`** — one home for five variants. Exposed rules gap B1 (no rule names the keyed family as a category) |
+| 6 | **narrow integer widths** | 12 | ✅ **evaluated — TWO questions, not one** (stored width vs variable-slot representation); split, not merged. Exposed rules gap B2 |
+| 2 | **is this carried as a DbRef** | 43 | ✅ **closed** — 3 sites wrong (2 real bugs, both fixed), the other 40 cleared by a corpus-wide SENTINEL rather than by reading. Only 4 ever see a keyed collection, and all 4 probe correct against their own documented failure modes |
+| 4 | **is this a collection** (keyed `+ Vector`) | 13 | ✅ **merged** onto `vectors::is_collection` (the one that DERIVES it). Three homes existed, not one; IR byte-identical 854/854 |
+| 5 | **is this DbRef-represented** | 11 | ✅ **merged onto `data::is_dbref`**, IR byte-identical on 854/854. Turned up a duplicate home (`Parser::is_heap_handle`) that `is_dbref` itself had duplicated — see IMPLEMENTATIONS.md |
+| 7 | **the value-carrying `Value` wrappers** | 59 | ✅ **evaluated — FOUR questions, not one**; not mergeable (arms, not predicates). One omission documented as deliberate. ⚠ its "one real gap fixed" claim was **wrong and is corrected** — `walk_check`'s missing `BreakWith` arm was unreachable, see #8 |
+| 8 | **which `Value` shapes hold a statement list** | 13 | ✅ **evaluated — the merged home already exists.** Not a merge: the two arm-sets differ only by whether `Call` shares the body. The finding is one level up — `Value::for_each_child` claims *every* traversal derives from it; measured **31 do, 22 are exhaustive, 127 are a partial match + `_` catch-all**. And **two variants have no producer at all** (`BreakWith`, `ParFor`) — see IMPLEMENTATIONS.md |
+| 1 | scalar — the 5 remaining BARE sites | 5 | ⚠ adopting `is_scalar` ADDS value enums at each: a behaviour change per site, one probe each. Not a sweep |
+
+#### B — rules gaps found by citing (spec decisions, not code)
+
+| gap | found by | state |
+|---|---|---|
+| **no rule names the KEYED FAMILY** as a category — `Col-Hash`/`-Sorted`/`-Index`/`-Spatial`/`-Trie` define one kind each, yet 16 sites tested the category | checklist #3 | ⚠ `is_keyed` cites all five as a stand-in. Minting a family rule is a spec decision |
+| **no rule says a narrow value in a VARIABLE slot is a raw `i64`** — `L-Narrow` states the stored width, `L-Null` the field encoding; the `io.rs` pair depends on neither | checklist #6 | ⚠ the code comments the distinction at length; the rules cannot express it |
+| `formal/binding.md` **OPEN: 1** — D-bind-11's heap-element half | pre-existing | ⚠ needs a representation choice; the record-backed path is proven to work (see the entry) |
+
+#### B3 — DONE: the two producerless variants are removed (2026-08-24)
+
+`Value::BreakWith` and `Value::ParFor` are gone, with `ParForBody`, 53 pattern alternatives and 39
+whole arms across the walkers, both serializer shapes, the `IrNode` accessors, the store-schema
+types, and the round-trip tests that were their only exercise. `make ci` green.
+`scripts/ir_walker_audit.py dead` now reports **no dead variant at all** — the same instrument that
+found them, used as the closing check.
+
+`ParFor`'s own declaration had said what it was: *"spine step 3a lands the variant + walker arms
+only. Steps 3b (codegen) and 3c (parser detection) follow."* They never did, and nothing recorded
+that they had stopped — the scaffolding simply stayed, and every walker went on paying for it.
+
+**Renumbering was safe, and that was checkable rather than a judgement call.** Removing
+`NdBreakWith` (19) and `NdParFor` (33) shifts every later discriminant, but
+`startup_cache::save_program` writes `cache::build_signature()` as the manifest's first line, so a
+binary upgrade invalidates every stored bundle. `data_store::baked_layout_mirrors_loft_schema`
+then proved the result: it failed on the first attempt naming `DISC_CONTINUE` 19-vs-20 exactly.
+
+#### B3a — found on the way: the generated IR schema had drifted from its source
+
+`src/ir_schema_gen.rs` is `@generated … DO NOT EDIT — regenerate` from `tools/ir_schema/ir.loft`.
+It had been hand-edited anyway. `src/keys.rs::Key` gained a third field, `start: i32`, in loft#812;
+the generated file was updated to match, **`ir.loft` was not**. Nobody regenerated afterwards, so
+the two stayed out of step invisibly — and the first regeneration in this session silently dropped
+`Key.start`, taking `KEY_STRIDE` from 24 to 16. The layout guard caught it.
+
+Fixed by adding `start` to `ir.loft` (the source), then regenerating; a name-keyed comparison of
+the regenerated schema against the committed one now differs by exactly the three removed types
+and nothing else.
+
+⚠ **The gap this exposes is not fixed: nothing gates that `ir_schema_gen.rs` is a faithful
+regeneration of `ir.loft`.** The `@F` catalogue has `features-check` for precisely this shape of
+generated shadow, and the IR schema has no equivalent — so the only thing standing between a hand
+edit and a silently wrong store layout is whether someone happens to regenerate. A check is
+awkward because regeneration needs a built `loft`, which is circular in CI; the honest options are
+a nightly job or a `make` target that the release checklist names. **Open.**
+
+#### B4 — DONE: in-code docs state the CONTRACT, not the INCIDENT (2026-08-24)
+
+**The owner's framing.** A feature and a formal rule are meant to be *timeless*; a bug is
+relevant in the moment and stops being so. An algorithm should be documented **as an
+algorithm** — what it computes, over what domain, under which invariant. The bug that
+caused its rewrite may be *linked*, but it is a side effect, never the main body.
+
+**Shipped:**
+
+| where | what |
+|---|---|
+| `.claude/skills/doc-quality` | **rule 8** — document the contract, not the incident — plus the deletion test, the CONVERSION move, the regression-test carve-out, and a description that fires on "this used to" / "the bug was" / documenting right after a fix |
+| `DOC_QUALITY.md` § B2 + **rule 9** | the reference: why the axis is distinct from rules 1–2, the worked `Key::start` rewrite, and an honest account of how countable it is |
+| `scripts/lint_comments.sh` | a third pattern, `incident`, with its own report mode and thermometer line |
+
+**The axis is distinct, and that is the point.** Rules 1–2 already ban past tense and
+provenance stamps. A comment can pass both — present-tense, no date, about code that
+exists — and still be organised around the bug that produced it. Rules 1–2 are about
+*tense and bookkeeping*; this one is about *what the documentation is about*.
+
+**The move is CONVERSION, not deletion.** Most incident narration is a timeless fact
+wearing a story's clothes, and deleting it loses real knowledge. Extract the rule the
+story contains. Worked through on ten sites: `Key::start`, both `@FR-L-Narrow` arms in
+`native.rs`, `is_keyed`, `is_dbref`, `ref_tuple_element_ok`, `write_absent_value`,
+`write_narrow_value`, and four the detector flagged. In every case the useful content
+survived and got *more* useful — "`u8?` 42 read back `0`" became "a width missing from
+this set falls to the catch-all, which leaves zero-init bytes, so the failure here is
+always silent".
+
+⚠ **The detector deliberately under-reports, and finding that out was the work.** The
+first version matched a broad failure vocabulary: 1 023 of 7 967 doc blocks, 787 of them
+invisible to the existing checks. That number does not survive inspection — `SIGSEGV` is
+what `crash_report.rs` installs a handler for, `the hole` is Robin Hood hashing and the
+lexer's unclosed brace, `silently dropped` describes a live spoof-check, `never reported`
+is a contract, and `loft#885's hoisted reads` names a mechanism by its issue, which rule 2
+explicitly KEEPS. The axis is semantic, not lexical. So the shipped pattern is narrow
+(12 lines, now 8) and the doc says plainly that **the detector finds the loud cases and
+the deletion test is the real check**. A noisy thermometer gets ignored, which is the
+failure mode that matters here.
+
+**Baseline handling worth knowing:** adding a pattern to `collect_raw` would have made
+`--check` report ~490 "new" flags and drowned the signal. Baselining only the new axis
+kept the **180 genuine old-pattern flags that have accumulated since the 2026-08-19
+baseline** visible instead of silently absorbing them. Those 180 are unfixed and still
+reported — the ratchet only works if someone prunes.
+
+#### B4a — the `@FR-` cited sites, swept (2026-08-24)
+
+All **17 comment blocks carrying the 24 citations** are done: every one now leads with the
+contract, and the `Enforces @FR-X` line sits at the top of its block rather than trailing
+after the prose. `rule_tags.py check` still resolves all 24.
+
+**The rewriting was the smaller half.** Reading the cited sites in order — which is what a
+tag route makes possible — turned up two things no comment lint could have found:
+
+- **`parse_assign_op` had no doc comment at all.** Its description ("apply the operator to
+  an already-parsed LHS, parse the RHS, rewrite into the assignment IR, returns
+  `Type::Void`") was stranded three hundred lines away on `classify_vec_bind`, because
+  that function had been inserted *between* the doc and the function it belonged to. So
+  one function was undocumented and another carried a description of something it does
+  not do — and rustdoc renders the wrong one without complaint. Both fixed.
+- **A doc block split by its own attribute.** `ref_tuple_element_ok`'s citation had been
+  appended *after* `#[must_use]`, so the source reads as two blocks where rustdoc shows
+  one. Eight such splits exist repo-wide (`doc → attribute → doc`); this was the only one
+  at a cited site, and it is fixed. The other seven are cosmetic and left alone.
+
+**Worth generalising:** the tags are a *reading* route, not just a citation index. The
+misattached doc had been there for as long as `classify_vec_bind` has existed, invisible
+to every lint because both functions had *something* above them. Following the citations
+one by one is what surfaced it.
+
+**Open:** the wider surface is not swept, by design (`doc-quality` says not to sweep a
+file during unrelated work). The route stays the one the owner named — a cited site should
+read *"this enforces `@FR-X`, here is how"*, and `scripts/rule_tags.py sites <tag>`
+enumerates them. **13 of 285 rules are cited, so tag adoption is the rate limiter**, not
+the rewriting: the next tranche of sweepable sites only exists once more rules are cited.
+
+#### C — process / skills
+
+| item | state |
+|---|---|
+| a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
+| `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
+| `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
+| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, two modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `dead` intersects a producer screen with an 854-program corpus census to find variants nothing can build. Both are REPORTS. It was **rejected twice before it shipped** for failing to reproduce the answer already found by hand — the `make profile-corpus` discipline, applied to a new instrument |
+
+#### B2 — open, and the owner's call
+
+| decision | evidence | why it is not mine to take |
+|---|---|---|
+| ~~remove `Value::BreakWith` and `Value::ParFor`~~ | — | ✅ **DONE** — see B3 below |
+| **the 127 catch-all walkers** | each silently absorbs a `Value` edge it does not name; the mechanism has fired twice in walkers written years apart, unnoticed by build, tests and review | ⚠ **but both firings were on the unreachable `BreakWith`, so neither cost anything** — the damage is UNMEASURED. The next step is not a conversion but a query: for each of the 127, which omitted edges are REACHABLE? Do that before proposing a sweep |
+| **`Parallel` is reached 4 times in 854 programs** | corpus census | a coverage gap in the suite, not a defect — but `par` is the construct with the least IR-level exercise of anything still alive |
+
+#### D — carried, unchanged by this thread
+
+`STABILITY_ROADMAP.md` still owns these: Plan-53 cluster 2 S4 (parked WIP, M), @PLN130's 504
+uncovered copy sites (L, cost unestablished), gate 4 durability (@PLN43, needs an in-or-out
+decision), H6 `i32::MIN` (deferred).  **The branch is 34 commits ahead of `origin/main` with no
+PR**, so none of the above is on main.
+
 ### The catch-all audit — every type-driven op choice, classified (2026-08-22)
 
 Two defects in one week had the same shape: a `match` on a TYPE that picks an **op**,
@@ -109,6 +306,821 @@ clean with a stated reason**:
 **The reusable half:** classify a catch-all by how it fails before reading what it
 covers.  A panic is a bounded risk; `_ => None` / `_ => return <input>` is where a
 type-driven decision goes missing quietly, and it is worth grepping for on its own.
+
+⚠ **A 24th site, found 2026-08-22, and the sweep's own boundary was the lesson.**
+`populate_struct_from_jsonvalue`'s `_ => { /* not yet handled … Leave at zero-init
+default */ }` is the same silent shape and cost more than any of the 14 — it dropped every
+narrow-integer field the `JsonValue` walker was handed, values included (see the Q1/P54
+entry under § JSON cluster). The sweep did not have it because the sweep's own frame was
+*"a `match` on a TYPE that picks an **op**"*, and this one picks a **write**: no opcode is
+selected, so it did not match the grep that found the other 23. The failure mode is
+identical, which said the frame was one word too narrow — the class is a type-driven
+DECISION with a silent default, whatever the decision produces.
+
+### Re-run with the wider frame (2026-08-22) — 210 sites, and the shape that actually bites
+
+Swept every `match` whose scrutinee is a TYPE source (`.parts`, `known_type`, `content_kt`,
+a `tp`, a discriminant): **210 sites — 56 already exhaustive, 15 with a loud catch-all, 139
+silent.** 139 is too many to read, and reading them is the wrong move: almost all are
+FALLBACKS, where the catch-all hands a value back (`_ => None`, `_ => false`,
+`_ => u16::MAX`) and the caller decides. A fallback is visible to whoever asked.
+
+The shape that bites is narrower and worth naming: **a side-effecting walk whose catch-all
+does NOTHING** (`_ => {}` / `_ => ()` / a bare `return`), because then the destination
+silently keeps whatever it already held and nobody is handed anything to check. Filtering
+the 139 to `.parts` walks of that shape gives **24**, which IS readable. Result:
+
+| verdict | sites |
+|---|---|
+| **the live bug** | `populate_struct_from_jsonvalue` ×2 — fixed today (§ JSON cluster) |
+| **correct, but coupled to a refusal in another file — now exhaustive** | `copy_claims` (below) |
+| **guards** — "only a keyed collection has keys", "only a struct has fields", "only a container can be inserted into": `set_keyed`, `insert_record`, `determine_keys_for`, `load_key_text`, `load_key_sets`, `relocate_ptr_fields`, `collect_sub_records`, `tree_roots`, `layout_closure`, `validate_all_layouts`, `validate_layout_by_nr` | 11 |
+| **diagnostics** — a skip costs a missed warning, never a value: `walk_copy_cmp` (the `copy_check` validator), `first_oob_text`, `search.rs::validate` (whose own doc comment lists what it does not yet check) | 3 |
+| **actually loud** — the catch-all raises a user diagnostic; the regex only read it as silent because the arm body opens a block: `fill_iter` | 1 |
+| **narrow surface, value-returning fallback**: `file_to_bytes` / `file_from_bytes`, `output_init` (which states why an inline container field is emitted elsewhere) | 5 |
+
+**The reusable half, sharpened:** classify by how the catch-all fails, *then* by whether
+anyone is told. A panic is bounded. A value-returning fallback is visible to the caller. A
+**do-nothing arm in a walk that writes** is the one that goes missing quietly — and that
+filter cut 139 unreadable sites to 24 readable ones without dropping either real find.
+
+### `copy_claims` skips `Parts::DbRef` — correct, and now it says so
+
+Measured rather than reasoned. An env-gated counter in the catch-all over the whole
+`tests/scripts` corpus: `Byte` 72276, `Base` 64588, `Int` 14184, `ShortRaw` 3110, and
+**`DbRef` 3** — so the one kind that could own something really does arrive here, from
+`85-poison-return-tail-uaf.loft` passing a `fn(…)`-holding struct by value.
+
+The skip is deliberate: the block copy preceding this walk leaves the destination's 12-byte
+`DbRef` pointing at the SOURCE's closure record, so a copied fn-ref field ALIASES rather
+than owns — which is why a bound fn-ref field read is marked `skip_free`. **That is sound
+only because the copy can never outlive the source, and nothing guaranteeing it lives in
+this file:** #318 refuses a capturing-closure holder as a return value, as a collection
+element, and as a field of another struct, and a fn-ref struct field admits ONE capture
+shape program-wide. Probed all four escape routes — every one is refused at compile time —
+and the two legal copies (passed down by value; copied out of an inner scope into a longer-
+lived local) answer correctly on both backends under `LOFT_POISON=1` with store churn.
+
+So: not a bug, but a guarantee held together across two files with nothing at the load-
+bearing end saying so. The arm set is now EXHAUSTIVE — each remaining kind states why it
+has no claim, and `DbRef` carries the coupling and the measurement. Proven: adding a probe
+`Parts` variant fails the build at `allocation.rs:2876` (`copy_claims`) alongside `:2157`
+(`validate_claims`, made exhaustive the day before for the same reason). Relax #318 and the
+build still won't complain — but the comment now tells the next reader where to look.
+
+### `character` on the JSON surface — five sites, one sentinel, none of them agreeing (2026-08-22)
+
+`formal/types.md` pins `Char`'s in-band null at **codepoint 0**, reserved even in a
+non-null slot, and loft#1014 made every site that WRITES one agree. The sites that READ
+it, and the ones that put a character on the wire, never did. Found by pulling on a dead
+line noticed while fixing the JSON walker: `Stores::is_null`'s `character` arm sits under
+`if known_type < 6`, so it can never run.
+
+| # | site | what it did |
+|---|---|---|
+| 1 | `Stores::is_null` | the arm was unreachable AND tested `u32::MAX`, not the sentinel — two wrongs cancelling into *"a character slot is never null"*. An absent field rendered as a value: `{"a":' '}`, **a space on the wire**, while `x.a == null` answered `true` |
+| 2 | the character renderer (`format.rs`) | re-derived the same `u32::MAX` test, so a null element printed `['a',' ','c']` — and in the plain display, nothing at all: `['a',,'c']` |
+| 3 | `to_json()` | wrote the loft spelling `'q'` in JSON mode. **That is not JSON**, and loft's own parser rejected the document — losing every other field with it |
+| 4 | `walk_parsed_into` (the `text` walker) | put a character through type 0's arm — an 8-byte `set_int` into a **4-byte slot** — running over whatever the layout put next |
+| 5 | `populate_struct_from_jsonvalue` | had no character arm at all, so it dropped the field |
+
+Site 3 is the one that would bite hardest in the field: **a program that saves state with
+`to_json()` writes a file nothing can read, including itself.** Site 4 is the one that
+corrupts: `{"tail":5,"c3":99,"c2":98,"c1":97}` into `T { c1, c2, c3: character, tail:
+integer }` answered `a`, NUL, NUL, `5` — only the LAST character written survived, so
+document ORDER decided whether the damage was visible. That is why the forward-order probe
+passed and looked like a clean bill.
+
+Fixed at the sentinel: `is_null` answers codepoint 0 (and its arm is reachable), the
+renderer asks instead of re-deriving, a character goes on the wire as the one-character
+**string** `to_json` writes, and both walkers read either that string or a NUMBER as its
+codepoint. Guarded by `tests/scripts/character-across-the-json-surface.loft`, six cases on
+both backends, falsified by re-breaking sites 1 and 4.
+
+**Deliberately NOT changed, and now asserted so it stays a decision:** string
+concatenation SKIPS a bare `'\0'` (`OpAppendCharacter`'s documented behaviour), so
+`"a{'\0'}b" == "ab"` and `{c}` on a null character is empty while the structured render
+says `null`. The sentinel IS the literal NUL — `types.md` records the collision and
+loft#1014 asserts it — so the two channels genuinely differ, and the difference is the
+price of an in-band sentinel rather than a sixth disagreement.
+
+### A Join whose arms each OWN a store — one leak, and two wrong answers behind it (2026-08-23)
+
+loft#1078, filed by `loft_planet` against `main`.  A tail `if`/`match` that returns a fresh
+record on one arm and a named LOCAL on the other retained one record per call:
+
+```loft
+fn pick(c: boolean) -> S { w = S { a: 7 }; if c { S { a: 9 } } else { w } }
+```
+
+`w` is renamed onto the hidden return buffer (NRVO), so the `else` arm delivers the buffer and
+the `if` arm delivers a different store — and on the arm that does not deliver `w`, the store
+`w` minted was returned by nobody and freed by nobody.  The value was right; only the ownership
+was wrong, which is why a single call looks clean and only a loop shows it.  In the field:
+~16,000 retained records per planet, and four planets exhausted the 65,535-entry `store_nr`
+table.
+
+`scopes::free_vars` already reaches this class through three legs — a null arm, a promoted
+buffer no arm names (loft#688), and arms that disagree about ownership (loft#1022).  The one
+that covers *"several owned candidates, one winner"* excluded every ARGUMENT.  Right for a user
+parameter; wrong for the promoted buffer, which is the one argument that is really a local this
+function minted.  **loft#1022's own comment had already written the carve-out down** and applied
+it inside its own gate, noting that loft#688's leg "cannot claim it here because it excludes
+anything in `sources`".  The multi-source leg needed the identical sentence.
+
+⚠ **The filed report's matrix moved one axis and pinned two, and the two it pinned each hid a
+`silent-wrong`.**  It varied *what the non-taken arm names* (local / parameter / vector element)
+and held the RETURN POSITION and the ARM COUNT fixed.  Moving those:
+
+| moved axis | what appeared |
+|---|---|
+| a SECOND owned local (`if c { u } else { w }`) | `u` answered **0**.  The first candidate is renamed onto the buffer; the second's copy leg then emits `OpDatabase(buf); OpCopyRecord(<tail that reads buf>, buf)` — the re-mint destroys the store the copy is about to read.  A three-arm `match` broke only its FIRST arm, which is what named the RENAME rather than the join. |
+| BOUND, then returned (`r = if c { … } else { w }; r`) | the fresh arm answered **0**.  Not a tail join at all — this is loft#848's class one arm over: `parser/objects.rs`'s value-position `Object` arm is `!first_pass`-guarded, so it mints on pass 2 only, and on the shared `__ref_N` counter it was handed the name pass 1 left on the return buffer.  `return_buffer()` resolves the buffer BY NAME, so the literal's record and the return destination became one slot.  loft#848 had moved the SIBLING arm of the same function onto `__ref_p2_N` and left this one. |
+
+Both wrong answers were **identical on both backends**, so neither backend could witness the
+other and the `--interpret`/`--native` differential — the workhorse gate for this subsystem —
+was structurally blind to them.  Collections and text were measured CLEAN on the same shape:
+each carries its own aliasing-aware delivery (`OpReplaceVector` is a documented no-op when the
+source still aliases the buffer; the B5-L3 text hoist copies first), so the defect is the record
+path's re-mint.
+
+The three cures are three INDEPENDENT guards on one collapse, which the ownership oracle proves:
+`oracle_flags_the_a1b_wrong_plan` needed `LOFT_NO_A1B` + `LOFT_NO_WORKREF_STEPOVER` to have a
+defect to catch, and now needs `LOFT_NO_P2_OBJECT_WORKREF` as well.  That test failing is how
+the third guard's independence was measured rather than argued.
+
+Guard: `tests/scripts/1078-join-arms-that-each-own-a-store.loft` — 10 cells, the leak half
+proven to fire the wrap leak gate on a pristine worktree at `f7a57124` and the value half proven
+to fail its assertions there.  `formal/ownership.md` gained D-own-7, opened and closed the same
+day.
+
+**The sweep, and the number that explains why it shipped.**  `LOFT_TRACE_WORKREF` prints one
+line per work-ref mint with the SITE that asked for it, so the collision has an exact
+signature: *one variable minted from TWO different sites inside one function*.  Sweeping all
+844 `tests/scripts` on that signature gives **138 hits across 24 files** — and almost all are
+benign, because a work-ref name IS scratch and pass 2 re-resolving it to the same scratch slot
+is the intended reuse.  The harmful half is narrower: the name resolves to an **argument**,
+which for a `__ref_N` can only mean `ref_return` promoted it to the return buffer on pass 1.
+
+The trace could not say which — including for its own headline example — so `arg=yes|no` was
+added to it.  Filtered on that predicate the sweep reads:
+
+| | argument-resolving collisions | files |
+|---|---|---|
+| with the fix | **0** | 0 |
+| with `LOFT_NO_P2_OBJECT_WORKREF=1` | 29 | **7** |
+
+Six of those seven are scripts that were **already in the suite and already passing** (`85`,
+`744`, `877`, `882`, `889`, `890`).  They reached the collision every run and never witnessed
+it — the buffer was handed out, re-minted, and the value still arrived, so nothing failed.
+That is the whole answer to "how did this ship": the corpus had the shape six times over and
+no channel that could see it.  The detector was proven able to fire before the zero was
+believed: it reports the loft#1078 repro under the opt-out and goes silent with the guard on.
+A zero from an instrument that was never shown to fire is not a measurement.
+
+**The reusable half:** when a fix's own comment says *"that other leg cannot claim it because
+…"*, the sentence is a map of where the same hole is.  loft#1022 wrote down the promoted-buffer
+carve-out and applied it to one gate; the sibling gate three lines up needed it too, and nothing
+connected them.  Grep the carve-out, not the symptom.  And when a sweep over a whole corpus
+reports a number too large to read, the fix is usually a missing FIELD on the instrument, not a
+narrower grep — one `arg=` flag took 138 unreadable hits to 7 readable ones.
+
+### A `&` on a tuple LOCAL linked nothing, at every element type (2026-08-23)
+
+`formal/tuples.md` D-tup-2, open since 2026-08-20, said the admitted-element rule was asked
+at the signature and not at the local — a `&(text, text)` LOCAL reaching codegen and dying
+there as an internal compiler error while the identical PARAMETER was refused with a message.
+
+Re-measured across POSITIONS rather than at the filed cell, the ICE was the mild half.  The
+whole binding was unimplemented at a local, for **every** element type including the admitted
+ones, and how loud it was depended on what the tuple happened to hold:
+
+| written | was | should be |
+|---|---|---|
+| `b = &a` | the `&` **dropped**: a plain copy, so `b.0 = 5` left `a` untouched — no diagnostic, both backends | `a.0 == 5` |
+| `b: &(integer, integer) = a` | a reference typed over a value: interp read an ELEMENT as a store index (`(7, 9)` → *"index is 9"*), `--native` handed the user a raw rustc `E0308` | the link |
+| `b: &(boolean, boolean) = a` | `truefalse` where the swap says `falsetrue`, **exit code 0** | `falsetrue` |
+| `b: &(float, float) = a` | `null` for a present element | `9.5` |
+| `b: &(text, text) = a` | the filed ICE | a refusal |
+| `b: &(integer, integer) = v[0]` | bound a COPY silently; `--native` would not compile | a refusal |
+
+**Both backends agreed on every one of those**, so the tuple differential this subsystem
+leans on (D-op-1) was structurally blind — the two implementations were wrong the same way.
+That is the third time in a week that a defect survived because the workhorse gate compares
+two things that share the mistake.
+
+**The fix is the chokepoint the deviation asked for, plus the mechanism it then needed
+something to admit.**  `Parser::ref_var_type` is now the one place a `&` in source becomes a
+`Type::RefVar`, so the parameter, the annotated local and the inferred `b = &a` ask one list
+(`data::ref_tuple_element_ok`) and cannot disagree.  And a tuple local lives in the FRAME, so
+it joins the scalars at `OpCreateStack` — exactly the stack ref a `&(…)` PARAMETER is already
+handed at its call site, read at the same `(ref, offset)` pair.  Native represents the local
+link as the raw `*mut (…)` @PLN87 L1 gives every local link; two sites read one predicate
+(`generation::is_raw_tuple_link`) to decide it, the element base and the call that forwards
+the local to a `&(…)` parameter.
+
+A tuple PLACE (`b = &v[0]`, `b = &s.pair`) is now refused rather than bound to a copy — the
+place is read element by element into a fresh tuple before the `&` is seen, so nothing
+survives to link to, and `binding.md` B-Ref-Reshape already settles that case: *"loft will not
+quietly downgrade the reference to a copy"*.  `T-Ref` gained the local position, `T-Ref-Src`
+the place refusal; tuples.md is back to **OPEN: 0**.
+
+**Three reusable halves.**  First, **a deviation entry inherits the framing of the report that
+raised it** — this one said "element types" because an ICE on `text` is what got filed, and
+sweeping element types while pinning POSITION left a `silent-wrong` cell that no deviation
+named.  A rule quantified over *"ANY binding"* (B-Ref-Alias) is falsified by a position as
+readily as by a type.  Second, **the refusal boundary was not where the rule seemed to put
+it**: the record-backed `RefVar(Tuple)` a `for` loop builds over a `vector<(text, text)>` reads
+and writes `text` elements correctly on both backends, so putting the gate in a universal
+`RefVar(Tuple)` constructor would have refused a shape that works.  Measuring the OTHER
+construction is what kept the chokepoint at *the `&` written in source*.  Third, the guard was
+proven able to fail on a pristine tree at `1e9d7910` — 6 of 7 cells on `--interpret`, 7 of 7 on
+`--native` — and the prefix-`&` cell fails there on its **value** assertion, not on a crash,
+which is the channel that had been missing.
+
+### 81 assertions the corpus contained and never ran — and the wrong line one of them reported (2026-08-23)
+
+The differential oracle's finding one level further out.  That pass converted 153 hand-written
+expectations from COMMENTS into `assert`s, on the reasoning that a channel captured and never
+compared is not a gate.  The question this pass asks is the next one: **of the assertions the
+corpus does contain, which ones EXECUTE?**
+
+It is not answerable by reading.  A file skipped for an expected error, a function the entry
+point never calls, a branch never taken and a passing test all look identical from outside —
+green.  So the instrument: **`LOFT_TRACE_ASSERTS=<path>` appends `file:line` for every `assert`
+that runs**, in `n_assert`, which is the interpreter's implementation AND the one a `--native`
+binary links, so one hook covers both backends and many processes.  Diffing the trace against
+the `assert(` sites in the source names the silent ones.
+
+**Result over `tests/scripts`: 9 722 sites executed, 81 never.** Three mechanisms, none of
+which any file said anything about:
+
+| # | mechanism | sites |
+|---|---|---|
+| 1 | **a firing `@EXPECT_ERROR:` stops the whole file** — `run_test` returns at *"ok (errors consumed)"* and `native_scripts` skips the file, so every runtime cell in it is compiled and dropped | 52 |
+| 2 | **a file with `main` runs ONLY `main`** — every other zero-parameter function is compiled and dropped | 21 |
+| 3 | deliberate: `assert(false, "unreachable")` markers, a branch not taken, an `assert` that IS the refused expression's use | 8 |
+
+Mechanism 1's sharpest case is **`1067-lambda-expected-type.loft`, whose entire positive half
+— 13 cells, 21 assertions — had never run.** Its own header states that the negative cell
+exists *"or this file would pass on a compiler that simply stopped checking"*; that negative
+cell is what stopped the positive cells from running, so the file passed on the refusal alone.
+The cure is the corpus's own convention (`102`/`102b`, `36`/`36b`): a file asserts a refusal
+OR runs.  Split into `1067b-lambda-no-expected-type-refused.loft`; same for the stranded
+positive cells in `36-parse-errors.loft` and `pln119-assign-to-file-scope-text.loft`.
+
+Mechanism 2 was `05-enums.loft` and `06-structs.loft` — struct formatting, `limit()` narrow
+fields, `&`-default parameters, copy-on-bind, a named codegen regression guard — 21
+assertions, wired into `main` now.  All 21 pass on both backends, which is the point: nobody
+knew.
+
+**A fourth mechanism, on the native side only.** `native_scripts` decided to skip a file with
+`src.contains("@EXPECT_ERROR")` over the whole source, so a file that merely NAMED the tag in
+prose dropped out of the native suite — silently, since a skip prints and passes.  Five files,
+**79 assertions**, including `93-vector-advanced.loft`'s 49.  Every one of the five was
+carrying a comment recording that it had **stopped** being a refusal case: *"this file used to
+be an @EXPECT_ERROR case"*, *"stayed here live and `@EXPECT_FAIL` until #1055 was fixed"*.  The
+sentence saying a file was no longer refused is what stopped it being tested.  Both runners now
+read one `common::expect_tag`, which is the same lesson `ref_tuple_element_ok` carries:
+*two lists that must agree are one list*.  Native goes 801 → 806 scripts, all green.
+
+**And the trace found a live bug, because it records the position the COMPILER injected.**
+Every assert in `685-mutated-scalar-param-capture.loft` traced exactly seven lines early, and
+every assert in `50-tuples.loft` five.  Breaking one proved it reaches a user: an assertion on
+line 184 failed and the diagnostic printed
+
+```
+error: assertion failed: repeat call, two params
+  --> …/685-mutated-scalar-param-capture.loft:177:1
+177 |   assert(inner == 13, "by-value: callee sees its own writes, got {inner}");
+```
+
+— **this assert's message under a different assert's source line**, and the line it named is
+itself an `assert`, so the report looks entirely plausible.
+
+The mechanism is loft#625's, at a site that fix did not reach.  `Lexer::to` moves the
+REPORTING position without moving the read cursor, and the tokenizer keeps incrementing that
+position on every physical line it pulls — so a seek that is never undone shifts every position
+derived from the lexer for the rest of the file: the caret, a runtime span, and the line the
+compiler injects into `assert`.  `parse_function` wraps its warning passes in a save/restore
+and its comment says exactly this — *"Each warning pass below seeks the lexer to a diagnostic
+site … Save the true position and restore it once the passes finish"* — and
+`check_ref_mutations` (the needless-`&` / `needless-const-parameter` pass) runs **eighteen lines
+above that save**.  The carve-out comment was the map: *below* was doing the work of a fence.
+
+Fixed at the chokepoint rather than by a second save/restore, because a rule spelled at each
+call site is how the first one came to be missed.  `to()` now records where it seeked FROM, and
+the next token scanned from source restores it: **a reporting seek lasts until the next token,
+so a missing restore costs the one diagnostic it was made for instead of every position after
+it.**  A file switch clears the pending seek — without that, the first token of a `use`d file
+inherited the previous file's line, which the corpus caught immediately (`88-imports`,
+`850*`, at −13 to −20 lines).
+
+Minimal repro, six lines, both backends, `silent-wrong` in the diagnostic channel:
+
+```loft
+fn f(n: const integer) -> integer { n }   // draws `needless-const-parameter`, which seeks
+fn main() { assert(false, "MARK"); }      // reported line 2, not 5
+```
+
+Guard: `runtime_warnings.rs::a_seek_to_a_warning_site_does_not_shift_later_positions`, proven
+able to fail (it reports line 2 with the restore disabled).  Corpus-wide re-measure: the two
+constant shifts are gone and no file has one.
+
+**Two ratchets, both static, both proven able to fire** (`tests/wrap.rs`):
+`a_refusal_file_carries_no_runtime_assertions` (mechanism 1) and
+`every_assertion_is_reachable_from_the_entry_point` (mechanism 2).  They are
+UNDER-approximations by construction and say so: they cannot see a branch never taken, and they
+deliberately allow the documented dual guard `751`/`432b` uses, where an annotated `main`
+carries assertions that run only if the refusal ever regresses.  `LOFT_TRACE_ASSERTS` is how
+the remainder gets re-measured — a report, not a gate, because a gate over 9 800 sites would
+need an allow-list keyed on line numbers and would rot.
+
+**Measured residual, so it is a decision and not an oversight.** `751`'s near-side cell —
+*"a `vector<u8>` built from integer LITERALS … must stay legal"* — is inert for the same
+reason the far side is, because both live in that file's annotated `main`.  Coherent as
+written (the whole file runs only if the refusal regresses), and the shape is positively
+covered by the running `432-untyped-vector-literal-arg.loft`; recorded here because a
+ratchet that allows a pattern owes a reader the list of what the allowance costs.
+
+**The reusable half.** A test suite's guarantee is the set of assertions it RUNS, and that set
+is not the set it CONTAINS. The difference is invisible in every channel a suite reports —
+exit code, pass count, output — so it has to be measured directly. Every mechanism found here
+was a file being SKIPPED for a good reason that quietly took a second thing with it.
+
+### The caret follows the CURSOR, and the cursor is one token past the code (2026-08-23)
+
+The assertion-line pass one level out again.  That pass found a whole-file line lag by reading
+the position the compiler INJECTED into `assert`; the position channel it read is the same one
+every diagnostic uses, and nothing in the suite compares it.  `check_diagnostics` matches an
+`@EXPECT_ERROR` / `@EXPECT_WARNING` by SUBSTRING — `diag.contains(pat)` — so the `file:line:col`
+each of the corpus's **272** annotations carries is captured and dropped, the exact shape
+loft#1063's stderr channel had.
+
+`tests/parse_errors.rs` DOES pin `line:col` exactly, on all 248 fixtures.  It was blind for the
+usual reason: **its corpus holds one axis fixed.**  Almost every fixture is a one-liner or a
+statement ending in `;`, and the `;` is what hides this.
+
+**The mechanism, and why `;` hides it.**  `Lexer::position` is the scan CURSOR — the end of the
+token the parser is *holding*, not of the code it has decided about.  A check that can only run
+once a construct is complete (a `const` write, a nullable reaching a non-null slot, a capture in
+a `parallel` arm) raises with the cursor already advanced.  A `;` keeps that next token on the
+statement's own line and the two answers agree; drop it — which loft invites, being
+expression-oriented — and the caret goes wherever the next token is:
+
+| written | caret landed on |
+|---|---|
+| `a = 42;` then `}` | line of `a = 42` — correct, **by luck** |
+| `a = 42` then `}` | the `}`, one line down |
+| `a = 42`, two blank lines, `}` | the `}`, **three lines down**, with a different statement under it |
+
+Same statement, three answers.  Corpus-wide the miss was not rare: an identifier-position oracle
+(*a message that quotes a name must point at a line containing that name*) reported **41
+suspects, 16 of them a caret sitting on a closing brace** — const writes, `parallel`-arm captures
+and the whole null-flow family.  And two diagnostics were naming an entirely **different
+construct**: `circular init dependency` landed on the `fn` after the struct, and *"Not all code
+paths return a value — function `classify`"* landed on the function after `classify`.
+
+**The fix is one place, and the measurement is what kept it there.**  `Lexer::report_pos`:
+a diagnostic goes to the end of the CONSUMED source (`prev_end`, captured in `cont()` before the
+cursor runs on) when the current token starts on a LATER line, and to the cursor otherwise, so
+the same-line column contract 248 fixtures pin is untouched.  A `Lexer::to` seek outranks both
+(that position was chosen — the item-5 rule), and the file must match.
+
+⚠ **The obvious wider fix is wrong, and one A/B settled it.**  Attributing *every* diagnostic to
+the consumed source moved **107 of 248** fixtures, and every one that moved was a syntax error
+about the token the parser is HOLDING — `Expect name in function definition` on `fn assert(…)`
+went from the `assert` to the `fn`.  So the class genuinely has two halves, and only the site
+knows which it is in.  **Three** sites say so explicitly now, each with a comment saying why:
+`'struct' definitions must be at file scope` and the `..hi` open-range refusal are both raised
+while LOOKING at the offending keyword, and `unreachable-code` is raised holding the first token
+of the unreachable statement.  That is the same shape as the 48 sites already reaching for
+`peek_pos`, and all three now put the caret ON the token rather than just past it.
+
+⚠ **`parse_errors.rs` did not find all of them — the whole suite is the position oracle, and it
+had to run `--no-fail-fast` to say so.**  Beyond the 11 fixtures parse_errors moved, three more
+turned up only in `tests/issues.rs` and one in the `error_messages` golden: `..hi` (the third
+opt-out), and two more instances of the defect that nothing had ever looked at — the deferred
+`OpMinInt` arity errors and `Unknown field Point.z` were BOTH being reported on the closing `}`
+of their function, and now land on the expression.  A max-fail run reports one per cycle and
+reads like a single stray fixture; `find_problems.sh --bg` is what showed the set.
+
+**Net over the corpus, measured in both directions.**  The sharp filter is *the caret sits on a
+line that is nothing but a closing brace*, which is the shape a cursor-following caret produces:
+**19 → 4** over the 773 diagnostics the 882-file corpus emits, the before-number taken by
+disabling `report_pos` on the fixed tree rather than remembered.  The looser identifier filter
+(*a message quoting a name must point at a line containing it*) reads 41 → 25, and the 25 that
+remain are its own false positives — the quoted name is a TYPE the line never spells.
+
+**The 4 that remained were whole-CONSTRUCT judgements — and a second pass took them to 0.**
+`circular init dependency`, a generator's discarded tail and an `i32` narrowing each complete
+only when their construct does, so the consumed source genuinely ends at that brace.  That is
+right and useless: a struct has many fields, and *"somewhere in this struct"* is not an answer.
+The chokepoint cannot guess which part is meant, but each SITE holds a better position:
+
+| check | now names | the datum it already had |
+|---|---|---|
+| `circular init dependency` | the field the cycle STARTS from | none — the one that needed threading (`init_deps` gained the field name's position) |
+| a generator's discarded tail | the tail expression | `l[last].span_pos()` — a call is span-wrapped at its `(` on pass 2 |
+| a tail conversion (narrowing, `not null`) | the tail statement | `block_result`'s `tail_pos`, already a PARAMETER and read by exactly one check |
+
+**Measure before widening a site, because most of it already worked.**  Three of the four
+narrowing POSITIONS — assignment, argument, struct-literal field — already named their own line;
+only the return tail did not, because only it is checked after the block closes.  The guard pins
+all four so a later change cannot move the working three unnoticed.  Same for the field COUNT
+axis: the circular-init guard runs a `a -> b -> c -> a` cycle among four fields that are NOT in
+it, so a caret that merely picked the first field, the struct, or its brace is visible.
+
+⚠ **Seek with `Lexer::to`, end with `Lexer::end_seek` — never with a second `to`.**  Seeking
+back leaves `seek_return` pending, and `report_pos` reads a live seek as a deliberate choice and
+stops attributing to the consumed source, so every diagnostic the pass raises AFTER the seek
+reverts to the scan cursor.  Measured: seeking around the block-tail conversion that way sent
+*"Not all code paths return a value — function `classify`"* back onto the FOLLOWING function —
+re-introducing, three sites away, the exact defect the pass had just removed.  The existing
+`missing_return_not_null` fixture caught it, which is the argument for pinning the positions
+that already work.
+
+The instrument is `scripts/diag_position_audit.py` — a REPORT, never a gate, for the same reason
+`LOFT_TRACE_ASSERTS` is: both filters have false positives, and a gate over them would need a
+line-numbered allow-list that rots.
+
+Guards: `a_diagnostic_names_its_own_line_{whatever_follows_it, with_no_terminator,
+across_blank_lines}` assert the three layouts AGREE rather than pinning a hand-picked line — a
+hand-picked expectation only ever pins the layout it was written for, which is how the corpus
+came to hold this axis fixed in the first place.  **The first cell is the one that always
+passed, and it is in the file to show what hid the other two.**
+`a_current_token_diagnostic_still_names_the_current_token` pins the opt-out direction so a later
+widening of the default cannot take it silently.  All proven able to fail by disabling
+`report_pos`.
+
+**The reusable half:** a suite that pins a channel is not the same as a suite that EXERCISES it.
+248 fixtures asserted `line:col` and none of them varied the one thing the position depends on —
+what follows the construct.  When an oracle reads clean, ask what its corpus never varies; here
+the answer was a single character.  And the detector that made 565 raise-sites readable was not
+a narrower grep but an extra FIELD — *does the current token start on a later line than the
+consumed source ends* — which cut them to 25 raises across 13 sites, the same move as
+loft#1078's `arg=` flag.
+
+### Pulling on D-bind-11 found three tuple defects the register did not know about (2026-08-23)
+
+`formal/binding.md` D-bind-11 (`&(τ,…)` admits only scalar elements) records a blocker
+measured on 2026-08-19: adding the `text` arms SIGSEGVs.  D-tup-2 changed that
+representation on 2026-08-23 — a tuple local now joins the scalars at `OpCreateStack` — so
+the blocker was a claim to re-measure ([[filed-blocker-is-a-hypothesis]], the standing rule).
+
+**The blocker HOLDS, and the re-measurement moved its cause one level down.**  Re-adding the
+arms still corrupts (`rec=179867128`).  Not because "the ops speak different families", as the
+entry said, but because a `text` on the STACK is a 16-byte `Str` — `{ptr, len}`, a raw BORROW
+— while the record form is a 4-byte handle.  That also answers the question the entry never
+did: **why `fn f(s: &text)` works while `&(text, text)` cannot.**  The `&text` parameter writes
+into the caller's 24-byte owned `String` through `OpClearStackText`/`OpAppendStackText`, so the
+owner never changes; a tuple's text element has no owner of its own on the stack.
+
+**And the entry's second escape route is already running.**  It offers *"either an op family
+that writes the STACK form through a DbRef, or backing a `&(…)` with a real record"*.  A
+`for p in v` over `vector<(text, text)>` performs the EXACT swap the refusal declines,
+correctly, on both backends.  ⚠ **Nothing guarded it** — no script in the corpus wrote a text
+tuple element through the record path — so the evidence the whole design option rests on was
+one refactor from vanishing.  Now pinned by
+`tests/scripts/reference-tuple-heap-element-through-a-record.loft`.
+
+**Three defects fell out of the matrix, all `silent-wrong`, none of them in any register.**
+
+| # | shape | verdict |
+|---|---|---|
+| 1 | `v[0] ?? fb` where the tuple's FIRST element is a COLLECTION | **FIXED** — answered the FALLBACK for a PRESENT element, `--interpret` only |
+| 2 | `hv = p.0` where the element is a COLLECTION | **D-bind-12** — aliases where `B-Copy` says it copies; both backends |
+| 3 | `hs = p.0; p.1 = hs` where the element is a STRUCT | **D-bind-12** — the write-back is a NO-OP and leaks; both backends |
+
+**#1's fix is one line, and the code's own carve-out comment was the map.**  A tuple has no
+`.rec` discriminant, so the convention is *"a tuple is null when its FIRST field holds its
+type's null sentinel"*.  `coalesce_not_null` built that test with the GENERIC
+`convert(first_tp, Boolean)` — and the heap-DbRef branch **three lines below it** exists
+precisely because that generic path has no registered `OpConv*FromX → Boolean` for a
+collection: it hands back the bare Var, and the interpreter then tests raw BYTES instead of
+`.rec != 0`.  The comment describing the hole sat directly under the call falling into it
+([[carve-out-comment-is-a-map]] again).  The fix RECURSES into `coalesce_not_null` instead of
+asking `convert`, so the null test and the heap-DbRef branch cannot drift.  A `Reference`
+first element HID it — that type does have a generic path — which is why the axis had to be
+the first element's TYPE.  Guard: `tests/scripts/tuple-null-check-reads-its-first-element.loft`,
+proven to fail 3-of-7 on a pristine worktree at `aa8f02dd`; the 4 that pass there are exactly
+the cells that hid it.
+
+⚠⚠ **Two probes on the way here were VACUOUS, and it is the sharpest lesson of the pass.**  A
+`print` placed between the steps of the struct swap made it answer CORRECTLY (`y|x`) where the
+same loop without it answers `y|y` — **the observation materialised the value being measured**.
+Everything scored off those prints was wrong, including a confident reading that a preceding
+loop was corrupting a later one.  Re-scored with `assert` after the loop, the picture is the
+disjoint table above.  The same reading also mis-explained the struct cell as `B-View`
+*"aliasing by design"*, reaching for a rule to EXPLAIN an observation instead of to PREDICT
+one — the rule says view, the measurement says copy, and the measurement was never in doubt.
+In this subsystem: no `print` inside the loop under test.
+
+### D-bind-12 fixed — and half of it turned out to be the RULE, not the code (2026-08-23)
+
+Filed the day before as two halves.  Measuring the second one properly split them apart, which
+is the whole result: **one was a real defect, the other was `formal/binding.md` under-stating a
+model the language deliberately depends on.**
+
+**Half one — FIXED, and the map was a doc comment describing a condition the code did not
+check.**  `for p in w { hs = p.0; p.1 = hs; }` left `w[0].1` unchanged and leaked the record,
+on both backends.  The write was not "a runtime no-op" — it was **absent from the IR**.
+
+`move_elidable_source`'s last gate is *"owns a transferable store"*, read off
+`Uses::def_vdb`, whose own doc says *`v = OpGetField(vdb, 0, _)` **where vdb is
+OpDatabase'd***.  The walk inserted on ANY `Set(v, OpGetField(Var(x), …))` and never checked
+the second half — so `hs = p.0`, a read of an EXISTING element through a borrow, counted as
+owning a transferable store.  `move_rewrite` then dropped its `OpCopyRecord`, which is sound
+only when the source is CONSTRUCTED (its build ops are retargeted onto the destination): `hs`
+has no build ops, so **the copy WAS the write**.  `collect_uses` now enforces the documented
+condition after the whole body is walked — it cannot be checked at insertion, because the
+`OpDatabase` may not have been visited yet.
+
+**The scope was measured, not argued:** emitted IR is **byte-identical on 120 of 120 scripts**
+(after normalising the worktree path — the first run said 116/120 differed, which was the
+absolute path in the dump and nothing else), and `857`'s allocation count is unchanged at 27,
+so the pointer-bind it protects is untouched.  The change can only ever REMOVE a spurious
+entry, so it is conservative-only by construction.
+
+**Half two — NOT a code deviation.**  `hv = p.0` on a COLLECTION element aliases, and the
+first reading scored that against `B-Copy`.  The 2×2 off a BORROWED base says otherwise:
+
+| construct | element type | behaviour |
+|---|---|---|
+| struct field | vector-typed | view |
+| struct field | struct-typed | view |
+| tuple element | vector-typed | **view** — the filed cell |
+| tuple element | struct-typed | copy |
+
+The implemented model is *a projection off a BORROWED base is a view; off an OWNED base it
+copies* — gated explicitly by `classify_vec_bind`'s `depend().is_empty()`, deliberate
+(`cells = sc.v; cells[i] = h` writing through is @PLN25 p379's point), and with its
+alternative measured to CORRUPT (#426).  Verified both directions, including that the p379
+write-through still reaches the source.  `B-View` states the view for a **struct-typed**
+projection only, so the rules cannot express a model the language depends on — which
+[formal/README](formal/README.md) says means the RULE wants extending.  **Deliberately not
+decided here:** widening `B-Copy` instead would delete p379's idiom and re-enter #426.  The
+one real inconsistency left is the fourth cell (a struct-typed tuple element copies while its
+three siblings view); no cell of it answers wrongly, so it is recorded rather than counted.
+
+**The reusable half:** *"fix the filed thing"* was the wrong instruction to give myself.  The
+filed report had two halves and one of them was not a defect at all — and the way to find that
+out was to complete the matrix (2×2 over construct × element type) rather than to fix the cell
+that was reported.  Had I "fixed" the alias, I would have deleted a documented idiom and
+walked back into a corruption bug closed months ago.
+
+### The last tuple-projection inconsistency — and the spec had already decided it (2026-08-23)
+
+The residual D-bind-12 recorded: off a BORROWED base, three of four projection cells are
+views and a STRUCT-typed TUPLE element copied.  I had written it up as a consistency question
+for the owner.  It was not — `B-View` says *"a STRUCT-typed PROJECTION is a VIEW that aliases
+WITHOUT `&`"*, so the direction was settled and only the code had to move.  **Consulting the
+rule turned a judgement call into a lookup**, which is the whole point of the register.
+
+**One site of three did not carry the base's lifetime.**  A stored-tuple element read took the
+synthetic struct's attribute type VERBATIM:
+
+```rust
+let elem_tp = elems[idx].clone();
+*code = self.get_val(&elem_tp, false, elem_offset, code.clone(), u32::MAX);
+t = elem_tp;                                   // no deps, no base var
+```
+
+Its two siblings already did it right, and one of them says why — the plain-tuple site's P197
+comment: *"propagate parent tuple's deps … without this, `a.v.0` returns a `Str` whose ptr
+points into a freed host"* — while `fields.rs`'s struct-field read carries the base deps AND
+`depending(base_var)`, which is exactly why `b = s.strf` typed `ref(In)["s"]` and `d = p.0`
+typed a bare `ref(In)`.  A bind typed as an OWNER while holding someone else's handle, with an
+`OpFreeRef` to match.  All four cells are views now, the dep is attached, the spurious free is
+gone, and emitted IR is unchanged on **80 of 80** tuple-bearing scripts.
+
+**Measuring the direction twice was necessary, and the first method was vacuous.**  The 2×2 was
+first read with `print`s inside the loop — the method already recorded as unreliable.  Re-run
+with asserts it gave the same answer, but a THIRD reading was needed before acting: a
+write-through test showed `e += [7]` not reaching the source while `e[0] = 7` did, because an
+append REALLOCATES.  Only `e[0] = 7` measures aliasing; the append measures something else.
+
+**The consequence is pinned, not left to be discovered:** a three-step swap through a bound
+element does not swap.  That is what the three sibling cells already did, and the cure —
+hold the VALUE (a scalar/text local), rebuild after the write — is a cell of its own.
+
+⚠ **A THIRD defect surfaced while writing that cure, and it is PRE-EXISTING** (reproduces on
+`80a05a5c`): the move-elide retargets a construction into its destination at the
+CONSTRUCTION's position, across a read of that destination.
+
+```loft
+for p in v { held = Tg { name: p.0.name }; p.0 = p.1; p.1 = held; }   // reads x|x, wants y|x
+```
+
+`held`'s build is moved into `p.1` before `p.0 = p.1` reads `p.1`.  `LOFT_NO_MOVE_ELIDE=1` is
+the bisect step that names it; the Record shape has `bad_containers`, `ambiguous` and
+`def_order` guards but nothing that asks whether the DESTINATION is read between the
+construction and the copy.  Not fixed here — a separate concern from the projection rule, and
+it belongs in its own change.
+
+### The move-elide outran a read of its own destination (2026-08-23)
+
+@PLN90 phase B transfers a dead-after owned source INTO its copy destination: it drops the
+source's `OpDatabase` / `OpCopyRecord` / `OpFreeRef` and retargets the source's CONSTRUCTION ops
+onto the destination slot.  So the destination is written at the CONSTRUCTION's position rather
+than at the copy's — **that is a REORDER**, and nothing checked what sits between.
+
+`collect_move_dest`'s guards all ask whether the destination is a STABLE container
+(`bad_containers`, a compiler temp, `def_order`).  None asks whether it is TOUCHED.  The
+pre-rewrite IR is the whole story:
+
+```
+    held = null;  OpDatabase(held, 78);  OpSetText(held, 0, …)     ← the build
+    OpCopyRecord(OpGetField(p,4,78), OpGetField(p,0,78), 78)       ← p.0 = p.1, READS p.1
+    OpCopyRecord(held, OpGetField(p,4,78), 78)                     ← p.1 = held, the copy
+```
+
+Retargeting moves the write of `p.1` up past the statement that reads it, so `p.0 = p.1` copied
+the NEW value back.
+
+**The filed repro held three axes fixed, and the defect was wider than all three.**  Measured on
+`d672d261`:
+
+| shape | was | wants |
+|---|---|---|
+| tuple swap through a rebuilt value | `x\|x` | `y\|x` |
+| a **plain READ** of the destination (`seen = p.1.name`) | `n\|n` | `y\|n` |
+| **straight-line**, no loop | `x\|x` | `y\|x` |
+| destination is a struct **FIELD** | `n\|n` | `y\|n` |
+| destination is a **VECTOR ELEMENT** | `n\|n` | `y\|n` |
+
+The read cell is the one that shows the size of it: the intervening statement does not have to
+WRITE anything — a plain read of the destination already sees a value the program has not
+assigned yet.
+
+**The fix is the missing predicate, and it is deliberately conservative.**
+`collect_move_disturbed` refuses a source whose destination's BASE container is mentioned by any
+statement between the source's definition and the copy.  Two carve-outs keep it from
+over-refusing: the source's OWN construction ops are excluded (they are what gets retargeted, so
+`o.f = T { x: o.g }` — building FROM the container into it — stays elidable), and a source whose
+definition is not in this operator list is treated as "from the top", the conservative reading.
+A slot-EXACT test would admit a few more cases and cannot be spelled reliably — two spellings of
+one slot is the shape loft#1006 was.
+
+**The cost is measured, not asserted: emitted IR is byte-identical on 851 of 851
+`tests/scripts`.**  So no legitimate elide anywhere in the corpus is lost, and the five broken
+shapes simply never appeared in it.
+
+**The guard's last two cells are the ones that matter for a reviewer.**  Five cells fail on a
+pristine tree; the two that PASS there are `test_the_clean_move_still_elides` and
+`test_build_from_the_container_into_it` — the control and the carve-out.  A "fix" that simply
+disabled the elision passes every other cell in the file, which is exactly why the control is in
+it.
+
+### The same hole in the sibling rewrite — and one of them grew a vector without bound (2026-08-24)
+
+Two silent-wrongs in one day had come out of @PLN90 phase B, so the class was the MECHANISM
+rather than either bug: **a rewrite that MOVES a statement needs to say what may not sit between
+the two positions.**  There are four such rewrites in `scopes.rs`; the previous pass fixed one.
+Auditing the other three found the same hole in a second, and the audit is the whole result —
+neither of the two new defects would have been reached by pulling on the first bug's repro.
+
+| rewrite | shape | verdict |
+|---|---|---|
+| `move_rewrite` | Record, `OpCopyRecord` | fixed the previous pass |
+| `construct_move_rewrite` (B1.3b) | Construct, `OpAppendVector` | **the same hole — 2 defects, fixed** |
+| `construct_fresh_rewrite` (B1.3c) | fresh container built AFTER the source | clean, and structurally so: the destination does not EXIST between, so nothing can read it.  Probed anyway (3 shapes) |
+| `construct_replace_rewrite` (B1.3d) | whole-vector replace | **already had the guard** |
+
+**B1.3d is where the sentence was already written.**  `try_replace_one` carries it verbatim —
+*"`base`'s BUILD must not read the destination container `a` (a SELF-ASSIGN like `s.v = s.v[1..]`
+… moving the `OpClearVector` ahead of that read would empty `s.v` before the slice copies it)"* —
+and its two siblings in the same file did not.  That is the third time this month a carve-out
+comment turned out to be a map of where the same hole still is, and the first time the map was
+for a rewrite rather than for a type.
+
+**What the Construct shape did.**  It guards the SOURCE being read between its build and the
+move (`escaping` / `source_escapes`) and never guarded the DESTINATION — the identical asymmetry:
+
+```loft
+seen = len(b.v);  b.v += tmp;                        // seen reported 3 for a 2-element vector
+for x in c.v { doubled += [x * 10]; }  c.v += doubled;   // SIGABRT
+```
+
+The second is the one that matters: the retarget pointed the loop's appends at the vector the
+loop was ITERATING, so it grew without bound — `SIGABRT` on `--interpret`, and on `--native`
+a `store offset overflow: requested 2203149353 words`.  Under the test harness it trips the 2 GiB
+store ceiling at 1.7 GiB, which is how the guard fails on a pristine tree rather than taking the
+box down with it.  **A time bound does not bound memory**, and this is a compiler rewrite
+producing the unbounded allocation, not user code.
+
+**One predicate, both shapes.**  `collect_move_disturbed` is now parameterised by the copy op and
+which argument is the source — `OpCopyRecord(src, dst)` at arg 0, `OpAppendVector(dst, src)` at
+arg 1 — rather than copied per shape, because two copies of one rule is the shape loft#1006 was.
+
+**Cost measured, not asserted:** emitted IR byte-identical on **851 of 852** `tests/scripts`, the
+one difference being the guard's own file.  Both fixes together cost no legitimate elision
+anywhere in the corpus, which also says why these survived: the corpus never wrote the shapes.
+
+### The rules doc stated three of five clauses, and I filed correct behaviour as a bug three times (2026-08-24)
+
+Closing the statement-moving audit: the FIFTH member of the family — the borrow elision
+(`elide_borrows` / `idiom_drop` / `elide_rewrite`) — is **clean**.  Twelve cells across the axes
+the previous sweeps had held fixed (what mutates the source between: `+=` / element write /
+whole-field reassign / a `&`-call / `remove`; the use: print / len / argument / return; position:
+straight-line / loop / branch arm).  Do not re-run it.
+
+**Two cells DID alias, and chasing them is the actual result.**  A NESTED field read
+(`c = o.inner.v`) and a vector INDEX read both aliased where I read `B-Copy` as promising a copy.
+Both survive `LOFT_NO_BORROW_ELIDE=1`, so neither was the elision — and
+`tests/scripts/85-store-lifetime-reference-default-views.loft` turned out to carry the answer in
+its header: *"#426's premise — that `a = vv[0]` / `c = o.inner.v` must COPY — was the **WRONG
+read**."*  Both are decided VIEWS, guarded green, citing `OWNERSHIP_MODEL § The law`.
+
+**So the defect is in `formal/binding.md`, and it is load-bearing.**  It states `B-Copy` plus ONE
+exception (a *struct-typed* projection views).  Measured, there are three, and the boundary over
+11 cells — identical on both backends — is:
+
+| bind | result |
+|---|---|
+| a whole VALUE (`d = v`, `p = o`), and every scalar | COPY |
+| a one-level **collection** projection off an **OWNED** base (`af = bx.v`) | COPY |
+| a one-level **struct** projection off an OWNED base | VIEW — `B-View` |
+| a vector **INDEX** read · a **NESTED** field read | VIEW — #426's resolution |
+| **ANY** projection off a **BORROWED** base, at every element type | VIEW |
+
+The two missing clauses are now written as **`B-View-Base`** (ownership of the BASE is the axis,
+not the element type) and **`B-View-Depth`** (index and nested reads, with #426's premise
+recorded as the wrong read so the next reader does not re-file it).
+
+**The cost of the omission is measured, and I paid it three times in one week** — D-bind-12's
+collection half, then a nested field read, then an index read: three correct behaviours filed
+against `B-Copy`, each costing a full investigation.  Two of the three I recorded as "an owner
+question"; neither was.  A rules doc that is incomplete does not fail loudly — it produces
+confident, well-evidenced wrong conclusions, which is more expensive than a doc that says
+nothing.
+
+**The boundary now has ONE home:** `tests/scripts/bind-copies-or-views-the-whole-boundary.loft`.
+The cells existed before, scattered across four files (`294-vector-element-view-semantics`,
+`85-store-lifetime-reference-default-views`, `reference-tuple-heap-element-through-a-record`, the
+C86 field cells) and no single one said what the rule WAS.  Ask that file rather than re-deriving
+it from the code.
+
+### One rule, how many implementations? — the checklist, and its first entry was drifted (2026-08-24)
+
+A rule in `formal/` is usually enforced by a **membership test over `Type` variants** — *is this
+a scalar*, *is this a keyed collection*, *does this own a store*.  Written inline at each site,
+the copies drift, and a drifted copy is a defect rather than untidiness: loft#1006 was two
+spellings of one tuple-element list disagreeing.
+
+`scripts/rule_predicate_audit.py` measures it: **32 distinct type-lists of 3+ variants; 30 appear
+at 2 or more sites.**  `--near` reports the pairs differing by exactly ONE variant, which is the
+drift that is already there rather than the drift that might happen.  The verdicts live in
+[formal/IMPLEMENTATIONS.md](formal/IMPLEMENTATIONS.md) — a checklist, because most entries need a
+judgement the script cannot make.
+
+**Entry #1 was already wrong.**  "Is this a scalar" is spelled 8 times in three variants, and the
+variants matter: `generation/`'s two copies include `Type::Enum(_, false, _)` and
+`data::ref_tuple_element_ok` did not.  A value enum and a `boolean` have the SAME 1-byte slot
+(`element_stack_size`: `Boolean | Enum(_, false, _) => 1`), so:
+
+```loft
+fn sw(p: &(boolean, boolean)) { … }   // admitted
+fn sw(p: &(Col, Col)) { … }           // "may only hold scalar elements, and this one holds `Col`"
+```
+
+The refusal read as a rule because the boolean case works.  It was drift.  Adding the value-enum
+arms to `RefTupleGet`/`RefTuplePut` makes the swap answer correctly on **both backends** first
+try — no representation question, unlike D-bind-11's `text` (a 16-byte `Str` borrow against a
+4-byte record handle), which stays refused.
+
+**The merge, and what was deliberately NOT merged.**  `data::is_scalar` is the one home;
+`ref_tuple_element_ok` delegates and `generation`'s two copies are gone.  Emitted IR is
+**byte-identical on 852 of 853** scripts (the one difference is the guard file's own new cells),
+so the `generation` half is a proven behaviour-preserving refactor and the only semantic change
+is the intended admission.
+
+The **5 remaining sites spell the BARE five** — `scopes.rs`'s return-type check,
+`generation/emit.rs`'s RefVar inner, `parser/operators.rs`'s `Const-ScalarCollapse`,
+`parser/mod.rs`'s `size` receiver.  Adopting them would ADD value enums at each, which is a
+behaviour change per site and needs its own probe.  They stay on the checklist rather than being
+swept, because "these lists are equal today" is not the same claim as "these are one rule" — and
+a merge that couples two rules which must stay free to differ is worse than the duplication.
+
+### A stray NUL byte made four files invisible to `grep` — now gated
+
+While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed
+nowhere, in a tree where a backtrace had just named it. `src/database/format.rs` — 99 KB
+of source — contained **one NUL byte**, pasted into a comment that was quoting the
+one-character string a bug produced. `grep` and `ripgrep` classify such a file as binary
+and skip it **silently**: no match, no warning, no non-zero exit.
+
+That is worth a gate rather than a fix, because the failure is invisible in both
+directions — the file reads fine in an editor, and the search that misses it reports
+success. loft's development model runs on grepping this tree, so a file the tools cannot
+see is a hole in the METHOD, not in one search.
+
+`tests/doc_hygiene.rs::no_source_file_is_invisible_to_grep` scans `src/`, `doc/claude/`,
+`tests/scripts/` and `default/` and names the file, line and byte offset. **It found three
+more on its first run** — `src/extensions.rs`, `doc/claude/CHANGELOG_TECHNICAL.md` and
+`tests/scripts/57-json.loft` — all the same slip, and three of the four were the same
+comment about loft#769's sentinel copy-pasted between files, carrying the byte each time.
+One bad paste, four blind spots. All four now describe the NUL in words.
 
 ### The library-CI gate reddens library repos for reasons they cannot cure
 
@@ -203,26 +1215,65 @@ the null code, so its ops encode against `min + 1` while the schema carried the 
 was absent. Fixed at the one home (`is_null` + `IntegerSpec::part_min`); guarded by
 `tests/scripts/narrow-null-render.loft` on both backends.
 
-**Q1/P54 — an ABSENT nullable field does not read back null at every width (OPEN, S).**
-The fix above stopped `to_json` from masking this, and it is worth stating precisely
-because it is the round-trip's remaining asymmetry. Parsing a JSON object that omits a
-nullable field — or gives it an explicit `null` — lands:
+**Q1/P54 — an absent field is the DECLARATION's question, and the second JSON walker was
+answering it itself — CLOSED 2026-08-22.** The row this replaces named three widths
+(`u16?` → `0`, `i16?` → `-32767`, `boolean?` → `false`) and pointed at
+`structures.rs`'s clear-to-default arm. **Re-measured, it was stale in one direction and
+far too narrow in the other**, and both halves of that are worth keeping.
 
-| field type | absent field reads back |
-|---|---|
-| `u8?`, `integer limit(lo,hi)?`, `integer?`, `float?`, `text?` | `null` ✅ |
-| `u16?` | **`0`** |
-| `i16?` | **`-32767`** (the slot's usable minimum) |
-| `boolean?` | **`false`** |
+*Stale:* those three widths were fixed at exactly the named site before this pass —
+`set_default_value_nullable` writes `i32::MIN` for a `Short` and `255` for a boolean, and
+its own comment quotes the `0` / `-32767` the row reports. That fix is on `main`. Re-run,
+the one-stage `T.parse(text)` is clean at every width.
 
-Identical on `--interpret` and `--native`, and identical on `main` — this is pre-existing,
-not a regression of the render fix. The suspect is the field-DEFAULT writer
-(`structures.rs`'s clear-to-default arm), which writes the 2-byte null as the *value*
-`65535` where `Parts::Short`'s encoding reserves the raw code `0`; the boolean arm writes
-`false` where @PLN17's tri-state reserves `255`. It is the same class as the render bug —
-a sentinel written by one site and read by another, with the two encodings disagreeing —
-so it belongs to Cluster D and should be fixed at `Stores::is_null`'s write-side twin, not
-per width. `silent-wrong`: a null becomes a plausible number with nothing reported.
+*Too narrow:* the same probe on the **two-stage** `T.parse(json_parse(text))` — the form
+this document recommends because it reports diagnostics — was wrong about nearly every
+absent field, and the failing widths were the COMPLEMENT of the ones filed:
+
+```
+struct D { u: u8?, b: boolean?, i: integer, t: text, dd: u8 = 9 }  ..parse("{}")
+  two-stage was  u=0     b=false  i=null  t=null  dd=0
+  one-stage      u=null  b=null   i=0     t=""    dd=9
+```
+
+So an absent `u8?` read back the VALUE `0`, an absent non-null `integer` read back **null
+in a slot `(N-Decl)` says cannot hold one**, and a declared field default was ignored
+outright. `u16?`/`i16?` passed here only by luck — `Parts::Short` reserves the raw code
+`0`, so zero-init bytes happen to spell its null.
+
+And the same gap **dropped narrow fields that WERE given a value**, which is data loss
+rather than a sentinel mix-up: `u8?` handed `42` read back `0`, `u16?` handed `300` read
+back `null`, non-null `u8` handed `7` read back `0`, and `vector<u8?>` given `[1,null,3]`
+read back `[0,0,0]`. A narrow field simply had no arm in that walker; it fell to
+`_ => { /* not yet handled … Leave at zero-init default */ }`. Wrong-KIND values fell
+there too, so the mismatch report never named them either.
+
+Root cause is one sentence: **`populate_struct_from_jsonvalue` answered "what does an
+absent field hold?" per type, instead of asking the declaration.** The rule it broke is
+[formal/layout.md](formal/layout.md) `(L-Null)` — absence is a sentinel inside the slot's
+own bytes, so the sentinel is part of the LAYOUT and belongs at one address. Both walkers
+now call `Stores::write_absent_value` (declared default, else the type's absent value) and
+`Stores::write_narrow_value` (the four narrow encodings); the one-stage walker's four
+open-coded narrow arms and its two copies of the absent-field decision collapsed onto the
+same two calls, so there is no second spelling left to drift. Guarded by
+`tests/scripts/json-walker-absent-field.loft` on both backends.
+
+⚠ **The blast radius is wider than `T.parse`.** `engine_host.rs`'s live build swap
+(@PLN18 08-S5) restores a running world into the new process through this same walker —
+`swap_world_impl` reads the snapshot with `json_parse` and hands it straight to
+`populate_struct_from_jsonvalue`. The snapshot is WRITTEN by loft's schema walker, whose
+narrow-null spelling was fixed on 2026-08-20, and read by this one, which was not: so
+every narrow field in a swapped world came back at its zero and every nullable narrow
+field came back as a number, silently, on hot reload. The round-trip is now pinned as an
+identity (`test_snapshot_restore_is_the_identity`) — worth having because a snapshot test
+written the obvious way is closed under its own encoder and would have passed throughout.
+
+**Two method notes, both measured here.** First, *a filed table is a hypothesis about
+which cells are broken, not just about why* — this one had the right symptom, the wrong
+widths, the wrong route and a suspect that was already fixed, and re-running the probe
+cost less than reading the row carefully. Second, **the reference implementation is the
+oracle**: every cell above is scored against what the one-stage route answers for the same
+document, which is what turned "some widths look odd" into a complete list.
 
 **`record#errors` is a text, and the docs said "iterate" — OPEN (design, XS-if-decided).**
 Both `STDLIB.md` and `LOFT.md` showed `for e in user#errors { log_warn(e); }`.  That

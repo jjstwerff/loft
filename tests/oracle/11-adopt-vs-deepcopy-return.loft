@@ -32,8 +32,20 @@ fn main() {
     // reassign-in-loop of an owned-call result
     r = s; total = 0;
     for i in 0..3 { r = mk_from(r); total += r.v; }
-    println("a={a.v} b={b.v}");                       // 6 5
-    println("wrap={e.v} kid={(e.kids[0] ?? Node { v: 0, kids: [] }).v}"); // 5 10
-    println("pick={f.v} chain={g.v} loop={total}");   // 1 7 21
-    println("src={s.v} vs={len(vs)}");                // 5 2  (sources survive — copies, not aliases)
+    kid = (e.kids[0] ?? Node { v: 0, kids: [] }).v;
+    assert(a.v == 6, "mk_from adds one to the seed; got {a.v}");
+    assert(b.v == 5, "id_g returns the param's value unchanged; got {b.v}");
+    assert(e.v == 5 && kid == 10, "wrap keeps the seed and doubles it into the kid; got {e.v} {kid}");
+    assert(f.v == 1, "the ?? JOIN takes the present element, not the literal; got {f.v}");
+    assert(g.v == 7, "mk_from twice over 5 is 7 — the chain does not re-read the seed; got {g.v}");
+    assert(total == 21, "6 + 7 + 8 over three reassignments; got {total}");
+    // The load-bearing pair: whether the callee ADOPTED a fresh store or DEEP-COPIED is
+    // invisible in the results above and visible here — an adopt of something that was
+    // not fresh would have consumed the source.
+    assert(s.v == 5, "the seed survives being fed to every call; got {s.v}");
+    assert(len(vs) == 2, "…and the picked-from vector keeps both elements; got {len(vs)}");
+    println("a={a.v} b={b.v}");
+    println("wrap={e.v} kid={kid}");
+    println("pick={f.v} chain={g.v} loop={total}");
+    println("src={s.v} vs={len(vs)}");
 }

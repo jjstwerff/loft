@@ -246,7 +246,7 @@ fn writes_store(
 ) -> bool {
     node.any_node(&mut |n| match n {
         Value::Call(d, _) => call_writes_store(*d, data, cache, active),
-        Value::CallRef(_, _) | Value::Parallel(_) | Value::ParFor(_) | Value::Yield(_) => true,
+        Value::CallRef(_, _) | Value::Parallel(_) | Value::Yield(_) => true,
         _ => false,
     })
 }

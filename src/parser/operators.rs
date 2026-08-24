@@ -347,17 +347,7 @@ impl Parser {
         op: &str,
         var_nr: u16,
     ) -> bool {
-        if op != "="
-            || var_nr == u16::MAX
-            || !matches!(
-                f_type,
-                Type::Sorted(_, _, _)
-                    | Type::Hash(_, _, _)
-                    | Type::Index(_, _, _)
-                    | Type::Radix(_, _, _)
-                    | Type::Trie(_, _, _)
-            )
-        {
+        if op != "=" || var_nr == u16::MAX || !crate::parser::vectors::is_keyed(f_type) {
             return false;
         }
         let is_empty_insert = matches!(code, Value::Insert(ls) if ls.is_empty());
@@ -723,15 +713,7 @@ impl Parser {
         }
         // Only the shapes `lift_owned_return` does NOT lift — a collection return, whose
         // hidden buffer IS what the call answers.
-        if !matches!(
-            self.data.def(fn_nr).returned().base(),
-            Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if !crate::parser::vectors::is_collection(self.data.def(fn_nr).returned().base()) {
             return false;
         }
         args.iter()
@@ -1453,9 +1435,30 @@ impl Parser {
                                 crate::data::element_stack_offsets(&elems)[idx] as u32
                             };
                             let elem_tp = elems[idx].clone();
+                            // Carry the BASE's lifetime into the element, exactly as the
+                            // plain-tuple site above (P197) and the struct-field read in
+                            // `fields.rs` already do.  This was the one of the three that
+                            // took the synthetic struct's attribute type VERBATIM, so a
+                            // stored-tuple element bound off a BORROWED base came out with
+                            // NO deps — typed as an owner while holding a handle into
+                            // someone else's record, and handed an `OpFreeRef` to match.
+                            // That is why a struct-typed element read as a COPY while its
+                            // three sibling projections are views (`formal/binding.md`
+                            // B-View: a struct-typed projection aliases without `&`).
+                            let parent_deps = t.depend();
+                            let base_var = match code.unspan() {
+                                Value::Var(nr) => Some(*nr),
+                                _ => None,
+                            };
                             *code =
                                 self.get_val(&elem_tp, false, elem_offset, code.clone(), u32::MAX);
                             t = elem_tp;
+                            for on in parent_deps {
+                                t = t.depending(on);
+                            }
+                            if let Some(nr) = base_var {
+                                t = t.depending(nr);
+                            }
                         }
                     }
                 } else {
@@ -1935,7 +1938,6 @@ impl Parser {
             Value::Set(_, src)
             | Value::Return(src)
             | Value::Drop(src)
-            | Value::BreakWith(_, src)
             | Value::Yield(src)
             | Value::TuplePut(_, _, src) => {
                 Self::rewrite_subtree_to_nullable(src, data);
@@ -2129,9 +2131,16 @@ impl Parser {
             && let Value::Var(v) = src
         {
             let first_tp = elems[0].clone();
-            let mut nc = Value::TupleGet(*v, 0);
-            self.convert(&mut nc, &first_tp, &Type::Boolean);
-            nc
+            // RECURSE rather than calling the generic `convert(first_tp, Boolean)`: the
+            // heap-DbRef branch below exists precisely because that generic path has no
+            // registered `OpConv*FromX -> Boolean` for a collection and hands back the
+            // bare Var, which the interpreter then tests as raw bytes.  Asking it here
+            // put a `vector`-first tuple through exactly that hole — `v[0] ?? fb`
+            // answered the FALLBACK for a PRESENT element, losing the scalar half with
+            // it, on `--interpret` only.  A `Reference` first element hid it: that one
+            // does have a generic path.  Recursion is also what keeps the two answers
+            // from drifting, which is the same reason `ref_tuple_element_ok` is one list.
+            self.coalesce_not_null(&Value::TupleGet(*v, 0), &first_tp)
         } else if let Type::Enum(syn, true, _) = tp
             && self.data.def(*syn).name.starts_with("__nullable<")
         {
@@ -2670,15 +2679,7 @@ impl Parser {
         // be parsed IN the coalesce's right-operand context (its ownership view-model
         // depends on that context — a standalone `[]` leaks), so route it as a SOURCE
         // that `build_null_coalesce_default` parses at its own parse site.
-        if matches!(
-            base,
-            Type::Vector(_, _)
-                | Type::Hash(_, _, _)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Trie(_, _, _)
-        ) {
+        if crate::parser::vectors::is_collection(&base) {
             *ctp = base;
             let lhs_type = ctp.clone();
             self.pending_default_src = Some("[]".to_string());
@@ -3989,7 +3990,7 @@ impl Parser {
                 // Both are robust to parser-name changes — (b) is the
                 // semantic check, (a) is the fast-path.
                 fn contains_break(v: &Value) -> bool {
-                    v.any_node(&mut |n| matches!(n, Value::Break(_) | Value::BreakWith(_, _)))
+                    v.any_node(&mut |n| matches!(n, Value::Break(_)))
                 }
                 let mut loop_vars_added: Vec<u16> = Vec::new();
                 for child in &b.operators {
@@ -4042,7 +4043,6 @@ impl Parser {
             }
             Value::Return(src)
             | Value::Drop(src)
-            | Value::BreakWith(_, src)
             | Value::Yield(src)
             | Value::TuplePut(_, _, src) => {
                 self.walk_for_warnings(src, ctx);

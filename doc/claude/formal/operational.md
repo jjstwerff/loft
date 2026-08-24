@@ -364,6 +364,22 @@ keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
   failing the nightly on any cross-backend divergence — the manual `-- --ignored` run is now
   a standing automatic guard.  Stays OPEN (the deviation closes only when a shared executable
   semantics replaces "the interpreter is the spec", or is reconciled): the corpus keeps growing.
+  **2026-08-23 — the corpus can now FAIL, not only DISAGREE.**  The oracle asserts that the
+  backends agree, and two backends wrong in the same way satisfy that perfectly — measured
+  three times this cycle (the tuple-`&` local, the Join-arm ownership, the JSON walker),
+  each identical on both sides and each structurally invisible here.  Re-measured, **32 of
+  33 corpus programs carried no `assert` at all**: they printed, and the harness compared
+  the two prints.  The hand-computed expected values existed — as COMMENTS (`// 55`,
+  `// 3 2`, `// 0+1+1+2+3+5+8+13 = 33`), roughly 157 of them, checked by nobody.  They are
+  assertions now (153 of them, 31 of 33 programs; a statically-rejected program is exempt
+  because it never runs).  Converting a comment rather than recording a golden is what
+  keeps the expectation independent of the implementation — a golden captured today would
+  enshrine today's answers, shared mistakes included.
+  Three ratchets keep the corpus from regrowing the hole, each proven able to fire:
+  a program must produce OUTPUT (`@ORACLE_STATIC_REJECT:` to opt out), must EXIT 0
+  (`@ORACLE_HALTS:`), and must carry an `assert`.  The first two are what make the third
+  worth writing: a self-check that fails identically on both backends is otherwise just
+  more agreement.
 - **Removal:** build a **differential oracle** — run a growing program corpus on BOTH
   backends and assert they AGREE (value / null / halt / stdout / stderr / leak); these rules stay the
   written contract that GUIDES the corpus (what behaviour to cover), not a third

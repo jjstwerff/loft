@@ -104,4 +104,12 @@ fn main() {
   // --- fold (reduce) with custom lambda ---
   v2 = [10, 20, 30];
   assert(fold(|a, b| { a + b }, 0, v2) == 60, "fold sum={fold(|a, b| { a + b }, 0, v2)}");
+
+  // --- a lambda inside a fn is not a file-scope declaration ---
+  // From `36-parse-errors.loft`, where it could never run: one firing `@EXPECT_ERROR`
+  // stops that whole file before execution, so its positive half asserted nothing.
+  pe_f = fn(x: integer) -> integer {
+    x * 2
+  };
+  assert(pe_f(5) == 10, "lambda works inside fn");
 }

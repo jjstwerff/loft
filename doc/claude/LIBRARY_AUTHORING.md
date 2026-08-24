@@ -428,6 +428,40 @@ exception you write a CHANGELOG line for. Breaking is allowed — the registry k
 releases installable, so a consumer that cannot follow you keeps resolving to the last version
 that suits them — but it must be a choice you made, not one you shipped by accident.
 
+**Run `--full` before the tag, even when the change feels additive — the check reads the
+TYPE, not your reasoning.**  The trap is a struct gaining a field with a default.  It looks
+like the safest change there is: every existing `Pixel { r, g, b }` still compiles, because a
+declared default is exactly what makes the new field optional at construction.  That reasoning
+is true and is not the whole claim.  Measured on `P3 { r, g, b }` versus
+`P4 { r, g, b, a = 255 }`:
+
+```
+P3 writes: {"r":10,"g":2,"b":3}
+P4 writes: {"r":10,"g":2,"b":3,"a":255}
+```
+
+Two different axes move, and only one of them is the one authors think about:
+
+- **What you WRITE changes.**  `to_json()` gains a key, and so does any reflection walk
+  (`fields`, `keys`).  A consumer comparing serialised output, or a reader that rejects
+  unknown fields, sees a new document.  Reading in the other direction is fine — an old
+  document parses into the new type and the default fills the gap (`a=255` above), which is
+  why authors probe the read side, find it clean, and conclude the change was additive.
+- **The record LAYOUT changes.**  A type has exactly one `(size, align, offset-vector)`
+  ([formal/layout.md](formal/layout.md) `(L-Total)`), and that rule's own gloss is the
+  warning: it is *"what makes a store written by one build readable by another **of the same
+  layout**"*.  Add a field and it is no longer the same layout, so a record persisted under
+  the old one is read at offsets computed for a different type.  That is a
+  `data_compatible_with` break, and it is invisible from source entirely.
+
+So the two floors move for different reasons and neither is implied by "existing source still
+compiles".  `loft compat check --full` reports both, against every prior release, before the
+release exists — which is the whole point of running it at PUBLISH time rather than after a
+consumer finds out.  (Worked example: `imaging` 0.3.0 claimed `api_compatible_with = "0.1.0"`
+on exactly this reasoning and the check answered API BREAK + DATA BREAK against all four prior
+releases.  ⚠ Note that loft has **no positional struct construction** — `Pixel { 1, 2, 3 }` is
+a parse error — so field ORDER is not one of the axes here, however plausible it sounds.)
+
 The mechanical `[auto]` core of the full correctness bar — see
 [LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) for the Goal-by-Goal + doc-quality
 `[review]` items and the registry `verified` administration.

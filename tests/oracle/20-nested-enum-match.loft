@@ -32,5 +32,12 @@ fn main() {
     for i in 0..len(shapes) { total += area(shapes[i] ?? Shape::Dot); }
     // a match returning variants, fed back through area
     winner = bigger(Shape::Circle { r: 3 }, Shape::Box { w: 4, h: 9 });
-    println("areas_total={total} winner_area={area(winner)}");
+    wa = area(winner);
+    // Four variants of three different payload SHAPES (none, one field, two fields),
+    // so a layout that read the wrong field would land inside the total rather than
+    // crashing — and would land there identically on both backends.
+    assert(total == 93, "0 + 3*4*4 + 5*6 + (7+8) = 0+48+30+15 = 93; got {total}");
+    // 27 vs 36: `bigger` must pick the Box, and `area` must then take the Box arm.
+    assert(wa == 36, "circle r=3 is 27, box 4x9 is 36, so the box wins; got {wa}");
+    println("areas_total={total} winner_area={wa}");
 }

@@ -861,12 +861,18 @@ fn native_scripts() -> std::io::Result<()> {
         // Skip files with intentional compile errors or expected failures.
         // Native mode compiles the whole file into one binary and can't
         // tolerate per-function panics like the interpreter runner can.
+        //
+        // Read the annotation the way `wrap` reads it (`common::expect_tag`), not with a
+        // `contains` over the whole source: a file that merely NAMES the tag in prose —
+        // "this file used to be an @EXPECT_ERROR case" — declares nothing, and skipping
+        // on the mention silently dropped five scripts from this suite, including
+        // `93-vector-advanced.loft` and its forty-nine assertions.
         if let Ok(src) = std::fs::read_to_string(&entry) {
-            if src.contains("@EXPECT_ERROR") {
+            if common::declares_expect_error(&src) {
                 println!("skip {entry:?} (has @EXPECT_ERROR)");
                 continue;
             }
-            if src.contains("@EXPECT_FAIL") {
+            if common::declares_expect_fail(&src) {
                 println!("skip {entry:?} (has @EXPECT_FAIL)");
                 continue;
             }

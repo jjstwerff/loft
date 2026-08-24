@@ -26,7 +26,7 @@
 
 use crate::data::{
     Attribute, Block, Data, DefType, Definition, ImpureCategory, IntegerSpec, LinkedFieldGroup,
-    LinkedFieldKind, ParForBody, Purity, Type, Value,
+    LinkedFieldKind, Purity, Type, Value,
 };
 use crate::json::Parsed;
 use crate::keys::Key;
@@ -445,17 +445,17 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
     })
 }
 
-// ─── Value JSON (Step 2: full encoder + decoder for all 34 variants) ──────────
+// ─── Value JSON (Step 2: full encoder + decoder for all 32 variants) ──────────
 //
 // `Value` is the recursive IR-body enum.  The encoder is exhaustive (a `match`
 // cannot be partial); the decoder dispatches on the `"k"` tag and covers every
 // variant.  It was built in reviewable slices (V1 leaf → V2 recursive payloads
-// → V3 Block/Loop/Span → V4 FnRef/ParFor), now all landed.
+// → V3 Block/Loop/Span → V4 FnRef), now all landed.
 //
 // Same conventions as `Type`: tagged object `{ "k": "<variant>", … }`,
 // absolute indices verbatim, strings via `write_str`.
 
-/// Serialise a `Value` to JSON.  Exhaustive over all 34 variants.
+/// Serialise a `Value` to JSON.  Exhaustive over all 32 variants.
 #[must_use]
 pub fn value_to_json(v: &Value) -> String {
     let mut out = String::new();
@@ -567,11 +567,6 @@ fn write_value(out: &mut String, v: &Value) {
             write_value(out, inner);
             out.push('}');
         }
-        Value::BreakWith(n, inner) => {
-            let _ = write!(out, "{{\"k\":\"BreakWith\",\"n\":{n},\"v\":");
-            write_value(out, inner);
-            out.push('}');
-        }
         Value::TuplePut(var, idx, inner) => {
             let _ = write!(
                 out,
@@ -621,11 +616,6 @@ fn write_value(out: &mut String, v: &Value) {
             write_type(out, ty);
             out.push('}');
         }
-        Value::ParFor(b) => {
-            out.push_str("{\"k\":\"ParFor\",\"body\":");
-            write_parforbody(out, b);
-            out.push('}');
-        }
     }
 }
 
@@ -671,25 +661,9 @@ fn write_block(out: &mut String, b: &Block) {
     let _ = write!(out, ",\"scope\":{},\"var_size\":{}}}", b.scope, b.var_size);
 }
 
-fn write_parforbody(out: &mut String, b: &ParForBody) {
-    out.push_str("{\"input\":");
-    write_value(out, &b.input);
-    let _ = write!(
-        out,
-        ",\"x_var\":{},\"r_var\":{},\"worker\":",
-        b.x_var, b.r_var
-    );
-    write_value(out, &b.worker);
-    out.push_str(",\"threads\":");
-    write_value(out, &b.threads);
-    out.push_str(",\"body\":");
-    write_value(out, &b.body);
-    let _ = write!(out, ",\"stitch_id\":{}}}", b.stitch_id);
-}
-
-/// Parse a JSON string into a `Value`.  Decodes all 34 variants: leaf (V1),
+/// Parse a JSON string into a `Value`.  Decodes all 32 variants: leaf (V1),
 /// recursive `Value`/`Vec<Value>`/scalar payloads (V2), `Block`/`Loop`/`Span`
-/// (V3), and `FnRef`/`ParFor` (V4 — slice complete).
+/// (V3), and `FnRef` (V4 — slice complete).
 ///
 /// # Errors
 /// Malformed JSON, wrong field shape, or an unknown variant tag.
@@ -785,19 +759,6 @@ fn position_from_parsed(p: &Parsed) -> Result<Position, TypeDecodeError> {
     })
 }
 
-/// Decode a [`ParForBody`] (V4 — carried by `Value::ParFor`).
-fn parforbody_from_parsed(p: &Parsed) -> Result<ParForBody, TypeDecodeError> {
-    Ok(ParForBody {
-        input: value_from_parsed(field(p, "input")?)?,
-        x_var: as_u16(field(p, "x_var")?)?,
-        r_var: as_u16(field(p, "r_var")?)?,
-        worker: value_from_parsed(field(p, "worker")?)?,
-        threads: value_from_parsed(field(p, "threads")?)?,
-        body: value_from_parsed(field(p, "body")?)?,
-        stitch_id: as_u8(field(p, "stitch_id")?)?,
-    })
-}
-
 fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
     let tag = as_str(field(p, "k")?)?;
     Ok(match tag.as_str() {
@@ -828,7 +789,6 @@ fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
         "Return" => Value::Return(boxed(p, "v")?),
         "Drop" => Value::Drop(boxed(p, "v")?),
         "Yield" => Value::Yield(boxed(p, "v")?),
-        "BreakWith" => Value::BreakWith(as_u16(field(p, "n")?)?, boxed(p, "v")?),
         "TuplePut" => Value::TuplePut(
             as_u16(field(p, "var")?)?,
             as_u16(field(p, "idx")?)?,
@@ -848,13 +808,11 @@ fn value_from_parsed(p: &Parsed) -> Result<Value, TypeDecodeError> {
             position_from_parsed(field(p, "pos")?)?,
             value_from_parsed(field(p, "v")?)?,
         ))),
-        // ── V4: FnRef (Type payload) + ParFor (ParForBody) — slice closes ──
         "FnRef" => Value::FnRef(
             as_i32(field(p, "d")?)?,
             as_u16(field(p, "var")?)?,
             Box::new(type_from_parsed(field(p, "t")?)?),
         ),
-        "ParFor" => Value::ParFor(Box::new(parforbody_from_parsed(field(p, "body")?)?)),
         other => return Err(TypeDecodeError::UnknownTag(other.to_string())),
     })
 }
@@ -1814,7 +1772,7 @@ mod tests {
         );
     }
 
-    /// The full encoder is exhaustive (it must compile over all 34 variants);
+    /// The full encoder is exhaustive (it must compile over all 32 variants);
     /// every emit — leaf AND recursive — must be valid JSON even before the
     /// recursive decoders land.
     #[test]
@@ -1845,15 +1803,6 @@ mod tests {
                 },
                 Value::Int(42),
             ))),
-            Value::ParFor(Box::new(ParForBody {
-                input: Value::Var(0),
-                x_var: 1,
-                r_var: 2,
-                worker: Value::Null,
-                threads: Value::Int(4),
-                body: Value::Int(1),
-                stitch_id: 0,
-            })),
         ];
         for v in &samples {
             let json = value_to_json(v);
@@ -1865,7 +1814,7 @@ mod tests {
     }
 
     /// V2 round-trips the recursive variants whose payload is only
-    /// `Value` / `Vec<Value>` / scalars (Block/Loop/Span/FnRef/ParFor wait
+    /// `Value` / `Vec<Value>` / scalars (Block/Loop/Span/FnRef wait
     /// for V3–V4).  Nesting is exercised so the recursion is real.
     #[test]
     fn value_recursive_round_trip() {
@@ -1880,7 +1829,6 @@ mod tests {
             Value::Return(Box::new(Value::Null)),
             Value::Drop(Box::new(Value::Var(0))),
             Value::Yield(Box::new(Value::Int(7))),
-            Value::BreakWith(2, Box::new(Value::Boolean(false))),
             Value::TuplePut(1, 4, Box::new(Value::Int(3))),
             Value::If(
                 Box::new(Value::Boolean(true)),
@@ -1992,10 +1940,9 @@ mod tests {
         );
     }
 
-    /// V4 round-trips FnRef (Type payload) and ParFor (ParForBody with five
-    /// nested Values), closing the Value slice.
+    /// V4 round-trips FnRef (Type payload), closing the Value slice.
     #[test]
-    fn value_fnref_parfor_round_trip() {
+    fn value_fnref_round_trip() {
         let samples = [
             Value::FnRef(2, 1, Box::new(Type::Boolean)),
             // negative dnr + sentinel var (the to_default shape, data.rs:536)
@@ -2004,15 +1951,6 @@ mod tests {
                 u16::MAX,
                 Box::new(Type::Function(vec![], Box::new(Type::Null), Deps::none())),
             ),
-            Value::ParFor(Box::new(ParForBody {
-                input: Value::Var(0),
-                x_var: 1,
-                r_var: 2,
-                worker: Value::Call(3, vec![Value::Int(1)]),
-                threads: Value::Int(4),
-                body: Value::Set(0, Box::new(Value::Var(1))),
-                stitch_id: 7,
-            })),
         ];
         for v in &samples {
             let json = value_to_json(v);
@@ -2022,24 +1960,12 @@ mod tests {
         }
     }
 
-    /// Pin the exact emitted JSON for FnRef and ParFor.
+    /// Pin the exact emitted JSON for FnRef.
     #[test]
-    fn value_golden_fnref_parfor_format() {
+    fn value_golden_fnref_format() {
         assert_eq!(
             value_to_json(&Value::FnRef(2, 1, Box::new(Type::Boolean))),
             r#"{"k":"FnRef","d":2,"var":1,"t":{"k":"Boolean"}}"#
-        );
-        assert_eq!(
-            value_to_json(&Value::ParFor(Box::new(ParForBody {
-                input: Value::Var(0),
-                x_var: 1,
-                r_var: 2,
-                worker: Value::Null,
-                threads: Value::Int(4),
-                body: Value::Int(1),
-                stitch_id: 0,
-            }))),
-            r#"{"k":"ParFor","body":{"input":{"k":"Var","n":0},"x_var":1,"r_var":2,"worker":{"k":"Null"},"threads":{"k":"Int","n":4},"body":{"k":"Int","n":1},"stitch_id":0}}"#
         );
     }
 
@@ -2068,15 +1994,6 @@ mod tests {
                 Value::Null,
             ))),
             Value::FnRef(0, 0, Box::new(Type::Null)),
-            Value::ParFor(Box::new(ParForBody {
-                input: Value::Null,
-                x_var: 0,
-                r_var: 0,
-                worker: Value::Null,
-                threads: Value::Null,
-                body: Value::Null,
-                stitch_id: 0,
-            })),
         ];
         for v in &all {
             let json = value_to_json(v);

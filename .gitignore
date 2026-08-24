@@ -139,3 +139,8 @@ target-*/
 /*.store
 /*.store.dschema
 .ci-running
+
+# Brick Buster's sprite pack — DRAWN by tools/brick-buster/pack_atlas.loft at
+# build time (@PLN146 F4), not authored.  `make game` / `make play` regenerate
+# it, and `[[embed]]` in the game's loft.toml carries it into the browser page.
+/tools/brick-buster/assets/

@@ -92,6 +92,23 @@ the `features-check` drift guard fails on hand-edits).
 File a NEW plan as a `loft-lang/plans` issue with one `status:*` + one `subject:*` label. Look refs
 up with `./scripts/idx` (`make index` first if stale; `./scripts/idx help` for queries).
 
+**A FORMAL RULE is `@FR-`-tagged — `@FR-B-Copy`, `@FR-L-Null`, `@FR-D-bind-11`** — and a code
+site that enforces one CITES it, so *"which sites enforce this rule?"* is a grep and *"is this
+rule already implemented somewhere?"* is a lookup. `scripts/rule_tags.py` is the tool
+(`list` · `check` · `sites <tag>` · `dups`); `check` gates that every citation resolves and no
+rule is defined twice.
+
+⚠ **A bare `@Name` is NOT unambiguous here** — `@` already carries the tracker tags above, the
+worked-example family (`@AAA-###`) and the corpus annotations (`@ARGS`, `@NAME`, `@IGNORE`,
+`@EXPECT_ERROR`); a bare-`@` reading of `src/` returned **4142 hits, not one of them a rule**.
+`@FR-` cannot be confused with `@F<digits>`, whose next character is a digit. Citations are
+**boundary-exact** (`@FR-B-View` does not match `@FR-B-View-Base`) because 21 of the 285 defined
+rules are a prefix of another — a general rule and its refinements share a stem, and renaming
+them to dodge a matcher is the worse trade. Only a DEFINED rule is a citation target: `B-Ref`,
+`D-op`, `D-own`, `D-cap` and `D-op-null` read like rules and are family PREFIXES used in prose.
+Detail: [formal/README.md § Rule tags](doc/claude/formal/README.md),
+[formal/IMPLEMENTATIONS.md](doc/claude/formal/IMPLEMENTATIONS.md).
+
 ## Architecture — execution path
 
 ```

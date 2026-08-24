@@ -801,11 +801,48 @@ pub fn init(state: &mut State) {
     }
 }
 
+/// `LOFT_TRACE_ASSERTS=<path>` — append `file:line` for every `assert` that EXECUTES.
+///
+/// The instrument for the assertion nobody checks.  A corpus's guarantee is the set of
+/// `assert`s it RUNS, and that set is invisible: a file skipped for an expected error, a
+/// function the entry point never calls, a branch never taken all look exactly like a
+/// passing test.  Diffing this trace against the `assert(` sites in the source names them
+/// — 81 in `tests/scripts` when it was first run, and a `--native` run appends to the same
+/// file because the generated binary calls this same function.
+///
+/// It also reads the position the COMPILER injected, which is how it found loft#625's
+/// mechanism at a second site: every assert in one file traced exactly seven lines early,
+/// so a failure printed another assert's source under the caret.
+///
+/// Off costs one `OnceLock` read.  Append rather than truncate: a suite runs many
+/// programs, and each is a separate process under `--native`.
+fn trace_assert_site(file: &str, line: i64) {
+    use std::io::Write;
+    use std::sync::OnceLock;
+    static SINK: OnceLock<Option<std::sync::Mutex<std::fs::File>>> = OnceLock::new();
+    let sink = SINK.get_or_init(|| {
+        std::env::var("LOFT_TRACE_ASSERTS").ok().and_then(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+                .map(std::sync::Mutex::new)
+        })
+    });
+    if let Some(m) = sink
+        && let Ok(mut f) = m.lock()
+    {
+        let _ = writeln!(f, "{file}:{line}");
+    }
+}
+
 fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
     let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     let v_test = *stores.get::<bool>(stack);
+    trace_assert_site(v_file.str(), v_line);
     if stores.report_asserts {
         stores.assert_results.push((
             v_test,
@@ -4292,6 +4329,7 @@ pub(crate) fn populate_struct_from_jsonvalue(
     let kt_float = stores.name("float");
     let kt_bool = stores.name("boolean");
     let kt_text = stores.name("text");
+    let kt_char = stores.name("character");
     // Parts::Struct(_) iteration: clone the field list because we need
     // a long-lived borrow on `stores` for the writes below.
     let fields = match &stores.types[struct_kt as usize].parts {
@@ -4299,74 +4337,110 @@ pub(crate) fn populate_struct_from_jsonvalue(
         _ => return,
     };
     let struct_name = stores.types[struct_kt as usize].name.clone();
-    for field in &fields {
+    for (f_nr, field) in fields.iter().enumerate() {
         let content_kt = field.content;
         let dest_field_pos = dest.pos + u32::from(field.position);
-        // Find the JSON sub-value by name.  Absent → synthesise a
-        // JNull discriminant so the unwrap functions write each
-        // field's null sentinel (matches the legacy
-        // `Type.parse(text)` behaviour where missing fields land
-        // as null, not zero-init bytes).
+        let slot = DbRef {
+            store_nr: dest.store_nr,
+            rec: dest.rec,
+            pos: dest_field_pos,
+        };
+        let field_nr = u16::try_from(f_nr).unwrap_or(u16::MAX);
         let sub_jv = lookup_jobject_field(stores, src, &field.name);
         let item_discr = match &sub_jv {
             Some(s) => stores.store(s).get_byte(s.rec, s.pos, 0),
             None => JV_DISCR_NULL,
         };
-        // Dummy ref for absent fields — the unwrap functions
-        // short-circuit on JNull/wrong-kind and never read from sub
-        // unless the discriminant matches.
-        let sub = sub_jv.unwrap_or(*dest);
+        // An omitted key and an explicit `null` are the same question, and the
+        // DECLARATION answers it — a declared default, else the type's absent value.
+        // Deciding it once here is what keeps this walker's answer identical to the
+        // `text`-side one's; while each type arm below answered for itself, a declared
+        // default was ignored, a non-null field took a null sentinel, and a one-byte
+        // width took its zero code (`u8?` read back `0`, `boolean?` read back `false`).
+        if sub_jv.is_none() || item_discr == JV_DISCR_NULL {
+            stores.write_absent_value(content_kt, struct_kt, field_nr, &slot);
+            continue;
+        }
+        let sub = sub_jv.expect("present — the absent case continued above");
         // Dispatch on the field's declared content type.  For
         // primitive types we cache-compare via known_type.  For
         // nested struct, vector, and JsonValue passthrough we look
-        // at the content type's `Parts` variant.
+        // at the content type's `Parts` variant.  A source the field's
+        // type cannot hold is reported and then treated as absent, so
+        // one field never answers a mismatch two different ways.
         if content_kt == kt_long {
-            let value = unwrap_long(stores, &sub, item_discr, &struct_name, &field.name);
-            stores
-                .store_mut(dest)
-                .set_long(dest.rec, dest_field_pos, value);
+            match unwrap_long(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(v) => {
+                    stores.store_mut(dest).set_long(dest.rec, dest_field_pos, v);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
+            }
         } else if content_kt == kt_int {
-            let value = unwrap_int(stores, &sub, item_discr, &struct_name, &field.name);
-            stores
-                .store_mut(dest)
-                .set_int(dest.rec, dest_field_pos, value);
+            match unwrap_int(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(v) => {
+                    stores.store_mut(dest).set_int(dest.rec, dest_field_pos, v);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
+            }
         } else if content_kt == kt_float {
-            let value = unwrap_float(stores, &sub, item_discr, &struct_name, &field.name);
-            stores
-                .store_mut(dest)
-                .set_float(dest.rec, dest_field_pos, value);
+            match unwrap_float(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(v) => {
+                    stores
+                        .store_mut(dest)
+                        .set_float(dest.rec, dest_field_pos, v);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
+            }
         } else if content_kt == kt_bool {
-            let value = unwrap_bool(stores, &sub, item_discr, &struct_name, &field.name);
-            stores
-                .store_mut(dest)
-                .set_byte(dest.rec, dest_field_pos, 0, value);
+            match unwrap_bool(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(v) => {
+                    stores
+                        .store_mut(dest)
+                        .set_byte(dest.rec, dest_field_pos, 0, v);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
+            }
         } else if content_kt == kt_text {
-            // Text null sentinel is a 0 str_rec (read-back via
-            // `get_str(0)` returns `STRING_NULL = "\0"` which loft
-            // treats as null).  When the source is absent or the
-            // wrong kind, write 0 directly instead of allocating an
-            // empty string — empty `""` is a real (non-null) text
-            // and would break the legacy `!field` null check.
-            push_kind_mismatch(
-                stores,
-                item_discr,
-                JV_DISCR_STRING,
-                &struct_name,
-                &field.name,
-            );
-            if item_discr == JV_DISCR_STRING {
-                let str_tp = stores.name("JString");
-                let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
-                let s_rec = stores.store(&sub).get_u32_raw(sub.rec, value_pos);
-                let text_val = stores.store(&sub).get_str(s_rec).to_owned();
-                let new_s_rec = stores.store_mut(dest).set_str(&text_val);
-                stores
-                    .store_mut(dest)
-                    .set_u32_raw(dest.rec, dest_field_pos, new_s_rec);
-            } else {
-                stores
-                    .store_mut(dest)
-                    .set_u32_raw(dest.rec, dest_field_pos, 0);
+            match unwrap_text(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(text_val) => {
+                    let new_s_rec = stores.store_mut(dest).set_str(&text_val);
+                    stores
+                        .store_mut(dest)
+                        .set_u32_raw(dest.rec, dest_field_pos, new_s_rec);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
+            }
+        } else if content_kt == kt_char {
+            // `character` is a 4-byte codepoint whose in-band null is codepoint 0
+            // (`formal/types.md`).  It is `Parts::Base`, not a narrow `Parts`, so the
+            // arm below does not catch it and it fell to the catch-all: every character
+            // field the `JsonValue` walker was handed kept its zero-init bytes, so
+            // `T.parse(json_parse(t))` answered NUL for one the document spelled.
+            match unwrap_char(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(cp) => {
+                    stores
+                        .store_mut(dest)
+                        .set_i32_raw(dest.rec, dest_field_pos, cp);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
+            }
+        } else if matches!(
+            stores.types[content_kt as usize].parts,
+            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
+        ) {
+            // A narrow-integer field.  @FR-L-Narrow is the authority on which widths
+            // belong in this set, and `write_narrow_value` owns their encodings.
+            //
+            // ⚠ Keep this set in step with that rule.  A width missing from it falls to
+            // the catch-all below, which leaves the field's zero-init bytes in place — so
+            // the value the document supplied is dropped with no error at all (`u8?` 42
+            // reads back `0`, `u16?` 300 reads back `null`).  The failure here is always
+            // silent, which is why the set is spelled out rather than defaulted.
+            match unwrap_long(stores, &sub, item_discr, &struct_name, &field.name) {
+                Some(n) => {
+                    stores.write_narrow_value(content_kt, n, &slot);
+                }
+                None => stores.write_absent_value(content_kt, struct_kt, field_nr, &slot),
             }
         } else {
             // Look at the field type's Parts to decide what to do.
@@ -4387,38 +4461,27 @@ pub(crate) fn populate_struct_from_jsonvalue(
                     };
                     populate_struct_from_jsonvalue(stores, &nested_dest, content_kt, &sub);
                 }
-                Parts::EnumValue(_, _) | Parts::Enum(_)
+                Parts::EnumValue(_, _) | Parts::Enum(_) => {
                     // Mixed struct-enum field — only `JsonValue`
-                    // passthrough is supported today.  Skip the copy
-                    // when the source is absent (sub is a dummy
-                    // pointing at the dest, copy would garble the
-                    // dest's own bytes).
-                    if sub_jv.is_some() => {
-                        let inner_name = stores.types[content_kt as usize].name.clone();
-                        if inner_name == "JsonValue" {
-                            let jv_size = u32::from(stores.size(content_kt));
-                            copy_bytes(stores, &sub, dest, dest_field_pos, jv_size);
-                        }
+                    // passthrough is supported today.
+                    let inner_name = stores.types[content_kt as usize].name.clone();
+                    if inner_name == "JsonValue" {
+                        let jv_size = u32::from(stores.size(content_kt));
+                        copy_bytes(stores, &sub, dest, dest_field_pos, jv_size);
                     }
-                    // Other struct-enum types: leave at default.
-                Parts::Vector(elem_kt)
-                    // Vector field: handle is a 4-byte rec-nr at
-                    // `dest_field_pos`.  Iterate JArray items and
+                }
+                Parts::Vector(elem_kt) => {
+                    // Vector field: the handle is a 4-byte rec-nr at
+                    // `dest_field_pos`.  Iterate the JArray items and
                     // append per element via the existing
-                    // `vector_append` machinery.  Absent source →
-                    // skip (handle stays at zero = empty vector).
-                    if sub_jv.is_some() => {
-                        let dest_handle = DbRef {
-                            store_nr: dest.store_nr,
-                            rec: dest.rec,
-                            pos: dest_field_pos,
-                        };
-                        populate_vector_from_jarray(stores, &dest_handle, elem_kt, &sub);
-                    }
+                    // `vector_append` machinery.
+                    populate_vector_from_jarray(stores, &slot, elem_kt, &sub);
+                }
                 _ => {
-                    // Other field types (Hash, Sorted, Index, Radix,
-                    // Array, Base, Byte, Short) are not yet handled.
-                    // Leave at zero-init default.
+                    // Hash, Sorted, Index, Radix, Array and Base fields have no JSON
+                    // form here yet, so the zero-init default stands.  Unlike the narrow
+                    // integers that used to share this arm, none of them can be spelled
+                    // in the document at all, so nothing is being dropped silently.
                 }
             }
         }
@@ -4509,101 +4572,140 @@ fn jinteger_value(stores: &Stores, sub: &DbRef, item_discr: i32) -> Option<i64> 
     Some(stores.store(sub).get_int(sub.rec, value_pos))
 }
 
+/// `None` means the source held no value this field can take — a `JNull`, or a kind the
+/// field's type cannot hold (reported by then).  The caller writes the DECLARATION's
+/// absent value rather than a zero of its own choosing; see `Stores::write_absent_value`.
 fn unwrap_long(
     stores: &mut Stores,
     sub: &DbRef,
     item_discr: i32,
     struct_name: &str,
     field_name: &str,
-) -> i64 {
+) -> Option<i64> {
     if let Some(n) = jinteger_value(stores, sub, item_discr) {
-        return n;
+        return Some(n);
     }
     push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
     if item_discr != JV_DISCR_NUMBER {
-        return i64::MIN;
+        return None;
     }
     let num_tp = stores.name("JNumber");
     let value_pos = u32::from(stores.position(num_tp, "value")) + sub.pos;
     let f = stores.store(sub).get_float(sub.rec, value_pos);
-    if f.is_finite() { f as i64 } else { i64::MIN }
+    if f.is_finite() { Some(f as i64) } else { None }
 }
 
+/// `None` as in [`unwrap_long`] — the field takes its declared absent value.
 fn unwrap_int(
     stores: &mut Stores,
     sub: &DbRef,
     item_discr: i32,
     struct_name: &str,
     field_name: &str,
-) -> i64 {
+) -> Option<i64> {
     if let Some(n) = jinteger_value(stores, sub, item_discr) {
-        return n;
+        return Some(n);
     }
     push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
     if item_discr != JV_DISCR_NUMBER {
-        return i64::MIN;
+        return None;
     }
     let num_tp = stores.name("JNumber");
     let value_pos = u32::from(stores.position(num_tp, "value")) + sub.pos;
     let f = stores.store(sub).get_float(sub.rec, value_pos);
     if !f.is_finite() {
-        return i64::MIN;
+        return None;
     }
-    f as i64
+    Some(f as i64)
 }
 
+/// `None` as in [`unwrap_long`] — the field takes its declared absent value.
 fn unwrap_float(
     stores: &mut Stores,
     sub: &DbRef,
     item_discr: i32,
     struct_name: &str,
     field_name: &str,
-) -> f64 {
+) -> Option<f64> {
     // A JInteger fed to a float field widens to f64 (no mismatch).
     #[allow(clippy::cast_precision_loss)]
     if let Some(n) = jinteger_value(stores, sub, item_discr) {
-        return n as f64;
+        return Some(n as f64);
     }
     push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
     if item_discr != JV_DISCR_NUMBER {
-        return f64::NAN;
+        return None;
     }
     let num_tp = stores.name("JNumber");
     let value_pos = u32::from(stores.position(num_tp, "value")) + sub.pos;
-    stores.store(sub).get_float(sub.rec, value_pos)
+    Some(stores.store(sub).get_float(sub.rec, value_pos))
 }
 
+/// `None` as in [`unwrap_long`].  It used to answer `0` here, which made an absent
+/// nullable boolean read back as the VALUE `false` instead of null — a boolean stores
+/// tri-state and 255 is its null (@PLN17 C73), and only the declaration knows whether
+/// this slot may carry it.
 fn unwrap_bool(
     stores: &mut Stores,
     sub: &DbRef,
     item_discr: i32,
     struct_name: &str,
     field_name: &str,
-) -> i32 {
+) -> Option<i32> {
     push_kind_mismatch(stores, item_discr, JV_DISCR_BOOL, struct_name, field_name);
     if item_discr != JV_DISCR_BOOL {
-        return 0;
+        return None;
     }
     let bool_tp = stores.name("JBool");
     let value_pos = u32::from(stores.position(bool_tp, "value")) + sub.pos;
-    stores.store(sub).get_byte(sub.rec, value_pos, 0)
+    Some(stores.store(sub).get_byte(sub.rec, value_pos, 0))
 }
 
+/// A `character` off the wire: the one-character STRING `to_json` writes, or a NUMBER
+/// read as its codepoint (the form that pre-dates the string spelling).  `None` as in
+/// [`unwrap_long`] — the field takes its declared absent value.
+fn unwrap_char(
+    stores: &mut Stores,
+    sub: &DbRef,
+    item_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) -> Option<i32> {
+    if item_discr == JV_DISCR_STRING {
+        let str_tp = stores.name("JString");
+        let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
+        let s_rec = stores.store(sub).get_u32_raw(sub.rec, value_pos);
+        let text = stores.store(sub).get_str(s_rec).to_owned();
+        let mut cs = text.chars();
+        if let (Some(c), None) = (cs.next(), cs.next()) {
+            return i32::try_from(u32::from(c)).ok();
+        }
+        // A string that is not exactly one character cannot be a codepoint; report it
+        // the way every other wrong-kind source is reported.
+        push_kind_mismatch(stores, item_discr, JV_DISCR_STRING, struct_name, field_name);
+        return None;
+    }
+    let n = unwrap_long(stores, sub, item_discr, struct_name, field_name)?;
+    i32::try_from(n).ok()
+}
+
+/// `None` as in [`unwrap_long`].  An empty `String` would not do: `""` is a PRESENT text
+/// and a nullable text's absence is the handle `0`, so the two cannot share a spelling.
 fn unwrap_text(
     stores: &mut Stores,
     sub: &DbRef,
     item_discr: i32,
     struct_name: &str,
     field_name: &str,
-) -> String {
+) -> Option<String> {
     push_kind_mismatch(stores, item_discr, JV_DISCR_STRING, struct_name, field_name);
     if item_discr != JV_DISCR_STRING {
-        return String::new();
+        return None;
     }
     let str_tp = stores.name("JString");
     let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
     let s_rec = stores.store(sub).get_u32_raw(sub.rec, value_pos);
-    stores.store(sub).get_str(s_rec).to_owned()
+    Some(stores.store(sub).get_str(s_rec).to_owned())
 }
 
 /// Byte-copy `n_bytes` from `src` to `(dest.rec, dest_pos)` — used for
@@ -4653,6 +4755,7 @@ fn populate_vector_from_jarray(
     let kt_float = stores.name("float");
     let kt_bool = stores.name("boolean");
     let kt_text = stores.name("text");
+    let kt_char = stores.name("character");
     let elem_parts = stores.types[elem_kt as usize].parts.clone();
     let elem_name = stores.types[elem_kt as usize].name.clone();
     for i in 0..length {
@@ -4666,24 +4769,73 @@ fn populate_vector_from_jarray(
             .store(src_arr)
             .get_byte(items_rec as u32, elm_offset, 0);
         let elm = crate::vector::vector_append(dest_handle, elem_size, &mut stores.allocations);
+        // An element the type cannot hold — a `null`, or the wrong kind — takes the
+        // element type's absent value.  An element has no declaration of its own to
+        // consult, which `u16::MAX` says.
+        let absent =
+            |stores: &mut Stores| stores.write_absent_value(elem_kt, u16::MAX, u16::MAX, &elm);
         if elem_kt == kt_long {
-            let v = unwrap_long(stores, &item, item_discr, "vector", &elem_name);
-            stores.store_mut(&elm).set_long(elm.rec, elm.pos, v);
+            match unwrap_long(stores, &item, item_discr, "vector", &elem_name) {
+                Some(v) => {
+                    stores.store_mut(&elm).set_long(elm.rec, elm.pos, v);
+                }
+                None => absent(stores),
+            }
         } else if elem_kt == kt_int {
-            let v = unwrap_int(stores, &item, item_discr, "vector", &elem_name);
-            stores.store_mut(&elm).set_int(elm.rec, elm.pos, v);
+            match unwrap_int(stores, &item, item_discr, "vector", &elem_name) {
+                Some(v) => {
+                    stores.store_mut(&elm).set_int(elm.rec, elm.pos, v);
+                }
+                None => absent(stores),
+            }
         } else if elem_kt == kt_float {
-            let v = unwrap_float(stores, &item, item_discr, "vector", &elem_name);
-            stores.store_mut(&elm).set_float(elm.rec, elm.pos, v);
+            match unwrap_float(stores, &item, item_discr, "vector", &elem_name) {
+                Some(v) => {
+                    stores.store_mut(&elm).set_float(elm.rec, elm.pos, v);
+                }
+                None => absent(stores),
+            }
         } else if elem_kt == kt_bool {
-            let v = unwrap_bool(stores, &item, item_discr, "vector", &elem_name);
-            stores.store_mut(&elm).set_byte(elm.rec, elm.pos, 0, v);
+            match unwrap_bool(stores, &item, item_discr, "vector", &elem_name) {
+                Some(v) => {
+                    stores.store_mut(&elm).set_byte(elm.rec, elm.pos, 0, v);
+                }
+                None => absent(stores),
+            }
         } else if elem_kt == kt_text {
-            let s = unwrap_text(stores, &item, item_discr, "vector", &elem_name);
-            let new_s_rec = stores.store_mut(&elm).set_str(&s);
-            stores
-                .store_mut(&elm)
-                .set_u32_raw(elm.rec, elm.pos, new_s_rec);
+            match unwrap_text(stores, &item, item_discr, "vector", &elem_name) {
+                Some(s) => {
+                    let new_s_rec = stores.store_mut(&elm).set_str(&s);
+                    stores
+                        .store_mut(&elm)
+                        .set_u32_raw(elm.rec, elm.pos, new_s_rec);
+                }
+                None => absent(stores),
+            }
+        } else if elem_kt == kt_char {
+            // A 4-byte codepoint element — see the struct walker's character arm.
+            match unwrap_char(stores, &item, item_discr, "vector", &elem_name) {
+                Some(cp) => {
+                    stores.store_mut(&elm).set_i32_raw(elm.rec, elm.pos, cp);
+                }
+                None => absent(stores),
+            }
+        } else if matches!(
+            elem_parts,
+            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
+        ) {
+            // A narrow-integer element — the element twin of the field arm above, and
+            // @FR-L-Narrow is the authority on the width set for both.
+            //
+            // ⚠ Same silent-loss hazard, one level down: a width missing here leaves the
+            // freshly-appended zero bytes, so `vector<u8?>` `[1,null,3]` reads back
+            // `[0,0,0]` without an error.
+            match unwrap_long(stores, &item, item_discr, "vector", &elem_name) {
+                Some(n) => {
+                    stores.write_narrow_value(elem_kt, n, &elm);
+                }
+                None => absent(stores),
+            }
         } else if matches!(elem_parts, Parts::Struct(_)) {
             // Struct element — recurse into the walker writing into
             // the freshly-appended embedded element slot.

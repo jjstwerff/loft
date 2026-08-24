@@ -16,5 +16,12 @@ fn main() {
         it = items[i] ?? Item { name: "?", tags: [] };
         out = out + describe(it) + "|";
     }
-    println("out={out} n={len(items)} first0={first_label(items[0] ?? Item { name: "?", tags: [] })}");
+    f0 = first_label(items[0] ?? Item { name: "?", tags: [] });
+    // The whole built string is the assertion.  A dropped or duplicated segment — the
+    // #495/#500 text-return class this file is named for — keeps the shape recognisable
+    // and changes only the contents, which a length check would pass.
+    assert(out == "sword:sharp|shield:none|", "both items described, the empty one falling back; got `{out}`");
+    assert(len(items) == 2, "two items; got {len(items)}");
+    assert(f0 == "sharp", "the first tag of the first item; got `{f0}`");
+    println("out={out} n={len(items)} first0={f0}");
 }

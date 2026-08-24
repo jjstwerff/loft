@@ -140,6 +140,21 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
                   and the author is told — so writes through it stop reaching the
                   container (@PLN130 F2/F4/F8).  A plain bind already copies, so this
                   is consistent with what it meant; a `&` gets B-Ref-Reshape instead.
+  (B-View-Base)   a projection off a BORROWED base is a VIEW at EVERY element type — not only
+                  a struct-typed one.  `for b in bv { c = b.vecf; … }` aliases exactly as
+                  `c = b.strf` does, and so does a tuple element.  Ownership of the BASE is the
+                  axis: off an OWNED base a COLLECTION projection copies (B-Copy, `af = bx.v`)
+                  while a STRUCT projection views (B-View); off a BORROWED base everything
+                  views.  `classify_vec_bind`'s `depend().is_empty()` is where the parser asks
+                  it, and @PLN25 p379 depends on the write-through (`cells = sc.v;
+                  cells[i] = h`).
+  (B-View-Depth)  a vector INDEX read (`a = vv[0]`) and a NESTED field read
+                  (`c = o.inner.v`) are VIEWS whatever the element type — #426's RESOLUTION,
+                  whose FILED premise (*"these must COPY"*) was recorded as the wrong read:
+                  under the reference-default model a binding to a heap value aliases the
+                  source, in-place mutation writes through, and the view survives a source
+                  realloc.  Guarded by `85-store-lifetime-reference-default-views.loft` and
+                  `294-vector-element-view-semantics.loft`.
   (B-Disturb)     three events END the place a reference names, and they are the same
                   three for every rule below: REMOVING from the container (`v.remove(i)`
                   renumbers every later position — collections.md Col-Remove),
@@ -168,9 +183,21 @@ rule `C-Ref` in [types.md](types.md): a `&τ` is accepted wherever a `τ` is.)
 **In words.** Binding copies by default — a scalar and a whole vector alike (`d = v`
 gives you an independent copy). Writing `&` at the bind turns it into a live link, so
 `d = &self.data; d[i] = x` writes through to the source (a game can grab a sub-vector and
-mutate it in place). The one exception is reading a *struct-typed* field or element
-(`o.inner`, `v[i]`): that is a view onto the interior, and mutating it is already
-visible — no `&` needed there.
+mutate it in place).
+
+**The exceptions are not one but three, and stating only the first is what made three separate
+correct behaviours read as bugs in one week** (D-bind-12's collection half, a nested field read,
+a vector index read — all three filed against `B-Copy` and all three correct).  A projection is
+a VIEW when *any* of these holds: its type is a STRUCT (`o.inner`, B-View); its base is
+BORROWED, at every element type (B-View-Base); or the read is an INDEX or NESTED one
+(B-View-Depth, #426).  What is left for `B-Copy` is a whole VALUE, a scalar, and a one-level
+COLLECTION projection off an OWNED base — which is exactly `OWNERSHIP_MODEL § The law`'s
+`af = bx.v`.
+
+**The whole boundary is pinned in one place:**
+`tests/scripts/bind-copies-or-views-the-whole-boundary.loft`, eleven cells, measured identical on
+both backends.  Ask it rather than re-deriving: the cells existed before, scattered across four
+files, and no single one said what the rule was.
 
 Both kinds of alias last exactly as long as the place they name, and the three things
 that end a place are the same for both (B-Disturb). What differs is the answer. A plain
@@ -284,52 +311,120 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **1** (D-bind-11). B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
+OPEN: **1** (D-bind-11); D-bind-12 opened and CLOSED the same day. B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 
+> **D-bind-12 — CLOSED (2026-08-23) — the struct write-back was a real defect; the
+> collection alias was the RULE being under-stated.** Filed as two halves; measuring the
+> second one properly split them apart.
+>
+> **Half one — FIXED.** Writing back a value BOUND from a sibling element vanished from the
+> IR entirely and leaked the record with it: `for p in w { hs = p.0; p.1 = hs; }` left
+> `w[0].1` unchanged, on both backends. `move_elidable_source`'s last gate is *"owns a
+> transferable store"*, read off `Uses::def_vdb` — whose own doc says *`v = OpGetField(vdb,
+> 0, _)` where vdb is OpDatabase'd* and whose walk never checked the second half. So `hs =
+> p.0`, a read of an EXISTING element through a borrow, counted as owning one, and
+> `move_rewrite` dropped the `OpCopyRecord`. That drop is sound only when the source is
+> CONSTRUCTED — its build ops are retargeted onto the destination — and `hs` has no build
+> ops, so the copy WAS the write. `collect_uses` now enforces the documented condition once
+> the whole body has been walked (the `OpDatabase` may not have been visited at insertion
+> time). Precisely scoped: emitted IR is **byte-identical on 120 of 120 scripts**, and
+> `857`'s own allocation count is unchanged at 27, so the pointer-bind it protects is
+> untouched.
+>
+> **Half two — RESOLVED (2026-08-24): `B-View` was under-stated, and the missing clauses are
+> now written as `B-View-Base` and `B-View-Depth`.** It is NOT the owner question this entry
+> first called it: `OWNERSHIP_MODEL § The law` and #426's RESOLUTION had already decided it,
+> and #426 records that its own filed premise (*"an index / nested read must COPY"*) was the
+> wrong read. So the code was right and the rules doc was incomplete. The whole boundary — 11
+> cells, both backends — is pinned by
+> `tests/scripts/bind-copies-or-views-the-whole-boundary.loft`.
+>
+> **Original reading, kept because the mistake is the useful part:** `hv = p.0` on a
+> COLLECTION element aliases, and the first reading scored that against `B-Copy`. Measured
+> across the 2×2 off a BORROWED base, three of four projection cells are views:
+>
+> | construct | element type | behaviour |
+> |---|---|---|
+> | struct field | vector-typed | view |
+> | struct field | struct-typed | view |
+> | tuple element | vector-typed | **view** — the cell that was filed |
+> | tuple element | struct-typed | copy |
+>
+> The implemented model is *a projection off a borrowed base is a VIEW; off an OWNED base it
+> COPIES* — gated explicitly by `classify_vec_bind`'s `depend().is_empty()`, deliberate
+> (`cells = sc.v; cells[i] = h` writing through is @PLN25 p379's point), and with its
+> alternative measured to CORRUPT (#426, `185-nested-boolean-vector`). Verified in both
+> directions: an owned base copies (`a = h.items` ⇒ `[1,2]`), a borrowed one views
+> (`b = s.vecf` ⇒ `[9,9]`), and the p379 write-through reaches the source.
+>
+> `B-View` above states the view for a **struct-typed** projection only, so the rules cannot
+> express a model the language depends on. Per [README](README.md) that means the RULE wants
+> extending, not the code changing — **a rules question for the owner, deliberately not
+> decided here**, since widening `B-Copy` instead would delete p379's idiom and re-enter
+> #426.
+>
+> ⚠ **The fourth cell was the one deviation, and `B-View` already settled its direction —
+> FIXED the same day.** A STRUCT-typed tuple element copied while its three siblings viewed,
+> and `B-View` says a struct-typed projection IS a view, so there was no decision to make:
+> the code had to move. The stored-tuple element read took the synthetic struct's attribute
+> type VERBATIM, carrying neither the base's deps nor the base variable — so the bind typed
+> as an OWNER while holding a handle into someone else's record, and was handed an
+> `OpFreeRef` to match. Its two siblings already did it right and one says why: the
+> plain-tuple site's P197 comment (*"without this, `a.v.0` returns a `Str` whose ptr points
+> into a freed host"*), and `fields.rs`'s struct-field read, which carries the base deps AND
+> `depending(base_var)`. All four projection cells are now views, the bind carries `["p"]`,
+> and the spurious free is gone. Precisely scoped: emitted IR is unchanged on **80 of 80**
+> tuple-bearing scripts (the only file that differs is the guard's own).
+>
+> **The consequence is pinned rather than left to be discovered:** a three-step swap through
+> a bound element does NOT swap (`held` names the place), which is what its three siblings
+> already did. `test_swap_through_a_view_does_not_swap` asserts that, and
+> `test_swap_by_holding_the_value` shows the cure — hold the VALUE (a scalar/text local) and
+> rebuild after the write.
+>
+> Guards: `tests/scripts/reference-tuple-heap-element-through-a-record.loft` — 8 cells, the
+> two write-back ones proven to fail on a pristine worktree at `c3d18a5f` while the shapes
+> that always worked (`p.1 = p.0`, a fresh literal) pass there, which is what made this read
+> as *"writes to `p.1` are fine"*.
+
 > **D-bind-11 — OPEN (2026-08-19) — `&(τ, …)` admits only SCALAR elements, against
 > B-Ref-Alias and B-Ref-Uniform.** `B-Ref-Alias` says the `&τ` annotation makes **ANY**
-> binding — *scalar OR heap* — a live link, and `B-Ref-Uniform` says a `&τ` variable is used
-> exactly like a `τ` one, with **no operation special-cased**. A reference TUPLE obeys neither
-> once an element is not a scalar:
+> binding — scalar OR heap — a live link, and `B-Ref-Uniform` says a `&τ` variable is used
+> exactly like a `τ` one. A reference TUPLE obeys neither once an element is not a scalar:
 >
 > ```loft
 > fn sw(p: &(text, text)) { t = p.0; p.0 = p.1; p.1 = t; }   // refused at the signature
 > fn sw(p: &(integer, integer)) { … }                        // fine, both backends
 > ```
 >
-> Until 2026-08-19 this was an **internal compiler error** at codegen (`RefTupleGet:
-> unsupported element type Text`, loft#1006); it is now a refusal naming the element type,
-> which is better for the user and still a deviation — the rule says it must work.
+> Since 2026-08-24 the admitted set also contains a VALUE ENUM, which has a `boolean`'s exact
+> 1-byte layout and was excluded only because two spellings of "is this a scalar" had drifted
+> (`data::is_scalar` is now the one home). The refusal for a heap element stands and names the
+> element type.
 >
-> **The cause is that `&(…)` is STACK-backed while the operations it must support are
-> RECORD-based.** Both backends keep the tuple on the stack — there is no store record on either
-> side. `--native` emits `&mut (i64, i64)`, a Rust stack tuple written in place
-> (`var_p.0 = var_p.1`); the interpreter emits `n_sw(OpCreateStack(s))`, whose own contract says
-> the resulting DbRef points into the *stack frame* and is "NOT a valid data store"
-> (`default/01_code.loft:1405-1417`). Its scalar field ops survive only because the interpreter
-> represents the frame as store 0 (`stack_store_at_zero` / `Stores::is_stack_store`), so
-> `OpGetInt(offset)` resolves and reads raw frame bytes.
+> ⚠ **Re-measured 2026-08-23, and the SECOND of the two named options is already running.**
+> This entry says closing it needs *"either an op family that writes the STACK form through a
+> DbRef, or backing a `&(…)` carrying heap elements with a real record"* — and the
+> record-backed path is not hypothetical. A `for p in v` over `vector<(text, text)>` performs
+> the EXACT swap `fn sw(p: &(text, text))` is refused for, correctly, on BOTH backends
+> (`[("a1","b1")] → b1|a1`). So the open question is not *"can a reference tuple carry heap
+> elements"* — it demonstrably can — but the narrower *"can a `&(…)` PARAMETER or LOCAL be
+> given the record backing the loop path already uses"*, which D-tup-2 made pointed by
+> deliberately making tuple locals STACK-backed so `&` works for scalars.
 >
-> `B-Ref-Uniform`'s "every operation goes through the link via the EXISTING mutation code" is
-> what this fails: that code addresses a store record, and a reference tuple has none. A scalar
-> element hides it (its value sits inline in the frame); a `text` element's does not.
-> (Adding only the `OpGetText` / `OpSetText` arms — the fix loft#1006 predicts — is NOT
-> sufficient: measured, it SIGSEGVs the interpreter and leaves `--native` failing to compile,
-> because the addressing, not the opcode, is what is missing.)
+> The SIGSEGV below still reproduces (re-measured the same day with the `text` arms re-added),
+> and its cause is now stated one level down: a `text` element on the STACK is a 16-byte `Str`
+> — `{ ptr, len }`, a raw BORROW — while the record form is a 4-byte handle, so the record ops
+> read a `Str` as a handle and get a corrupt record number. That is also why `fn f(s: &text)`
+> WORKS while `&(text, text)` cannot: the `&text` parameter writes into the caller's 24-byte
+> owned `String` via `OpClearStackText`/`OpAppendStackText` and the owner never changes,
+> whereas a tuple's text element has no owner of its own on the stack.
 >
-> ⚠ **A second defect sat underneath, and the first reading of this entry missed it — now
-> FIXED (2026-08-19).** The two `TupleGet`/`TuplePut` branches derived the element offset from
-> DIFFERENT layouts: `RefVar(Tuple)` used `stored_tuple_field_offset` — the synthetic
-> `__tuple<…>` RECORD layout — while the plain branch beside it used `element_stack_offsets`,
-> the STACK layout. One datum, two derivations, agreeing only where the layouts coincide.
-> Measured: `(integer, integer)` is `[0, 8]` under both, `(text, text)` is `[0, 4]` as a record
-> against `[0, 16]` on the stack — so a reference read of element 1 landed 12 bytes early,
-> inside element 0. `ref_tuple_field_offset` now answers the stack layout, which is the one the
-> data has, and the two branches agree. No shipped program changes (scalars coincide and heap
-> elements are refused); it removes the hazard that would have made any future heap-element work
-> wrong in a way that reads as correct on every scalar test.
+> ⚠ **That working record-backed path had NO guard** — no script in the corpus wrote a `text`
+> tuple element through it — so the evidence this entry now rests on was one refactor away
+> from vanishing silently.
 >
 > **The remaining half is a REPRESENTATION choice, and the ops are what force it.** With the
 > offset corrected, adding the `text` arms still SIGSEGVs — measured — because the two element
@@ -348,6 +443,24 @@ only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
 >
 > `tuples.md` states no rule for `&(…)` at all, which is how a composition of two specified
 > features went unspecified; see its Deviations note.
+>
+> ⚠ **Narrowed 2026-08-23 — a SECOND B-Ref-Alias violation was sitting behind this one, and
+> it was not about element types at all.** This entry reads as *"`&(…)` works for scalars,
+> and the open half is heap elements"*. Measured across POSITIONS instead of element types,
+> the scalar half only worked at a PARAMETER: at a local, neither `b = &a` nor
+> `b: &(integer, integer) = a` linked anything, at any element type. The first dropped the
+> `&` and bound a copy — silently, on both backends — and the second typed a reference over a
+> value, which the interpreter read as a store index and `--native` refused with a raw rustc
+> `E0308` handed to the user. A `&(boolean, boolean)` local answered the un-swapped tuple with
+> exit code 0. Fixed the same day (tuples.md D-tup-2, guard
+> `tests/scripts/reference-tuple-local-binding.loft`): a tuple local is stack-backed, so it
+> joins the scalars at `OpCreateStack` and B-Ref-Alias holds at every position for every
+> admitted element type.
+>
+> **What stays open here is exactly the heap-element half**, and the table above is why. The
+> entry's own framing — element types — is what hid a whole axis: a rule quantified over "ANY
+> binding" is falsified by a POSITION as readily as by a type, and only one of those two was
+> being swept.
 
 > **D-bind-10 — CLOSED (2026-08-09) — the ⚑ VITAL rule was enforced for HALF of each
 > expression.** The rule named `x + &y` as a parse error and grammar.md's D-gram-4

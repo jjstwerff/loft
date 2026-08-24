@@ -407,7 +407,7 @@ fn refusal(kt: u16, old: usize, new: usize, cap: u64, born_at: u32) -> String {
     // `file:line` derived from it.  The interpreter's span table records CALL SITES
     // only, so resolving an arbitrary pc through it returns the nearest span BELOW —
     // which is routinely in an unrelated function, and a diagnostic that sends the
-    // reader to the wrong file costs more than one that stays quiet.  `LOFT_STORES=summary`
+    // reader to the wrong file costs more than one that stays quiet.  `LOFT_STORES=timeline`
     // prints the same pc with a line number, resolved against the denser per-run
     // table this module cannot reach.
     if born_at != 0 {

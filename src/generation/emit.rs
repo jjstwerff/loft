@@ -112,16 +112,6 @@ impl Output<'_> {
             }
             // @PLN11 G2/M4.4 — single/list-child arms recurse via output_code_node.
             ValueType::Drop => return self.output_code_node(w, node.drop_inner()),
-            ValueType::BreakWith => {
-                let n = node.breakwith_nr();
-                if n == 0 || self.loop_stack.is_empty() {
-                    write!(w, "break ")?;
-                } else {
-                    let idx = self.loop_stack.len().saturating_sub(n as usize + 1);
-                    write!(w, "break 'l{} ", self.loop_stack[idx])?;
-                }
-                return self.output_code_node(w, node.breakwith_inner());
-            }
             ValueType::Insert => {
                 let ops = node.insert_items();
                 let n = ops.len();
@@ -278,13 +268,6 @@ impl Output<'_> {
             // Plan-07 — Span is transparent in native emit.
             ValueType::Span => return self.output_code_node(w, node.span_inner()),
             ValueType::Iter => return write!(w, "{:?}", node.as_native()),
-            // Plan-06 spine step 3 — ParFor native codegen lands in step 3b.
-            ValueType::ParFor => {
-                return write!(
-                    w,
-                    "/* par_for(...) — native codegen lands in spine step 3b */"
-                );
-            }
             // @PLN11 G2/M4.6 — Var + tuple arms (self-contained; `infer_type`
             // keeps a native bridge as it is a &Value-only predicate).
             ValueType::Var => {
@@ -413,7 +396,13 @@ impl Output<'_> {
                 let var = node.tupleget_var();
                 let idx = node.tupleget_idx();
                 let variables = self.data.def(self.def_nr).variables();
-                let name = sanitize(variables.name(var));
+                let (name, deref) = crate::generation::tuple_base(variables, var);
+                if deref {
+                    // A `&`-bound tuple LOCAL: the element sits behind a raw pointer.
+                    // `T-Ref-El` admits only scalars here, so none of the text/borrow
+                    // spellings below can apply to this base.
+                    return write!(w, "unsafe {{ {name}.{idx} }}");
+                }
                 // loft#1038 — one derivation for what the slot holds, shared with the
                 // WRITE arm and with `set_var`'s clone rule (`tuple_elem_is_text`).
                 let elem_is_text =
@@ -425,7 +414,7 @@ impl Output<'_> {
                 let is_work_ref = variables.name(var).starts_with("__ref_");
                 if elem_is_text && !is_arg {
                     if is_work_ref {
-                        return write!(w, "var_{name}.{idx}.clone()");
+                        return write!(w, "{name}.{idx}.clone()");
                     }
                     if self.tuple_text_to_string {
                         // Feeding a `String`-typed tuple slot, and the caller appends
@@ -433,18 +422,18 @@ impl Output<'_> {
                         // which rustc reads as `&String` where a `String` is wanted —
                         // `a = ("X", a.1)` refused the whole program (loft#1004).  Same
                         // guard the plain-variable arm above already carries.
-                        return write!(w, "var_{name}.{idx}");
+                        return write!(w, "{name}.{idx}");
                     }
-                    return write!(w, "&var_{name}.{idx}");
+                    return write!(w, "&{name}.{idx}");
                 }
-                return write!(w, "var_{name}.{idx}");
+                return write!(w, "{name}.{idx}");
             }
             ValueType::TuplePut => {
                 // N8a.2: emit the element assignment (TuplePut is a void stmt).
                 let var = node.tupleput_var();
                 let idx = node.tupleput_idx();
                 let variables = self.data.def(self.def_nr).variables();
-                let name = sanitize(variables.name(var));
+                let (name, deref) = crate::generation::tuple_base(variables, var);
                 // A text element is a `String` slot, so the value has to arrive owned —
                 // the same rule the tuple LITERAL arm below obeys through this flag.
                 // Without it `t.0 = "X"` emitted `var_t.0 = "X";` and rustc refused the
@@ -484,7 +473,12 @@ impl Output<'_> {
                 let elem_is_fn = elem_tp
                     .as_ref()
                     .is_some_and(|e| matches!(e.base(), Type::Function(_, _, _)));
-                write!(w, "var_{name}.{idx} = ")?;
+                // The write through a `&`-bound tuple local derefs a raw pointer, so the
+                // whole assignment — not just the base — has to sit inside the block.
+                if deref {
+                    write!(w, "unsafe {{ ")?;
+                }
+                write!(w, "{name}.{idx} = ")?;
                 if bool_cast.is_some() {
                     write!(w, "(")?;
                 }
@@ -506,6 +500,9 @@ impl Output<'_> {
                 }
                 if let Some(cast) = bool_cast {
                     write!(w, ") as {cast}")?;
+                }
+                if deref {
+                    write!(w, " }}")?;
                 }
                 return r;
             }
@@ -907,15 +904,13 @@ impl Output<'_> {
             | Value::Break(_)
             | Value::Continue(_)
             | Value::Drop(_)
-            | Value::BreakWith(_, _)
             | Value::Insert(_)
             | Value::Yield(_)
             | Value::FnRef(_, _, _)
             | Value::Parallel(_)
             | Value::FnRefDnr(_)
             | Value::Span(_)
-            | Value::Iter(_, _, _, _)
-            | Value::ParFor(_) => {
+            | Value::Iter(_, _, _, _) => {
                 unreachable!("M4.1–M4.5-converted kind reached legacy match: {code:?}")
             }
         }

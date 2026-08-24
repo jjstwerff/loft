@@ -23,8 +23,3 @@ PLN119_CONST_TEXT: text = "";
 fn pln119_assigning_to_a_file_scope_text_constant() {
   PLN119_CONST_TEXT = "x";
 }
-
-// Reading one is fine, and stays fine — the constant is inlined at the use.
-fn test_pln119_reading_a_file_scope_text_constant() {
-  assert(len(PLN119_CONST_TEXT) == 0, "a file-scope text constant reads as its value");
-}

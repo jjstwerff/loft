@@ -222,14 +222,14 @@ impl Parser {
             // on BOTH passes so the call's return type propagates into
             // first-pass type inference of the enclosing variable.
             //
-            // Before the fix, `s = x.to_text()` (where `x: T`,
-            // `T: Printable`) typed `s` as `Type::Unknown(0)` because the
-            // first-pass branch (just below) consumed the `(...)` args
-            // and returned `Type::Unknown(0)` without dispatching to the
-            // t-stub.  The variable's Unknown type then survived second
-            // pass (`change_var_type` is a no-op when assigning Unknown),
-            // and downstream operators like `s + "!"` rejected with
-            // "No matching operator '+' on 'unknown(0)' and 'text'".
+            // ⚠ A first-pass branch that consumes the `(...)` args and returns
+            // `Type::Unknown(0)` without dispatching to the t-stub does not
+            // merely defer the answer — it fixes it.  `change_var_type` is a
+            // no-op when assigning Unknown, so the variable's Unknown type
+            // SURVIVES second pass: `s = x.to_text()` (`x: T`, `T: Printable`)
+            // stays Unknown for good, and every downstream operator on `s` is
+            // then rejected — `s + "!"` with "No matching operator '+' on
+            // 'unknown(0)' and 'text'".
             //
             // The t-stub `t_<n>T_<method>` is registered when the
             // function's bounds are declared (definitions.rs:670+).  By

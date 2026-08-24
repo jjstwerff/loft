@@ -25,14 +25,14 @@ async function decodeLoftAssets(rawAssets) {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(bitmap, 0, 0);
       const imgData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
-      const rgba = imgData.data;
-      const rgb = new Uint8Array(bitmap.width * bitmap.height * 3);
-      for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
-        rgb[j] = rgba[i];
-        rgb[j + 1] = rgba[i + 1];
-        rgb[j + 2] = rgba[i + 2];
-      }
-      out[name] = { width: bitmap.width, height: bitmap.height, bytes: rgb };
+      // Keep the RGBA the browser already decoded.  This used to drop the alpha
+      // channel into an RGB buffer, and every consumer then put 255 back — so a
+      // PNG with transparency uploaded fully OPAQUE and no caller could tell.
+      out[name] = {
+        width: bitmap.width,
+        height: bitmap.height,
+        bytes: new Uint8Array(imgData.data.buffer.slice(0)),
+      };
     } catch (e) {
       // Leave the entry undecoded; bridge will treat as missing.
       out[name] = null;
@@ -630,15 +630,10 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
         const name = readStr(pp, pl).split(/[\\/]/).pop();
         const a = (ctrl && ctrl.assets) ? ctrl.assets[name] : null;
         if (!a || !a.bytes || a.width <= 0 || a.height <= 0) return 0;
-        // The asset table holds RGB; GL wants RGBA. C58: no upload-side Y flip.
-        const n = a.width * a.height;
-        const px = new Uint8Array(n * 4);
-        for (let i = 0; i < n; i++) {
-          px[i * 4] = a.bytes[i * 3]; px[i * 4 + 1] = a.bytes[i * 3 + 1];
-          px[i * 4 + 2] = a.bytes[i * 3 + 2]; px[i * 4 + 3] = 255;
-        }
+        // The asset table holds RGBA already, which is what GL wants — the copy
+        // that rebuilt it here forced every alpha to 255. C58: no upload-side Y flip.
         const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, a.width, a.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, a.width, a.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, a.bytes);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         return hold(textures, t);

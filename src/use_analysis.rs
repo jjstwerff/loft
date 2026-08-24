@@ -839,6 +839,21 @@ fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
         record_copy: Vec::new(),
     };
     u.visit(code, Ctx::Other);
+    // `def_vdb` means "`v` is the handle of a FRESH buffer", and its own doc says *where vdb is
+    // OpDatabase'd* — a condition the walk cannot check at insertion, because the `OpDatabase`
+    // may not have been visited yet.  Enforce it here, once the whole body has been seen, so the
+    // map matches what every consumer reads it as.
+    //
+    // Without it ANY `v = OpGetField(x, …)` counted as owning a transferable store — including a
+    // read of an EXISTING element through a borrow, `hs = p.0` over a `vector<(…)>`.
+    // `move_elidable_source`'s last gate is exactly "owns a transferable store", so it admitted
+    // `hs`, and `move_rewrite` then dropped the `OpCopyRecord`: sound when the source is
+    // CONSTRUCTED (its build ops get retargeted onto the destination), but `hs` has no build ops,
+    // so the copy WAS the write and `p.1 = hs` vanished from the IR — silently, on both backends
+    // (`formal/binding.md` D-bind-12).
+    let allocated = std::mem::take(&mut u.database_vars);
+    u.def_vdb.retain(|_, vdb| allocated.contains(vdb));
+    u.database_vars = allocated;
     u
 }
 
@@ -1932,7 +1947,7 @@ impl<'a> Ownership<'a> {
             Value::Insert(ops) => ops
                 .last()
                 .map_or(Own::Owned, |t| self.classify(t, func, defs)),
-            Value::Return(v) | Value::BreakWith(_, v) => self.classify(v, func, defs),
+            Value::Return(v) => self.classify(v, func, defs),
             // Everything else (literals, scalar/void ops, control with no value
             // payload) is a fresh value or irrelevant to the heap over-free class.
             _ => Own::Owned,
@@ -2079,9 +2094,7 @@ impl<'a> Ownership<'a> {
                 .operators
                 .last()
                 .and_then(|t| self.borrow_base_guarded(t, func, defs, visited)),
-            Value::Return(v) | Value::BreakWith(_, v) => {
-                self.borrow_base_guarded(v, func, defs, visited)
-            }
+            Value::Return(v) => self.borrow_base_guarded(v, func, defs, visited),
             _ => None,
         }
     }
@@ -2221,6 +2234,9 @@ pub enum HeapDelivery {
 /// — the leak stays for that shape rather than risking a free of a store the caller
 /// still reaches.
 #[must_use]
+/// The witness @FR-O-Move needs at a call: when a return BORROWS a parameter the caller must
+/// copy, so the bracket has to name the argument's store.  D-own-6 is the register entry for
+/// what this missed when the witness was not total.
 pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
     let Value::Call(fn_nr, args) = call.unspan() else {
         return (Vec::new(), false);
@@ -2308,17 +2324,7 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
 /// that is here without carrying a store would be worse: the set would read complete while
 /// protecting nothing, which is the loft#981 use-after-free.
 fn is_protectable_store_type(tp: &Type) -> bool {
-    matches!(
-        tp,
-        Type::Reference(_, _)
-            | Type::Vector(_, _)
-            | Type::Enum(_, true, _)
-            | Type::Hash(_, _, _)
-            | Type::Sorted(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-    )
+    crate::data::is_dbref(tp)
 }
 
 /// loft#1029 — the variable slots whose STORES an argument's value can lie in, or
@@ -2507,6 +2513,8 @@ pub fn free_sites(data: &Data, d_nr: u32) -> Vec<FreeSite> {
 /// every own-vs-borrow chokepoint READS instead of re-deriving — the unification
 /// entry point (the OWNERSHIP_MODEL north star).
 #[must_use]
+/// Answers @FR-O-Owner for one value: which single thing owns this store.  Every heap store
+/// has exactly one owner at any moment, and this is where that is decided.
 pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
     ownership_of_with(data, d_nr, value, &function_defs(data, d_nr))
 }
@@ -2987,16 +2995,12 @@ impl DoubleMove<'_> {
             // same way an arm is. The iteration count is what stays invisible: ONE hand-off
             // in a body that runs twice is a real double release this lint cannot see, and
             // that false negative is the documented boundary.
-            Value::Loop(_) | Value::Iter(..) | Value::Parallel(_) | Value::ParFor(_) => {
+            Value::Loop(_) | Value::Iter(..) | Value::Parallel(_) => {
                 kill_assigned(node, st);
                 self.scan_children_isolated(node);
             }
             // Nothing after a terminator runs, so the pending set cannot pair across it.
             Value::Return(v) => {
-                self.scan(v, st);
-                st.clear();
-            }
-            Value::BreakWith(_, v) => {
                 self.scan(v, st);
                 st.clear();
             }
@@ -4009,10 +4013,7 @@ fn scan_uaf(
             // on only one path is live on the other, so it is NOT carried as freed.
             *freed = ft.intersection(&fe).copied().collect();
         }
-        Value::Return(inner)
-        | Value::Drop(inner)
-        | Value::Yield(inner)
-        | Value::BreakWith(_, inner) => {
+        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
             scan_uaf(inner, freed, dependents, free_ref, op_db, out);
         }
         Value::Call(op, args) if *op == free_ref => {
@@ -4065,7 +4066,7 @@ fn check_reads(
 ///
 /// So a bare `Var` only counts when it is already inside a call (`in_call`); the
 /// inherently-dereferencing slots (`TupleGet` / `CallRef` / `Iter` / `FnRef` /
-/// `ParFor`) always count. Write targets (`Set`/`TuplePut` LHS) never do —
+/// always count. Write targets (`Set`/`TuplePut` LHS) never do —
 /// `for_each_child` restricts those to their RHS.
 fn deref_read(node: &Value, target: u16, in_call: bool) -> bool {
     let n = node.unspan();
@@ -4074,7 +4075,6 @@ fn deref_read(node: &Value, target: u16, in_call: bool) -> bool {
         Value::TupleGet(x, _) | Value::FnRefDnr(x) => *x == target,
         Value::CallRef(x, _) | Value::Iter(x, _, _, _) => *x == target,
         Value::FnRef(_, w, _) => *w == target,
-        Value::ParFor(b) => b.x_var == target || b.r_var == target,
         _ => false,
     };
     if hit {
@@ -4499,18 +4499,11 @@ fn collect_last_set<'a>(v: u16, node: &'a Value, found: &mut Option<&'a Value>) 
         Value::Return(inner)
         | Value::Drop(inner)
         | Value::Yield(inner)
-        | Value::BreakWith(_, inner)
         | Value::TuplePut(_, _, inner) => collect_last_set(v, inner, found),
         Value::Iter(_, a, b, c) => {
             collect_last_set(v, a, found);
             collect_last_set(v, b, found);
             collect_last_set(v, c, found);
-        }
-        Value::ParFor(b) => {
-            collect_last_set(v, &b.input, found);
-            collect_last_set(v, &b.worker, found);
-            collect_last_set(v, &b.threads, found);
-            collect_last_set(v, &b.body, found);
         }
         Value::Span(b) => collect_last_set(v, &b.1, found),
         _ => {}
