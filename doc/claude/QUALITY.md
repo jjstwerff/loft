@@ -105,8 +105,8 @@ implementations, often in multiple files."* The response has three parts, and tw
    triggers actually fire — see C.
 
 **State in one line:** the checklist is finished, the tooling is in place, and what remains is
-three spec decisions (B), two owner calls (B2), one unrun measurement (C), and a **42-commit
-branch with no PR**.
+three spec decisions (B), three owner calls (B2), one unrun measurement (C), and a
+**43-commit branch with no PR** (tip `d48f72b0`).
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
