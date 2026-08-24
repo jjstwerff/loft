@@ -2928,6 +2928,21 @@ overhead dominates both compilation size and startup time.  The store already
 has `copy_block()` and `zero_fill()` primitives that can transfer arbitrary
 byte ranges in a single call.
 
+⚠ **Measured at the size a real fixture reaches, the cost is not a slowdown —
+it is a wall.**  @PLN146 W3 generated a `graphics` test file holding two
+Pillow-derived goldens at 100x100 (a 40 000-element source literal and a
+43 200-element expectation, 765 KB of `.loft`).  The INTERPRETER parses and runs
+it; `--native` ran past a 900 s `LOFT_TIMEOUT` in `phase=parse` and was
+hard-killed with SIGABRT.  Three things worth carrying from that:
+
+- the two backends part company entirely, so a fixture can pass locally on
+  `--interpret` and kill the `--native` CI leg;
+- the failure is a TIMEOUT, so it reports as a hang rather than as "this literal
+  is too big", and nothing points at the literal;
+- the workaround is to bound the fixture (W3 shrank each golden to the smallest
+  shape that still walks its path, 765 KB → 42 KB), which costs coverage a
+  design like O8.1 would give back.
+
 ---
 
 ### Current behaviour
