@@ -1381,16 +1381,14 @@ use a separate collection or add after the loop"
         false
     }
 
-    /// Apply the operator `op` to an already-parsed LHS and parse the RHS,
-    /// then rewrite `code` into the assignment IR. Returns `Type::Void`.
-    // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    /// The pure selector for the C86 whole-value vector bind at
-    /// `parse_assign_op`'s copy branch — rule rationale on the `VecBind`
-    /// variants; the branch applies mechanics only.  Fires on BOTH passes
-    /// (`change_var` re-types per pass; emission is pass-2).
     /// Decides @FR-B-Copy vs @FR-B-View / @FR-B-View-Base for a whole-value vector bind:
     /// off an OWNED base a collection projection copies, off a BORROWED one it views.
+    ///
+    /// The pure selector for the C86 whole-value vector bind at `parse_assign_op`'s copy
+    /// branch — the rule rationale lives on the `VecBind` variants, and the branch applies
+    /// mechanics only.  Runs on BOTH passes: `change_var` re-types per pass, and emission
+    /// is pass-2, so a pass-1 answer that differs is a re-type, not a disagreement.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn classify_vec_bind(
         &self,
         code: &Value,
@@ -1754,6 +1752,9 @@ use a separate collection or add after the loop"
         out
     }
 
+    /// Apply the operator `op` to an already-parsed LHS and parse the RHS, then rewrite
+    /// `code` into the assignment IR.  Returns `Type::Void`.
+    // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn parse_assign_op(
         &mut self,

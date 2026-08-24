@@ -4237,7 +4237,9 @@ pub fn v_if(test: Value, t: Value, f: Value) -> Value {
     Value::If(Box::new(test), Box::new(t), Box::new(f))
 }
 
-/// May a `&(…)` reference tuple hold an element of this type (loft#1006)?
+/// May a `&(…)` reference tuple hold an element of this type?
+///
+/// The admitted-element set for a `&(…)`; the heap half is refused under @FR-D-bind-11.
 ///
 /// A reference tuple's element is read and written through the tuple's stored DbRef with
 /// the same `(ref, offset)` opcodes an ordinary struct FIELD uses, so the admitted set is
@@ -4251,7 +4253,6 @@ pub fn v_if(test: Value, t: Value, f: Value) -> Value {
 /// tuple does not own.  Admitting `text` is layout work, not a guard change.  Until then a
 /// struct takes its place — its fields of any type write through a `&` parameter.
 #[must_use]
-/// The admitted-element set for a `&(…)`; the heap half is refused under @FR-D-bind-11.
 pub fn ref_tuple_element_ok(tp: &Type) -> bool {
     is_scalar(tp.base())
 }
@@ -4262,13 +4263,13 @@ pub fn ref_tuple_element_ok(tp: &Type) -> bool {
 /// `size_of::<DbRef>()`, and any site deciding "does this travel as a handle?" is asking
 /// that same question.
 ///
+/// Enforces @FR-Col-Store (the store-backed set) and @FR-L-Scalar's complement.
+///
 /// ⚠ Spelled inline, this list drifts SHORT in one specific way: the three obvious kinds
 /// (`Reference` / `Vector` / struct-`Enum`) get written and the five keyed collections are
 /// forgotten, because they are reached by key and do not look like references at the call
 /// site.  A short list is not a compile error anywhere — it routes a handle down the
 /// scalar path — so call this function rather than restating it.
-///
-/// Enforces @FR-Col-Store (the store-backed set) and @FR-L-Scalar's complement.
 ///
 /// `Parser::is_heap_handle` is the same question with a `.base()` peel, and delegates here.
 #[must_use]

@@ -218,11 +218,36 @@ kept the **180 genuine old-pattern flags that have accumulated since the 2026-08
 baseline** visible instead of silently absorbing them. Those 180 are unfixed and still
 reported — the ratchet only works if someone prunes.
 
+#### B4a — the `@FR-` cited sites, swept (2026-08-24)
+
+All **17 comment blocks carrying the 24 citations** are done: every one now leads with the
+contract, and the `Enforces @FR-X` line sits at the top of its block rather than trailing
+after the prose. `rule_tags.py check` still resolves all 24.
+
+**The rewriting was the smaller half.** Reading the cited sites in order — which is what a
+tag route makes possible — turned up two things no comment lint could have found:
+
+- **`parse_assign_op` had no doc comment at all.** Its description ("apply the operator to
+  an already-parsed LHS, parse the RHS, rewrite into the assignment IR, returns
+  `Type::Void`") was stranded three hundred lines away on `classify_vec_bind`, because
+  that function had been inserted *between* the doc and the function it belonged to. So
+  one function was undocumented and another carried a description of something it does
+  not do — and rustdoc renders the wrong one without complaint. Both fixed.
+- **A doc block split by its own attribute.** `ref_tuple_element_ok`'s citation had been
+  appended *after* `#[must_use]`, so the source reads as two blocks where rustdoc shows
+  one. Eight such splits exist repo-wide (`doc → attribute → doc`); this was the only one
+  at a cited site, and it is fixed. The other seven are cosmetic and left alone.
+
+**Worth generalising:** the tags are a *reading* route, not just a citation index. The
+misattached doc had been there for as long as `classify_vec_bind` has existed, invisible
+to every lint because both functions had *something* above them. Following the citations
+one by one is what surfaced it.
+
 **Open:** the wider surface is not swept, by design (`doc-quality` says not to sweep a
-file during unrelated work). The route stays the one the owner named — **follow the
-`@FR-` citations**: a cited site should read *"this enforces `@FR-X`, here is how"*, and
-`scripts/rule_tags.py sites <tag>` enumerates them. 13 of 285 rules are cited so far, so
-adoption is the rate limiter, not the rewriting.
+file during unrelated work). The route stays the one the owner named — a cited site should
+read *"this enforces `@FR-X`, here is how"*, and `scripts/rule_tags.py sites <tag>`
+enumerates them. **13 of 285 rules are cited, so tag adoption is the rate limiter**, not
+the rewriting: the next tranche of sweepable sites only exists once more rules are cited.
 
 #### C — process / skills
 

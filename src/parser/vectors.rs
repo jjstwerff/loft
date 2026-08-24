@@ -4031,8 +4031,9 @@ impl Parser {
 /// list drifts — there is nothing to keep the copies in step.
 ///
 /// Enforces @FR-Col-Hash · @FR-Col-Sorted · @FR-Col-Index · @FR-Col-Spatial · @FR-Col-Trie.
-/// ⚠ No rule names the KEYED FAMILY as a category, though this predicate is what 16 sites
-/// depended on — see doc/claude/formal/IMPLEMENTATIONS.md.
+///
+/// ⚠ No rule names the KEYED FAMILY as a category, though that is the question 16 sites
+/// actually ask — see doc/claude/formal/IMPLEMENTATIONS.md.
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp,

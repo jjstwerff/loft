@@ -1279,6 +1279,9 @@ impl Stores {
     /// explicit `null`, or a value the slot's type cannot hold.  All three are the same
     /// question, and this is the ONE place that answers it.
     ///
+    /// Enforces @FR-L-Null: a nullable field has the SAME bytes as its not-null form, so
+    /// "what does an absent field hold?" is the DECLARATION's question, not the type's.
+    ///
     /// A field that DECLARES a default answers with it (loft#876).  Otherwise the type's
     /// absent value stands, which per [`formal/layout.md`] `(L-Null)` is the null sentinel
     /// inside the slot's own bytes when the slot is nullable, and the type's zero when it
@@ -1296,8 +1299,6 @@ impl Stores {
     /// error at any of the four.
     ///
     /// [`formal/layout.md`]: ../../../doc/claude/formal/layout.md
-    /// Enforces @FR-L-Null: a nullable field has the SAME bytes as its not-null form, so
-    /// "what does an absent field hold?" is the DECLARATION's question, not the type's.
     pub fn write_absent_value(&mut self, tp: u16, rec_tp: u16, field: u16, slot: &DbRef) {
         if let Some(f) = self.declared_field(rec_tp, field)
             && self.write_declared_default(&f, rec_tp, field, slot)
@@ -1312,13 +1313,14 @@ impl Stores {
     /// answering whether `tp` was a narrow integer at all — `false` lets a caller fall
     /// through to its own dispatch.
     ///
+    /// Enforces @FR-L-Null for the narrow widths — the write twin of `narrow_is_null`.
+    ///
     /// The four encodings disagree about where the null code sits: `Byte` and `Short`
     /// store `value - min + 1` and reserve the raw code for absence, `ShortRaw` stores
     /// `value - min` directly, and `Int` is a raw `i32` whose null is `i32::MIN`.  That
     /// makes the encoding part of the slot's LAYOUT, so it lives at one address.  A second
     /// writer re-deriving it does not fail loudly: it writes plausible bytes that decode to
     /// the wrong value, or to absence, for present input.
-    /// Enforces @FR-L-Null for the narrow widths — the write twin of `narrow_is_null`.
     pub fn write_narrow_value(&mut self, tp: u16, n: i64, slot: &DbRef) -> bool {
         enum Enc {
             Byte(i32),

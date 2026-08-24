@@ -2811,18 +2811,19 @@ use #count instead"
             // generator (they allocate in the state store, which is freed
             // with the generator).  Bind the loop var as a BORROW of the
             // generator (dep on gen_var): the consumer's scope machinery
-            // must never emit a per-iteration OpFreeRef for it, which
-            // whole-store-freed the generator's state store (the store
-            // recycled under allocation pressure → corrupted worklists) and
-            // tripped the #306 stack-store guard on the exhausted null.
+            // must never emit a per-iteration OpFreeRef for it.  Such a free
+            // releases the generator's whole STATE STORE, not one record — the
+            // store is then recycled under allocation pressure with the
+            // generator still live, and the exhausted-null read trips the #306
+            // stack-store guard well after the corruption.
             //
-            // EVERY DbRef-carried type, not the three obvious ones: a keyed collection is
-            // handed over as a handle exactly as a `Reference` or `Vector` is, and the five
-            // keyed kinds were simply never added here.  So `for x in <generator of
-            // hash/sorted/index>` bound `x` WITHOUT the dep, the scope machinery read it as
-            // an owner, and the per-iteration free this arm exists to prevent produced the
-            // very `BUG (#306)` the comment above describes.  `data::is_dbref` is the one
-            // home for the set (@FR-Col-Store).
+            // The test is EVERY DbRef-carried type, not the three obvious ones: a keyed
+            // collection is handed over as a handle exactly as a `Reference` or `Vector`
+            // is.  `data::is_dbref` is the one home for that set (@FR-Col-Store).
+            //
+            // ⚠ A short list here does not skip a nicety — it inverts this arm.  The loop
+            // var binds WITHOUT the dep, the scope machinery reads it as an owner, and the
+            // per-iteration free this arm exists to PREVENT is exactly what gets emitted.
             if gen_var != u16::MAX
                 && matches!(in_type, Type::Iterator(_, _))
                 && crate::data::is_dbref(&var_tp)

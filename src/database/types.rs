@@ -2369,19 +2369,20 @@ impl Stores {
     /// to `i32::MIN`), `ShortRaw` reserves the top code, and `Int` is a raw `i32` whose
     /// null is `i32::MIN`.
     ///
-    /// The widths were four inline arms here and `Int` had none at all, which is exactly
-    /// how [STABILITY_REDFLAGS] Cluster D describes this class — *"one width-fact, N
-    /// drifting copies"*.  The measured cost: an absent `i32?` field was not omitted from
-    /// a render and went onto the wire as the NUMBER `-2147483648`, while reading the same
-    /// slot answered null.  The 2026-08-20 pass fixed the three widths that had an arm and
-    /// could not fix the one that did not.
+    /// ⚠ A width with no arm here does not fail loudly — it reads as NOT NULL.  An absent
+    /// field then survives into output as its sentinel NUMBER (an absent `i32?` renders as
+    /// `-2147483648`) while the same slot read through this function answers null, so the
+    /// two disagree with nothing to report.  That asymmetry is why all four widths live in
+    /// one function rather than as inline arms per caller: [STABILITY_REDFLAGS] Cluster D
+    /// names the class — *"one width-fact, N drifting copies"*.
+    ///
+    /// Enforces @FR-L-Null for the narrow widths — the read twin of `write_narrow_value`.
     ///
     /// Write twins: [`Self::write_narrow_value`] for a value, and
     /// `set_default_value_nullable`'s narrow arms for the absent code.
     ///
     /// [STABILITY_REDFLAGS]: ../../../doc/claude/STABILITY_REDFLAGS.md
     #[must_use]
-    /// Enforces @FR-L-Null for the narrow widths — the read twin of `write_narrow_value`.
     pub fn narrow_is_null(
         &self,
         store: &crate::store::Store,
