@@ -844,10 +844,10 @@ impl Output<'_> {
         // yielded DbRef directly.  Mirrors the text branch's `next_text`
         // selection; both keep the default `next_i64` to drain immediately
         // on a wrong-channel call.
-        let is_dbref = matches!(
-            yield_tp,
-            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-        );
+        // Every DbRef-carried type, not the three obvious ones: a keyed collection is a
+        // handle too, and spelling the short list here sent `iterator<hash<…>>` down the
+        // `next_i64` channel.  @FR-Col-Store — one home, `data::is_dbref`.
+        let is_dbref = crate::data::is_dbref(yield_tp);
         // @P327 / @P328 native — tuple-of-(integer|float) AND fn-ref yields
         // use the unified `next_into(stores, dest: &mut [i64])` channel.
         // Each yield arm writes the yielded value's slots into `dest` and
@@ -1557,10 +1557,10 @@ impl Output<'_> {
         // @P326 — for-body factory must use the DbRef channel for
         // Reference-yielding generators (the eager-collect buffer is
         // `Vec<DbRef>`, the sub-generator advances via `next_dbref`).
-        let is_dbref = matches!(
-            yield_tp,
-            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-        );
+        // Every DbRef-carried type, not the three obvious ones: a keyed collection is a
+        // handle too, and spelling the short list here sent `iterator<hash<…>>` down the
+        // `next_i64` channel.  @FR-Col-Store — one home, `data::is_dbref`.
+        let is_dbref = crate::data::is_dbref(yield_tp);
         let (vec_ty, push_wrap_open, push_wrap_close, sub_advance, sub_exhaust) = if is_text {
             (
                 "String",

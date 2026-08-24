@@ -4310,6 +4310,34 @@ pub fn ref_tuple_element_ok(tp: &Type) -> bool {
     is_scalar(tp.base())
 }
 
+/// Is `tp` carried as a `DbRef` — a handle into a store rather than an inline value?
+///
+/// The authority is the layout: [`element_stack_size`] gives exactly these eight
+/// `size_of::<DbRef>()`, and any site deciding "does this travel as a handle?" is asking
+/// that same question.  Spelled inline it drifts SHORT — the three obvious ones
+/// (`Reference` / `Vector` / struct-`Enum`) get written and the five keyed collections are
+/// forgotten, because they are reached by key and do not look like references at the call
+/// site.  Measured: `coroutine.rs`'s two `is_dbref` tests spelled the short form, so a
+/// generator yielding `hash` / `sorted` / `index` picked the `next_i64` channel for a
+/// handle — `BUG (#306)` on `--interpret` and a raw rustc `E0605` on `--native`, while the
+/// same generator over a `vector` was fine.
+///
+/// Enforces @FR-Col-Store (the store-backed set) and @FR-L-Scalar's complement.
+#[must_use]
+pub fn is_dbref(tp: &Type) -> bool {
+    matches!(
+        tp,
+        Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
+            | Type::Enum(_, true, _)
+    )
+}
+
 /// Is `tp` a SCALAR — a value that lives inline in its slot and owns no store?
 ///
 /// The one home for a membership test written at several sites and already drifted between

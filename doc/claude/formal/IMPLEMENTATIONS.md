@@ -87,7 +87,7 @@ Status: ☐ to assess · ⚠ drift found · ✅ merged · ⛔ deliberately separ
 | # | the question | rule(s) it enforces | sites | status |
 |---|---|---|---|---|
 | 1 | **is this a scalar** (`Integer\|Float\|Single\|Character\|Boolean\|Enum(_,false,_)`) | `types.md` scalar/heap split; the `&(…)` admitted-element rule | 8 → **3 merged**, 5 left | ✅ **merged + drift FIXED.** `generation/`'s two copies included `Enum(_, false, _)`; `ref_tuple_element_ok` did not — so `&(Col, Col)` was refused while `&(boolean, boolean)` was admitted, on an identical 1-byte layout. One home: `data::is_scalar`. The 5 remaining sites (`scopes.rs:3898`, `generation/emit.rs`, `parser/operators.rs:47` = `Const-ScalarCollapse`, `parser/mod.rs:4932`, +1) spell the BARE five, so adopting them ADDS value enums at each — a behaviour change per site needing its own probe. Left open deliberately. |
-| 2 | **does this own a store** (`Reference\|Vector\|Enum(_,true,_)`) | `heap.md` H-Alloc; `ownership.md` O-Owner | **30** | ☐ largest single list; check whether all 30 ask the same question before touching |
+| 2 | **is this carried as a DbRef** (`Reference\|Vector\|Enum(_,true,_)`) | `@FR-Col-Store` — home is `data::is_dbref` | 43 → **2 fixed**, 41 to read | ⚠ **the short list is a BUG source** — see § The DbRef set below. Home exists now; the remaining 41 each need reading, since some may legitimately want only three |
 | 3 | **is this a KEYED collection** (`Hash\|Index\|Radix\|Sorted\|Trie`) | `@FR-Col-Hash` · `-Sorted` · `-Index` · `-Spatial` · `-Trie` | 16 → **1** | ✅ **merged onto `vectors::is_keyed`** — see § The keyed collections below |
 | 4 | **is this a collection** (keyed `+ Vector`) | `@FR-Col-Store` | 10 | ☐ home EXISTS (`vectors::is_collection`, now cited) and is literally `is_keyed(tp) \|\| Vector` — so #3 and #4 differ by that variant BY DESIGN, not by drift. The inline copies remain to convert. |
 | 5 | **is this a DbRef-represented type** (`+Radix\|Trie` over #2) | `layout.md`; `element_stack_size`'s DbRef group | **8** | ☐ `coalesce_not_null`'s heap-DbRef branch is one of these — the branch loft#1065 recursed into |
@@ -160,6 +160,46 @@ Checklist #4 (`is_collection`) resolves in the same breath: its home exists and 
 `is_keyed(tp) || Vector`, so #3 and #4 differ by that one variant **by design**. The near-dup
 detector flagged them as a candidate drift pair; reading them shows a deliberate pair. That is
 the detector working as intended — it proposes, the reading disposes.
+
+## The DbRef set — a list that drifts SHORT, and the bug it produced (checklist #2, 2026-08-24)
+
+`Reference | Vector | Enum(_, true, _)` appears at **43 sites**. It looks like "the heap
+types" and it is not: `element_stack_size` gives **eight** types a `DbRef` — those three plus
+`Sorted`, `Index`, `Hash`, `Radix`, `Trie`. The five keyed collections are the ones that get
+forgotten, because they are reached by key and do not read as references at the call site.
+
+**It is not a tidiness problem. It produced a live bug in the one place I probed.**
+`generation/coroutine.rs` chose the generator's yield channel with the short list, so a
+generator over a keyed collection sent a handle down the `next_i64` channel:
+
+```loft
+fn g() -> iterator<hash<E[k]>> { a: hash<E[k]> = [E { k: 1, v: "a" }]; yield a; }
+```
+
+`--native` refused to compile (a raw rustc `E0605` handed to the user); `--interpret` reported
+`BUG (#306): a stack-record ref was treated as an owned heap store`. The same generator over a
+`vector` was fine — the boundary is exactly the list. Both sites now read `data::is_dbref`,
+and `--native` answers correctly.
+
+**Why it survived: the corpus has never yielded a DbRef.** `tests/scripts` covers
+`iterator<integer>` (45 files), `<text>` (10), `<single>` and `<float>` — and nothing carried
+by handle. `coroutine-yields-a-dbref-value.loft` is the first coverage of that channel
+(vector, struct reference, and the scalar channel beside them as the control).
+
+⚠ **Two things left open, both recorded rather than papered over:**
+
+1. **The interpreter half of the keyed-yield bug is a SEPARATE fault.** `--native` is fixed;
+   `--interpret` still reports `BUG (#306)` for `iterator<hash<…>>`. It is not the channel
+   choice — `coroutine_layout::next_operands` already handles hash/sorted/index — but the
+   yield-ownership path, which I did not locate. Repro above. The keyed cells are therefore
+   absent from the guard: a failing cell cannot land.
+2. **`coroutine_layout::next_operands` is short too** — six of the eight, missing `Radix` and
+   `Trie`. Not probed (a `spatial`/`trie` yield); the same class as the bug above.
+
+**41 sites still to read.** They are not automatically the same question: the coroutine ones
+wanted all eight, but a site that genuinely cannot see a keyed collection may be right with
+three. Each needs the reading the narrow widths got — which is exactly why this family was
+predicted to split rather than merge, and did.
 
 ## Not mergeable — recorded so the question is not reopened
 
