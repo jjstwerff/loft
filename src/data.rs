@@ -655,7 +655,21 @@ pub enum Value {
     Return(Box<Value>),
     /// Break out of the n-th loop
     Break(u16),
-    /// Break out of the n-th loop with a value
+    /// Break out of the n-th loop with a value.
+    ///
+    /// ⚠ NO PRODUCER.  Nothing in the front end builds one: the parser has never
+    /// constructed it under this name or its original `BreakValue`, and loft has no
+    /// break-with-value syntax (LOFT.md documents `break` and `x#break` only).  Its
+    /// every construction is a serializer round-trip test or a REBUILD inside a walker's
+    /// own arm (`Scopes::scan`), so it is a closed cycle with no source — a deserializer
+    /// can only return what a producer once wrote.  Measured: 0 nodes across the 854
+    /// programs of `tests/scripts` (`scripts/ir_walker_audit.py dead`).
+    ///
+    /// It is not free.  Every walker still owes it an arm, 66 hand-rolled ones get it
+    /// wrong, and no test can reach those arms to notice — which is why the same defect
+    /// was found twice (`inline_ref_set_in`'s predecessor in parser/expressions.rs, and
+    /// `scopes::walk_check`).  Do not treat a missing `BreakWith` arm as a live bug
+    /// without re-measuring first.  IMPLEMENTATIONS.md § Checklist #8.
     BreakWith(u16, Box<Value>),
     /// Continue the n-th loop
     Continue(u16),
@@ -695,6 +709,14 @@ pub enum Value {
     FnRefDnr(u16),
     /// Parallel { arm1; arm2; } — each arm runs concurrently.
     Parallel(Vec<Value>),
+    /// ⚠ NO PRODUCER, like [`Value::BreakWith`] above.  The shape below was designed
+    /// but never wired: no file under `src/parser/` has ever built a `ParForBody`, and
+    /// the only non-serializer construction is `Scopes::scan` rebuilding one it walked.
+    /// `state/codegen.rs` says as much at its own arm — *"codegen lands in plan-06 spine
+    /// step 3b — should not be reachable"*.  Measured: 0 nodes across the 854 programs of
+    /// `tests/scripts` (`scripts/ir_walker_audit.py dead`).  `par` itself is alive and
+    /// lowers to [`Value::Parallel`] — which the same corpus reaches only 4 times.
+    ///
     /// Plan-06 PRIORITY.md spine step 3 — fused for-par IR shape
     /// (DESIGN.md D7).  Captures the streaming-only par construct
     /// `for x in input par(r=worker(x), threads) { body }` without

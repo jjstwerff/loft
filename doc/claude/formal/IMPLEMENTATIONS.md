@@ -286,11 +286,15 @@ merging them would be the too-early-abstraction failure with real consequences:
 | `Drop \| Return \| Yield` | 9 | the same walker question, three of the four | 7 of 9 carry a SEPARATE `BreakWith` arm (it takes a label as well as a value, so it cannot share one); 2 did not |
 | `BreakWith \| Return` · `Break \| BreakWith \| Continue \| Return` | 3 · 2 | **loop exit** | ⛔ separate again |
 
-**The one real gap, fixed.** `scopes::walk_check` — the `check_arg_ref_allocs` validator that
-reports a `Set(v, Null)` nested inside a call argument, the shape that "corrupts the CallRef arg
-layout (A5.6)" — walked `Return`/`Drop`/`Yield` and not `BreakWith`. A violation under a
-`break with f(…)` was therefore never reported. It is a missed DIAGNOSTIC rather than a wrong
-answer, and adding the arm can only report more.
+**The one gap — and the claim I made about it was wrong.** `scopes::walk_check`, the
+`check_arg_ref_allocs` validator that reports a `Set(v, Null)` nested inside a call argument
+("corrupts the CallRef arg layout", A5.6), walked `Return`/`Drop`/`Yield` and not `BreakWith`.
+I recorded that "a violation under a `break with f(…)` was therefore never reported". There is
+no such program: `break with` is not loft syntax, and `Value::BreakWith` has **no producer at
+all** (#8 below). The arm stays — it is free and it makes the walker match the keystone — but it
+fixed nothing, because nothing could reach it. The lesson is the one this checklist keeps
+re-teaching: an arm-set gap is a hypothesis about REACHABILITY, and the variant list does not
+establish that anything reaches it.
 
 **The other gap is deliberate and now says so.** `scopes::prepend_to_scope` omits `BreakWith`
 too, but that relocation is BEST-EFFORT with a correct fallback — leaving the null-init at body
@@ -304,6 +308,67 @@ more shape; it would not fix anything. The comment now records that so the next 
 per site, so there is nothing to call — the reusable artefact here is the TABLE above, not a
 helper. Recognising which kind you have is what stops a merge being attempted where it cannot
 land.
+
+## Checklist #8 — the keystone that says every walker derives from it (2026-08-24)
+
+The filed question was "which `Value` shapes hold a statement list", expecting a merge like #3/#4.
+It is not a merge, and the two arm-sets it started from (`Insert | Parallel | Tuple`, 8 sites, and
+`Call | Insert | Parallel | Tuple`, 5) differ only by whether `Call` can share the arm body — it
+carries a `def_nr` the others do not. Both are ordered child lists; all 13 descend into calls.
+(My first pass reported `parser/operators.rs:4052` as having no `Call` arm nearby. It has two, at
+3929 and 3954 — outside the ±55-line window I measured with. Fourth window artifact of this
+sweep; the window is now part of what gets stated with the number.)
+
+**The real finding is one level up.** `Value::for_each_child` (data.rs) already IS the merged home,
+and its doc says so: *"the ONE place that knows `Value`'s tree shape … Every traversal derives from
+this — the match is exhaustive on purpose, so a new `Value` variant forces a decision here and
+every walker inherits the edge."* That is a claim, and claims get re-measured:
+
+| how a recursive multi-variant walker descends | count | what a new edge does |
+|---|---|---|
+| via the keystone | 31 | inherited — nothing to do |
+| own match, exhaustive (no catch-all) | 22 | breaks the build; the author must decide |
+| own match + `_ =>` catch-all | **127** | falls into `_`, **silently** |
+
+`scripts/ir_walker_audit.py walkers` re-measures it. The third row is the hazard, and the
+MECHANISM has fired twice — `inline_ref_set_in`'s hand-rolled predecessor *"treated `BreakWith`
+as a leaf and missed a `Set` inside its value"* (parser/expressions.rs:121), and
+`scopes::walk_check` had the identical hole (#7).
+
+⚠ **But both landed on `BreakWith`, and `BreakWith` turns out to be unreachable — so neither was
+a live defect.** They demonstrate the shape, not the damage, and it would be sleight of hand to
+count them as evidence that the 127 are costing anything today. What they honestly establish is
+narrower and still worth having: a hand-rolled walker DOES silently drop an edge the keystone
+would have supplied, and nothing in the build, the tests, or review noticed for years — twice.
+**The measurement that would settle it has not been made:** for each of the 127, which of the
+edges it omits are REACHABLE? That is a different query from this one, and it is the honest next
+step rather than a mass conversion. QUALITY.md § B2.
+
+**Two `Value` variants have no producer.** `BreakWith` and `ParFor` can only be *rebuilt* inside a
+walker's own arm, or *deserialized* — and a deserializer returns only what a producer once wrote,
+so both are closed cycles with no source. No file under `src/parser/` has ever constructed either,
+under any name, in any commit. Measured two independent ways, because neither alone is an oracle:
+
+| variant | nodes in 854-program corpus | construction sites | verdict |
+|---|---|---|---|
+| `Single` · `Loop` | 147,854 · 22,176 | screen says "no producer" | **live** — built through a helper the screen reads as a rebuild |
+| `Parallel` | **4** | same | live, but the corpus barely reaches it |
+| `Iter` · `RawExpr` | 0 · 0 | real producer found | live — `Iter` is lowered away before the snapshot, `RawExpr` is built after it |
+| **`BreakWith` · `ParFor`** | **0 · 0** | rebuild + serializer only | **dead** |
+
+Corpus-absence alone proves nothing (`Iter`, `RawExpr`); a producer screen alone proves nothing
+(`Loop`, `Single`, `Parallel`). The intersection is the answer: `scripts/ir_walker_audit.py dead`.
+
+**Why this is worth the words.** A producerless variant is not free. It costs every walker an arm;
+66 hand-rolled walkers get `BreakWith` wrong; and *no test can reach any of those arms*, so the
+defect is structurally invisible — which is exactly how it was found and mis-diagnosed twice. Both
+declarations now carry the measurement, so the next reader does not audit 66 arms again.
+
+**Open, and the user's call:** removing the two variants would touch **119 mentions across 25 files**
+(70 `BreakWith`, 49 `ParFor`) — walker arms, two serializer shapes, and the round-trip tests
+that are their only exercise. It touches the IR
+schema, so it is a compatibility decision rather than a cleanup — recorded in QUALITY.md § open
+work, not taken here.
 
 ## Not mergeable — recorded so the question is not reopened
 

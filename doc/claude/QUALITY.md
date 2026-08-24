@@ -81,19 +81,49 @@ Items below are "what to BUILD" derived from the design content in this document
 The concrete queue for the thread that runs from `formal/IMPLEMENTATIONS.md`.  Each row names
 the next ACTION, not the topic.  Status: ☐ open · ⚠ needs a decision · ✅ done.
 
+**Where this thread came from, so the queue below reads as more than housekeeping.** The premise
+is an owner diagnosis, not a metric: *"most of the code in loft is not from an early
+implementation but from fixing bugs, and during that bug fixing a lot of duplications were
+written without design — so we have structure, but in that structure we have multiple
+implementations, often in multiple files."* The response has three parts, and two are done:
+
+1. **Anchor duplication on the RULES, not on the code** — a formal rule is the thing two
+   implementations are both claiming to implement, so it is the only stable place to ask "is this
+   the same question?". Rules therefore needed unique names: `@FR-<Rule>` tags, defined in
+   `formal/`, cited from the code, resolved by `scripts/rule_tags.py`, indexed by `./scripts/idx`,
+   and gated by `doc_hygiene::every_rule_citation_resolves`. ✅ shipped.
+2. **Work the duplications the tags expose** — the eight-family checklist in
+   `formal/IMPLEMENTATIONS.md`. ✅ all eight evaluated; four merged, four split with the reason
+   recorded. The split verdicts matter as much as the merges: three of the eight were *different
+   questions sharing a variant list*, and merging them would have been the early-abstraction
+   failure the diagnosis warns about.
+3. **Make the sensor fire without being asked** — the blind spot is activation, not capability
+   (*"if you think about the issue you will do the correct thing; but without it you build a lot
+   of correct things and still miss the correct design"*). Trigger lines now live in
+   `design-protocol`, `engineering-rigor` and `loft-codegen`, and each duplication question has a
+   TOOL so the answer does not depend on remembering. ⚠ the one unmeasured part is whether the
+   triggers actually fire — see C.
+
+**State in one line:** the checklist is finished, the tooling is in place, and what remains is
+three spec decisions (B), two owner calls (B2), one unrun measurement (C), and a **42-commit
+branch with no PR**.
+
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
-12 of 285 rules cited, across 19 sites.  Each row is one family from the checklist; the work is
-*read each site, decide which rule it enforces, cite it* — and the reading is the point, since
-two of the three families done so far split rather than merged.
+13 of 285 rules cited, across 24 sites (`python3 scripts/rule_tags.py check`).  Each row is one
+family from the checklist; the work is *read each site, decide which rule it enforces, cite it* —
+and the reading is the point: **four of the eight families split rather than merged**, and each
+split is a merge that would have coupled two rules that must stay free to differ.
 
 | # | family | sites | next action |
 |---|---|---|---|
+| 3 | **is this a KEYED collection** | 16 | ✅ **merged onto `vectors::is_keyed`** — one home for five variants. Exposed rules gap B1 (no rule names the keyed family as a category) |
+| 6 | **narrow integer widths** | 12 | ✅ **evaluated — TWO questions, not one** (stored width vs variable-slot representation); split, not merged. Exposed rules gap B2 |
 | 2 | **is this carried as a DbRef** | 43 | ✅ **closed** — 3 sites wrong (2 real bugs, both fixed), the other 40 cleared by a corpus-wide SENTINEL rather than by reading. Only 4 ever see a keyed collection, and all 4 probe correct against their own documented failure modes |
 | 4 | **is this a collection** (keyed `+ Vector`) | 13 | ✅ **merged** onto `vectors::is_collection` (the one that DERIVES it). Three homes existed, not one; IR byte-identical 854/854 |
 | 5 | **is this DbRef-represented** | 11 | ✅ **merged onto `data::is_dbref`**, IR byte-identical on 854/854. Turned up a duplicate home (`Parser::is_heap_handle`) that `is_dbref` itself had duplicated — see IMPLEMENTATIONS.md |
-| 7 | **the value-carrying `Value` wrappers** | 59 | ✅ **evaluated — FOUR questions, not one**; not mergeable (arms, not predicates). One validator gap fixed (`walk_check` missed `BreakWith`), one omission documented as deliberate |
-| 8 | **which `Value` shapes hold a statement list** | 8 | ☐ a `Value` list, not `Type`/`Parts` — widen `rule_predicate_audit.py` again first |
+| 7 | **the value-carrying `Value` wrappers** | 59 | ✅ **evaluated — FOUR questions, not one**; not mergeable (arms, not predicates). One omission documented as deliberate. ⚠ its "one real gap fixed" claim was **wrong and is corrected** — `walk_check`'s missing `BreakWith` arm was unreachable, see #8 |
+| 8 | **which `Value` shapes hold a statement list** | 13 | ✅ **evaluated — the merged home already exists.** Not a merge: the two arm-sets differ only by whether `Call` shares the body. The finding is one level up — `Value::for_each_child` claims *every* traversal derives from it; measured **31 do, 22 are exhaustive, 127 are a partial match + `_` catch-all**. And **two variants have no producer at all** (`BreakWith`, `ParFor`) — see IMPLEMENTATIONS.md |
 | 1 | scalar — the 5 remaining BARE sites | 5 | ⚠ adopting `is_scalar` ADDS value enums at each: a behaviour change per site, one probe each. Not a sweep |
 
 #### B — rules gaps found by citing (spec decisions, not code)
@@ -111,6 +141,15 @@ two of the three families done so far split rather than merged.
 | a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
+| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, two modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `dead` intersects a producer screen with an 854-program corpus census to find variants nothing can build. Both are REPORTS. It was **rejected twice before it shipped** for failing to reproduce the answer already found by hand — the `make profile-corpus` discipline, applied to a new instrument |
+
+#### B2 — open, and the owner's call
+
+| decision | evidence | why it is not mine to take |
+|---|---|---|
+| **remove `Value::BreakWith` and `Value::ParFor`** | no producer in any commit; 0 nodes in 854 programs; 119 mentions across 25 files (70 + 49) — walker arms, two serializer shapes, and the round-trip tests that are their only exercise | it changes the IR schema, so it is a compatibility decision (COMPATIBILITY.md), not a cleanup. Both declarations now carry the measurement so the cost is at least visible |
+| **the 127 catch-all walkers** | each silently absorbs a `Value` edge it does not name; the mechanism has fired twice in walkers written years apart, unnoticed by build, tests and review | ⚠ **but both firings were on the unreachable `BreakWith`, so neither cost anything** — the damage is UNMEASURED. The next step is not a conversion but a query: for each of the 127, which omitted edges are REACHABLE? Do that before proposing a sweep |
+| **`Parallel` is reached 4 times in 854 programs** | corpus census | a coverage gap in the suite, not a defect — but `par` is the construct with the least IR-level exercise of anything still alive |
 
 #### D — carried, unchanged by this thread
 
