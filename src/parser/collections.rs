@@ -2825,17 +2825,27 @@ use #count instead"
             // whole-store-freed the generator's state store (the store
             // recycled under allocation pressure → corrupted worklists) and
             // tripped the #306 stack-store guard on the exhausted null.
+            //
+            // EVERY DbRef-carried type, not the three obvious ones: a keyed collection is
+            // handed over as a handle exactly as a `Reference` or `Vector` is, and the five
+            // keyed kinds were simply never added here.  So `for x in <generator of
+            // hash/sorted/index>` bound `x` WITHOUT the dep, the scope machinery read it as
+            // an owner, and the per-iteration free this arm exists to prevent produced the
+            // very `BUG (#306)` the comment above describes.  `data::is_dbref` is the one
+            // home for the set (@FR-Col-Store).
             if gen_var != u16::MAX
                 && matches!(in_type, Type::Iterator(_, _))
-                && matches!(
-                    var_tp,
-                    Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-                )
+                && crate::data::is_dbref(&var_tp)
             {
                 let dep_tp = match var_tp.clone() {
                     Type::Reference(d, _) => Type::Reference(d, crate::data::Deps::frame1(gen_var)),
                     Type::Enum(d, m, _) => Type::Enum(d, m, crate::data::Deps::frame1(gen_var)),
                     Type::Vector(e, _) => Type::Vector(e, crate::data::Deps::frame1(gen_var)),
+                    Type::Hash(d, k, _) => Type::Hash(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Sorted(d, k, _) => Type::Sorted(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Index(d, k, _) => Type::Index(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Radix(d, k, _) => Type::Radix(d, k, crate::data::Deps::frame1(gen_var)),
+                    Type::Trie(d, k, _) => Type::Trie(d, k, crate::data::Deps::frame1(gen_var)),
                     other => other,
                 };
                 self.change_var_type(for_var, &dep_tp);

@@ -87,7 +87,7 @@ Status: ☐ to assess · ⚠ drift found · ✅ merged · ⛔ deliberately separ
 | # | the question | rule(s) it enforces | sites | status |
 |---|---|---|---|---|
 | 1 | **is this a scalar** (`Integer\|Float\|Single\|Character\|Boolean\|Enum(_,false,_)`) | `types.md` scalar/heap split; the `&(…)` admitted-element rule | 8 → **3 merged**, 5 left | ✅ **merged + drift FIXED.** `generation/`'s two copies included `Enum(_, false, _)`; `ref_tuple_element_ok` did not — so `&(Col, Col)` was refused while `&(boolean, boolean)` was admitted, on an identical 1-byte layout. One home: `data::is_scalar`. The 5 remaining sites (`scopes.rs:3898`, `generation/emit.rs`, `parser/operators.rs:47` = `Const-ScalarCollapse`, `parser/mod.rs:4932`, +1) spell the BARE five, so adopting them ADDS value enums at each — a behaviour change per site needing its own probe. Left open deliberately. |
-| 2 | **is this carried as a DbRef** (`Reference\|Vector\|Enum(_,true,_)`) | `@FR-Col-Store` — home is `data::is_dbref` | 43 → **2 fixed**, 41 to read | ⚠ **the short list is a BUG source** — see § The DbRef set below. Home exists now; the remaining 41 each need reading, since some may legitimately want only three |
+| 2 | **is this carried as a DbRef** (`Reference\|Vector\|Enum(_,true,_)`) | `@FR-Col-Store` — home is `data::is_dbref` | 43 → **3 fixed**, 40 to read | ⚠ **the short list is a BUG source** — see § The DbRef set below. Home exists now; the remaining 41 each need reading, since some may legitimately want only three |
 | 3 | **is this a KEYED collection** (`Hash\|Index\|Radix\|Sorted\|Trie`) | `@FR-Col-Hash` · `-Sorted` · `-Index` · `-Spatial` · `-Trie` | 16 → **1** | ✅ **merged onto `vectors::is_keyed`** — see § The keyed collections below |
 | 4 | **is this a collection** (keyed `+ Vector`) | `@FR-Col-Store` | 10 | ☐ home EXISTS (`vectors::is_collection`, now cited) and is literally `is_keyed(tp) \|\| Vector` — so #3 and #4 differ by that variant BY DESIGN, not by drift. The inline copies remain to convert. |
 | 5 | **is this a DbRef-represented type** (`+Radix\|Trie` over #2) | `layout.md`; `element_stack_size`'s DbRef group | **8** | ☐ `coalesce_not_null`'s heap-DbRef branch is one of these — the branch loft#1065 recursed into |
@@ -186,15 +186,19 @@ and `--native` answers correctly.
 by handle. `coroutine-yields-a-dbref-value.loft` is the first coverage of that channel
 (vector, struct reference, and the scalar channel beside them as the control).
 
-⚠ **Two things left open, both recorded rather than papered over:**
+**The interpreter half was a SECOND site with the same short list — now fixed.**
+`collections.rs` binds the consumer's loop variable as a BORROW of the generator
+(`x: ref(E)["___gen_1"]`) precisely so the per-iteration free is never emitted, and its comment
+already says what happens otherwise: *"whole-store-freed the generator's state store … and
+tripped the #306 stack-store guard"*. That arm listed `Reference | Enum(_, true, _) | Vector`.
+A keyed yield therefore bound `x` with NO dep, the scope machinery read it as an OWNER, and the
+free that arm exists to prevent produced exactly the `BUG (#306)` its own comment describes.
+Both sites now read `data::is_dbref`; all five DbRef yield shapes answer correctly on both
+backends with no leak.
 
-1. **The interpreter half of the keyed-yield bug is a SEPARATE fault.** `--native` is fixed;
-   `--interpret` still reports `BUG (#306)` for `iterator<hash<…>>`. It is not the channel
-   choice — `coroutine_layout::next_operands` already handles hash/sorted/index — but the
-   yield-ownership path, which I did not locate. Repro above. The keyed cells are therefore
-   absent from the guard: a failing cell cannot land.
-2. **`coroutine_layout::next_operands` is short too** — six of the eight, missing `Radix` and
-   `Trie`. Not probed (a `spatial`/`trie` yield); the same class as the bug above.
+⚠ `coroutine_layout::next_operands` is still short — six of the eight, no `Radix`/`Trie`.
+Probed: a `spatial` yield is correct anyway, so it does not bite. The guard now carries a
+spatial cell to keep it that way rather than leaving the discrepancy unattended.
 
 **41 sites still to read.** They are not automatically the same question: the coroutine ones
 wanted all eight, but a site that genuinely cannot see a keyed collection may be right with
