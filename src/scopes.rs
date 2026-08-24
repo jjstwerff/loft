@@ -100,9 +100,16 @@ struct Scopes {
     /// `av` (outer/function) outlives `v` (inner), so `av`'s Rust
     /// `let` is still live where `v`'s free fires.
     witness_buffer: HashMap<u16, u16>,
-    /// #316 — Reference vars whose LATEST scanned assignment gave them an
-    /// OWNED store (a call whose filtered return deps are empty, a deep-copied
-    /// var, …), mapped to the loop depth (`loops.len()`) at that assignment.
+    /// Reference vars whose LATEST scanned assignment gave them an OWNED store (a call
+    /// whose filtered return deps are empty, a deep-copied var, …), mapped to the loop
+    /// depth (`loops.len()`) at that assignment.
+    ///
+    /// ⚠ **The THIRD ownership fact.** @FR-O-Deps names one — `deps` — and
+    /// [`crate::variables::Function::is_skip_free`] is the second, the veto for the
+    /// empty-deps proxy.  This is the third, and it is not redundant with either: it
+    /// carries a TEMPORAL fact (the *latest* assignment) and a LOOP-DEPTH fact, neither of
+    /// which a type-level dep list can express.  `scan_set`'s ownership-transition free is
+    /// gated on this rather than on `deps` for exactly that reason.
     /// When such a var is reassigned with a BORROW, its merged static type
     /// already carries deps, so codegen's dep-empty pre-Set free never fires —
     /// `scan_set` emits an explicit `OpFreeRef(v)` for the orphaned store
@@ -4641,6 +4648,15 @@ impl Scopes {
         let scanned_test = self.scan(test, function, data);
         // #316 — ownership state is path-sensitive: scan each branch from the
         // same pre-If state, then keep only entries BOTH branches agree on.
+        // Enforces @FR-O-Complete — the fact is per BINDING and per PATH, a
+        // set-and-reconcile rather than one structural walk.  Both arms are scanned from
+        // the SAME pre-`If` state and only what they AGREE on survives, so a store owned
+        // on one path only is not treated as owned after the join.
+        //
+        // ⚠ @FR-O-Complete is the load-bearing invariant of the whole model: loft has no
+        // user-facing borrow checker, so an incomplete fact is not a compile error someone
+        // fixes — it is a miscompile or a leak.  Erring toward "not owned" here is why the
+        // reconcile intersects rather than unions.
         let owned_before = self.owned_refs.clone();
         let scanned_true = self.scan(t_val, function, data);
         let owned_after_true = std::mem::replace(&mut self.owned_refs, owned_before);
@@ -5572,6 +5588,24 @@ impl Scopes {
         ls
     }
 
+    /// Which variables this scope must free on the way out, as the `OpFreeRef` /
+    /// `OpFreeText` / per-element ops to emit before leaving it.
+    ///
+    /// Enforces @FR-O-Derived — free placement is DERIVED, not decided: a local is freed
+    /// iff it OWNS its store and does not transfer it out, once, at scope exit — and
+    /// @FR-O-Owner, the single-owner invariant that makes "once" correct.  There is no
+    /// per-site heuristic here; every arm answers from a carried fact.
+    ///
+    /// `ret_var` and `return_sources` are what "does not transfer it out" means in
+    /// practice: a store handed to the caller is the caller's to free (@FR-O-Move), so its
+    /// scope-exit free is suppressed.  `return_sources` is PATH-LOCAL — a source dead on a
+    /// sibling path is absent from it and is still freed by that path's own sweep, which is
+    /// what keeps @FR-O-Complete true without a global "skip" stamp that would over-suppress
+    /// and leak.
+    ///
+    /// ⚠ Ownership is read here from a carried fact, but "empty deps" is only a PROXY for
+    /// it (loft#723) — see [`crate::variables::Function::is_skip_free`], the second fact
+    /// that vetoes the proxy for a borrow whose dep list was never populated.
     #[allow(clippy::too_many_lines)]
     fn get_free_vars(
         &mut self,

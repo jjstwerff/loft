@@ -1209,6 +1209,19 @@ impl DepEntry {
 /// space-agnostic ones) or the space-asserting accessors.  In debug
 /// builds each value carries its [`DepSpace`]; the tag is excluded from
 /// equality and absent in release builds.
+/// The ownership fact of @FR-O-Deps: every store-lifetime decision — free placement,
+/// adopt-vs-copy, move-vs-clone, drop — is meant to derive from THIS and nothing else, and
+/// a decision re-derived from a codegen condition is by that rule a bug.
+///
+/// @FR-O-Borrow is what the list carries: a value aliasing another (a parameter, a field,
+/// an element, an explicit `&τ`) names its source here, and a binding that names a source
+/// is a borrower — skip-free, with the single owner freeing once.  An EMPTY list therefore
+/// reads as "owner".
+///
+/// ⚠ That reading is a PROXY, not the fact (loft#723): a borrow whose dep list was never
+/// populated also has an empty list, and reads as an owner.  The repair is a second carried
+/// fact, [`crate::variables::Function::is_skip_free`], which vetoes the proxy — so in
+/// practice the model has two facts where its rules name one.
 #[derive(Clone, Debug, Default)]
 pub struct Deps {
     items: Vec<u16>,

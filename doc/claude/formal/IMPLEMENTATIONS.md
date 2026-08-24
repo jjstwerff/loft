@@ -378,6 +378,72 @@ manifest's first line so a binary upgrade invalidates the bundle. The numbering 
 constants still match the regenerated schema — it failed on the first renumber attempt and named
 the exact constant, which is what a layout gate is for.
 
+## The variable-lifetime map (2026-08-24)
+
+The `deps` ownership system is the subsystem loft is most often wrong in and hardest to
+reason about, so this is the rule → site map for it. Every row is cited in the code, so
+`python3 scripts/rule_tags.py sites @FR-O-Deps` (etc.) answers *"what implements this?"*
+without anyone having to remember.
+
+| rule | what it says | implemented at |
+|---|---|---|
+| `@FR-O-Deps` | one fact; every lifetime decision derives from it | `data::Deps` (`src/data.rs`) — the type itself |
+| `@FR-O-Borrow` | an aliasing value names its source; borrowers are skip-free | the `Deps` list; `Function::make_independent` strips a dep to promote a borrow to owner |
+| `@FR-O-Owner` · `@FR-O-Derived` | single owner; free is DERIVED, once, at scope exit | `Scopes::get_free_vars` (`src/scopes.rs`) — the scope-exit sweep |
+| `@FR-O-Move` | a returned store transfers to the caller | `get_free_vars`'s `ret_var` / `return_sources` suppression; `Parser::ref_return` (`src/parser/control.rs`) |
+| `@FR-O-Complete` | per binding, per path — set-and-reconcile | `Scopes::scan_if`'s intersect of `owned_refs` across both arms (`src/scopes.rs`) |
+| `@FR-O-NoDiverge` | both backends translate the SAME facts | structural: `scopes` decides and writes `OpFreeRef` into the IR; the emitters translate |
+
+**The load-bearing invariant is `O-Complete`, not soundness.** loft has no user-facing
+borrow checker — the user writes naively and the compiler must always find a lowering — so
+an incomplete fact is not a compile error someone fixes. It is a miscompile or a leak. That
+is why the `if` reconcile INTERSECTS the two arms rather than unioning them.
+
+### ⚠ The model has TWO facts, and its rules name one
+
+`O-Deps` says every decision derives from `deps`. The way a site actually reads ownership
+off `deps` is `tp.depend().is_empty()` — and the code states plainly what that is worth:
+
+> *"loft#723 — empty deps is only a PROXY for ownership, and it reads 'owned' for a borrow
+> whose dep list was never populated."* (`src/state/codegen.rs`)
+
+The repair was a SECOND carried fact, `Function::is_skip_free`, whose contract is "never
+emit `OpFreeRef` for this var" and which must VETO the proxy. Consulting it only at the
+scope-exit sweep left an unconditional pre-Set free reachable inside a loop body, where it
+landed on the *next* iteration's store — stale bytes without `LOFT_POISON`, SIGSEGV with it.
+
+**Measured 2026-08-24:** 24 functions test `depend().is_empty()`; 9 consult `skip_free`,
+15 do not. ⚠ **That count does not survive inspection, and how it fails is the real
+result.** Checking the largest proxy-without-veto site that frees — `Scopes::scan_set` —
+its `OpFreeRef` turns out to be gated on neither: the condition is
+`owned_refs.get(&v) == Some(&self.loops.len())`, a THIRD carried fact (the latest
+assignment's ownership, tagged with the loop depth at which it was taken). The function
+contains the proxy for a different question entirely.
+
+**So the model carries at least three facts where its rules name one:**
+
+| fact | where | what it answers |
+|---|---|---|
+| `deps` (`tp.depend().is_empty()`) | the type | is this a borrow? — a PROXY, wrong for an unpopulated dep list |
+| `Function::is_skip_free` | the variable table | never free this one — the veto the proxy needs (loft#723) |
+| `Scopes::owned_refs` | the scan state | did the LATEST assignment leave it owning a store, and at which loop depth |
+
+None of the three is redundant: `owned_refs` carries a temporal fact (*latest* assignment)
+and a loop-depth fact that a type-level dep list structurally cannot, which is why the
+transition free is gated on it and not on `deps`.
+
+The gap is therefore not "15 sites forgot the veto" — it is that **which fact a lifetime
+decision should read is nowhere written down**, so a reader cannot tell a site that
+legitimately reads one from a site that reached for the wrong one. That is a question for
+`ownership.md`'s rules, which currently describe a one-fact model the code does not have.
+
+⚠ This qualifies a **CLOSED** deviation. `D-own-1` (closed 2026-07-04) records *"the LAST
+per-site ownership re-derivation is now GONE"* and *"every free/copy/move reads `deps`"*.
+Both remain true in the letter — these sites do read `deps`. What is not true is the
+implication that reading `deps` is sufficient: since loft#723 it demonstrably is not, and a
+second fact carries the difference. Re-opening `D-own-1` would misdescribe it; the honest
+record is this note plus the two code sites now saying so in their own docs.
+
 ## Not mergeable — recorded so the question is not reopened
 
 | the pair | why they must stay apart |
