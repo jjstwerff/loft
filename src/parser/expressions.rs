@@ -116,11 +116,11 @@ fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
-/// Descent comes from `Value::for_each_child`, so a new compound variant
-/// cannot be silently missed (A15).  The hand-rolled predecessor treated
-/// `BreakWith` as a leaf and missed a `Set` inside its value — the unified
-/// walker descends it (pass-2 wave 2 widening; the wider answer is the
-/// correct null-init insertion point).
+/// Descent comes from `Value::for_each_child`, the one place that knows the IR
+/// tree's shape, so every compound variant is reached and a new one is inherited
+/// rather than needing an arm here (A15).  The answer is deliberately the WIDE
+/// one: a `Set` at any depth counts, because the first statement that assigns the
+/// temporary is the correct null-init insertion point wherever it sits.
 fn inline_ref_set_in(val: &Value, r: u16) -> bool {
     val.any_node(&mut |n| matches!(n, Value::Set(v, _) if *v == r))
 }
@@ -262,7 +262,6 @@ fn ir_mentions_var(val: &Value, target: u16) -> bool {
         }
         Value::Set(_, body)
         | Value::Return(body)
-        | Value::BreakWith(_, body)
         | Value::Drop(body)
         | Value::TuplePut(_, _, body)
         | Value::Yield(body) => ir_mentions_var(body, target),
@@ -275,12 +274,6 @@ fn ir_mentions_var(val: &Value, target: u16) -> bool {
             ir_mentions_var(a, target) || ir_mentions_var(b, target) || ir_mentions_var(c, target)
         }
         Value::Span(b) => ir_mentions_var(&b.1, target),
-        Value::ParFor(b) => {
-            ir_mentions_var(&b.input, target)
-                || ir_mentions_var(&b.worker, target)
-                || ir_mentions_var(&b.threads, target)
-                || ir_mentions_var(&b.body, target)
-        }
     }
 }
 
@@ -314,7 +307,6 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
         | Value::Return(v)
         | Value::Drop(v)
         | Value::Yield(v)
-        | Value::BreakWith(_, v)
         | Value::TuplePut(_, _, v) => substitute_value(v, from, to),
         Value::Iter(_, a, b, c) => {
             substitute_value(a, from, to);
@@ -330,12 +322,6 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
         // wrapped node.
         Value::Span(b) => substitute_value(&mut b.1, from, to),
         // Plan-06 spine step 3 — recurse into all child Values.
-        Value::ParFor(b) => {
-            substitute_value(&mut b.input, from, to);
-            substitute_value(&mut b.worker, from, to);
-            substitute_value(&mut b.threads, from, to);
-            substitute_value(&mut b.body, from, to);
-        }
         // Leaf variants.
         Value::Null
         | Value::Int(_)
@@ -515,11 +501,9 @@ impl Parser {
                 self.wrap_value_text_dest(t);
                 self.wrap_value_text_dest(e);
             }
-            Value::Return(x)
-            | Value::Drop(x)
-            | Value::Yield(x)
-            | Value::BreakWith(_, x)
-            | Value::TuplePut(_, _, x) => self.wrap_value_text_dest(x),
+            Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::TuplePut(_, _, x) => {
+                self.wrap_value_text_dest(x)
+            }
             Value::Iter(_, a, b, c) => {
                 self.wrap_value_text_dest(a);
                 self.wrap_value_text_dest(b);
@@ -531,12 +515,6 @@ impl Parser {
                 }
             }
             Value::Span(b) => self.wrap_value_text_dest(&mut b.1),
-            Value::ParFor(b) => {
-                self.wrap_value_text_dest(&mut b.input);
-                self.wrap_value_text_dest(&mut b.worker);
-                self.wrap_value_text_dest(&mut b.threads);
-                self.wrap_value_text_dest(&mut b.body);
-            }
             _ => {}
         }
     }
@@ -858,7 +836,7 @@ impl Parser {
                 self.rotate_retbufs_in(e, in_loop, partners);
             }
             Value::Span(b) => self.rotate_retbufs_in(&mut b.1, in_loop, partners),
-            Value::Set(_, b) | Value::Return(b) | Value::Drop(b) | Value::BreakWith(_, b) => {
+            Value::Set(_, b) | Value::Return(b) | Value::Drop(b) => {
                 self.rotate_retbufs_in(b, in_loop, partners);
             }
             _ => {}

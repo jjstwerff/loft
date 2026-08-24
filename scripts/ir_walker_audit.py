@@ -13,15 +13,15 @@
 #             variant forces a decision here and every walker inherits the edge".  A
 #             walker that recurses by its own match does NOT inherit it: when a variant
 #             is added, or an existing one is reached by a new route, that walker goes
-#             silently blind.  Measured twice already — `inline_ref_set_in`'s hand-rolled
-#             predecessor "treated `BreakWith` as a leaf and missed a `Set` inside its
-#             value" (parser/expressions.rs), and `scopes::walk_check` had the same hole.
+#             silently blind, and no test can see the difference because the arm it is
+#             missing is the one nothing constructs yet.
 #
 #   producers Which variants can never come into existence?  A variant whose every
 #             construction is a REBUILD (inside its own match arm), a DESERIALIZER, or a
 #             test is a closed cycle with no source: nothing creates the first instance,
 #             so nothing can deserialize one either.  It still costs every walker an arm,
-#             and no test can ever reach those arms to check them.
+#             and no test can ever reach those arms to check them — which is the argument
+#             for deleting it rather than completing it.
 #
 #   dead      `producers` INTERSECTED with a census of what the front end actually emits
 #             over the 854-program corpus.  Neither half is an oracle and the failures go

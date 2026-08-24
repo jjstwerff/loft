@@ -1938,7 +1938,6 @@ impl Parser {
             Value::Set(_, src)
             | Value::Return(src)
             | Value::Drop(src)
-            | Value::BreakWith(_, src)
             | Value::Yield(src)
             | Value::TuplePut(_, _, src) => {
                 Self::rewrite_subtree_to_nullable(src, data);
@@ -3991,7 +3990,7 @@ impl Parser {
                 // Both are robust to parser-name changes — (b) is the
                 // semantic check, (a) is the fast-path.
                 fn contains_break(v: &Value) -> bool {
-                    v.any_node(&mut |n| matches!(n, Value::Break(_) | Value::BreakWith(_, _)))
+                    v.any_node(&mut |n| matches!(n, Value::Break(_)))
                 }
                 let mut loop_vars_added: Vec<u16> = Vec::new();
                 for child in &b.operators {
@@ -4044,7 +4043,6 @@ impl Parser {
             }
             Value::Return(src)
             | Value::Drop(src)
-            | Value::BreakWith(_, src)
             | Value::Yield(src)
             | Value::TuplePut(_, _, src) => {
                 self.walk_for_warnings(src, ctx);

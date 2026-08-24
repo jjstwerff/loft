@@ -1163,14 +1163,10 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
                     walk(a, path, next_id, first_set, hoist);
                 }
             }
-            Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+            Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
                 walk(x, path, next_id, first_set, hoist);
             }
             Value::Span(b) => walk(&b.1, path, next_id, first_set, hoist),
-            Value::ParFor(b) => {
-                walk(&b.input, path, next_id, first_set, hoist);
-                scoped!(&b.worker);
-            }
             _ => {}
         }
     }
@@ -1484,7 +1480,7 @@ fn collect_witness_vars(data: &crate::data::Data, def_nr: u32) -> HashSet<u16> {
                 walk(data, def_nr, b2, counts);
                 walk(data, def_nr, c, counts);
             }
-            Value::Return(v) | Value::BreakWith(_, v) | Value::Drop(v) | Value::Yield(v) => {
+            Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
                 walk(data, def_nr, v, counts);
             }
             Value::Call(_, args) => {

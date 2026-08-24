@@ -4493,8 +4493,7 @@ fn walk_for_mutations(
         Value::Return(expr)
         | Value::Drop(expr)
         | Value::Yield(expr)
-        | Value::TuplePut(_, _, expr)
-        | Value::BreakWith(_, expr) => {
+        | Value::TuplePut(_, _, expr) => {
             walk_for_mutations(expr, captured_names, closure_param, variables, data, out);
         }
         _ => {}

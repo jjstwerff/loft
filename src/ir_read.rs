@@ -12,9 +12,9 @@
 //! derived `PartialEq`, the strongest oracle available (stronger than the
 //! @PLAN28 JSON re-encode comparison, and needing no JSON at all).
 //!
-//! Scope of this slice: the two recursive enums (`Value`, 34 variants;
+//! Scope of this slice: the two recursive enums (`Value`, 32 variants;
 //! `Type`, 24 variants) and every sub-struct reachable from them — `Block`,
-//! `ParForBody`, `Position`, `Key`, `IntegerSpec`, plus `SortKey`/`NameRef`
+//! `Position`, `Key`, `IntegerSpec`, plus `SortKey`/`NameRef`
 //! key lists and `vector<integer>` dep lists.  The `Definition`-level
 //! components (`Attribute` / `Function` / `Variable` / `Definition` / `Data`)
 //! and the whole-`Data` reader are the next increment.
@@ -28,7 +28,7 @@
 
 use crate::data::{
     Attribute, Block, Data, DefType, Definition, ImpureCategory, IntegerSpec, LinkedFieldGroup,
-    LinkedFieldKind, ParForBody, Purity, Type, Value,
+    LinkedFieldKind, Purity, Type, Value,
 };
 use crate::data_store::{
     self as ds, Record, TypeKind, Value as Node, ValueType, ValuesVector, type_kind,
@@ -89,13 +89,6 @@ pub fn read_value(stores: &Stores, slot: Node) -> Value {
             stores,
             slot.field_vec(ds::NDRETURN_INNER),
         ))),
-        ValueType::BreakWith => Value::BreakWith(
-            slot.field_int(stores, ds::NDBREAKWITH_N) as u16,
-            Box::new(read_node_child(
-                stores,
-                slot.field_vec(ds::NDBREAKWITH_INNER),
-            )),
-        ),
         ValueType::If => Value::If(
             Box::new(read_node_child(stores, slot.field_vec(ds::NDIF_COND))),
             Box::new(read_node_child(stores, slot.field_vec(ds::NDIF_T))),
@@ -140,7 +133,6 @@ pub fn read_value(stores: &Stores, slot: Node) -> Value {
             let inner = read_node_child(stores, slot.field_vec(ds::NDSPAN_INNER));
             Value::Span(Box::new((position, inner)))
         }
-        ValueType::ParFor => Value::ParFor(Box::new(read_par_for(stores, slot))),
         // ── vector of a non-Node struct ───────────────────────────────────────
         ValueType::Keys => Value::Keys(read_keys(stores, slot)),
         // ── carries a vector<TypeT> ────────────────────────────────────────────
@@ -360,20 +352,6 @@ fn read_block(stores: &Stores, slot: Node) -> Block {
         result: read_type_child(stores, blk.field_recvec(ds::BLOCK_RESULT, ds::TYPET_STRIDE)),
         scope: blk.field_int(stores, ds::BLOCK_SCOPE) as u16,
         var_size: blk.field_int(stores, ds::BLOCK_VAR_SIZE) as u16,
-    }
-}
-
-/// Read the referenced `ParForBody` of an `NdParFor` record.
-fn read_par_for(stores: &Stores, slot: Node) -> ParForBody {
-    let pf = slot.par_for_rec(stores);
-    ParForBody {
-        input: read_node_child(stores, pf.field_vec(ds::PARFOR_INPUT)),
-        x_var: pf.field_int(stores, ds::PARFOR_X_VAR) as u16,
-        r_var: pf.field_int(stores, ds::PARFOR_R_VAR) as u16,
-        worker: read_node_child(stores, pf.field_vec(ds::PARFOR_WORKER)),
-        threads: read_node_child(stores, pf.field_vec(ds::PARFOR_THREADS)),
-        body: read_node_child(stores, pf.field_vec(ds::PARFOR_BODY)),
-        stitch_id: pf.field_int(stores, ds::PARFOR_STITCH_ID) as u8,
     }
 }
 
@@ -1064,7 +1042,6 @@ mod tests {
         // Box-of-one children.
         round_trip_value(&Value::Set(9, Box::new(Value::Long(42))));
         round_trip_value(&Value::Return(Box::new(Value::Int(3))));
-        round_trip_value(&Value::BreakWith(1, Box::new(Value::Int(4))));
         round_trip_value(&Value::Drop(Box::new(Value::Int(5))));
         round_trip_value(&Value::Yield(Box::new(Value::Int(6))));
         round_trip_value(&Value::TuplePut(2, 1, Box::new(Value::Int(7))));
@@ -1109,15 +1086,6 @@ mod tests {
             },
             Value::Int(7),
         ))));
-        round_trip_value(&Value::ParFor(Box::new(ParForBody {
-            input: Value::Int(1),
-            x_var: 2,
-            r_var: 3,
-            worker: Value::Int(4),
-            threads: Value::Int(5),
-            body: Value::Int(6),
-            stitch_id: 1,
-        })));
         round_trip_value(&Value::Keys(vec![
             Key {
                 type_nr: 3,

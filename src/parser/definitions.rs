@@ -4884,8 +4884,8 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
             visit_constant_vars(inner, f)
         }
 
-        // No variable of their own — recurse.  The `u16` on `Break`/`Continue`/
-        // `BreakWith` is a loop level, not a variable, so it is left alone.
+        // No variable of their own — recurse.  The `u16` on `Break`/`Continue` is a
+        // loop level, not a variable, so it is left alone.
         Value::Span(b) => visit_constant_vars(&mut b.1, f),
         Value::Call(_, args) | Value::Insert(args) | Value::Tuple(args) | Value::Parallel(args) => {
             args.iter_mut().all(|a| visit_constant_vars(a, f))
@@ -4893,9 +4893,7 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
         Value::Block(bl) | Value::Loop(bl) => {
             bl.operators.iter_mut().all(|o| visit_constant_vars(o, f))
         }
-        Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
-            visit_constant_vars(b, f)
-        }
+        Value::Return(b) | Value::Drop(b) | Value::Yield(b) => visit_constant_vars(b, f),
         Value::If(c, t, e) => {
             visit_constant_vars(c, f) && visit_constant_vars(t, f) && visit_constant_vars(e, f)
         }
@@ -4920,8 +4918,7 @@ pub(crate) fn visit_constant_vars(val: &mut Value, f: &mut dyn FnMut(&mut u16)) 
         | Value::TupleGet(..)
         | Value::TuplePut(..)
         | Value::FnRef(..)
-        | Value::FnRefDnr(_)
-        | Value::ParFor(_) => false,
+        | Value::FnRefDnr(_) => false,
     }
 }
 
@@ -5030,9 +5027,7 @@ pub(crate) fn default_replayable_in_place(value: &crate::data::Value, site: Defa
                 && default_replayable_in_place(t, site)
                 && default_replayable_in_place(e, site)
         }
-        Value::Return(b) | Value::Drop(b) | Value::BreakWith(_, b) | Value::Yield(b) => {
-            default_replayable_in_place(b, site)
-        }
+        Value::Return(b) | Value::Drop(b) | Value::Yield(b) => default_replayable_in_place(b, site),
 
         // Literals name nothing.
         Value::Null
@@ -5057,8 +5052,7 @@ pub(crate) fn default_replayable_in_place(value: &crate::data::Value, site: Defa
         | Value::TupleGet(..)
         | Value::TuplePut(..)
         | Value::FnRef(..)
-        | Value::FnRefDnr(_)
-        | Value::ParFor(_) => false,
+        | Value::FnRefDnr(_) => false,
 
         // `unspan` above already peeled the outer wrapper; peel any nested one too.
         Value::Span(b) => default_replayable_in_place(&b.1, site),

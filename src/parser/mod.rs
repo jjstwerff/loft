@@ -7289,16 +7289,6 @@ impl Parser {
                     data,
                 )),
             ),
-            Value::BreakWith(n, val) => Value::BreakWith(
-                n,
-                Box::new(Self::substitute_type_in_value(
-                    *val,
-                    tv_nr,
-                    concrete,
-                    iter_stride,
-                    data,
-                )),
-            ),
             Value::Yield(val) => Value::Yield(Box::new(Self::substitute_type_in_value(
                 *val,
                 tv_nr,
@@ -13879,7 +13869,7 @@ impl Parser {
     /// Plan-06 spine step 5 — find each `Set(v, Call(par_for_d_nr, ...))`
     /// occurrence in the IR tree and push `v` into `result`.  Recurses
     /// through every compound variant (Block / Loop / If / Insert /
-    /// Iter / Span / ParFor) so a par assignment buried inside an `if`
+    /// Iter / Span) so a par assignment buried inside an `if`
     /// branch or a sub-block is still found.
     fn collect_par_assignments(val: &Value, par_for_d_nr: u32, result: &mut Vec<u16>) {
         match val {
@@ -13919,16 +13909,10 @@ impl Parser {
             Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
                 Self::collect_par_assignments(v, par_for_d_nr, result);
             }
-            Value::BreakWith(_, v) | Value::TuplePut(_, _, v) => {
+            Value::TuplePut(_, _, v) => {
                 Self::collect_par_assignments(v, par_for_d_nr, result);
             }
             Value::Span(b) => Self::collect_par_assignments(&b.1, par_for_d_nr, result),
-            Value::ParFor(b) => {
-                Self::collect_par_assignments(&b.input, par_for_d_nr, result);
-                Self::collect_par_assignments(&b.worker, par_for_d_nr, result);
-                Self::collect_par_assignments(&b.threads, par_for_d_nr, result);
-                Self::collect_par_assignments(&b.body, par_for_d_nr, result);
-            }
             _ => {}
         }
     }
@@ -13985,25 +13969,10 @@ impl Parser {
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
                 Self::classify_var_uses(inner, v, streaming, other);
             }
-            Value::BreakWith(_, inner) | Value::TuplePut(_, _, inner) => {
+            Value::TuplePut(_, _, inner) => {
                 Self::classify_var_uses(inner, v, streaming, other);
             }
             Value::Span(b) => Self::classify_var_uses(&b.1, v, streaming, other),
-            Value::ParFor(b) => {
-                // The input position is streaming-equivalent (par
-                // dispatcher iterates).  worker/threads/body are
-                // ordinary expression contexts.
-                if let Value::Var(u) = &b.input
-                    && *u == v
-                {
-                    *streaming += 1;
-                } else {
-                    Self::classify_var_uses(&b.input, v, streaming, other);
-                }
-                Self::classify_var_uses(&b.worker, v, streaming, other);
-                Self::classify_var_uses(&b.threads, v, streaming, other);
-                Self::classify_var_uses(&b.body, v, streaming, other);
-            }
             _ => {}
         }
     }

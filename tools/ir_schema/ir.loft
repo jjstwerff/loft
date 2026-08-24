@@ -26,6 +26,7 @@ struct Key {
   // src/keys.rs::Key
   type_nr: integer, // i8
   position: integer, // u16
+  start: integer, // i32 — the field's storage START (loft#812)
 }
 
 struct SortKey {
@@ -95,8 +96,8 @@ enum TypeT {
   TyTrie { n: integer, key: text, dep: vector<integer> },
 }
 
-// ---- Value (34 variants) ----------------------------------------------------
-// Block / ParForBody are folded inline as their own structs that hold Value.
+// ---- Value (32 variants) ----------------------------------------------------
+// Block is folded inline as its own struct that holds Value.
 
 enum Node {
   NdNull,
@@ -124,7 +125,6 @@ enum Node {
   NdSet { var: integer, inner: vector<Node> },
   NdReturn { inner: vector<Node> },
   NdBreak { n: integer },
-  NdBreakWith { n: integer, inner: vector<Node> },
   NdContinue { n: integer },
   NdIf { cond: vector<Node>, t: vector<Node>, f: vector<Node> },
   NdLoop { block: vector<Block> },   // box-of-one, as NdBlock
@@ -138,7 +138,6 @@ enum Node {
   NdFnRef { def_nr: integer, var: integer, t: vector<TypeT> },
   NdFnRefDnr { n: integer },
   NdParallel { arms: vector<Node> },
-  NdParFor { body: vector<ParForBody> }, // box-of-one, as NdBlock
   NdRawExpr { s: text },
 }
 
@@ -151,16 +150,6 @@ struct Block {
   var_size: integer,
 }
 
-struct ParForBody {
-  // src/data.rs::ParForBody
-  input: vector<Node>,
-  x_var: integer,
-  r_var: integer,
-  worker: vector<Node>,
-  threads: vector<Node>,
-  body: vector<Node>,
-  stitch_id: integer,
-}
 
 // ---- Definition / Attribute / Function / Variable ---------------------------
 

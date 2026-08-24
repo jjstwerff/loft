@@ -1947,7 +1947,7 @@ impl<'a> Ownership<'a> {
             Value::Insert(ops) => ops
                 .last()
                 .map_or(Own::Owned, |t| self.classify(t, func, defs)),
-            Value::Return(v) | Value::BreakWith(_, v) => self.classify(v, func, defs),
+            Value::Return(v) => self.classify(v, func, defs),
             // Everything else (literals, scalar/void ops, control with no value
             // payload) is a fresh value or irrelevant to the heap over-free class.
             _ => Own::Owned,
@@ -2094,9 +2094,7 @@ impl<'a> Ownership<'a> {
                 .operators
                 .last()
                 .and_then(|t| self.borrow_base_guarded(t, func, defs, visited)),
-            Value::Return(v) | Value::BreakWith(_, v) => {
-                self.borrow_base_guarded(v, func, defs, visited)
-            }
+            Value::Return(v) => self.borrow_base_guarded(v, func, defs, visited),
             _ => None,
         }
     }
@@ -2997,16 +2995,12 @@ impl DoubleMove<'_> {
             // same way an arm is. The iteration count is what stays invisible: ONE hand-off
             // in a body that runs twice is a real double release this lint cannot see, and
             // that false negative is the documented boundary.
-            Value::Loop(_) | Value::Iter(..) | Value::Parallel(_) | Value::ParFor(_) => {
+            Value::Loop(_) | Value::Iter(..) | Value::Parallel(_) => {
                 kill_assigned(node, st);
                 self.scan_children_isolated(node);
             }
             // Nothing after a terminator runs, so the pending set cannot pair across it.
             Value::Return(v) => {
-                self.scan(v, st);
-                st.clear();
-            }
-            Value::BreakWith(_, v) => {
                 self.scan(v, st);
                 st.clear();
             }
@@ -4019,10 +4013,7 @@ fn scan_uaf(
             // on only one path is live on the other, so it is NOT carried as freed.
             *freed = ft.intersection(&fe).copied().collect();
         }
-        Value::Return(inner)
-        | Value::Drop(inner)
-        | Value::Yield(inner)
-        | Value::BreakWith(_, inner) => {
+        Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
             scan_uaf(inner, freed, dependents, free_ref, op_db, out);
         }
         Value::Call(op, args) if *op == free_ref => {
@@ -4075,7 +4066,7 @@ fn check_reads(
 ///
 /// So a bare `Var` only counts when it is already inside a call (`in_call`); the
 /// inherently-dereferencing slots (`TupleGet` / `CallRef` / `Iter` / `FnRef` /
-/// `ParFor`) always count. Write targets (`Set`/`TuplePut` LHS) never do —
+/// always count. Write targets (`Set`/`TuplePut` LHS) never do —
 /// `for_each_child` restricts those to their RHS.
 fn deref_read(node: &Value, target: u16, in_call: bool) -> bool {
     let n = node.unspan();
@@ -4084,7 +4075,6 @@ fn deref_read(node: &Value, target: u16, in_call: bool) -> bool {
         Value::TupleGet(x, _) | Value::FnRefDnr(x) => *x == target,
         Value::CallRef(x, _) | Value::Iter(x, _, _, _) => *x == target,
         Value::FnRef(_, w, _) => *w == target,
-        Value::ParFor(b) => b.x_var == target || b.r_var == target,
         _ => false,
     };
     if hit {
@@ -4509,18 +4499,11 @@ fn collect_last_set<'a>(v: u16, node: &'a Value, found: &mut Option<&'a Value>) 
         Value::Return(inner)
         | Value::Drop(inner)
         | Value::Yield(inner)
-        | Value::BreakWith(_, inner)
         | Value::TuplePut(_, _, inner) => collect_last_set(v, inner, found),
         Value::Iter(_, a, b, c) => {
             collect_last_set(v, a, found);
             collect_last_set(v, b, found);
             collect_last_set(v, c, found);
-        }
-        Value::ParFor(b) => {
-            collect_last_set(v, &b.input, found);
-            collect_last_set(v, &b.worker, found);
-            collect_last_set(v, &b.threads, found);
-            collect_last_set(v, &b.body, found);
         }
         Value::Span(b) => collect_last_set(v, &b.1, found),
         _ => {}

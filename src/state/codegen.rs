@@ -505,10 +505,6 @@ impl State {
             }
             ValueType::Return => self.gen_return(node.return_inner(), stack),
             ValueType::Drop => self.gen_drop(node.drop_inner(), stack),
-            ValueType::BreakWith => {
-                self.generate_node(node.breakwith_inner(), stack, false);
-                self.gen_break(node.breakwith_nr(), stack)
-            }
             ValueType::If => self.gen_if(node.if_cond(), node.if_then(), node.if_else(), stack),
             ValueType::Yield => {
                 // CO1.3c: emit the yielded expression, then OpCoroutineYield.
@@ -616,9 +612,6 @@ impl State {
             ValueType::Iter => {
                 panic!("Iter node should have been rewritten before codegen")
             }
-            ValueType::ParFor => panic!(
-                "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
-            ),
             // @PLN11 G2/M3.5 — FnRef on the stack: [d_nr i64][closure DbRef],
             // 8 + 12 B (P249 widened d_nr from 4).  add_op already advances
             // stack.position.
@@ -4754,7 +4747,7 @@ impl State {
 /// that never produces a value at the join point.
 fn is_divergent(node: IrNode) -> bool {
     match node.kind() {
-        ValueType::Return | ValueType::Break | ValueType::BreakWith | ValueType::Continue => true,
+        ValueType::Return | ValueType::Break | ValueType::Continue => true,
         // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
         // raw-Return check misses it. Walk the last op of Insert/Block to recover
         // divergence for these wrappers.
@@ -4802,10 +4795,6 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         Value::Line(_) => {} // source-line markers: skip
         Value::Var(n) => eprint!("{}", vars.name(*n)),
         Value::Break(n) => eprint!("break({n})"),
-        Value::BreakWith(n, inner) => {
-            eprint!("break({n}) ");
-            print_ir(inner, data, vars, depth);
-        }
         Value::Continue(n) => eprint!("continue({n})"),
         Value::Keys(keys) => eprint!("keys({keys:?})"),
         Value::Set(v, inner) => {
@@ -4921,7 +4910,7 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         // `Span` wraps every expression with a source position — unwrap it so
         // the dump reads cleanly.
         Value::Span(b) => print_ir(&b.1, data, vars, depth),
-        // Rare IR nodes (FnRefDnr, ParFor, …) printed opaquely; this is a
+        // Rare IR nodes (FnRefDnr, …) printed opaquely; this is a
         // debug-only dumper.  The catch-all also keeps `print_ir` exhaustive in
         // debug-assertions builds (e.g. under cargo-fuzz) as new variants land.
         _ => eprint!("<ir>"),

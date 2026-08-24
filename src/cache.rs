@@ -45,7 +45,7 @@ use sha2::{Digest, Sha256};
 /// `ir_read` on a shifted discriminant. A layout change is exactly what this
 /// byte is for.
 ///
-/// 3 — `NdBlock` / `NdLoop` / `NdParFor` hold their sub-record BY REFERENCE (a
+/// 3 — `NdBlock` / `NdLoop` hold their sub-record BY REFERENCE (a
 /// box-of-one vector) instead of inlining it, which moved every offset in a
 /// `Node` and shrank its stride from 48 to 28.
 const CACHE_FORMAT_VERSION: u8 = 3;

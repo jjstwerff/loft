@@ -1340,12 +1340,9 @@ pub fn run_parallel_fold(
 // results are dropped on the floor, worker output stores deallocate at thread
 // join.  No order preservation, no per-element allocation, no merge pass.
 //
-// Used by phase 7's fused for-par when the body never references `r`, and by
-// `par_for_each` (future surface).  Compiles to `Value::ParFor { stitch:
-// Discard }` — see `doc/claude/plans/06-typed-par/PRIORITY.md` step 3.
-//
-// Currently dead code at the call-site level — step 3 (fused for-par + ParFor
-// IR) is the first consumer.  Self-tested in `tests/threading.rs::par_discard_*`.
+// Used by the fused for-par lowering when the body never references `r`, reached
+// through the `par_discard` worker name (`parser/collections.rs`).  Self-tested in
+// `tests/threading.rs::par_discard_*`.
 
 /// Plan-06 spine step 2 — `Stitch::Discard` worker runtime.
 ///

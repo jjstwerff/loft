@@ -41,11 +41,9 @@ pub(crate) fn find_text_coll(v: &Value, target: u32) -> Option<Value> {
         Value::If(c, t, e) => find_text_coll(c, target)
             .or_else(|| find_text_coll(t, target))
             .or_else(|| find_text_coll(e, target)),
-        Value::Set(_, x)
-        | Value::Return(x)
-        | Value::Drop(x)
-        | Value::Yield(x)
-        | Value::BreakWith(_, x) => find_text_coll(x, target),
+        Value::Set(_, x) | Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
+            find_text_coll(x, target)
+        }
         Value::Span(b) => find_text_coll(&b.1, target),
         _ => None,
     }
@@ -2889,11 +2887,9 @@ use #count instead"
                         Value::If(c, t, e) => find_vec_coll(c, gvn, vrn)
                             .or_else(|| find_vec_coll(t, gvn, vrn))
                             .or_else(|| find_vec_coll(e, gvn, vrn)),
-                        Value::Set(_, x)
-                        | Value::Return(x)
-                        | Value::Drop(x)
-                        | Value::Yield(x)
-                        | Value::BreakWith(_, x) => find_vec_coll(x, gvn, vrn),
+                        Value::Set(_, x) | Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
+                            find_vec_coll(x, gvn, vrn)
+                        }
                         Value::Span(b) => find_vec_coll(&b.1, gvn, vrn),
                         _ => None,
                     }
@@ -5359,7 +5355,6 @@ use #count instead"
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
                 Self::renumber_frame_var(inner, from, to);
             }
-            Value::BreakWith(_, inner) => Self::renumber_frame_var(inner, from, to),
             Value::Span(b) => Self::renumber_frame_var(&mut b.1, from, to),
             Value::Iter(v, a, b, c) => {
                 if *v == from {
@@ -5421,7 +5416,6 @@ use #count instead"
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
                 Self::remap_var_deep(inner, from, to);
             }
-            Value::BreakWith(_, inner) => Self::remap_var_deep(inner, from, to),
             Value::Span(b) => Self::remap_var_deep(&mut b.1, from, to),
             Value::Iter(v, a, b, c) => {
                 if *v == from {
@@ -5984,7 +5978,7 @@ use #count instead"
 
 /// Recursively rename variable `from` to `to` everywhere in `val` — as a READ
 /// (`Value::Var` and the other var-carrying reads) AND as a BINDING TARGET (the
-/// slot of `Set`/`BreakWith`/`TuplePut`/`Iter` and a block's `scope`).  Unlike
+/// slot of `Set`/`TuplePut`/`Iter` and a block's `scope`).  Unlike
 /// `replace_var_in_ir` (which rewrites reads only, leaving binding targets), this
 /// is a total substitution: after it, `from` no longer appears anywhere.
 ///
@@ -6033,7 +6027,7 @@ pub(crate) fn rename_var(val: &mut Value, from: u16, to: u16) {
                 rename_var(op, from, to);
             }
         }
-        Value::Set(t, body) | Value::BreakWith(t, body) | Value::TuplePut(t, _, body) => {
+        Value::Set(t, body) | Value::TuplePut(t, _, body) => {
             if *t == from {
                 *t = to;
             }
@@ -6056,12 +6050,6 @@ pub(crate) fn rename_var(val: &mut Value, from: u16, to: u16) {
             rename_var(c, from, to);
         }
         Value::Span(b) => rename_var(&mut b.1, from, to),
-        Value::ParFor(b) => {
-            rename_var(&mut b.input, from, to);
-            rename_var(&mut b.worker, from, to);
-            rename_var(&mut b.threads, from, to);
-            rename_var(&mut b.body, from, to);
-        }
     }
 }
 
@@ -6108,7 +6096,6 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
         }
         Value::Set(_, body)
         | Value::Return(body)
-        | Value::BreakWith(_, body)
         | Value::Drop(body)
         | Value::TuplePut(_, _, body)
         | Value::Yield(body) => {
@@ -6128,12 +6115,6 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
         // wrapped node.
         Value::Span(b) => replace_var_in_ir(&mut b.1, target, replacement),
         // Plan-06 spine step 3 — recurse into all child Values.
-        Value::ParFor(b) => {
-            replace_var_in_ir(&mut b.input, target, replacement);
-            replace_var_in_ir(&mut b.worker, target, replacement);
-            replace_var_in_ir(&mut b.threads, target, replacement);
-            replace_var_in_ir(&mut b.body, target, replacement);
-        }
         // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
         // synthetic value; the parser walker never produces or sees it.
         Value::RawExpr(_) => {}

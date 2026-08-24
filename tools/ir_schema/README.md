@@ -101,7 +101,7 @@ field is STORED is a real migration — schema, `ir_store`, `ir_read`, the baked
 offsets in `data_store.rs`, and `CACHE_FORMAT_VERSION` — not a transcription
 change, so make it deliberately.
 
-That migration has since been done: `NdBlock` / `NdLoop` / `NdParFor` hold their
+That migration has since been done: `NdBlock` / `NdLoop` hold their
 sub-record as a **box-of-one vector**, the idiom this schema already uses for
 `Block.result` and `DbField.default`.  A box is a 4-byte handle where
 `reference<T>` would be a 12-byte `Parts::DbRef` — same indirection, a third of

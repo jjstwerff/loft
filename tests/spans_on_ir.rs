@@ -39,7 +39,7 @@ fn has_span_at(val: &Value, line: u32, col: u32) -> bool {
         }
         Value::Set(_, v) => has_span_at(v, line, col),
         Value::Return(v) | Value::Drop(v) | Value::Yield(v) => has_span_at(v, line, col),
-        Value::BreakWith(_, v) | Value::TuplePut(_, _, v) => has_span_at(v, line, col),
+        Value::TuplePut(_, _, v) => has_span_at(v, line, col),
         Value::If(c, t, e) => {
             has_span_at(c, line, col) || has_span_at(t, line, col) || has_span_at(e, line, col)
         }
@@ -155,7 +155,7 @@ fn has_span_on_line(val: &Value, line: u32) -> bool {
         }
         Value::Set(_, v) => has_span_on_line(v, line),
         Value::Return(v) | Value::Drop(v) | Value::Yield(v) => has_span_on_line(v, line),
-        Value::BreakWith(_, v) | Value::TuplePut(_, _, v) => has_span_on_line(v, line),
+        Value::TuplePut(_, _, v) => has_span_on_line(v, line),
         Value::If(c, t, e) => {
             has_span_on_line(c, line) || has_span_on_line(t, line) || has_span_on_line(e, line)
         }

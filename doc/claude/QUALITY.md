@@ -104,9 +104,10 @@ implementations, often in multiple files."* The response has three parts, and tw
    TOOL so the answer does not depend on remembering. ⚠ the one unmeasured part is whether the
    triggers actually fire — see C.
 
-**State in one line:** the checklist is finished, the tooling is in place, and what remains is
-three spec decisions (B), three owner calls (B2), one unrun measurement (C), and a
-**43-commit branch with no PR** (tip `d48f72b0`).
+**State in one line:** the checklist is finished, the tooling is in place, and the two dead IR
+variants are removed (B3); what remains is three spec decisions (B), one missing drift guard
+(B3a), one queued documentation rewrite (B4), one unrun measurement (C), and a branch with **no
+PR**.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -134,6 +135,70 @@ split is a merge that would have coupled two rules that must stay free to differ
 | **no rule says a narrow value in a VARIABLE slot is a raw `i64`** — `L-Narrow` states the stored width, `L-Null` the field encoding; the `io.rs` pair depends on neither | checklist #6 | ⚠ the code comments the distinction at length; the rules cannot express it |
 | `formal/binding.md` **OPEN: 1** — D-bind-11's heap-element half | pre-existing | ⚠ needs a representation choice; the record-backed path is proven to work (see the entry) |
 
+#### B3 — DONE: the two producerless variants are removed (2026-08-24)
+
+`Value::BreakWith` and `Value::ParFor` are gone, with `ParForBody`, 53 pattern alternatives and 39
+whole arms across the walkers, both serializer shapes, the `IrNode` accessors, the store-schema
+types, and the round-trip tests that were their only exercise. `make ci` green.
+`scripts/ir_walker_audit.py dead` now reports **no dead variant at all** — the same instrument that
+found them, used as the closing check.
+
+`ParFor`'s own declaration had said what it was: *"spine step 3a lands the variant + walker arms
+only. Steps 3b (codegen) and 3c (parser detection) follow."* They never did, and nothing recorded
+that they had stopped — the scaffolding simply stayed, and every walker went on paying for it.
+
+**Renumbering was safe, and that was checkable rather than a judgement call.** Removing
+`NdBreakWith` (19) and `NdParFor` (33) shifts every later discriminant, but
+`startup_cache::save_program` writes `cache::build_signature()` as the manifest's first line, so a
+binary upgrade invalidates every stored bundle. `data_store::baked_layout_mirrors_loft_schema`
+then proved the result: it failed on the first attempt naming `DISC_CONTINUE` 19-vs-20 exactly.
+
+#### B3a — found on the way: the generated IR schema had drifted from its source
+
+`src/ir_schema_gen.rs` is `@generated … DO NOT EDIT — regenerate` from `tools/ir_schema/ir.loft`.
+It had been hand-edited anyway. `src/keys.rs::Key` gained a third field, `start: i32`, in loft#812;
+the generated file was updated to match, **`ir.loft` was not**. Nobody regenerated afterwards, so
+the two stayed out of step invisibly — and the first regeneration in this session silently dropped
+`Key.start`, taking `KEY_STRIDE` from 24 to 16. The layout guard caught it.
+
+Fixed by adding `start` to `ir.loft` (the source), then regenerating; a name-keyed comparison of
+the regenerated schema against the committed one now differs by exactly the three removed types
+and nothing else.
+
+⚠ **The gap this exposes is not fixed: nothing gates that `ir_schema_gen.rs` is a faithful
+regeneration of `ir.loft`.** The `@F` catalogue has `features-check` for precisely this shape of
+generated shadow, and the IR schema has no equivalent — so the only thing standing between a hand
+edit and a silently wrong store layout is whether someone happens to regenerate. A check is
+awkward because regeneration needs a built `loft`, which is circular in CI; the honest options are
+a nightly job or a `make` target that the release checklist names. **Open.**
+
+#### B4 — QUEUED: in-code docs should state the FEATURE, not retell the BUG (2026-08-24)
+
+**The owner's framing.** A feature and a formal rule are meant to be *timeless*; a bug is relevant
+in the moment and stops being so. loft's in-code documentation has drifted to the second kind —
+comments whose main body is the incident that produced the code. An algorithm should be documented
+**as an algorithm**: what it computes, over what domain, under which invariant. The bug that caused
+its rewrite may still be *linked*, but as a **side note, never the main body**.
+
+**The route in is the tags.** `@FR-<Rule>` already ties a code site to the rule it enforces, so the
+citations are the worklist: a cited site should read as *"this enforces `@FR-X`; here is how"*, and
+where the comment instead reads *"loft#1006 was two copies of a list disagreeing"*, that is the
+rewrite. `python3 scripts/rule_tags.py sites <tag>` enumerates them; `list` gives the 285 rules,
+13 of which are cited so far. Uncited sites that carry a long incident narrative are the second
+wave — and the narrative usually names the invariant, which is what makes the rule findable.
+
+**Scope: the docs AND the doc skill.** `doc-quality` (and `DOC_QUALITY.md`) currently do not
+distinguish the two registers, so the pattern regenerates every time a bug is fixed. The skill
+needs the rule: *state the contract; cite the rule; link the incident, do not narrate it.*
+
+⚠ **This is being written from the wrong side already.** The comments added to `src/data.rs` in
+this very session — *"⚠ NO PRODUCER … Measured: 0 nodes across the 854 programs … which is why the
+same defect was found twice"* — are exactly the register being retired. They are also about to be
+deleted with the variants (B3), so they are not the place to start; they are the example of what
+the guidance must prevent.
+
+**Not started.** Sequence it after B3 lands, so the two do not collide in the same files.
+
 #### C — process / skills
 
 | item | state |
@@ -147,7 +212,7 @@ split is a merge that would have coupled two rules that must stay free to differ
 
 | decision | evidence | why it is not mine to take |
 |---|---|---|
-| **remove `Value::BreakWith` and `Value::ParFor`** | no producer in any commit; 0 nodes in 854 programs; 119 mentions across 25 files (70 + 49) — walker arms, two serializer shapes, and the round-trip tests that are their only exercise | it changes the IR schema, so it is a compatibility decision (COMPATIBILITY.md), not a cleanup. Both declarations now carry the measurement so the cost is at least visible |
+| ~~remove `Value::BreakWith` and `Value::ParFor`~~ | — | ✅ **DONE** — see B3 below |
 | **the 127 catch-all walkers** | each silently absorbs a `Value` edge it does not name; the mechanism has fired twice in walkers written years apart, unnoticed by build, tests and review | ⚠ **but both firings were on the unreachable `BreakWith`, so neither cost anything** — the damage is UNMEASURED. The next step is not a conversion but a query: for each of the 127, which omitted edges are REACHABLE? Do that before proposing a sweep |
 | **`Parallel` is reached 4 times in 854 programs** | corpus census | a coverage gap in the suite, not a defect — but `par` is the construct with the least IR-level exercise of anything still alive |
 

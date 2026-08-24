@@ -54,8 +54,8 @@ KEYSTONES = [
 
 # Child-bearing IR variants — the set `IrNode::for_each_child` is exhaustive over.
 CHILD_BEARING = ["Call", "CallRef", "Insert", "Tuple", "Parallel", "Block", "Loop",
-                 "Set", "Return", "BreakWith", "Drop", "Yield", "TuplePut", "Span",
-                 "If", "Iter", "ParFor"]
+                 "Set", "Return", "Drop", "Yield", "TuplePut", "Span",
+                 "If", "Iter"]
 FN_RE = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?(const\s+)?fn\s+([a-z_0-9]+)")
 
 
@@ -200,7 +200,6 @@ def main():
     print(f"  {'variant':<12}{'omitted':>9}{'bugs':>7}")
     bugcount = {"Tuple": len(hits.get("tuple", [])),
                 "Parallel": len(hits.get("par/coroutine", [])),
-                "ParFor": len(hits.get("par/coroutine", [])),
                 "Yield": len(hits.get("par/coroutine", []))}
     for v in sorted(CHILD_BEARING, key=lambda v: -(total - present[v])):
         om = 100 * (total - present[v]) / total if total else 0

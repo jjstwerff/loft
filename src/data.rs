@@ -655,22 +655,6 @@ pub enum Value {
     Return(Box<Value>),
     /// Break out of the n-th loop
     Break(u16),
-    /// Break out of the n-th loop with a value.
-    ///
-    /// ⚠ NO PRODUCER.  Nothing in the front end builds one: the parser has never
-    /// constructed it under this name or its original `BreakValue`, and loft has no
-    /// break-with-value syntax (LOFT.md documents `break` and `x#break` only).  Its
-    /// every construction is a serializer round-trip test or a REBUILD inside a walker's
-    /// own arm (`Scopes::scan`), so it is a closed cycle with no source — a deserializer
-    /// can only return what a producer once wrote.  Measured: 0 nodes across the 854
-    /// programs of `tests/scripts` (`scripts/ir_walker_audit.py dead`).
-    ///
-    /// It is not free.  Every walker still owes it an arm, 66 hand-rolled ones get it
-    /// wrong, and no test can reach those arms to notice — which is why the same defect
-    /// was found twice (`inline_ref_set_in`'s predecessor in parser/expressions.rs, and
-    /// `scopes::walk_check`).  Do not treat a missing `BreakWith` arm as a live bug
-    /// without re-measuring first.  IMPLEMENTATIONS.md § Checklist #8.
-    BreakWith(u16, Box<Value>),
     /// Continue the n-th loop
     Continue(u16),
     /// Conditional statement
@@ -709,42 +693,6 @@ pub enum Value {
     FnRefDnr(u16),
     /// Parallel { arm1; arm2; } — each arm runs concurrently.
     Parallel(Vec<Value>),
-    /// ⚠ NO PRODUCER, like [`Value::BreakWith`] above.  The shape below was designed
-    /// but never wired: no file under `src/parser/` has ever built a `ParForBody`, and
-    /// the only non-serializer construction is `Scopes::scan` rebuilding one it walked.
-    /// `state/codegen.rs` says as much at its own arm — *"codegen lands in plan-06 spine
-    /// step 3b — should not be reachable"*.  Measured: 0 nodes across the 854 programs of
-    /// `tests/scripts` (`scripts/ir_walker_audit.py dead`).  `par` itself is alive and
-    /// lowers to [`Value::Parallel`] — which the same corpus reaches only 4 times.
-    ///
-    /// Plan-06 PRIORITY.md spine step 3 — fused for-par IR shape
-    /// (DESIGN.md D7).  Captures the streaming-only par construct
-    /// `for x in input par(r=worker(x), threads) { body }` without
-    /// materialising a result vector.  Heap-boxed because the
-    /// variant carries 5 child `Value`s plus 3 small fields and
-    /// would otherwise grow `size_of::<Value>()` past the 32-byte
-    /// budget that every `Vec<Value>` allocation pays for.
-    ///
-    /// Field layout (mirrors the design doc's struct):
-    ///   * `input`  — expression of type `vector<T>`
-    ///   * `x_var`  — variable bound to each input element
-    ///   * `r_var`  — bound to worker result; `u16::MAX` when the
-    ///     stitch policy is Discard (no result name)
-    ///   * `worker` — call expression evaluated by workers per row
-    ///   * `threads` — expression of type integer
-    ///   * `body`   — sequential block on the main thread
-    ///   * `stitch_id` — `Stitch` policy: 0=Concat, 1=Discard,
-    ///     2=Reduce, 3=Queue.  Numeric here so `data.rs` does not
-    ///     need to import the typed `Stitch` enum from `parallel.rs`
-    ///     (avoids a cross-module dependency); codegen converts to
-    ///     the typed enum via the same id mapping.  Reduce/Queue
-    ///     policy payloads (fold_fn, capacity) come from companion
-    ///     fields added when their runtimes land in spine steps 4+9.
-    ///
-    /// Currently dead code — spine step 3a (this commit) lands the
-    /// variant + walker arms only.  Steps 3b (codegen) and 3c
-    /// (parser detection) follow.
-    ParFor(Box<ParForBody>),
     /// Plan 09 phase 00 step 0.7 — codegen-internal "raw expression"
     /// passthrough.
     ///
@@ -763,19 +711,6 @@ pub enum Value {
     /// see this variant — the catch-all `_ =>` arms in those walkers
     /// suffice as a defensive default.
     RawExpr(String),
-}
-
-/// Plan-06 PRIORITY.md spine step 3 — payload for `Value::ParFor`.
-/// Heap-boxed so the variant fits the 32-byte budget.
-#[derive(Debug, PartialEq, Clone)]
-pub struct ParForBody {
-    pub input: Value,
-    pub x_var: u16,
-    pub r_var: u16,
-    pub worker: Value,
-    pub threads: Value,
-    pub body: Value,
-    pub stitch_id: u8,
 }
 
 #[allow(dead_code)]
@@ -890,7 +825,6 @@ impl Value {
             Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().for_each(&mut *f),
             Value::Set(_, inner)
             | Value::Return(inner)
-            | Value::BreakWith(_, inner)
             | Value::Drop(inner)
             | Value::Yield(inner)
             | Value::TuplePut(_, _, inner) => f(inner),
@@ -903,12 +837,6 @@ impl Value {
                 f(a);
                 f(b);
                 f(c);
-            }
-            Value::ParFor(b) => {
-                f(&b.input);
-                f(&b.worker);
-                f(&b.threads);
-                f(&b.body);
             }
             // Leaves — no child expressions.
             Value::RawExpr(_)
@@ -964,7 +892,6 @@ impl Value {
             Value::Block(bl) | Value::Loop(bl) => bl.operators.iter_mut().for_each(&mut *f),
             Value::Set(_, inner)
             | Value::Return(inner)
-            | Value::BreakWith(_, inner)
             | Value::Drop(inner)
             | Value::Yield(inner)
             | Value::TuplePut(_, _, inner) => f(inner),
@@ -977,12 +904,6 @@ impl Value {
                 f(a);
                 f(b);
                 f(c);
-            }
-            Value::ParFor(b) => {
-                f(&mut b.input);
-                f(&mut b.worker);
-                f(&mut b.threads);
-                f(&mut b.body);
             }
             // Leaves — no child expressions.
             Value::RawExpr(_)
@@ -1043,7 +964,6 @@ impl Value {
             | Value::CallRef(x, _)
             | Value::Iter(x, _, _, _) => *x == v,
             Value::FnRef(_, w, _) => *w == v,
-            Value::ParFor(b) => b.x_var == v || b.r_var == v,
             _ => false,
         })
     }
@@ -8146,10 +8066,6 @@ impl Data {
             }
             Value::Insert(i) => self.show_insert(write, vars, i, indent),
             Value::Break(v) => write!(write, "break({v})"),
-            Value::BreakWith(v, expr) => {
-                write!(write, "break({v}) ")?;
-                self.show_code(write, vars, expr, indent, false)
-            }
             Value::Continue(v) => write!(write, "continue({v})"),
             Value::If(test, t, f) => {
                 write!(write, "if ")?;
@@ -8208,30 +8124,6 @@ impl Data {
             }
             // Plan-07 phase 1 — Span is transparent in pretty-print.
             Value::Span(b) => self.show_code(write, vars, &b.1, indent, start),
-            Value::ParFor(b) => {
-                let stitch_name = match b.stitch_id {
-                    0 => "concat",
-                    1 => "discard",
-                    2 => "reduce",
-                    3 => "queue",
-                    _ => "?",
-                };
-                write!(write, "par_for[{stitch_name}](x={}, r=", b.x_var)?;
-                if b.r_var == u16::MAX {
-                    write!(write, "_")?;
-                } else {
-                    write!(write, "{}", b.r_var)?;
-                }
-                write!(write, ", input=")?;
-                self.show_code(write, vars, &b.input, 0, false)?;
-                write!(write, ", worker=")?;
-                self.show_code(write, vars, &b.worker, 0, false)?;
-                write!(write, ", threads=")?;
-                self.show_code(write, vars, &b.threads, 0, false)?;
-                writeln!(write, ", body=")?;
-                self.show_code(write, vars, &b.body, indent + 1, true)?;
-                write!(write, ")")
-            }
             // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
             // pretty-print should never see it (it's only created during
             // native emission, downstream of this IR walker).

@@ -263,7 +263,6 @@ fn collect_calls(value: &crate::data::Value, out: &mut HashSet<u32>) {
         Value::Span(b) => collect_calls(&b.1, out),
         Value::Set(_, inner)
         | Value::Return(inner)
-        | Value::BreakWith(_, inner)
         | Value::Drop(inner)
         | Value::TuplePut(_, _, inner)
         | Value::Yield(inner) => collect_calls(inner, out),
@@ -281,12 +280,6 @@ fn collect_calls(value: &crate::data::Value, out: &mut HashSet<u32>) {
             for o in &bl.operators {
                 collect_calls(o, out);
             }
-        }
-        Value::ParFor(pf) => {
-            collect_calls(&pf.input, out);
-            collect_calls(&pf.worker, out);
-            collect_calls(&pf.threads, out);
-            collect_calls(&pf.body, out);
         }
         // Leaves — no nested `Value`, nothing to collect.  Listed explicitly (no
         // `_`) so a future variant is a compile error, not a silent miss.

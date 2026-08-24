@@ -364,11 +364,19 @@ Corpus-absence alone proves nothing (`Iter`, `RawExpr`); a producer screen alone
 defect is structurally invisible — which is exactly how it was found and mis-diagnosed twice. Both
 declarations now carry the measurement, so the next reader does not audit 66 arms again.
 
-**Open, and the user's call:** removing the two variants would touch **119 mentions across 25 files**
-(70 `BreakWith`, 49 `ParFor`) — walker arms, two serializer shapes, and the round-trip tests
-that are their only exercise. It touches the IR
-schema, so it is a compatibility decision rather than a cleanup — recorded in QUALITY.md § open
-work, not taken here.
+**Removed (2026-08-24).** The owner's call was to delete both. `Value::BreakWith` and
+`Value::ParFor` are gone, with `ParForBody`, their walker arms, both serializer shapes, the
+`IrNode` accessors, the store-schema types and the round-trip tests that were their only exercise.
+`scripts/ir_walker_audit.py dead` now reports no dead variant at all, which is the check that
+closes this.
+
+The compatibility question turned out to be answerable rather than a judgement call: removing
+`NdBreakWith` (19) and `NdParFor` (33) renumbers every later discriminant, but no store image
+survives the change, because `startup_cache::save_program` writes `cache::build_signature()` as the
+manifest's first line so a binary upgrade invalidates the bundle. The numbering closes up, and
+`data_store::baked_layout_mirrors_loft_schema` is the gate that proves the baked `DISC_*` / `ND*`
+constants still match the regenerated schema — it failed on the first renumber attempt and named
+the exact constant, which is what a layout gate is for.
 
 ## Not mergeable — recorded so the question is not reopened
 

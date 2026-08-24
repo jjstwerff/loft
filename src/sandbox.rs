@@ -1349,12 +1349,12 @@ pub fn describe_cap_totality_violation(data: &Data, v: &CapTotalityViolation) ->
 /// which plain work happens (`max_leaf`), and every call with the loop nesting it
 /// sits under (`(nesting, callee)`).  A pure single-def walk — the inter-procedural
 /// composition is `complexity_degree`.  `Loop` (incl. comprehensions) / `Iter` /
-/// `ParFor` each add one nesting level; an admitted script has no `while` (3.1) so
+/// each add one nesting level; an admitted script has no `while` (3.1) so
 /// every loop is bounded.
 fn intrinsic_complexity(data: &Data, f: u32) -> (u32, Vec<(u32, u32)>) {
     fn scan(v: &Value, nesting: u32, max_leaf: &mut u32, calls: &mut Vec<(u32, u32)>) {
         let child_nesting = match v {
-            Value::Loop(_) | Value::Iter(..) | Value::ParFor(_) => nesting + 1,
+            Value::Loop(_) | Value::Iter(..) => nesting + 1,
             _ => nesting,
         };
         if let Value::Call(g, _) = v {
@@ -1480,7 +1480,7 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, bool, Vec<(u32, u32)>) {
     }
     fn scan(data: &Data, v: &Value, nesting: u32, st: &mut St) {
         match v {
-            Value::Loop(_) | Value::Iter(..) | Value::ParFor(_) => {
+            Value::Loop(_) | Value::Iter(..) => {
                 // vars reset somewhere in this loop don't accumulate across it.
                 let mut targets = HashSet::new();
                 collect_set_targets(v, &mut targets);

@@ -1357,11 +1357,10 @@ fn prepend_to_scope(node: &mut Value, target: u16, ni: Value) -> Option<Value> {
             prepend_to_scope(e, target, ni)
         }
         Value::Span(b) => prepend_to_scope(&mut b.1, target, ni),
-        // No `BreakWith` arm on purpose: this relocation is BEST-EFFORT and its fallback —
-        // leaving the null-init at body position 0 — is correct, which is what the @PLN57
-        // cluster-I false alarm established (a confined block off the control-flow spine,
-        // e.g. a `map`/`filter`/lambda body, cannot be reached either).  Adding the arm
-        // would relocate in one more shape; it would not fix anything.
+        // This relocation is BEST-EFFORT: where no arm reaches, the fallback — leaving the
+        // null-init at body position 0 — is correct, so an unreached shape costs placement
+        // quality and never correctness.  A confined block off the control-flow spine (a
+        // `map`/`filter`/lambda body) is the standing example.
         Value::Return(b) | Value::Drop(b) | Value::Yield(b) => prepend_to_scope(b, target, ni),
         _ => Some(ni),
     }
@@ -3588,15 +3587,10 @@ fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
                     walk_check(op, function, fn_name);
                 }
             }
-            // All FOUR value wrappers, not three: a `break with <expr>` carries an inner
-            // value exactly as `return` / `drop` / `yield` do, and omitting it meant a
-            // `Set(v, Null)` nested in a call argument under one was never checked — a
-            // missed diagnostic for the very corruption this walker exists to report.
-            // `BreakWith` needs its own arm because it carries a label alongside the value.
+            // Every value-WRAPPING node, not a chosen subset: the shape this walker
+            // reports — a `Set(v, Null)` nested inside a call argument — can sit under any
+            // of them, so one omitted wrapper is a silently missed diagnostic.
             Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
-                walk_check(inner, function, fn_name);
-            }
-            Value::BreakWith(_, inner) => {
                 walk_check(inner, function, fn_name);
             }
             _ => {}
@@ -3711,23 +3705,6 @@ impl Scopes {
                     Value::Break(*lv)
                 } else {
                     ls.push(Value::Break(*lv));
-                    Value::Insert(ls)
-                }
-            }
-            Value::BreakWith(lv, val) => {
-                let scanned_val = self.scan(val, function, data);
-                let mut ls = self.get_free_vars(
-                    function,
-                    data,
-                    self.loops[self.loops.len() - *lv as usize - 1],
-                    &Type::Void,
-                    u16::MAX,
-                    &HashSet::new(),
-                );
-                if ls.is_empty() {
-                    Value::BreakWith(*lv, Box::new(scanned_val))
-                } else {
-                    ls.push(Value::BreakWith(*lv, Box::new(scanned_val)));
                     Value::Insert(ls)
                 }
             }
@@ -4044,21 +4021,6 @@ impl Scopes {
                 } else {
                     Value::with_span(b.0.clone(), scanned)
                 }
-            }
-            Value::ParFor(b) => {
-                // Plan-06 spine step 3 — recurse into each child Value.
-                // No new scope is opened by ParFor itself: the worker fn
-                // runs in a worker State (separate scope), and `body`
-                // runs in the enclosing scope on the main thread.
-                Value::ParFor(Box::new(crate::data::ParForBody {
-                    input: self.scan(&b.input, function, data),
-                    x_var: b.x_var,
-                    r_var: b.r_var,
-                    worker: self.scan(&b.worker, function, data),
-                    threads: self.scan(&b.threads, function, data),
-                    body: self.scan(&b.body, function, data),
-                    stitch_id: b.stitch_id,
-                }))
             }
             _ => val.clone(),
         }
@@ -9278,7 +9240,7 @@ fn guard_refs(
                 guard_refs(a, target, free_ref_nr, stack, lca);
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             guard_refs(v, target, free_ref_nr, stack, lca)
         }
         Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
@@ -9294,12 +9256,6 @@ fn guard_refs(
             guard_refs(inner, target, free_ref_nr, stack, lca);
         }
         Value::Span(b) => guard_refs(&b.1, target, free_ref_nr, stack, lca),
-        Value::ParFor(b) => {
-            guard_refs(&b.input, target, free_ref_nr, stack, lca);
-            guard_refs(&b.worker, target, free_ref_nr, stack, lca);
-            guard_refs(&b.threads, target, free_ref_nr, stack, lca);
-            guard_refs(&b.body, target, free_ref_nr, stack, lca);
-        }
         _ => {}
     }
 }
@@ -9324,7 +9280,7 @@ fn escapes_value(v: &Value, target: u16) -> bool {
 
 fn guard_escapes(node: &Value, target: u16) -> bool {
     node.any_node(&mut |n| match n {
-        Value::Return(v) | Value::Yield(v) | Value::BreakWith(_, v) => escapes_value(v, target),
+        Value::Return(v) | Value::Yield(v) => escapes_value(v, target),
         // The block's VALUE is its last operator; if that hands out the local
         // (directly or in a tuple/literal), it escapes (block-result `x = {
         // …; a }` U3; `return (a, n)` t2).
@@ -9353,14 +9309,14 @@ fn confine_reassign_safe(code: &Value, local: u16) -> bool {
 
 /// Shared dominance walk behind the two Plan-57 soundness gates
 /// (pass-3 dedupe: the two walkers were 80 identical lines apart, and the
-/// stronger one had silently lost the `ParFor` arm).  `dom` = "every read
+/// stronger one had silently lost a child arm).  `dom` = "every read
 /// of `local` here is preceded by a non-null assignment that definitely
 /// executed".  The two gates differ ONLY in:
 /// - the START value (`confine_reassign_safe` starts false — a definite
 ///   reassignment must precede any read; `store_dead_after_block` starts
 ///   true — the fn-level init counts);
 /// - `invalidate_conditional` (`store_dead_after_block` only): a
-///   reassignment inside an `If`/`Loop`/`Iter`/`ParFor` body INVALIDATES
+///   reassignment inside an `If`/`Loop`/`Iter` body INVALIDATES
 ///   dominance — afterwards `local` may hold that block's confined store.
 ///
 /// A read of `local` while `!dom` clears `ok`.
@@ -9442,7 +9398,7 @@ fn dominance_walk(node: &Value, local: u16, dom: bool, ok: &mut bool, inv: bool)
             }
             d
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             dominance_walk(v, local, dom, ok, inv);
             dom
         }
@@ -9454,18 +9410,6 @@ fn dominance_walk(node: &Value, local: u16, dom: bool, ok: &mut bool, inv: bool)
             dom
         }
         Value::Span(b) => dominance_walk(&b.1, local, dom, ok, inv),
-        Value::ParFor(b) => {
-            let mut d = dominance_walk(&b.input, local, dom, ok, inv);
-            d = dominance_walk(&b.worker, local, d, ok, inv);
-            d = dominance_walk(&b.threads, local, d, ok, inv);
-            dominance_walk(&b.body, local, d, ok, inv);
-            // The parallel body is conditional from the caller's view.
-            if inv && assigns_local(node, local) {
-                false
-            } else {
-                d
-            }
-        }
         _ => dom,
     }
 }
@@ -9955,7 +9899,7 @@ fn store_liveness_walk(
                 store_liveness_walk(op, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             store_liveness_walk(v, seq, db_nr, gf_nr, fr_nr, holds, alloc, dead, last_read);
         }
         Value::Span(b) => {
@@ -10001,7 +9945,7 @@ fn contains_alloc_unconditional(node: &Value, store: u16, db_nr: u32) -> bool {
             .iter()
             .any(|o| contains_alloc_unconditional(o, store, db_nr)),
         Value::Span(b) => contains_alloc_unconditional(&b.1, store, db_nr),
-        // If / Loop / Parallel / Iter / ParFor — conditional, so an alloc inside is
+        // If / Loop / Parallel / Iter — conditional, so an alloc inside is
         // NOT unconditional.
         _ => false,
     }
@@ -10039,9 +9983,7 @@ fn holder_retained(node: &Value, holders: &HashSet<u16>) -> bool {
         Value::Insert(xs) | Value::Tuple(xs) | Value::Parallel(xs) => {
             xs.iter().any(|x| holder_retained(x, holders))
         }
-        Value::Return(v) | Value::Yield(v) | Value::Drop(v) | Value::BreakWith(_, v) => {
-            holder_retained(v, holders)
-        }
+        Value::Return(v) | Value::Yield(v) | Value::Drop(v) => holder_retained(v, holders),
         Value::TuplePut(_, _, v) => holder_retained(v, holders),
         Value::Iter(_, c, n, e) => {
             holder_retained(c, holders)
@@ -10049,12 +9991,6 @@ fn holder_retained(node: &Value, holders: &HashSet<u16>) -> bool {
                 || holder_retained(e, holders)
         }
         Value::Span(b) => holder_retained(&b.1, holders),
-        Value::ParFor(b) => {
-            holder_retained(&b.input, holders)
-                || holder_retained(&b.worker, holders)
-                || holder_retained(&b.threads, holders)
-                || holder_retained(&b.body, holders)
-        }
         _ => false,
     }
 }
@@ -10508,7 +10444,7 @@ fn tag_stores(
                 );
             }
         }
-        Value::Return(v) | Value::Drop(v) | Value::Yield(v) | Value::BreakWith(_, v) => {
+        Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
             tag_stores(
                 v,
                 db_nr,

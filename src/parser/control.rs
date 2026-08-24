@@ -384,12 +384,9 @@ fn tail_has_tuple_leaf(value: &Value, vars: &crate::variables::Function) -> bool
 
 /// Check if the last meaningful expression in a block is divergent.
 fn is_block_divergent(ops: &[Value]) -> bool {
-    ops.iter().rev().any(|v| {
-        matches!(
-            v,
-            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_)
-        )
-    })
+    ops.iter()
+        .rev()
+        .any(|v| matches!(v, Value::Return(_) | Value::Break(_) | Value::Continue(_)))
 }
 
 /// Collected match arm data for enum/struct-enum match expressions.
@@ -817,7 +814,7 @@ impl Parser {
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
                 Value::Return(_) => terminated = Some("return"),
-                Value::Break(_) | Value::BreakWith(_, _) => terminated = Some("break"),
+                Value::Break(_) => terminated = Some("break"),
                 Value::Continue(_) => terminated = Some("continue"),
                 _ => {}
             }
@@ -2378,9 +2375,6 @@ impl Parser {
                 }
                 Self::substitute_work_ref(body, from, to);
             }
-            Value::BreakWith(_, body) => {
-                Self::substitute_work_ref(body, from, to);
-            }
             Value::Return(body) | Value::Drop(body) | Value::Yield(body) => {
                 Self::substitute_work_ref(body, from, to);
             }
@@ -2410,10 +2404,6 @@ impl Parser {
                 Self::substitute_work_ref(c, from, to);
             }
             Value::Span(b) => Self::substitute_work_ref(&mut b.1, from, to),
-            Value::ParFor(b) => {
-                Self::substitute_work_ref(&mut b.input, from, to);
-                Self::substitute_work_ref(&mut b.worker, from, to);
-            }
             Value::Var(_)
             | Value::Int(_)
             | Value::Long(_)
@@ -2760,8 +2750,7 @@ impl Parser {
             | Value::TuplePut(_, _, b)
             | Value::Return(b)
             | Value::Drop(b)
-            | Value::Yield(b)
-            | Value::BreakWith(_, b) => Self::count_cv_assignments(b, cv),
+            | Value::Yield(b) => Self::count_cv_assignments(b, cv),
             Value::Span(b) => Self::count_cv_assignments(&b.1, cv),
             Value::Call(_, a)
             | Value::CallRef(_, a)
@@ -2782,9 +2771,6 @@ impl Parser {
                 Self::count_cv_assignments(a, cv)
                     + Self::count_cv_assignments(b, cv)
                     + Self::count_cv_assignments(c, cv)
-            }
-            Value::ParFor(b) => {
-                Self::count_cv_assignments(&b.input, cv) + Self::count_cv_assignments(&b.worker, cv)
             }
             _ => 0,
         };
@@ -2840,9 +2826,7 @@ impl Parser {
                 Value::Set(slot, body) | Value::TuplePut(slot, _, body) => {
                     (*slot == v && !matches!(body.unspan(), Value::Null)) || walk(body, v)
                 }
-                Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
-                    walk(b, v)
-                }
+                Value::Return(b) | Value::Drop(b) | Value::Yield(b) => walk(b, v),
                 Value::Span(b) => walk(&b.1, v),
                 Value::Call(_, args)
                 | Value::CallRef(_, args)
@@ -2852,7 +2836,6 @@ impl Parser {
                 Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|op| walk(op, v)),
                 Value::If(c, t, f) => walk(c, v) || walk(t, v) || walk(f, v),
                 Value::Iter(_, a, b, c) => walk(a, v) || walk(b, v) || walk(c, v),
-                Value::ParFor(b) => walk(&b.input, v) || walk(&b.worker, v),
                 _ => false,
             }
         }
@@ -9524,7 +9507,6 @@ impl Parser {
             | Value::Return(inner)
             | Value::Drop(inner)
             | Value::Yield(inner)
-            | Value::BreakWith(_, inner)
             | Value::TuplePut(_, _, inner) => self.patch_tret_call(inner, force),
             Value::Span(b) => self.patch_tret_call(&mut b.1, force),
             Value::Iter(_, a, b, c) => {
@@ -10188,9 +10170,7 @@ impl Parser {
     /// diagnostic still fires.
     fn arm_yields_text(arm: &Value) -> bool {
         match arm.unspan() {
-            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => {
-                false
-            }
+            Value::Return(_) | Value::Break(_) | Value::Continue(_) => false,
             Value::Null => false,
             Value::Block(bl) => bl.operators.last().is_some_and(Self::arm_yields_text),
             Value::Insert(ops) => ops.last().is_some_and(Self::arm_yields_text),
@@ -11207,9 +11187,7 @@ impl Parser {
                 Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|o| walk(o, cv)),
                 Value::If(c, t, e) => walk(c, cv) || walk(t, cv) || walk(e, cv),
                 Value::Iter(_, c, n, e) => walk(c, cv) || walk(n, cv) || walk(e, cv),
-                Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
-                    walk(x, cv)
-                }
+                Value::Return(x) | Value::Drop(x) | Value::Yield(x) => walk(x, cv),
                 Value::Span(b) => walk(&b.1, cv),
                 _ => false,
             }
@@ -11341,7 +11319,7 @@ impl Parser {
                     collect(n, v, nr, temps);
                     collect(e, v, nr, temps);
                 }
-                Value::Return(x) | Value::Drop(x) | Value::Yield(x) | Value::BreakWith(_, x) => {
+                Value::Return(x) | Value::Drop(x) | Value::Yield(x) => {
                     collect(x, v, nr, temps);
                 }
                 Value::Span(b) => collect(&b.1, v, nr, temps),
@@ -11661,9 +11639,7 @@ impl Parser {
         }
         fn walk(op: &Value, borrowers: &std::collections::HashSet<u16>) -> bool {
             match op {
-                Value::Return(inner) | Value::BreakWith(_, inner) => {
-                    borrowers.iter().any(|&w| inner.reads_var(w))
-                }
+                Value::Return(inner) => borrowers.iter().any(|&w| inner.reads_var(w)),
                 Value::Span(b) => walk(&b.1, borrowers),
                 Value::Insert(ops) | Value::Parallel(ops) => ops.iter().any(|o| walk(o, borrowers)),
                 Value::Block(bl) | Value::Loop(bl) => {
@@ -14180,7 +14156,7 @@ impl Parser {
                     self.collect_parallel_violations(x, encl, out);
                 }
             }
-            Value::Return(b) | Value::Drop(b) | Value::Yield(b) | Value::BreakWith(_, b) => {
+            Value::Return(b) | Value::Drop(b) | Value::Yield(b) => {
                 self.collect_parallel_violations(b, encl, out);
             }
             Value::If(c, t, e) => {

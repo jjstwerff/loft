@@ -11,9 +11,9 @@
 //! (`plans/11-data-as-store` § arc B).
 //!
 //! Coverage: every `Node` variant whose fields are scalars + `vector<Node>`
-//! children + the inlined `Block` (30 of 34 variants).  The four that reach
+//! children + the inlined `Block` (30 of 32 variants).  The two that reach
 //! into another struct or the `TypeT` half — `Span` (`Position`), `Keys`
-//! (`vector<Key>`), `FnRef` (`vector<TypeT>`), `ParFor` (`ParForBody`) — are
+//! (`vector<Key>`), `FnRef` (`vector<TypeT>`) — are
 //! the next increment (they need the `TypeT`/sub-struct accessors).  A
 //! `Box<Value>` single child maps to a one-element `vector<Node>` field
 //! (finding 2's box-of-one); a `Vec<Value>` maps to the same field with N
@@ -827,11 +827,6 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
             slot.set_discriminant(stores, ds::DISC_RETURN);
             materialize_node(stores, slot.field_vec(ds::NDRETURN_INNER), inner);
         }
-        Value::BreakWith(n, inner) => {
-            slot.set_discriminant(stores, ds::DISC_BREAK_WITH);
-            slot.set_field_int(stores, ds::NDBREAKWITH_N, i64::from(*n));
-            materialize_node(stores, slot.field_vec(ds::NDBREAKWITH_INNER), inner);
-        }
         Value::If(cond, t, f) => {
             slot.set_discriminant(stores, ds::DISC_IF);
             materialize_node(stores, slot.field_vec(ds::NDIF_COND), cond);
@@ -879,17 +874,6 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
             slot.set_field_str(stores, ds::SPAN_POS_FILE, &position.file);
             materialize_node(stores, slot.field_vec(ds::NDSPAN_INNER), inner);
         }
-        Value::ParFor(b) => {
-            slot.set_discriminant(stores, ds::DISC_PAR_FOR);
-            let pf = slot.write_par_for(stores);
-            pf.set_field_int(stores, ds::PARFOR_X_VAR, i64::from(b.x_var));
-            pf.set_field_int(stores, ds::PARFOR_R_VAR, i64::from(b.r_var));
-            pf.set_field_int(stores, ds::PARFOR_STITCH_ID, i64::from(b.stitch_id));
-            materialize_node(stores, pf.field_vec(ds::PARFOR_INPUT), &b.input);
-            materialize_node(stores, pf.field_vec(ds::PARFOR_WORKER), &b.worker);
-            materialize_node(stores, pf.field_vec(ds::PARFOR_THREADS), &b.threads);
-            materialize_node(stores, pf.field_vec(ds::PARFOR_BODY), &b.body);
-        }
         // ── vector of a non-Node struct ───────────────────────────────────────
         Value::Keys(keys) => {
             slot.set_discriminant(stores, ds::DISC_KEYS);
@@ -920,9 +904,7 @@ fn write_into(stores: &mut Stores, slot: &Node, v: &Value) {
 mod tests {
     use super::*;
     use crate::data::Deps;
-    use crate::data::{
-        Attribute, Block, IntegerSpec, LinkedFieldGroup, LinkedFieldKind, ParForBody, Type,
-    };
+    use crate::data::{Attribute, Block, IntegerSpec, LinkedFieldGroup, LinkedFieldKind, Type};
     use crate::data_store::{self as ds, RecVector, Record, TypeKind, ValueType};
     use crate::ir_schema_gen::register_ir_schema;
     use crate::keys::Key;
@@ -1214,38 +1196,6 @@ mod tests {
     }
 
     #[test]
-    fn materialize_par_for_round_trip() {
-        let mut stores = Stores::new();
-        let _ids = register_ir_schema(&mut stores);
-
-        let native = Value::ParFor(Box::new(ParForBody {
-            input: Value::Int(1),
-            x_var: 2,
-            r_var: 3,
-            worker: Value::Int(4),
-            threads: Value::Int(5),
-            body: Value::Int(6),
-            stitch_id: 1,
-        }));
-
-        let root = root_vector(&mut stores);
-        materialize_node(&mut stores, root, &native);
-
-        let node = root.get(0, &stores);
-        assert_eq!(node.value_type(&stores), ValueType::ParFor);
-        // The body is a referenced record now, so the offsets are its own.
-        let pf = node.par_for_rec(&stores);
-        assert_eq!(pf.field_int(&stores, ds::PARFOR_X_VAR), 2);
-        assert_eq!(pf.field_int(&stores, ds::PARFOR_R_VAR), 3);
-        assert_eq!(pf.field_int(&stores, ds::PARFOR_STITCH_ID), 1);
-        let child = |off: u32| pf.field_vec(off).get(0, &stores).int_value(&stores);
-        assert_eq!(child(ds::PARFOR_INPUT), 1);
-        assert_eq!(child(ds::PARFOR_WORKER), 4);
-        assert_eq!(child(ds::PARFOR_THREADS), 5);
-        assert_eq!(child(ds::PARFOR_BODY), 6);
-    }
-
-    #[test]
     fn materialize_keys_round_trip() {
         let mut stores = Stores::new();
         let _ids = register_ir_schema(&mut stores);
@@ -1284,8 +1234,8 @@ mod tests {
     /// (`materialize_node` → `read_value`), the path the startup cache uses.
     ///
     /// The per-shape tests above check the WRITE side (materialized fields) for
-    /// ~29 variants; this checks the full write→read round-trip for ALL 34,
-    /// including the 5 the per-shape tests miss (`Insert`/`BreakWith`/`TuplePut`/
+    /// ~29 variants; this checks the full write→read round-trip for ALL 32,
+    /// including the 5 the per-shape tests miss (`Insert`/`TuplePut`/
     /// `Yield`/`Parallel`) and the rare ones the program corpus can't exercise
     /// (`Yield` is coroutine 1.1+).  The `samples.len() == 34` guard is the
     /// explicit "a new variant must be added here" reminder the F9 schema macro
@@ -1300,15 +1250,6 @@ mod tests {
             result: Type::Boolean,
             scope: 2,
             var_size: 8,
-        };
-        let parfor = || ParForBody {
-            input: Value::Var(0),
-            x_var: 1,
-            r_var: 2,
-            worker: Value::Call(3, vec![Value::Int(1)]),
-            threads: Value::Int(4),
-            body: Value::Set(0, Box::new(Value::Var(1))),
-            stitch_id: 7,
         };
         let samples: Vec<Value> = vec![
             Value::Null,
@@ -1336,7 +1277,6 @@ mod tests {
             Value::Set(1, Box::new(Value::Int(2))),
             Value::Return(Box::new(Value::Var(0))),
             Value::Break(2),
-            Value::BreakWith(1, Box::new(Value::Int(3))),
             Value::Continue(1),
             Value::If(
                 Box::new(Value::Boolean(true)),
@@ -1363,12 +1303,11 @@ mod tests {
             Value::FnRef(2, 1, Box::new(Type::Boolean)),
             Value::FnRefDnr(4),
             Value::Parallel(vec![Value::Int(1)]),
-            Value::ParFor(Box::new(parfor())),
             Value::RawExpr("x".into()),
         ];
         assert_eq!(
             samples.len(),
-            34,
+            32,
             "every Value variant must appear here (add the new one)"
         );
         for v in &samples {
