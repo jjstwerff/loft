@@ -346,6 +346,56 @@ tuple-place refusal in `parser/expressions.rs`.
 and `binding.md` ~17 (the `B-Ref-*` family is 11). Both are worth doing by sub-family the
 same way; both are larger than a single sitting.
 
+#### B4e — DONE: a nullable field starts null (2026-08-24)
+
+**Owner's call on `D-Opt-Zero`: the rule stands.** A nullable value in a field is null at
+the start, so the code changed and `formal/types.md` is back to `OPEN: 0`.
+
+`data::to_default`'s `Optional` arm now builds the base type's null SENTINEL through a new
+`data::to_null`. Nothing had to be invented: the `OpConv…FromNull` ops already existed and
+already produced the same sentinels the runtime's `Stores::set_default_value_nullable`
+writes (`i64::MIN`, `255` for the tri-state boolean, `char::from(0)`), so the compile-time
+and runtime paths now agree instead of contradicting each other.
+
+**The E0308 objection in the old comment was real but misdirected.** A bare `Value::Null`
+does render as native unit into a scalar slot — the answer is the TYPED null op, not the
+base's zero.
+
+⚠ **`to_null` is narrow on purpose, and the first version was not.** Routing EVERY base
+through an op leaked: `OpConvRefFromNull` reserves a frame, so a nullable collection field
+got a store nothing frees (`heap-value-as-a-condition.loft`, caught by `wrap.rs`'s leak
+gate — `--tests` does not leak-check). For a handle-carried base or an enum the zero
+already IS the null and costs no allocation, so those delegate to `to_default`. The
+distinction is the same one the old shortcut got right by accident and wrong everywhere
+else.
+
+**What the old behaviour rested on, checked.** The code cited *"an omitted field gets the
+zero value for its type (LOFT.md § constructors; 06-structs.loft locks it)"*. `LOFT.md` has
+**no such section** and does not contain that sentence; `06-structs.loft` declares **no
+nullable field at all**. Both citations were wrong, and the only thing actually locking the
+old answer was one half of `issue_332_nullable_narrow_field_null_roundtrip`.
+
+**Blast radius: 3 tests, all asserting the old rule**, now asserting the new one —
+`issue_332_…` (strengthened to omitted / set / re-nulled across three widths),
+`875-json-absent-text-field.loft` (a plain `text` still answers `""`, a `text?` answers
+null, which makes that guard *more* coherent), and `931b-i32-accepted-forms-run.loft`
+(whose real subject is that the literal is ACCEPTED, unchanged).
+
+**Guard:** `tests/scripts/nullable-field-starts-null.loft` — 6 functions, both backends,
+every width `i8?…integer? float? single? boolean? text?`, the explicit `= null` spelling,
+enum/reference/collection bases, a partial literal, and a CONTROL that non-null fields still
+take their zero (a fix that nulled everything would pass every other cell).
+
+**Gates:** `make ci` 4434/4434, and the published-library gate
+(`scripts/revalidate_libs_local.sh`) **41 pass, 0 compile-break** — required because
+`make ci` green does not cover a language semantic change. One library SKIPPED (`drawing`
+0.2.0, tag missing in `loft-libs-graphics`) and a skip is not a pass.
+
+⚠ Not opened here: `character?` cannot represent absence distinctly — its null is
+`char::from(0)`, the same as its zero, and the runtime's content-type-6 arm ignores
+`nullable` too. Consistent between both paths, so not a divergence, but it is the one base
+where the rule cannot be observed.
+
 #### C — process / skills
 
 | item | state |

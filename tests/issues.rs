@@ -16087,18 +16087,16 @@ fn run() -> integer {
 }
 
 // ── Issue 332 (stability-sweep F6; documented, NOT fixed) ────────────────────
-// Nullable narrow integer field: omitted default is not null, and a written
-// null does not round-trip through `== null` — the narrow null encoding has
-// different write and compare homes.
-
-// FIXED 2026-06-11 for the short width: the OpSetShort/OpGetShort template
-// (the generated fill.rs follows) now translates the stack null (i64::MIN)
-// to/from the store null (i32::MIN → raw 0) like Int4/ShortRaw always did.
-// NOTE the spec correction found while fixing: an OMITTED field gets "the
-// zero value for its type" (LOFT.md § constructors; 06-structs.loft locks
-// it) — `omitted == null` being false is CORRECT; only the explicit-null
-// write round-trip was broken.  BYTE width remains a design gap (255
-// sentinel collides with the value range) — split to #334.
+// A nullable narrow-integer field across its whole life: OMITTED, given a value,
+// and written back to null.  Every width answers `null` where it is absent and the
+// value where it is present, and the narrow encodings (i16's raw-0 null, i32's
+// i32::MIN) are invisible from loft.
+//
+// The omitted half is `formal/types.md` (D-Opt): a nullable's default IS null.  This
+// test previously asserted the opposite — that an omitted `i16?` reads `0` — on the
+// strength of two citations that do not hold up: "LOFT.md § constructors", a section
+// that does not exist quoting a sentence that is not in the file, and
+// `06-structs.loft`, which declares no nullable field at all.  Nothing else locked it.
 #[test]
 fn issue_332_nullable_narrow_field_null_roundtrip() {
     code!(
@@ -16106,20 +16104,24 @@ fn issue_332_nullable_narrow_field_null_roundtrip() {
 fn run() -> integer {
     n = N { tail: 1 };
     om = 0;
-    if n.a == 0 { om += 100; }
-    if n.c == 0 { om += 10; }
-    if n.d == 0 { om += 1; }
+    if n.a == null { om += 100; }
+    if n.c == null { om += 10; }
+    if n.d == null { om += 1; }
     n.a = 5; n.c = 5; n.d = 5;
+    st = 0;
+    if n.a == 5 { st += 100; }
+    if n.c == 5 { st += 10; }
+    if n.d == 5 { st += 1; }
     n.a = null; n.c = null; n.d = null;
     re = 0;
     if n.a == null { re += 100; }
     if n.c == null { re += 10; }
     if n.d == null { re += 1; }
-    om * 1000 + re
+    om * 1000000 + st * 1000 + re
 }"
     )
     .expr("run()")
-    .result(Value::Int(111_111));
+    .result(Value::Int(111_111_111));
 }
 
 // FIXED 2026-06-11 per the documented design (LOFT.md § integer widths):

@@ -1049,6 +1049,43 @@ impl Value {
     }
 }
 
+/// The NULL of a base type — the sentinel that reads back as `null`.
+///
+/// Enforces @FR-L-Null's second half: absence is a SENTINEL inside the slot's own bytes,
+/// never an extra byte or a moved offset.  Each `OpConv…FromNull` is that type's sentinel
+/// (`i64::MIN`, `255` for the tri-state boolean, `char::from(0)`, a null text handle), and
+/// they are the same values `Stores::set_default_value_nullable` writes on the runtime
+/// store-init path — so a record built by a literal and one filled by a `#read` answer the
+/// question the same way.
+///
+/// ⚠ `Value::Null` is NOT this.  A bare `Value::Null` carries no type, so native codegen
+/// renders it as unit `()` into the slot and rustc rejects the write (E0308).  The typed
+/// op is what makes a null default expressible at all.
+///
+/// Peel `Optional` before calling: this answers for the BASE type.
+///
+/// Only the bases whose zero is a genuine VALUE need an op; for the rest the zero already
+/// is the null, so this delegates to [`to_default`] rather than keeping a second table.
+#[must_use]
+pub fn to_null(tp: &Type, data: &Data) -> Value {
+    let op = match tp.base() {
+        Type::Integer(_) => "OpConvIntFromNull",
+        Type::Float => "OpConvFloatFromNull",
+        Type::Single => "OpConvSingleFromNull",
+        Type::Boolean => "OpConvBoolFromNull",
+        Type::Character => "OpConvCharacterFromNull",
+        Type::Text(_) => "OpConvTextFromNull",
+        // Everything else is HANDLE-carried (a store reference, a collection, a
+        // struct-enum) or a value enum, and for those the zero IS the null: a 0 handle
+        // reads back as null, and an enum's variants are 1-based so 0 is its absence.
+        // [`to_default`] already produces that, and produces it WITHOUT allocating —
+        // which is the operative difference: `OpConvRefFromNull` reserves a frame, so
+        // using it here hands a nullable collection field a store nothing ever frees.
+        _ => return to_default(tp, data),
+    };
+    Value::Call(data.def_nr(op), Vec::new())
+}
+
 /// The value a type takes when nothing chooses one — `S {}`'s omitted fields, a
 /// default-initialised local, a struct literal that names only some fields.
 ///
@@ -1059,11 +1096,9 @@ impl Value {
 /// whether a default EXISTS at all — @FR-D-NoRef and @FR-D-NoEnumF are refusals and live
 /// there, not here.
 ///
-/// ⚠ **@FR-D-Opt is NOT what this does**, and the divergence is deliberate: the rule says a
-/// nullable's default is `null`, and the `Optional` arm below answers the BASE type's zero
-/// instead (`integer?` → `0`, `text?` → `""`).  Both backends agree with each other and
-/// disagree with the rule — recorded as the open deviation `D-Opt-Zero` in
-/// `formal/types.md`, whose resolution is a design call rather than an edit.
+/// Enforces @FR-D-Opt: a nullable's default IS null, so an `Optional` field with no
+/// `= expr` starts at its base type's null SENTINEL via [`to_null`] — not at the base
+/// type's zero, which is a VALUE for every base whose zero is not already its null.
 #[must_use]
 pub fn to_default(tp: &Type, data: &Data) -> Value {
     match tp {
@@ -1099,13 +1134,12 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         // integer)` lands as `("", 0)`.  Recurses through nested
         // tuples and other compound element types.
         Type::Tuple(elems) => Value::Tuple(elems.iter().map(|e| to_default(e, data)).collect()),
-        // @PLN25 — an `Optional(τ)` FIELD with no explicit default takes its base type's
-        // default (base-zero: `integer? → 0`, `bool? → false`, `text? → ""`), NOT a bare
-        // `null`. `null` would fall to the `_` arm below and render as native `(())` (unit)
-        // into the scalar's slot (E0308) — and base-zero is the settled design call (the
-        // nullable field is still writable to null via an explicit `= null`). Inert gate-OFF
-        // (no `Optional` is constructed there).
-        Type::Optional(inner) => to_default(inner, data),
+        // @FR-D-Opt — a nullable's default is its base type's null SENTINEL, which is what
+        // [`to_null`] builds.  Answering the base's ZERO instead is wrong for every base
+        // whose zero is a legitimate value (`integer? → 0`, `bool? → false`, `text? → ""`)
+        // and right only for the ones whose zero already IS their null (enum, reference) —
+        // so the old shortcut looked correct exactly where it could not be told apart.
+        Type::Optional(inner) => to_null(inner, data),
         _ => Value::Null,
     }
 }

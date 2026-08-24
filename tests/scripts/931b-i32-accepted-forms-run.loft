@@ -87,13 +87,13 @@ fn pn_null_is_not_a_narrowing() {
   n.c = null;
   assert(n.c == null, "931b nullable field cleared");
 
-  // An OMITTED field takes its type's zero rather than null — the `omitted-field-zero`
-  // advice (loft#914) is about exactly this, and `tests/issues.rs::issue_332_…` pins the
-  // same answer.  What matters here is that the store is ACCEPTED: the compiler-inserted
-  // default arrives at the narrowing check as a bare `null` typed `integer`, so before the
-  // exemption the widened width test refused a struct literal that omits an `i32?` field.
+  // What matters HERE is that the store is ACCEPTED: the compiler-inserted default arrives
+  // at the narrowing check as a bare `null` typed `integer`, so without the exemption the
+  // widened width test refuses a struct literal that merely OMITS an `i32?` field.  The
+  // value itself is `formal/types.md` D-Opt's question — a nullable field starts null —
+  // and `nullable-field-starts-null.loft` is where that is pinned across every width.
   m = PnNullable { t: 2 };
-  assert(m.c == 0, "931b omitted nullable field {m.c}, want 0");
+  assert(m.c == null, "931b omitted nullable field {m.c}, want null");
 }
 
 // Widening is never a narrowing: a narrow alias flows into `i32`, and `i32` into
