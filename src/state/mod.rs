@@ -2415,17 +2415,20 @@ impl State {
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_ref(&mut self) {
         let pos = self.code::<u16>();
-        // A ref local's null-init ALLOCATES an empty store.  `--native` writes the
-        // NULL sentinel instead (`let mut var_x: DbRef = DbRef::NULL`), and that
-        // difference is the root of loft#1085: it makes a call-site return buffer
-        // (`__ref_N`) a real store the caller keeps and frees at scope exit, while
-        // the callee — which cannot tell a caller-supplied buffer from one the
-        // runtime handed it (`CallRef`, the cdylib bridge) — frees it as well.
-        // `LOFT_SENTINEL_INIT_REF=1` takes the native spelling; see that switch.
-        let null_ref = if crate::keys::sentinel_init_ref() {
-            DbRef::NULL
-        } else {
+        // A ref local's null-init writes the NULL sentinel — the same thing
+        // `--native` writes (`let mut var_x: DbRef = DbRef::NULL`).
+        //
+        // It used to ALLOCATE an empty store, and that is what made a call-site
+        // return buffer (`__ref_N`) a real store the caller kept and freed at scope
+        // exit, while the callee — which cannot tell a caller-supplied buffer from
+        // one the runtime handed it (`CallRef`, the cdylib bridge) — freed it too.
+        // The second free released a slot recycled since, and the next allocation
+        // took it back (loft#1085).  `OpDatabase` accepts the sentinel and allocates
+        // fresh from it; `free` ignores it.
+        let null_ref = if crate::keys::alloc_init_ref() {
             self.database.null()
+        } else {
+            DbRef::NULL
         };
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,

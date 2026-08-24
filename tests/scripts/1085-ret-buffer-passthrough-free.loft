@@ -1,14 +1,11 @@
 // loft#1085 — a promoted return buffer the callee never allocates into belongs to
 // the CALLER, and freeing it there recycles a slot a live local still owns.
 //
-// NOT in `tests/scripts/` yet: it is RED by default, because the fix is still an
-// opt-in switch.  Run it both ways —
-//
-//     loft --interpret <this file>                        # asserts fire (the bug)
-//     LOFT_SENTINEL_INIT_REF=1 loft --interpret <this>     # clean
-//     loft --native <this file>                            # clean
-//
-// and move it into `tests/scripts/` when the switch becomes the default.
+// The cure is that a ref local's null-init now writes the NULL sentinel, which is
+// what `--native` already wrote, instead of ALLOCATING an empty store.  Only the
+// allocating form gave the caller a store to keep, and `LOFT_ALLOC_INIT_REF=1`
+// brings it back — the asserts below fire under it, which is what makes this file
+// a reading rather than a hope.
 //
 // `fn l1_passthrough(v) -> Pt { pt(v, v) }` hands its hidden buffer straight to
 // the inner call and never mints a store into it.  The callee's conditional free

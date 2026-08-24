@@ -1220,6 +1220,38 @@ fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32>
     out
 }
 
+/// The scope-exit / pre-reassignment frees for a TUPLE local's OWNED elements, in
+/// reverse index order.
+///
+/// `Value::TupleGet(v, idx)` reads one element as a plain `DbRef` / `Str`, so each
+/// free is the ordinary op on that read and needs no per-element stack-offset
+/// machinery of its own.
+///
+/// Only an element the tuple OWNS. `owned_elements` answers on the type KIND — is
+/// it heap-shaped — which a BORROWED element passes exactly as an owned one does,
+/// and freeing that releases the source's store.  The empty-dep test is the
+/// ownership half, the same one the scalar branch of `get_free_vars` uses.
+///
+/// STORE-backed elements only.  A tuple's `text` element is an owned `String` in a
+/// stack slot, not a store, and `OpFreeText` takes the VARIABLE whose slot it
+/// resets — handed a `TupleGet` value read instead, its stack-distance arithmetic
+/// underflows (loft#1004's corpus script panics with "attempt to subtract with
+/// overflow").  Text elements are released with the frame and are not the leak
+/// this exists for.
+fn tuple_owned_elem_frees(elems: &[Type], v: u16, data: &Data) -> Vec<Value> {
+    let mut out = Vec::new();
+    for &(_offset, idx) in crate::data::owned_elements(elems).iter().rev() {
+        if !elems[idx].depend().is_empty() || matches!(elems[idx].base(), Type::Text(_)) {
+            continue;
+        }
+        out.push(Value::Call(
+            data.def_nr("OpFreeRef"),
+            vec![Value::TupleGet(v, idx as u16)],
+        ));
+    }
+    out
+}
+
 fn run_scan_phase(
     data: &mut Data,
     d_nr: u32,
@@ -4096,6 +4128,25 @@ impl Scopes {
         // inside a deeper loop the free would re-run on iterations 2+ and
         // release the previous iteration's VIEWED store.
         let mut transition_free: Option<Value> = None;
+        // The same transition for a TUPLE: reassigning a tuple local installs new
+        // elements over the old ones, and without this the previous turn's owned
+        // element stores are named by nobody.  Invisible until a call-site return
+        // buffer stopped being pre-allocated by the caller (loft#1085): before that
+        // the callee ADOPTED the caller's `__ref_N` store, so the caller's own
+        // scope-exit free covered every iteration's element and one store served
+        // the whole loop.  A first-iteration free is a no-op — the entry null-init
+        // leaves the elements at the sentinel, which `free` ignores.
+        if was_in_scope
+            && let Type::Tuple(elems) = function.tp(v)
+            && !value.reads_var(v)
+            && !value.reads_var(ov)
+        {
+            let elems = elems.clone();
+            let frees = tuple_owned_elem_frees(&elems, v, data);
+            if !frees.is_empty() {
+                transition_free = Some(Value::Insert(frees));
+            }
+        }
         if was_in_scope
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
             && self.owned_refs.get(&v) == Some(&self.loops.len())
@@ -5558,13 +5609,8 @@ impl Scopes {
             }
             // T1.3: tuple scope exit — free owned elements in reverse index order.
             if let Type::Tuple(elems) = function.tp(v) {
-                let owned = crate::data::owned_elements(elems);
-                for &(_offset, _idx) in owned.iter().rev() {
-                    // T1.4 will emit per-element OpFreeText/OpFreeRef at the correct
-                    // stack offset.  For now, record that cleanup is needed.
-                    // The actual free ops require knowing the variable's stack slot +
-                    // element offset, which is codegen's responsibility.
-                }
+                let elems = elems.clone();
+                ls.extend(tuple_owned_elem_frees(&elems, v, data));
                 continue;
             }
             if matches!(function.tp(v).base(), Type::Text(_)) {

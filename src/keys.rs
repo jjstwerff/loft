@@ -1244,25 +1244,23 @@ pub fn no_slot_reuse() -> bool {
 /// which made the trace silent for exactly the calls that go through a package's
 /// shared library (loft#810).
 #[must_use]
-/// `LOFT_SENTINEL_INIT_REF=1` (loft#1085, **opt-in**) — lower a ref local's
-/// null-init to the NULL sentinel, which is what `--native` writes, instead of
-/// ALLOCATING an empty store.
+/// `LOFT_ALLOC_INIT_REF=1` (loft#1085) — restore the pre-fix `OpInitRef`, which
+/// ALLOCATED an empty store for a ref local's null-init instead of writing the NULL
+/// sentinel `--native` writes.
 ///
-/// The interpreter's allocating null-init is what gives a call-site return buffer
-/// (`__ref_N`) a real store: the caller then keeps and frees it, and so does the
-/// callee, whose conditional free cannot distinguish a caller-supplied buffer from
-/// one the runtime handed it (`CallRef`, the cdylib bridge).  The second free
-/// releases a slot recycled to a live local since — loft#1085's silent overwrite.
+/// The allocating form is what gave a call-site return buffer (`__ref_N`) a real
+/// store: the caller then kept and freed it, and so did the callee, whose
+/// conditional free cannot tell a caller-supplied buffer from one the runtime
+/// handed it (`CallRef`, the cdylib bridge).  The second free released a slot
+/// recycled to a live local since — loft#1085's silent overwrite.
 ///
-/// On: loft#1085 goes away and `smooth_pts` answers the oracle's `661.7595`.
-/// It is not the default because it also stops the buffer store being REUSED in
-/// place across a loop, and that reuse was masking a second, separate leak in
-/// tuple destructure (`tests/scripts/1051-tuple-destructure-ownership.loft`,
-/// `Cell×80`).  That leak is the work this switch is waiting on; suppressing it to
-/// turn the switch on would trade a silent-wrong for a silent leak.
-pub fn sentinel_init_ref() -> bool {
-    static SIR: OnceLock<bool> = OnceLock::new();
-    *SIR.get_or_init(|| env_set("LOFT_SENTINEL_INIT_REF"))
+/// The before-half of a one-binary A/B, and the first bisect step for a wrong
+/// answer or a leak around a call-site return buffer.  It also restores the
+/// in-place REUSE of that buffer's store across a loop, which was masking the
+/// tuple-element leak `tuple_owned_elem_frees` now closes.
+pub fn alloc_init_ref() -> bool {
+    static AIR: OnceLock<bool> = OnceLock::new();
+    *AIR.get_or_init(|| env_set("LOFT_ALLOC_INIT_REF"))
 }
 
 pub fn trace_db() -> bool {
