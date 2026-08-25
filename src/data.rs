@@ -5620,36 +5620,56 @@ impl Data {
         self.definitions[d_nr as usize].attributes[a_nr].nullable = nullable;
     }
 
+    /// The definition key [`Self::add_fn`] registers a function under.
+    ///
+    /// A METHOD — one whose first parameter is named `self` or `both` — is keyed by its
+    /// RECEIVER as well as its name (`t_<LEN><Type>_<name>`), so two types may each carry
+    /// a `scale`; everything else is `n_<name>`.  `None` only when the receiver's type is
+    /// unknown, which `add_fn` diagnoses.
+    ///
+    /// A caller that has to FIND a definition `add_fn` made must ask here rather than
+    /// spell `n_<name>` itself.  A default value lowered into a function of its own takes
+    /// the earlier parameters it reads, so a default inside a method may be a method too
+    /// — and looking for the plain key missed it, leaving the pass-1 body (which could
+    /// not resolve a name declared later in the file) to reach codegen unrepaired
+    /// (loft#1086).
+    #[must_use]
+    pub fn fn_key(&self, fn_name: &str, arguments: &[Argument]) -> Option<String> {
+        let is_self = !arguments.is_empty() && arguments[0].name == "self";
+        let is_both = !arguments.is_empty() && arguments[0].name == "both";
+        if !is_self && !is_both {
+            return Some(format!("n_{fn_name}"));
+        }
+        let type_nr = self.type_def_nr(&arguments[0].typedef);
+        if type_nr == u32::MAX {
+            return None;
+        }
+        // @PLN25 — the signature key is NULLABILITY-AWARE: a `τ?` receiver/`both`
+        // param appends `?` so `min(τ)` and `min(τ?)` are DISTINCT overloads. The
+        // `type_def_nr` peel still governs LAYOUT (Optional shares the base's
+        // storage); this only distinguishes the def KEY. Gate-OFF no `Optional`
+        // exists, so the name is the base — byte-identical.
+        let sig = Self::sig_type_name(&self.def(type_nr).name, &arguments[0].typedef);
+        Some(format!("t_{}{}_{fn_name}", sig.len(), sig))
+    }
+
     /**
     Add a new function to the definitions.
     # Panics
     When the return type cannot be parsed.
     */
     pub fn add_fn(&mut self, lexer: &mut Lexer, fn_name: &str, arguments: &[Argument]) -> u32 {
-        let mut name = String::new();
         let is_self = !arguments.is_empty() && arguments[0].name == "self";
         let is_both = !arguments.is_empty() && arguments[0].name == "both";
-        if is_self || is_both {
-            let type_nr = self.type_def_nr(&arguments[0].typedef);
-            if type_nr == u32::MAX {
-                diagnostic!(
-                    lexer,
-                    Level::Error,
-                    "Unknown type on fn '{fn_name}' argument '{}'",
-                    arguments[0].name
-                );
-            } else {
-                // @PLN25 — the signature key is NULLABILITY-AWARE: a `τ?` receiver/`both`
-                // param appends `?` so `min(τ)` and `min(τ?)` are DISTINCT overloads. The
-                // `type_def_nr` peel still governs LAYOUT (Optional shares the base's
-                // storage); this only distinguishes the def KEY. Gate-OFF no `Optional`
-                // exists, so the name is the base — byte-identical.
-                let sig = Self::sig_type_name(&self.def(type_nr).name, &arguments[0].typedef);
-                name = format!("t_{}{}_{fn_name}", sig.len(), sig);
-            }
-        } else {
-            name = format!("n_{fn_name}");
-        }
+        let mut name = self.fn_key(fn_name, arguments).unwrap_or_else(|| {
+            diagnostic!(
+                lexer,
+                Level::Error,
+                "Unknown type on fn '{fn_name}' argument '{}'",
+                arguments[0].name
+            );
+            String::new()
+        });
         // @PLN102 C97 — a LIBRARY (source ≥ 2, i.e. not the stdlib prelude and not the user's
         // MAIN program) defines its public symbols MODULE-SCOPED: they live under the library's
         // own source and are reached as `lib::name`, never injected into the global namespace.

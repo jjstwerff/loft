@@ -2198,6 +2198,7 @@ impl Parser {
                 // replayed at a call site.  Mark the source position first: one that turns
                 // out to need a temporary is re-parsed from here into a function of its own.
                 let value_start = self.lexer.link();
+                let unresolved_before = self.unresolved_names;
                 let mut t = Value::Var(arguments.len() as u16);
                 // loft#1067 — the parameter's declared type is the expected type for its
                 // DEFAULT, exactly as it is for an argument a caller passes: a default is
@@ -2269,10 +2270,41 @@ impl Parser {
                 let site = DefaultSite::Parameter {
                     count: arguments.len() as u16,
                 };
-                if !matches!(typedef, Type::RefVar(_)) && !default_replayable_in_place(&t, site) {
-                    let (params, call_args) = Self::default_fn_params(&t, arguments, &injected);
+                //
+                // A default that named something pass 1 could not resolve is lowered too,
+                // however simple its tree looks.  What pass 1 parsed is what a call site
+                // replays — the pass-2 re-parse is discarded — so a forward-referenced
+                // constant froze the collapsed pass-1 reading: `b: integer = a + LATER`
+                // stored just `a` and answered 5 where 15 was written, silently
+                // (loft#1086).  Lowering it puts the value in a function BODY, and a body
+                // is re-parsed in pass 2, where the name resolves.
+                let dflt_fn = self.default_fn_name(fn_name, arguments, &attr_name);
+                let named_a_forward_reference =
+                    self.first_pass && self.unresolved_names != unresolved_before;
+                let hoisted_in_pass_1 =
+                    !self.first_pass && self.minted_default_nr(&dflt_fn, arguments) != u32::MAX;
+                if !matches!(typedef, Type::RefVar(_))
+                    && (named_a_forward_reference
+                        || hoisted_in_pass_1
+                        || !default_replayable_in_place(&t, site))
+                {
+                    // Pass 1's signature is the one the function HAS, so pass 2 re-parses
+                    // the body against those parameters rather than against a list
+                    // recomputed from a tree that now resolves more names than pass 1's
+                    // did.  And a pass-1 tree that lost a name to a forward reference
+                    // cannot be asked which earlier parameters the default reads, so it
+                    // takes them all — an over-wide signature is wasteful where a short
+                    // one fails to compile.
+                    let (params, call_args) = self
+                        .hoisted_default_signature(&dflt_fn, arguments)
+                        .unwrap_or_else(|| {
+                            if named_a_forward_reference {
+                                Self::every_earlier_parameter(arguments, &injected)
+                            } else {
+                                Self::default_fn_params(&t, arguments, &injected)
+                            }
+                        });
                     self.lexer.revert(value_start);
-                    let dflt_fn = self.default_fn_name(fn_name, arguments, &attr_name);
                     t = self.default_value_fn(&dflt_fn, &params, &typedef, call_args);
                 }
                 t
@@ -4073,6 +4105,7 @@ impl Parser {
                         // for circular-init detection (same as init(expr) path).
                         self.init_field_tracking = true;
                         self.init_field_deps.clear();
+                        self.init_reads_record = false;
                         // @PLN22 Phase 1 — hint the field's enum so a bare variant
                         // default (`level: Level = Warning`) resolves against the
                         // declared field type.
@@ -4114,12 +4147,15 @@ impl Parser {
                         // `$` is `Var(0)`, and so is the first temporary the struct's empty
                         // table hands out — the dep tracking above is what tells the two
                         // apart, so the replay question cannot be asked without it.
-                        let reads_record = !self.init_field_deps.is_empty();
+                        let reads_record = self.init_reads_record;
                         let site = DefaultSite::Field {
                             reads_record,
                             struct_typed: matches!(a_type.base(), Type::Reference(_, _)),
                         };
-                        if !default_replayable_in_place(&value, site) {
+                        let dflt_fn = format!("__dflt_{}_{a_name}", self.data.def(d_nr).name());
+                        if self.default_hoisted_in_pass_1(&dflt_fn)
+                            || !default_replayable_in_place(&value, site)
+                        {
                             // A non-empty KEYED default was refused here because loft had no
                             // keyed literal as a VALUE at all — `[K { … }]` was a `vector<K>`
                             // wherever it stood alone, so there was nothing for the function
@@ -4127,9 +4163,7 @@ impl Parser {
                             // lowered like any other default needing a temporary.
                             if !reads_record {
                                 self.lexer.revert(value_start);
-                                let name =
-                                    format!("__dflt_{}_{a_name}", self.data.def(d_nr).name());
-                                value = self.default_value_fn(&name, &[], &a_type, Vec::new());
+                                value = self.default_value_fn(&dflt_fn, &[], &a_type, Vec::new());
                             } else if !self.first_pass {
                                 let tn = a_type.name(&self.data);
                                 diagnostic!(
@@ -4291,6 +4325,7 @@ impl Parser {
             // #91: enable dep tracking for circular-init detection.
             self.init_field_tracking = true;
             self.init_field_deps.clear();
+            self.init_reads_record = false;
             self.lexer.token("(");
             let tp = self.expression(value);
             if a_type.is_unknown() {
@@ -4333,6 +4368,116 @@ impl Parser {
             _ => String::new(),
         };
         format!("__dflt_{owner}{fn_name}_{a_name}")
+    }
+
+    /// Whether pass 1 already lowered this default into a function of its own.
+    ///
+    /// The hoist decision belongs to pass 1, and pass 2 has to reach the same one.  A
+    /// name declared LATER in the file does not resolve during pass 1, so the default
+    /// parses as a fresh variable and reads as "needs a temporary"; the identical source
+    /// is a literal in pass 2 and reads as "replayable".  Pass 1 mints the function
+    /// either way, so a pass 2 that declines to re-mint leaves that function holding a
+    /// variable no frame ever allocated — codegen then aborts with `Incorrect var
+    /// NAME[65535]` on a program whose only fault is the order of two declarations
+    /// (loft#1086).
+    ///
+    /// Asking whether the definition is already there is what makes pass 1's decision
+    /// the one that stands: pass 2 re-parses the same default into the same function,
+    /// where the name now resolves.  The opposite divergence — pass 2 wanting a
+    /// definition pass 1 never minted — is rejected separately, because a definition may
+    /// not first appear in pass 2.
+    fn default_hoisted_in_pass_1(&self, fn_name: &str) -> bool {
+        !self.first_pass && self.data.def_nr(&format!("n_{fn_name}")) != u32::MAX
+    }
+
+    /// The definition pass 1 minted for this default, under either key it could carry.
+    ///
+    /// A minted default takes the earlier parameters it reads, so one inside a METHOD
+    /// that reads `self` is registered under the receiver key rather than `n_<name>`.
+    /// Which of the two pass 1 used depends on the tree pass 1 parsed, and pass 2 does
+    /// not have that tree — so try both.
+    fn minted_default_nr(&self, dflt_fn: &str, arguments: &[Argument]) -> u32 {
+        let plain = self.data.def_nr(&format!("n_{dflt_fn}"));
+        if plain != u32::MAX {
+            return plain;
+        }
+        let Some(key) = self.data.fn_key(dflt_fn, arguments) else {
+            return u32::MAX;
+        };
+        self.data.def_nr(&key)
+    }
+
+    /// The signature pass 1 gave this default's function, as `(parameters, call
+    /// arguments)`, or `None` when pass 1 minted nothing.
+    ///
+    /// A minted function is created once, in pass 1, and pass 2 re-parses its body into
+    /// the same definition — so pass 2 must hand it the parameters it already has.
+    /// Recomputing them from the pass-2 tree gives a different list whenever pass 1
+    /// resolved fewer names, and the body is then parsed against parameters the
+    /// definition does not carry: the name reads back as an unknown variable
+    /// (loft#1086).
+    fn hoisted_default_signature(
+        &self,
+        fn_name: &str,
+        arguments: &[Argument],
+    ) -> Option<(Vec<Argument>, Vec<Value>)> {
+        if self.first_pass {
+            return None;
+        }
+        let d_nr = self.minted_default_nr(fn_name, arguments);
+        if d_nr == u32::MAX {
+            return None;
+        }
+        let params: Vec<Argument> = self
+            .data
+            .def(d_nr)
+            .attributes()
+            .iter()
+            .map(|a| Argument {
+                name: a.name.clone(),
+                typedef: a.typedef.clone(),
+                default: Value::Null,
+                constant: false,
+                ref_pos: (0, 0),
+                const_pos: (0, 0),
+            })
+            .collect();
+        // Each parameter by NAME, because the call passes the caller's argument at that
+        // index and the two lists are ordered independently.
+        let call_args = params
+            .iter()
+            .map(|p| {
+                let at = arguments.iter().position(|a| a.name == p.name);
+                #[allow(clippy::cast_possible_truncation)]
+                Value::Var(at.map_or(u16::MAX, |i| i as u16))
+            })
+            .collect();
+        Some((params, call_args))
+    }
+
+    /// Every earlier parameter that was in scope for the default's parse, as a signature.
+    ///
+    /// The safe over-approximation [`Self::default_fn_params`] falls back to, reached
+    /// here for a different reason: a pass-1 tree that lost a name to a forward
+    /// reference no longer mentions the parameters the default reads, so asking it which
+    /// ones they are answers "none".
+    fn every_earlier_parameter(
+        arguments: &[Argument],
+        injected: &[(String, u16, u16)],
+    ) -> (Vec<Argument>, Vec<Value>) {
+        let used: Vec<u16> = injected.iter().map(|(_, _, arg_idx)| *arg_idx).collect();
+        let params = used
+            .iter()
+            .map(|i| Argument {
+                name: arguments[*i as usize].name.clone(),
+                typedef: arguments[*i as usize].typedef.clone(),
+                default: Value::Null,
+                constant: false,
+                ref_pos: (0, 0),
+                const_pos: (0, 0),
+            })
+            .collect();
+        (params, used.iter().map(|i| Value::Var(*i)).collect())
     }
 
     /// loft#699 — the parameters the function a default is lowered into must take, and
@@ -4410,7 +4555,13 @@ impl Parser {
         a_type: &Type,
         call_args: Vec<Value>,
     ) -> Value {
-        let stored_name = format!("n_{fn_name}");
+        // The key `add_fn` registered it under in pass 1, derived from the same
+        // parameters — a default inside a method that reads `self` is itself a method,
+        // and `n_<name>` does not find it.
+        let stored_name = self
+            .data
+            .fn_key(fn_name, params)
+            .unwrap_or_else(|| format!("n_{fn_name}"));
         let outer_context = self.context;
         let outer_vars = std::mem::replace(
             &mut self.vars,

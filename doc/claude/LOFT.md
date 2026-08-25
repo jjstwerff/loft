@@ -367,6 +367,12 @@ value-const value that escapes via a local (`x = t.v; x[i]=…`), a function ret
 type-carried const, deferred to Phase 3.
 (@PLN40; doc/claude/plans/40-const-fields/const-model-phase2.md.)
 
+Defaults are applied in DECLARATION order, and `$` reads the record as it stands at that
+moment. A field the construction site supplies is already written, whichever order the two
+are declared in — which is what makes the `Object` example below work. A field left to its
+OWN default is not: `struct S { a: integer = $.b, b: integer = 2 }` gives `a = 0`, because
+`b`'s default has not run yet. Declare the field being read first.
+
 In default/computed expressions, `$` refers to the record:
 ```
 struct Object {

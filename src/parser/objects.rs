@@ -197,6 +197,12 @@ impl Parser {
     ) -> Type {
         // '$' refers to the current record in struct field default expressions
         if name == "$" && matches!(self.data.def_type(self.context), DefType::Struct) {
+            // Noted HERE rather than at the field it selects: a `$.x` naming a field
+            // declared later in the struct does not resolve in pass 1, and a default that
+            // reads the record must be recognised as one in BOTH passes.
+            if self.init_field_tracking {
+                self.init_reads_record = true;
+            }
             *code = Value::Var(0);
             return Type::Reference(self.context, crate::data::Deps::none());
         }
@@ -992,6 +998,12 @@ impl Parser {
                         }
                         t = Type::Unknown(0);
                     } else {
+                        // Nothing in the table answers to this name.  In pass 2 that is a
+                        // typo and the diagnostics downstream say so; in pass 1 it is
+                        // usually a forward reference, and the caller parsing a stretch of
+                        // source needs to know one happened — see
+                        // `Parser::unresolved_names`.
+                        self.unresolved_names = self.unresolved_names.saturating_add(1);
                         *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
                         t = Type::Unknown(0);
                     }

@@ -621,6 +621,20 @@ pub struct Parser {
     /// NOT cleared between passes: the stub itself survives (pass 2 finds it by name
     /// rather than registering a second one), so the exemption has to survive with it.
     speculative_type_refs: std::collections::HashSet<u32>,
+    /// How many identifiers pass 1 could not resolve to anything, and so turned into a
+    /// fresh variable of unknown type.
+    ///
+    /// Pass 1 is the pass that RECORDS definitions, so a name declared later in the file
+    /// is simply not there yet — that is the two-pass design working, not an error, and
+    /// pass 2 resolves it.  But a PARAMETER default is parsed and stored once, in pass 1,
+    /// and a call site replays what was stored: the pass-2 re-parse is discarded.  A
+    /// default naming a later constant therefore froze pass 1's answer, which for
+    /// `b: integer = a + LATER` is the collapsed `a` — the call answered 5 where 15 was
+    /// written, with nothing said (loft#1086).
+    ///
+    /// A COUNTER rather than a flag: what a caller wants to know is whether the stretch
+    /// of source IT parsed contained one, which is the difference between two readings.
+    unresolved_names: u32,
     /// @PLN115 — record each resolved identifier occurrence during parse.  DEFAULT
     /// OFF (only the LSP parse sets it, S3); zero-cost when off.  See
     /// `doc/claude/plans/115-resolution-index/`.
@@ -705,6 +719,19 @@ pub struct Parser {
     pub(crate) init_field_tracking: bool,
     /// #91: field names accessed via $ during the current init(expr) parse.
     pub(crate) init_field_deps: Vec<String>,
+    /// Whether the init(expr) being parsed mentions `$` at all.
+    ///
+    /// Separate from [`Self::init_field_deps`], which records the RESOLVED field a `$.x`
+    /// selects and so answers a different question: the cycle check needs names, and a
+    /// name it cannot resolve is not part of a cycle it can see.  Whether the default
+    /// reads the record is not about the field — a `$` that selects a field declared
+    /// LATER in the struct still reads the record, and pass 1 cannot resolve that field.
+    ///
+    /// Reading the deps for this made the answer differ between the passes: pass 1 said
+    /// "reads nothing" and lowered `a: integer = $.b` into a function, pass 2 said "reads
+    /// the record" and did not, and the function pass 1 left behind held a `$` no frame
+    /// ever allocated (loft#1086).
+    pub(crate) init_reads_record: bool,
     /// M11-a: true while parsing the body of a `for … par(…) { … }` loop.
     /// `yield` inside a `par()` body is illegal — the worker runs in a separate
     /// thread with its own store; there is no safe coroutine resumption path.
@@ -1010,6 +1037,7 @@ impl Parser {
             track_sources: false,
             parsed_sources: Vec::new(),
             speculative_type_refs: std::collections::HashSet::new(),
+            unresolved_names: 0,
             data,
             database: Stores::new(),
             lexer: Lexer::default(),
@@ -1110,6 +1138,7 @@ impl Parser {
             last_closure_captured_vars: vec![],
             init_field_tracking: false,
             init_field_deps: Vec::new(),
+            init_reads_record: false,
             in_par_body: false,
             is_capture_aliases: Vec::new(),
             is_capture_bindings: Vec::new(),
