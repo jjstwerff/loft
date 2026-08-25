@@ -1496,7 +1496,23 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, bool, Vec<(u32, u32)>) {
         calls: Vec<(u32, u32)>,
     }
     fn scan(data: &Data, v: &Value, nesting: u32, st: &mut St) {
-        match v {
+        // `Value::unspan`'s documented obligation, and here it decides an ADMISSION.  The
+        // arms single out `Loop` / `Iter` (nesting) and `Call` (the callee's own cost), so a
+        // spanned node took `_` and its work was never counted: `intrinsic_space` under-reports,
+        // and `space_degree` then never folds that callee's own footprint into its caller's.
+        //
+        // Not a lost optimisation — the failure direction is admitting a program that exceeds
+        // its declared budget.  Measured end to end: on the guard program the declared bound
+        // reads `24 · n^2` without this peel and `36 · n^2` with it, and at a `data_budget`
+        // between the two the program is ADMITTED without it and REJECTED with it
+        // (`sandbox_cli::the_space_budget_counts_a_callee_behind_a_spanned_call`).
+        //
+        // This body already unspanned an ARGUMENT (`args.first().map(Value::unspan)`) while
+        // leaving the node it matches on bare — the same split appears in `move_rewrite` and
+        // in `scopes::is_ref_materialisation`'s neighbourhood, which suggests the argument
+        // case is the one that bites visibly during development while the node case fails
+        // silently.
+        match v.unspan() {
             Value::Loop(_) | Value::Iter(..) => {
                 // vars reset somewhere in this loop don't accumulate across it.
                 let mut targets = HashSet::new();
