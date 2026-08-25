@@ -420,15 +420,69 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 246 | 205 | **41** |
+| 233 | 206 | **27** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
+
+**A second false-positive class, and it held the two scariest-looking entries.** A match that
+is the BODY of a `any_node` / `for_each_child` closure can never be handed a `Span`, because
+`any_node` unwraps one before calling the predicate (`if let Value::Span(b) = self { return
+b.1.any_node(pred) }`) and `for_each_child` descends through it. Four sites were that shape,
+including the two whose failure direction is UNSAFE rather than merely lossy —
+`hoist.rs::writes_store`, the vector-header hoist's safety predicate, and `scopes::guard_escapes`.
+Neither can be reached with a `Span`. (A fifth, `walk_sub_rule_pure`, discriminates on `Purity`
+and never on a `Value` at all.) The tool now strips those closures before counting.
+
+⚠ **Do not diff two runs of this list by `path:line`** — a comment added above a site shifts its
+line and reads as a removal plus an addition. Compare by function NAME. That is how
+`is_void_value` briefly looked deleted when it had only moved eight lines.
+
+⚠ **The count was 41 until 2026-08-25, and the 8 it lost then were never real** — the audit matched
+the NAME `Value::<Variant>` without checking WHICH `Value`.  Three enums answer to that
+spelling here: `host::Value` (the host-call ABI, 5 sites) has no `Span` at all, `MValue`
+(2 sites) matched because `MValue::Scalar` literally contains the substring
+`Value::Scalar`, and one more site matched neither.  The tool now intersects against the
+IR enum read out of `data.rs`, and rejects any site naming a host-only variant
+(`Void` / `Bool` / `Ref`) — needed because `host::Value` shares `Float` / `Int` / `Text`
+with the IR enum, so the intersection alone still let those through.  Re-validated the way
+[STABILITY_METHOD](STABILITY_METHOD.md) asks: it still flags `scopes::walk_check`, and
+still does NOT flag `find_assigned_vars`, whose fix is the known answer below.
+**A count offered as open work has to be right, or it is a bill someone else pays.**
 
 **Instrumented, not argued.** One env-gated line in `scopes::find_assigned_vars`'s
 catch-all, over 200 corpus programs: the path is reached **10 208 times**, of which
 **2 dropped a Span-wrapped `Set`** — a genuinely missed assignment — and **8 dropped a
 whole Span-wrapped `Block`**, whose statements then go unscanned. So the mechanism is real
 and reachable, not theoretical.
+
+⚠ **That method cannot measure a `#[cfg(debug_assertions)]` site, and a zero from it there
+is an artifact.** Learned on `scopes::walk_check`, the top of the list: instrumenting its
+catch-all and running the corpus reported **0** Span arrivals — and also 0 hits on the
+catch-all at all, which is impossible for a walker that meets leaf nodes. The site is gated,
+and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo build` and
+`cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
+hits on the same arm; if those are zero too, the probe never ran.
+
+**Exactly 1 of the 27 is gated** (`walk_check`) — so the method holds for the other 32, and
+the bound is worth stating rather than leaving as a general worry. It is only notable because
+it is the top of the list by variant count, and so the natural place to start: the one site
+where a zero was going to be believed.
+
+**Two sites measured and FIXED 2026-08-25, and the counts are the point.** The raw arrival
+count is not the defect count — at both sites most arrivals change nothing, so the measurement
+that matters is *does unspanning change the answer*:
+
+| site | spanned values arriving | answer actually changes |
+|---|---:|---:|
+| `const_eval` (858 programs, interp) | 1000 | **2** — folds lost in `91-null-coalescing`, `store_compact_kinds` |
+| `generation::needs_pre_eval` (45 programs, native) | 1807 | **1264** |
+| `generation::is_void_value` (45 programs, native) | 22 | **0** — left alone |
+
+`needs_pre_eval` is the one that mattered: its arms single out `Call` / `Block` / `CallRef` /
+`Insert` / `Iter`, all of which can answer TRUE, while a `Span` matches none and takes
+`_ => false` — so a spanned call was reported as needing no pre-evaluation, which is the
+double-borrow the analysis exists to prevent. `is_void_value` is the control that keeps the
+rule honest: same file, same shape, and not worth touching.
 
 ⚠ **And then it changes nothing.** Adding the peel leaves the IR byte-identical on all six
 affected programs. The variables were already covered another way. **So: reachable,
@@ -438,10 +492,34 @@ failure mode is a missing initialisation with nothing to report it. But no defec
 found, and saying otherwise would be the dressed-up version of this result.
 
 **What that settles.** The catch-all concern is no longer unmeasured, and the answer is
-milder than it looked: the shape is real, the damage is not demonstrated. The 41 remaining
+milder than it looked: the shape is real, the damage is not demonstrated. The remaining
 sites are a ranked backlog to *measure* — several are display and host helpers where a
 `Span` cannot arrive — and the tool now says plainly that a hit is a measurement to make,
 not a defect found.
+
+**The const-vector pair — measured clean, and the measurement nearly wasn't.**
+`compile::build_const_vectors` and `generation::emit_const_vectors` are the same job in the
+two backends, and both had the worst-shaped fallback in the list: `_ => {}` around a literal
+match, so a spanned literal would write NOTHING and leave a zero in a const vector — silent,
+not lossy. The feeding path never unspanned either (`extract_literal_values` takes an
+`IrNode`, whose `unspan()` is an explicit call it did not make). Measured anyway: **both
+sites are reached and see only plain literals, 0 spanned arrivals**, so const folding hands
+them clean values and neither needed the call.
+
+✅ **The shape is now gone, not merely measured harmless.** loft#1090 replaced the `Value`
+payload with a `ConstField` enum, so both writers match EXHAUSTIVELY and neither has a `_`
+arm to drop a value into — a kind added on one side can no longer be silently ignored by the
+other. That defect was not hypothetical when the fallback existed: `boolean` and `character`
+fields were being dropped from constants that were built anyway, so `[Row { flag: true, id: 5 }]`
+read back `flag = false` with `id` correct. **The measurement above was right about spans and
+blind to the kinds** — it asked whether a SPANNED literal could arrive and answered no, while
+the arm was already discarding two ordinary literal kinds that did.
+
+⚠ The first native run of that probe reported 0 and was VACUOUS — the site is exercised by
+only 6 of the 858 corpus programs, and none was in the 60-program native sample. The
+interpreter run had already fired 12 times, which is the only reason the zero was not
+believed. **When a site is rare, sample the programs that REACH it, not the first N.** (All
+six are dedicated `*-const-*` regression tests, so the feature is deliberately covered.)
 
 #### C — process / skills
 

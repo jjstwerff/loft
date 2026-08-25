@@ -36,27 +36,47 @@ fn main() {
   // ## Parsing a minimal function
   // The double braces '{{' and '}}' produce literal '{' and '}' inside a
   // Loft format string — needed here because the source code itself contains braces.
-  parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}");
+  assert(parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}") == 0,
+         "a minimal function parses cleanly");
   // ## Parsing a struct and function together
   // The parser validates the entire source snippet as one unit.
   // Both the struct definition and the function body are checked.
-  parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}");
+  assert(parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}") == 0,
+         "a struct and a function in one unit parse cleanly");
   // ## Parsing an enum
   // Both a plain variant and a struct variant (with fields) are recognised.
-  parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}");
+  assert(parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}") == 0,
+         "both a plain and a struct variant parse cleanly");
+  // ## Parsing several statements in a body
+  // A body is a sequence of statements; each call below is one.
+  assert(parser::parse("body", "fn m() {{ println(\"a\"); println(\"b\"); }}") == 0,
+         "a body of several statements parses cleanly");
+  // ## Parsing assignments and operators
+  // Every binary operator in the table above is accepted, including assignment.
+  assert(parser::parse("assign", "fn f() {{ t = 0; t += 1; }}") == 0,
+         "assignment and compound assignment parse cleanly");
   // ## Parsing a for loop and arithmetic
-  // This exercises the expression parser and range syntax.
-  parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}");
+  // This exercises the expression parser, range syntax, and a tail expression after a
+  // loop body — the shape where a speculative struct-literal parse has to give its
+  // tokens back so the loop can claim them.
+  assert(parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}") == 0,
+         "a for loop over a range parses cleanly");
   // ## Practical use: validating user-supplied code
   //
   // If your application lets users write Loft snippets (for scripting or
   // configuration), you can parse them before executing:
   //
   //   snippet = read_user_input();
-  //   parser::parse("user_code", snippet);
-  //   // If parse() emits errors, the snippet was invalid — show them to the user.
+  //   if parser::parse("user_code", snippet) > 0 {
+  //     // The snippet was invalid — the count is how many errors it had.
+  //   }
   //
   // Combine this with the lexer (see the Lexer page) when you need to extract
   // individual tokens from the source rather than validate all of the syntax.
+  // ## What a failed parse looks like
+  // The count is the whole point: a snippet that does not parse answers a NON-zero
+  // number, so a caller can tell the two apart. Watching the call not crash cannot.
+  assert(parser::parse("broken", "fn main() {{ println(\"hi\");") > 0,
+         "an unterminated body reports at least one error");
   println("parser test passed");
 }

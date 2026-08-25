@@ -224,6 +224,57 @@ inert, validated against an 87-cell boundary matrix *plus* the accumulated per-f
 regression suite, then landed gated off-by-default) is the worked example; see
 [plans/85-store-lifetime-retirement/ownership-analysis-gaps.md](plans/85-store-lifetime-retirement/ownership-analysis-gaps.md).
 
+## When the fix WIDENS what flows, sweeping the class is a precondition
+
+The consolidation above replaces many sites with one.  The narrower cousin — one shared
+helper is wrong, and the sites that call it inherit the defect — has a trap the precondition
+section does not cover: **a fix that turns a rare input into a common one arms every sibling
+you did not fix.**
+
+Worked example (2026-08-25, `Function::depend`).  Nine sites looped over a dependency list
+calling a setter that REPLACES rather than appends, so every list silently collapsed to its
+last element.  Six were the filed defect.  Fixing those six is precisely what makes lists of
+length > 1 reachable — and the other three sat downstream, ready to collapse the newly
+multi-element lists the fix had just made possible.  Sweeping the class was therefore a
+precondition for the six-site fix being safe, not a tidy-up afterwards.  *"I will get the
+others later"* is a regression scheduled for later.
+
+Two habits make that sweep reliable:
+
+* **Screen by the SETTER, not by the iterated expression.**  Grepping the obvious shape
+  (`for … in ….depend()`) found the six known sites and read as complete.  Screening instead
+  for *the replacing setter called anywhere inside a loop* found nine — including a
+  save/restore pair whose SAVE side looped correctly over the whole list while its RESTORE
+  side collapsed, an asymmetry that had been visible within its own six lines for as long as
+  it had existed.
+* **Prove the screen is not vacuous before believing its zero.**  Run it against
+  `git archive HEAD` and check it reproduces the count you already know by hand — here 9 on
+  the pre-fix tree, 0 after.  A screen that cannot find the bug you have already found is not
+  evidence that no others exist.  Same discipline as `make profile-corpus`.
+
+**A second instance, and it inverts the intuition** (2026-08-25, the `*Nullable` swap).  The
+same family had TWO duplicated lists: a swap table, duplicated *deliberately* with a comment
+saying why (*"kept inline… so the dispatch table stays grep-discoverable from both swap
+sites"*), and a wrapper-getter list that nothing defended.  **The defended duplicate stayed in
+sync across all three copies; the undefended one drifted** — one copy was extended past the
+integer wrappers and another kept the four it was born with.  So the lesson is not "never
+duplicate": it is that a duplicate kept on purpose still needs something other than memory
+keeping it honest.  The copy is now one function, and the remaining pair has a gate
+(`doc_hygiene::the_nullable_swap_tables_do_not_drift`) that pays for the discoverability trade.
+
+**And it drifted on a channel nobody was checking.**  Every cell of that matrix answers the
+same VALUE either way — the defended read yields `null` whether or not the swap applied — so a
+value-based probe of the exact 2×2 comes back clean and reads as a pass.  The difference is on
+the REPORT channel: a defended site that still logs.  Before building a matrix, name the
+channel each cell is scored on, and check the one the mechanism actually acts on; see
+[DEBUG.md](DEBUG.md) on captured-but-uncompared channels.
+
+And **bound the blast radius with a property, not with confidence**.  The fix above changes
+*which* deps a value carries but never *whether* it carries any, so every decision reading
+`depend().is_empty()` — at least three of them, each measured load-bearing — provably cannot
+move.  A one-line invariant of that kind is worth more to a reviewer than a green suite,
+because it says what the change *cannot* do rather than what happened not to break.
+
 ## Relation to the rest of the method stack
 
 - [GOALS.md](GOALS.md) Goal E — the destination this method walks toward;

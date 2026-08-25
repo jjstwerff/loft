@@ -197,6 +197,12 @@ impl Parser {
     ) -> Type {
         // '$' refers to the current record in struct field default expressions
         if name == "$" && matches!(self.data.def_type(self.context), DefType::Struct) {
+            // Noted HERE rather than at the field it selects: a `$.x` naming a field
+            // declared later in the struct does not resolve in pass 1, and a default that
+            // reads the record must be recognised as one in BOTH passes.
+            if self.init_field_tracking {
+                self.init_reads_record = true;
+            }
             *code = Value::Var(0);
             return Type::Reference(self.context, crate::data::Deps::none());
         }
@@ -992,6 +998,12 @@ impl Parser {
                         }
                         t = Type::Unknown(0);
                     } else {
+                        // Nothing in the table answers to this name.  In pass 2 that is a
+                        // typo and the diagnostics downstream say so; in pass 1 it is
+                        // usually a forward reference, and the caller parsing a stretch of
+                        // source needs to know one happened — see
+                        // `Parser::unresolved_names`.
+                        self.unresolved_names = self.unresolved_names.saturating_add(1);
                         *code = Value::Var(self.create_var(name, &Type::Unknown(0)));
                         t = Type::Unknown(0);
                     }
@@ -1609,9 +1621,7 @@ impl Parser {
         let db_tp = self.io_scalar_db_tp(val_type).unwrap_or(db_tp);
         let db_tp = self.checked_io_db_tp(db_tp, val_type, "write_file");
         let temp_var = self.vars.unique("wf", val_type, &mut self.lexer);
-        for d in val_type.depend() {
-            self.vars.depend(temp_var, d);
-        }
+        self.vars.depend_on_all(temp_var, &val_type.depend());
         let assign = v_set(temp_var, val);
         let var_ref = self.cl("OpCreateStack", &[Value::Var(temp_var)]);
         let write = self.cl(
@@ -2676,23 +2686,48 @@ impl Parser {
         out
     }
 
+    /// Read the flags of a `{value:spec}` placeholder, in whatever order they are
+    /// written.
+    ///
+    /// Order used to be fixed — alignment, then `+` — and a flag written out of that
+    /// order was simply left in the stream for the WIDTH expression to find: `{f:+<8.3}`
+    /// read `+`, then parsed `<8.3` as a comparison.  The interpreter rendered `0.5`
+    /// (no sign, no width, no precision) and the native backend emitted a comparison
+    /// between an i64 and an f64, so the program failed to compile with rustc errors
+    /// about loft's own internals.  Neither said the spec was the problem.
+    ///
+    /// Looping until a round consumes nothing is what makes the order not matter.  Each
+    /// flag is a distinct token, so a round that matches none of them has reached the
+    /// width — and a round that matches one has consumed it, which is what ends the loop.
     pub(crate) fn string_states(&mut self, state: &mut OutputState) {
-        if self.lexer.has_token("<") {
-            state.dir = -1;
-        } else if self.lexer.has_token("^") {
-            state.dir = 0;
-        } else if self.lexer.has_token(">") {
-            state.dir = 1;
-        }
-        if self.lexer.has_token("+") {
-            state.plus = true;
-        }
-        if self.lexer.has_token("#") {
-            // show 0x 0b or 0o in front of numbers when applicable
-            state.note = true;
-        }
-        if self.lexer.has_token(".") {
-            state.float = true;
+        loop {
+            let mut consumed = false;
+            if self.lexer.has_token("<") {
+                state.dir = -1;
+                consumed = true;
+            } else if self.lexer.has_token("^") {
+                state.dir = 0;
+                consumed = true;
+            } else if self.lexer.has_token(">") {
+                state.dir = 1;
+                consumed = true;
+            }
+            if self.lexer.has_token("+") {
+                state.plus = true;
+                consumed = true;
+            }
+            if self.lexer.has_token("#") {
+                // show 0x 0b or 0o in front of numbers when applicable
+                state.note = true;
+                consumed = true;
+            }
+            if self.lexer.has_token(".") {
+                state.float = true;
+                consumed = true;
+            }
+            if !consumed {
+                return;
+            }
         }
     }
 

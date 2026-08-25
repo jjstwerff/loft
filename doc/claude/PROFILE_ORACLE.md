@@ -3,16 +3,21 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN140 phase 0 — the oracle
+# The profiling oracle — what each instrument must say
 
-Written **before** any instrument, because it is the only step that can prove one
-*wrong* rather than merely exercise it. Each row below names a program whose hot
-spot is known in advance and states what the instrument must say about it. The
-machine-readable form is [`bench/profile_oracle.tsv`](../../../../bench/profile_oracle.tsv);
-`make profile-corpus` runs it and fails a row that stops holding.
+What `make profile-corpus` checks, and why each row is the row it is. Written
+**before** any instrument (@PLN140 phase 0), because stating the answer first is the
+only step that can prove a profiler *wrong* rather than merely exercise it — every
+trap this tooling has hit produced a **plausible** profile, not an obviously broken
+one, so an instrument that is merely run is not an instrument that is checked.
 
-The two roles do not substitute for each other (plan § "Why this earns its keep only
-at scale"): **benchmarks say the instrument is correct, consumers say it is usable.**
+Each row below names a program whose hot spot is known in advance and states what the
+instrument must say about it. The machine-readable form is
+[`bench/profile_oracle.tsv`](../../bench/profile_oracle.tsv); `make profile-corpus`
+runs it and fails a row that stops holding. The how — which switch, which report —
+is [PERFORMANCE.md § Profiling a run](PERFORMANCE.md).
+
+The two roles do not substitute for each other ([@PLN140](plans/140-semi-automatic-profiling/README.md)): **benchmarks say the instrument is correct, consumers say it is usable.**
 This file is only the first role.
 
 ## Reading the table
@@ -79,7 +84,7 @@ green corpus as full coverage:
 No benchmark can falsify arc C. Every allocation in `bench/` is reached by exactly
 one path, so "captured the path" and "printed the only path there is" produce
 identical output. The oracle for C is therefore **purpose-built**:
-[`bench/profile_oracle/alloc_paths.loft`](../../../../bench/profile_oracle/alloc_paths.loft)
+[`bench/profile_oracle/alloc_paths.loft`](../../bench/profile_oracle/alloc_paths.loft)
 allocates from one helper called down two chains at a 9:1 ratio, so the instrument
 must report two paths through the same source line at roughly that split. A report
 showing one path, or two at 5:5, is wrong in a way no `bench/` program could reveal.

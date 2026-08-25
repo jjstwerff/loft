@@ -59,6 +59,10 @@ pub struct Anchor {
   index: integer,
   line: integer,
   pos: integer,
+  // The START of the anchored token.  The current token is `data[start..index]`, so
+  // without this a revert can only land at its END — see `revert`.
+  start: integer,
+  scanned: Scanned = Unknown,
 }
 // Set keywords, these will never be identifiers.
 
@@ -215,6 +219,13 @@ fn scan(self: Lexer) {
     self.scanned = Integer;
     for _tn in 0..30 {
       l = self.data[self.index];
+      if l == '.' and self.data[self.index + 1] == '.' {
+        // `1..2` is a RANGE, not a float.  A `.` directly followed by another `.`
+        // belongs to the `..` / `..=` operator, so the NUMBER ends here — without this
+        // the scanner swallowed `1..2` whole as one `Float` token, and every range
+        // written without spaces failed to parse while `1 .. 2` was fine (loft#1092).
+        break;
+      }
       if l == '.' or l == 'e' or l == '-' { self.scanned = Float; } else if l == 'l' {
         self.scanned = Long;
       } else if l == 'x' || l == 'o' || l == 'b' {
@@ -372,15 +383,24 @@ pub fn comment_behind(self: Lexer) -> boolean {
 
 // Example: @LEX-002
 pub fn anchor(self: Lexer) -> Anchor {
-  Anchor { index: self.index, line: self.line, pos: self.pos }
+  Anchor { index: self.index, line: self.line, pos: self.pos, start: self.start,
+           scanned: self.scanned }
 }
 
 // Example: @LEX-002
 pub fn revert(self: Lexer, to: Anchor) {
+  // Restore the whole cursor and do NOT re-scan.  The anchored token spans
+  // `start..index`, so rewinding `index` alone and scanning forward landed on the token
+  // AFTER the one anchored — every speculative parse came back one token too far.  In
+  // `parser::object` that meant a `{` was consumed by the failed attempt and never
+  // given back, so `for i in xs {{ … }}` lost its body to a struct-literal guess and the
+  // block above claimed to leave the tokens for another rule while eating one
+  // (loft#1092).
   self.index = to.index;
   self.line = to.line;
   self.pos = to.pos;
-  self.scan();
+  self.start = to.start;
+  self.scanned = to.scanned;
 }
 
 pub fn get_line(self: Lexer) -> integer {

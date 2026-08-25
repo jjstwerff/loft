@@ -147,6 +147,73 @@ def audit_walkers():
 DISCRIM = re.compile(r"Value::([A-Za-z]+)\s*(?:\([^)]*\))?\s*(?:=>|\||\)\s*=)")
 
 
+def ir_value_variants():
+    """The variant names of the IR `Value` enum, read from `src/data.rs`.
+
+    `Value` is not one type in this crate: `host::Value` is a separate enum for the
+    host-call ABI (`Void` / `Bool` / `Int` / …) and has NO `Span` variant, so a site
+    matching on it can never be hidden by one.  Without this set those sites counted
+    as unpeeled `Span` hazards — four of them did — and the total is quoted as open
+    work, so an over-count is a bill someone pays in review.
+    """
+    src = open(os.path.join(ROOT, "src", "data.rs"), encoding="utf-8").read()
+    start = src.index("pub enum Value {")
+    depth, i = 0, src.index("{", start)
+    end = i
+    for j in range(i, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                end = j
+                break
+    names = set(re.findall(r"^\s{4}([A-Z][A-Za-z0-9]*)\s*[({,]", src[i:end], re.M))
+    if len(names) < 20:
+        raise SystemExit(f"ir_value_variants parsed only {len(names)} variants — the enum shape changed")
+    return names
+
+
+IR_VARIANTS = ir_value_variants()
+
+# `host::Value` shares `Float` / `Int` / `Text` with the IR enum, so intersecting against
+# the IR variant set is not enough on its own — a host site matching two of those three
+# still looks like an IR site.  `Void` / `Bool` / `Ref` exist ONLY on `host::Value`, so a
+# site naming one of them is deciding a host value and cannot be hidden by a `Span`.
+HOST_ONLY = {"Void", "Bool", "Ref"}
+
+TRAVERSAL_OPEN = re.compile(r"\.(any_node|for_each_child|for_each_child_mut)\(")
+
+
+def strip_traversal_closures(body):
+    """Remove `x.any_node(&mut |n| match n { … })` regions from a function body.
+
+    `Value::any_node` unwraps a `Span` BEFORE calling the predicate —
+    `if let Value::Span(b) = self { return b.1.any_node(pred) }` — and `for_each_child`
+    descends through one the same way.  So a match that IS such a closure's body can
+    never be handed a `Span`, and counting it as an unpeeled site is a false positive.
+    Measured: this is what made `hoist.rs::writes_store` (the vector-header hoist's
+    safety predicate) and `scopes::guard_escapes` look like hazards when neither can be.
+    """
+    out, i = [], 0
+    while True:
+        m = TRAVERSAL_OPEN.search(body, i)
+        if not m:
+            out.append(body[i:])
+            return "".join(out)
+        out.append(body[i : m.start()])
+        depth, j = 0, m.end() - 1  # sitting on the '('
+        while j < len(body):
+            if body[j] == "(":
+                depth += 1
+            elif body[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        i = j + 1
+
+
 def audit_unspan():
     """Sites that read a specific `Value` shape without seeing through `Span`."""
     total, handled, rows = 0, 0, []
@@ -157,9 +224,12 @@ def audit_unspan():
         if os.path.basename(path).endswith(skip):
             continue
         for name, start, body in functions(path):
-            specific = set(DISCRIM.findall(body)) - {"Span"}
+            named = set(DISCRIM.findall(strip_traversal_closures(body))) - {"Span"}
+            if named & HOST_ONLY:
+                continue  # a `host::Value` site — that enum has no `Span`
+            specific = named & IR_VARIANTS
             if len(specific) < 2:
-                continue  # not discriminating between shapes
+                continue  # not discriminating between shapes of the IR `Value`
             total += 1
             if ".unspan()" in body or ".unspan_mut()" in body or "Value::Span" in body:
                 handled += 1

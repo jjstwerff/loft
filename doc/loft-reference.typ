@@ -2652,7 +2652,12 @@ no-op; does not panic
 
 Note: '\#index' works on a sorted collection — it is a sequential counter that advances one per visited element (see the loop above). It is only 'index\<T\>' collections that reject '\#index' — use '\#count' there instead (see 11-index).
 
+=== Iterating a Key Range
+
+The range examples live in `main_ranges` below; run them here, because a file with a `main` runs only its `main`.
+
 ```rust
+  main_ranges();
 }
 ```
 
@@ -3437,7 +3442,8 @@ fn main() {
 The double braces '{{' and '}}' produce literal '{' and '}' inside a Loft format string — needed here because the source code itself contains braces.
 
 ```rust
-  parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}");
+  assert(parser::parse("hello", "fn main() {{ println(\"Hello World\"); }}") == 0,
+         "a minimal function parses cleanly");
 ```
 
 === Parsing a struct and function together
@@ -3445,7 +3451,8 @@ The double braces '{{' and '}}' produce literal '{' and '}' inside a Loft format
 The parser validates the entire source snippet as one unit. Both the struct definition and the function body are checked.
 
 ```rust
-  parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}");
+  assert(parser::parse("point", "struct Point {{ x: integer, y: integer }} fn origin() -> Point {{ Point {{ x: 0, y: 0 }} }}") == 0,
+         "a struct and a function in one unit parse cleanly");
 ```
 
 === Parsing an enum
@@ -3453,15 +3460,35 @@ The parser validates the entire source snippet as one unit. Both the struct defi
 Both a plain variant and a struct variant (with fields) are recognised.
 
 ```rust
-  parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}");
+  assert(parser::parse("shape", "enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}") == 0,
+         "both a plain and a struct variant parse cleanly");
+```
+
+=== Parsing several statements in a body
+
+A body is a sequence of statements; each call below is one.
+
+```rust
+  assert(parser::parse("body", "fn m() {{ println(\"a\"); println(\"b\"); }}") == 0,
+         "a body of several statements parses cleanly");
+```
+
+=== Parsing assignments and operators
+
+Every binary operator in the table above is accepted, including assignment.
+
+```rust
+  assert(parser::parse("assign", "fn f() {{ t = 0; t += 1; }}") == 0,
+         "assignment and compound assignment parse cleanly");
 ```
 
 === Parsing a for loop and arithmetic
 
-This exercises the expression parser and range syntax.
+This exercises the expression parser, range syntax, and a tail expression after a loop body — the shape where a speculative struct-literal parse has to give its tokens back so the loop can claim them.
 
 ```rust
-  parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}");
+  assert(parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}") == 0,
+         "a for loop over a range parses cleanly");
 ```
 
 === Practical use: validating user-supplied code
@@ -3470,13 +3497,20 @@ If your application lets users write Loft snippets (for scripting or configurati
 
 ```
 snippet = read_user_input();
-parser::parse("user_code", snippet);
-// If parse() emits errors, the snippet was invalid — show them to the user.
+if parser::parse("user_code", snippet) > 0 {
+  // The snippet was invalid — the count is how many errors it had.
+}
 ```
 
 Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate all of the syntax.
 
+=== What a failed parse looks like
+
+The count is the whole point: a snippet that does not parse answers a NON-zero number, so a caller can tell the two apart. Watching the call not crash cannot.
+
 ```rust
+  assert(parser::parse("broken", "fn main() {{ println(\"hi\");") > 0,
+         "an unterminated body reports at least one error");
   println("parser test passed");
 }
 ```
@@ -6289,6 +6323,15 @@ Functions for searching, transforming, and classifying text and character values
 Faster than comparing characters one at a time for a known prefix at `pos`. Example: \@STD-001
 
 ```rust
+pub fn char_slice(self: text, from: integer, to: integer) -> text
+```
+
+The characters of `self` from `from` up to (not including) `to` — a slice that counts CHARACTERS where `self\[a..b\]` counts BYTES.
+⚠ \*\*This is the cure for the commonest text bug in this stack.\*\*  `len(text)` counts characters while `self\[a..b\]` slices bytes, and loft snaps a byte cut outward to a character boundary — so a count computed from `len` and applied as a byte range fits FEWER characters than it measured.  The failure is not mojibake but something quieter: the text comes back SHORT, silently, and only when it is not ASCII, so every ASCII test stays green.  `"héllo"\[0..4\]` is `"hél"`; `"héllo".char\_slice(0, 4)` is `"héll"`.
+Use it wherever a character COUNT becomes a cut: fitting a label to a width, wrapping a line, a caret or a selection in a text field, truncating with an ellipsis.  Reach for `self\[a..b\]` only when the numbers came from a byte source — `find`, `size`, `byte\_at`.
+Negative bounds count from the end, as a byte slice's do (`char\_slice(-2, n)` is the last two characters); both ends clamp, and a reversed or empty range answers `""` rather than failing.
+
+```rust
 pub fn trim(both: text) -> text[both]
 ```
 
@@ -6569,10 +6612,11 @@ pub fn max_of < T: Ordered > (v: vector<T>) -> T?
 Largest element in a vector, or null when the vector is empty (\@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op \<). Example: \@STD-004
 
 ```rust
-pub fn sum < T: Addable > (v: vector<T>, init: T) -> T
+pub fn sum < T: Addable > (v: vector<T>, init: T? = null) -> T
 ```
 
-Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum(\[10, 20, 12\], 0) == 42 Example: \@STD-005
+Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, ""). Example: sum(\[10, 20, 12\], 0) == 42 Example: sum(\[10, 20, 12\]) == 42 Example: \@STD-005
+\@PLN102 arc C — `init` gained its default so `sum\_of(v)` can be REWRITTEN to `sum(v)`: `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the result, so while `init` was required the only `\#superseded` symbol loft ships had its fix rejected on every program (loft\#1003).  A literal default is not spellable here (`init: T = 0` is "expected T, got integer"), so it is the nullable-with-discharge form, which needs loft\#1016's per-monomorph `construct\_default(T)`.  Additive: every existing `sum(v, init)` call is unchanged.
 
 ```rust
 pub fn sum_of(v: vector<integer>) -> integer
@@ -6810,12 +6854,14 @@ pub fn store_durable_check(path: text) -> boolean fs#read
 ```
 
 Durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `\<path\>.dmeta` validates against the main file at `\<path\>` (signature, header CRC, payload length, payload CRC, tier\_id all OK).  Returns false on any failure or missing file.  Pair with `store\_durable\_seal` after a clean write session to record the new state.
+Desktop-only: the sidecar is built over memory-mapped files, so on the wasm targets this answers false — "nothing validates", which is the state that sends a caller down its rebuild branch (loft\#1063).
 
 ```rust
 pub fn store_durable_seal(path: text) -> boolean fs#update
 ```
 
 Write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store\_durable\_check` returns false → caller rebuilds.
+Desktop-only, like `store\_durable\_check`: on the wasm targets this answers false — the seal did not happen — so seal where the store is written and read it back with `store\_load` (loft\#1063).
 
 ```rust
 pub fn store_persist_bind(r: reference, path: text) -> boolean fs#update
@@ -6982,6 +7028,13 @@ pub fn store_load_keys(local: reference, path: text, keys: vector<integer>) -> i
 ```
 
 Plural form of `store\_load\_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same relocation rules as `store\_load\_key`. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] got = store\_load\_keys(tiles, "block.store", \[7, 13, 42\])   // got == 3
+
+```rust
+pub fn store_load_keys_text(local: reference, path: text, keys: vector<text>) -> integer fs#read
+```
+
+Plural form of `store\_load\_key\_text`, and the text twin of `store\_load\_keys`: fetch the given text keys' entries into `local` in ONE call, returning how many were found. Keys absent from the remote are skipped. Serves a `hash\<T\[k\]\>` and a `trie\<T\[k\]\>` alike, like the single-key form. loft\#1064.
+Looping `store\_load\_key\_text` is not the same call: each one opens its own reader, so a ring of twenty asset names re-fetches the same 64 KiB bucket-table page twenty times. This opens the reader once and shares its page cache — which is what makes it the PREFETCH call: ask for the ring at a load or level boundary, so no frame is ever the thing that discovers it needs an asset. art: hash\<Blob\[bl\_key\]\> = \[\] got = store\_load\_keys\_text(art, "pack.store", \["page/mobs", "hit.ogg"\])
 
 ```rust
 pub fn store_load_range(local: reference, path: text, lo: integer, hi: integer) -> integer fs#read

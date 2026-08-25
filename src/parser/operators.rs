@@ -1715,7 +1715,7 @@ impl Parser {
     /// nested sub-expressions keep trap semantics.  No-op if the Nullable
     /// variant isn't registered (defensive — should always be, via
     /// `default/01_code.loft`).
-    fn rewrite_outer_arith_to_nullable(code: &mut Value, data: &crate::data::Data) {
+    pub(crate) fn rewrite_outer_arith_to_nullable(code: &mut Value, data: &crate::data::Data) {
         // Helper: try to swap the call's def_nr to its Nullable peer.
         // Returns `true` if it found and applied a swap.
         fn try_swap(def_nr: &mut u32, data: &crate::data::Data) -> bool {

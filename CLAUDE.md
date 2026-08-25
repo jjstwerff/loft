@@ -74,7 +74,11 @@ necessarily the process the kernel kills. TESTING.md § Store-memory ceiling.
 **Under debug assertions a third bound applies:** the interpreter stops after `LOFT_MAX_OPS`
 operations (default 4e9, `0` = off) and prints the last sixteen ops as `function+offset: OpName` —
 reach for it, set LOW, when hunting a hang, because it names the loop a timeout can only time out
-in. Absent from every release build. It is a count, so it cannot tell a long run from a hung one:
+in. Absent from every release build. ⚠ **And absent from your ordinary debug build too** —
+`[profile.dev.package.loft] debug-assertions = false` in `Cargo.toml` strips it (and the other
+92 `#[cfg(debug_assertions)]` items in `src/`) from both `cargo build --bin loft` and the test
+binaries; flip that line and rebuild into a separate `--target-dir` to use it. TESTING.md § Hang
+guard has the recipe and the measurement. It is a count, so it cannot tell a long run from a hung one:
 at 100M it was tripping legitimate library tests and reporting them as infinite loops, which read
 the debug-assertions gate as known-red (loft#919). TESTING.md § Hang guard.
 
@@ -301,12 +305,19 @@ cross; a returned VIEW cannot be placed) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
 [BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
 
+**Networked runs:** `LOFT_NET_PROFILE=1|trace` reports socket operations by **margin**
+(a call that finished close to its deadline is a failure that has not happened yet) with
+wall-clock stamps that merge two processes' streams. It records at the sockets the RUNTIME
+owns — `engine_host`, `loft debug --serve`, placed-library workers; a networking LIBRARY
+joins by calling `loft::net_profile::time(…)` from its Rust bridge, and the armed-but-empty
+report says so rather than printing nothing (loft#1088). PERFORMANCE.md § LOFT_NET_PROFILE.
+
 **Diagnostics:** [DIAGNOSTICS.md](doc/claude/DIAGNOSTICS.md) the code index (`advice[avoidable-copy]`)
 + `--explain` fix lines — a code is a FROZEN public surface, and a new one lands with its row.
 
 **Testing / debug:** [TESTING.md](doc/claude/TESTING.md) framework/`LOFT_LOG`/LogConfig ·
 [DEBUG.md](doc/claude/DEBUG.md) tools + boundary-matrix runner · [CAVEATS.md](doc/claude/CAVEATS.md) edge cases ·
-[PERFORMANCE.md](doc/claude/PERFORMANCE.md) benchmarks · [CI_BUDGET.md](doc/claude/CI_BUDGET.md) what runs
+[PERFORMANCE.md](doc/claude/PERFORMANCE.md) benchmarks + profiling (its oracle: [PROFILE_ORACLE.md](doc/claude/PROFILE_ORACLE.md)) · [CI_BUDGET.md](doc/claude/CI_BUDGET.md) what runs
 when + the 20-min PR rule.
 
 **Quality / stability / formal:** [CODE.md](doc/claude/CODE.md) · [DOC_QUALITY.md](doc/claude/DOC_QUALITY.md) ·
@@ -485,7 +496,12 @@ picks *when*, a wall clock says *how much*, and the period is JITTERED because a
 samples a single phase of a periodic program and reports it as the whole) ·
 `LOFT_ALLOC_SITES=1` ranks live store BYTES by the loft line that allocated them, captured at
 the run's PEAK rather than at exit · `LOFT_ALLOC_PATHS=<ops>` adds the call paths that reached
-each allocation. `LOFT_PROFILE` / `LOFT_ALLOC_PATHS` also cover **test runs** (`loft test`,
+each allocation. **A program whose only exit is a signal — a server — reports through
+`LOFT_PROFILE_EVERY=<seconds>` (a report while running, surviving a hard kill), `kill -USR1`
+(dump and keep going, which profiles a WINDOW) or `kill -TERM`/Ctrl-C (dump, then leave):
+the report used to render at process exit, so the run you most want a profile of was the
+one that could not produce one (loft#1089). Handlers are installed only when the profiler
+is armed.** `LOFT_PROFILE` / `LOFT_ALLOC_PATHS` also cover **test runs** (`loft test`,
 `--tests`), merged into ONE report keyed by resolved `function` + `file:line` — each test
 compiles its own bytecode, so positions cannot be merged, only labels (loft#860).
 `LOFT_ALLOC_SITES` is program-only and says so under a suite instead of going quiet.

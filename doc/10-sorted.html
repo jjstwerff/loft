@@ -115,7 +115,10 @@
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
 <p>Note: <code>#index</code> works on a sorted collection — it is a sequential counter that advances one per visited element (see the loop above). It is only <code>index&lt;T&gt;</code> collections that reject <code>#index</code> — use <code>#count</code> there instead (see 11-index).</p>
-<pre><code>}</code></pre>
+<h2 id="iterating-a-key-range">Iterating a Key Range</h2>
+<p>The range examples live in <code>main_ranges</code> below; run them here, because a file with a <code>main</code> runs only its <code>main</code>.</p>
+<pre><code>  <span class="fn-call">main_ranges</span>();
+}</code></pre>
 <pre><code><span class="kw">struct</span> <span class="en">Word</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   score: <span class="ty"><a href="stdlib-types.html">integer</a></span>

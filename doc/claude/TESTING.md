@@ -1214,6 +1214,35 @@ last sixteen ops — each resolved to `function+offset: OpName`. That trail is t
 whole value of it: a timeout tells you a run did not finish, this tells you which
 loop it did not finish in.
 
+⚠ **"Debug-assertions only" does NOT mean "any debug build" — and by default that is
+every build you have.**  `Cargo.toml` carries
+
+```toml
+[profile.dev.package.loft]
+debug-assertions = false        # ~270x on the hot-path store guards
+```
+
+so the loft LIBRARY is compiled without them, and the guard is absent from the binary
+`cargo build --bin loft` produces AND from the test binaries.  Measured 2026-08-25 three
+ways: the panic message string is missing from `target/debug/loft` and from
+`target/debug/deps/wrap-*`; and an infinite loop under `LOFT_MAX_OPS=100000` runs until
+`LOFT_TIMEOUT` hard-kills it, where the same program on a build with the flag flipped
+panics with *"ran 100000 operations without finishing"*.
+
+To actually use it, flip that one line to `true` and rebuild — ideally into a separate
+`--target-dir`, so the main target tree is not invalidated:
+
+```bash
+sed -i 's/^debug-assertions = false/debug-assertions = true/' Cargo.toml   # revert after
+cargo build --bin loft --target-dir /tmp/loft-dbg
+LOFT_MAX_OPS=100000 /tmp/loft-dbg/debug/loft --interpret --path . prog.loft
+```
+
+(`--path .` because the stdlib is found relative to the binary.)  The same applies to
+every other `#[cfg(debug_assertions)]` item in `src/` — **93 of them**, including
+`check_arg_ref_allocs` and `check_ref_leaks`.  The store LEAK check is unaffected because
+it is not gated at all.
+
 A count cannot tell a long run from a hung one, which is the trap loft#919 walked
 into. The ceiling was 100M ops, two tests of the library suite legitimately execute
 more than that, and the only signal the guard had for "this is long" was the wording
@@ -2581,6 +2610,7 @@ stack, and the panic site appears.
 
 | Item | Section | Status |
 |---|---|---|
+| **Fenced examples in API doc comments are not executed** — an example in a `pub` item's doc comment is not run or asserted, so a doc can disagree with its code.  The mechanism is designed (@PLN121: extract → run both backends → gate → ship only what ran), but the **domain is empty**: measured 2026-08-25, **6 fenced examples in 1962 `pub` items** across the stdlib and all 8 library repos, none in a published package.  Building an extractor, runner, gate and registry field for six examples would be five mechanisms serving one file. | § Doc tests | 🔕 Deliberately not built.  **Trigger to revisit: re-run the count** — if a package starts writing fenced examples, @PLN121's steps 3–7 are still the plan.  The assert-less half shipped (`tests/doc_hygiene.rs::every_doc_page_asserts_something`). |
 | ~~**@P229b — Windows `pick_free_port` rebind race**~~ — **CLOSED 2026-05-29** via the v2 probe (PR #228).  Un-ignored `v2_single_client_completes_game` on `windows-latest`; CI showed it PASSING.  All 10 `multiplayer_v{2,3,5}.rs` `#[cfg_attr(target_os = "windows", ignore = "P229b…")]` ignores dropped in the follow-up.  The 2026-05-21 leading hypothesis (bind-then-drop race) was incorrect; @P229b was incidentally resolved in some recent Rust toolchain or transitive dep update.  Bug record: [PROBLEMS.md @P229](PROBLEMS.md). | — | ✅ Closed; row kept for the lesson — "don't apply unverified-from-Windows-output hypotheses blindly" stands. |
 
 ---

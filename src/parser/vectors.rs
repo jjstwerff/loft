@@ -2976,9 +2976,7 @@ impl Parser {
         if vec != u16::MAX {
             self.vars.depend(elm, vec);
         }
-        for on in Deps::frame(parent_tp.depend()) {
-            self.vars.depend(elm, on);
-        }
+        self.vars.depend_on_all(elm, &parent_tp.depend());
         elm
     }
 

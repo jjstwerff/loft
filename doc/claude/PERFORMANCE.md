@@ -66,6 +66,57 @@ different way. It cost a consumer one confused measurement. Redirect both (`> ou
 2>&1`) or keep stderr on the terminal. Stderr is deliberate: the profile must not land in
 the program's own output, where it would corrupt whatever reads it.
 
+### A program with no clean shutdown (loft#1089)
+
+The report renders at process **exit**, and a server has none: the operator sends
+`SIGTERM` and the process dies. So the one class of program you most want a profile of —
+a server under real load — was the class that could not give you one. Three ways in, all
+armed only when the profiler is:
+
+```
+LOFT_PROFILE=1 LOFT_PROFILE_EVERY=30 loft server.loft   # a report every 30 s, while running
+kill -USR1 <pid>      # dump now and KEEP RUNNING — profiles a WINDOW, not a lifetime
+kill -TERM <pid>      # dump, then leave (exit 143); SIGINT/Ctrl-C the same way
+```
+
+`LOFT_PROFILE_EVERY` is the one to reach for first: it needs no signal, and what has
+already been printed survives a hard kill. Each report covers the run **so far**, not the
+interval since the last one, so a series reads as a growing picture rather than as slices
+to add up. A window is what `SIGUSR1` is for — dump, drive the load you care about, dump
+again, and read the difference.
+
+The report is built from the samples on the running interpreter, resolved against the
+`Data` they were compiled from, so it can only be rendered from the execute loop: a
+signal raises the request and the next operation answers it. A process **idle** in a
+blocking read has no operation to answer at, so the report waits for the next request it
+serves — and for `SIGINT`/`SIGTERM` a second signal is the ordinary kill, never a hang.
+An unprofiled run installs no handlers at all, so ordinary shutdown behaviour is
+untouched.
+
+### `LOFT_NET_PROFILE` — what the network did (loft#1088)
+
+The third instrument that reports on a RUNNING program, beside CPU and memory. Its metric
+is **margin**, not duration: an operation that COMPLETED, well within its own success
+criteria but close enough to a deadline that a slower machine would have missed it, is
+what makes a networked test flake, and no other instrument reports it. Every event also
+carries wall-clock start and end, so two PROCESSES' streams merge on one timeline — which
+is the only way to answer *did the client connect before the server bound?*
+
+```
+LOFT_NET_PROFILE=1        # a summary by site at exit
+LOFT_NET_PROFILE=trace    # + one line per event, as it happens — reach for this when
+                          #   the ORDER of operations is the question
+```
+
+**It records at the sockets the RUNTIME owns** — `engine_host`'s kernel, the
+`loft debug --serve` browser server, and the wire to a placed library's worker. A
+networking LIBRARY opens its own sockets, and arming the switch does not reach them: its
+Rust bridge joins this report by calling `loft::net_profile::time(site, budget, || …)`
+around its own accept / read / write, which is what puts it on the same timeline with the
+same budgets. Armed with nothing recorded, the report says all of this rather than
+printing nothing — a silent instrument and a broken one look identical from outside, and
+that cost a consumer an investigation.
+
 ### Two profilers, and the driver picks
 
 **`perf` measures the engine — loft's own Rust.** For a `--native` run that is also your
@@ -207,7 +258,7 @@ reported the deepest frame), `09_matrix_mul`'s memory at the two lines that buil
 vectors. An instrument that fails a row is **wrong**, so that half is a gate. The share
 drift printed beside it never is: shares move with the machine, so the previous local
 capture is diffed rather than a committed baseline (@PLN140 open question 5). Rationale
-per row: `doc/claude/plans/140-semi-automatic-profiling/ORACLE.md`.
+per row: [PROFILE_ORACLE.md](PROFILE_ORACLE.md).
 
 ### Sample counts
 

@@ -445,3 +445,182 @@ fn main() {
         "clean run produced spurious runtime-event log; got {log:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Defended fault sites — the E-Report half of the `*Nullable` op split.
+//
+// These are NOT production-mode tests; they share this file only because the
+// machinery (script + log.conf + read the captured log) is already here.
+// ---------------------------------------------------------------------------
+
+/// Run a script under a plain (non-production) backend with a logger attached,
+/// and return the captured log.
+fn run_logged(name: &str, source: &str, native: bool) -> String {
+    let (script_path, log_path) = setup_prod_run(name, source);
+    let conf = script_path.parent().unwrap().join("log.conf");
+    let out = Command::new(loft_bin())
+        .arg(if native { "--native" } else { "--interpret" })
+        .arg("--log-conf")
+        .arg(&conf)
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft binary");
+    assert!(
+        out.status.success(),
+        "{name} ({}) did not run cleanly: {}",
+        if native { "native" } else { "interp" },
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(script_path.parent().unwrap());
+    log
+}
+
+/// A fault site the program DEFENDS must not report — for every element type.
+///
+/// `rewrite_defended_fault_sites` swaps a defended fault-prone op to its
+/// Nullable peer, which never calls `s.raise`, so the site stays silent while
+/// an undefended one reports.  The two defence spellings reach that swap by
+/// different routes: `v[i] ?? fb` through `rewrite_outer_arith_to_nullable`,
+/// and `x = v[i]; if x == null {…}` through the defended-fault-site pass.
+///
+/// Typed-vector indexing emits a type-specific getter WRAPPING the raw
+/// `OpGetVector` — `OpGetInt(OpGetVector(…), 0)` and analogues — and it is the
+/// inner op that raises, so the swap must descend through the wrapper.  The
+/// list of wrappers to descend through existed in two copies; @P356 extended
+/// one of them past the integer wrappers and the other kept the four it was
+/// born with, so a defended read of a `text` / `float` / `single` / `enum` /
+/// `character` / `boolean` vector reported while the identical defence over
+/// `vector<integer>` stayed silent.
+///
+/// ⚠ Asserted on the LOG, not on the value: every cell answers `null` either
+/// way, which is why a value-only probe of this exact matrix comes back clean.
+/// The element type is the axis — a single-type version of this test passes
+/// against the bug whichever type it picks, as long as that type is `integer`.
+#[test]
+fn a_defended_fault_site_reports_for_no_element_type() {
+    let source = "\
+fn main() {
+  iv: vector<integer> = [7];
+  tv: vector<text> = [\"a\"];
+  fv: vector<float> = [1.5];
+  sv: vector<single> = [1.5f];
+  cv: vector<character> = ['x'];
+  bv: vector<boolean> = [true];
+  a = iv[5] ?? -1;
+  print(\"{a}\\n\");
+  b = iv[5];
+  if b == null { print(\"b\\n\"); }
+  c = tv[5];
+  if c == null { print(\"c\\n\"); }
+  d = fv[5];
+  if d == null { print(\"d\\n\"); }
+  e = sv[5];
+  if e == null { print(\"e\\n\"); }
+  f = cv[5];
+  if f == null { print(\"f\\n\"); }
+  g = bv[5];
+  if g == null { print(\"g\\n\"); }
+}
+";
+    for native in [false, true] {
+        let log = run_logged("defended_sites", source, native);
+        assert!(
+            !log.contains("[index_out_of_bounds]"),
+            "a defended fault site reported ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
+/// The control cell: the same reads, UNDEFENDED, must still report.
+///
+/// Without this, the test above passes just as well if the swap is applied
+/// everywhere — or if reporting is switched off altogether — which would
+/// delete the distinction the split exists to draw rather than fix its drift.
+#[test]
+fn an_undefended_fault_site_still_reports_for_every_element_type() {
+    let source = "\
+fn main() {
+  tv: vector<text> = [\"a\"];
+  fv: vector<float> = [1.5];
+  cv: vector<character> = ['x'];
+  u = tv[5];
+  print(\"{u}\\n\");
+  w = fv[5];
+  print(\"{w}\\n\");
+  y = cv[5];
+  print(\"{y}\\n\");
+}
+";
+    for native in [false, true] {
+        let log = run_logged("undefended_sites", source, native);
+        let hits = log.matches("[index_out_of_bounds]").count();
+        assert_eq!(
+            hits,
+            3,
+            "an undefended fault site must report ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
+/// `(E-Report)` says "a following null-check", not "the very next statement".
+///
+/// An ordinary statement between the fault site and its guard must not cost the program its
+/// silence — the guard still owns the null, because nothing touched the value in between.
+#[test]
+fn a_null_check_after_an_unrelated_statement_still_owns_the_null() {
+    let source = "\
+fn main() {
+  tv: vector<text> = [\"a\"];
+  f = tv[5];
+  g = 1;
+  if f == null { print(\"{g}\\n\"); }
+}
+";
+    for native in [false, true] {
+        let log = run_logged("gap_then_check", source, native);
+        assert!(
+            !log.contains("[index_out_of_bounds]"),
+            "an intervening statement must not defeat the guard ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
+/// The other direction, and the one that matters more: widening "guarded" SUPPRESSES a
+/// diagnostic, so these three shapes must keep reporting.
+///
+/// Without them the scan above passes just as well if it stops requiring the check to be
+/// about the faulting value at all — which would silence real faults rather than fix a
+/// false one. Each cell breaks the guard differently: the null ESCAPES before the check,
+/// the check is about ANOTHER variable, and the variable is REASSIGNED before the check.
+#[test]
+fn a_null_that_escapes_before_its_check_still_reports() {
+    let source = "\
+fn main() {
+  tv: vector<text> = [\"a\"];
+  u = tv[5];
+  print(\"{u}\\n\");
+  if u == null { print(\"n1\\n\"); }
+  v2 = tv[5];
+  g = 1;
+  if g == 1 { print(\"n2\\n\"); }
+  w = tv[5];
+  w = \"x\";
+  if w == null { print(\"no\\n\"); } else { print(\"n3\\n\"); }
+}
+";
+    for native in [false, true] {
+        let log = run_logged("escaped_null", source, native);
+        let hits = log.matches("[index_out_of_bounds]").count();
+        assert_eq!(
+            hits,
+            3,
+            "a guard that does not own the null must not silence it ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}

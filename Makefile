@@ -1754,6 +1754,11 @@ ci-guard:
 	@# stale file that the next `kill -0` steps straight over.  A lock that
 	@# outlives its holder is worse than no lock — it fails runs that should
 	@# pass, and gets deleted by hand until nobody trusts it.
+	@# ⚠ That is what the liveness test is FOR, and for a while it did not do it: the
+	@# `kill -0` gated only the ancestor walk below, so a DEAD claim fell straight through
+	@# to the refusal with the pid still set.  A killed run then blocked every later gate
+	@# in the tree until someone removed the file by hand — the exact failure this comment
+	@# promises it prevents.  Clearing the claim is what makes the promise true.
 	@# ⚠ A claim held by one of OUR OWN ANCESTORS is not a competing run — it is the
 	@# wrapper that launched us.  `scripts/box-claim.sh make ci` writes the claim, then
 	@# `make ci` refused itself and exited 1; the failure was then invisible, because the
@@ -1761,7 +1766,8 @@ ci-guard:
 	@# a summary grep reads.  Measured 2026-08-21 — it produced a false green on a real
 	@# cherry-pick.  So walk the pid chain: a claim from an ancestor is ours.
 	@claim=$$(cat .ci-running 2>/dev/null); \
-	if [ -n "$$claim" ] && kill -0 "$$claim" 2>/dev/null; then \
+	if [ -n "$$claim" ] && ! kill -0 "$$claim" 2>/dev/null; then claim=""; fi; \
+	if [ -n "$$claim" ]; then \
 	    p=$$PPID; mine=0; \
 	    while [ "$$p" -gt 1 ]; do \
 	        [ "$$p" = "$$claim" ] && { mine=1; break; }; \

@@ -607,6 +607,39 @@ check_examples_selftest() {
 # issue body).  Two of the four rules below are ABSENCES — a scanner that gets keener
 # reads the documentation OF the convention as a use of it, which is silent drift in
 # the direction that always looks like more coverage.
+# @PLN141 Phase C follow-up — the online fallback stays a fallback.
+#
+# HERMETIC ON PURPOSE: it points the fetch at a host that cannot exist, so it asserts the
+# one property a network test could never assert reliably — that a run which CANNOT fetch
+# still warns instead of failing.  A gate that goes red when a DNS lookup fails stops
+# being run, and that failure mode only appears on the machine that has no network, which
+# is never the machine the test was written on.
+check_examples_online_selftest() {
+  say "=== Worked-example online fallback: a failed fetch is not a finding ==="
+  local d out rc; d=$(mktemp -d) || { red "  online selftest: cannot create a temp dir"; DRIFT=1; return; }
+  mkdir -p "$d/src"
+  # A citation to a REGISTERED acronym whose repo has no local checkout: the only path
+  # that reaches the online fallback at all.
+  printf '// Example: @RGX-901\nfn cites_a_foreign_tag() { }\n' > "$d/src/a.loft"
+  # `.invalid` is reserved by RFC 2606 and can never resolve, so the fetch fails on every
+  # machine and no packet reaches anyone's server.  A resolver that answers anyway (a
+  # captive portal) still leaves the test sound: whatever it returns is not a tag index,
+  # and the shape guard rejects it.
+  printf 'RGX\tno-such-repo-for-a-selftest\thttps://example.invalid/nope\tmain\n' > "$d/reg.tsv"
+  out=$( EXAMPLES_ONLINE=1 EXAMPLES_CITE_GATES=1 EXAMPLES_REGISTRY="$d/reg.tsv" \
+         EXAMPLES_REPO_ROOT="$d" EXAMPLES_CITE_ROOTS=src bash "$0" examples 2>&1 ); rc=$?
+  rm -rf "$d"
+  if printf '%s' "$out" | grep -q "unvalidated: @RGX-901" && \
+     ! printf '%s' "$out" | grep -q "dangling: @RGX-901" && [ $rc -eq 0 ]; then
+    green "  ok — an unreachable index warns, and the gate stays green"
+  else
+    red "  online selftest FAILED — an unreachable index must warn, never fail the gate"
+    printf '%s\n' "$out" | sed 's/^/      /' | head -6
+    red "      exit was $rc (want 0)"
+    DRIFT=1
+  fi
+}
+
 check_examples_cite_selftest() {
   say "=== Worked-example citation scanner: both sources, and what each ignores ==="
   local d; d=$(mktemp -d) || { red "  cite selftest: cannot create a temp dir"; DRIFT=1; return; }
@@ -685,16 +718,20 @@ examples_cited_in_tree() {
 #   dangling     cited, but no fn in the owning repo carries it → drift.
 #   duplicate    one tag on two fns in this repo → ambiguous → drift.
 #   unregistered the acronym isn't in the registry → drift (add its repo + url).
-#   unvalidated  a cross-repo tag whose repo has no local checkout → WARNING only
-#                (the link is still emitted); a local checkout is validated OFFLINE
-#                and preferred over any online lookup.
+#   unvalidated  a cross-repo tag this run could not check at all → WARNING only
+#                (the link is still emitted).  A local checkout is validated OFFLINE and
+#                stays preferred: it can see unmerged refs, which is what tells a PENDING
+#                MERGE from a real dangling citation, and a published index cannot.
 #
-# ⚠ A local checkout is validated at the branch it is PARKED ON, not at its default
-# branch — so parking a sibling library checkout on a branch that predates a tag turns
-# that tag `dangling` here, and loft's own gate goes red for something no loft file
-# says. Measured 2026-08-22: branching `loft-libs-assets` off `main` to add a package
-# left @MSH-002 / @MSH-005 dangling, because their worked examples live on an
-# unmerged branch. Push the work, put the sibling back on the branch you found it on.
+# With no checkout, `EXAMPLES_ONLINE=1` reads the owning repo's own published
+# `examples-index.tsv` and validates against that — the case a missing sibling used to
+# leave entirely unchecked.  Opt-in, because the default gate is hermetic and stays that
+# way.  A fetch that FAILS is not a finding (no network, no `curl`, a repo that has not
+# adopted the convention).  Neither is ABSENCE from a fetched index: the only fetchable
+# one is a committed `examples-index.tsv`, and LIBRARY_AUTHORING.md is retiring that file
+# because a copy committed beside the source cannot be regenerated where it sits.  So the
+# index may CONFIRM a tag and never REFUTE one — this path can turn `unvalidated` into
+# `ok`, and can never turn it red.  Guarded by `check_examples_online_selftest`.
 #
 # The `@AAA-###` shape (three letters, hyphen, three digits) is distinct from the
 # repo's other tag families (@F1, @P259, @PLN141) — none has that hyphen.
@@ -773,6 +810,41 @@ check_examples() {
     fi
     printf '%s' "$cf"
   }
+  # The owning repo's PUBLISHED tag index, fetched once per (repo, branch) — @PLN141
+  # Phase C follow-up.  Prints the cache path when the index is in hand, nothing when it
+  # is not.
+  #
+  # Only reached when there is NO local checkout: a checkout is validated OFFLINE and
+  # stays preferred, because it can see unmerged refs (the `pending` answer) and a
+  # published index cannot.  This is the case a missing sibling used to leave entirely
+  # unchecked.
+  #
+  # A FETCH FAILURE IS NOT A FINDING.  No network, no `curl`, a 404 on a repo that has
+  # not adopted the convention — none of those say anything about the citation, so each
+  # falls back to the same `unvalidated` warning as before.  Only a REACHABLE index that
+  # does not carry the tag is evidence, and that is what becomes a `dangling`.  A doc
+  # gate that goes red when a DNS lookup fails stops being run.
+  _online_defs() {
+    local repo="$1" br="$2" url="$3" key cf
+    [ "${EXAMPLES_ONLINE:-0}" -eq 1 ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+    key=$(printf 'online_%s@%s' "$repo" "$br" | tr '/.@:' '____'); cf="$cache/$key"
+    if [ ! -f "$cf" ]; then
+      # `examples-index.tsv` is the repo's own generated index — the same file
+      # `write_examples_index` produces here — so this reads what that repo published
+      # rather than re-deriving it from source we would have to clone.
+      local raw="${url%/}"; raw="${raw%.git}"
+      raw="${raw/#https:\/\/github.com\//https://raw.githubusercontent.com/}/$br/examples-index.tsv"
+      curl -fsSL --max-time 10 "$raw" -o "$cf.try" 2>/dev/null || { : > "$cf.fail"; return 1; }
+      # A repo that serves an error page rather than a 404 must not read as an index.
+      if ! grep -qE "^@[A-Z]{3}-[0-9]{3}\s" "$cf.try" 2>/dev/null; then
+        rm -f "$cf.try"; : > "$cf.fail"; return 1
+      fi
+      mv "$cf.try" "$cf"
+    fi
+    [ -f "$cf" ] || return 1
+    printf '%s' "$cf"
+  }
   local n_cited; n_cited=$(grep -cvE '^$' "$cited")
   local hits=0 t acr row repo url branch lpath def link
   while IFS= read -r t; do
@@ -794,7 +866,31 @@ check_examples() {
     elif [ "$repo" = "$host_repo" ]; then lpath="."
     fi
     if [ ! -d "$lpath" ]; then
-      yellow "  unvalidated: $t — no sibling checkout ../$repo; clone it to validate. link: $url"
+      # No checkout: try the repo's PUBLISHED index before giving up on the tag.
+      local oidx odef
+      if oidx=$(_online_defs "$repo" "$branch" "$url"); then
+        odef=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$oidx")
+        if [ -n "$odef" ]; then
+          link="$url/blob/$branch/$(printf '%s' "$odef" | sed 's/:\([0-9][0-9]*\)$/#L\1/')"
+          say "  ok  $t -> $link  (validated online against $repo@$branch)"
+          continue
+        fi
+        # ABSENCE IN THE INDEX IS NOT EVIDENCE, and this is the whole design.  The only
+        # fetchable index is a `examples-index.tsv` a library COMMITTED, and
+        # LIBRARY_AUTHORING.md is retiring exactly that file — CI builds it now, and a
+        # leftover committed copy "can only rot: you cannot regenerate it where it sits".
+        # A repo that stops regenerating it would start reporting tags it really carries
+        # as missing, and loft's gate would go red for something no loft file says — the
+        # failure this check's own header warns about.  So the index may CONFIRM a tag
+        # and never REFUTE one.
+        yellow "  unvalidated: $t — $repo@$branch's published index does not list it; it may be stale (CI builds that file now). Clone ../$repo to settle it. link: $url"
+        HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
+      fi
+      if [ "${EXAMPLES_ONLINE:-0}" -eq 1 ]; then
+        yellow "  unvalidated: $t — no checkout ../$repo and $repo@$branch published no readable index. link: $url"
+      else
+        yellow "  unvalidated: $t — no sibling checkout ../$repo; clone it, or set EXAMPLES_ONLINE=1 to check its published index. link: $url"
+      fi
       HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
     fi
     def=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$(_defs "$lpath" "$branch")")
@@ -1285,6 +1381,27 @@ check_libraries_progress() {
     yellow "  (in-tree trees only; the published distribution needs those snapshots)"
     have_pub=0
   fi
+  # SAY HOW OLD THE WORKLIST IS.  The package list comes from a local snapshot, and a
+  # snapshot omits every package that landed after it was built — which is exactly the set
+  # most likely to owe a review, because a new package has never had one.  Silent, that
+  # reads as "these libraries owe nothing" rather than "I did not look at them": a
+  # five-day-old snapshot hid four packages that each owed a verdict, and the report
+  # above them was confident and complete-looking (@PLN141).
+  if [ $have_pub -eq 1 ]; then
+    # `stat` twice, GNU then BSD: `date -r FILE` is the file's mtime on GNU and reads
+    # FILE as EPOCH SECONDS on macOS, so it answers a wrong age there rather than
+    # failing — the same shape of silent wrongness this warning exists to prevent.
+    local snap_epoch snap_days
+    snap_epoch=$(stat -c %Y "$unrel" 2>/dev/null || stat -f %m "$unrel" 2>/dev/null || echo 0)
+    snap_days=$(( ( $(date +%s) - snap_epoch ) / 86400 ))
+    [ "$snap_epoch" -gt 0 ] 2>/dev/null || snap_days=0
+    if [ "$snap_days" -ge 2 ]; then
+      yellow "  ⚠ the package list is a snapshot built ${snap_days} day(s) ago — anything published"
+      yellow "    or merged since is NOT on this worklist.  Refresh: make libcatalogue"
+    else
+      say "  (package list from a snapshot built ${snap_days} day(s) ago — make libcatalogue to refresh)"
+    fi
+  fi
 
   local wm pop; wm=$(mktemp); pop=$(mktemp)
   _libraries_watermarks > "$wm"
@@ -1423,7 +1540,7 @@ case "$CHECK" in
   refs)    check_refs ;;
   libs)    check_libs ;;
   examples) check_examples ;;
-  examples-selftest) check_examples_selftest; sep; check_examples_cite_selftest ;;
+  examples-selftest) check_examples_selftest; sep; check_examples_cite_selftest; sep; check_examples_online_selftest ;;
   examples-index) check_examples_index ;;
   emit-examples-index) emit_examples_index; exit 0 ;;
   examples-preflight)

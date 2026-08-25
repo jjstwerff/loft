@@ -1227,12 +1227,30 @@ impl Parser {
         t
     }
 
-    /// Plan-07 phase 4d.2 — walks `ops` looking for adjacent
-    /// `Set(x, fault_op); If(test_using_x, …)` pairs and swaps the
-    /// fault op's def_nr to its Nullable peer.  See the call site
-    /// in `parse_block` for the rationale.  The swap suppresses
-    /// BOTH the production-mode log entry AND the development-mode
+    /// Find `Set(x, fault_op)` statements whose null a FOLLOWING null-check owns, and swap
+    /// the fault op to its silent `*Nullable` peer.
+    ///
+    /// This is `(E-Report)`'s guarded half: *"a GUARDED site (the operand of `??` / a
+    /// following null-check) emits the silent `*Nullable` op and reports NOTHING (the guard
+    /// owns the null)"*.  The swap suppresses both the log entry and the development-mode
     /// halt, because the Nullable peers never call `s.raise`.
+    ///
+    /// The check need not be the very next statement — it needs only to come before anything
+    /// else touches the variable.  That is the soundness condition, and it is what the scan
+    /// below encodes: skip siblings that neither read nor write `x`, then require the first
+    /// one that DOES mention it to be an `if` testing it.  A statement that reads `x` first
+    /// has already consumed the null, so a check after it does not own it; a statement that
+    /// REASSIGNS `x` means the check tests a different value, and `reads_var` counts a write
+    /// target too, so both stop the scan at the same place.
+    ///
+    /// ⚠ Deliberately an UNDER-approximation.  Widening the notion of "guarded" SUPPRESSES a
+    /// diagnostic, so a wrong answer here goes silent, while a missed one is merely noisy —
+    /// the two failure directions are not equally bad and the predicate leans to the loud one.
+    /// Known shapes it still reports on, both recorded as deviations in
+    /// [`formal/operational.md`](../../doc/claude/formal/operational.md): a check with no
+    /// intermediate binding (`if v[i] == null`), where the fault site is inside the test
+    /// rather than before it; and a `match`, which lowers to a subject temp so the guard
+    /// reaches the value through a COPY rather than by naming it.
     pub(crate) fn rewrite_defended_fault_sites(&self, ops: &mut [Value]) {
         // Two-pass to avoid borrow conflicts.  First pass: collect
         // the indices of statements that need rewriting.  Second
@@ -1243,15 +1261,17 @@ impl Parser {
                 continue;
             };
             let var = *var;
-            // Look ahead for the next non-Line sibling.
+            // Skip siblings that do not mention the variable at all.
             let mut j = i + 1;
-            while j < ops.len() && matches!(ops[j].unspan(), Value::Line(_)) {
+            while j < ops.len()
+                && (matches!(ops[j].unspan(), Value::Line(_)) || !ops[j].reads_var(var))
+            {
                 j += 1;
             }
             if j >= ops.len() {
                 continue;
             }
-            // Sibling must be an `if` whose test mentions Var(x).
+            // The first sibling that mentions it must be an `if` TESTING it.
             let Value::If(test, _, _) = ops[j].unspan() else {
                 continue;
             };
@@ -1262,58 +1282,8 @@ impl Parser {
         }
         for i in to_rewrite {
             if let Value::Set(_, source) = ops[i].unspan_mut() {
-                Self::rewrite_outer_to_nullable(source, &self.data);
+                Self::rewrite_outer_arith_to_nullable(source, &self.data);
             }
-        }
-    }
-
-    /// Helper for `rewrite_defended_fault_sites` — same shape as
-    /// `parser/operators.rs::rewrite_outer_arith_to_nullable` but
-    /// recurses one level into wrapping getters
-    /// (`OpGetInt` / `OpGetByte` / `OpGetShortRaw` / `OpGetInt4`)
-    /// so integer-vector indexing's
-    /// `OpGetInt(OpGetVector(…), 0)` shape is also handled.
-    fn rewrite_outer_to_nullable(code: &mut Value, data: &crate::data::Data) {
-        fn try_swap(def_nr: &mut u32, data: &crate::data::Data) -> bool {
-            let name = data.def(*def_nr).original_name();
-            let nullable = match name.as_str() {
-                "AddInt" => "OpAddIntNullable",
-                "MinInt" => "OpMinIntNullable",
-                "MulInt" => "OpMulIntNullable",
-                "DivInt" => "OpDivIntNullable",
-                "RemInt" => "OpRemIntNullable",
-                "GetVector" => "OpGetVectorNullable",
-                "VectorRef" => "OpVectorRefNullable",
-                "TextCharacter" => "OpTextCharacterNullable",
-                // Plan-07 phase 4f.5 — float / single div / mod peers.
-                "DivFloat" => "OpDivFloatNullable",
-                "RemFloat" => "OpRemFloatNullable",
-                "DivSingle" => "OpDivSingleNullable",
-                "RemSingle" => "OpRemSingleNullable",
-                _ => return false,
-            };
-            let new_nr = data.def_nr(nullable);
-            if new_nr == u32::MAX {
-                false
-            } else {
-                *def_nr = new_nr;
-                true
-            }
-        }
-        let Value::Call(def_nr, args) = code.unspan_mut() else {
-            return;
-        };
-        if try_swap(def_nr, data) {
-            return;
-        }
-        let outer_name = data.def(*def_nr).original_name();
-        if matches!(
-            outer_name.as_str(),
-            "GetInt" | "GetInt4" | "GetByte" | "GetShortRaw"
-        ) && let Some(first_arg) = args.first_mut()
-            && let Value::Call(inner_nr, _) = first_arg.unspan_mut()
-        {
-            try_swap(inner_nr, data);
         }
     }
 

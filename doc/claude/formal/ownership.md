@@ -157,7 +157,8 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A open) — D-own-7
+OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A NARROWED 2026-08-25
+to a single cell — an inline-minting `match` arm — with every other cell fixed) — D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
@@ -177,10 +178,158 @@ line = if len(pts) > 2 { smooth_pts(pts, flags, false) } else { pts };
 ```
 
 The then-arm is a call returning a freshly-owned vector; the else-arm is a bare local.
-`arm_join_type` strips only the deps an arm MINTED (loft#978), and `joined_deps` then
-UNIONS, so `{} ∪ {pts}` = `{pts}` and `LOFT_VAR_TABLE` shows the binding typed
-`def deps=[pts]` — a BORROW.  On the owning path the fact is false.
+`LOFT_VAR_TABLE` shows the binding typed `def deps=[pts]` — a BORROW.  On the owning path
+the fact is false.
 
+⚠ **The mechanism this entry originally named is NOT the one in play, and that was
+falsified 2026-08-25.**  It read: *"`arm_join_type` strips only the deps an arm MINTED
+(loft#978), and `joined_deps` then UNIONS, so `{} ∪ {pts}` = `{pts}`."*  Two probes against
+the `if` shape above — the entry's own example — say otherwise:
+
+* removing the strip from `arm_join_type` entirely leaves the binding's deps **unchanged**;
+* a tracer in `arm_join_type` **never fires** for this shape at all.
+
+The `if`-expression joins through `merge_dependencies(&true_type, &false_type)`
+(`parser/control.rs`), which is a different path; `arm_join_type` serves the `match` arms.
+So an attempted fix aimed at `arm_join_type` — the obvious reading of the old text — would
+have changed code that never runs for the reported program.
+
+**The real mechanism, found 2026-08-25 by instrumenting `merge_dependencies` and then
+`LOFT_LOG=type_timeline:line`.**  The union is computed CORRECTLY and is then collapsed by a
+setter that replaces where its caller assumes it accumulates:
+
+```
+[MD]  a=[5] b=[0] -> [5, 0]                    merge_dependencies: the union is RIGHT
+[type_timeline] line  Unknown -> [5, 0]        change_var_type stores both
+[type_timeline] line  [5, 0]  -> [5]           depend  (variables/mod.rs:1797)
+[type_timeline] line  [5]     -> [0]           depend  — last one wins
+```
+
+(var 5 is `__ref_1`, the owning arm's mint dep; var 0 is `cp`.)
+
+`Function::change_var_type`'s early-return does
+
+```rust
+for on in type_def.depend() { self.depend(var_nr, on); }
+```
+
+and `Function::depend` is `Type::depending(on)` = `with_deps(&Deps::frame1(on))` — it
+REPLACES the whole list with `[on]`.  So a type carrying N deps collapses to its LAST one.
+**Six sites in `variables/mod.rs` share that loop.**
+
+**It is not join-specific, and that is the wider finding.**  A two-BORROW join loses one
+source outright:
+
+```loft
+pick = if c { a } else { b };   // pick def deps=[b] — the dep on `a` is gone
+```
+
+`pick` aliases `a` on the taken path, and nothing records it.
+
+⚠ **Still no symptom.**  The two-borrow shape was probed with the dropped source going out
+of scope first, under `LOFT_POISON` + `LOFT_STRICT_STORES`, and answers correctly — so
+something downstream keeps the dropped source alive.  The collapse is a real defect in the
+FACT with no demonstrated consequence, which is the same position Face A has always been in,
+now stated one layer deeper and at the right function.
+
+**FIXED 2026-08-25 — `Function::depend_all`.**  All six sites now route through one setter
+that keeps every incoming dep instead of the last:
+
+```rust
+fn depend_all(&mut self, var_nr: u16, type_def: &Type) { … }   // variables/mod.rs
+```
+
+Two properties make it a replacement rather than a widening, and both are guarded in
+`variables::loop_binding_dep_tests`:
+
+* a value borrowing two sources records BOTH (`a_binding_that_borrows_two_sources_records_both`);
+* an EMPTY incoming list is a **no-op, not a clear**
+  (`an_empty_incoming_dep_list_does_not_clear_the_established_ones`) — the loop it replaces
+  did nothing for an empty list, and *"the types agree, adopt the deps"* never meant *"and
+  drop what you had"*.
+
+It adopts the incoming list WHOLE; it is deliberately **not** a `Deps::union` with the
+variable's existing deps.  The loop replaced, so replacing-without-collapsing is the minimal
+change that fixes the loss and nothing else.  For the same reason it keeps dropping the
+`u16::MAX` share-marker (#328), which `depend`'s own guard has always skipped: two downstream
+decisions read that marker's presence (a struct field's layout via `deps.contains(&u16::MAX)`,
+and `deps == [u16::MAX]` as a predicate of its own), so carrying it through would have changed
+answers well outside this defect.
+
+⚠ **Guarded on the predicate, not through a program, and the reason is the entry above:**
+the collapse has no observable symptom, so a script-level guard would assert nothing while
+the fact is plainly wrong — and the fact is what every free-placement decision reads.  The
+two tests above it in that module carry the same disclaimer for their own reasons.
+
+Measured on the two shapes this entry names:
+
+```
+[vartable]  pick  vec<ref>  def deps=[a(0), b(2)]        ← was [b]
+[vartable]  line  vec<ref>  def deps=[__ref_1(5), cp(0)] ← was [cp]
+```
+
+**Sibling audit — the class, not the site.**  The collapse is *a loop over a dep list whose
+body calls a REPLACING setter*, so it was swept as that shape rather than as six known lines.
+21 loops in `src/` iterate a dep list; 18 only read it.  The other **three** had the identical
+defect and are fixed with the same `depend_on_all`:
+
+| site | shape |
+|---|---|
+| `parser/expressions.rs` (@PLN85 cluster V) | save/restore around `change_var` — **strips every dep in a correct loop and restores only the last** |
+| `parser/vectors.rs` | an element binding adopting its parent's deps |
+| `parser/objects.rs` | a temp adopting the written value's deps |
+
+The first is the one to notice: its SAVE side loops over the whole list and its RESTORE side
+collapses, so the asymmetry was visible in the same six lines the whole time.  **And the union
+fix makes these siblings more dangerous rather than less** — multi-dep lists were previously
+rare *because* the six sites kept flattening them, so fixing the six is what puts lists of
+length > 1 in front of the other three.  A class-wide sweep was therefore a precondition for
+the fix being safe, not a tidy-up after it.
+
+**The blast radius is bounded by a property worth checking rather than trusting.**  Writing
+`n` for the incoming list's length after the `u16::MAX` filter:
+
+| `n` | before | after |
+|---|---|---|
+| 0 | no-op | no-op |
+| 1 | `[d]` | `[d]` |
+| ≥ 2 | `[last]` | **`[all]`** |
+
+Before and after are non-empty in exactly the same cases, so **`depend().is_empty()` answers
+identically at every site**, and the fix changes *which* deps a value carries — never
+*whether* it carries any.  That matters because at least three decisions read that predicate
+AS AN OWNERSHIP TEST (`vector_needs_db`, `classify_vec_bind`, and the `[]`-means-owner reading
+in `minted_vars`), and each is measured load-bearing: neutralising the first breaks
+`tests/scripts/03-text.loft`, and inverting the second corrupts (#426).  None of them can move
+under this change.
+
+**How often the collapse actually fired, and where — this is the part that reflects on the
+register itself.**  Counted with one env-gated `eprintln` on the `n >= 2` arm, over all 858
+corpus programs: **48 events in 12 files** (47 of two deps, one of three).  So the fix is live
+rather than theoretical — the corpus was dropping a dep 48 times — and the whole suite passes
+either way, meaning nothing had come to depend on the collapse.
+
+The 12 files are the finding.  Almost every one is a regression guard written for an EARLIER
+ownership deviation:
+
+```
+11  h7-loop-retbuf-alias        7  1081-a-join-bound-to-a-returned-local
+ 9  848-value-block-local…      5  1051-tuple-destructure-ownership   (the 3-dep case)
+ 2  981-split-ownership-return  2  139-drop-cascade
+ 1  1019-join-owned-arm-owner   1  172-store-confinement-soundness
+```
+
+Those guards were passing while the fact underneath them was incomplete — which is what
+[README § deviations](README.md) means by an `OPEN: 0` line being only as strong as its oracle.
+They still pass now that the fact is complete, so none of them was ever *scored* on the dep
+list; they were scored on values, and the collapsed list was invisible to them.  Treat the
+earlier D-own zeros accordingly: they were measured over a corpus in which multi-source deps
+could not survive to be measured.
+
+⚠ `vectors.rs` keeps one pre-existing behaviour deliberately: a `self.vars.depend(elm, vec)`
+immediately above is still overwritten when the parent carries deps.  Whether `elm` should
+depend on BOTH `vec` and the parent's list is a separate question this fix does not answer —
+adopting the parent list whole changes only what the loop lost.
 **One fact, two questions — and it is only right for one of them.**  `joined_deps`'
 own doc-comment justifies the union as the reading "no arm can contradict: it can only
 keep a store alive longer than one arm needed, never free one another arm still holds."
@@ -192,11 +341,126 @@ needs no store" about a value that OWNS on the path that runs.  Conservative for
 liveness is anti-conservative for allocation.  Two named hazards meet here: an empty dep
 list read as *owned*, and one derived fact with two homes.
 
-**Face A — the allocation answer (OPEN).**  A borrow-typed slot owns no store, so a
+**Face A — NARROWED 2026-08-25 to one cell, by the `depend_all` fix above.**  The entry
+below predicted the closure would need *"a lowering change — making the join's own result
+carry a mint dep"*.  It did not: the lowering **already produced** that mint dep, and the
+collapse was discarding it.  With the collapse fixed, the filed shape reads
+
+```
+pf_line  def deps=[__ref_1(10), pf_cp(7)]   ← was [pf_cp]
+pf_wids  def deps=[__ref_2(12), pf_cw(8)]   ← was [pf_cw]
+```
+
+— the owning arm's mint marker beside the borrowing arm's dep, which is exactly what
+`arm_join_type`'s own comment calls *"what says which store the result owns"*.  The fact is
+no longer true-on-one-path-only for this shape.
+
+⚠ **One cell survives, and it makes the two spellings DISAGREE.**  Varying the owning arm
+between a CALL and an INLINE mint, across `if` and `match`:
+
+| owning arm | `if` | `match` |
+|---|---|---|
+| a call (`smooth(cp)`) | `[cp, __ref_1]` ✓ | `[cp, __ref_1]` ✓ |
+| an inline mint (`[for v in cp {…}]`) | `[cp, __vdb_3]` ✓ | **`[cp]`** ✗ |
+
+Values are correct in all four cells; only the FACT differs.  The `match` row is
+`arm_join_type` stripping the contributed arm's minted vars — which is why the call cell
+passes for the wrong reason: `minted_vars` **cannot see a mint inside a callee**, so the
+strip finds nothing to remove and the union survives by accident.  Move the mint into the
+arm and the strip engages.
+
+That strip is deliberate (loft#978: publishing an arm's mint as a dep made the return
+machinery read the result as a view of a local, and `deliver`'s return went to `["??"]`), so
+removing it trades this deviation for that one.  It is the entry's *"one derived fact, two
+homes"* hazard in its sharpest form: the strip is RIGHT for the delivery question and WRONG
+for the ownership question, and one dep list answers both.  **Face A stays OPEN for the
+inline-mint `match` arm only**, pending a way to separate those two readings.
+
+**Face A — the allocation answer (the original statement).**  A borrow-typed slot owns no store, so a
 whole-value assignment into it has nowhere to land.  The false fact reduces to ~55 lines — a
 `for` over a vector of structs whose vector fields are copied into locals, then the mixed join
 — reproducing `pf_line def deps=[pf_cp]` and `pf_wids def deps=[pf_cw]` exactly as filed.
 No wrong answer or crash is yet attributed to it; it is a false FACT looking for its symptom.
+
+**Symptom hunt, 2026-08-25 — the fact REACHES its site, and still nothing breaks.**
+Re-reproduced in ~20 lines (`LOFT_VAR_TABLE` shows `line def deps=[cp]` for
+`line = if len(cp) > 2 { smooth(cp) } else { cp }`).  Instrumenting `vector_needs_db`
+confirms the decision is reached and answers with the false fact: `[VNDB] line deps=1 →
+false`, i.e. *no backing store allocated*.  So these probes are not vacuous — they arrive at
+the named site, take the branch the false fact selects, and are still correct:
+
+| probed shape | result |
+|---|---|
+| whole-value reassign into the joined slot (`line = other()`) | correct, source intact |
+| build a comprehension into it (`line = [for p in cp {…}]`) — the `op == "=" && !needs_db` → `OpClearVector` path, which builds into the EXISTING store | correct, **source and `cp` both intact** |
+| append after that reassign | correct |
+| 40 rounds under the leak gate + `LOFT_STORES=timeline` | 4 allocs / 2 frees, **no leak** |
+
+⚠ **`depend().is_empty()` is not an ownership test, and that is sharper than the union
+story.** Printing the dep NAMES at that site separates two cases the emptiness test
+conflates:
+
+```
+[VNDB2] out    deps=["__vdb_1"]   ← dep on its OWN mint var: it OWNS a store already
+[VNDB2] result deps=["__vdb_1"]
+[VNDB2] shapes deps=["__vdb_1"]
+[VNDB2] line   deps=["cp"]        ← dep on ANOTHER LOCAL: a borrow
+```
+
+`minted_vars`' own doc states the first reading: *"`[]` lowers to `OpDatabase(__vdb_N, …)`
+and the value then types as a dep on `__vdb_N`, which says I own this store — the opposite
+of the borrow a dep normally records."*  So the list carries THREE meanings, not two: empty
+(no store yet), a mint dep (owns one), a local dep (borrows one).  `vector_needs_db` reads
+only emptiness, and answers "needs no store" for the mint case correctly and for `line`
+correctly-by-accident.
+
+(An earlier note here said the false answer was "the well-trodden branch" because the other
+vars reach it the same way.  That was wrong: they reach it with a MINT dep, which is a
+different case with a correct answer.  `line` is the only anomaly in the run.)
+
+**The fix direction the rules make sayable.** This is `O-Proxy` and `O-Oracle` meeting:
+`vector_needs_db` asks an OWNERSHIP question (*do I own a store?*) using the dep list, while
+`joined_deps`' union answers a LIVENESS question (*what must stay alive?*).  The obvious
+closure is for the allocation site to read `O-Oracle` instead of the proxy.
+
+⚠ **That closure was attempted 2026-08-25 and is STRUCTURALLY UNAVAILABLE at that site.**
+`O-Oracle` (`use_analysis::ownership_of`) classifies from `data.def(d_nr).code` — a
+POST-PARSE analysis over a finished body.  `vector_needs_db` runs inside the parser, which
+(measured) has **no current-def handle at all** and **never calls the oracle**: every one of
+its 20-odd consumers lives in `scopes` / `codegen` / `generation` / `ownership_cfg`.  There is
+no def_nr to pass and no completed body to classify.
+
+Two further measurements bound the problem:
+
+* **The proxy term is load-bearing.**  Neutralising `depend().is_empty()` in
+  `vector_needs_db` breaks `tests/scripts/03-text.loft` — it cannot simply be dropped.
+* **The false fact reaches that site and still does not decide the allocation.**  Instrumented,
+  `line` arrives as `deps=1 → false` ("no backing store"); yet the emitted IR shows
+  `OpDatabase(__vdb_2)` at the reassignment repointing `line` to a FRESH store, so the
+  borrowed one is never cleared.  Something downstream allocates regardless, which is why
+  no probed shape bites.
+
+**The second-fact route was attempted next, and the blocker is placement, not machinery.**
+The flag has to be SET where the mixed join is visible and READ where the var is known, and
+no single point has both:
+
+* the join sites (`control.rs`, six of them) build a `result_type` and have **no destination
+  var** — the binding happens later, at the assignment;
+* the bind site has the var and the joined type, but the union has already erased which arm
+  owned, and the arms' TYPES are gone — a structural re-check of the IR cannot recover it
+  either, because the owning arm here is a bare CALL and `minted_vars` sees no mint (the
+  mint is inside the callee);
+* carrying the flag on `Deps` would travel correctly but **does not survive the store
+  round-trip** — `ir_schema` reconstructs a dep list as `Deps::unknown(vec![…])`, so a
+  warm-loaded program from the startup cache would lose it and answer differently from a
+  cold one.  A correctness flag that a cache drops is worse than none.
+
+So the flag wants to be set at the join and read at the allocation, and the two are separated
+by a bind that discards the distinguishing information.  Closing Face A means first giving the
+join a way to reach the binding — most plausibly by making the join's own result carry a mint
+dep (the `["__vdb_N"]` form above already MEANS "owns"), which is a lowering change rather
+than a flag.  Face A stays OPEN pending that design, with the placement constraints above
+recorded so the next attempt does not re-derive them.
 
 ⚠ **loft#1082's panic was NOT this, and is now CLOSED elsewhere.**  Measured in a scratchpad
 copy of the `drawing` package: replacing BOTH joins with imperative `for`-append loops — either

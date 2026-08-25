@@ -203,7 +203,7 @@ webfont that arrives after the first frame draws is a fallback nobody was told a
 they do not — before the wasm compile. The failure it replaces is silent: the page
 registers one family, the program asks for another, text draws in a generic face and
 nothing anywhere says so. Full reference:
-[plans/146-content-delivery/FONTS.md](plans/146-content-delivery/FONTS.md).
+[HTML_EXPORT.md](HTML_EXPORT.md).
 
 ### `[[embed]]` — the file a browser page carries
 

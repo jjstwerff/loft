@@ -2,7 +2,7 @@
 # known in advance.  Written before the instruments existed; `make profile-corpus`
 # checks it.  A row that stops holding is a regression in the PROFILER, not in the
 # program.  Rationale, and what this corpus cannot prove:
-#   doc/claude/plans/140-semi-automatic-profiling/ORACLE.md
+#   doc/claude/PROFILE_ORACLE.md
 #
 # 06_newton_sqrt carries no `line` column on purpose: its two hot lines sit at 50.1 % and
 # 47.9 %, too close to pin a winner run to run.  (It could not run under --interpret at all

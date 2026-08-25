@@ -1263,6 +1263,48 @@ impl Function {
         }
     }
 
+    /// Give `var_nr` EVERY dep the incoming type carries.
+    ///
+    /// ⚠ Not a loop over [`Self::depend`], and that distinction is the whole point:
+    /// `depend` REPLACES the list (`Type::depending` → `with_deps(Deps::frame1(on))`), so
+    /// iterating it keeps only the LAST dep.  A value borrowing two sources — the arms of
+    /// `pick = if c { a } else { b }` — then records one of them and loses the other, and
+    /// the lost source is not known to be borrowed by anything.
+    ///
+    /// An EMPTY incoming list is a no-op rather than a clear, which is what the loop it
+    /// replaces did: "the types agree, adopt the deps" never meant "and drop what you had".
+    fn depend_all(&mut self, var_nr: u16, type_def: &Type) {
+        self.depend_on_all(var_nr, &type_def.depend());
+    }
+
+    /// Give `var_nr` every dep in `on`, for a caller that already holds the list.
+    ///
+    /// The slice-taking half of [`Self::depend_all`] — same contract, same reason to exist.
+    /// Reach for it wherever a loop would otherwise call [`Self::depend`] once per element:
+    /// the SAVE side of a save/restore pair loops correctly over the whole list, and a
+    /// restore that collapses to the last element is the asymmetry to look for.
+    pub(crate) fn depend_on_all(&mut self, var_nr: u16, on: &[u16]) {
+        if var_nr == u16::MAX {
+            return;
+        }
+        // `u16::MAX` is a real entry in a dep list — the #328 share-marker — and [`Self::depend`]
+        // has always skipped it, so the loops this replaces dropped it too.  Keep dropping it:
+        // two downstream decisions read the marker's PRESENCE (`deps.contains(&u16::MAX)` for a
+        // struct field's layout, `deps == [u16::MAX]` as its own predicate), so preserving it
+        // here would change answers well outside the collapse this fixes.
+        let incoming: Vec<u16> = on.iter().copied().filter(|d| *d != u16::MAX).collect();
+        match incoming.len() {
+            0 => (),
+            1 => self.depend(var_nr, incoming[0]),
+            _ => {
+                let cur = &self.variables[var_nr as usize].type_def;
+                let new_tp = cur.with_deps(&crate::data::Deps::frame(incoming));
+                self.trace_type_change(var_nr, &new_tp, "depend_on_all");
+                self.variables[var_nr as usize].type_def = new_tp;
+            }
+        }
+    }
+
     #[track_caller]
     pub fn depend(&mut self, var_nr: u16, on: u16) {
         if on != u16::MAX {
@@ -1777,9 +1819,7 @@ impl Function {
         if adopt_elem_width {
             self.trace_type_change(var_nr, type_def, "change_var_type(#663 element width)");
             self.variables[var_nr as usize].type_def = type_def.clone();
-            for on in type_def.depend() {
-                self.depend(var_nr, on);
-            }
+            self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
         // @P376 — assigning the `Never` poison (an errored struct construction,
@@ -1793,9 +1833,7 @@ impl Function {
         let var_tp = &self.variables[var_nr as usize].type_def;
         let never_into_unknown = matches!(type_def, Type::Never) && var_tp.is_unknown();
         if !never_into_unknown && (type_def.is_unknown() || var_tp.is_equal(type_def)) {
-            for on in type_def.depend() {
-                self.depend(var_nr, on);
-            }
+            self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
         // loft#1073 — the same rule as the `type_def.is_unknown()` arm above, one level
@@ -1818,9 +1856,7 @@ impl Function {
             && !crate::data::Data::type_has_unresolved(var_tp)
             && crate::data::Data::type_has_unresolved(type_def)
         {
-            for on in type_def.depend() {
-                self.depend(var_nr, on);
-            }
+            self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
         // @PLN25 (N-Decl): `Optional(τ)` and `τ` share sentinel storage, so storing a
@@ -1837,9 +1873,7 @@ impl Function {
             // `inner.is_equal` fail and change_var wrongly rejected `text? ← text?`.
             && (inner.is_equal(type_def.base()) || matches!(type_def, Type::Null))
         {
-            for on in type_def.depend() {
-                self.depend(var_nr, on);
-            }
+            self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
         // @PLN25 (N-Decl) composed with a TUPLE — element-wise (loft#1034).
@@ -1874,9 +1908,7 @@ impl Function {
                 .zip(got.iter())
                 .all(|(w, g)| Self::decl_accepts(w, g))
         {
-            for on in type_def.depend() {
-                self.depend(var_nr, on);
-            }
+            self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
         // @PLN25 DN6 (N-Join): an INFERRED local first assigned a bare `null`, then a
@@ -1908,9 +1940,7 @@ impl Function {
             let widened = Type::optional(type_def.clone());
             self.trace_type_change(var_nr, &widened, "change_var_type(N-Join)");
             self.variables[var_nr as usize].type_def = widened;
-            for on in type_def.depend() {
-                self.depend(var_nr, on);
-            }
+            self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
         // Allow assigning an iterator (vector slice) to a vector variable
@@ -3387,6 +3417,59 @@ mod loop_binding_dep_tests {
         assert!(
             f.tp(again).deps_ref().is_some_and(|d| !d.is_empty()),
             "a dep already established must not be dropped by a later depless type"
+        );
+    }
+
+    /// D-own-8 — a value that borrows TWO sources must record BOTH.
+    ///
+    /// `pick = if c { a } else { b }` aliases whichever arm runs, so the binding's dep list
+    /// is the union.  `Function::change_var_type` used to adopt it with
+    /// `for on in type_def.depend() { self.depend(var_nr, on); }`, and `depend` REPLACES
+    /// the list (`Type::depending` → `with_deps(Deps::frame1(on))`) — so the loop kept only
+    /// the LAST dep and the other source was recorded nowhere.
+    ///
+    /// ⚠ Asserted on the predicate, not through a program, for the reason the two tests
+    /// above give and one more of its own: the collapse has no observable symptom.  Probed
+    /// with the dropped source going out of scope first, under `LOFT_POISON` and
+    /// `LOFT_STRICT_STORES`, the answer is correct — something downstream keeps it alive.
+    /// A script-level guard would therefore assert nothing, while the FACT is plainly
+    /// wrong, and the fact is what every free-placement decision reads.
+    #[test]
+    fn a_binding_that_borrows_two_sources_records_both() {
+        let mut lexer = Lexer::default();
+        let mut f = Function::new("t", "t.loft");
+        let one = Type::Vector(Box::new(Type::Float), Deps::frame1(3));
+        let v = f.loop_variable("pick", &one, &mut lexer);
+
+        // The join's union: this value borrows BOTH 3 and 4.
+        let both = Type::Vector(Box::new(Type::Float), Deps::frame(vec![3, 4]));
+        f.change_var_type(v, &both, &crate::data::Data::new(), &mut lexer);
+
+        let deps = f.tp(v).depend();
+        assert!(
+            deps.contains(&3) && deps.contains(&4),
+            "a two-source borrow must keep both deps, got {deps:?} — the lost one is a \
+             store nothing records as borrowed"
+        );
+    }
+
+    /// The complement, so the fix cannot be written as "always widen": an EMPTY incoming
+    /// dep list leaves the established deps alone.  The loop this replaced did nothing for
+    /// an empty list, and "the types agree, adopt the deps" never meant "and drop what you
+    /// had" — clearing here would free a store the binding still views.
+    #[test]
+    fn an_empty_incoming_dep_list_does_not_clear_the_established_ones() {
+        let mut lexer = Lexer::default();
+        let mut f = Function::new("t", "t.loft");
+        let with_dep = Type::Vector(Box::new(Type::Float), Deps::frame1(3));
+        let v = f.loop_variable("held", &with_dep, &mut lexer);
+
+        let bare = Type::Vector(Box::new(Type::Float), Deps::none());
+        f.change_var_type(v, &bare, &crate::data::Data::new(), &mut lexer);
+
+        assert!(
+            f.tp(v).depend().contains(&3),
+            "a depless incoming type must not clear an established dep"
         );
     }
 }

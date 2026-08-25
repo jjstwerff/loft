@@ -367,6 +367,12 @@ value-const value that escapes via a local (`x = t.v; x[i]=…`), a function ret
 type-carried const, deferred to Phase 3.
 (@PLN40; doc/claude/plans/40-const-fields/const-model-phase2.md.)
 
+Defaults are applied in DECLARATION order, and `$` reads the record as it stands at that
+moment. A field the construction site supplies is already written, whichever order the two
+are declared in — which is what makes the `Object` example below work. A field left to its
+OWN default is not: `struct S { a: integer = $.b, b: integer = 2 }` gives `a = 0`, because
+`b`'s default has not run yet. Declare the field being read first.
+
 In default/computed expressions, `$` refers to the record:
 ```
 struct Object {
@@ -547,15 +553,19 @@ loft warns when a constant's initialiser calls a user function or a stdlib
 function marked `#impure`. Set `LOFT_NO_CONST_EFFECT` to silence it.
 
 A **vector** constant is different: it is pre-built once into the constant store and
-referenced, not re-run. Its elements are built from their literal fields, so they must
-be **flat** — scalars and text, and structs of those (`ITEMS = [It { a: 3, b: 4 }]`).
+referenced, not re-run. Its elements are built from their fields, so they must be
+**flat** — scalars and text, and structs of those (`ITEMS = [It { a: 3, b: 4 }]`).
+A field value may be computed from things already known at compile time, and is folded
+before the element is built: `[BASE + 1, BASE * 2]`, `[-5]`, `["a" + "b"]` all work.
 
-Two limits on what an initialiser may be, each rejected with the working idiom named:
+Three limits on what an initialiser may be, each rejected with the working idiom named:
 a **struct-valued** constant (`P = Point { … }`), because a record cannot be
-materialised at each use site; and a vector constant whose element holds a **nested
+materialised at each use site; a vector constant whose element holds a **nested
 record** — an inner collection, or a struct/enum field (`NEST = [[7], [8]]`,
 `WS = [W { v: [2, 3] }]`) — because that data lives in a store of its own that no
-field write describes. Wrap either in a zero-argument function.
+field write describes; and a vector constant with an element value that is only known
+at **run time** (`[seven(), 42]`), because there is nothing to pre-build. Wrap any of
+them in a zero-argument function.
 
 Text initialisers such as `A = "x" + "y";` and `A = "p{1 + 1}q";` are fine. An
 all-literal one is folded to a single literal, so it is not rebuilt per use.
@@ -1244,12 +1254,14 @@ Both `"..."` and `` `...` `` strings support format specifiers using `{...}`:
 "Oct: {n:o}"             // octal
 "Bin: {n:b}"             // binary
 "Padded: {n:+4}"         // width 4, always show sign
+"Signed float: {f:+.3}"  // `+` applies to float and single too
 "Zero-padded: {n:03}"    // width 3, zero-padded
 "Float: {f:4.2}"         // width 4, 2 decimal places
 "Left: {s:<5}"           // left-aligned width 5
 "Right: {s:>5}"          // right-aligned
 "Center: {s:^7}"         // center-aligned
 "{x:j}"                  // JSON output
+// The flags before the width may be written in any order: `{f:+<8.3}` == `{f:<+8.3}`.
 "{x:#}"                  // pretty-printed multi-line output
 ```
 

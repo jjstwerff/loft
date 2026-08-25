@@ -141,7 +141,12 @@ and any inline example still match what the code does **now**? Doc edits are XS 
 
 From the *uncited* public functions, pick the ones a reader "knows exists but
 cannot use from the signature alone" — the ratchet's rule (@PLN141 § Scope
-discipline). Author a worked example for **one or two per pass** (a tagged test,
+discipline).  **This step is where @PLN141's tail lives now that the plan is
+closed:** a package that lands after a rollout owes a verdict like any other, and
+step 1's "owe a worked-example verdict" list is what surfaces it.  ⚠ That list is
+built from a local snapshot, so a stale one omits exactly the newest packages —
+the aid states its age and warns past two days; refresh with `make libcatalogue`
+before trusting the worklist. Author a worked example for **one or two per pass** (a tagged test,
 or a citation to a real consumer call site). The ratchet only goes up; there is
 no sweep, and a function whose use is self-evident is left alone.
 

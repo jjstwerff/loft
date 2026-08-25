@@ -1621,3 +1621,105 @@ fn o_proxy_frees_consult_the_override() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+/// @PLN121 step 2 — a doc page that RUNS and asserts nothing proves nothing.
+///
+/// `tests/docs/*.loft` are the pages `gendoc` renders, and their whole claim is that
+/// the doc cannot disagree with the code because the doc is generated from executed
+/// source.  Execution alone does not carry that claim: a page that calls its subject
+/// and checks no result has demonstrated that the call does not crash, and nothing
+/// else — while rendering identically to a page that proves its output.  That is the
+/// worst shape for a mechanism whose entire value is trustworthiness, and it is
+/// invisible from the rendered page.
+///
+/// Measured when this landed: 33 pages, one hole — `16-parser.loft` called
+/// `parser::parse` five times and asserted nothing.
+///
+/// **Counted over the whole FILE, not over `fn main`.** Two pages delegate from `main`
+/// to `test_*` / `show_*` helpers that do the asserting (17 and 28 asserts), and a
+/// `main`-only rule reports both as holes — a lint whose false positives are the
+/// idiomatic shape gets silenced rather than fixed.  A page is a hole only when
+/// NOTHING in it asserts.
+#[test]
+fn every_doc_page_asserts_something() {
+    let mut silent = Vec::new();
+    let dir = std::path::Path::new("tests/docs");
+    let mut pages = 0;
+    for entry in std::fs::read_dir(dir).expect("tests/docs is readable") {
+        let path = entry.expect("dir entry").path();
+        if !path.is_file() || path.extension().is_none_or(|e| e != "loft") {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path).expect("page is readable");
+        // An `@IGNORE`d page is not run, so it cannot be asked to prove anything.
+        if body.contains("@IGNORE") {
+            continue;
+        }
+        pages += 1;
+        // `assert` covers the plain form and `Test::advice()`-style helpers alike;
+        // `@EXPECT_ERROR` is a page whose CLAIM is the diagnostic, which the harness
+        // checks for it.
+        if !body.contains("assert") && !body.contains("@EXPECT_ERROR") {
+            silent.push(path.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    assert!(pages >= 30, "expected the doc corpus, found {pages} pages");
+    assert!(
+        silent.is_empty(),
+        "these doc pages run and assert nothing, so they prove only that the code does \
+         not crash — and they render exactly like a page that proves its output:\n  {}\n\
+         Add an assert on the result each example produces, or mark the page \
+         @EXPECT_ERROR if the diagnostic IS its claim.",
+        silent.join("\n  ")
+    );
+}
+
+/// The two `try_swap` dispatch tables in `parser/operators.rs` must stay identical.
+///
+/// `rewrite_outer_arith_to_nullable` and `rewrite_subtree_to_nullable` each carry their own
+/// copy of the base-op → Nullable-peer table, and the second one says why in its own comment:
+/// *"kept inline (no shared helper) so the dispatch table stays grep-discoverable from both
+/// swap sites."*  That is a deliberate trade, and this test is what pays for it — a duplicate
+/// kept for discoverability still has to be kept in agreement by something other than memory.
+///
+/// It is worth a gate because the sibling list in this family DID drift: the wrapper-getter
+/// list to descend through had a third copy in `parser/control.rs`, @P356 extended one copy
+/// past the integer wrappers, and the other kept the four it was born with — so a defended
+/// read of a non-integer vector reported while `vector<integer>` stayed silent, on both
+/// backends.  That copy is now gone (the defended-fault-site pass calls the canonical
+/// function), which leaves these two tables as the remaining duplication.
+#[test]
+fn the_nullable_swap_tables_do_not_drift() {
+    let src = std::fs::read_to_string("src/parser/operators.rs").expect("read operators.rs");
+    let mut tables: Vec<Vec<String>> = Vec::new();
+    for (idx, _) in src.match_indices("fn try_swap(") {
+        let rest = &src[idx..];
+        let end = rest
+            .find("_ => return false,")
+            .expect("try_swap body has no default arm");
+        let mut arms: Vec<String> = Vec::new();
+        for line in rest[..end].lines() {
+            let t = line.trim();
+            if t.starts_with('"') && t.contains("=>") {
+                arms.push(t.trim_end_matches(',').to_string());
+            }
+        }
+        tables.push(arms);
+    }
+    assert_eq!(
+        tables.len(),
+        2,
+        "expected exactly two try_swap tables in operators.rs; found {}. \
+         If one was added or removed, update this gate deliberately.",
+        tables.len()
+    );
+    assert!(
+        !tables[0].is_empty(),
+        "extracted an EMPTY table — the gate would pass vacuously; the arm shape must have changed"
+    );
+    assert_eq!(
+        tables[0], tables[1],
+        "the two Nullable swap tables have drifted; they are duplicated on purpose for \
+         grep-discoverability, so they must agree entry for entry"
+    );
+}

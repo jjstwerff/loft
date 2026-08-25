@@ -55,6 +55,14 @@ fn substitute_var(val: &Value, var_nr: u16, replacement: &Value) -> Value {
 /// - Non-finite float → int cast → `None`
 #[must_use]
 pub fn const_eval(val: &Value, data: &Data) -> Option<Value> {
+    // `Value::unspan`'s doc makes this an obligation: "every second-pass site that
+    // pattern-matches a specific Value variant must call `code.unspan()` first".  The arms
+    // below discriminate on `Call` / `If` / the literal variants, so a `Span` wrapper sends
+    // the value to `_ => None` and the fold is skipped.  The parser callers already unspan
+    // their own argument; what they cannot reach is the RECURSION here, and sub-expressions
+    // carry their own spans.  Measured over the 858-program corpus: 1000 spanned values
+    // arrive, 998 would not fold anyway, 2 are folds being lost.
+    let val = val.unspan();
     match val {
         Value::Int(_) | Value::Long(_) | Value::Float(_) | Value::Single(_) | Value::Boolean(_) => {
             Some(val.clone())
@@ -131,6 +139,37 @@ fn fold_op(name: &str, args: &[Value]) -> Option<Value> {
         ("OpNot", [Value::Boolean(a)]) => Some(Value::Boolean(!a)),
         _ => None,
     }
+}
+
+/// Fold an all-literal text expression to the string it spells, or `None` when some part
+/// of it is only known at run time.
+///
+/// `"x" + "y"` lowers to a block that builds its value in a WORK BUFFER —
+/// `{ OpClearText(w); OpAppendText(w, "x"); OpAppendText(w, "y"); w }` — so the value is
+/// not in the tree as a literal even when every piece of it is one.  Callers that must
+/// end up with a literal (a text constant, which is pasted at each use; a constant-store
+/// element, which is written with `set_str`) fold it here.
+#[must_use]
+pub fn fold_text_block(val: &Value, data: &Data) -> Option<String> {
+    let Value::Block(bl) = val.unspan() else {
+        return None;
+    };
+    let clear = data.def_nr("OpClearText");
+    let append = data.def_nr("OpAppendText");
+    let mut out = String::new();
+    for op in &bl.operators {
+        match op.unspan() {
+            // The buffer reset and the trailing read of it carry no text.
+            Value::Call(d, args) if *d == clear && args.len() == 1 => {}
+            Value::Var(_) => {}
+            Value::Call(d, args) if *d == append && args.len() == 2 => match args[1].unspan() {
+                Value::Text(t) => out.push_str(t),
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]

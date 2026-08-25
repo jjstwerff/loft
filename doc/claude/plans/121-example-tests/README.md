@@ -7,8 +7,74 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — design complete, nothing implemented.** Tracked as
-[@PLN121](https://github.com/loft-lang/plans/issues/121).
+**CLOSED 2026-08-25 — step 1 measured the corpus and FALSIFIED steps 3–7.** Step 2 is
+built and shipped; the rest is a `## Open work` row, exactly as this plan said it should
+become if the measurement came out this way.
+
+### Step 1, measured
+
+Fenced examples in doc comments, over the whole ecosystem:
+
+| corpus | `pub` items | documented | **fenced example** |
+|---|---|---|---|
+| stdlib `default/*.loft` | 252 | 208 | **6** |
+| loft in-tree `lib/` | 180 | 104 | **0** |
+| `loft-libs-core` | 155 | 135 | **0** |
+| `loft-libs-graphics` | 457 | 386 | **0** |
+| `loft-libs-net` | 96 | 75 | **0** |
+| `loft-libs-game` | 151 | 92 | **0** |
+| `loft-libs-world` | 581 | 387 | **0** |
+| `loft-libs-assets` / `-plugins` / `-docs` | 90 | 51 | **0** |
+| **total** | **1962** | **1438** | **6** |
+
+**Six fenced examples in 1962 `pub` items — 0.3 %, all six in one stdlib file
+(`07_reflect.loft`, `04_stacktrace.loft`, `06_json.loft`), none in any published
+package.** The plan's own falsifier: *"if almost nobody writes fenced examples, the
+feature has no corpus and the plan should stop here."* It fired.
+
+The 606 doc comments that are code-SHAPED are not a counter-argument — E8 is explicit
+that heuristic detection over them must never run, so they are not a corpus either.
+
+**So steps 3–7 do not get built.** An extractor, a runner, a gate, a registry field and a
+compat corpus for six examples would be five mechanisms serving one file, and every one
+of them a place for the invariant to be re-asserted — the brittleness this plan was
+shaped to avoid.
+
+### Step 2, built
+
+The assert-less lint ships as `tests/doc_hygiene.rs::every_doc_page_asserts_something`.
+It was independent of every step after it, which is why it survives their falsification.
+
+Counted over the whole FILE rather than over `fn main`: two pages delegate to `test_*` /
+`show_*` helpers that do the asserting, and a `main`-only rule reports both as holes — a
+lint whose false positives are the idiomatic shape gets silenced rather than fixed.
+
+**It found one hole in 33 pages, and the hole was worth the lint.** `16-parser.loft` ran
+`parser::parse` five times and asserted nothing — and `parser::parse` returned `void`, so
+the page had nothing it *could* assert. E2 had surfaced an API gap, not a lazy page.
+`parse` now answers its error count, and the page asserts it. What that turned up:
+
+- **Two of the page's four documented claims were false.** The first assertion ever added
+  to it failed. `enum S {{ C {{ r: float }}, R {{ w: float, h: float }} }}` did not parse
+  — the demo parser accepted `;` between variant fields but loft uses `,` — and the body
+  `{{ t = 0; for i in 1..=n {{ … }} t }}` did not either, because a statement ending in
+  its own block was still required to carry a trailing `;`. Both fixed in `lib/parser.loft`.
+- **A third gap is filed, not fixed:** the demo parser does not parse an assignment
+  statement (`fn f() {{ t = 0; }}` answers 1) —
+  [loft#1092](https://github.com/loft-lang/loft/issues/1092). That is its expression
+  layer, well past this plan, and the page now says the parser handles a SUBSET rather
+  than claiming otherwise.
+
+That is the whole argument for E2 in one page: it executed for a long time, printed
+`parser test passed`, and two of the things it claimed were untrue.
+
+### What remains — an `## Open work` row, not a plan
+
+**If fenced examples ever become common, revisit.** The invariant is right and the
+design above is sound; the domain is empty. The trigger is a measurement, not a feeling:
+re-run the step 1 count, and if a package writes them, steps 3–7 are still the plan.
+
+The steps below are kept for that case.
 
 ## Goal
 

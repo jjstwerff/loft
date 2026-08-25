@@ -3304,10 +3304,12 @@ extern crate loft;"
                 continue;
             };
             let elem_tp = (**elem_tp_box).clone();
-            let values = crate::compile::extract_literal_values_public(def.code(), self.data);
-            if values.is_empty() {
+            // Refused at the declaration when it cannot be pre-built (`parse_constant`
+            // asks the same question), so a failure here has already been reported.
+            let Ok(values) = crate::compile::extract_literal_values_public(def.code(), self.data)
+            else {
                 continue;
-            }
+            };
             let vec_struct_name = format!("main_vector<{}>", elem_tp.name(self.data));
             let vec_struct_dnr = self.data.def_nr(&vec_struct_name);
             if vec_struct_dnr == u32::MAX {
@@ -3335,32 +3337,47 @@ extern crate loft;"
                 // grouping `build_const_vectors` writes, from the same extractor.
                 for (offset, val) in element {
                     let at = format!("rec.pos + {offset}");
+                    // One arm per field kind, exhaustively — the interpreter's
+                    // `build_const_vectors` writes the same bytes from the same list.
                     match val {
-                        crate::data::Value::Int(v) => {
+                        crate::compile::ConstField::Int(v) => {
                             writeln!(
                                 w,
                                 "            db.store_mut(&rec).set_int(rec.rec, {at}, {v}_i64);"
                             )?;
                         }
-                        crate::data::Value::Long(v) => {
+                        crate::compile::ConstField::Long(v) => {
                             writeln!(
                                 w,
                                 "            db.store_mut(&rec).set_long(rec.rec, {at}, {v}_i64);"
                             )?;
                         }
-                        crate::data::Value::Float(v) => {
+                        crate::compile::ConstField::Float(v) => {
                             writeln!(
                                 w,
                                 "            db.store_mut(&rec).set_float(rec.rec, {at}, {v}_f64);"
                             )?;
                         }
-                        crate::data::Value::Single(v) => {
+                        crate::compile::ConstField::Single(v) => {
                             writeln!(
                                 w,
                                 "            db.store_mut(&rec).set_single(rec.rec, {at}, {v}_f32);"
                             )?;
                         }
-                        crate::data::Value::Text(v) => {
+                        crate::compile::ConstField::Bool(v) => {
+                            let byte = i32::from(*v);
+                            writeln!(
+                                w,
+                                "            db.store_mut(&rec).set_byte(rec.rec, {at}, 0, {byte}_i32);"
+                            )?;
+                        }
+                        crate::compile::ConstField::Char(v) => {
+                            writeln!(
+                                w,
+                                "            db.store_mut(&rec).set_u32_raw(rec.rec, {at}, {v}_u32);"
+                            )?;
+                        }
+                        crate::compile::ConstField::Text(v) => {
                             let esc = v.replace('\\', "\\\\").replace('"', "\\\"");
                             writeln!(
                                 w,
@@ -3369,7 +3386,6 @@ extern crate loft;"
                                  store.set_u32_raw(rec.rec, {at}, s_pos); }}"
                             )?;
                         }
-                        _ => {}
                     }
                 }
                 writeln!(w, "            db.record_finish(&cvr, &rec, {vec_tp}, 0);")?;

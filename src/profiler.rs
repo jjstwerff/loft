@@ -48,7 +48,8 @@
 //!   backend is `perf`'s, and `scripts/profile.sh` routes to it.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 
 /// How many innermost frames a recorded path keeps.
 ///
@@ -432,6 +433,16 @@ pub struct Profiler {
     pub alloc_sampled: u64,
     /// `(site pc, call path) → (sampled allocations, stores)`.
     alloc_paths: HashMap<(u32, Vec<u32>), (u64, u64)>,
+
+    /// How often to render a report WHILE running (`LOFT_PROFILE_EVERY=<seconds>`), and
+    /// when the next one is due.  `None` unless asked for.
+    ///
+    /// The report renders at process exit, and a server has no exit that runs it — the
+    /// operator's `kill` is the only way out, so the run you most want a profile of is
+    /// the one that cannot produce one (loft#1089).  A periodic report needs no signal
+    /// and survives a hard kill, because what was already printed is already out.
+    flush_every: Option<Duration>,
+    next_flush: Instant,
 }
 
 impl Profiler {
@@ -452,6 +463,13 @@ impl Profiler {
         } else {
             0
         };
+        // Seconds, not ops: the thing being waited for is wall-clock time, and an
+        // idle server's op count barely moves.
+        let flush_every = std::env::var("LOFT_PROFILE_EVERY")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|n| *n > 0)
+            .map(Duration::from_secs);
         let mut jitter = Jitter::new();
         let first_tick = jitter.next(interval);
         let first_alloc_tick = if alloc {
@@ -477,7 +495,25 @@ impl Profiler {
             alloc_events: 0,
             alloc_sampled: 0,
             alloc_paths: HashMap::new(),
+            flush_every,
+            next_flush: now + flush_every.unwrap_or(Duration::ZERO),
         })
+    }
+
+    /// Whether a periodic report is due, re-arming the timer when it is.
+    ///
+    /// Asked once per SAMPLE rather than once per op: the timer only matters for a
+    /// long-running program, and one that is running at all is being sampled.
+    pub fn periodic_flush_due(&mut self) -> bool {
+        let Some(every) = self.flush_every else {
+            return false;
+        };
+        let now = Instant::now();
+        if now < self.next_flush {
+            return false;
+        }
+        self.next_flush = now + every;
+        true
     }
 
     /// Whether CPU sampling is armed (as opposed to allocation paths alone).
@@ -610,6 +646,84 @@ fn tail(frames: &[u32]) -> Vec<u32> {
 /// `NAME=<n>` as a count, or `default` when the variable is set without a usable
 /// number.  A typo must not silently pick a rate nobody asked for, so an
 /// unparseable value is reported once.
+/// What a profiled program should do before its next operation.
+///
+/// A profile is rendered from data that lives on the interpreter's own stack — the
+/// samples on the running `State`, resolved against the `Data` they were compiled from —
+/// so nothing outside the execute loop can render one.  A signal handler therefore
+/// cannot print the report; it can only say that one is wanted, which is what this
+/// answers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Flush {
+    /// Nothing asked for.
+    None,
+    /// Render the report and keep running.
+    Report,
+    /// Render the report, then leave with this exit code.
+    ReportAndExit(i32),
+}
+
+/// 0 = nothing pending, 1 = report, 128 + signal = report and exit.
+static PENDING: AtomicU8 = AtomicU8::new(0);
+
+/// Async-signal-safe: one relaxed store, nothing else.
+#[cfg(unix)]
+extern "C" fn on_signal(sig: libc::c_int) {
+    let want = if sig == libc::SIGUSR1 {
+        1
+    } else {
+        // 128 + signal is the shell's own convention for "died of this signal", and it
+        // is what the exit code becomes.
+        u8::try_from(128 + sig).unwrap_or(129)
+    };
+    PENDING.store(want, Ordering::Relaxed);
+}
+
+/// Arm the signals a program with no clean shutdown needs to be profilable.
+///
+/// A server's only exit is the operator's `kill`, so the report that renders at process
+/// exit is the one report it can never produce — and a server under load is the run you
+/// most want a profile of (loft#1089).  `SIGUSR1` dumps and keeps running, which is what
+/// profiles a WINDOW rather than a lifetime; `SIGINT` and `SIGTERM` dump and leave.
+///
+/// Installed only when the profiler is armed, so an ordinary run's shutdown is exactly
+/// what it was.  `SA_RESETHAND` on the two terminating signals is the escape hatch: the
+/// report is rendered from the execute loop, so a process that is idle in a blocking
+/// read has no operation to render it at, and the SECOND signal is then the ordinary
+/// kill rather than a hang.
+#[cfg(unix)]
+pub fn install_signal_flush() {
+    // SAFETY: `sigaction` with a handler that performs one relaxed atomic store.
+    unsafe {
+        for &(sig, reset) in &[
+            (libc::SIGUSR1, false),
+            (libc::SIGINT, true),
+            (libc::SIGTERM, true),
+        ] {
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = on_signal as *const () as libc::sighandler_t;
+            // No `SA_RESTART`: a blocking read returns `EINTR` instead of resuming, so a
+            // waiting program comes back to the loop and can render.
+            act.sa_flags = if reset { libc::SA_RESETHAND } else { 0 };
+            libc::sigemptyset(&raw mut act.sa_mask);
+            libc::sigaction(sig, &raw const act, std::ptr::null_mut());
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn install_signal_flush() {}
+
+/// Take whatever a signal asked for, leaving nothing pending.
+#[must_use]
+pub fn take_pending() -> Flush {
+    match PENDING.swap(0, Ordering::Relaxed) {
+        0 => Flush::None,
+        1 => Flush::Report,
+        code => Flush::ReportAndExit(i32::from(code)),
+    }
+}
+
 fn env_count(name: &str, default: u32) -> u32 {
     let Ok(v) = std::env::var(name) else {
         return default;

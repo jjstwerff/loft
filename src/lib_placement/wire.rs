@@ -843,7 +843,10 @@ impl Worker {
     /// reported with the library name, because the operator's next question is
     /// always which library failed to place.
     pub fn connect(name: &str, address: &str) -> io::Result<Worker> {
-        let stream = std::net::TcpStream::connect(address).map_err(|e| {
+        let stream = crate::net_profile::time("placement/connect", None, || {
+            std::net::TcpStream::connect(address)
+        })
+        .map_err(|e| {
             io::Error::other(format!(
                 "library '{name}' declares placement = \"remote\" but {address} could \
                  not be reached: {e}"
@@ -1199,7 +1202,8 @@ fn put_message(w: &mut impl std::io::Write, parts: &[&[u8]]) -> Result<(), Strin
         msg.extend_from_slice(&(p.len() as u32).to_le_bytes());
         msg.extend_from_slice(p);
     }
-    w.write_all(&msg).map_err(|e| e.to_string())?;
+    crate::net_profile::time("placement/write", None, || w.write_all(&msg))
+        .map_err(|e| e.to_string())?;
     w.flush().map_err(|e| e.to_string())
 }
 
@@ -1211,7 +1215,8 @@ fn put_message(w: &mut impl std::io::Write, parts: &[&[u8]]) -> Result<(), Strin
 /// an out-of-memory kill.
 fn get_message(r: &mut impl std::io::Read, parts: usize) -> Result<Vec<Vec<u8>>, String> {
     let mut len = [0u8; 4];
-    r.read_exact(&mut len).map_err(|e| e.to_string())?;
+    crate::net_profile::time("placement/read_len", None, || r.read_exact(&mut len))
+        .map_err(|e| e.to_string())?;
     let total = u32::from_le_bytes(len) as usize;
     if total > MAX_MESSAGE_BYTES {
         return Err(format!(
@@ -1219,7 +1224,8 @@ fn get_message(r: &mut impl std::io::Read, parts: usize) -> Result<Vec<Vec<u8>>,
         ));
     }
     let mut buf = vec![0u8; total];
-    r.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    crate::net_profile::time("placement/read_body", None, || r.read_exact(&mut buf))
+        .map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(parts);
     let mut at = 0usize;
     for _ in 0..parts {
@@ -1610,7 +1616,9 @@ pub fn serve_remote(address: &str, pkg_dir: &Path, stdlib_dir: &Path) -> ! {
     // the local wire has a single request slot for the same reason, and a placed
     // library's calls serialise either way.
     loop {
-        let Ok((stream, _)) = listener.accept() else {
+        let Ok(stream) = crate::net_profile::time("placement/accept", None, || {
+            listener.accept().map(|(s, _)| s)
+        }) else {
             continue;
         };
         let _ = stream.set_nodelay(true);

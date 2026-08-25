@@ -6,47 +6,58 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN141 — Worked examples for the current libraries
 
 > Tracker: [loft-lang/plans#141](https://github.com/loft-lang/plans/issues/141)
-> (`subject:libs`, `status:future` → move to `status:active`). Origin: dryopea's
+> (`subject:libs`, `status:finished`). Origin: dryopea's
 > `docs/EXAMPLES.md` gate (commits `9cf8a01` + `1f4c35f`, 2026-08-17) — this idea
 > rolled out across the loft library + feature ecosystem. Built on branch
 > `mac-install-dylib-fix` (alongside @PLN142).
 
 ## Status
 
-**ALL SEVEN LIBRARY REPOS ARE ROLLED OUT** (2026-08-18) — `loft-libs-core`,
-`-graphics` and `-net` merged and released; `-game`, `-plugins`, `-assets` and
-`-world` open as PRs alongside the loft-side registry PR they all wait on
-(loft#973). 152 tags across the ecosystem, and **Phase E is DONE**: `hex_form`
-(`@HXF-001..007`), `hex_place` (`@HXP-001..006`), `hex_roof` (`@HXR-001..006`), `hex_way`
-(`@HXY-001..006`), `hex_shape` (`@HXS-001..009`), `hex_fit` (`@HXI-001..008`), `hex_draw`
-(`@HXD-001..007`), `hex_terrain` (`@HXT-001..008`), `hex_body` (`@HXB-001..008`),
-`hex_field` (`@HXL-001..012`), `hex_recover` (`@HXV-001..009`) and `hex_edge`
-(`@HXE-001..011`) are **all twelve** of `loft-libs-world`'s deferred packages, so
-**Phase E is complete** — the repo reads *14 tagged, 0 exempt, 0 deferred, 0 todo*. Writing
-them found a shipped parser that repaired seven malformed texts its own comment documents as
-refused, a seam-error number that reads exactly zero wherever a caller would naturally
-measure it, a documented cure for a wobbly eave that silently buys it by ponding, an offset
-that put every **arc** on the far side of the way from its straights while remaining exactly
-`d` from the centreline, two of a package's own instruments reading *pass* on the exact
-failures they were built to catch, a wall with two legal names of which only one survives
-the round trip the whole text format exists for, and a recovery check whose two sides are a
-lattice rational and an irrational, so it could never have passed, and an invariant whose
-NAME promises the opposite of the property it holds, and a two-dimensional walk that answers
-for a three-dimensional rig anyway, and a validator that refuses the multi-form chunk its
-own package exists to trace, a verification step that discarded the exact answer it had
-just computed because it re-drew into a window sized for the code it replaced, and a
-resting position that lands on the wrong side of a wall every time rather than sometimes.
+**CLOSED — SHIPPED 2026-08-25.** Every phase is done: **A** probe · **B** acronym
+registry · **C** shared gate + indexer ingestion (both follow-ups settled) · **C2** the
+feature catalogue, **116 of 116 cited** · **D** the per-library rollout · **E**
+`loft-libs-world`'s twelve · **(last)** the convention doc + CI ratchet.
 
-**This plan does NOT close on that.** `loft-libs-world` reached zero TODO with two
-packages tagged and **twelve `deferred`**, which is a legitimate verdict but is most
-of the repo — and a verdict file beside the code is a good home for a *reason* and a
-poor one for a *work queue*. The twelve are now **Phase E** below, in the order they
-can actually be done, and the plan stays open until
-`make examples-progress REPO=../loft-libs-world` reads *14 tagged, 0 deferred*.
-**Reached** — 14 tagged, 0 deferred. Also open: Phase C's two follow-ups and Phase C2 (the
-feature catalogue, `FTR`, **25 of 117 entries cited**).
+**297 worked-example tags across the ecosystem**, and the convention is wired into every
+library's CI. The reader's guide is
+[LIBRARY_AUTHORING.md § 2](../../LIBRARY_AUTHORING.md); the standing home for the tail is
+the monthly pass in [LIBRARY_DOC_REVIEW.md](../../LIBRARY_DOC_REVIEW.md).
 
-ACTIVE — stdlib + in-tree libraries done; the distributed-library **gate is now
+### Why it closes with work still visible
+
+Two things were outstanding, and neither is this plan's to finish:
+
+- **Three PRs are unmerged** — [`game#10`](https://github.com/loft-lang/loft-libs-game/pull/10),
+  [`plugins#3`](https://github.com/loft-lang/loft-libs-plugins/pull/3),
+  [`assets#5`](https://github.com/loft-lang/loft-libs-assets/pull/5). All three are green
+  and all three read READY under `make examples-progress`. That is **landing, not
+  building**, and a plan does not gate on a merge clock.
+- **New packages owe verdicts** — `assets`, `drawing`, `text2d`, `tween` in the
+  distributed repos, plus `html`, `markdown` and three in-tree files. These landed AFTER
+  the rollout, which is **the ratchet working, not the rollout being incomplete**: a repo
+  is not done once, it is done per package, and packages keep arriving. A plan that stays
+  open until no package ever owes a verdict can never close.
+
+**The tail was handed over only after checking the receiver actually fires.** `make
+libraries-review` now names all nine, and [LIBRARY_DOC_REVIEW.md](../../LIBRARY_DOC_REVIEW.md)
+step 3 is the standing instruction to clear one or two per pass.
+
+⚠ **That check nearly passed for the wrong reason, and the fix is the plan's last
+finding.** The review aid reads a locally-built snapshot for its package list, and the
+one on this machine was five days old — so it omitted every package that had landed
+since, which is precisely the set most likely to owe a review, because a new package has
+never had one. It said nothing about that: the report above the omission was confident
+and complete-looking. Handing the tail to it in that state would have dropped four
+verdicts on the floor. The aid now **states its worklist's age** and warns past two days
+(`scripts/check_doc_drift.sh`), so the next reader is told what it did not look at.
+
+### Historical — how the first distributed library landed
+
+> Kept because the sequencing findings below are reusable; superseded as a STATUS report
+> by the table above. `arguments` was the first distributed library and its PR has long
+> since merged, so read this for the method, not for where the rollout stands.
+
+Stdlib + in-tree libraries done; the distributed-library **gate is now
 wired into every library's CI** (Phase-last CI ratchet, see below); the **convention
 page is done** (LIBRARY_AUTHORING.md § 2a). First distributed library **`arguments`
 DONE** — pushed as `loft-libs-core` branch `mac-worked-examples` (rebased onto
@@ -800,7 +811,7 @@ edit).
   the gate today guards duplicate *tags* within a repo, not acronym collisions across
   the registry.
 
-### Phase C — Shared gate + indexer ingestion — PARTIAL
+### Phase C — Shared gate + indexer ingestion — DONE
 
 - **Done:** the gate is one shared script — `scripts/check_doc_drift.sh examples` —
   not a per-library copy; it already resolves cross-repo citations and **emits the
@@ -815,12 +826,17 @@ edit).
   tag:…`) is a generic bucket lookup and needed no change. Verified: all 16
   `@AAA`-shaped tags in the tree index (12 `@STD` + the plan's `@DRY`/`@MOR`/`@FTR`
   mechanism examples), no accidental matches, `idx broken` + `broken-links` clean.
-- **Still to do (Follow-up from Status):** hard *online* validation of a cross-repo
-  tag when its sibling isn't checked out (fetch a published per-repo tag index),
-  crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
-  bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
+- **Done (2026-08-25):** online validation of a cross-repo tag when its sibling is not
+  checked out — `EXAMPLES_ONLINE=1` reads the owning repo's published
+  `examples-index.tsv`. Opt-in, and it may CONFIRM a tag but never REFUTE one, because
+  the file it reads is the one LIBRARY_AUTHORING.md is retiring. See § What is actually
+  left.
+- **Closed by measurement (2026-08-25):** the `~/.loft/`-style hidden-root crawl does not
+  reproduce here. It was inherited from dryopea's `grep --exclude-dir='.*'`; this gate
+  uses `find . -not -path './.*'`, which prunes only a hidden directory directly under
+  the scan root.
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (31 of 117)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **DONE (116 of 116 cited)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches
@@ -1498,12 +1514,15 @@ repo (`loft-libs-world`) is a moving target that never converges.
 | `loft-libs-game` | `worked-examples` | **PR OPEN** ([#10](https://github.com/loft-lang/loft-libs-game/pull/10)) — 3 tagged (`fixstep`, `input`, `time`), 0 todo |
 | `loft-libs-plugins` | `worked-examples` | **PR OPEN** ([#3](https://github.com/loft-lang/loft-libs-plugins/pull/3)) — 1 tagged (`pluginabi`), 0 todo |
 | `loft-libs-assets` | `worked-examples` | **PR OPEN** ([#5](https://github.com/loft-lang/loft-libs-assets/pull/5)) — 2 tagged (`glb`, `mesh3d`), 0 todo |
-| `loft-libs-world` | `worked-examples` | **PR OPEN** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15)) — **14 tagged, 0 exempt, 0 deferred, 0 todo** — Phase E complete |
+| `loft-libs-world` | *(merged)* | **DONE** ([#15](https://github.com/loft-lang/loft-libs-world/pull/15) MERGED) — **14 tagged, 0 exempt, 0 deferred, 0 todo** — Phase E complete |
 
-All four wait on loft [#973](https://github.com/loft-lang/loft/pull/973), which
-carries the six registry rows **and** the fix for the gate bug that reddens every
-library's `examples-index` step. The gate fires on `pull_request`, so none of them
-can go green before it merges.
+**The blocker is gone.** All four waited on loft
+[#973](https://github.com/loft-lang/loft/pull/973) — the six registry rows **and** the
+fix for the gate bug that reddened every library's `examples-index` step — because the
+gate fires on `pull_request`, so none of them could go green before it merged. It has
+MERGED, and `loft-libs-world` merged behind it. The three still open are open for their
+own reasons now, not for that one; re-run each PR's checks before assuming otherwise
+(measured 2026-08-25).
 
 `loft-libs-net` was the convention's first complete repo, which is what makes the
 "the PR unit is the REPO" rule reviewable rather than theoretical — a reviewer is
@@ -1514,7 +1533,7 @@ packages had something a signature could not say. **Opening a PR needs an explic
 ask** — the plan's "zero TODO ⇒ open the PR" sets the readiness bar, not the
 permission.
 
-### Phase E — `loft-libs-world`'s remaining twelve (S each) — **DONE, 12 of 12**
+### Phase E — `loft-libs-world`'s remaining twelve (S each) — **DONE, 12 of 12** (PR [#15](https://github.com/loft-lang/loft-libs-world/pull/15) MERGED)
 
 The rollout's PR unit is the REPO, and `loft-libs-world` reached zero TODO the way
 the mechanism allows: two packages **tagged**, twelve recorded **`deferred`** in

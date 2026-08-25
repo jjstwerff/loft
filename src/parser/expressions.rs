@@ -2637,9 +2637,7 @@ use a separate collection or add after the loop"
             for d in self.vars.tp(var_nr).depend() {
                 self.vars.make_independent(var_nr, d);
             }
-            for d in saved_backing {
-                self.vars.depend(var_nr, d);
-            }
+            self.vars.depend_on_all(var_nr, &saved_backing);
         }
         // Plan-22 phase 02d-vi — bypass the text-special branch
         // when the LHS is auto-deref'd boxed text.  The general

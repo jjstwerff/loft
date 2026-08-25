@@ -215,9 +215,15 @@ heap, so the discipline is a hard invariant, not a degradable value.
 
 **In words.** These free rules describe what a free *does* and when it *would* corrupt the heap.
 The promise that a real loft program never hits a corrupting free is **not** re-checked at
-runtime — it is discharged statically by [ownership.md](ownership.md)'s `deps` checker (now at
-**0 open deviations**): the checker only emits a free on a store the value provably OWNS, at its
-last use, so LIFO holds, the stack is never freed, and nothing freed is later read. This doc
+runtime — it is discharged statically by [ownership.md](ownership.md)'s `deps` checker: it only
+emits a free on a store the value provably OWNS, at its last use, so LIFO holds, the stack is
+never freed, and nothing freed is later read.
+
+⚠ **That discharge is only as strong as the checker's register, and the register is not at
+zero.** `ownership.md` is at `OPEN: 1` — `D-own-8`, *"a Join's ownership fact is true on one
+path only"* — which is a PATH-COMPLETENESS gap, precisely the property `H-Sound` leans on. So
+the free rules below are currently discharged by a checker with an open hole in the relevant
+direction. Re-read that entry before treating a free fault here as impossible. This doc
 defines the cliff; ownership.md proves the program walks the path beside it. The
 `LOFT_POISON` harness is the empirical cross-check: it overwrites freed stores with a poison
 pattern so any surviving `H-FreeTwice` / use-after-free surfaces as a corrupted read.
@@ -238,11 +244,13 @@ contract (this file). What remains is the SAME meta-deviation, not a heap-specif
   interpreter's store and the native generator's `DbRef` ABI use the most different mechanisms.
   A program whose heap steps diverge is caught there. This doc does not add a new open row; it
   supplies the contract the oracle's heap-touching cases are read against.
-- **The lifetime side is CLOSED** — the free discipline's soundness (`H-Sound`) rests on
-  [ownership.md](ownership.md), which is at **0 open deviations** (2026-07-04): every
-  store-lifetime decision reads the one `deps` fact, and the fact is total. So the historically
-  #1-weakness area — the free rules above — is the one with the strongest standing proof, not
-  the weakest.
+- **The lifetime side has the strongest standing proof, and it is not complete.** The free
+  discipline's soundness (`H-Sound`) rests on [ownership.md](ownership.md), whose register was
+  at 0 when this line was written (2026-07-04) and is at **`OPEN: 1`** today: `D-own-8`, a
+  Join's ownership fact holding on one path only. That is a path-completeness gap, and
+  path-completeness is what `H-Sound` consumes — so the discharge is real but qualified.
+  ⚠ A claim about another doc's register goes stale silently; re-read the register rather
+  than this sentence.
 
 ---
 
