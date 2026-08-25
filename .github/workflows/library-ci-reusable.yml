@@ -28,16 +28,6 @@ on:
         required: false
         default: main
         type: string
-      wasm-exempt:
-        description: >-
-          JSON array of packages whose native crate CANNOT cross-build for
-          wasm32, e.g. '["server","ssh","web"]'.  Each entry is a declared,
-          visible exemption from the WASM cross-build gate below — it prints on
-          every run and lands in the job summary, so it cannot quietly become
-          permanent.  Default: nothing is exempt.
-        required: false
-        default: '[]'
-        type: string
 
 permissions:
   contents: read
@@ -227,34 +217,42 @@ jobs:
       #
       # Measured 2026-08-25 across all 44 packages: 8 have a native crate, and
       # `server` / `ssh` / `web` cannot cross-build because their TLS stack
-      # (`ring`, `aws-lc-sys`) has C build scripts with no wasm32 target.  Those
-      # three are `wasm-exempt` in loft-libs-net's caller.  The exemption is a
-      # LIST, not a default: a package is gated unless someone names it, so the
+      # (`ring`, `aws-lc-sys`) has C build scripts with no wasm32 target.  Each
+      # of those carries a `.wasm_exempt` file — the same per-package marker
+      # shape `.allow_warnings` already uses above, so there is one convention
+      # here rather than two.
+      #
+      # A marker, not a default: a package is gated unless it carries one, so the
       # next package added is covered without anyone remembering to opt it in.
-      # And an exemption is loud — it prints and writes to the job summary on
-      # every run — because the failure mode of a quiet one is that it outlives
-      # its reason.
+      # And the exemption is loud — it prints and writes to the job summary on
+      # every run, with the reason read out of the file — because the failure
+      # mode of a quiet exemption is that it outlives its reason.  Putting it in
+      # the library repo also means it can be committed BEFORE this gate reaches
+      # `main`, so no package is ever red for a rule that arrived without it.
       #
       # What a red here means, and the shape that fixes it:
       # WASM.md § When the crate needs a device the target does not have.
       - name: WASM cross-build — ${{ matrix.package }}
         working-directory: ${{ matrix.package }}
-        env:
-          WASM_EXEMPT: ${{ contains(fromJson(inputs.wasm-exempt), matrix.package) && '1' || '0' }}
         run: |
           set -u
           if [ ! -f native/Cargo.toml ]; then
             echo "no [native] crate — nothing to cross-build (the loft half is target-independent)"
             exit 0
           fi
-          if [ "$WASM_EXEMPT" = "1" ]; then
-            echo "declared wasm-exempt by this repo's caller — NOT cross-built"
+          if [ -f .wasm_exempt ]; then
+            echo "declared wasm-exempt — NOT cross-built.  Stated reason:"
+            sed 's/^/    /' .wasm_exempt
             {
               echo "### ⚠ \`${{ matrix.package }}\` — wasm cross-build skipped (declared exempt)"
               echo
               echo "Its native crate is declared unable to target wasm32, so this package"
-              echo "does not ship on \`--native-wasm\`.  Remove it from \`wasm-exempt\` in"
-              echo "this repo's \`library-ci.yml\` once that stops being true."
+              echo "does not ship on \`--native-wasm\`.  Delete \`${{ matrix.package }}/.wasm_exempt\`"
+              echo "once that stops being true.  The reason it gives:"
+              echo
+              echo '```'
+              cat .wasm_exempt
+              echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
