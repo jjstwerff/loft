@@ -492,10 +492,25 @@ failure mode is a missing initialisation with nothing to report it. But no defec
 found, and saying otherwise would be the dressed-up version of this result.
 
 **What that settles.** The catch-all concern is no longer unmeasured, and the answer is
-milder than it looked: the shape is real, the damage is not demonstrated. The 41 remaining
+milder than it looked: the shape is real, the damage is not demonstrated. The remaining
 sites are a ranked backlog to *measure* — several are display and host helpers where a
 `Span` cannot arrive — and the tool now says plainly that a hit is a measurement to make,
 not a defect found.
+
+**The const-vector pair — measured clean, and the measurement nearly wasn't.**
+`compile::build_const_vectors` and `generation::emit_const_vectors` are the same job in the
+two backends, and both have the worst-shaped fallback in the list: `_ => {}` around a literal
+match, so a spanned literal would write NOTHING and leave a zero in a const vector — silent,
+not lossy. The feeding path never unspans either (`extract_literal_values` takes an `IrNode`,
+whose `unspan()` is an explicit call it does not make). Measured anyway: **both sites are
+reached and see only plain literals, 0 spanned arrivals**, so const folding hands them clean
+values and neither needs the call.
+
+⚠ The first native run of that probe reported 0 and was VACUOUS — the site is exercised by
+only 6 of the 858 corpus programs, and none was in the 60-program native sample. The
+interpreter run had already fired 12 times, which is the only reason the zero was not
+believed. **When a site is rare, sample the programs that REACH it, not the first N.** (All
+six are dedicated `*-const-*` regression tests, so the feature is deliberately covered.)
 
 #### C — process / skills
 
