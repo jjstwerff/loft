@@ -258,7 +258,7 @@ reported the deepest frame), `09_matrix_mul`'s memory at the two lines that buil
 vectors. An instrument that fails a row is **wrong**, so that half is a gate. The share
 drift printed beside it never is: shares move with the machine, so the previous local
 capture is diffed rather than a committed baseline (@PLN140 open question 5). Rationale
-per row: `doc/claude/plans/140-semi-automatic-profiling/ORACLE.md`.
+per row: [PROFILE_ORACLE.md](PROFILE_ORACLE.md).
 
 ### Sample counts
 
