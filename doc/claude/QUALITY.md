@@ -420,15 +420,40 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 246 | 205 | **41** |
+| 238 | 205 | **33** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
+
+⚠ **That was 41 until 2026-08-25, and the 8 it lost were never real** — the audit matched
+the NAME `Value::<Variant>` without checking WHICH `Value`.  Three enums answer to that
+spelling here: `host::Value` (the host-call ABI, 5 sites) has no `Span` at all, `MValue`
+(2 sites) matched because `MValue::Scalar` literally contains the substring
+`Value::Scalar`, and one more site matched neither.  The tool now intersects against the
+IR enum read out of `data.rs`, and rejects any site naming a host-only variant
+(`Void` / `Bool` / `Ref`) — needed because `host::Value` shares `Float` / `Int` / `Text`
+with the IR enum, so the intersection alone still let those through.  Re-validated the way
+[STABILITY_METHOD](STABILITY_METHOD.md) asks: it still flags `scopes::walk_check`, and
+still does NOT flag `find_assigned_vars`, whose fix is the known answer below.
+**A count offered as open work has to be right, or it is a bill someone else pays.**
 
 **Instrumented, not argued.** One env-gated line in `scopes::find_assigned_vars`'s
 catch-all, over 200 corpus programs: the path is reached **10 208 times**, of which
 **2 dropped a Span-wrapped `Set`** — a genuinely missed assignment — and **8 dropped a
 whole Span-wrapped `Block`**, whose statements then go unscanned. So the mechanism is real
 and reachable, not theoretical.
+
+⚠ **That method cannot measure a `#[cfg(debug_assertions)]` site, and a zero from it there
+is an artifact.** Learned on `scopes::walk_check`, the top of the list: instrumenting its
+catch-all and running the corpus reported **0** Span arrivals — and also 0 hits on the
+catch-all at all, which is impossible for a walker that meets leaf nodes. The site is gated,
+and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo build` and
+`cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
+hits on the same arm; if those are zero too, the probe never ran.
+
+**Exactly 1 of the 33 is gated** (`walk_check`) — so the method holds for the other 32, and
+the bound is worth stating rather than leaving as a general worry. It is only notable because
+it is the top of the list by variant count, and so the natural place to start: the one site
+where a zero was going to be believed.
 
 ⚠ **And then it changes nothing.** Adding the peel leaves the IR byte-identical on all six
 affected programs. The variables were already covered another way. **So: reachable,
