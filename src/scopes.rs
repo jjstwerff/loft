@@ -2017,6 +2017,14 @@ fn source_escapes(node: &Value, src: u16, co: &ConstructOps) -> bool {
 /// retargeting the source's construction into `container.field` writes into an un-allocated slot
 /// (`b = SABag { extra: extra }`: `b` allocated AFTER `extra` → `var_b` not in scope).
 fn collect_def_order(node: &Value, mo: &MoveOps) -> HashMap<u16, usize> {
+    // ⚠ Peels the SCRUTINEE while the recursion below walks the ORIGINAL `node`, so a spanned
+    // node is visited TWICE: once here through the peel, once when `for_each_child` descends
+    // to the same payload (it sees through a `Span` itself).  Safe here only because both
+    // accumulations are IDEMPOTENT — `or_insert` ignores the second write, and `idx` feeds a
+    // relative ORDER, so an extra tick shifts every later index equally.  Keep it that way, or
+    // bind (`let node = node.unspan();`) so the match and the walk see the same node.  The
+    // same shape counted a sandbox callee twice and inflated a heap bound by half — see
+    // `sandbox::intrinsic_space`.
     fn walk(node: &Value, mo: &MoveOps, idx: &mut usize, out: &mut HashMap<u16, usize>) {
         match node.unspan() {
             Value::Set(v, _) => {
@@ -2262,6 +2270,14 @@ fn construct_prescan(
                 && con.contains(s)
             {
                 if dest.contains_key(s) {
+                    // ⚠ NOT idempotent, and this function double-visits a spanned node: the
+                    // scrutinee above is peeled while `for_each_child` below walks the ORIGINAL,
+                    // and that walk sees through a `Span` itself.  A second visit of the SAME
+                    // append lands here and reads as two appends, which silently disqualifies the
+                    // var from the construct rewrite.  Measured over the 858-program corpus: 77
+                    // first-appends in 45 files and exactly ONE mark, which is genuine — it
+                    // survives binding the peel.  So the hazard does not fire today; it is one
+                    // edit away from firing.  See `sandbox::intrinsic_space` for the shape biting.
                     ambiguous.insert(*s); // appended into two places — not the clean shape.
                 } else {
                     container.insert(*s, get_field_base(dst, co));

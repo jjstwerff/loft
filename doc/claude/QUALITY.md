@@ -594,6 +594,22 @@ existing test covered that bound; the one I wrote pinned the over-count as the r
 only came apart when I tried to explain the mechanism afterwards and found `for_each_child`
 already handled the case — i.e. when the A/B's *direction* stopped matching the story.
 
+**Swept for the class, 2026-08-25.** Five functions in `src/` peel the scrutinee AND walk the
+original binding. None is a live defect, and the reasons differ enough to be worth listing —
+this is what the shape looks like when it is harmless:
+
+| site | why it survives |
+|---|---|
+| `sandbox::intrinsic_space`'s scan | was the live one; now binds |
+| `scopes::move_rewrite` | its walk sits INSIDE the `_` arm, and the inner `if let` reads the original on purpose |
+| `scopes::elide_rewrite` | peels only to compute a `replacement`, then re-matches the original for recursion |
+| `scopes::collect_def_order`'s walk | double-visits, but `or_insert` ignores the second write and `idx` feeds a relative order |
+| `scopes::construct_prescan` | double-visits, and its accumulation is NOT idempotent — measured 77 first-appends over 45 files with exactly one mark, which is genuine (it survives binding the peel) |
+
+The last is the one to watch: it is safe by measurement, not by construction. Both double-visiting
+sites now carry a comment saying so, because the invariant that protects them — the accumulation
+being idempotent — is nowhere else stated and is one edit from being broken silently.
+
 **The rule this yields:** `match x.unspan()` is safe only when nothing else in the body walks
 `x` again. Where there is a trailing `for_each_child` / `for_each_child_mut`, bind instead —
 `let x = x.unspan();` — so the match and the walk see the same node and each is visited once.
