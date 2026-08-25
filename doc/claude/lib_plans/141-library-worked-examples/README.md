@@ -6,100 +6,50 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN141 — Worked examples for the current libraries
 
 > Tracker: [loft-lang/plans#141](https://github.com/loft-lang/plans/issues/141)
-> (`subject:libs`, `status:active`). Origin: dryopea's
+> (`subject:libs`, `status:finished`). Origin: dryopea's
 > `docs/EXAMPLES.md` gate (commits `9cf8a01` + `1f4c35f`, 2026-08-17) — this idea
 > rolled out across the loft library + feature ecosystem. Built on branch
 > `mac-install-dylib-fix` (alongside @PLN142).
 
 ## Status
 
-**ACTIVE — measured 2026-08-25.** The mechanism is complete and the rollout is most of
-the way through. What is left is content and three unmerged PRs, not design.
+**CLOSED — SHIPPED 2026-08-25.** Every phase is done: **A** probe · **B** acronym
+registry · **C** shared gate + indexer ingestion (both follow-ups settled) · **C2** the
+feature catalogue, **116 of 116 cited** · **D** the per-library rollout · **E**
+`loft-libs-world`'s twelve · **(last)** the convention doc + CI ratchet.
 
-| Phase | State (measured, not recalled) |
-|---|---|
-| **A** probe | DONE |
-| **B** acronym registry | DONE (foundation + broadened to the distributed monorepos) |
-| **C** shared gate + indexer ingestion | **DONE** — both follow-ups settled 2026-08-25 |
-| **C2** feature catalogue (`FTR`) | **DONE — 116 of 116 entries cited** |
-| **D** per-library rollout | **4 of 7 repos merged**; 3 PRs open |
-| **E** `loft-libs-world`'s twelve | DONE — PR [#15](https://github.com/loft-lang/loft-libs-world/pull/15) is MERGED |
-| **(last)** convention doc + CI ratchet | DONE |
-| monthly by-hand review | DONE (ongoing home) |
+**297 worked-example tags across the ecosystem**, and the convention is wired into every
+library's CI. The reader's guide is
+[LIBRARY_AUTHORING.md § 2](../../LIBRARY_AUTHORING.md); the standing home for the tail is
+the monthly pass in [LIBRARY_DOC_REVIEW.md](../../LIBRARY_DOC_REVIEW.md).
 
-**A citation may name ANY acronym, and that is the rule not an exception:** a feature
-whose real use is already demonstrated cites THAT demonstrator (`@STD-001`, `@GIT-001`,
-`@EHK-001`), and only one authored *for* a feature is an `@FTR`. So 102 of the 116 cite
-`FTR` and the other 14 cite the library or stdlib example that already showed the thing —
-counting `FTR` alone reads as "14 uncited" and is wrong. **The catalogue's gap was always
-the POINTER, not the example.**
+### Why it closes with work still visible
 
-**Worked-example tags across the ecosystem** — 113 in loft's own index, plus each library
-repo's own:
+Two things were outstanding, and neither is this plan's to finish:
 
-| Repo | PR | `make examples-progress` |
-|---|---|---|
-| `loft-libs-core` | [#29](https://github.com/loft-lang/loft-libs-core/pull/29) + [#30](https://github.com/loft-lang/loft-libs-core/pull/30) MERGED | READY — 6 tagged, 0 todo |
-| `loft-libs-net` | [#18](https://github.com/loft-lang/loft-libs-net/pull/18) + [#19](https://github.com/loft-lang/loft-libs-net/pull/19) MERGED | READY — 3 tagged, 1 exempt, 0 todo |
-| `loft-libs-world` | [#15](https://github.com/loft-lang/loft-libs-world/pull/15) MERGED | READY — 14 tagged, 0 todo |
-| `loft-libs-graphics` | [#26](https://github.com/loft-lang/loft-libs-graphics/pull/26) MERGED | ⚠ **NOT READY** — `drawing`, `text2d`, `tween` owe a verdict |
-| `loft-libs-game` | [#10](https://github.com/loft-lang/loft-libs-game/pull/10) **OPEN** | READY — 3 tagged, 0 todo |
-| `loft-libs-plugins` | [#3](https://github.com/loft-lang/loft-libs-plugins/pull/3) **OPEN** | READY — 1 tagged, 0 todo |
-| `loft-libs-assets` | [#5](https://github.com/loft-lang/loft-libs-assets/pull/5) **OPEN** | READY — 2 tagged, 0 todo |
+- **Three PRs are unmerged** — [`game#10`](https://github.com/loft-lang/loft-libs-game/pull/10),
+  [`plugins#3`](https://github.com/loft-lang/loft-libs-plugins/pull/3),
+  [`assets#5`](https://github.com/loft-lang/loft-libs-assets/pull/5). All three are green
+  and all three read READY under `make examples-progress`. That is **landing, not
+  building**, and a plan does not gate on a merge clock.
+- **New packages owe verdicts** — `assets`, `drawing`, `text2d`, `tween` in the
+  distributed repos, plus `html`, `markdown` and three in-tree files. These landed AFTER
+  the rollout, which is **the ratchet working, not the rollout being incomplete**: a repo
+  is not done once, it is done per package, and packages keep arriving. A plan that stays
+  open until no package ever owes a verdict can never close.
 
-### What is actually left
+**The tail was handed over only after checking the receiver actually fires.** `make
+libraries-review` now names all nine, and [LIBRARY_DOC_REVIEW.md](../../LIBRARY_DOC_REVIEW.md)
+step 3 is the standing instruction to clear one or two per pass.
 
-1. **Phase D — three unmerged PRs**: `loft-libs-game#10`, `loft-libs-plugins#3`,
-   `loft-libs-assets#5`. All three read **READY TO PR** under
-   `make examples-progress`, so the work is done and the landing is not.
-2. **Phase D — `loft-libs-graphics` owes three verdicts.** Its PR merged, and
-   `drawing`, `text2d` and `tween` have landed in it SINCE with no tags and no row in
-   `examples-exempt.tsv`, so the repo reads **NOT READY** again. This is the ratchet
-   working: a repo is not done once, it is done per package, and `drawing` in
-   particular is @PLN146's sprite renderer — a package whose correct use is exactly
-   what a worked example is for.
-**Phase C's two follow-ups are both settled** (2026-08-25) — one built, one measured away:
-
-- ✅ **Online validation when the sibling is not checked out — BUILT.** `EXAMPLES_ONLINE=1`
-  reads the owning repo's own published `examples-index.tsv` and validates against it, so
-  a tag that used to be `unvalidated` now resolves with a real link
-  (`validated online against loft-libs-core@main`). Four library repos publish that index,
-  which is what made this implementable rather than a design question.
-
-  **The index may CONFIRM a tag and never REFUTE one, and that is the design rather than
-  a hedge.** The follow-up asked for *hard* online validation; measured, the only
-  fetchable index is a `examples-index.tsv` a library COMMITTED, and
-  [LIBRARY_AUTHORING.md](../../LIBRARY_AUTHORING.md) is **retiring exactly that file** —
-  CI builds it now, and a leftover committed copy *"can only rot: you cannot regenerate
-  it where it sits"*. A repo that stops regenerating it would start reporting tags it
-  really carries as missing, and loft's gate would go red for something no loft file
-  says. So absence is not evidence: this path turns `unvalidated` into `ok`, and can
-  never turn it red.
-
-  **Opt-in, and a failed fetch is not a finding either.** The default gate stays
-  hermetic; no network, no `curl`, or a repo that never adopted the convention all keep
-  the `unvalidated` warning. A doc gate that goes red when a DNS lookup fails stops being
-  run — and that failure mode only appears on the machine with no network, which is never
-  the machine the test was written on. `check_examples_online_selftest` guards exactly
-  that, hermetically (the fetch is aimed at an RFC 2606 `.invalid` host that cannot
-  resolve), and it is proven able to fail.
-
-  A local checkout stays **preferred** over the index, and this is the reason: a checkout
-  can see unmerged refs, which is what tells a PENDING MERGE from a real dangling
-  citation. A published index cannot make that distinction.
-
-- ✅ **The `~/.loft/`-style hidden-root crawl — MEASURED, does not reproduce.** The
-  follow-up was carried over from dryopea, whose scan used `grep --exclude-dir='.*'`;
-  this gate uses `find . -not -path './.*'`, which prunes only a hidden directory
-  **directly under the scan root**. Measured all three shapes: a hidden root finds its
-  tags, a package nested at `<root>/.loft/registry/pkg` finds them when it is the root,
-  and scanning from *above* that prunes it — which is correct, because `.loft/` is a
-  build cache. Nothing to fix; the item was a premise inherited from another tree.
-
-⚠ The four `pending:` warnings loft's own gate prints (`@MSH-002` `@MSH-005` `@TIM-001`
-`@TIM-002`) are the **pending-merge** answer working as designed, not a defect: those
-examples live on `loft-libs-assets` / `loft-libs-game` branches whose PRs are still open.
-They clear when those PRs land.
+⚠ **That check nearly passed for the wrong reason, and the fix is the plan's last
+finding.** The review aid reads a locally-built snapshot for its package list, and the
+one on this machine was five days old — so it omitted every package that had landed
+since, which is precisely the set most likely to owe a review, because a new package has
+never had one. It said nothing about that: the report above the omission was confident
+and complete-looking. Handing the tail to it in that state would have dropped four
+verdicts on the floor. The aid now **states its worklist's age** and warns past two days
+(`scripts/check_doc_drift.sh`), so the next reader is told what it did not look at.
 
 ### Historical — how the first distributed library landed
 

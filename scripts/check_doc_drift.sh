@@ -1381,6 +1381,27 @@ check_libraries_progress() {
     yellow "  (in-tree trees only; the published distribution needs those snapshots)"
     have_pub=0
   fi
+  # SAY HOW OLD THE WORKLIST IS.  The package list comes from a local snapshot, and a
+  # snapshot omits every package that landed after it was built — which is exactly the set
+  # most likely to owe a review, because a new package has never had one.  Silent, that
+  # reads as "these libraries owe nothing" rather than "I did not look at them": a
+  # five-day-old snapshot hid four packages that each owed a verdict, and the report
+  # above them was confident and complete-looking (@PLN141).
+  if [ $have_pub -eq 1 ]; then
+    # `stat` twice, GNU then BSD: `date -r FILE` is the file's mtime on GNU and reads
+    # FILE as EPOCH SECONDS on macOS, so it answers a wrong age there rather than
+    # failing — the same shape of silent wrongness this warning exists to prevent.
+    local snap_epoch snap_days
+    snap_epoch=$(stat -c %Y "$unrel" 2>/dev/null || stat -f %m "$unrel" 2>/dev/null || echo 0)
+    snap_days=$(( ( $(date +%s) - snap_epoch ) / 86400 ))
+    [ "$snap_epoch" -gt 0 ] 2>/dev/null || snap_days=0
+    if [ "$snap_days" -ge 2 ]; then
+      yellow "  ⚠ the package list is a snapshot built ${snap_days} day(s) ago — anything published"
+      yellow "    or merged since is NOT on this worklist.  Refresh: make libcatalogue"
+    else
+      say "  (package list from a snapshot built ${snap_days} day(s) ago — make libcatalogue to refresh)"
+    fi
+  fi
 
   local wm pop; wm=$(mktemp); pop=$(mktemp)
   _libraries_watermarks > "$wm"
