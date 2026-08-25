@@ -424,7 +424,21 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
 
-**Six false-positive classes, and 41 → 13. The precision work and the fixes are separate: 9 sites were shown impossible, 5 were fixed, and the rest measured clean.** In order of
+**Six false-positive classes, and 41 → 13.** The precision work and the fixes are separate,
+and conflating them is how a backlog gets "cleared" with nothing fixed:
+
+| | count | |
+|---|---:|---|
+| shown IMPOSSIBLE | **22** | the audit could not tell which `Value`, or that something upstream already peeled |
+| FIXED | **6** | `const_eval`, `needs_pre_eval`, `find_first_ref_vars`, `sandbox::scan`, `move_rewrite`, `substitute_var` |
+| still listed | **13** | of which 5 are measured clean and left unpeeled, 1 is gated, 7 unmeasured |
+
+Where the 22 went, by mechanism: **7** matched inside another enum's path (`MValue::Scalar`,
+`VariableValue::Long`, `ScalarValue::Single` all end in the substring the pattern looked for);
+**5** discriminate on `host::Value`, a separate enum with no `Span` variant; **6** are the body
+of an `any_node` / `for_each_child` / `walk` closure, which peel before calling the predicate;
+**2** match on a span-transparent scrutinee (`match val.tail()`); **2** are test functions that
+build their own IR. In order of
 discovery: a non-IR `Value` (`host::Value`, `MValue`); a host-only variant name; a match that
 is a traversal closure's body; a match whose scrutinee is span-transparent; a test function;
 and — the one that subsumes the first — a match on an enum whose NAME merely ends in `Value`.
