@@ -70,7 +70,10 @@ fn test_many_calls_neither_leak_nor_accumulate() {
 //
 // Adding `|| result_type == Type::Null` there fixes the wrong VALUE and simultaneously
 // changes what the NULL arm delivers, from the null sentinel to an allocated empty vector.
-// `(H-RefNull)` says the sentinel is what a collection-typed null IS — "a real value (a
-// reference that points at nothing), not a separate error state" — so that trade swaps a
-// wrong value for a rule violation.  The fix has to deliver the non-null arm's value while
-// the null arm still answers `nullref`; recorded in QUALITY.md rather than forced.
+// Which of those two is right is NOT obvious, and both readings I tried first were wrong.
+// `(H-RefNull)` calls a collection-typed null the per-type sentinel; but
+// `materialize_null_slice_arms` (@PLN85) deliberately rewrites a null slice-match arm to a
+// FRESH empty vector, "so a `[]` arm bound to a local … is a real `DbRef`, not a bare `null`
+// native emits as `()`".  So today's sentinel answer here is the BUG bypassing that
+// materialisation, not the rule being honoured.  Reconciling the two is an owner call with
+// two documented mechanisms behind it — recorded in QUALITY.md rather than forced.

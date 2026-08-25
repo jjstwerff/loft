@@ -659,18 +659,26 @@ wrong value — and simultaneously changes what the NULL arm delivers, from the 
 allocated empty vector. Measured both ways; the arm repair is load-bearing for the tuple chain
 and redundant for the vector one once the promotion is in.
 
-⚠ **I first recorded that second half as an unsettled design call. It is settled, and a
-deeper read of the rules is what settled it** — `(H-RefNull)` in [heap.md](formal/heap.md):
-*"nullref is the reference null — the per-type SENTINEL (E-Null) of a reference type … a real
-value (a reference that points at nothing), not a separate error state."* So a
-collection-typed null IS the sentinel, an allocated empty store is not it, and today's
-behaviour on the null arm is the CORRECT one. The promotion as written would have traded a
-wrong value for a rule violation.
+⚠ **This entry twice recorded a wrong reading of that second half. Both are kept because the
+sequence is the point.**
 
-So the remaining work is specified rather than open-ended: **make the non-null arm deliver its
-own value while the null arm still answers `nullref`.** One grep for "collection null" found
-nothing and I called it undecided; the rule was under `(H-RefNull)` in the heap doc, which is
-where a reference-typed null belongs.
+*First:* "an unsettled design call" — wrong, because I grepped `formal/` for "collection null"
+and stopped. `(H-RefNull)` in [heap.md](formal/heap.md) does speak to it: *"nullref is the
+reference null — the per-type SENTINEL (E-Null) of a reference type … a real value (a
+reference that points at nothing), not a separate error state."*
+
+*Second:* "so the empty vector is a rule violation" — also wrong, and reading the CODE is what
+settled it. `parser::materialize_null_slice_arms` (@PLN85) deliberately rewrites a null arm of
+a slice-match tail to a fresh empty vector, *"so a `[]` arm bound to a local … is a real
+`DbRef`, not a bare `null` native emits as `()`"*, and its `arm_is_null` already recognises
+BOTH the bare form and `{ OpNullRefSentinel() }`. So the empty vector is intentional on that
+path, and today's `isnull=true` is the BUG bypassing the materialisation — not the rule being
+honoured.
+
+**What is actually open**, then: whether `(H-RefNull)`'s sentinel and @PLN85's materialisation
+are reconcilable or whether one of them wants scoping to say where it applies. That is an
+owner call with two documented mechanisms behind it, not something to settle by measurement —
+which is why the promotion is not shipped here.
 
 ⚠ The matrix that located this needed DISTINCTIVE values: a first attempt used `_ => { [] }`
 as the wildcard, which made "the null arm answered empty" and "it fell through to the
