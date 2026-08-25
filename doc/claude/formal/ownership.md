@@ -198,6 +198,33 @@ whole-value assignment into it has nowhere to land.  The false fact reduces to ~
 — reproducing `pf_line def deps=[pf_cp]` and `pf_wids def deps=[pf_cw]` exactly as filed.
 No wrong answer or crash is yet attributed to it; it is a false FACT looking for its symptom.
 
+**Symptom hunt, 2026-08-25 — the fact REACHES its site, and still nothing breaks.**
+Re-reproduced in ~20 lines (`LOFT_VAR_TABLE` shows `line def deps=[cp]` for
+`line = if len(cp) > 2 { smooth(cp) } else { cp }`).  Instrumenting `vector_needs_db`
+confirms the decision is reached and answers with the false fact: `[VNDB] line deps=1 →
+false`, i.e. *no backing store allocated*.  So these probes are not vacuous — they arrive at
+the named site, take the branch the false fact selects, and are still correct:
+
+| probed shape | result |
+|---|---|
+| whole-value reassign into the joined slot (`line = other()`) | correct, source intact |
+| build a comprehension into it (`line = [for p in cp {…}]`) — the `op == "=" && !needs_db` → `OpClearVector` path, which builds into the EXISTING store | correct, **source and `cp` both intact** |
+| append after that reassign | correct |
+| 40 rounds under the leak gate + `LOFT_STORES=timeline` | 4 allocs / 2 frees, **no leak** |
+
+⚠ **And the "wrong" answer is the well-trodden branch.** In the same run `out`, `result`,
+`shapes` and `wk_order` all reach `vector_needs_db` with non-empty deps and get `false` too.
+A non-empty dep list answering "needs no store" is the COMMON case at that site, not an
+exceptional one — so whatever compensates downstream is heavily exercised, which is the most
+likely reason a false fact here has no symptom.
+
+**The fix direction the rules now make sayable.** This is `O-Proxy` and `O-Oracle` meeting:
+`vector_needs_db` asks an OWNERSHIP question (*do I own a store?*) using the dep list, while
+`joined_deps`' union answers a LIVENESS question (*what must stay alive?*).  Closing Face A
+means the allocation site reads `O-Oracle` (`use_analysis::ownership_of`) rather than the
+proxy — not making the union answer both questions, which is what the entry above already
+says it cannot do.
+
 ⚠ **loft#1082's panic was NOT this, and is now CLOSED elsewhere.**  Measured in a scratchpad
 copy of the `drawing` package: replacing BOTH joins with imperative `for`-append loops — either
 alone, or both — left `index out of bounds … 65535` exactly where it was.  The cause was a
