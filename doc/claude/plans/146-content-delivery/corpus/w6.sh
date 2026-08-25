@@ -22,11 +22,10 @@ GRAPHICS=${W6_GRAPHICS:-$WORKSPACE/loft-libs-graphics/graphics/src}
 # `assets` the way it follows an unpublished `graphics`.  Point it at an empty
 # directory to measure the registry copy instead.
 #
-# ⚠ This needs loft-libs-assets PARKED on a branch that carries the placer
-# (`texels` / `Tile` / `page_grid`) — before `assets` 0.3.0 is published, that is
-# `tuxedo-assets-w6`, and the repo is normally left on `worked-examples` because
-# loft's own doc-drift gate resolves @MSH-### against whatever branch the sibling
-# is on.  Either check the branch out for the run or set `W6_ASSETS`.
+# ⚠ Before `assets` 0.3.0 is published this needs the placer (`texels` / `Tile` /
+# `page_grid`) to be somewhere loft can see: check `tuxedo-assets-w6` out for the
+# run, or point `W6_ASSETS` at a copy of its `src/`.  The registry copy is 0.2.0
+# and the driver will not compile against it.
 ASSETS=${W6_ASSETS:-$WORKSPACE/loft-libs-assets/assets/src}
 LOFT=${LOFT:-$HERE/../../../../../target/release/loft}
 LIST=${W6_LIST:-"ammo sword potion"}
