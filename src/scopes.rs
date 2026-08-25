@@ -6053,7 +6053,21 @@ impl Scopes {
     /// Recurses into nested `If` and `Block` but NOT into `Loop` — loop variables have
     /// per-iteration scope management and must not be pre-inited at the enclosing scope.
     fn find_first_ref_vars(&self, val: &Value, function: &Function, result: &mut Vec<u16>) {
-        match val {
+        // Peeled for the same reason as its sibling [`Self::find_assigned_vars`], which
+        // `scan_if` calls two lines below this one for the same job.  The arms discriminate
+        // on `Set` / `Block` / `If` / `Insert`, so a spanned one took `_ => {}` — contributing
+        // nothing for that whole subtree, where the shape being looked for is a branch's
+        // FIRST assignment of a Reference/Vector/Text, i.e. the thing that decides pre-init.
+        //
+        // Reachable, and measured latent.  Over the 858-program corpus the peel changes the
+        // decision at 46 sites in 16 programs, and at every one of them it newly
+        // pre-initialises **0** variables: the same variables were already reaching `result`
+        // by another path.  So no emitted code moves today.  The peel stays because it is one
+        // word and it obeys `Value::unspan`'s documented rule, and because the reachability is
+        // what makes it a trap — span placement has moved before, and the failure mode here is
+        // a missing initialisation with nothing to report it.  Claiming a defect was fixed
+        // would be the dressed-up version of this result.
+        match val.unspan() {
             Value::Set(v, _) => {
                 let resolved = *self.var_mapping.get(v).unwrap_or(v);
                 // For borrowed types (non-empty dep), only pre-init if every dep is already

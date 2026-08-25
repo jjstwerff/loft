@@ -420,9 +420,31 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 233 | 206 | **27** |
+| 222 | 206 | **16** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
+
+**Six false-positive classes now, and 41 → 16 is all precision, not fixes.** In order of
+discovery: a non-IR `Value` (`host::Value`, `MValue`); a host-only variant name; a match that
+is a traversal closure's body; a match whose scrutinee is span-transparent; a test function;
+and — the one that subsumes the first — a match on an enum whose NAME merely ends in `Value`.
+
+⚠ **That last one is the root cause the first fix only patched.** The pattern `Value::(\w+)`
+matches inside `MValue::Scalar`, `VariableValue::Long` and `ScalarValue::Single`, and
+intersecting against the IR variant set does not save you, because `Long` and `Single` ARE
+real IR variant names — so `state::static_call` scored two and read as an unpeeled hazard
+while discriminating on a debug enum. A lookbehind for a non-identifier character fixes the
+class; it cleared four repl/debug sites at once. The lesson is the ordinary one about
+substring matching, arriving late: I fixed the symptom (`MValue`) with an allow-list before
+noticing the pattern was simply wrong. Each was found by hand-checking a site the list called a hazard and finding it
+could not be one — which is the only way this list gets shorter honestly.
+
+⚠ **The test-region filter is brace-balanced, and the cheap version of it is a trap.**
+"Everything after the first `#[cfg(test)]`" looks right because test modules sit at the end
+of a file by convention. `src/trie_db.rs` has one at line 245 of 1355, so that shortcut
+discards 82 % of a production file. It happened not to move the headline here (20 either way)
+but it corrupted the denominator, 212 against the true 226 — a shrinking backlog with no
+fix behind it is exactly the failure this whole exercise is meant to avoid.
 
 **A second false-positive class, and it held the two scariest-looking entries.** A match that
 is the BODY of a `any_node` / `for_each_child` closure can never be handed a `Span`, because
@@ -463,7 +485,7 @@ and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo 
 `cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
 hits on the same arm; if those are zero too, the probe never ran.
 
-**Exactly 1 of the 27 is gated** (`walk_check`) — so the method holds for the other 32, and
+**Exactly 1 of the 16 is gated** (`walk_check`) — so the method holds for the other 32, and
 the bound is worth stating rather than leaving as a general worry. It is only notable because
 it is the top of the list by variant count, and so the natural place to start: the one site
 where a zero was going to be believed.
@@ -514,6 +536,17 @@ fields were being dropped from constants that were built anyway, so `[Row { flag
 read back `flag = false` with `id` correct. **The measurement above was right about spans and
 blind to the kinds** — it asked whether a SPANNED literal could arrive and answered no, while
 the arm was already discarding two ordinary literal kinds that did.
+
+**`scopes::find_first_ref_vars` — the sibling of the site that started this, and the same
+verdict.** `scan_if` calls it two lines above `find_assigned_vars`, for the same job, and only
+one of the pair was peeled. Its arms are `Set` / `Block` / `If` / `Insert`, so a spanned one
+took `_ => {}` and contributed nothing for that subtree. Reachable: 108 838 arrivals over 250
+programs, 8 of them wrapping an arm. The peel changes the decision at **46 sites in 16
+programs** — and newly pre-initialises **0** variables at every one of them, because the same
+variables were already reaching `result` another way. Reachable, latent, peel kept. Measured
+without an A/B build: the pre-fix code contributed nothing on that path, so running the
+subtree into a scratch vector and counting what `result` did not already hold gives the gain
+exactly.
 
 ⚠ The first native run of that probe reported 0 and was VACUOUS — the site is exercised by
 only 6 of the 858 corpus programs, and none was in the 60-program native sample. The
