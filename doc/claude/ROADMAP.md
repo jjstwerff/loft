@@ -460,7 +460,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`lib_plans/61-game-infra/`](lib_plans/61-game-infra) | M-MH per item | — | FFI.1-4 — third-party native extensions |
+| [`lib_plans/61-game-infra/`](lib_plans/61-game-infra) | M-MH per item | **✅ CLOSED 2026-08-26 (6 of 7 G-rows shipped)** | FFI.1-4 — third-party native extensions.  The 2D-game rows landed in the libraries rather than here: G1/G2 `graphics::create_sprite_sheet` + `draw_sprite`, G4 `shapes` overlap tests, G5/G6 `graphics` audio + `sfx_*`, G7 `doc/brick-buster.html`.  G3 tilemap is the only remainder and has its own row below |
 | [`lib_plans/63-lsp/`](lib_plans/63-lsp) | M (LSP.1) / MH (LSP.2/3) | — | LSP.1 unblocks 4 IDE plugins + browser IDE |
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
@@ -512,10 +512,11 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [`lib_plans/60-asset-pipeline/`](lib_plans/60-asset-pipeline) | M | — | Game asset workflow |
 | [`lib_plans/06-web-services/`](lib_plans/06-web-services) | M-H per arc | — | JSON / HTTP client / auth / WebSocket / SSE clients |
 | [`lib_plans/70-viewer-generalisation/`](lib_plans/70-viewer-generalisation) | M | — | `lib/viewer/` — extract the loft branch-review viewer as a project-agnostic library (Java + moros projects as initial customers) |
-| [`lib_plans/71-terrain-heightmap/`](lib_plans/71-terrain-heightmap) | M | — | `terrain` — slope-based height-map generation library |
+| [`lib_plans/71-terrain-heightmap/`](lib_plans/71-terrain-heightmap) | M | **✅ CLOSED 2026-08-26 (superseded)** | `terrain` — slope-based height-map generation.  `hex_terrain` 0.1.1 ships the need by another model (`tt_rise`/`tt_steep`, priority-flood hydrology); `md_slope` and `emit_slope_face` exist in no library |
 | [`lib_plans/73-universal-editor/`](lib_plans/73-universal-editor) | H | — | `hex_*` universal hex-world editor libraries (moros extraction; dryopea + indie consumers) |
 | [`lib_plans/74-ffi-dispatch/`](lib_plans/74-ffi-dispatch) | MH | F | FFI generated-dispatch — `#[loft_native]` proc-macro generates per-fn marshal bridges, deletes the ~98-arm `dispatch_call`; libraries own their FFI typing (supersedes 05-game-infra FFI.1/FFI.3) |
 | [`lib_plans/75-physics-2body/`](lib_plans/75-physics-2body) | M | — | `physics_2body` — shared rigid-body collision + integrator for moros / dryopea / bumper-airplanes (sphere/AABB pairwise; no N-body stacking) |
+| G3 tilemap rendering | S | — | The one row left from `lib_plans/61-game-infra` when it closed: draw a grid of sprite-sheet cells in one batch.  Its neighbours already ship — `graphics` has the sheet and the sprite draw, `stage` has 2-D batching — so this is a composition rather than a new primitive, and belongs in whichever of the two grows it |
 | [`lib_plans/76-particles/`](lib_plans/76-particles) | S | — | `particles` — ribbon trails + point-burst particles (two-flavour scope) for dryopea + bumper-airplanes |
 | [`lib_plans/77-test-deps/`](lib_plans/77-test-deps) | S | F | `loft test --deps` — transitive dep-tree test walker driven by loft.toml + loft.lock; wired into the unified library CI as a final regression-catch step (COMPLETE: T1-T3 + T6 2026-05-28, T4 `--lock` + T5 `--skip` + `--strict-deps` 2026-08-25) |
 | [`lib_plans/78-loft-distribution/`](lib_plans/78-loft-distribution) | MH | **DONE 2026-07-31** | `loft` binary distribution + self-update — `install.sh` bootstrap, `loft self-update` (resolve → verify against the signed index → replace), `loft verify-self`, and the toolchain's own registry entry.  Reference content moved to [RELEASE.md](RELEASE.md) + [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md) |

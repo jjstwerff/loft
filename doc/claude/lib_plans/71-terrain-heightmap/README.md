@@ -5,7 +5,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # lib-plan 20 — terrain: slope-based height-map generation
 
-**Status:** Future (design drafted 2026-05-21, no code yet). A
+**Status:** ✅ **CLOSED 2026-08-26 — SUPERSEDED, not delivered** (@PLN71,
+`status:declined`). `hex_terrain` 0.1.1 ships the need by another model
+(`tt_rise`/`tt_steep`, priority-flood hydrology, window independence); the
+Eikonal/painted-slope design below was never built. Measured at closure:
+`md_slope` has one hit in the whole library ecosystem and it is prose in
+`hex_world/MAPFILE.md`, and `emit_slope_face` — which T4 was to auto-call —
+is in no shipped library. Kept as a closure record; read
+`loft-libs-world/CONVERGENCE.md` before reviving any of it.
+
+**Original status:** Future (design drafted 2026-05-21, no code yet). A
 **game-agnostic** height-FIELD producer shared by two games — **dryopea**
 (sci-fi free-build / tower-defence, likely first) and **moros** (RPG). It
 feeds [lib-plan 19 gridmesh](../19-gridmesh/README.md) Phase C meshing

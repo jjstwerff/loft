@@ -1,6 +1,15 @@
 
 # Game Infrastructure — Design
 
+**Status:** ✅ **CLOSED 2026-08-26** (@PLN61, `status:finished`) — six of the seven
+G-rows shipped, in the libraries rather than here: G1/G2 `graphics::create_sprite_sheet`
++ `draw_sprite`, G4 `shapes`' overlap tests, G5/G6 `graphics` audio + the `sfx_*` synths,
+G7 `doc/brick-buster.html`. FFI.1-4 were superseded in implementation by
+`lib_plans/74-ffi-dispatch`. **G3 tilemap rendering is the one remainder** and lives on
+as its own ROADMAP row — its neighbours all ship, so it is a composition of `graphics`'
+sprite sheet with `stage`'s 2-D batching rather than a new primitive. Kept as a closure
+record.
+
 Designs for all game infrastructure, audio, FFI, and tooling items on the
 roadmap that don't yet have a dedicated design document.
 
