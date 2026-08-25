@@ -212,11 +212,27 @@ the named site, take the branch the false fact selects, and are still correct:
 | append after that reassign | correct |
 | 40 rounds under the leak gate + `LOFT_STORES=timeline` | 4 allocs / 2 frees, **no leak** |
 
-⚠ **And the "wrong" answer is the well-trodden branch.** In the same run `out`, `result`,
-`shapes` and `wk_order` all reach `vector_needs_db` with non-empty deps and get `false` too.
-A non-empty dep list answering "needs no store" is the COMMON case at that site, not an
-exceptional one — so whatever compensates downstream is heavily exercised, which is the most
-likely reason a false fact here has no symptom.
+⚠ **`depend().is_empty()` is not an ownership test, and that is sharper than the union
+story.** Printing the dep NAMES at that site separates two cases the emptiness test
+conflates:
+
+```
+[VNDB2] out    deps=["__vdb_1"]   ← dep on its OWN mint var: it OWNS a store already
+[VNDB2] result deps=["__vdb_1"]
+[VNDB2] shapes deps=["__vdb_1"]
+[VNDB2] line   deps=["cp"]        ← dep on ANOTHER LOCAL: a borrow
+```
+
+`minted_vars`' own doc states the first reading: *"`[]` lowers to `OpDatabase(__vdb_N, …)`
+and the value then types as a dep on `__vdb_N`, which says I own this store — the opposite
+of the borrow a dep normally records."*  So the list carries THREE meanings, not two: empty
+(no store yet), a mint dep (owns one), a local dep (borrows one).  `vector_needs_db` reads
+only emptiness, and answers "needs no store" for the mint case correctly and for `line`
+correctly-by-accident.
+
+(An earlier note here said the false answer was "the well-trodden branch" because the other
+vars reach it the same way.  That was wrong: they reach it with a MINT dep, which is a
+different case with a correct answer.  `line` is the only anomaly in the run.)
 
 **The fix direction the rules make sayable.** This is `O-Proxy` and `O-Oracle` meeting:
 `vector_needs_db` asks an OWNERSHIP question (*do I own a store?*) using the dep list, while
@@ -240,11 +256,27 @@ Two further measurements bound the problem:
   borrowed one is never cleared.  Something downstream allocates regardless, which is why
   no probed shape bites.
 
-**The route that IS available** is the one this model already uses three times: a SECOND
-carried fact, set where the union is formed and consulted by the allocation site — the
-pattern of `O-Override` (`is_skip_free`) and `O-Latest` (`owned_refs`).  It needs no oracle
-at parse time, because the join is the place that knows an arm minted.  Face A stays OPEN
-pending that, rather than pending the oracle read, which cannot be written.
+**The second-fact route was attempted next, and the blocker is placement, not machinery.**
+The flag has to be SET where the mixed join is visible and READ where the var is known, and
+no single point has both:
+
+* the join sites (`control.rs`, six of them) build a `result_type` and have **no destination
+  var** — the binding happens later, at the assignment;
+* the bind site has the var and the joined type, but the union has already erased which arm
+  owned, and the arms' TYPES are gone — a structural re-check of the IR cannot recover it
+  either, because the owning arm here is a bare CALL and `minted_vars` sees no mint (the
+  mint is inside the callee);
+* carrying the flag on `Deps` would travel correctly but **does not survive the store
+  round-trip** — `ir_schema` reconstructs a dep list as `Deps::unknown(vec![…])`, so a
+  warm-loaded program from the startup cache would lose it and answer differently from a
+  cold one.  A correctness flag that a cache drops is worse than none.
+
+So the flag wants to be set at the join and read at the allocation, and the two are separated
+by a bind that discards the distinguishing information.  Closing Face A means first giving the
+join a way to reach the binding — most plausibly by making the join's own result carry a mint
+dep (the `["__vdb_N"]` form above already MEANS "owns"), which is a lowering change rather
+than a flag.  Face A stays OPEN pending that design, with the placement constraints above
+recorded so the next attempt does not re-derive them.
 
 ⚠ **loft#1082's panic was NOT this, and is now CLOSED elsewhere.**  Measured in a scratchpad
 copy of the `drawing` package: replacing BOTH joins with imperative `for`-append loops — either
