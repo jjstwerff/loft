@@ -485,7 +485,12 @@ picks *when*, a wall clock says *how much*, and the period is JITTERED because a
 samples a single phase of a periodic program and reports it as the whole) ·
 `LOFT_ALLOC_SITES=1` ranks live store BYTES by the loft line that allocated them, captured at
 the run's PEAK rather than at exit · `LOFT_ALLOC_PATHS=<ops>` adds the call paths that reached
-each allocation. `LOFT_PROFILE` / `LOFT_ALLOC_PATHS` also cover **test runs** (`loft test`,
+each allocation. **A program whose only exit is a signal — a server — reports through
+`LOFT_PROFILE_EVERY=<seconds>` (a report while running, surviving a hard kill), `kill -USR1`
+(dump and keep going, which profiles a WINDOW) or `kill -TERM`/Ctrl-C (dump, then leave):
+the report used to render at process exit, so the run you most want a profile of was the
+one that could not produce one (loft#1089). Handlers are installed only when the profiler
+is armed.** `LOFT_PROFILE` / `LOFT_ALLOC_PATHS` also cover **test runs** (`loft test`,
 `--tests`), merged into ONE report keyed by resolved `function` + `file:line` — each test
 compiles its own bytecode, so positions cannot be merged, only labels (loft#860).
 `LOFT_ALLOC_SITES` is program-only and says so under a suite instead of going quiet.

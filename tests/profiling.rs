@@ -505,3 +505,99 @@ fn a_profile_says_when_a_used_library_is_invisible_to_it() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A program that never finishes on its own — a server's shape, without the sockets.
+///
+/// `LOFT_TIMEOUT` stops it, which is the runner's own watchdog and not an exit the
+/// program reaches: that is the point, because the report used to render at process exit
+/// and a run with no exit therefore produced none.
+const RUNS_UNTIL_STOPPED: &str = r#"
+fn grind(n: integer) -> integer {
+  acc = 0;
+  for g_i in 0..n { acc += g_i % 7; }
+  acc
+}
+fn main() {
+  t = 0;
+  for round in 0..1000000 { t += grind(50000); }
+  println("never reached: {t}");
+}
+"#;
+
+/// loft#1089 — a program with no clean shutdown can still be profiled.
+///
+/// The report renders at process exit, so the one class of program you most want a
+/// profile of — a server under load, whose only exit is the operator's `kill` — was the
+/// class that could not give you one. A periodic flush needs no signal and no exit: what
+/// was already printed is already out, so it survives a hard kill too.
+///
+/// The assertion is on the COUNT of reports rather than on their presence, because one
+/// report is what an ordinary exit already produced: what has to be true here is that
+/// the program reported WHILE RUNNING, more than once, without ever reaching its end.
+#[test]
+fn a_program_that_never_exits_still_reports_its_profile() {
+    let path = std::env::temp_dir().join("loft_prof_periodic.loft");
+    std::fs::write(&path, RUNS_UNTIL_STOPPED).expect("write probe");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&path)
+        .env("LOFT_PROFILE", "1")
+        .env("LOFT_PROFILE_EVERY", "1")
+        // Stopped by the watchdog, not by the program: it has no end of its own.
+        .env("LOFT_TIMEOUT", "5")
+        .output()
+        .expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reports = text.matches("loft CPU profile").count();
+    assert!(
+        reports >= 2,
+        "a one-second flush over a five-second run must report more than once — and the \
+         program never reaches its own end, so every one of them came from the flush.\n\
+         Got {reports}:\n{text}"
+    );
+    assert!(
+        !text.contains("never reached"),
+        "the probe must not finish, or the reports could be ordinary exit-time ones.\n{text}"
+    );
+    // The rows have to be a real answer, not an empty banner: `grind` is where every
+    // sample of this program belongs.
+    assert!(
+        top_row(&text, "── by function").contains("grind"),
+        "a mid-run report must carry the same rows an exit-time one does.\n{text}"
+    );
+}
+
+/// The other half of the same claim: an UNPROFILED run's shutdown is untouched.
+///
+/// The signal handlers are installed only when the profiler arms, because a handler that
+/// absorbs `SIGINT` would change what Ctrl-C does for every program — a much larger
+/// change than the one being made, and one nobody asked for.
+#[test]
+fn an_unprofiled_run_installs_no_signal_handlers() {
+    let path = std::env::temp_dir().join("loft_prof_no_handlers.loft");
+    std::fs::write(&path, RUNS_UNTIL_STOPPED).expect("write probe");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&path)
+        .env("LOFT_TIMEOUT", "3")
+        .env_remove("LOFT_PROFILE")
+        .env_remove("LOFT_PROFILE_EVERY")
+        .env_remove("LOFT_ALLOC_PATHS")
+        .output()
+        .expect("spawn loft");
+    let _ = std::fs::remove_file(&path);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !text.contains("loft CPU profile"),
+        "an unarmed run reports nothing at all.\n{text}"
+    );
+}

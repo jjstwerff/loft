@@ -66,6 +66,33 @@ different way. It cost a consumer one confused measurement. Redirect both (`> ou
 2>&1`) or keep stderr on the terminal. Stderr is deliberate: the profile must not land in
 the program's own output, where it would corrupt whatever reads it.
 
+### A program with no clean shutdown (loft#1089)
+
+The report renders at process **exit**, and a server has none: the operator sends
+`SIGTERM` and the process dies. So the one class of program you most want a profile of —
+a server under real load — was the class that could not give you one. Three ways in, all
+armed only when the profiler is:
+
+```
+LOFT_PROFILE=1 LOFT_PROFILE_EVERY=30 loft server.loft   # a report every 30 s, while running
+kill -USR1 <pid>      # dump now and KEEP RUNNING — profiles a WINDOW, not a lifetime
+kill -TERM <pid>      # dump, then leave (exit 143); SIGINT/Ctrl-C the same way
+```
+
+`LOFT_PROFILE_EVERY` is the one to reach for first: it needs no signal, and what has
+already been printed survives a hard kill. Each report covers the run **so far**, not the
+interval since the last one, so a series reads as a growing picture rather than as slices
+to add up. A window is what `SIGUSR1` is for — dump, drive the load you care about, dump
+again, and read the difference.
+
+The report is built from the samples on the running interpreter, resolved against the
+`Data` they were compiled from, so it can only be rendered from the execute loop: a
+signal raises the request and the next operation answers it. A process **idle** in a
+blocking read has no operation to answer at, so the report waits for the next request it
+serves — and for `SIGINT`/`SIGTERM` a second signal is the ordinary kill, never a hang.
+An unprofiled run installs no handlers at all, so ordinary shutdown behaviour is
+untouched.
+
 ### Two profilers, and the driver picks
 
 **`perf` measures the engine — loft's own Rust.** For a `--native` run that is also your
