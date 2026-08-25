@@ -420,11 +420,11 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 222 | 206 | **16** |
+| 222 | 209 | **13** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
 
-**Six false-positive classes now, and 41 → 16 is all precision, not fixes.** In order of
+**Six false-positive classes, and 41 → 13. The precision work and the fixes are separate: 9 sites were shown impossible, 5 were fixed, and the rest measured clean.** In order of
 discovery: a non-IR `Value` (`host::Value`, `MValue`); a host-only variant name; a match that
 is a traversal closure's body; a match whose scrutinee is span-transparent; a test function;
 and — the one that subsumes the first — a match on an enum whose NAME merely ends in `Value`.
@@ -485,7 +485,7 @@ and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo 
 `cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
 hits on the same arm; if those are zero too, the probe never ran.
 
-**Exactly 1 of the 16 is gated** (`walk_check`) — so the method holds for the other 32, and
+**Exactly 1 of the 13 is gated** (`walk_check`) — so the method holds for the other 32, and
 the bound is worth stating rather than leaving as a general worry. It is only notable because
 it is the top of the list by variant count, and so the natural place to start: the one site
 where a zero was going to be believed.
@@ -547,6 +547,30 @@ variables were already reaching `result` another way. Reachable, latent, peel ke
 without an A/B build: the pre-fix code contributed nothing on that path, so running the
 subtree into a scratch vector and counting what `result` did not already hold gives the gain
 exactly.
+
+**The sandbox batch — one of these was not a lost optimisation.** Measured over the full
+858-program corpus (and, for the sandbox, a `[sandbox]`-policy program):
+
+| site | arrivals | spanned around an ARM | verdict |
+|---|---:|---:|---|
+| `sandbox::intrinsic_space`'s scan | 188 | 6 | **fixed — admission bypass** |
+| `scopes::move_rewrite` | 567 | 41 | fixed — retarget skipped (safe direction) |
+| `const_eval::substitute_var` | 41 | 5 | fixed — substitution skipped |
+| `scopes::is_ref_materialisation` | 2329 | **0** | clean, untouched |
+| `control::is_block_divergent` | **17 396** | **0** | clean, untouched |
+
+The sandbox one is the only defect in this whole sweep whose failure direction is not merely
+skipped work: `space_degree` never folded a spanned callee's footprint into its caller's, so
+the declared bound read `24 · n²` instead of `36 · n²`, and at a `data_budget` between those
+two the program was ADMITTED rather than REJECTED. Admission is the security boundary.
+
+**`is_block_divergent` is the strongest clean result here, and it looked like the worst.** Its
+negated caller does `bl.operators[p] = null_value(…)` on the LAST operator when the block is
+judged non-divergent — so a spanned `Return` would have been overwritten, destroying a return
+statement. 17 396 calls across 150 programs, and the bare and peeled answers never once
+differ. The structural fact behind it: spans DO appear among block operators (`find_first_ref_vars`
+sees `Span(Block)` and `Span(Set)` there), but `Return` / `Break` / `Continue` are never
+spanned. Worth knowing before anyone reasons from "a Span can be anywhere".
 
 ⚠ The first native run of that probe reported 0 and was VACUOUS — the site is exercised by
 only 6 of the 858 corpus programs, and none was in the 60-program native sample. The
