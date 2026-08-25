@@ -4175,8 +4175,8 @@ impl State {
         // profiling pays for none of it.
         if self.debug.as_deref().is_some_and(|d| d.prof.is_some()) {
             self.profile_tick(pc);
-            self.profile_flush_check(data);
         }
+        self.profile_flush_check(data);
         let is_bp = self.debug.as_ref().is_some_and(|d| d.is_breakpoint(pc));
         if !is_bp {
             return false;
@@ -4222,6 +4222,10 @@ impl State {
         if periodic || asked != crate::profiler::Flush::None {
             self.report_alloc_sites(data);
             self.report_profile(data);
+            // The two instruments compound for a networked server: the CPU profiler
+            // cannot be REACHED and the network profiler cannot SEE it, so a socket
+            // server had neither (loft#1088).  One flush answers both.
+            crate::net_profile::report();
         }
         if let crate::profiler::Flush::ReportAndExit(code) = asked {
             // The signal that asked for this is a shutdown request, and the report it
@@ -5529,9 +5533,21 @@ impl State {
         if self.debug.as_deref().is_some_and(|d| d.prof.is_some()) {
             return;
         }
-        let Some(prof) = crate::profiler::Profiler::from_env() else {
+        let prof = crate::profiler::Profiler::from_env();
+        if prof.is_none() && !crate::net_profile::enabled() {
             return;
-        };
+        }
+        // The network profiler has no per-op work of its own, but its report is reached
+        // the same way the CPU one is — from the execute loop — so a run with only
+        // `LOFT_NET_PROFILE` set still needs the `Debugger` the hook hangs off.
+        if prof.is_none() {
+            if self.debug.is_none() {
+                self.debug = Some(Box::default());
+            }
+            crate::profiler::install_signal_flush();
+            return;
+        }
+        let Some(prof) = prof else { return };
         if self.debug.is_none() {
             self.debug = Some(Box::default());
         }

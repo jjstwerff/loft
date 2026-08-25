@@ -93,6 +93,30 @@ serves — and for `SIGINT`/`SIGTERM` a second signal is the ordinary kill, neve
 An unprofiled run installs no handlers at all, so ordinary shutdown behaviour is
 untouched.
 
+### `LOFT_NET_PROFILE` — what the network did (loft#1088)
+
+The third instrument that reports on a RUNNING program, beside CPU and memory. Its metric
+is **margin**, not duration: an operation that COMPLETED, well within its own success
+criteria but close enough to a deadline that a slower machine would have missed it, is
+what makes a networked test flake, and no other instrument reports it. Every event also
+carries wall-clock start and end, so two PROCESSES' streams merge on one timeline — which
+is the only way to answer *did the client connect before the server bound?*
+
+```
+LOFT_NET_PROFILE=1        # a summary by site at exit
+LOFT_NET_PROFILE=trace    # + one line per event, as it happens — reach for this when
+                          #   the ORDER of operations is the question
+```
+
+**It records at the sockets the RUNTIME owns** — `engine_host`'s kernel, the
+`loft debug --serve` browser server, and the wire to a placed library's worker. A
+networking LIBRARY opens its own sockets, and arming the switch does not reach them: its
+Rust bridge joins this report by calling `loft::net_profile::time(site, budget, || …)`
+around its own accept / read / write, which is what puts it on the same timeline with the
+same budgets. Armed with nothing recorded, the report says all of this rather than
+printing nothing — a silent instrument and a broken one look identical from outside, and
+that cost a consumer an investigation.
+
 ### Two profilers, and the driver picks
 
 **`perf` measures the engine — loft's own Rust.** For a `--native` run that is also your

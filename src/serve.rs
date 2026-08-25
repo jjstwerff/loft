@@ -54,7 +54,7 @@ pub fn run_serve(
     // process, e.g. hiding panic messages in a parallel test run.)
     crate::rpc::capture_begin();
     eprintln!("loft debug --serve: open http://127.0.0.1:{port}/ in a browser");
-    for conn in listener.incoming() {
+    for conn in crate::net_profile::accepting(&listener, "serve/accept") {
         let Ok(stream) = conn else { continue };
         // A bad connection (malformed request, abrupt close) must not take the server
         // down — drop it and keep serving.
@@ -73,7 +73,9 @@ fn serve_connection(
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
+    crate::net_profile::time("serve/request_line", None, || {
+        reader.read_line(&mut request_line)
+    })?;
     let path = request_line
         .split_whitespace()
         .nth(1)
@@ -83,7 +85,8 @@ fn serve_connection(
     let mut is_upgrade = false;
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        if crate::net_profile::time("serve/header_line", None, || reader.read_line(&mut line))? == 0
+        {
             break;
         }
         let line = line.trim_end();
@@ -105,7 +108,7 @@ fn serve_connection(
              Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
         );
         let mut s = stream;
-        s.write_all(resp.as_bytes())?;
+        crate::net_profile::time("serve/upgrade_write", None, || s.write_all(resp.as_bytes()))?;
         ws_protocol_loop(reader, stream, session)?;
     } else if path == "/" {
         http_respond(
@@ -210,7 +213,7 @@ fn ws_read_frame(reader: &mut impl BufRead) -> std::io::Result<Option<(u8, Vec<u
 fn read_exact_or_eof(reader: &mut impl BufRead, buf: &mut [u8]) -> std::io::Result<bool> {
     let mut filled = 0;
     while filled < buf.len() {
-        match reader.read(&mut buf[filled..])? {
+        match crate::net_profile::time("serve/ws_read", None, || reader.read(&mut buf[filled..]))? {
             0 => return Ok(true),
             n => filled += n,
         }
@@ -224,7 +227,7 @@ fn ws_write_text(stream: &TcpStream, text: &str) -> std::io::Result<()> {
     write_frame_len(&mut frame, text.len());
     frame.extend_from_slice(text.as_bytes());
     let mut s = stream;
-    s.write_all(&frame)
+    crate::net_profile::time("serve/ws_write", None, || s.write_all(&frame))
 }
 
 /// Reply to a ping with a pong carrying the same payload (FIN, opcode 0xA, unmasked).

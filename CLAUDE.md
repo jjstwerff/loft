@@ -301,6 +301,13 @@ cross; a returned VIEW cannot be placed) ·
 [LOGGER.md](doc/claude/LOGGER.md) · [WASM.md](doc/claude/WASM.md) · [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) ·
 [BROWSER_INTEROP.md](doc/claude/BROWSER_INTEROP.md) · [WINDOWS.md](doc/claude/WINDOWS.md) / [WINDOWS_SESSION.md](doc/claude/WINDOWS_SESSION.md).
 
+**Networked runs:** `LOFT_NET_PROFILE=1|trace` reports socket operations by **margin**
+(a call that finished close to its deadline is a failure that has not happened yet) with
+wall-clock stamps that merge two processes' streams. It records at the sockets the RUNTIME
+owns — `engine_host`, `loft debug --serve`, placed-library workers; a networking LIBRARY
+joins by calling `loft::net_profile::time(…)` from its Rust bridge, and the armed-but-empty
+report says so rather than printing nothing (loft#1088). PERFORMANCE.md § LOFT_NET_PROFILE.
+
 **Diagnostics:** [DIAGNOSTICS.md](doc/claude/DIAGNOSTICS.md) the code index (`advice[avoidable-copy]`)
 + `--explain` fix lines — a code is a FROZEN public surface, and a new one lands with its row.
 

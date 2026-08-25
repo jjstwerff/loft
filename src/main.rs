@@ -11047,6 +11047,11 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     // often exactly what is being asked. Both are silent unless armed.
     state.report_alloc_sites(&p.data);
     state.report_profile(&p.data);
+    // loft#1088 — the network summary was BUILT and never printed: `LOFT_NET_PROFILE=1`
+    // accumulated every event and nothing called `report`, so only `=trace` (which
+    // prints per event) produced output at all.  Beside the other two because it is the
+    // third instrument that reports on a RUNNING program.
+    loft::net_profile::report();
     // @PLN119 arc A — say goodbye to each placed library's worker rather than
     // leaving the kernel to do it. `PR_SET_PDEATHSIG` is the backstop that
     // covers every `exit` path below and an outright kill; this is the graceful

@@ -601,3 +601,51 @@ fn an_unprofiled_run_installs_no_signal_handlers() {
         "an unarmed run reports nothing at all.\n{text}"
     );
 }
+
+/// loft#1088 — `LOFT_NET_PROFILE=1` accumulated every event into a summary that nothing
+/// ever printed: only `=trace`, which prints per event, produced output at all.
+///
+/// So "no report" was the answer for every program, and a consumer arming it against a
+/// socket server spent an investigation on it — because a report that never prints and
+/// an instrument that sees nothing look exactly the same from outside.
+///
+/// The empty case is the one asserted here, since it is the one a consumer hits: armed,
+/// nothing recorded, and the report SAYS so and names what it can see. A silent
+/// instrument and a broken one are indistinguishable, which is the same lesson the CPU
+/// profiler learned from a `--native` run (loft#865).
+#[test]
+fn an_armed_network_profile_says_so_when_it_recorded_nothing() {
+    let out = run(
+        "net_empty",
+        "fn main() { println(\"no sockets here\"); }",
+        &[("LOFT_NET_PROFILE", "1")],
+    );
+    assert!(
+        out.contains("[net-profile] armed, and no socket operation was recorded"),
+        "an armed run that touched no socket must say so rather than print nothing:\n{out}"
+    );
+    assert!(
+        out.contains("the sockets the RUNTIME owns"),
+        "…and name its reach, because the reader's next question is whether the switch \
+         works:\n{out}"
+    );
+    assert!(
+        out.contains("net_profile::time"),
+        "…and name how a library joins the report, which is the actual cure for a \
+         program built on one:\n{out}"
+    );
+}
+
+/// The control: an unarmed run says nothing at all about the network.
+#[test]
+fn an_unarmed_network_profile_is_silent() {
+    let out = run(
+        "net_off",
+        "fn main() { println(\"no sockets here\"); }",
+        &[],
+    );
+    assert!(
+        !out.contains("[net-profile]"),
+        "an unarmed run must not mention the instrument:\n{out}"
+    );
+}

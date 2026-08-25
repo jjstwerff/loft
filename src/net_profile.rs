@@ -26,6 +26,14 @@
 //! Events also carry BYTES, so a stalled transfer is distinguishable from a small one and
 //! a byte-at-a-time header read is visible as the 1-byte-per-syscall loop it is.
 //!
+//! **What it can see.** The sockets the RUNTIME owns: `engine_host`'s kernel, the
+//! `loft debug --serve` browser server, and the wire to a placed library's worker. A
+//! networking LIBRARY opens its own sockets, and arming the switch does not reach them —
+//! its Rust bridge joins this report by calling [`time`] around its own accept / read /
+//! write, which is what puts it on the same timeline with the same budgets. Armed with
+//! nothing recorded, [`report`] says all of this rather than printing nothing, because a
+//! silent instrument and a broken one look identical (loft#1088).
+//!
 //! Off costs a cached bool. Armed, it costs one `Instant::now()` pair per socket call.
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -65,6 +73,8 @@ fn wall_us() -> u64 {
 
 static SITES: OnceLock<Mutex<std::collections::BTreeMap<&'static str, Site>>> = OnceLock::new();
 static EVENTS: AtomicU64 = AtomicU64::new(0);
+/// Whether the armed-but-empty line has already been printed — see [`report`].
+static ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `LOFT_NET_PROFILE=1` — summary at exit. `=trace` also prints each event as it happens,
 /// which is what you want when the ORDER of operations is the question (a bind that lost a
@@ -193,11 +203,61 @@ impl IoVolume for () {
         0
     }
 }
+/// An accepted connection moves no bytes — the accept is the event, not a transfer.
+impl IoVolume for std::net::TcpStream {
+    fn volume(&self) -> u64 {
+        0
+    }
+}
 
-/// Print the summary.  Silent when nothing was recorded, so an unprofiled run — or one
-/// that never touched a socket — prints nothing at all.
+/// The sites the runtime itself records at, for the report to name when it has nothing
+/// else to say.
+///
+/// A consumer arming the switch against a program built on a networking LIBRARY got
+/// silence, and silence is indistinguishable from "the switch is broken" (loft#1088).
+/// Naming the reach turns that into a one-line answer.
+const RUNTIME_SITES: &str =
+    "engine_host (@PLN18 kernel), `loft debug --serve`, and placed-library workers";
+
+/// Wrap a listener's `incoming()` so each accepted connection is an event.
+///
+/// A listener is where a networked flake starts — *did the client connect before the
+/// server bound?* is a question about accepts, and it needs the wall-clock stamps
+/// [`record_io`] carries.  Iterator-shaped so the call site stays the `for conn in …`
+/// loop it already was.
+pub fn accepting<'a>(
+    listener: &'a std::net::TcpListener,
+    site: &'static str,
+) -> impl Iterator<Item = std::io::Result<std::net::TcpStream>> + 'a {
+    std::iter::from_fn(move || Some(time(site, None, || listener.accept().map(|(s, _)| s))))
+}
+
+/// Print the summary.
+///
+/// When the switch is armed and nothing was recorded, the report SAYS so and names what
+/// it can see.  It used to print nothing at all, which reads as "the instrument is
+/// broken" — a consumer armed it against a socket server built on a loft LIBRARY, got an
+/// empty terminal, and had no way to tell that from a switch that does not work
+/// (loft#1088).  The CPU profiler learned the same lesson from a `--native` run
+/// (loft#865): an armed instrument that finds nothing must announce it, not exit quiet.
 pub fn report() {
-    if !enabled() || EVENTS.load(Ordering::Relaxed) == 0 {
+    if !enabled() {
+        return;
+    }
+    if EVENTS.load(Ordering::Relaxed) == 0 {
+        // Once per process: a periodic flush asks again every time, and a line repeated
+        // every thirty seconds stops being read.
+        if ANNOUNCED.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        crate::loft_eprintln!("\n[net-profile] armed, and no socket operation was recorded.");
+        crate::loft_eprintln!("  It records at the sockets the RUNTIME owns — {RUNTIME_SITES}.");
+        crate::loft_eprintln!(
+            "  A library that opens its own sockets is not covered by arming the switch: \
+             its Rust bridge joins this report by calling \
+             `loft::net_profile::time(site, budget, || …)` around its own accept / read / \
+             write, which puts it on this timeline with these budgets."
+        );
         return;
     }
     let Some(map) = SITES.get() else { return };
@@ -293,6 +353,38 @@ mod tests {
         );
         // 4ms of a 20ms budget is 20% — under the near-miss line, so not flagged.
         assert_eq!(e.near_misses, 0, "a comfortable call is not a near miss");
+    }
+
+    /// An ACCEPT is an event, because the question a networked flake poses is about the
+    /// order of two of them — did the client connect before the server bound?
+    ///
+    /// Through the same wrapper the runtime's own listeners use, so this is the recording
+    /// path and not a re-implementation of it (loft#1088).
+    #[test]
+    fn an_accepted_connection_is_recorded() {
+        unsafe { std::env::set_var("LOFT_NET_PROFILE", "1") };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+        let client = std::thread::spawn(move || std::net::TcpStream::connect(addr));
+        let mut incoming = accepting(&listener, "test/accept");
+        let accepted = incoming
+            .next()
+            .expect("the iterator yields")
+            .expect("accept");
+        drop(accepted);
+        drop(client.join().expect("client thread"));
+
+        let m = SITES.get().expect("a recorded event creates the map");
+        let g = m.lock().expect("lock");
+        let e = g.get("test/accept").expect("the accept was recorded");
+        assert_eq!(e.calls, 1, "one accept, one event");
+        assert_eq!(e.bytes, 0, "an accept moves no bytes and says so");
+        assert!(
+            e.first_start_us > 0 && e.last_end_us >= e.first_start_us,
+            "an accept carries wall-clock stamps like every other event: {} .. {}",
+            e.first_start_us,
+            e.last_end_us
+        );
     }
 
     /// The margin metric is the reason this exists: a call that SUCCEEDED close to its
