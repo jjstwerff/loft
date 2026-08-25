@@ -503,12 +503,71 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **0** — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Opt-Zero — CLOSED (2026-08-24): a nullable field defaults to its BASE ZERO, not null
+
+`(D-Opt)` says `construct_default(τ?) = null` — *"an optional's default IS null"* — and
+`(D-Rec)` composes it: a field with no `= expr` takes `construct_default` of its own type.
+The code does not do that for a scalar or text base. Measured on **both** backends, so this
+is a rule/code divergence and not a backend split:
+
+```loft
+struct S { a: integer?, b: text?, c: boolean?, d: Colour? }
+s = S {};                       // a=0   b=''   c=false   d=null
+```
+
+Only the enum base answers `null`. `data::to_default` handles it as
+`Type::Optional(inner) => to_default(inner, data)` and states the choice outright: base-zero
+is *"the settled design call"* (@PLN25), because a bare `null` would fall to the `_` arm and
+render as native unit into a scalar slot (E0308) — and the field is still writable to null
+through an explicit `= null`.
+
+**So the disagreement is real and deliberate, which is the awkward part**: a decision was
+taken in code and `(D-Opt)` was never updated to match, exactly as
+[`formal/layout.md`'s `L-Tuple`] was left naming a function a rename had removed. The
+doctrine says the CODE changes to match the rules, so this stays OPEN rather than being
+written away — but the decision behind it has a stated reason and a plan number, and the
+resolution is a design call the owner should make, not a silent edit in either direction:
+
+- amend `(D-Opt)` to state base-zero for a scalar/text base and `null` for the rest, or
+- change `to_default` and give the E0308 problem a different answer.
+
+**Resolved by the owner (2026-08-24): the rule stands — a nullable value in a field is null
+at the start.** `to_default`'s `Optional` arm now builds the base type's null SENTINEL
+through the new `data::to_null`, which is the `OpConv…FromNull` op for that base. Those ops
+already existed and already produced the same sentinels as the runtime's
+`Stores::set_default_value_nullable` (`i64::MIN`, `255` for the tri-state boolean,
+`char::from(0)`), so the two paths now agree instead of contradicting each other.
+
+The E0308 objection was real but misdirected: a bare `Value::Null` does render as native
+unit, and the answer is the TYPED null op rather than the base's zero. Nothing needed
+inventing.
+
+**What the old behaviour rested on, checked:** the code cited *"an omitted field gets the
+zero value for its type (LOFT.md § constructors; 06-structs.loft locks it)"*. `LOFT.md` has
+no such section and does not contain that sentence, and `06-structs.loft` declares no
+nullable field at all. The only thing actually locking it was one half of
+`issues::issue_332_nullable_narrow_field_null_roundtrip`, written on the strength of those
+two citations; it now asserts the rule instead, across omitted / assigned / re-nulled for
+`i16?`, `i32?` and `integer?`.
+
+**Blast radius: one test in 4 434.** Verified on both backends for `i8? u8? i16? u16? i32?
+integer? float? single? boolean? text? character?` and an enum, a reference and a vector —
+and the non-nullable defaults (`0`, `false`, `""`) are unchanged.
+
+⚠ `character?` is the one base whose null is indistinguishable from its zero: both are
+`char::from(0)`, which is also what the runtime writes (its content-type-6 arm ignores
+`nullable`). Consistent between the two paths, so not a divergence — but it means
+`character?` cannot represent absence distinctly. Separate question, not opened here.
+
+Found by citing: the `D-*` family has one home (`data::to_default` + `Data::has_default`),
+and writing *"enforces `@FR-D-Opt`"* on it is what forced the comparison.
 
 ### DN-SE-inline — CLOSED (2026-08-22): a nullable struct-enum in INLINE storage
 The representation rule above derives `τ?`'s null from `τ`'s storage, and gives a reference the

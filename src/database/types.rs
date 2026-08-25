@@ -562,6 +562,16 @@ impl Stores {
         }
     }
 
+    /// Assign `(size, align, field positions)` to one registered type, recursing into the
+    /// types it contains.
+    ///
+    /// Enforces @FR-L-Total: layout is a TOTAL function of the finished type — every
+    /// registered type ends with exactly one `(size, align, offset-vector)`, and BOTH
+    /// backends read those same offsets.  A backend computing a different offset is a bug,
+    /// not a second layout.
+    ///
+    /// Returns early for a type that is not a record shape, or whose size is already
+    /// assigned, or that is mid-recursion — so the result does not depend on visit order.
     pub(super) fn finish_type(
         &mut self,
         linked: &HashSet<u16>,
@@ -2424,6 +2434,13 @@ impl Stores {
         }
     }
 
+    /// The layout identity a store records, so a later reader can tell whether its own
+    /// layout still matches the bytes on disk.
+    ///
+    /// Enforces @FR-L-Sound: a reader whose identity differs from a store's RECORDED
+    /// identity must reject-or-migrate and NEVER read the bytes raw; a raw handoff is
+    /// admitted only when the two are equal.  `schema_sidecar` is what compares them.
+    ///
     /// @PLN97 — a stable FNV-1a hash of the STORAGE layout of `roots` and every
     /// type they reference (record sizes + `Parts` field byte positions,
     /// narrow-int encodings, collection element strides) AND the host endianness

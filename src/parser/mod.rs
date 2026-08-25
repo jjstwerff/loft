@@ -849,7 +849,21 @@ pub struct Parser {
     advisory_checked: std::collections::HashSet<(String, String)>,
 }
 
-// Operators ordered on their precedence
+/// The binary operator levels, loosest first.
+///
+/// Enforces @FR-G-Prec — level N binds tighter than level N-1, and parsing is
+/// precedence-climbing over exactly this table, so the table IS the precedence.  A level's
+/// operators all bind equally.
+///
+/// @FR-G-Assoc is NOT in this table: associativity is decided where `parse_operators`
+/// recurses, by the precedence it hands the RHS.  Every level is LEFT-associative (RHS at
+/// `precedence + 1`) except `**`, which passes its own level so it re-enters itself.  `as`
+/// is not associative at all — its right side is a TYPE, not an expression.  So changing
+/// this table alone cannot change associativity.
+///
+/// `??` sits at the loosest level on purpose (@FR-G-Post-Default): a default-fallback binds
+/// after everything it might supply a default for.  The lexer coalesces `??` by maximal
+/// munch (@FR-G-Lex-Coal), so it never arrives here as two `?` tokens.
 static OPERATORS: &[&[&str]] = &[
     &["??"],
     &["||", "or"],
@@ -5632,6 +5646,17 @@ impl Parser {
     /// which substitution rewrites to the concrete one.
     pub(crate) const TV_NULL_BLOCK: &'static str = "tvnull";
 
+    /// Specialise a generic `name` for the concrete argument types `types`, returning the
+    /// monomorph's def_nr (or `u32::MAX` when `name` names no generic).
+    ///
+    /// Enforces @FR-G-Mono: a call with concrete argument types produces ONE specialised
+    /// copy per distinct instantiation, in the PARSER — so a generic never survives into
+    /// the IR and every backend sees ordinary monomorphic functions.  Re-instantiating the
+    /// same types reuses the existing monomorph rather than building a second.
+    ///
+    /// Also the gate for @FR-G-Gen's bound half: the `bindings` computed here are handed to
+    /// [`Self::check_satisfaction`], so a type that does not satisfy the declared bounds is
+    /// rejected at the instantiation rather than inside the specialised body.
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
         let g_nr = self.data.def_nr(&generic_name);
@@ -6218,14 +6243,19 @@ impl Parser {
         out
     }
 
-    /// I6: Check that the concrete type (identified by `concrete_nr`) implements every
+    /// Check that the concrete type (identified by `concrete_nr`) implements every
     /// interface in `g_nr`'s bounds, and that each companion it binds to an associated type
     /// satisfies that type's declared bound.  Returns `true` if satisfied (or no bounds),
     /// `false` and a diagnostic per failure otherwise.
     ///
-    /// `assoc` is what `instantiate_generic` already inferred for this monomorph — passed
-    /// in rather than recomputed, so a companion the implementor cannot agree on is
-    /// reported once, not once per place that asks.
+    /// Enforces @FR-G-Sat: satisfaction is STRUCTURAL and judged at the point of use — a
+    /// type satisfies an interface exactly when the required methods are VISIBLE there.
+    /// No `impl` declaration exists to consult, so having the methods IS satisfying, and
+    /// this function is the only thing that decides it.
+    ///
+    /// `assoc` is what [`Self::try_generic_instantiation`] already inferred for this
+    /// monomorph — passed in rather than recomputed, so a companion the implementor cannot
+    /// agree on is reported once, not once per place that asks.
     fn check_satisfaction(&mut self, g_nr: u32, concrete_nr: u32, assoc: &[(u32, Type)]) -> bool {
         let bounds = self.data.definitions[g_nr as usize].bounds.clone();
         if bounds.is_empty() {
@@ -8606,7 +8636,7 @@ impl Parser {
             }
             Type::Tuple(elems) => {
                 // Plan-06 phase 4d: tuple struct field read.  Each
-                // element is read from `pos + element_offsets[i]`
+                // element is read from `pos + element_stack_offsets[i]`
                 // using the same OpGet* opcodes that ordinary struct
                 // fields use; the assembled stack tuple matches the
                 // shape `Type::Tuple(...)` consumers expect.

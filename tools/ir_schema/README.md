@@ -39,6 +39,27 @@ changes — no hand-sync of ~940 sites); the ergonomic typed API is hand-coded
 (codegen never emits an accessor layer — see @PLN11 § "What the generated
 Rust gives us").
 
+## The drift guard
+
+`make ir-schema-check` (or `scripts/ir_schema_check.sh`) runs the pipeline for real and
+byte-compares the result against the committed `src/ir_schema_gen.rs`. It costs ~0.1 s and
+is gated by `doc_hygiene::ir_schema_gen_matches_its_loft_source`, which shells out to the
+same script — so the gate and the tool cannot drift apart.
+
+**Why it exists.** `ir_schema_gen.rs` says `DO NOT EDIT — regenerate`, and nothing enforced
+that. It was hand-edited anyway: `src/keys.rs::Key` gained a third field, `start`, in
+loft#812; the generated file was updated to match and **`ir.loft` — the source — was not.
+Nobody regenerated for months, so the two stayed out of step invisibly, and the first
+regeneration after that silently DROPPED `Key.start`, taking `KEY_STRIDE` from 24 to 16.
+A wrong record layout is not a build error; it is a wrong byte offset.
+
+When it fires, decide which side is right. If `ir.loft` is, `make ir-schema-regen` rewrites
+the generated file — then run `cargo test --lib baked_layout_mirrors_loft_schema`, which is
+what proves `data_store.rs`'s baked `DISC_*` / `ND*` constants still match the new layout.
+
+The check SKIPS rather than fails when there is no built `loft` to regenerate with (a fresh
+clone) or no `python3`. `make ci` builds a binary, so there it always runs.
+
 ## Extraction findings (2026-06-01)
 
 `extract.py` (probe mode) established:

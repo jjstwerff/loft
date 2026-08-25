@@ -2971,11 +2971,25 @@ impl Function {
         self.inline_ref_vars.contains(&v)
     }
 
-    /// Returns true if this work-ref variable should be skipped when emitting `OpFreeRef`.
-    /// Set by `clean_work_refs` for ref variables that were re-assigned to a different type
-    /// and must not be freed at scope exit.
-    /// Returns true if `get_free_vars` must not emit `OpFreeRef` for this variable.
-    /// Set by `clean_work_refs` for work-ref temporaries that are re-purposed after use.
+    /// Must no `OpFreeRef` ever be emitted for `v`?  Its contract is exactly that
+    /// sentence, and nothing weaker.
+    ///
+    /// Enforces @FR-O-Override — the never-free veto.
+    ///
+    /// ⚠ It exists because @FR-O-Proxy is unsound alone.  The way sites read `deps` for
+    /// ownership is `tp.depend().is_empty()` — which is only a PROXY: it
+    /// answers "owned" for a borrow whose dep list was never populated (loft#723).  A `??`
+    /// subject of `Reference` type is exactly that shape — the parser materialises it into
+    /// `__ncc_N` and marks it here, while its type keeps empty deps.  So this flag has to
+    /// VETO the proxy at every site that frees on it, not only at the scope-exit sweep in
+    /// `Scopes::get_free_vars`.
+    ///
+    /// Consulting it only at scope exit is what left an unconditional pre-Set free
+    /// reachable in a loop body: the free landed on the NEXT iteration's store — stale
+    /// bytes without `LOFT_POISON`, SIGSEGV with it.
+    ///
+    /// Set by `clean_work_refs` for work-ref temporaries re-purposed after use, and by the
+    /// `??` lowering for a borrowed subject.
     pub fn is_skip_free(&self, v: u16) -> bool {
         self.variables[v as usize].skip_free
     }

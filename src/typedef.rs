@@ -9,8 +9,9 @@
 //! database store schemas.  Called between parser pass 1 and pass 2.
 //!
 //! Key entry points:
-//! - [`actual_types`] — resolve forward type references, detect cycles,
-//!   compute field positions via [`crate::calc::calculate_positions`].
+//! - [`actual_types`] — resolve forward type references, detect cycles, and settle
+//!   each field's TYPE.  It does not assign byte positions: those come later, when
+//!   `Stores::finish` runs `finish_type` over the resolved types (@FR-L-Total).
 //! - [`fill_all`] — allocate database stores for each struct/enum and
 //!   write the type schema into `Stores`.
 //! - [`complete_definition`] — finalise a single definition's field layout.

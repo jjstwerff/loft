@@ -81,8 +81,11 @@ fn main() {
   // The literal is the fourth spelling of an absent PLAIN text, and it agrees: that is
   // the disagreement loft#875 reported (`T {}` gave "", `"{{}}" as T` gave null).
   i875_absent(I875 {}, "struct literal");
-  // Its `text?` field does NOT, and must not: @PLN25's base-zero rule.
-  assert(I875 {}.opt == "", "an omitted `text?` in a LITERAL takes its base zero (@PLN25)");
+  // Its `text?` field answers NULL, and the difference is the point: a plain `text` has no
+  // way to say "absent", so its absent value is the empty string; a `text?` does, so its
+  // default is the null sentinel (`formal/types.md` D-Opt).  The four spellings above agree
+  // with each other because they are all asking about the PLAIN field.
+  assert(I875 {}.opt == null, "an omitted `text?` in a LITERAL is null (D-Opt)");
 
   // A present value still arrives — the guard must not pass by defaulting everything.
   has = I875_HAS as I875;

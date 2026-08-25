@@ -735,10 +735,42 @@ check_examples() {
   cited=$(mktemp); cache=$(mktemp -d)
   # Citations under the repo-under-test (loft: default/ + lib/ + doc/features/).
   examples_cited_in_tree "$repo_root" "$cite_roots" "$feature_docs" > "$cited"
-  # Cache a repo's defs by checkout path, so each repo is scanned at most once.
+  # Cache a repo's defs by (checkout path, branch), so each is scanned at most once.
+  #
+  # Resolve against the BRANCH the registry names, not the working tree.  A sibling
+  # checkout sits on whatever branch its own agent is working on, so indexing the tree made
+  # this gate's verdict depend on that: a tag present only on a feature branch read as
+  # RESOLVED while the `blob/<branch>` link printed beside it 404s, and the same tag read as
+  # dangling once that checkout moved.  A false GREEN is the worse half.
+  #
+  # `git archive` is read-only — a sibling repo is never ours to check out, stash or
+  # worktree — and the export reuses `examples_defs_in_tree` unchanged, so the def rules
+  # (defines / first-tag-wins / blank-breaks / citation-block) have exactly one home.
+  # Falls back to the working tree, loudly, when the ref is absent.
   _defs() {
-    local key cf; key=$(printf '%s' "$1" | tr '/.' '__'); cf="$cache/$key"
-    [ -f "$cf" ] || examples_defs_in_tree "$1" > "$cf" 2>/dev/null
+    local root="$1" br="${2:-}" key cf ref exp
+    key=$(printf '%s@%s' "$root" "$br" | tr '/.@' '___'); cf="$cache/$key"
+    if [ ! -f "$cf" ]; then
+      ref=""
+      if [ -n "$br" ] && [ -d "$root/.git" ]; then
+        for cand in "origin/$br" "$br"; do
+          if git -C "$root" rev-parse --verify -q "$cand^{commit}" >/dev/null 2>&1; then
+            ref="$cand"; break
+          fi
+        done
+      fi
+      if [ -n "$ref" ]; then
+        exp="$cache/x_$key"; mkdir -p "$exp"
+        if git -C "$root" archive "$ref" 2>/dev/null | tar -x -C "$exp" 2>/dev/null; then
+          examples_defs_in_tree "$exp" > "$cf" 2>/dev/null
+        else
+          examples_defs_in_tree "$root" > "$cf" 2>/dev/null
+        fi
+      else
+        [ -n "$br" ] && yellow "  note: $root has no ref '$br' — indexing its working tree instead"
+        examples_defs_in_tree "$root" > "$cf" 2>/dev/null
+      fi
+    fi
     printf '%s' "$cf"
   }
   local n_cited; n_cited=$(grep -cvE '^$' "$cited")
@@ -765,9 +797,25 @@ check_examples() {
       yellow "  unvalidated: $t — no sibling checkout ../$repo; clone it to validate. link: $url"
       HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
     fi
-    def=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$(_defs "$lpath")")
+    def=$(awk -F'\t' -v tg="$t" '$1==tg{print $2; exit}' "$(_defs "$lpath" "$branch")")
     if [ -z "$def" ]; then
-      red "  dangling: $t is cited but no fn carries it in $repo"
+      # Absent from the branch the registry names is not one condition but two, and they
+      # want different answers.  A tag carried on some OTHER ref of the owning repo is a
+      # PENDING MERGE — a cross-repo timing fact, nothing here can fix it, and failing the
+      # gate on it blocks this repo on another repo's merge schedule.  A tag carried
+      # nowhere is a genuine dangling citation and stays an error.
+      pending=""
+      if [ -d "$lpath/.git" ]; then
+        pending=$(git -C "$lpath" grep -l -- "$t" \
+                    $(git -C "$lpath" for-each-ref --format='%(refname)' \
+                        refs/heads refs/remotes 2>/dev/null) 2>/dev/null \
+                  | head -1 | cut -d: -f1)
+      fi
+      if [ -n "$pending" ]; then
+        yellow "  pending: $t is on '$pending' in $repo, not yet on '$branch' — merge it there"
+        HITS_EXAMPLES_WARN=$((HITS_EXAMPLES_WARN + 1)); continue
+      fi
+      red "  dangling: $t is cited but no fn carries it in $repo (on any ref)"
       ( cd "$repo_root" 2>/dev/null && grep -rnE "Example:.*$t" $cite_roots --include='*.loft' 2>/dev/null ) | sed 's/^/      /'
       [ -d "$repo_root/$feature_docs" ] && \
         ( cd "$repo_root" 2>/dev/null && grep -rnE "Example:.*$t" "$feature_docs" --include='*.md' 2>/dev/null ) | sed 's/^/      /'

@@ -1,0 +1,136 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN146 W6 — a `.draw` scene straight into the pack.
+//
+// Two routes to the same atlas entry:
+//
+//   A  scene -> render -> save_png -> a FILE -> imaging decodes it -> texels
+//   B  scene -> render -> texels
+//
+// Route A is what a packer had to do before this phase: `drawing` could only
+// hand a picture out as a PNG.  Route B skips the file.  The claim is that the
+// cell each route produces is the same cell — same rect, same texels, same
+// derived collision proxy — read back out of a WRITTEN pack rather than
+// compared in memory, because the pack is what a game reads.
+//
+//   W6_SCENES=<dir> W6_OUT=<dir> W6_LIST="ammo sword …" [W6_CONTROL=1] loft w6.loft
+use drawing;
+use graphics;
+use imaging;
+use assets;
+
+/// The 0xAARRGGBB words of a decoded PNG, in the order a canvas holds them.
+fn png_words(path: text) -> vector<integer> {
+  img = file(path).png();
+  pw_out: vector<integer> = [];
+  if img == null { return pw_out }
+  for p in img.data { pw_out += [p.rgba()]; }
+  pw_out
+}
+
+/// Build a one-page pack out of tiles, write it, and read it back — so what is
+/// compared is what a game would load, not what the packer had in hand.
+fn pack_of(tiles: const vector<assets::Tile>, base: text) -> assets::Pack {
+  p = assets::new_pack();
+  blobs: hash<assets::Blob[bl_key]> = [];
+  if !assets::page_grid(p, blobs, "atlas", "page/atlas", tiles, 0, 1) {
+    println("RED  page_grid refused the tiles for {base}");
+    return p
+  }
+  if !assets::pack_write(p, blobs, base) { println("RED  could not write {base}"); }
+  back = assets::new_pack();
+  if !assets::pack_read(back, base) { println("RED  could not read {base} back"); }
+  back
+}
+
+fn main() {
+  dir = env_variable("W6_SCENES");
+  out = env_variable("W6_OUT");
+  list = env_variable("W6_LIST");
+  control = env_variable("W6_CONTROL") == "1";
+  if dir == "" || out == "" || list == "" {
+    println("RED  W6_SCENES / W6_OUT / W6_LIST must all be set");
+    return
+  }
+
+  names: vector<text> = [];
+  through_file: vector<assets::Tile> = [];
+  fileless: vector<assets::Tile> = [];
+  for nm in list.split(' ') {
+    if nm == "" { continue }
+    names += [nm];
+    sc = parse_scene(file("{dir}/{nm}.draw").content()?);
+    for u in sc.unparsed { println("RED  {nm} — unparsed {u}"); }
+    for d in sc.deferred { println("RED  {nm} — not drawn by this build: {d}"); }
+    cv = render(sc);
+
+    // Route A — out through a file and back in.
+    png = "{out}/a/{nm}.png";
+    if !cv.save_png(png) { println("RED  {nm} — could not write {png}"); }
+    through_file += [assets::Tile { ti_key: nm, ti_w: cv.width, ti_h: cv.height,
+                                    ti_px: assets::texels(png_words(png)) }];
+
+    // Route B — no file anywhere.
+    px = assets::texels(cv.data);
+    if control && len(px) > 3 { px[3] = (((px[3]? + 128) % 256)? as u8?)?; }
+    fileless += [assets::Tile { ti_key: nm, ti_w: cv.width, ti_h: cv.height, ti_px: px }];
+
+    if file("{out}/b/{nm}.png").exists() {
+      println("RED  {nm} — route B left a PNG on disk");
+    }
+  }
+
+  a = pack_of(through_file, "{out}/a/pack");
+  b = pack_of(fileless, "{out}/b/pack");
+
+  pa = a.pages["atlas"];
+  pb = b.pages["atlas"];
+  if pa == null || pb == null { println("RED  a pack came back without its page"); return }
+  if pa.pi_w != pb.pi_w || pa.pi_h != pb.pi_h {
+    println("RED  page {pb.pi_w}x{pb.pi_h} against the file route's {pa.pi_w}x{pa.pi_h}");
+  }
+
+  ba: hash<assets::Blob[bl_key]> = [];
+  bb: hash<assets::Blob[bl_key]> = [];
+  _ = assets::prefetch(ba, assets::blobs_path("{out}/a/pack"), ["page/atlas"]);
+  _ = assets::prefetch(bb, assets::blobs_path("{out}/b/pack"), ["page/atlas"]);
+  xa = ba["page/atlas"];
+  xb = bb["page/atlas"];
+  if xa == null || xb == null { println("RED  a pack came back without its pixels"); return }
+
+  diff = 0;
+  if len(xa.bl_bytes) != len(xb.bl_bytes) {
+    println("RED  {len(xb.bl_bytes)} bytes against the file route's {len(xa.bl_bytes)}");
+  } else {
+    for i in 0..len(xa.bl_bytes) {
+      if xa.bl_bytes[i]? != xb.bl_bytes[i]? { diff += 1; }
+    }
+  }
+  if diff > 0 {
+    println("RED  {diff} of {len(xa.bl_bytes)} page bytes differ between the two routes");
+  }
+
+  for nm in names {
+    ca = a.cells[nm];
+    cb = b.cells[nm];
+    if ca == null || cb == null { println("RED  {nm} — a route produced no cell"); continue }
+    if ca.ce_x != cb.ce_x || ca.ce_y != cb.ce_y || ca.ce_w != cb.ce_w || ca.ce_h != cb.ce_h {
+      println("RED  {nm} — cell ({cb.ce_x},{cb.ce_y}) {cb.ce_w}x{cb.ce_h} against "
+              + "({ca.ce_x},{ca.ce_y}) {ca.ce_w}x{ca.ce_h}");
+    }
+    if len(ca.ce_proxy) != len(cb.ce_proxy) {
+      println("RED  {nm} — proxy of {len(cb.ce_proxy)} box(es) against {len(ca.ce_proxy)}");
+      continue
+    }
+    if len(cb.ce_proxy) == 0 { println("RED  {nm} — no proxy was derived at all"); }
+    for i in 0..len(ca.ce_proxy) {
+      ra = ca.ce_proxy[i]?;
+      rb = cb.ce_proxy[i]?;
+      if ra.rx != rb.rx || ra.ry != rb.ry || ra.rw != rb.rw || ra.rh != rb.rh {
+        println("RED  {nm} — proxy box {i} moved between the routes");
+      }
+    }
+  }
+  println("compared {len(names)} scene(s) through both routes");
+}

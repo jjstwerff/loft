@@ -113,6 +113,38 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
     if (!window._loftAudioCtx) window._loftAudioCtx = new AudioContext();
     return window._loftAudioCtx;
   }
+  // Start (or restart) a sink's source at `offset` seconds, through a gain and a
+  // panner that OUTLIVE it.  A buffer source is one-shot — it cannot be paused,
+  // moved or replayed — so seeking means building a new one, and keeping the two
+  // nodes behind it is what lets the volume and pan a caller already set survive
+  // that.  Answers whether it started.
+  function startSink(s, pan, offset) {
+    try {
+      const ctx = audioCtx();
+      if (!s.gain) {
+        s.gain = ctx.createGain();
+        s.gain.gain.value = s.vol;
+        s.panner = ctx.createStereoPanner();
+        s.gain.connect(s.panner);
+        s.panner.connect(ctx.destination);
+      }
+      s.panner.pan.value = Math.max(-1, Math.min(1, pan || 0));
+      const src = ctx.createBufferSource();
+      src.buffer = s.buf;
+      src.loop = !!s.loop;
+      src.connect(s.gain);
+      src.start(0, Math.max(0, offset || 0));
+      s.src = src;
+      return true;
+    } catch (e) { return false; }
+  }
+  function stopSource(s) {
+    if (!s || !s.src) return;
+    // Stopping an already-ended source is not an error anywhere but in the spec.
+    try { s.src.stop(); } catch (e) { /* already ended */ }
+    try { s.src.disconnect(); } catch (e) { /* already detached */ }
+    s.src = null;
+  }
   function text2d() {
     if (!textCx) {
       textCv = document.createElement('canvas');
@@ -797,31 +829,67 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
           .catch(() => { slot.dead = true; });
         return id;
       },
-      loft_audio_play(clip, volume) {
+      //
+      // `looping`, `pan` and `start` (@PLN146 E2) are the four things a game
+      // decides at the moment a sound starts, and the native side takes ITS
+      // answers from here: `StereoPannerNode`'s pan law is specified where rodio's
+      // mixer has no pan at all, and `start(when, offset)` under `loop` repeats
+      // from the top, which is why an offset there is a first-pass-only skip on
+      // both targets.  A caller from before this existed passes two arguments and
+      // the defaults below make that mean what it meant.
+      loft_audio_play(clip, volume, looping, pan, start) {
         const c = audioClips[clip];
         if (!c || !c.buf) return -1;                 // absent, failed, or still decoding
         try {
-          const ctx = audioCtx();
-          const src = ctx.createBufferSource();
-          src.buffer = c.buf;
-          const gain = ctx.createGain();
-          gain.gain.value = volume;
-          src.connect(gain);
-          gain.connect(ctx.destination);
-          src.start();
-          audioSinks.push({ src: src, gain: gain });
-          return audioSinks.length - 1;             // ids are never reused: a stopped
-        } catch (e) { return -1; }                  // sink must not name a live one
+          const sink = { src: null, gain: null, panner: null, buf: c.buf,
+                         loop: !!looping, vol: volume };
+          audioSinks.push(sink);
+          const id = audioSinks.length - 1;         // ids are never reused: a stopped
+          if (!startSink(sink, pan || 0, start || 0)) return -1;   // sink must not name a live one
+          return id;
+        } catch (e) { return -1; }
       },
       loft_audio_stop(sink) {
         const s = audioSinks[sink];
         if (!s) return;
-        try { s.src.stop(); } catch (e) { /* already ended — stopping twice is not an error */ }
+        stopSource(s);
         audioSinks[sink] = null;
+      },
+      // Every sound at once — a pause menu, a scene change, a game over.  The
+      // slots are cleared, so no id survives this: a stop-all a caller can undo by
+      // reusing an old handle is not one.
+      loft_audio_stop_all() {
+        for (let i = 0; i < audioSinks.length; i++) {
+          const s = audioSinks[i];
+          if (!s) continue;
+          stopSource(s);
+          audioSinks[i] = null;
+        }
       },
       loft_audio_set_volume(sink, volume) {
         const s = audioSinks[sink];
-        if (s) s.gain.gain.value = volume;
+        if (!s) return;
+        s.vol = volume;
+        if (s.gain) s.gain.gain.value = volume;
+      },
+      // Move a playing sound across the stereo field: -1 left, 0 centre, 1 right.
+      loft_audio_set_pan(sink, pan) {
+        const s = audioSinks[sink];
+        if (!s || !s.panner) return;
+        s.panner.pan.value = Math.max(-1, Math.min(1, pan));
+      },
+      // Jump a playing sound to `seconds` from its start.
+      //
+      // An `AudioBufferSourceNode` cannot be moved once started — it is a
+      // one-shot — so this stops the current one and starts another at the offset
+      // through the SAME gain and panner.  The sink id therefore survives a seek,
+      // which is what makes it a seek rather than a stop plus a play.
+      loft_audio_seek(sink, seconds) {
+        const s = audioSinks[sink];
+        if (!s || !s.buf) return 0;
+        const pan = s.panner ? s.panner.pan.value : 0;
+        stopSource(s);
+        return startSink(s, pan, seconds) ? 1 : 0;
       },
       loft_audio_play_raw(ptr, count, sample_rate, volume) {
         try {

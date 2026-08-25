@@ -854,6 +854,16 @@ impl Stores {
             return;
         }
         let al = db.store_nr;
+        // `LOFT_TRACE_DB` — the free half of the OpDatabase trace.  `already_free`
+        // is the load-bearing column: a free of a slot that is still IN USE means
+        // the DbRef reaching this call is not the current owner's, so the slot is
+        // about to be handed out while someone still holds it.  Reading the
+        // allocation trace alone cannot tell that apart from an ordinary reuse.
+        if crate::keys::trace_db() {
+            let was_free =
+                (al as usize) < self.allocations.len() && self.allocations[al as usize].free;
+            eprintln!("[db] free #{al} name={name} already_free={was_free}");
+        }
         // #405 — a wrong/stale free can carry an out-of-range store_nr (e.g. a
         // stack-NRVO loop-local's dep slot read on a not-taken branch before it
         // is initialised). An out-of-range nr is never a live store, so refuse it

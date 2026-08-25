@@ -3611,16 +3611,19 @@ impl Parser {
         }
     }
 
-    /// I3: parse an `interface` declaration and register it as `DefType::Interface`.
+    /// Parse an `interface` declaration and register it as `DefType::Interface`.
+    ///
+    /// Enforces @FR-G-Iface: an interface is a set of method SIGNATURES and nothing else —
+    /// no bodies — each taking `self: Self`, where `Self` stands for whatever concrete type
+    /// ends up satisfying it.  An operator requirement written `op <tok> (self: Self, …)`
+    /// desugars here to the canonical method name (`<` ⟶ `OpLt`).
     ///
     /// Syntax: `interface Name { fn method(params) -> type [;] ... }`
     ///
-    /// Method signatures are parsed for syntactic correctness (param/return types
-    /// resolved against the current scope).  `Self` is a placeholder type that
-    /// refers to the concrete satisfying type at instantiation (I6).
-    ///
-    /// This first-pass implementation registers the interface definition and
-    /// verifies syntax; semantic satisfaction checking comes in I5/I6.
+    /// Signatures are parsed for syntactic correctness only, with param/return types
+    /// resolved against the current scope.  Whether a type SATISFIES the interface is a
+    /// separate question asked at the use site, never here — see
+    /// `Parser::check_satisfaction` (@FR-G-Sat).
     #[allow(clippy::too_many_lines)]
     // @F26 — interfaces & bounded generics (<T: A + B>, operator interfaces)
     pub(crate) fn parse_interface(&mut self) -> bool {

@@ -18,7 +18,15 @@ fn int_literal(n: i64) -> Value {
 
 impl Parser {
     /// Whether a DIRECT write (`nr = …` / `nr += …`) with operator `op` to binding
-    /// `nr` must be rejected.  The two const axes reject opposite operations:
+    /// `nr` must be rejected.
+    ///
+    /// Enforces @FR-Const-Bind and @FR-Const-Value — the two axes of the const model —
+    /// for the case where the write TARGET is the bare variable.  @FR-Const-ScalarCollapse
+    /// falls out of it: a by-value scalar has no interior distinct from its binding, so
+    /// both axes reject and either spelling freezes it fully.  @FR-Const-Compose is the
+    /// two axes together, and needs no arm of its own: each rejects its own operation.
+    ///
+    /// The two const axes reject opposite operations:
     /// - **binding-const** (`const x`, prefix): the slot is write-once — reject a
     ///   rebind (`=`); allow contents mutation (`+=`).
     /// - **value-const** (`p: const T`, type-qualifier): the value is read-only —
@@ -3506,6 +3514,9 @@ impl Parser {
             self.expr_not_null = false;
             let mut second_code = Value::Null;
             let second_pos = self.lexer.peek_pos().clone();
+            // Enforces @FR-G-Assoc — this is the ONE place associativity is decided, since
+            // the level table (`parser/mod.rs::OPERATORS`) carries precedence only.
+            //
             // `**` is RIGHT-associative — `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, matching
             // maths and most languages, so the maker never carries a surprise here.  Its RHS
             // therefore parses at the SAME precedence (it recurses into a following `**`),

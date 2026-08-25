@@ -1,0 +1,8 @@
+# A line no command accepts, and a check that passes — so the non-zero exit can
+# only be coming from the unparsed line.
+size 40x30
+Background transparent
+name a
+Poly (0.10,0.10) (0.30,0.10) (0.30,0.30) (0.10,0.30) rgb=200,10,10
+Wobble (0.1,0.2) r=3
+check a.cx ~ 0.2

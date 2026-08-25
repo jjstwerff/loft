@@ -2081,11 +2081,13 @@ use a separate collection or add after the loop"
         // A `&` of a tuple PLACE (`b = &v[0]`, `b = &s.pair`) reaches no lowering above,
         // and unlike the struct projection below it cannot be left alone: a tuple place is
         // read ELEMENT-WISE into a fresh by-value tuple before the `&` is ever seen, so
-        // there is no place left to link to.  Declining is what binding.md B-Ref-Reshape
+        // there is no place left to link to.  Declining is what @FR-B-Ref-Reshape
         // prescribes where the link cannot be honoured — *"loft will not quietly downgrade
-        // the reference to a copy"* — and quietly downgrading is exactly what happened:
-        // `b.0 = 9` wrote the copy, the source was unchanged, no diagnostic was issued, and
-        // both backends agreed, so the differential could not see it either (D-tup-2).
+        // the reference to a copy"*.
+        //
+        // ⚠ The alternative is not a lesser `&`, it is a SILENT one: downgrading makes
+        // `b.0 = 9` write the copy while the source stands, with no diagnostic, and both
+        // backends agree — so the differential oracle cannot see it either (D-tup-2).
         if amp_unlowered
             && !self.first_pass
             && matches!(
@@ -5147,6 +5149,16 @@ use a separate collection or add after the loop"
         true
     }
 
+    /// Reject a write that a `const` binding forbids, for a COMPONENT target.
+    ///
+    /// Enforces @FR-Const-Value where the mutation is *through* a name rather than *to*
+    /// it — `p.x = …`, `p[i] = …`, `p.a.b = …` — by resolving the write back to its base
+    /// binding.  The bare-variable case has no `Value::Var` target here and is
+    /// `Parser::const_write_blocked`'s instead; between them the two cover every write.
+    ///
+    /// ⚠ Construction does NOT come through here (@FR-Const-ConstructExempt): a literal
+    /// lowers via `Value::Insert`, so a const field is SET at construction rather than
+    /// CHECKED there, and `T{ v: 1 }` is always admitted however `v` is qualified.
     pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type, op: &str) {
         // @PLN40 step 3 — value-const base-resolution.  `validate_write` fires only for
         // a COMPONENT write (`p.x = …`, `p[i] = …`, `p.a.b = …`; the whole-var case has

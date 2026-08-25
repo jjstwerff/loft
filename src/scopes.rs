@@ -100,9 +100,18 @@ struct Scopes {
     /// `av` (outer/function) outlives `v` (inner), so `av`'s Rust
     /// `let` is still live where `v`'s free fires.
     witness_buffer: HashMap<u16, u16>,
-    /// #316 — Reference vars whose LATEST scanned assignment gave them an
-    /// OWNED store (a call whose filtered return deps are empty, a deep-copied
-    /// var, …), mapped to the loop depth (`loops.len()`) at that assignment.
+    /// Reference vars whose LATEST scanned assignment gave them an OWNED store (a call
+    /// whose filtered return deps are empty, a deep-copied var, …), mapped to the loop
+    /// depth (`loops.len()`) at that assignment.
+    ///
+    /// Enforces @FR-O-Latest — a memo of @FR-O-Oracle's answer plus the loop depth at
+    /// which the assignment was taken.
+    ///
+    /// ⚠ Not redundant with `deps` or with @FR-O-Override: it carries a TEMPORAL fact (the
+    /// *latest* assignment) and a LOOP-DEPTH fact, neither of which a type-level dep list
+    /// can express.  `scan_set`'s ownership-TRANSITION free is gated on this and not on
+    /// `deps` for exactly that reason — freeing at the wrong loop depth would release the
+    /// previous iteration's viewed store.
     /// When such a var is reassigned with a BORROW, its merged static type
     /// already carries deps, so codegen's dep-empty pre-Set free never fires —
     /// `scan_set` emits an explicit `OpFreeRef(v)` for the orphaned store
@@ -191,7 +200,12 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
     }
 }
 
-/// @PLN130 F2 — every container variable `code` REMOVES from.
+/// Every container variable `code` REMOVES from.
+///
+/// Detects one of @FR-B-Disturb's three place-ending events — REMOVING from a container.
+/// (The other two are RE-KEYING an element and REASSIGNING the container itself; note that
+/// OVERWRITING a place does not disturb it, since the write lands in the place the view
+/// already points at.)
 ///
 /// `v.remove(i)` lowers to `OpRemoveVector(v, size, index)` (container = arg 0) and the
 /// in-loop `e#remove` to `OpRemove(index, container, …)` (container = arg 1). Both renumber
@@ -1217,6 +1231,38 @@ fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32>
             }
         }
     });
+    out
+}
+
+/// The scope-exit / pre-reassignment frees for a TUPLE local's OWNED elements, in
+/// reverse index order.
+///
+/// `Value::TupleGet(v, idx)` reads one element as a plain `DbRef` / `Str`, so each
+/// free is the ordinary op on that read and needs no per-element stack-offset
+/// machinery of its own.
+///
+/// Only an element the tuple OWNS. `owned_elements` answers on the type KIND — is
+/// it heap-shaped — which a BORROWED element passes exactly as an owned one does,
+/// and freeing that releases the source's store.  The empty-dep test is the
+/// ownership half, the same one the scalar branch of `get_free_vars` uses.
+///
+/// STORE-backed elements only.  A tuple's `text` element is an owned `String` in a
+/// stack slot, not a store, and `OpFreeText` takes the VARIABLE whose slot it
+/// resets — handed a `TupleGet` value read instead, its stack-distance arithmetic
+/// underflows (loft#1004's corpus script panics with "attempt to subtract with
+/// overflow").  Text elements are released with the frame and are not the leak
+/// this exists for.
+fn tuple_owned_elem_frees(elems: &[Type], v: u16, data: &Data) -> Vec<Value> {
+    let mut out = Vec::new();
+    for &(_offset, idx) in crate::data::owned_elements(elems).iter().rev() {
+        if !elems[idx].depend().is_empty() || matches!(elems[idx].base(), Type::Text(_)) {
+            continue;
+        }
+        out.push(Value::Call(
+            data.def_nr("OpFreeRef"),
+            vec![Value::TupleGet(v, idx as u16)],
+        ));
+    }
     out
 }
 
@@ -4096,6 +4142,25 @@ impl Scopes {
         // inside a deeper loop the free would re-run on iterations 2+ and
         // release the previous iteration's VIEWED store.
         let mut transition_free: Option<Value> = None;
+        // The same transition for a TUPLE: reassigning a tuple local installs new
+        // elements over the old ones, and without this the previous turn's owned
+        // element stores are named by nobody.  Invisible until a call-site return
+        // buffer stopped being pre-allocated by the caller (loft#1085): before that
+        // the callee ADOPTED the caller's `__ref_N` store, so the caller's own
+        // scope-exit free covered every iteration's element and one store served
+        // the whole loop.  A first-iteration free is a no-op — the entry null-init
+        // leaves the elements at the sentinel, which `free` ignores.
+        if was_in_scope
+            && let Type::Tuple(elems) = function.tp(v)
+            && !value.reads_var(v)
+            && !value.reads_var(ov)
+        {
+            let elems = elems.clone();
+            let frees = tuple_owned_elem_frees(&elems, v, data);
+            if !frees.is_empty() {
+                transition_free = Some(Value::Insert(frees));
+            }
+        }
         if was_in_scope
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
             && self.owned_refs.get(&v) == Some(&self.loops.len())
@@ -4585,6 +4650,15 @@ impl Scopes {
         let scanned_test = self.scan(test, function, data);
         // #316 — ownership state is path-sensitive: scan each branch from the
         // same pre-If state, then keep only entries BOTH branches agree on.
+        // Enforces @FR-O-Complete — the fact is per BINDING and per PATH, a
+        // set-and-reconcile rather than one structural walk.  Both arms are scanned from
+        // the SAME pre-`If` state and only what they AGREE on survives, so a store owned
+        // on one path only is not treated as owned after the join.
+        //
+        // ⚠ @FR-O-Complete is the load-bearing invariant of the whole model: loft has no
+        // user-facing borrow checker, so an incomplete fact is not a compile error someone
+        // fixes — it is a miscompile or a leak.  Erring toward "not owned" here is why the
+        // reconcile intersects rather than unions.
         let owned_before = self.owned_refs.clone();
         let scanned_true = self.scan(t_val, function, data);
         let owned_after_true = std::mem::replace(&mut self.owned_refs, owned_before);
@@ -4616,8 +4690,22 @@ impl Scopes {
         Value::Insert(stmts)
     }
 
+    /// Collect the variables an `if` branch ASSIGNS, so the caller can emit their
+    /// null-init before the `If` — a variable written in one arm and read after it must
+    /// hold null rather than an uninitialised slot.
+    ///
+    /// ⚠ `unspan()` first — the requirement `Value::unspan`'s own doc states for every site
+    /// that pattern-matches a specific variant.  Without it a `Span` wrapping a `Set` falls
+    /// to the catch-all, the assignment is not collected, and the variable loses its init.
+    ///
+    /// That path is REACHED: instrumented over 200 corpus programs, the catch-all dropped
+    /// 2 Span-wrapped `Set`s and 8 whole Span-wrapped `Block`s.  No program's IR changes
+    /// when the peel is added, so nothing observable was riding on it — the vars in
+    /// question were already covered another way.  The peel stays because the reachability
+    /// is what makes it a trap: Span placement has moved before, and the failure mode is a
+    /// missing initialisation with nothing to report it.
     fn find_assigned_vars(val: &Value, mapping: &HashMap<u16, u16>, result: &mut Vec<u16>) {
-        match val {
+        match val.unspan() {
             Value::Set(v, inner) => {
                 let resolved = *mapping.get(v).unwrap_or(v);
                 if !result.contains(&resolved) {
@@ -5502,6 +5590,24 @@ impl Scopes {
         ls
     }
 
+    /// Which variables this scope must free on the way out, as the `OpFreeRef` /
+    /// `OpFreeText` / per-element ops to emit before leaving it.
+    ///
+    /// Enforces @FR-O-Derived — free placement is DERIVED, not decided: a local is freed
+    /// iff it OWNS its store and does not transfer it out, once, at scope exit — and
+    /// @FR-O-Owner, the single-owner invariant that makes "once" correct.  There is no
+    /// per-site heuristic here; every arm answers from a carried fact.
+    ///
+    /// `ret_var` and `return_sources` are what "does not transfer it out" means in
+    /// practice: a store handed to the caller is the caller's to free (@FR-O-Move), so its
+    /// scope-exit free is suppressed.  `return_sources` is PATH-LOCAL — a source dead on a
+    /// sibling path is absent from it and is still freed by that path's own sweep, which is
+    /// what keeps @FR-O-Complete true without a global "skip" stamp that would over-suppress
+    /// and leak.
+    ///
+    /// ⚠ Ownership is read here from a carried fact, but "empty deps" is only a PROXY for
+    /// it (loft#723) — see [`crate::variables::Function::is_skip_free`], the second fact
+    /// that vetoes the proxy for a borrow whose dep list was never populated.
     #[allow(clippy::too_many_lines)]
     fn get_free_vars(
         &mut self,
@@ -5558,13 +5664,8 @@ impl Scopes {
             }
             // T1.3: tuple scope exit — free owned elements in reverse index order.
             if let Type::Tuple(elems) = function.tp(v) {
-                let owned = crate::data::owned_elements(elems);
-                for &(_offset, _idx) in owned.iter().rev() {
-                    // T1.4 will emit per-element OpFreeText/OpFreeRef at the correct
-                    // stack offset.  For now, record that cleanup is needed.
-                    // The actual free ops require knowing the variable's stack slot +
-                    // element offset, which is codegen's responsibility.
-                }
+                let elems = elems.clone();
+                ls.extend(tuple_owned_elem_frees(&elems, v, data));
                 continue;
             }
             if matches!(function.tp(v).base(), Type::Text(_)) {
@@ -8009,10 +8110,13 @@ use crate::data::{ImpureCategory, Purity};
 /// workers).  `CallRef` (runtime fn-ref) callsites pessimise to
 /// `false` — the actual callee is not statically known.
 ///
-/// Currently no production caller — phase 5b proper hooks the
-/// analyser into codegen so par worker fns that return false here
-/// produce a compile error per D8 diagnostics.  The accessor +
-/// helpers carry `#[allow(dead_code)]` until then.
+/// ⚠ NOT WIRED TO ANYTHING.  Nothing calls this outside its own tests, so no program is
+/// rejected for an impure par worker today.  That is not a missing gate against the rules:
+/// @FR-C-Impure says an impure worker's result is UNDEFINED, not that the compiler must
+/// refuse it — the contract is "make the worker pure", and conformance is differential
+/// (concurrency.md § Deviations).  This classifier is the DIAGNOSTIC that DESIGN.md D8
+/// wants on top of that, and its consumer has never been written.  Keep or delete it as a
+/// deliberate choice; do not read the `#[allow(dead_code)]` as a temporary state.
 #[allow(dead_code)]
 #[must_use]
 pub fn is_par_safe(data: &Data, d_nr: u32) -> bool {
@@ -8291,7 +8395,8 @@ mod par_safety_tests {
 /// compile-error diagnostic body, matching D8's example error
 /// shape with `--> file:line` + offending construct + fix-it.
 ///
-/// Currently no production caller — phase 5b proper hooks it.
+/// ⚠ NOT WIRED TO ANYTHING — the reason-string twin of [`is_par_safe`], and unreached for
+/// the same reason.  See there.
 #[allow(dead_code)]
 #[must_use]
 pub fn par_unsafe_reason(data: &Data, d_nr: u32) -> Option<String> {

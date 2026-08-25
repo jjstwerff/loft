@@ -2366,11 +2366,28 @@ impl ReplSession {
     /// is running.
     pub fn stop_game(&mut self) -> Option<String> {
         let mut g = self.game.take()?;
-        // Kill the whole process GROUP this session created: a native game's
-        // real server is a grandchild (driver -> compiled binary).
+        // Stop the whole TREE this session created, not just the handle it holds: a
+        // `--native` game's real server is a GRANDCHILD (driver → compiled binary), so
+        // reaping the child alone leaves the server running and holding its port.
+        //
+        // Unix reaches the tree through the process group the launch put the child in.
+        // Windows has no process group, so it walks the tree by parent link instead —
+        // and the ordering is the whole of it: `taskkill /T` needs the child ALIVE to
+        // walk from, so it must run BEFORE the kill below, not after.  Measured on
+        // `windows-latest`: the grandchild survives a bare `child.kill()` and still
+        // holds its port, and `taskkill /T /F` terminates it ("the process with PID N
+        // (child process of PID M) has been terminated") — see WINDOWS.md § Known gaps.
         #[cfg(unix)]
         unsafe {
             libc::killpg(g.child.id() as i32, libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &g.child.id().to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
         }
         let _ = g.child.kill();
         let _ = g.child.wait();

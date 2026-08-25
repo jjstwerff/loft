@@ -4,9 +4,20 @@
 
 //! Parallel execution: dispatch a worker function over vector elements using OS threads.
 //!
+//! Enforces @FR-C-Par — the clause is two phases, a PARALLEL map that may run its workers
+//! in any order, then a SEQUENTIAL consume of `res[0], res[1], …` in INDEX order — and
+//! @FR-C-Det: the thread count is a performance knob, never a semantic one, so position
+//! `i` always receives `worker(v[i])` whatever order the threads finished in.
+//!
 //! When the `threading` feature is enabled, each `run_parallel_*` function spawns OS
 //! threads.  When `threading` is disabled (e.g. under WASM), the loop body runs
-//! sequentially in the caller's thread — same results, no parallelism.
+//! sequentially in the caller's thread — same results, no parallelism.  That is @FR-C-Det
+//! taken to its limit: N = "no threads at all" is still the same answer.
+//!
+//! ⚠ The guarantee is CONDITIONAL (@FR-C-Impure): it holds only for a PURE worker.  A
+//! worker that touches shared mutable state has no defined behaviour — loft pins no
+//! interleaving — and nothing here detects that.  See `scopes::is_par_safe`, which
+//! classifies it but is wired to nothing.
 
 use crate::database::{Call, Stores, WorkerStores};
 use crate::keys::DbRef;

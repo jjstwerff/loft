@@ -23,6 +23,18 @@
 #             and no test can ever reach those arms to check them — which is the argument
 #             for deleting it rather than completing it.
 #
+#   unspan    Who pattern-matches a specific `Value` variant without peeling `Span`?
+#             `Value::unspan`'s own doc states the requirement — "every second-pass site
+#             that pattern-matches a specific Value variant must call `code.unspan()`
+#             first" — because a `Span` wrapper otherwise falls to the catch-all and the
+#             shape is simply not seen.  A site is counted as handling it if it calls
+#             `unspan()`/`unspan_mut()` or carries a `Value::Span` arm.
+#
+#             ⚠ Reaching this path is NOT the same as a defect, and the difference is the
+#             point: `scopes::find_assigned_vars` dropped Span-wrapped `Set`s and `Block`s
+#             on real corpus programs, yet peeling changed no program's IR.  Treat a hit as
+#             "measure this one", not "fix this one".
+#
 #   dead      `producers` INTERSECTED with a census of what the front end actually emits
 #             over the 854-program corpus.  Neither half is an oracle and the failures go
 #             opposite ways, which is the whole reason this mode exists: `Loop`/`Single`/
@@ -35,7 +47,7 @@
 # SITE, so read the sites it prints before acting.  Verdicts live in
 # doc/claude/formal/IMPLEMENTATIONS.md.
 #
-# Usage:  python3 scripts/ir_walker_audit.py [walkers|producers|dead|both]
+# Usage:  python3 scripts/ir_walker_audit.py [walkers|producers|unspan|dead|both]
 #         `dead` needs a built binary (target/debug/loft, or $LOFT_BIN) and takes ~1 min.
 
 import glob
@@ -129,6 +141,38 @@ def audit_walkers():
         print(f"  {site:<42} {name:<36} {n:>2} variants")
     if len(hand) > 30:
         print(f"  … and {len(hand) - 30} more")
+
+
+# A site DISCRIMINATES when it pattern-matches a specific variant (an arm, an `if let`).
+DISCRIM = re.compile(r"Value::([A-Za-z]+)\s*(?:\([^)]*\))?\s*(?:=>|\||\)\s*=)")
+
+
+def audit_unspan():
+    """Sites that read a specific `Value` shape without seeing through `Span`."""
+    total, handled, rows = 0, 0, []
+    # The serializers walk a node they were handed by kind, not by pattern-matching a
+    # shape they expect, so `Span` is a variant to them like any other.
+    skip = ("data.rs", "ir_schema.rs", "ir_store.rs", "ir_read.rs", "ir_node.rs")
+    for path in rust_files():
+        if os.path.basename(path).endswith(skip):
+            continue
+        for name, start, body in functions(path):
+            specific = set(DISCRIM.findall(body)) - {"Span"}
+            if len(specific) < 2:
+                continue  # not discriminating between shapes
+            total += 1
+            if ".unspan()" in body or ".unspan_mut()" in body or "Value::Span" in body:
+                handled += 1
+            else:
+                rows.append((f"{rel(path)}:{start}", name, len(specific)))
+    print(f"sites discriminating on 2+ specific `Value` variants : {total}")
+    print(f"  peel `Span` (unspan, or a `Span` arm)              : {handled}")
+    print(f"  neither — a `Span` hides the shape from them       : {len(rows)}")
+    print()
+    print("  Most variants first: the more shapes a site tells apart, the more a missed")
+    print("  wrapper costs it.  A hit is a MEASUREMENT to make, not a defect found.")
+    for site, name, n in sorted(rows, key=lambda r: -r[2]):
+        print(f"  {site:<44} {name:<34} {n} variants")
 
 
 def constructor_sites(variant):
@@ -274,6 +318,10 @@ if mode in ("walkers", "both"):
 if mode in ("producers", "both"):
     print("== producers ==")
     audit_producers()
+if mode in ("unspan", "both"):
+    print("== unspan ==")
+    audit_unspan()
+    print()
 if mode == "dead":
     print("== dead variants (no producer AND absent from the corpus) ==")
     audit_dead()

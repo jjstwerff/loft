@@ -33,8 +33,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   time.
 - **borrow / alias** — a value that *refers to* a store it does not own (a parameter, a
   field/element read, a `&τ` link). It must not free, and must not outlive its source.
-- **`deps`** — the per-binding fact recording what it owns and what it borrows from. The
-  one fact every store-lifetime decision reads. (Today a `Vec<u16>`; see D-own-3.)
+- **`deps`** — the per-binding list recording what a binding borrows from. (Today a
+  `Vec<u16>`; see D-own-3.) An EMPTY list is read as "owner" at many sites — that reading
+  is `O-Proxy`, and it is a stand-in for the oracle rather than the oracle itself.
+- **the oracle** — `use_analysis::ownership_of`, which computes own-vs-borrow for a VALUE
+  from the IR. `O-Oracle`. It does not consult `deps`.
+- **the never-free override** — a per-binding flag (`is_skip_free`) that forbids emitting a
+  free for that binding at all. `O-Override`.
+- **the latest-assignment memo** — `Scopes::owned_refs`, the oracle's answer for a binding's
+  most recent assignment, tagged with the loop depth at which it was taken. `O-Latest`.
 - **transfer / move** — handing ownership to another binding (e.g. a return). The giver
   stops owning; it must not free what it moved.
 
@@ -95,10 +102,56 @@ never refused.
                 E-Op/E-Trap agree across backends.)
 ```
 
-**In words.** `deps` is the single source of truth. Every "do I free / copy / move this
-store?" question is *answered by reading `deps`*, never re-worked out in the code
-generator. And because both backends read the same answer, they can't disagree — which is
-exactly what makes the operational rules hold on native as well as interp.
+**In words.** Every "do I free / copy / move this store?" question is *answered by reading
+a carried fact*, never re-worked out in the code generator. And because both backends read
+the same answer, they can't disagree — which is exactly what makes the operational rules
+hold on native as well as interp.
+
+### The facts that answer it — there are four, and `deps` is not the oracle
+
+`O-Deps` above is written as though `deps` were the single source of truth. It is not, and
+the gap between that sentence and the implementation is where this subsystem's bugs live
+(loft#723 is the worked example). Four distinct carried facts answer ownership questions,
+and a decision that reads the wrong one is wrong in the silent direction:
+
+```
+  (O-Oracle)    the own-vs-borrow answer for a VALUE is computed by ONE oracle
+                (`use_analysis::ownership_of`), from the IR: a store mint is Owned, a
+                projection is Borrowed(base), a call resolves through the callee's return
+                summary.  It does NOT read `deps` — the two are INDEPENDENT derivations of
+                the same question.  A chokepoint reads the oracle rather than re-deriving.
+  (O-Proxy)     an EMPTY `deps` list is a cheap PROXY for "this binding owns its store",
+                and it is UNSOUND ALONE: a borrow whose dep list was never populated also
+                reads empty, so the proxy answers "owner" for a borrower.  A site that
+                FREES on the proxy MUST also consult O-Override — otherwise it frees a
+                store someone else owns.
+  (O-Override)  a binding may carry an explicit never-free flag
+                (`variables::Function::is_skip_free`).  Its contract is exactly "no
+                `OpFreeRef` is ever emitted for this binding", and it VETOES the proxy and
+                the scope-exit sweep alike.  It exists BECAUSE O-Proxy is unsound alone.
+  (O-Latest)    ownership is a property of the LATEST assignment to a binding, at the LOOP
+                DEPTH at which that assignment was taken (`Scopes::owned_refs`, a memo of
+                O-Oracle plus that depth).  A type-level `deps` list can express neither,
+                so the ownership-TRANSITION free — freeing the store a binding is about to
+                stop pointing at — reads THIS and not `deps`.
+```
+
+**In words.** There is a real oracle, and it is not the dep list. `deps` is a cheap
+stand-in for it that is right most of the time and wrong for a borrow nobody recorded a dep
+for; `is_skip_free` is the patch that makes the stand-in safe at a free site; and
+`owned_refs` carries the two things a type cannot — *which* assignment, and *how deep in
+loops* it happened.
+
+⚠ **The reason to write this down is that the choice is currently invisible.** 24 functions
+test `depend().is_empty()`; some legitimately want the proxy (they are asking "is this a
+view?", not "may I free it?"), some memo the oracle, and some free. Nothing in the source
+distinguishes them, so a reader cannot tell a site that correctly reads one fact from a site
+that reached for the wrong one — and both compile. `O-Proxy`'s "MUST also consult
+O-Override" is the first checkable obligation in that space.
+
+⚠ This does **not** re-open `D-own-1` (CLOSED: *"every free/copy/move reads `deps`"*). That
+remains true in the letter — these sites do read `deps`. What was never true is the
+implication that reading `deps` is *sufficient*.
 
 ---
 

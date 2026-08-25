@@ -111,7 +111,8 @@ PR**.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
-13 of 285 rules cited, across 24 sites (`python3 scripts/rule_tags.py check`).  Each row is one
+13 of 285 rules cited, across 24 sites at the time of writing (`python3 scripts/rule_tags.py
+check`; see the note under B4c — the DENOMINATOR has since changed).  Each row is one
 family from the checklist; the work is *read each site, decide which rule it enforces, cite it* —
 and the reading is the point: **four of the eight families split rather than merged**, and each
 split is a merge that would have coupled two rules that must stay free to differ.
@@ -165,12 +166,19 @@ Fixed by adding `start` to `ir.loft` (the source), then regenerating; a name-key
 the regenerated schema against the committed one now differs by exactly the three removed types
 and nothing else.
 
-⚠ **The gap this exposes is not fixed: nothing gates that `ir_schema_gen.rs` is a faithful
-regeneration of `ir.loft`.** The `@F` catalogue has `features-check` for precisely this shape of
-generated shadow, and the IR schema has no equivalent — so the only thing standing between a hand
-edit and a silently wrong store layout is whether someone happens to regenerate. A check is
-awkward because regeneration needs a built `loft`, which is circular in CI; the honest options are
-a nightly job or a `make` target that the release checklist names. **Open.**
+✅ **The gap this exposed is now CLOSED (2026-08-24).** `scripts/ir_schema_check.sh` runs the
+pipeline for real and byte-compares the result against the committed file — ~0.1 s — gated by
+`doc_hygiene::ir_schema_gen_matches_its_loft_source`, which shells out to the same script so the
+gate and the tool cannot drift apart.  `make ir-schema-check` reports; `make ir-schema-regen`
+rewrites the generated file.
+
+The circularity turned out not to bite.  The check needs a built `loft`, but whatever state the
+generated file is in, the binary compiled from it still parses `ir.loft` the same way — so a
+hand-edit shows up as a diff, and an un-regenerated source edit shows up as one too.  **Both
+directions were probed deliberately** (delete a `db.field` line from the generated file; add a
+field to `ir.loft` without regenerating) and both fail with the offending line named.  Where
+there is no binary or no `python3` it SKIPS with a line saying so, and the test surfaces that
+line — a check that quietly did not run must not read as one that passed.
 
 #### B4 — DONE: in-code docs state the CONTRACT, not the INCIDENT (2026-08-24)
 
@@ -243,11 +251,197 @@ misattached doc had been there for as long as `classify_vec_bind` has existed, i
 to every lint because both functions had *something* above them. Following the citations
 one by one is what surfaced it.
 
-**Open:** the wider surface is not swept, by design (`doc-quality` says not to sweep a
-file during unrelated work). The route stays the one the owner named — a cited site should
-read *"this enforces `@FR-X`, here is how"*, and `scripts/rule_tags.py sites <tag>`
-enumerates them. **13 of 285 rules are cited, so tag adoption is the rate limiter**, not
-the rewriting: the next tranche of sweepable sites only exists once more rules are cited.
+#### B4b — cite, then sweep: the loop run twice (2026-08-24)
+
+**13 → 21 rules cited, 24 → 38 citation sites.** Two tranches: `layout.md` (L-Struct,
+L-Enum, L-Total, L-Tuple, L-Sound) and `coroutines.md` (G-Return, G-Call, G-Done).
+
+**Citing is a stronger instrument than sweeping.** Writing *"this enforces `@FR-X`"*
+forces you to name the rule and then check that the code in front of you is what the rule
+says — and that check is what fails. The layout tranche alone turned up:
+
+| found | what it was |
+|---|---|
+| **`L-Tuple` named a function that no longer exists** | The rule said element offsets are `element_offsets`. @PLN114 had split that into `element_stack_offsets` (stack view) and the storage view *specifically so a site must declare which it means* — and the rule still named the ambiguous one it abolished. The rule now names BOTH and states that their agreement is part of the rule. |
+| **13 stale `element_offsets` references in comments** | Same rename, never followed through. |
+| **1 stale reference in a runtime diagnostic** | `@PLN114 [{caller}]: … (element_offsets for {types:?})` — a `debug_assert!` message pointing an engineer at a function that does not exist. |
+| **`calc.rs` named the wrong caller** | *"Called by `typedef.rs` during type resolution."* Its only caller is `Stores::finish_type`. |
+| **`typedef.rs` claimed a call it does not make** | Its header said `actual_types` "compute[s] field positions via `calc::calculate_positions`". It does not — positions are assigned later by `Stores::finish`. Its own inline comments said so, contradicting its header. |
+
+The stale rule is the one that matters: **a formal rule naming a renamed function is worse
+than an uncited one**, because it reads as authoritative and sends the reader to a symbol
+that is not there. Nothing but citing it would have compared the two.
+
+**And a general lesson about the direction of the doctrine.** `formal/`'s rule is *"the
+rules do not change to match the code; the code changes to match the rules."* That governs
+SEMANTICS. It does not license a rule to keep a stale implementation NAME — updating the
+name (and, here, splitting one view into the two the code now distinguishes) makes the rule
+say what it always meant. Reading it as "never touch the rule" would have preserved the
+error.
+
+#### B4c — concurrency, interfaces, grammar, capabilities (2026-08-24)
+
+**21 → 39 rules cited, 38 → 63 citation sites.** What each family exposed:
+
+| family | found by citing |
+|---|---|
+| **concurrency** | `scopes::is_par_safe` and `par_unsafe_reason` have **no production caller** — 18 tests, `#[allow(dead_code)]`, and *"phase 5b proper hooks it"*. The same scaffolding-without-a-consumer shape as `Value::ParFor`. ⚠ **Not a rule deviation**, and getting that right mattered: `C-Impure` says an impure worker is UNDEFINED, not that the compiler must refuse it, so `concurrency.md`'s `OPEN: 0` is correct on its own terms. The analyser is the D8 *diagnostic* that was planned on top, never wired. Both now say so instead of implying a temporary state. |
+| **interfaces** | `check_satisfaction`'s doc named `instantiate_generic` — a function that has **never existed under that name** in any commit. The real one is `try_generic_instantiation`, which had **no doc comment at all**. `parse_interface` still said *"semantic satisfaction checking comes in I5/I6"*; it shipped. |
+| **grammar** | The precedence table carried one bare line of comment (*"Operators ordered on their precedence"*) for the thing that defines `G-Prec`, and **associativity is not in it at all** — it is decided where `parse_operators` hands the RHS a precedence. Both now cite, and the table says which rule it is *not*. |
+| **capabilities** | Nothing stale — the cleanest family. `reachable_set`'s sandboxed / non-sandboxed split turned out to be the `Cap-Own` boundary and the `Cap-Trusted` leaf rule at once, which the citation now states. |
+
+⚠ **I got a citation wrong and the check caught it.** I wrote that `Cap-Trusted` and
+`Cap-Own` were "decided by the admission walk before it reaches here" — plausible, and
+false: both are decided in `sandbox.rs` itself, by `reachable_set`. Verifying each claim
+against the code before committing it is the discipline this thread exists to enforce, and
+it is easy to skip precisely when writing the citation feels like documentation rather than
+analysis. Two claims about `**` right-associativity and `as` were checked the same way and
+held (`operators.rs:3513` states it outright).
+
+**Open:** the wider surface is still not swept, by design. The remaining families are the
+big ones — `types.md`, `binding.md`, `matching.md`, `heap.md`, `collections.md`,
+`operational.md` — where a rule usually has many enforcement sites rather than one, so the
+work per rule is larger and the payoff (a `sites <tag>` query that returns everything
+enforcing it) is bigger.
+
+⚠ **The counts in B4a–B4c are DELTAS, and their denominator moved.** Those sections were
+written against a `rule_tags.py` that reported **285** defined rules; `main` has since
+extended the script (deviation tracking) and it now reports **251**, with the citations
+from this thread merged in at **45 cited · 74 sites · 35 deviations (2 open)**. The
+13 → 21 → 39 progression is still the record of what this thread cited; the ratio to a
+fixed total is not, so re-run the tool rather than reading a number off this page.
+
+#### B4d — types.md and binding.md, and a rule the code contradicts on purpose (2026-08-24)
+
+**45 → 60 rules cited, 74 → 92 citation sites.** The two biggest families, worked by
+sub-family rather than rule by rule: `D-*` (defaults), `Const-*` (the const model),
+`B-Disturb` / `B-Ref-Reshape`.
+
+**The find: `(D-Opt)` says a nullable's default is `null`. It is not.** Measured on both
+backends, so it is a rule/code divergence and not a backend split:
+
+```loft
+struct S { a: integer?, b: text?, c: boolean?, d: Colour? }
+s = S {};                       // a=0   b=''   c=false   d=null
+```
+
+`data::to_default` answers the BASE type's zero and says so outright — base-zero is *"the
+settled design call"* (@PLN25), because a bare `null` renders as native unit into a scalar
+slot (E0308). So a decision was taken in code and the rule was never updated to match.
+
+⚠ **This one I did not resolve, and that is the point.** `L-Tuple` (B4b) was a stale
+implementation NAME — semantics unchanged, so correcting it made the rule say what it
+always meant. `D-Opt` is a SEMANTIC disagreement, which is exactly where the doctrine says
+the code yields and the rule stands. Editing the rule to match the code would have been the
+same act as `L-Tuple` in form and the opposite in substance. Recorded instead as
+`formal/types.md` § `D-Opt-Zero`, **flipping that doc's `OPEN: 0` to `OPEN: 1`**, with the
+two admissible resolutions named and neither taken. The register already carried the lesson
+from last time: *"the answer to the 'OPEN: 0' line above having been too strong"*.
+
+**A near-miss worth recording.** `B-Disturb` is about what invalidates a `&` reference —
+remove, re-key, reassign the container. I was about to cite it on `scopes::collect_move_
+disturbed`, which is a DIFFERENT question that shares the word "disturb". Reading the rule
+before writing the citation is what caught it; the name similarity is the whole trap. It
+went to `collect_views_to_materialise`'s remove-detector instead, and `B-Ref-Reshape` to the
+tuple-place refusal in `parser/expressions.rs`.
+
+**Also undocumented at a rule site:** `data::to_default` — the one home for
+`construct_default`, six rules — had no doc comment at all. Same shape as
+`try_generic_instantiation` in B4c.
+
+**Open:** `types.md` still has ~43 uncited rules (the `N-*` nullability family alone is 17)
+and `binding.md` ~17 (the `B-Ref-*` family is 11). Both are worth doing by sub-family the
+same way; both are larger than a single sitting.
+
+#### B4e — DONE: a nullable field starts null (2026-08-24)
+
+**Owner's call on `D-Opt-Zero`: the rule stands.** A nullable value in a field is null at
+the start, so the code changed and `formal/types.md` is back to `OPEN: 0`.
+
+`data::to_default`'s `Optional` arm now builds the base type's null SENTINEL through a new
+`data::to_null`. Nothing had to be invented: the `OpConv…FromNull` ops already existed and
+already produced the same sentinels the runtime's `Stores::set_default_value_nullable`
+writes (`i64::MIN`, `255` for the tri-state boolean, `char::from(0)`), so the compile-time
+and runtime paths now agree instead of contradicting each other.
+
+**The E0308 objection in the old comment was real but misdirected.** A bare `Value::Null`
+does render as native unit into a scalar slot — the answer is the TYPED null op, not the
+base's zero.
+
+⚠ **`to_null` is narrow on purpose, and the first version was not.** Routing EVERY base
+through an op leaked: `OpConvRefFromNull` reserves a frame, so a nullable collection field
+got a store nothing frees (`heap-value-as-a-condition.loft`, caught by `wrap.rs`'s leak
+gate — `--tests` does not leak-check). For a handle-carried base or an enum the zero
+already IS the null and costs no allocation, so those delegate to `to_default`. The
+distinction is the same one the old shortcut got right by accident and wrong everywhere
+else.
+
+**What the old behaviour rested on, checked.** The code cited *"an omitted field gets the
+zero value for its type (LOFT.md § constructors; 06-structs.loft locks it)"*. `LOFT.md` has
+**no such section** and does not contain that sentence; `06-structs.loft` declares **no
+nullable field at all**. Both citations were wrong, and the only thing actually locking the
+old answer was one half of `issue_332_nullable_narrow_field_null_roundtrip`.
+
+**Blast radius: 3 tests, all asserting the old rule**, now asserting the new one —
+`issue_332_…` (strengthened to omitted / set / re-nulled across three widths),
+`875-json-absent-text-field.loft` (a plain `text` still answers `""`, a `text?` answers
+null, which makes that guard *more* coherent), and `931b-i32-accepted-forms-run.loft`
+(whose real subject is that the literal is ACCEPTED, unchanged).
+
+**Guard:** `tests/scripts/nullable-field-starts-null.loft` — 6 functions, both backends,
+every width `i8?…integer? float? single? boolean? text?`, the explicit `= null` spelling,
+enum/reference/collection bases, a partial literal, and a CONTROL that non-null fields still
+take their zero (a fix that nulled everything would pass every other cell).
+
+**Gates:** `make ci` 4434/4434, and the published-library gate
+(`scripts/revalidate_libs_local.sh`) **41 pass, 0 compile-break** — required because
+`make ci` green does not cover a language semantic change. One library SKIPPED (`drawing`
+0.2.0, tag missing in `loft-libs-graphics`) and a skip is not a pass.
+
+⚠ Not opened here: `character?` cannot represent absence distinctly — its null is
+`char::from(0)`, the same as its zero, and the runtime's content-type-6 arm ignores
+`nullable` too. Consistent between both paths, so not a divergence, but it is the one base
+where the rule cannot be observed.
+
+#### B4f — the catch-all walkers, measured (2026-08-24)
+
+B2 asked the honest question and it is now answered: **for each catch-all walker, which
+omitted edges are REACHABLE?**
+
+**Raw omission counts are noise.** 130 walkers descend into some child-bearing `Value`
+variant and not all, and ranking by (walkers omitting × corpus frequency) puts `Call`,
+`Set`, `Span` and `Block` on top — but most of those omissions are deliberate. The useful
+question hid inside one of them.
+
+**`Span` is different, because there is a RULE about it.** `Value::unspan`'s own doc:
+*"Every second-pass site that pattern-matches a specific Value variant must call
+`code.unspan()` first. Without this, the per-site wraps silently break optimisations that
+rely on the unwrapped shape."* That turns a vague worry into a checkable predicate:
+
+| sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
+|---:|---:|---:|
+| 246 | 205 | **41** |
+
+`scripts/ir_walker_audit.py unspan` re-measures it.
+
+**Instrumented, not argued.** One env-gated line in `scopes::find_assigned_vars`'s
+catch-all, over 200 corpus programs: the path is reached **10 208 times**, of which
+**2 dropped a Span-wrapped `Set`** — a genuinely missed assignment — and **8 dropped a
+whole Span-wrapped `Block`**, whose statements then go unscanned. So the mechanism is real
+and reachable, not theoretical.
+
+⚠ **And then it changes nothing.** Adding the peel leaves the IR byte-identical on all six
+affected programs. The variables were already covered another way. **So: reachable,
+latent.** The peel stays — it is one word, it obeys the documented rule, and the
+reachability is exactly what makes it a trap, since Span placement has moved before and the
+failure mode is a missing initialisation with nothing to report it. But no defect was
+found, and saying otherwise would be the dressed-up version of this result.
+
+**What that settles.** The catch-all concern is no longer unmeasured, and the answer is
+milder than it looked: the shape is real, the damage is not demonstrated. The 41 remaining
+sites are a ranked backlog to *measure* — several are display and host helpers where a
+`Span` cannot arrive — and the tool now says plainly that a hit is a measurement to make,
+not a defect found.
 
 #### C — process / skills
 
@@ -263,15 +457,15 @@ the rewriting: the next tranche of sweepable sites only exists once more rules a
 | decision | evidence | why it is not mine to take |
 |---|---|---|
 | ~~remove `Value::BreakWith` and `Value::ParFor`~~ | — | ✅ **DONE** — see B3 below |
-| **the 127 catch-all walkers** | each silently absorbs a `Value` edge it does not name; the mechanism has fired twice in walkers written years apart, unnoticed by build, tests and review | ⚠ **but both firings were on the unreachable `BreakWith`, so neither cost anything** — the damage is UNMEASURED. The next step is not a conversion but a query: for each of the 127, which omitted edges are REACHABLE? Do that before proposing a sweep |
+| ~~the 127 catch-all walkers~~ | — | ✅ **MEASURED** (2026-08-24) — see B4f below. Reachable, and so far latent |
 | **`Parallel` is reached 4 times in 854 programs** | corpus census | a coverage gap in the suite, not a defect — but `par` is the construct with the least IR-level exercise of anything still alive |
 
 #### D — carried, unchanged by this thread
 
 `STABILITY_ROADMAP.md` still owns these: Plan-53 cluster 2 S4 (parked WIP, M), @PLN130's 504
 uncovered copy sites (L, cost unestablished), gate 4 durability (@PLN43, needs an in-or-out
-decision), H6 `i32::MIN` (deferred).  **The branch is 34 commits ahead of `origin/main` with no
-PR**, so none of the above is on main.
+decision), H6 `i32::MIN` (deferred).  **On `main` as of 2026-08-24** — PR #1084 absorbed the
+bulk of this thread; the branch now carries only the tranches after it.
 
 ### The catch-all audit — every type-driven op choice, classified (2026-08-22)
 

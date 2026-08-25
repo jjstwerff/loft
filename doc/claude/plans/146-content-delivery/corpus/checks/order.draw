@@ -1,0 +1,10 @@
+# `late` is NAMED first and INKED second.  The element report is ordered by first
+# ink, so it must read early, late — the order the oracle's dict has them in.
+size 40x30
+Background transparent
+name late
+name early
+Poly (0.10,0.10) (0.30,0.10) (0.30,0.30) (0.10,0.30) rgb=200,10,10
+name late
+Poly (0.50,0.50) (0.90,0.50) (0.90,0.70) (0.50,0.70) rgb=10,200,10
+check early.cx < late.cx

@@ -1049,6 +1049,56 @@ impl Value {
     }
 }
 
+/// The NULL of a base type — the sentinel that reads back as `null`.
+///
+/// Enforces @FR-L-Null's second half: absence is a SENTINEL inside the slot's own bytes,
+/// never an extra byte or a moved offset.  Each `OpConv…FromNull` is that type's sentinel
+/// (`i64::MIN`, `255` for the tri-state boolean, `char::from(0)`, a null text handle), and
+/// they are the same values `Stores::set_default_value_nullable` writes on the runtime
+/// store-init path — so a record built by a literal and one filled by a `#read` answer the
+/// question the same way.
+///
+/// ⚠ `Value::Null` is NOT this.  A bare `Value::Null` carries no type, so native codegen
+/// renders it as unit `()` into the slot and rustc rejects the write (E0308).  The typed
+/// op is what makes a null default expressible at all.
+///
+/// Peel `Optional` before calling: this answers for the BASE type.
+///
+/// Only the bases whose zero is a genuine VALUE need an op; for the rest the zero already
+/// is the null, so this delegates to [`to_default`] rather than keeping a second table.
+#[must_use]
+pub fn to_null(tp: &Type, data: &Data) -> Value {
+    let op = match tp.base() {
+        Type::Integer(_) => "OpConvIntFromNull",
+        Type::Float => "OpConvFloatFromNull",
+        Type::Single => "OpConvSingleFromNull",
+        Type::Boolean => "OpConvBoolFromNull",
+        Type::Character => "OpConvCharacterFromNull",
+        Type::Text(_) => "OpConvTextFromNull",
+        // Everything else is HANDLE-carried (a store reference, a collection, a
+        // struct-enum) or a value enum, and for those the zero IS the null: a 0 handle
+        // reads back as null, and an enum's variants are 1-based so 0 is its absence.
+        // [`to_default`] already produces that, and produces it WITHOUT allocating —
+        // which is the operative difference: `OpConvRefFromNull` reserves a frame, so
+        // using it here hands a nullable collection field a store nothing ever frees.
+        _ => return to_default(tp, data),
+    };
+    Value::Call(data.def_nr(op), Vec::new())
+}
+
+/// The value a type takes when nothing chooses one — `S {}`'s omitted fields, a
+/// default-initialised local, a struct literal that names only some fields.
+///
+/// This is `construct_default` from `formal/types.md`, and the one home for it: enforces
+/// @FR-D-Scalar (every integer width, float and single are zero), @FR-D-Text (`""`),
+/// @FR-D-Coll (`[]`, likewise every keyed collection), @FR-D-Enum and @FR-D-Rec (a record
+/// is its fields' defaults, recursively).  [`Data::has_default`] is the twin that answers
+/// whether a default EXISTS at all — @FR-D-NoRef and @FR-D-NoEnumF are refusals and live
+/// there, not here.
+///
+/// Enforces @FR-D-Opt: a nullable's default IS null, so an `Optional` field with no
+/// `= expr` starts at its base type's null SENTINEL via [`to_null`] — not at the base
+/// type's zero, which is a VALUE for every base whose zero is not already its null.
 #[must_use]
 pub fn to_default(tp: &Type, data: &Data) -> Value {
     match tp {
@@ -1084,13 +1134,12 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         // integer)` lands as `("", 0)`.  Recurses through nested
         // tuples and other compound element types.
         Type::Tuple(elems) => Value::Tuple(elems.iter().map(|e| to_default(e, data)).collect()),
-        // @PLN25 — an `Optional(τ)` FIELD with no explicit default takes its base type's
-        // default (base-zero: `integer? → 0`, `bool? → false`, `text? → ""`), NOT a bare
-        // `null`. `null` would fall to the `_` arm below and render as native `(())` (unit)
-        // into the scalar's slot (E0308) — and base-zero is the settled design call (the
-        // nullable field is still writable to null via an explicit `= null`). Inert gate-OFF
-        // (no `Optional` is constructed there).
-        Type::Optional(inner) => to_default(inner, data),
+        // @FR-D-Opt — a nullable's default is its base type's null SENTINEL, which is what
+        // [`to_null`] builds.  Answering the base's ZERO instead is wrong for every base
+        // whose zero is a legitimate value (`integer? → 0`, `bool? → false`, `text? → ""`)
+        // and right only for the ones whose zero already IS their null (enum, reference) —
+        // so the old shortcut looked correct exactly where it could not be told apart.
+        Type::Optional(inner) => to_null(inner, data),
         _ => Value::Null,
     }
 }
@@ -1160,6 +1209,21 @@ impl DepEntry {
 /// space-agnostic ones) or the space-asserting accessors.  In debug
 /// builds each value carries its [`DepSpace`]; the tag is excluded from
 /// equality and absent in release builds.
+/// The ownership fact of @FR-O-Deps: every store-lifetime decision — free placement,
+/// adopt-vs-copy, move-vs-clone, drop — is meant to derive from THIS and nothing else, and
+/// a decision re-derived from a codegen condition is by that rule a bug.
+///
+/// @FR-O-Borrow is what the list carries: a value aliasing another (a parameter, a field,
+/// an element, an explicit `&τ`) names its source here, and a binding that names a source
+/// is a borrower — skip-free, with the single owner freeing once.  An EMPTY list therefore
+/// reads as "owner".
+///
+/// ⚠ That reading is @FR-O-Proxy, and it is NOT the oracle (loft#723): a borrow whose dep
+/// list was never populated also has an empty list, and reads as an owner.  @FR-O-Oracle
+/// (`use_analysis::ownership_of`) is the real derivation and does not consult this list at
+/// all.  A site that FREES on the empty-list proxy must also consult @FR-O-Override
+/// ([`crate::variables::Function::is_skip_free`]), which is the veto that makes the proxy
+/// safe at a free site.
 #[derive(Clone, Debug, Default)]
 pub struct Deps {
     items: Vec<u16>,
@@ -2489,7 +2553,7 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
 }
 
 ///
-/// Used by `element_offsets` to pad tuple-element offsets so each
+/// Used by `element_stack_offsets` to pad tuple-element offsets so each
 /// element lands on its natural-alignment boundary — a tuple
 /// `(byte, integer)` has `_0` at offset 0 and `_1` at offset 8 (not 1).
 /// Mirrors the alignment table in `LinkedFieldGroup::group_alignment`'s
@@ -2535,7 +2599,7 @@ fn element_offsets_alignment_max(types: &[Type]) -> u8 {
 /// For tuples this returns the **atomic group size** —
 /// alignment-padded so each element lands on its natural-alignment
 /// boundary.  Matches `LinkedFieldGroup::group_size`'s packing so
-/// the runtime read path (`element_offsets`) and the storage layout
+/// the runtime read path (`element_stack_offsets`) and the storage layout
 /// (`calculate_positions_with_groups`) agree on every byte offset.
 #[must_use]
 pub fn element_stack_size(t: &Type) -> usize {
@@ -2639,10 +2703,15 @@ pub fn element_storage_offsets(types: &[Type]) -> Vec<usize> {
 /// returns `[0, 8]` (not `[0, 1]`) — `_1` (integer, align 8) needs
 /// an 8-byte boundary, so 7 bytes of padding follow `_0`.
 ///
-/// This matches `LinkedFieldGroup::group_member_offsets` exactly,
-/// so storage layout (synthetic `__tuple<…>` struct via
-/// `calculate_positions_with_groups`) and runtime reads (via
-/// codegen / `read_tuple_at_wide`) compute the same offsets.
+/// Enforces the STACK half of @FR-L-Tuple.  A tuple has two layout views and the rule
+/// requires them to compute the SAME offsets: this one, and the STORAGE view (the
+/// synthetic `__tuple<…>` struct via `calculate_positions_with_groups`, read back by
+/// [`stored_tuple_offsets`]).  This function matches
+/// `LinkedFieldGroup::group_member_offsets` exactly, which is what makes them agree.
+///
+/// ⚠ Picking the wrong view does not fail — it returns a plausible offset from the other
+/// model.  @PLN114 split the one ambiguous `element_offsets` into these two named
+/// functions so a call site has to say which it means.
 #[must_use]
 pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(types.len());
@@ -2658,6 +2727,9 @@ pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
 /// Resolve per-element byte offsets for a STORED tuple via the synthetic
 /// `__tuple<…>` struct's post-finish field positions.
 ///
+/// Enforces the STORAGE half of @FR-L-Tuple — the twin of [`element_stack_offsets`],
+/// which the rule requires to agree with it byte for byte.
+///
 /// Returns `Some(offsets)` when:
 /// - `tuple_def` has registered the synthetic struct, AND
 /// - `Stores::finish_type` has assigned `position` to every field
@@ -2665,12 +2737,12 @@ pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
 ///
 /// Returns `None` in any other situation (struct not yet registered,
 /// not yet finished, or wrong arity) so callers can fall back to
-/// `element_offsets` for early-parse paths.
+/// `element_stack_offsets` for early-parse paths.
 ///
 /// **Why this exists**: storage reads / writes for tuple elements MUST
 /// use the same field offsets that ordinary struct fields use via
 /// `OpGetInt` / `OpSetInt`.  Routing through the synthetic struct's
-/// finished layout (rather than recomputing via `element_offsets`)
+/// finished layout (rather than recomputing via `element_stack_offsets`)
 /// means any divergence between the two paths is detected immediately
 /// — and keeps a single source of truth for stored-tuple field
 /// offsets.
@@ -2816,7 +2888,7 @@ mod renumber_frame_deps_tests {
 #[cfg(test)]
 mod tuple_stack_layout_tests {
     //! Stack-level tuple layout tests.  `element_size` and
-    //! `element_offsets` operate at stack widths — every
+    //! `element_stack_offsets` operate at stack widths — every
     //! `Type::Integer` reports 8 bytes regardless of `forced_size`,
     //! `Type::Text` reports `size_of::<Str>()` (16 bytes), etc.
     //! Used by codegen for STACK tuples (`Value::TupleGet` on
@@ -5364,6 +5436,14 @@ impl Data {
     /// `= expr`, is nullable, or its own type has a default — recursively.  Cycles
     /// self-resolve: value-recursion is illegal (infinite size) and ref-recursion
     /// bottoms out at a reference, which has no default.
+    ///
+    /// Enforces @FR-D-NoRef — a bare reference has NO default, because a language whose
+    /// storage is non-null by default has no "the null pointer" to hand back — and
+    /// @FR-D-NoEnumF: a bare (non-optional) enum FIELD carrying no `= expr` has none
+    /// either, since an enum's `0` is its null and its variants are 1-based.
+    ///
+    /// The refusal twin of [`crate::data::to_default`], which builds the value once this
+    /// says one exists.
     ///
     /// # Errors
     /// Returns `Err(reason)` — a message naming the culprit field/type — when `tp`

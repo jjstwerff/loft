@@ -2415,7 +2415,21 @@ impl State {
     /// `pos` is read from the bytecode stream as a `const u16`.
     pub fn init_ref(&mut self) {
         let pos = self.code::<u16>();
-        let null_ref = self.database.null();
+        // A ref local's null-init writes the NULL sentinel — the same thing
+        // `--native` writes (`let mut var_x: DbRef = DbRef::NULL`).
+        //
+        // It used to ALLOCATE an empty store, and that is what made a call-site
+        // return buffer (`__ref_N`) a real store the caller kept and freed at scope
+        // exit, while the callee — which cannot tell a caller-supplied buffer from
+        // one the runtime handed it (`CallRef`, the cdylib bridge) — freed it too.
+        // The second free released a slot recycled since, and the next allocation
+        // took it back (loft#1085).  `OpDatabase` accepts the sentinel and allocates
+        // fresh from it; `free` ignores it.
+        let null_ref = if crate::keys::alloc_init_ref() {
+            self.database.null()
+        } else {
+            DbRef::NULL
+        };
         *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
             self.stack_cur.rec,
             self.stack_cur.pos + self.stack_pos - u32::from(pos),
@@ -6509,7 +6523,7 @@ impl State {
         // A byte-by-byte `put_stack::<u8>` advanced stack_pos by stack_step(1) = 8
         // PER BYTE under LOFT_ALIGN, smearing the packed tuple buffer (p.0@0, p.1@8)
         // across 16 separate 8-byte slots; the worker body then reads tuple fields at
-        // the raw `element_offsets` [0, 8] into that smeared layout → padding zeros →
+        // the raw `element_stack_offsets` [0, 8] into that smeared layout → padding zeros →
         // every worker returned 0 (sum collected as 0).  A block copy keeps the buffer
         // byte-identical to `read_tuple_at_wide`'s raw layout the worker reads.
         // Identity when off (step(1) == 1, so the old byte loop was already contiguous).

@@ -1,0 +1,21 @@
+# Every comparison the check grammar has, against boxes small enough to render fast.
+# a: x[0.10..0.30] y[0.10..0.30]   cx 0.2  cy 0.2  w 0.2  h 0.2
+# b: x[0.50..0.90] y[0.50..0.70]   cx 0.7  cy 0.6  w 0.4  h 0.2
+size 40x30
+Background transparent
+name a
+Poly (0.10,0.10) (0.30,0.10) (0.30,0.30) (0.10,0.30) rgb=200,10,10
+name b
+Poly (0.50,0.50) (0.90,0.50) (0.90,0.70) (0.50,0.70) rgb=10,200,10
+landmark mid = 0.5
+landmark low = 0.75
+check a.cx ~ 0.2
+check a.w ~ 0.2 tol 0.001
+check a.left < b.left
+check b.right > a.right
+check a.top <= 0.1
+check b.bottom >= mid
+check a.cy == 0.2
+check b.cx ~ mid + 0.2
+check b.cy ~ low - 0.15
+check a.h ~ 0.25

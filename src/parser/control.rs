@@ -12114,25 +12114,24 @@ impl Parser {
                 *val = Value::Return(Box::new(Value::Null));
                 return;
             }
-            // A GENERATOR has no `return`.  `coroutines.md` (G-Call) makes any function
-            // whose return type is `iterator<T>` a generator, and in that model values come
-            // only from `yield`: (G-Done) says reaching the end without a further yield
-            // leaves the iterator done, so a returned value has nothing it could mean and
+            // Enforces @FR-G-Return — the VALUED spelling.  @FR-G-Call makes any function
+            // returning `iterator<T>` a generator, and in that model values leave only
+            // through `yield`; @FR-G-Done says reaching the end without a further yield
+            // leaves the iterator done.  So a returned value has nothing it could mean, and
             // ending early is what `break` already does.
             //
-            // A valued return used to be accepted and DISCARDED.
-            // `fn make() -> iterator<integer> { return counting(1); }` — an author
-            // delegating to another generator — gave an EMPTY sequence on `--interpret`
-            // with no diagnostic, and panicked inside `alloc_coroutine` ("RefCell already
-            // borrowed") on `--native`.  Refusing is what binding.md B-Ref-Reshape
-            // prescribes for the same situation elsewhere: where the language cannot honour
-            // what was written it declines the program rather than answering quietly.
+            // ⚠ Accepting it is not a lenient option — the value is DISCARDED, and silently.
+            // `fn make() -> iterator<integer> { return counting(1); }` (an author delegating
+            // to another generator) then yields an EMPTY sequence on `--interpret` with no
+            // diagnostic, and faults inside `alloc_coroutine` on `--native`.  Refusing is
+            // what binding.md's B-Ref-Reshape prescribes for the same situation elsewhere:
+            // where the language cannot honour what was written, it declines the program
+            // rather than answering quietly.
             //
-            // The message names `break` and not a bare `return;` deliberately — both cures
-            // were measured on both backends, and only `break` works.  `detect_lazy_for`
-            // (generation/coroutine.rs) rejects a `return` outright, so such a generator
-            // falls back to the eager buffer, whose factory cannot emit a mid-body return
-            // either (rustc E0308: the factory's type is `Box<dyn LoftCoroutine>`).
+            // The message names `break` and NOT a bare `return;` because only `break` is a
+            // working cure — `detect_lazy_for` (generation/coroutine.rs) rejects a `return`
+            // outright, so such a generator falls back to the eager buffer, whose factory
+            // cannot emit a mid-body return either (its type is `Box<dyn LoftCoroutine>`).
             if !self.first_pass && matches!(r_type, Type::Iterator(_, _)) {
                 diagnostic!(
                     self.lexer,
@@ -12478,12 +12477,14 @@ impl Parser {
                 // Vector arm's OpAppendVector treatment.
             }
         } else if !self.first_pass && matches!(r_type, Type::Iterator(_, _)) {
-            // A bare `return;` in a generator: the same rule as the valued one above, and
-            // it gets the same message.  It was already refused — as the generic "Expect
-            // expression after return", because the check reads "the declared type is not
-            // Void" as "a value is required" and a generator's declared type is
-            // `iterator<T>`.  That message sends the author to ADD a value, which is the
-            // one thing the rule forbids.
+            // Enforces @FR-G-Return — the BARE spelling, which the rule names alongside the
+            // valued one above, and which gets the same message.
+            //
+            // ⚠ It needs its own arm even though the generic path already rejects it.  That
+            // path reports "Expect expression after return", because it reads "the declared
+            // type is not Void" as "a value is required" — and a generator's declared type
+            // is `iterator<T>`.  So the generic message sends the author to ADD a value,
+            // which is the one thing this rule forbids.
             diagnostic!(
                 self.lexer,
                 Level::Error,

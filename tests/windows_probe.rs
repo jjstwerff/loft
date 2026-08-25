@@ -14,15 +14,44 @@
 //!           while the first still listens (the S5 swap handover rides
 //!           SO_REUSEPORT on unix; Windows SO_REUSEADDR semantics differ)?
 //!           This probe REPORTS, it does not assert a wish.
+//! Probe 4 — does killing a child reap its GRANDCHILD?  `stop_game` reaches a
+//!           `--native` game's real server (a grandchild) through `killpg`,
+//!           which is `cfg(unix)`; Windows has no process group, so the
+//!           question is whether the grandchild survives — and whether
+//!           `taskkill /T` reaps it, since that decides the fix's shape.
+//! Probe 5 — UDP on the port a TCP listener already holds (the 05a auto-path
+//!           binds both).  Different protocols, so unix allows it; this asks
+//!           what Windows does.
 #![cfg(windows)]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+/// Is `port` held by something?  A refused connect means the holder is gone —
+/// the liveness signal probe 4 reads, because a process handle says nothing
+/// about a process it is not the parent of.
+fn port_is_held(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(300),
+    )
+    .is_ok()
+}
+
+/// Wait until `port` reaches `want`, or give up.  Returns whether it did.
+fn await_port(port: u16, want: bool, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if port_is_held(port) == want {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    port_is_held(port) == want
+}
+
 use loft::compile;
-use loft::database::Stores;
-use loft::keys::DbRef;
 use loft::parser::Parser;
 use loft::state::State;
 
@@ -198,4 +227,161 @@ fn probe_sequential_rebind_latency() {
         t0.elapsed()
     );
     drop(rebound);
+}
+
+// ── Probe 4: the orphaned grandchild ────────────────────────────────────────────────
+//
+// `Repl::stop_game` kills the process GROUP so it reaches a `--native` game's real
+// server, which is a GRANDCHILD (driver → compiled binary).  `killpg` is `cfg(unix)`;
+// on Windows the same call site has only `child.kill()`, which reaps the child alone.
+// Whether that orphans the grandchild is a platform fact, so it is measured here rather
+// than reasoned about — and the same probe measures `taskkill /T`, because a fix that
+// cannot be shown to work on the runner is not yet a fix.
+//
+// The role helper below is how one test binary supplies all three processes: it is a
+// no-op unless the role env var is set, so the ordinary suite never notices it.
+
+const ROLE: &str = "LOFT_WINPROBE_ROLE";
+const ROLE_PORT: &str = "LOFT_WINPROBE_PORT";
+
+/// Re-invoke this test binary as `role`, running only the helper cell.
+fn spawn_role(role: &str, port: u16) -> std::process::Child {
+    let exe = std::env::current_exe().expect("current_exe");
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["--exact", "winprobe_role_helper", "--nocapture"])
+        .env(ROLE, role)
+        .env(ROLE_PORT, port.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd.spawn().expect("spawn role")
+}
+
+/// The child and grandchild bodies, selected by env.  Without the env var — every
+/// ordinary run, including the real suite — it returns immediately.
+#[test]
+fn winprobe_role_helper() {
+    let Ok(role) = std::env::var(ROLE) else {
+        return;
+    };
+    let port: u16 = std::env::var(ROLE_PORT)
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .expect("role port");
+    match role.as_str() {
+        // The driver: spawn the real server, then stay alive holding nothing itself.
+        // Nothing here holds the port, so the port answers about the GRANDCHILD alone.
+        "child" => {
+            let _grandchild = spawn_role("grandchild", port);
+            std::thread::sleep(Duration::from_secs(120));
+        }
+        // The real server: hold the port until killed.
+        "grandchild" => {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", port)).expect("bind");
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while Instant::now() < deadline {
+                // Accept so the liveness probe's connect completes rather than backlogs.
+                listener.set_nonblocking(true).ok();
+                match listener.accept() {
+                    Ok(_) => {}
+                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
+        }
+        other => panic!("unknown role {other}"),
+    }
+}
+
+/// Probe 4a — REPORTS whether `child.kill()` reaps the grandchild.  This is the
+/// `stop_game` shape on Windows exactly: kill the handle we own, and ask whether the
+/// process that actually serves is gone.
+#[test]
+fn probe_child_kill_reaches_the_grandchild() {
+    let port = 18203u16;
+    let mut child = spawn_role("child", port);
+    assert!(
+        await_port(port, true, Duration::from_secs(30)),
+        "the grandchild never took port {port} — the probe measured nothing"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    let reaped = await_port(port, false, Duration::from_secs(5));
+    println!(
+        "PROBE grandchild-after-child-kill: port {port} {} — grandchild {}",
+        if reaped { "RELEASED" } else { "STILL HELD" },
+        if reaped { "reaped" } else { "ORPHANED" }
+    );
+    // Leave nothing behind whichever way it went: an orphan holding a port would
+    // fail the next probe on a warm runner.
+    if !reaped {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .output();
+        let _ = await_port(port, false, Duration::from_secs(5));
+    }
+}
+
+/// Probe 4b — the sequence `Repl::stop_game` runs on Windows, in its exact order:
+/// `taskkill /T /F` on the child, then `child.kill()`, then `child.wait()`.  Asserting
+/// the port is released after the first step is what guards the fix, and the ordering is
+/// the whole finding: `taskkill /T` walks the tree by parent link, so the child must
+/// still be ALIVE to be walked from.  Run it after the kill and there is nothing left to
+/// walk — which is why 4a, the same experiment without this step, still reports an orphan.
+///
+/// 4a stays as the PLATFORM fact (a bare `child.kill()` orphans the grandchild); this
+/// cell is the one that goes red if the cure stops working.
+#[test]
+fn probe_taskkill_tree_reaches_the_grandchild() {
+    let port = 18204u16;
+    let mut child = spawn_role("child", port);
+    assert!(
+        await_port(port, true, Duration::from_secs(30)),
+        "the grandchild never took port {port} — the probe measured nothing"
+    );
+    let out = std::process::Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &child.id().to_string()])
+        .output()
+        .expect("taskkill runs");
+    let reaped = await_port(port, false, Duration::from_secs(10));
+    println!(
+        "PROBE taskkill-tree: exit={:?} stdout={} — port {port} {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).trim(),
+        if reaped { "RELEASED" } else { "STILL HELD" }
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        reaped,
+        "taskkill /T did not reach the grandchild — the Job Object shape is required"
+    );
+}
+
+/// Probe 5 — UDP beside a TCP listener on one port (the 05a auto-path binds both).
+/// REPORTS; the two are different protocols, so a refusal here would be a Windows
+/// constraint the auto-path has to design around rather than a bug to fix.
+#[test]
+fn probe_udp_beside_tcp_on_one_port() {
+    let port = 18205u16;
+    let tcp = std::net::TcpListener::bind(("0.0.0.0", port)).expect("tcp bind");
+    let udp = std::net::UdpSocket::bind(("0.0.0.0", port));
+    println!(
+        "PROBE udp-beside-tcp: udp bind on the tcp port -> {:?}",
+        udp.as_ref().map(|_| "BOUND").map_err(|e| e.kind())
+    );
+    // A second UDP bind on that same port — the overlap question, for UDP.
+    if udp.is_ok() {
+        let second = std::net::UdpSocket::bind(("0.0.0.0", port));
+        println!(
+            "PROBE udp-beside-tcp: a SECOND udp bind -> {:?}",
+            second.as_ref().map(|_| "BOUND").map_err(|e| e.kind())
+        );
+    }
+    // Whatever UDP did, the TCP listener must still accept.
+    let probe = TcpStream::connect(("127.0.0.1", port));
+    println!(
+        "PROBE udp-beside-tcp: tcp connect during the experiment -> {:?}",
+        probe.as_ref().map(|_| "CONNECTED").map_err(|e| e.kind())
+    );
+    drop(tcp);
 }

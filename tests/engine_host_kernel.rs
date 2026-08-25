@@ -1851,7 +1851,11 @@ fn main() {{
         )
     };
     let local = shape("run_local(1000", "client_stop");
-    let listener = shape("run(18099, 1000", "stop");
+    // Through `bind_port` like every other server test in this file: a hard-coded port
+    // cannot be moved by `LOFT_TEST_PORT_OFFSET`, so a second checkout — or any other
+    // process on the box that happens to hold it — fails this test with "cannot listen
+    // on port …" and nothing pointing at the port as the cause.
+    let listener = shape(&format!("run({}, 1000", common::bind_port(18099)), "stop");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for (tag, src) in [("local", &local), ("listener", &listener)] {
         for interpret in [true, false] {

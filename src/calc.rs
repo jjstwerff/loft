@@ -4,10 +4,19 @@
 
 //! Field layout calculator — computes byte offsets for struct/enum fields.
 //!
-//! [`calculate_positions`] takes a list of `(name, size, alignment)` fields
-//! and assigns each a byte offset within a record, minimising gaps via a
-//! `BTreeMap`-based gap tracker.  Fields are sorted largest-first to reduce
-//! padding.  Called by `typedef.rs` during type resolution.
+//! Enforces @FR-L-Struct (a record packs its fields by DESCENDING alignment;
+//! `off(τ, fᵢ)` is the packed position and `size(τ)` the packed total) and
+//! @FR-L-Enum (an enum is a 1-byte discriminant; a data-carrying variant is
+//! that tag byte followed by the variant's fields, packed the same way — the
+//! `sub` flag below is what reserves the tag).  A tuple reaches the same
+//! packer as its synthetic `__tuple<…>` struct, which is the STORAGE half of
+//! @FR-L-Tuple.
+//!
+//! [`calculate_positions`] takes a list of `(size, alignment)` fields and
+//! assigns each a byte offset within a record, minimising gaps via a
+//! `BTreeMap`-based gap tracker.  Its one caller is
+//! `database::types::Stores::finish_type`, which is what makes @FR-L-Total
+//! hold: layout is assigned in exactly one place, after type resolution.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -33,10 +42,10 @@ pub fn calculate_positions(
         pos = 8;
         positions.insert(0, 0);
         gaps.insert(1, 7);
-        // B2-runtime (2026-04-13): a unit variant in a mixed struct-enum
-        // has only the enum discriminant field.  Without this, `size`
-        // stays 0 and `Store::claim(0)` panics "Incomplete record".
-        // Ensure at least 1 byte (the discriminant) is accounted for.
+        // A unit variant in a mixed struct-enum has ONLY the discriminant field, so the
+        // loop below assigns nothing and `size` would stay 0 — and a 0-size record is not
+        // a degenerate case the store tolerates (`Store::claim(0)` rejects it as an
+        // incomplete record).  The tag byte is always accounted for.
         *size = 1;
     }
     for al in [8, 4, 2, 1] {
@@ -90,8 +99,13 @@ pub fn calculate_positions(
     result
 }
 
-/// Group-aware variant of [`calculate_positions`].  Treats every
-/// linked-field group as a SINGLE atomic unit during packing — the
+/// Group-aware variant of [`calculate_positions`].
+///
+/// Enforces the STORAGE half of @FR-L-Tuple: a tuple's elements are one linked-field
+/// group, so they are packed as an atomic block whose member offsets must match the
+/// STACK view (`data::element_stack_offsets`) byte for byte.
+///
+/// Treats every linked-field group as a SINGLE atomic unit during packing — the
 /// layout routine reserves the group's `total_size` bytes at a
 /// `group_alignment`-aligned position, then expands each member to
 /// its in-group offset.  Non-group fields use the same gap-tracker
