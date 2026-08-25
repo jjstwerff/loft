@@ -1621,9 +1621,7 @@ impl Parser {
         let db_tp = self.io_scalar_db_tp(val_type).unwrap_or(db_tp);
         let db_tp = self.checked_io_db_tp(db_tp, val_type, "write_file");
         let temp_var = self.vars.unique("wf", val_type, &mut self.lexer);
-        for d in val_type.depend() {
-            self.vars.depend(temp_var, d);
-        }
+        self.vars.depend_on_all(temp_var, &val_type.depend());
         let assign = v_set(temp_var, val);
         let var_ref = self.cl("OpCreateStack", &[Value::Var(temp_var)]);
         let write = self.cl(
