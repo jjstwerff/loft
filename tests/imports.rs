@@ -620,3 +620,101 @@ fn issue1080_two_different_files_of_one_name_are_still_distinct() {
         );
     }
 }
+
+/// loft#1094 — the duplicate-name check is scoped to a SOURCE's namespace, and a
+/// type-mismatch between two same-named types has to say which is which.
+///
+/// The issue reported the check as unreliable: it fires in a minimal package and not in a
+/// real one "with the same ingredients". The ingredients differ in exactly one axis, and
+/// it is the IMPORT FORM. A bare `use dep;` puts every public name into this source's
+/// namespace, so declaring one of them again is a genuine redefinition and is refused; a
+/// SELECTIVE `use dep::(a, b);` imports only what it names, so the name is not in this
+/// source at all and a local declaration of it is an ordinary, unambiguous definition —
+/// which is the coexistence @PLN102 C97 blessed. Both behaviours are right; the reporting
+/// package used the selective form, which the issue transcribed as the bare one.
+///
+/// The first two cells pin that axis so neither regime can drift into the other. The
+/// third is the defect the investigation did turn up: when two live types share a name,
+/// `expected Frame, got Frame` named them identically and left the reader nothing to go
+/// on. Naming both DECLARATION sites is the one case where the position of a type, rather
+/// than of the offending value, is the useful fact.
+#[test]
+fn issue1094_import_form_decides_a_name_clash_and_a_clash_names_both_sites() {
+    let dir = std::env::temp_dir().join("loft_issue1094");
+    let _ = std::fs::remove_dir_all(&dir);
+    let libs = dir.join("libs");
+    std::fs::create_dir_all(&libs).expect("libs");
+    std::fs::write(
+        libs.join("depa.loft"),
+        "pub struct Frame { fa_x: float }\npub fn depa_helper() -> integer { 1 }\n",
+    )
+    .expect("depa");
+    std::fs::write(
+        libs.join("depb.loft"),
+        "pub struct Frame { fb_y: float }\npub fn takes_frame(f: Frame) -> float { f.fb_y }\n",
+    )
+    .expect("depb");
+
+    let run = |name: &str, body: &str| -> String {
+        let main = dir.join(name);
+        std::fs::write(&main, body).expect("main");
+        let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+            .arg("--interpret")
+            .arg("--lib")
+            .arg(&libs)
+            .arg(&main)
+            .env("LOFT_ERRORS", "compact")
+            .env("LOFT_TIMEOUT", "180")
+            .output()
+            .expect("failed to invoke the loft binary");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    // A — the bare import puts `Frame` in this source, so declaring it again is refused.
+    let wildcard = run(
+        "wildcard.loft",
+        "use depa;\nstruct Frame { fm_x: float }\nfn main() { print(\"{depa_helper()}\") }\n",
+    );
+    assert!(
+        wildcard.contains("conflicts with"),
+        "a bare `use depa;` imports `Frame`, so a local one is a redefinition: {wildcard}"
+    );
+
+    // B — the selective import does not, so the local `Frame` is ordinary and is USED.
+    let selective = run(
+        "selective.loft",
+        "use depa::(depa_helper);\nstruct Frame { fm_x: float }\n\
+         fn main() { f = Frame { fm_x: 4.0 }; print(\"local={f.fm_x} dep={depa_helper()}\") }\n",
+    );
+    assert!(
+        !selective.contains("conflicts with"),
+        "a selective import leaves the name free — refusing here would reject the \
+         coexistence C97 blessed: {selective}"
+    );
+    assert!(
+        selective.contains("local=4 dep=1"),
+        "and the LOCAL `Frame` is the one used: {selective}"
+    );
+
+    // C — two live `Frame`s meeting at a call must be told apart by their declarations.
+    let clash = run(
+        "clash.loft",
+        // `Frame` here is depa's (bare import); `takes_frame` is imported by NAME only,
+        // so depb's `Frame` never enters this source — the two types meet at the call.
+        "use depa;\nuse depb::(takes_frame);\n\
+         fn main() { print(\"{takes_frame(Frame { fa_x: 1.0 })}\") }\n",
+    );
+    assert!(
+        clash.contains("two different types share this name"),
+        "a mismatch between two same-named types must say so: {clash}"
+    );
+    assert!(
+        clash.contains("depa.loft") && clash.contains("depb.loft"),
+        "and must name BOTH declaration sites — naming neither is what made the old \
+         `expected Frame, got Frame` unreadable: {clash}"
+    );
+}

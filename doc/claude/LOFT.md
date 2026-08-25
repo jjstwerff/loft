@@ -610,6 +610,33 @@ qualified access.
 **Multiple names from one library must be parenthesised.** `use lib::a, b;` (a flat
 comma list) is a compile error; write `use lib::(a, b);`.
 
+#### The import form decides whether your own name can clash (loft#1094)
+
+**A bare `use lib;` brings every public name into THIS SOURCE's namespace, so declaring
+one of them yourself is a redefinition and is refused.  A selective `use lib::(a, b);`
+brings in only what it names, so every OTHER name in that library stays free for you to
+declare** — and the two live side by side, reached unambiguously in each source that did
+not import the other (the module scoping of @PLN102 C97).
+
+```
+use hex_body;                        struct Frame { … }   // refused: `Frame` came in bare
+use hex_body::(Rig, rig_world_seg);  struct Frame { … }   // fine: only those two came in
+```
+
+Both are deliberate, and the second is the stronger position: **a selective import makes
+you immune to the library GROWING a name.** A dependency adding a `Frame` in a later
+release cannot collide with yours, because you never asked for it. With a bare import it
+can, and that refusal is the point of the check.
+
+It is worth knowing which form you wrote before relying on either. A consumer read the
+refusal as a property of their package — "a floor bump would break my build loudly" —
+when it is a property of the IMPORT, and their selective imports meant the two `Frame`s
+had been live in one graph for some time with nothing to say so.
+
+Where two same-named types do meet — one module imports the library bare while another
+declares its own — the mismatch names both DECLARATION sites rather than printing the one
+name twice.
+
 #### A package's own module wins its own `use` (loft#976)
 
 **Inside a package, `use <module>;` binds that package's own `src/<module>.loft`** when it
