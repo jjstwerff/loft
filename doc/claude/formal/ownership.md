@@ -177,9 +177,28 @@ line = if len(pts) > 2 { smooth_pts(pts, flags, false) } else { pts };
 ```
 
 The then-arm is a call returning a freshly-owned vector; the else-arm is a bare local.
-`arm_join_type` strips only the deps an arm MINTED (loft#978), and `joined_deps` then
-UNIONS, so `{} ∪ {pts}` = `{pts}` and `LOFT_VAR_TABLE` shows the binding typed
-`def deps=[pts]` — a BORROW.  On the owning path the fact is false.
+`LOFT_VAR_TABLE` shows the binding typed `def deps=[pts]` — a BORROW.  On the owning path
+the fact is false.
+
+⚠ **The mechanism this entry originally named is NOT the one in play, and that was
+falsified 2026-08-25.**  It read: *"`arm_join_type` strips only the deps an arm MINTED
+(loft#978), and `joined_deps` then UNIONS, so `{} ∪ {pts}` = `{pts}`."*  Two probes against
+the `if` shape above — the entry's own example — say otherwise:
+
+* removing the strip from `arm_join_type` entirely leaves the binding's deps **unchanged**;
+* a tracer in `arm_join_type` **never fires** for this shape at all.
+
+The `if`-expression joins through `merge_dependencies(&true_type, &false_type)`
+(`parser/control.rs`), which is a different path; `arm_join_type` serves the `match` arms.
+So an attempted fix aimed at `arm_join_type` — the obvious reading of the old text — would
+have changed code that never runs for the reported program.
+
+**Where the next attempt should start:** instrument `merge_dependencies` (and the
+`joined_deps` it delegates to, `parser/mod.rs`) to print the two arm types it is given.  The
+IR shows them as `["__ref_1"]` (the owning arm, a mint dep) and `["cp"]` (the borrowing
+arm), and a plain union of those two would keep BOTH — so the reduction to `["cp"]` happens
+somewhere between those types being formed and the binding being typed, and that step is
+still unidentified.
 
 **One fact, two questions — and it is only right for one of them.**  `joined_deps`'
 own doc-comment justifies the union as the reading "no arm can contradict: it can only
