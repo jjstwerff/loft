@@ -28,6 +28,16 @@ on:
         required: false
         default: main
         type: string
+      wasm-exempt:
+        description: >-
+          JSON array of packages whose native crate CANNOT cross-build for
+          wasm32, e.g. '["server","ssh","web"]'.  Each entry is a declared,
+          visible exemption from the WASM cross-build gate below — it prints on
+          every run and lands in the job summary, so it cannot quietly become
+          permanent.  Default: nothing is exempt.
+        required: false
+        default: '[]'
+        type: string
 
 permissions:
   contents: read
@@ -189,6 +199,80 @@ jobs:
             echo '```'
             grep -E '^[[:space:]]*(FAIL|Warning\[|error)' "$RUNNER_TEMP/native.log" | head -40 \
               || echo "(no FAIL/Warning line — see the job log)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      # ── The wasm target, which nothing measured ────────────────────────────
+      #
+      # A `[native] crate` is cross-built AS A WHOLE for `wasm32-wasip2`, so ONE
+      # dependency without a wasm32 target takes the entire package off
+      # `--native-wasm` — including the parts that never wanted a device.
+      # `graphics` shipped that way for months: `winit` and `glutin` were
+      # unconditional, cargo failed before reaching any of the package's own code,
+      # and its software canvas, mesh maths and PNG encoder went down with the
+      # window layer they have nothing to do with.
+      #
+      # Nothing here could have caught it.  The two gates above are `--interpret`
+      # and `--native`; there was no wasm target in this workflow at all, and
+      # `loft test` has no `--native-wasm` mode — it compiles a program, and a
+      # suite is not one.  So a library reporting a green suite had said nothing
+      # about whether it cross-builds, and @PLN111 recorded graphics as "passes
+      # native-wasm 68/68" for something that could not be BUILT for it.  That is
+      # the specific false green this step closes.
+      #
+      # Cheap: a package with no `[native] crate` has nothing to cross-build and
+      # says so; the heaviest one that has (graphics — image, fontdue, png, rodio,
+      # gl) is 13 s cold against a warm registry.
+      #
+      # Measured 2026-08-25 across all 44 packages: 8 have a native crate, and
+      # `server` / `ssh` / `web` cannot cross-build because their TLS stack
+      # (`ring`, `aws-lc-sys`) has C build scripts with no wasm32 target.  Those
+      # three are `wasm-exempt` in loft-libs-net's caller.  The exemption is a
+      # LIST, not a default: a package is gated unless someone names it, so the
+      # next package added is covered without anyone remembering to opt it in.
+      # And an exemption is loud — it prints and writes to the job summary on
+      # every run — because the failure mode of a quiet one is that it outlives
+      # its reason.
+      #
+      # What a red here means, and the shape that fixes it:
+      # WASM.md § When the crate needs a device the target does not have.
+      - name: WASM cross-build — ${{ matrix.package }}
+        working-directory: ${{ matrix.package }}
+        env:
+          WASM_EXEMPT: ${{ contains(fromJson(inputs.wasm-exempt), matrix.package) && '1' || '0' }}
+        run: |
+          set -u
+          if [ ! -f native/Cargo.toml ]; then
+            echo "no [native] crate — nothing to cross-build (the loft half is target-independent)"
+            exit 0
+          fi
+          if [ "$WASM_EXEMPT" = "1" ]; then
+            echo "declared wasm-exempt by this repo's caller — NOT cross-built"
+            {
+              echo "### ⚠ \`${{ matrix.package }}\` — wasm cross-build skipped (declared exempt)"
+              echo
+              echo "Its native crate is declared unable to target wasm32, so this package"
+              echo "does not ship on \`--native-wasm\`.  Remove it from \`wasm-exempt\` in"
+              echo "this repo's \`library-ci.yml\` once that stops being true."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          rustup target add wasm32-wasip2
+          set -o pipefail
+          cargo build --release --target wasm32-wasip2 \
+            --manifest-path native/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/wasm.log" && exit 0
+          status=$?
+          {
+            echo "### ❌ \`${{ matrix.package }}\` — wasm cross-build"
+            echo
+            echo "The native crate no longer builds for \`wasm32-wasip2\`, so the package"
+            echo "is off \`--native-wasm\` entirely — its pure halves included."
+            echo "See WASM.md § When the crate needs a device the target does not have."
+            echo
+            echo '```'
+            grep -E '^error' "$RUNNER_TEMP/wasm.log" | head -20 \
+              || echo "(no error line — see the job log)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit $status
