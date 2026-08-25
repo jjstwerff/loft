@@ -302,7 +302,12 @@ while IFS= read -r line; do
                 [[ -z "$patch" || "$patch" != "$pkg/"* ]] && continue
                 rel="${patch#"$pkg"/}"
                 diff_out="$(grep -vxF -- "$rel" <<< "$diff_out" || true)"
-            done <<< "$LOCAL_PATCHES$'\n'$(printf '%s\n' "$UNRELEASED_FILES" | awk '{print $1}')"
+            # ⚠ The quote CLOSES before `$'\n'`.  Inside double quotes that is not an
+            # escape, it is five literal characters — so the list's LAST entry fused with
+            # the first UNRELEASED one and BOTH vanished from the filter.  Nothing said
+            # so: the two lost rows simply stayed in `diff_out`, and `graphics` reported
+            # permanent DRIFT for `android_gl.rs`, a file declared one list up.
+            done <<< "$LOCAL_PATCHES"$'\n'"$(printf '%s\n' "$UNRELEASED_FILES" | awk '{print $1}')"
             if [[ $UNRELEASED_ONLY -eq 0 && -n "${diff_out//[[:space:]]/}" ]]; then
                 echo "[check] DRIFT: tests/fixtures/libs/$pkg vs $chunk@$ref"
                 drift=1
@@ -324,7 +329,12 @@ while IFS= read -r line; do
             while IFS= read -r patch; do
                 [[ -z "$patch" || "$patch" != "$pkg/"* ]] && continue
                 git -C "$REPO_ROOT" checkout -- "tests/fixtures/libs/$patch" 2>/dev/null || true
-            done <<< "$LOCAL_PATCHES$'\n'$(printf '%s\n' "$UNRELEASED_FILES" | awk '{print $1}')"
+            # ⚠ The quote CLOSES before `$'\n'`.  Inside double quotes that is not an
+            # escape, it is five literal characters — so the list's LAST entry fused with
+            # the first UNRELEASED one and BOTH vanished from the filter.  Nothing said
+            # so: the two lost rows simply stayed in `diff_out`, and `graphics` reported
+            # permanent DRIFT for `android_gl.rs`, a file declared one list up.
+            done <<< "$LOCAL_PATCHES"$'\n'"$(printf '%s\n' "$UNRELEASED_FILES" | awk '{print $1}')"
         fi
     done
 done <<< "$PINNED_REFS"
