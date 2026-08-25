@@ -437,6 +437,20 @@ struct PatternArm {
 /// bare-arm spelling of the same function was right.
 ///
 /// One predicate for all of them, because the previous arrangement was one copy each.
+///
+/// ⚠ Do NOT fold this together with `Parser::arm_is_null`, which looks similar and answers a
+/// DIFFERENT question.  That one also counts `OpNullRefSentinel` — the shape a null arm has
+/// AFTER this repair has run — because its caller (@PLN85's slice materialisation) runs later
+/// in the pipeline and has to recognise the repaired form.  This one runs BEFORE the repair
+/// and must match only unrepaired nulls; teaching it the sentinel would make it re-repair its
+/// own output.  Two predicates, two lifecycle stages, measured to disagree exactly once over
+/// the 858-program corpus — and that one disagreement is the nested-block tail `arm_is_null`
+/// recurses into and this deliberately does not.
+///
+/// It also does not peel the TOP, unlike `arm_is_null`.  Measured before leaving it that way:
+/// 4323 spanned values arrive here over the corpus and peeling changes the answer **0** times,
+/// because a spanned arm is never a null arm — the same structural fact that keeps
+/// `Return`/`Break`/`Continue` unspanned in block-operator position.
 fn arm_body_is_null(code: &Value) -> bool {
     match code {
         Value::Null => true,

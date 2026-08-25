@@ -684,6 +684,19 @@ which is why the promotion is not shipped here.
 as the wildcard, which made "the null arm answered empty" and "it fell through to the
 wildcard" the same observation. `[99, 99]` separated them.
 
+**Three null-arm predicates, and folding them would be WRONG.** The obvious follow-up to B5 is
+to notice that `arm_body_is_null`, the enum path's inline test, and `Parser::arm_is_null` all
+answer "is this arm a null?" and to consolidate. They do not answer the same question:
+`arm_is_null` also counts `OpNullRefSentinel`, the shape an arm has AFTER the repair, because
+its caller (@PLN85's slice materialisation) runs later in the pipeline. A repair predicate that
+learned the sentinel would re-repair its own output.
+
+Measured rather than argued: over the 858-program corpus the strong and weak predicates
+disagree **once**, and that case is a nested-block tail `arm_is_null` recurses into. The
+`arm_body_is_null` gap that looked worst — it does not peel its own top — takes **4323** spanned
+values and changes the answer **0** times, because a spanned arm is never a null arm. Left as
+it is, with the count in its doc comment, for the same reason `is_void_value` was left alone.
+
 #### C — process / skills
 
 | item | state |
