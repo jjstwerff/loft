@@ -839,6 +839,18 @@ impl Stores {
     # Panics
     When the code doesn't free the last claimed store first.
     */
+    /// Release the store `db` names, and everything in it.
+    ///
+    /// Enforces @FR-H-Free.  The guards below are the fault rules, in the order they are
+    /// checked: @FR-H-FreeNull (freeing the null sentinel is a no-op), @FR-H-FreeStack
+    /// (freeing store 0, the eval stack, is refused loudly — a `#306` bug IS a stack-record
+    /// ref mistaken for an owned heap store), and @FR-H-FreeTwice.
+    ///
+    /// ⚠ @FR-H-FreeTwice says a double free is a FAULT, and this function answers it with a
+    /// silent no-op.  That is the model, not a divergence: `heap.md` states the corrupting
+    /// frees are "not re-checked at runtime — discharged statically" by ownership.md's
+    /// checker, so reaching one means the STATIC system already failed.  `LOFT_POISON` is
+    /// the empirical cross-check that turns a surviving one into a corrupted read.
     pub fn free(&mut self, db: &DbRef) {
         self.free_named(db, "");
     }

@@ -492,6 +492,31 @@ implication that reading `deps` is sufficient: since loft#723 it demonstrably is
 second fact carries the difference. Re-opening `D-own-1` would misdescribe it; the honest
 record is this note plus the two code sites now saying so in their own docs.
 
+### heap.md — the runtime half of the lifetime map (2026-08-25)
+
+`Stores::free` / `free_named` (`src/database/allocation.rs`) is the runtime free, and it is
+the **third** load-bearing lifetime function found undocumented — after `get_free_vars`
+(free placement) and `Scopes::scan_if` (the path reconcile). Now cited: `@FR-H-Free`, with
+its guards in check order — `@FR-H-FreeNull`, `@FR-H-FreeStack` (a `#306` bug IS a
+stack-record ref mistaken for an owned heap store), `@FR-H-FreeTwice`.
+
+**A candidate divergence that was not one.** `H-FreeTwice` says a double free is a FAULT;
+the code answers it with `if store.free { return; }` — a silent no-op. That reads like the
+`D-Opt` shape, and it is not: `heap.md` states outright that the corrupting frees are *"not
+re-checked at runtime — discharged statically"* by ownership.md's checker, so reaching one
+means the static system already failed and `LOFT_POISON` is the cross-check that surfaces
+it. Checking the rule's own prose before filing is what kept this from becoming a false
+report.
+
+⚠ **What WAS wrong is the soundness argument's footing.** `heap.md` asserted twice that
+ownership.md is at **0 open deviations**, and `H-Sound` discharges the whole free discipline
+onto that checker. ownership.md is at **`OPEN: 1`** — `D-own-8`, *"a Join's ownership fact is
+true on one path only"*. That is a PATH-COMPLETENESS gap, and path-completeness is exactly
+what `H-Sound` consumes, so the stale claim was wrong in the direction that matters. Both
+occurrences now state the current register and say to re-read it rather than the sentence —
+**a claim about another document's register goes stale silently**, which is the same failure
+as `L-Tuple` naming a renamed function, one document further out.
+
 ## Not mergeable — recorded so the question is not reopened
 
 | the pair | why they must stay apart |
