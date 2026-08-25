@@ -8332,6 +8332,40 @@ mod par_safety_tests {
         assert!(is_par_safe(&d, user));
     }
 
+    /// The two classifiers must give the same verdict — one returns a bool, the other the
+    /// REASON for it, and a verdict with no reason to give is a contradiction.
+    ///
+    /// They did not. `par_unsafe_reason` was hand-rolled with a `_ => None` fallback and no
+    /// `Return` arm, so a body of `return <call>` was reported par-SAFE without ever being
+    /// looked at, while `is_par_safe` (walking with `any_node`, which visits every node)
+    /// called the same function unsafe. Measured over the corpus par workers: 16 of 42
+    /// disagreed, every one of them `is_par_safe=false` against `reason=none`.
+    ///
+    /// `Return` is the arm that exposed it; the fallback now descends via `for_each_child`,
+    /// so a wrapper nobody thought of cannot reintroduce the gap.
+    #[test]
+    fn the_two_par_classifiers_agree_through_a_return() {
+        let mut d = Data::new();
+        let native = d.add_def("OpMulInt", &pos(), DefType::Function);
+        d.definitions[native as usize].purity = Purity::Unknown;
+        d.definitions[native as usize].code = Value::Null; // a native: no loft body
+        let user = d.add_def("dbl", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Return(Box::new(Value::Call(native, vec![])));
+
+        let flag = is_par_safe(&d, user);
+        let reason = super::par_unsafe_reason(&d, user);
+        assert_eq!(
+            flag,
+            reason.is_none(),
+            "bool says {flag} while the reason is {reason:?} — a verdict with no reason \
+             behind it, or a reason behind no verdict"
+        );
+        assert!(
+            reason.is_some_and(|r| r.contains("OpMulInt")),
+            "and the reason must NAME the call it found through the `Return`"
+        );
+    }
+
     #[test]
     fn fn_calling_parent_write_stdlib_is_not_par_safe() {
         let mut d = Data::new();
@@ -8516,7 +8550,23 @@ fn walk_par_unsafe_reason_value(
         }
         Value::Set(_, rhs) => walk_par_unsafe_reason_value(rhs, data, visited),
         Value::Span(b) => walk_par_unsafe_reason_value(&b.1, data, visited),
-        _ => None,
+        // Every OTHER node descends via the keystone rather than stopping.
+        //
+        // This arm used to be `_ => None`, and the named arms above do not include `Return` —
+        // so `fn dbl(x) { return x * 2; }` was reported par-SAFE without its body ever being
+        // looked at, while `is_par_safe` (which walks with `any_node`, so it sees every node)
+        // called the same function unsafe.  16 of 42 par workers in the corpus disagreed that
+        // way, every one of them `is_par_safe=false` against `reason=none`: a verdict of
+        // "unsafe" with no reason to give for it.
+        other => {
+            let mut found = None;
+            other.for_each_child(&mut |c| {
+                if found.is_none() {
+                    found = walk_par_unsafe_reason_value(c, data, visited);
+                }
+            });
+            found
+        }
     }
 }
 

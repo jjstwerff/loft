@@ -697,6 +697,52 @@ disagree **once**, and that case is a nested-block tail `arm_is_null` recurses i
 values and changes the answer **0** times, because a spanned arm is never a null arm. Left as
 it is, with the count in its doc comment, for the same reason `is_void_value` was left alone.
 
+#### B6 — the par-safety classifier disagreed with itself (2026-08-26)
+
+`parallel.rs`'s module doc names an undetected UB surface: *"the guarantee is CONDITIONAL
+(@FR-C-Impure) … a worker that touches shared mutable state has no defined behaviour — loft
+pins no interleaving — and nothing here detects that. See `scopes::is_par_safe`, which
+classifies it but is **wired to nothing**."*
+
+Wired to nothing understates it. `is_par_safe` returns a bool and `par_unsafe_reason` returns
+the REASON for it, and over the corpus's par workers they **disagreed 16 times in 42** — every
+one of them `is_par_safe=false` against `reason=none`. A verdict of "unsafe" with no reason to
+give for it.
+
+**Cause, and it is the keystone lesson again.** `par_unsafe_reason` was hand-rolled with named
+arms and a `_ => None` fallback, and its arms do not include `Return` — so `fn dbl(x) { return
+x * 2; }` was reported par-SAFE without its body ever being looked at. `is_par_safe` walks with
+`any_node`, which visits every node, and saw the call. One walker exhaustive, one with a
+catch-all, and the catch-all silently answered for a subtree it never entered.
+
+**Fixed:** the fallback descends via `for_each_child`, so a wrapper nobody thought of cannot
+reintroduce the gap. The two now agree on **136 of 136** corpus verdicts. Guard:
+`scopes::par_safety_tests::the_two_par_classifiers_agree_through_a_return`, verified to fail
+against the old walker with exactly that message.
+
+**What still blocks WIRING it, named, sized and TRIAGED.** With the two in agreement the
+reasons are actionable and all of one kind: **15 distinct unannotated native ops**, led by
+`OpMulInt` (38 hits), `OpAddInt` (11), `OpEqInt` (8), `OpDatabase` (6), `OpLtInt` (3). Only 32
+of 136 verdicts come back clean.
+
+The annotation system is not missing — the stdlib carries **230** of them (132 `#pure`, 39
+`#impure(host_io)`, 36 `#impure(io)`, 15 `#impure(parent_write)`, 8 `#impure(par_call)`). What
+it never reached is the PRIMITIVE operator layer: the arithmetic block in `01_code.loft` runs
+about sixty lines with one `#pure` in it.
+
+⚠ **But "annotate the 15" is the wrong instruction, and reading their bodies is what shows it.**
+They are three different cases:
+
+| op | body | verdict |
+|---|---|---|
+| `OpAddInt`, `OpMulInt`, `OpEqInt`, `OpLtInt`, `OpAddFloat`, `OpMulFloat` | integer/float arithmetic, no state | genuinely pure — annotating unblocks |
+| **`OpSetInt`** | `stores.store_mut(&db).set…` — a store WRITE | the classifier is **RIGHT** to reject it; this is the shared-mutable-state case `par` has no defined behaviour for |
+| `OpGetInt` (a store READ), `OpDivFloat` (raises, so it logs), the `OpFormat*` family (append to a work buffer) | | a judgement, per op |
+
+So a third of the "blockers" are the analysis working. Annotating changes what `par` would
+ACCEPT once wired, and one of these ops is precisely the hazard the whole classifier exists to
+catch — an owner call, and not a cleanup.
+
 #### C — process / skills
 
 | item | state |
