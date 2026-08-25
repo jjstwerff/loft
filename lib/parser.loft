@@ -33,7 +33,14 @@ struct FormatSpec {
   decimals: i8 = -1
 }
 
-pub fn parse(name: text, s: text) {
+// Parse `s` as a Loft source file named `name`, and answer how many errors it
+// contained — `0` for a snippet that parsed cleanly.
+//
+// The count is the only thing a caller can check: parsing writes its diagnostics to
+// the log as it goes, and the parser itself is internal.  Returning it is what lets a
+// caller (or a doc page) assert that a snippet is valid rather than merely watch the
+// call not crash.
+pub fn parse(name: text, s: text) -> integer {
   p = Parser { };
   p.operators =[
  {op: "*", prio: 1 }, {op: "/", prio: 1 }, {op: "%", prio: 1 },
@@ -60,6 +67,7 @@ pub fn parse(name: text, s: text) {
   p.lexer.parse_string(name, s);
   p.cur_file += 1;
   parse_file(p);
+  p.log.errors
 }
 // <file> ::= { 'use' <identifier> ';' } { 'pub' ( <structure> | <def_enumerate> | <def_type> | <function> | <constant> ) }
 
@@ -118,7 +126,7 @@ fn structure(self: Parser, public: boolean) -> boolean {
   self.expect("}}");
   true
 }
-// <def_enumerate> :: 'enum' <identifier> '{' { <identifier> [ '{' { <identifier> ':' <type> [ '=' <value ] } '}' ] [ ',' ] } '}'
+// <def_enumerate> :: 'enum' <identifier> '{' { <identifier> [ '{' { <identifier> ':' <type> [ '=' <value ] [ ',' ] } '}' ] [ ',' ] } '}'
 
 fn def_enumerate(self: Parser, _public: boolean) -> boolean {
   if !self.lexer.matches("enum") {
@@ -136,7 +144,12 @@ fn def_enumerate(self: Parser, _public: boolean) -> boolean {
         if self.lexer.matches("=") {
           self.value();
         }
-        if self.lexer.matches(";") {
+        // Loft separates enum-variant fields with `,`, exactly as it separates struct
+        // fields — see `structure` above.  Accepting only `;` meant a variant with a
+        // SECOND field never parsed: `Rectangle {{ w: float, h: float }}` stopped at the
+        // comma.  The page documenting this rule claimed struct variants were
+        // recognised and asserted nothing, so the claim went unchecked (@PLN121 E2).
+        if self.lexer.matches(",") || self.lexer.matches(";") {
           field# continue;
         }
         if self.lexer.test("}}") {
@@ -218,10 +231,24 @@ fn block(self: Parser) -> boolean {
     if self.log.level == Fatal {
       statement# break;
     }
-    if !self.for_statement() and !self.return_statement() {
+    // A statement that ends in its own BLOCK carries no trailing `;` — `for i in xs {{
+    // … }}` is complete at its closing brace.  Demanding one broke the enclosing block
+    // out of its loop, so the tail expression after a `for` was never read and the body
+    // failed with `Expected }`: `fn sum(n) {{ t = 0; for i in 1..=n {{ … }} t }}` did
+    // not parse (@PLN121 E2 — the page claiming it did asserted nothing).
+    block_ended = self.for_statement();
+    if !block_ended and !self.return_statement() {
       self.expression();
     }
-    if !self.lexer.matches(";") {
+    // The closing brace is tested on BOTH sides of the separator, because a body can
+    // end either way and each test alone breaks the other: before it, so a TAIL
+    // EXPRESSION (`… ; t }}`) ends the block; after it, so a trailing SEMICOLON
+    // (`… t = 0; }}`) does too.  Checking only after loses the tail; only before runs
+    // `expression()` on the closing brace itself.
+    if self.lexer.test("}}") {
+      statement# break;
+    }
+    if !block_ended and !self.lexer.matches(";") {
       statement# break;
     }
     if self.lexer.test("}}") {
@@ -368,6 +395,13 @@ fn do_operators(self: Parser) -> boolean {
     if !o {
       do# break;
     }
+    // CONSUME the operator before reading the right operand.  `peek` only looks — it is
+    // `matches` that advances — so without this the operator token was still current
+    // when `single_part` ran, and `single_part` tried to read `=` (or `+`, or `==`) as a
+    // value.  The effect was that NO binary operator parsed at all: `t = 0`, `t += 1`,
+    // `t == 0` and `t + 1` each failed at the operator, while a bare `t;` was fine
+    // (loft#1092).
+    self.lexer.matches(o.op);
     self.single_part();
     if self.lexer.matches("as") {
       self.type_def(false);

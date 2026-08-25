@@ -49,6 +49,13 @@
 <p>Faster than comparing characters one at a time for a known prefix at `pos`. Example: @STD-001</p>
 </div>
 <div class="item">
+<pre><code>pub fn char_slice(self: text, from: integer, to: integer) -&gt; text</code></pre>
+<p>The characters of `self` from `from` up to (not including) `to` — a slice that counts CHARACTERS where `self[a..b]` counts BYTES.</p>
+<p>⚠ **This is the cure for the commonest text bug in this stack.**  `len(text)` counts characters while `self[a..b]` slices bytes, and loft snaps a byte cut outward to a character boundary — so a count computed from `len` and applied as a byte range fits FEWER characters than it measured.  The failure is not mojibake but something quieter: the text comes back SHORT, silently, and only when it is not ASCII, so every ASCII test stays green.  `&quot;héllo&quot;[0..4]` is `&quot;hél&quot;`; `&quot;héllo&quot;.char_slice(0, 4)` is `&quot;héll&quot;`.</p>
+<p>Use it wherever a character COUNT becomes a cut: fitting a label to a width, wrapping a line, a caret or a selection in a text field, truncating with an ellipsis.  Reach for `self[a..b]` only when the numbers came from a byte source — `find`, `size`, `byte_at`.</p>
+<p>Negative bounds count from the end, as a byte slice's do (`char_slice(-2, n)` is the last two characters); both ends clamp, and a reversed or empty range answers `&quot;&quot;` rather than failing.</p>
+</div>
+<div class="item">
 <pre><code>pub fn trim(both: text) -&gt; text[both]</code></pre>
 <p>(Path helpers `dir` / `basename` / `join` / `resolve` moved to `02_files.loft` § Path helpers, so they're available before `03_text.loft` loads — same call shape, same `pub fn` signatures.) Removes leading and trailing whitespace. Use when processing user input or file content.</p>
 </div>

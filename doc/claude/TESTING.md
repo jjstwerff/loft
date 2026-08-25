@@ -2581,6 +2581,7 @@ stack, and the panic site appears.
 
 | Item | Section | Status |
 |---|---|---|
+| **Fenced examples in API doc comments are not executed** — an example in a `pub` item's doc comment is not run or asserted, so a doc can disagree with its code.  The mechanism is designed (@PLN121: extract → run both backends → gate → ship only what ran), but the **domain is empty**: measured 2026-08-25, **6 fenced examples in 1962 `pub` items** across the stdlib and all 8 library repos, none in a published package.  Building an extractor, runner, gate and registry field for six examples would be five mechanisms serving one file. | § Doc tests | 🔕 Deliberately not built.  **Trigger to revisit: re-run the count** — if a package starts writing fenced examples, @PLN121's steps 3–7 are still the plan.  The assert-less half shipped (`tests/doc_hygiene.rs::every_doc_page_asserts_something`). |
 | ~~**@P229b — Windows `pick_free_port` rebind race**~~ — **CLOSED 2026-05-29** via the v2 probe (PR #228).  Un-ignored `v2_single_client_completes_game` on `windows-latest`; CI showed it PASSING.  All 10 `multiplayer_v{2,3,5}.rs` `#[cfg_attr(target_os = "windows", ignore = "P229b…")]` ignores dropped in the follow-up.  The 2026-05-21 leading hypothesis (bind-then-drop race) was incorrect; @P229b was incidentally resolved in some recent Rust toolchain or transitive dep update.  Bug record: [PROBLEMS.md @P229](PROBLEMS.md). | — | ✅ Closed; row kept for the lesson — "don't apply unverified-from-Windows-output hypotheses blindly" stands. |
 
 ---

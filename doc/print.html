@@ -906,7 +906,10 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
 <p>Note: <code>#index</code> works on a sorted collection — it is a sequential counter that advances one per visited element (see the loop above). It is only <code>index&lt;T&gt;</code> collections that reject <code>#index</code> — use <code>#count</code> there instead (see 11-index).</p>
-<pre><code>}</code></pre>
+<h2 id="iterating-a-key-range">Iterating a Key Range</h2>
+<p>The range examples live in <code>main_ranges</code> below; run them here, because a file with a <code>main</code> runs only its <code>main</code>.</p>
+<pre><code>  <span class="fn-call">main_ranges</span>();
+}</code></pre>
 <pre><code><span class="kw">struct</span> <span class="en">Word</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   score: <span class="ty"><a href="stdlib-types.html">integer</a></span>
@@ -1356,24 +1359,41 @@ pixel.value()           pack r,g,b into a single 0xRRGGBB integer
 <span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
 <p>The double braces <code>{{</code> and <code>}}</code> produce literal <code>{</code> and <code>}</code> inside a Loft format string — needed here because the source code itself contains braces.</p>
-<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"hello"</span>, <span class="st">"fn main() {{ println(\"</span><span class="en">Hello</span> <span class="en">World</span>\<span class="st">"); }}"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"hello"</span>, <span class="st">"fn main() {{ println(\"</span><span class="en">Hello</span> <span class="en">World</span>\<span class="st">"); }}"</span>) == <span class="nm">0</span>,
+         <span class="st">"a minimal function parses cleanly"</span>);</code></pre>
 <h2 id="parsing-a-struct-and-function-together">Parsing a struct and function together</h2>
 <p>The parser validates the entire source snippet as one unit. Both the struct definition and the function body are checked.</p>
-<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"point"</span>, <span class="st">"struct Point {{ x: integer, y: integer }} fn origin() -&gt; Point {{ Point {{ x: 0, y: 0 }} }}"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"point"</span>, <span class="st">"struct Point {{ x: integer, y: integer }} fn origin() -&gt; Point {{ Point {{ x: 0, y: 0 }} }}"</span>) == <span class="nm">0</span>,
+         <span class="st">"a struct and a function in one unit parse cleanly"</span>);</code></pre>
 <h2 id="parsing-an-enum">Parsing an enum</h2>
 <p>Both a plain variant and a struct variant (with fields) are recognised.</p>
-<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"shape"</span>, <span class="st">"enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"shape"</span>, <span class="st">"enum Shape {{ Circle {{ radius: float }}, Rectangle {{ w: float, h: float }} }}"</span>) == <span class="nm">0</span>,
+         <span class="st">"both a plain and a struct variant parse cleanly"</span>);</code></pre>
+<h2 id="parsing-several-statements-in-a-body">Parsing several statements in a body</h2>
+<p>A body is a sequence of statements; each call below is one.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"body"</span>, <span class="st">"fn m() {{ println(\"</span>a\<span class="st">"); println(\"</span>b\<span class="st">"); }}"</span>) == <span class="nm">0</span>,
+         <span class="st">"a body of several statements parses cleanly"</span>);</code></pre>
+<h2 id="parsing-assignments-and-operators">Parsing assignments and operators</h2>
+<p>Every binary operator in the table above is accepted, including assignment.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"assign"</span>, <span class="st">"fn f() {{ t = 0; t += 1; }}"</span>) == <span class="nm">0</span>,
+         <span class="st">"assignment and compound assignment parse cleanly"</span>);</code></pre>
 <h2 id="parsing-a-for-loop-and-arithmetic">Parsing a for loop and arithmetic</h2>
-<p>This exercises the expression parser and range syntax.</p>
-<pre><code>  parser::<span class="fn-call">parse</span>(<span class="st">"loop"</span>, <span class="st">"fn sum(n: integer) -&gt; integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}"</span>);</code></pre>
+<p>This exercises the expression parser, range syntax, and a tail expression after a loop body — the shape where a speculative struct-literal parse has to give its tokens back so the loop can claim them.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"loop"</span>, <span class="st">"fn sum(n: integer) -&gt; integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}"</span>) == <span class="nm">0</span>,
+         <span class="st">"a for loop over a range parses cleanly"</span>);</code></pre>
 <h2 id="practical-use-validating-user-supplied-code">Practical use: validating user-supplied code</h2>
 <p>If your application lets users write Loft snippets (for scripting or configuration), you can parse them before executing:</p>
 <pre><code>snippet = read_user_input();
-parser::parse("user_code", snippet);
-// If parse() emits errors, the snippet was invalid — show them to the user.
+if parser::parse("user_code", snippet) &gt; 0 {
+  // The snippet was invalid — the count is how many errors it had.
+}
 </code></pre>
 <p>Combine this with the lexer (see the Lexer page) when you need to extract individual tokens from the source rather than validate all of the syntax.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"parser test passed"</span>);
+<h2 id="what-a-failed-parse-looks-like">What a failed parse looks like</h2>
+<p>The count is the whole point: a snippet that does not parse answers a NON-zero number, so a caller can tell the two apart. Watching the call not crash cannot.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"broken"</span>, <span class="st">"fn main() {{ println(\"</span>hi\<span class="st">");"</span>) &gt; <span class="nm">0</span>,
+         <span class="st">"an unterminated body reports at least one error"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"parser test passed"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="17-libraries">
@@ -3138,6 +3158,13 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>Faster than comparing characters one at a time for a known prefix at `pos`. Example: @STD-001</p>
 </div>
 <div class="item">
+<pre><code>pub fn char_slice(self: text, from: integer, to: integer) -&gt; text</code></pre>
+<p>The characters of `self` from `from` up to (not including) `to` — a slice that counts CHARACTERS where `self[a..b]` counts BYTES.</p>
+<p>⚠ **This is the cure for the commonest text bug in this stack.**  `len(text)` counts characters while `self[a..b]` slices bytes, and loft snaps a byte cut outward to a character boundary — so a count computed from `len` and applied as a byte range fits FEWER characters than it measured.  The failure is not mojibake but something quieter: the text comes back SHORT, silently, and only when it is not ASCII, so every ASCII test stays green.  `&quot;héllo&quot;[0..4]` is `&quot;hél&quot;`; `&quot;héllo&quot;.char_slice(0, 4)` is `&quot;héll&quot;`.</p>
+<p>Use it wherever a character COUNT becomes a cut: fitting a label to a width, wrapping a line, a caret or a selection in a text field, truncating with an ellipsis.  Reach for `self[a..b]` only when the numbers came from a byte source — `find`, `size`, `byte_at`.</p>
+<p>Negative bounds count from the end, as a byte slice's do (`char_slice(-2, n)` is the last two characters); both ends clamp, and a reversed or empty range answers `&quot;&quot;` rather than failing.</p>
+</div>
+<div class="item">
 <pre><code>pub fn trim(both: text) -&gt; text[both]</code></pre>
 <p>(Path helpers `dir` / `basename` / `join` / `resolve` moved to `02_files.loft` § Path helpers, so they're available before `03_text.loft` loads — same call shape, same `pub fn` signatures.) Removes leading and trailing whitespace. Use when processing user input or file content.</p>
 </div>
@@ -3324,8 +3351,9 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>Largest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;). Example: @STD-004</p>
 </div>
 <div class="item">
-<pre><code>pub fn sum &lt; T: Addable &gt; (v: vector&lt;T&gt;, init: T) -&gt; T</code></pre>
-<p>Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum([10, 20, 12], 0) == 42 Example: @STD-005</p>
+<pre><code>pub fn sum &lt; T: Addable &gt; (v: vector&lt;T&gt;, init: T? = null) -&gt; T</code></pre>
+<p>Sum of vector elements.  Works on any Addable type.  `init` is the identity to start from; leave it out and the element type's own zero is used (0, 0.0, &quot;&quot;). Example: sum([10, 20, 12], 0) == 42 Example: sum([10, 20, 12]) == 42 Example: @STD-005</p>
+<p>@PLN102 arc C — `init` gained its default so `sum_of(v)` can be REWRITTEN to `sum(v)`: `superseded-call` offers that rename and `loft fix` verifies every edit by compiling the result, so while `init` was required the only `#superseded` symbol loft ships had its fix rejected on every program (loft#1003).  A literal default is not spellable here (`init: T = 0` is &quot;expected T, got integer&quot;), so it is the nullable-with-discharge form, which needs loft#1016's per-monomorph `construct_default(T)`.  Additive: every existing `sum(v, init)` call is unchanged.</p>
 </div>
 <div class="item">
 <pre><code>pub fn sum_of(v: vector&lt;integer&gt;) -&gt; integer</code></pre>
@@ -3504,10 +3532,12 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn store_durable_check(path: text) -&gt; boolean fs#read</code></pre>
 <p>Durable-store integrity check.  Returns true iff the `.dmeta` sidecar at `&lt;path&gt;.dmeta` validates against the main file at `&lt;path&gt;` (signature, header CRC, payload length, payload CRC, tier_id all OK).  Returns false on any failure or missing file.  Pair with `store_durable_seal` after a clean write session to record the new state.</p>
+<p>Desktop-only: the sidecar is built over memory-mapped files, so on the wasm targets this answers false — &quot;nothing validates&quot;, which is the state that sends a caller down its rebuild branch (loft#1063).</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_durable_seal(path: text) -&gt; boolean fs#update</code></pre>
 <p>Write a fresh `.dmeta` sidecar capturing the current main-file's byte length + CRC32 + a clean-close timestamp. Returns true on success, false on any I/O error.  Call this after finishing a write session; if the program crashes between the last write and the seal, the sidecar stays stale and the next `store_durable_check` returns false → caller rebuilds.</p>
+<p>Desktop-only, like `store_durable_check`: on the wasm targets this answers false — the seal did not happen — so seal where the store is written and read it back with `store_load` (loft#1063).</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_persist_bind(r: reference, path: text) -&gt; boolean fs#update</code></pre>
@@ -3633,6 +3663,11 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn store_load_keys(local: reference, path: text, keys: vector&lt;integer&gt;) -&gt; integer fs#read</code></pre>
 <p>Plural form of `store_load_key`: fetch the given integer keys' entries into `local` in one call (the paged reader is opened once and its cache reused), returning how many were found. Keys absent from the remote are skipped. Same relocation rules as `store_load_key`. @PLN97 arc G (loft#522). tiles: hash&lt;Tile[id]&gt; = [] got = store_load_keys(tiles, &quot;block.store&quot;, [7, 13, 42])   // got == 3</p>
+</div>
+<div class="item">
+<pre><code>pub fn store_load_keys_text(local: reference, path: text, keys: vector&lt;text&gt;) -&gt; integer fs#read</code></pre>
+<p>Plural form of `store_load_key_text`, and the text twin of `store_load_keys`: fetch the given text keys' entries into `local` in ONE call, returning how many were found. Keys absent from the remote are skipped. Serves a `hash&lt;T[k]&gt;` and a `trie&lt;T[k]&gt;` alike, like the single-key form. loft#1064.</p>
+<p>Looping `store_load_key_text` is not the same call: each one opens its own reader, so a ring of twenty asset names re-fetches the same 64 KiB bucket-table page twenty times. This opens the reader once and shares its page cache — which is what makes it the PREFETCH call: ask for the ring at a load or level boundary, so no frame is ever the thing that discovers it needs an asset. art: hash&lt;Blob[bl_key]&gt; = [] got = store_load_keys_text(art, &quot;pack.store&quot;, [&quot;page/mobs&quot;, &quot;hit.ogg&quot;])</p>
 </div>
 <div class="item">
 <pre><code>pub fn store_load_range(local: reference, path: text, lo: integer, hi: integer) -&gt; integer fs#read</code></pre>

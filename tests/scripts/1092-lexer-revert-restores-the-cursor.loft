@@ -1,0 +1,75 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib lib
+//
+// A failed speculative parse gives back EVERY token it consumed (loft#1092).
+//
+// `lexer::anchor()` / `revert()` are the backtracking primitive the parser is built on:
+// try an ambiguous rule, and if it does not match, rewind so another rule can claim the
+// same tokens. `Anchor` recorded `index` — the END of the current token — and `revert`
+// then re-scanned forward, so it landed on the token AFTER the one anchored. Every
+// speculative parse came back one token too far, silently.
+//
+// It surfaced as a parser bug rather than a lexer one: `parser::object` anchors before
+// guessing that `{ … }` is a struct literal, and on failure its `{` was already gone —
+// so `for i in xs { … }` lost its body to the guess, and the doc page claiming the loop
+// parsed asserted nothing and therefore never noticed (@PLN121 E2).
+//
+// The cells assert the CURSOR, not just a return value: a revert that answers correctly
+// while leaving the lexer somewhere else is exactly the failure being closed.
+
+use lexer;
+use parser;
+
+fn lex_of(src: text) -> lexer::Lexer {
+  lx = lexer::Lexer { };
+  lx.set_tokens(["..", "..=", "+=", "=="]);
+  lx.set_keywords(["for", "in", "fn"]);
+  lx.parse_string("t", src);
+  lx
+}
+
+fn main() {
+  // c1 — the primitive itself: anchor, consume, revert, and the SAME token is current.
+  //     Red before the fix: after the revert `peek()` answered `b`, one token on.
+  lx = lex_of("a b c");
+  assert(lx.peek() == "a", "c1 starts at a, got {lx.peek()}");
+  at_a = lx.anchor();
+  assert(lx.matches("a"), "c1 consumes a");
+  assert(lx.peek() == "b", "c1 now at b, got {lx.peek()}");
+  lx.revert(at_a);
+  assert(lx.peek() == "a", "c1 reverted to a, got {lx.peek()}");
+
+  // c2 — the revert is not one-shot: the same tokens can be re-consumed after it, which
+  //     is what "another rule retries them" means.
+  assert(lx.matches("a"), "c2 re-consumes a after the revert");
+  assert(lx.peek() == "b", "c2 back at b, got {lx.peek()}");
+
+  // c3 — SEVERAL tokens deep. A rewind of one token could pass c1 by accident; this
+  //     cannot, because the anchor is three tokens back.
+  lx3 = lex_of("a b c d");
+  start = lx3.anchor();
+  assert(lx3.matches("a") and lx3.matches("b") and lx3.matches("c"), "c3 consumes three");
+  assert(lx3.peek() == "d", "c3 reached d, got {lx3.peek()}");
+  lx3.revert(start);
+  assert(lx3.peek() == "a", "c3 reverted all three, got {lx3.peek()}");
+
+  // c4 — a BRACE, which is the token the parser actually lost. `{` is a single-character
+  //     token and the failure was invisible on identifiers alone.
+  lx4 = lex_of("{{ }}");
+  brace = lx4.anchor();
+  assert(lx4.matches("{{"), "c4 consumes the open brace");
+  lx4.revert(brace);
+  assert(lx4.peek() == "{{", "c4 gave the brace back, got {lx4.peek()}");
+
+  // c5 (the shape that found it) — a speculative struct-literal parse that fails must
+  //     leave the loop body intact, so the whole statement parses.
+  assert(parser::parse("loop", "fn sum(n: integer) -> integer {{ t = 0; for i in 1..=n {{ t += i; }} t }}") == 0,
+         "c5 a for loop with a tail expression parses cleanly");
+  // ... and a REAL struct literal still parses, so the cure is not "never guess".
+  assert(parser::parse("obj", "fn f() {{ x = P {{ a: 1 }}; }}") == 0,
+         "c5 a genuine struct literal still parses");
+
+  println("1092 ok");
+}
