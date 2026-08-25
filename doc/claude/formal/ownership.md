@@ -218,12 +218,33 @@ A non-empty dep list answering "needs no store" is the COMMON case at that site,
 exceptional one — so whatever compensates downstream is heavily exercised, which is the most
 likely reason a false fact here has no symptom.
 
-**The fix direction the rules now make sayable.** This is `O-Proxy` and `O-Oracle` meeting:
+**The fix direction the rules make sayable.** This is `O-Proxy` and `O-Oracle` meeting:
 `vector_needs_db` asks an OWNERSHIP question (*do I own a store?*) using the dep list, while
-`joined_deps`' union answers a LIVENESS question (*what must stay alive?*).  Closing Face A
-means the allocation site reads `O-Oracle` (`use_analysis::ownership_of`) rather than the
-proxy — not making the union answer both questions, which is what the entry above already
-says it cannot do.
+`joined_deps`' union answers a LIVENESS question (*what must stay alive?*).  The obvious
+closure is for the allocation site to read `O-Oracle` instead of the proxy.
+
+⚠ **That closure was attempted 2026-08-25 and is STRUCTURALLY UNAVAILABLE at that site.**
+`O-Oracle` (`use_analysis::ownership_of`) classifies from `data.def(d_nr).code` — a
+POST-PARSE analysis over a finished body.  `vector_needs_db` runs inside the parser, which
+(measured) has **no current-def handle at all** and **never calls the oracle**: every one of
+its 20-odd consumers lives in `scopes` / `codegen` / `generation` / `ownership_cfg`.  There is
+no def_nr to pass and no completed body to classify.
+
+Two further measurements bound the problem:
+
+* **The proxy term is load-bearing.**  Neutralising `depend().is_empty()` in
+  `vector_needs_db` breaks `tests/scripts/03-text.loft` — it cannot simply be dropped.
+* **The false fact reaches that site and still does not decide the allocation.**  Instrumented,
+  `line` arrives as `deps=1 → false` ("no backing store"); yet the emitted IR shows
+  `OpDatabase(__vdb_2)` at the reassignment repointing `line` to a FRESH store, so the
+  borrowed one is never cleared.  Something downstream allocates regardless, which is why
+  no probed shape bites.
+
+**The route that IS available** is the one this model already uses three times: a SECOND
+carried fact, set where the union is formed and consulted by the allocation site — the
+pattern of `O-Override` (`is_skip_free`) and `O-Latest` (`owned_refs`).  It needs no oracle
+at parse time, because the join is the place that knows an arm minted.  Face A stays OPEN
+pending that, rather than pending the oracle read, which cannot be written.
 
 ⚠ **loft#1082's panic was NOT this, and is now CLOSED elsewhere.**  Measured in a scratchpad
 copy of the `drawing` package: replacing BOTH joins with imperative `for`-append loops — either
