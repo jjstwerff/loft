@@ -69,6 +69,34 @@ load them **whole** at boot with `store_load_url_trusted`. The world is large an
 read sparsely, so page it. Mixing those two in one file makes the boot load pay
 for the world.
 
+### An asset pack is a store, not a bundle (@PLN146 arc F)
+
+The obvious first pass for the browser is a `--html` flag that bundles every
+referenced file into the page — the Flash `[Embed]` shape. **Do not build that.**
+The route above already exists and is better: the pack IS a loft store, hosted on
+any dumb file server and read by range, so the struct definition is the file
+layout — no codec, no parse step, no serialize seam. The `assets` package carries
+the schema, `pack_write` / `pack_read`, `keys_near` / `prefetch`, the layout
+fingerprint and the alpha-derived collision proxy.
+
+Two constraints carry over from the `routing` project, which shipped this for map
+tiles first:
+
+- **Plan → fetch → read, never fetch-on-miss inside a frame.** Synchronous wasm
+  cannot await, and a frame blocking on a range read stutters visibly. Ask for
+  assets at load or level boundaries, or as a ring around the player.
+- **Verify the layout fingerprint across native and wasm before anything reads a
+  pack.** A silent divergence turns every asset into garbage at a byte offset,
+  which reads as a corrupt file rather than as a layout bug. The fingerprint is
+  pinned in `assets`, which is what makes a format change say so.
+
+Embedding stays for the bytes a page needs before its first fetch — a boot font, a
+loading sprite. The exception, not the pipeline.
+
+⚠ The two halves accept **different URL spellings**: the metadata half reads a
+`file://` URL and the paged half refuses one. One base would therefore have loaded
+a game's scenes and silently none of its art.
+
 ## The two ways to read a remote store
 
 | | fetches | use when |

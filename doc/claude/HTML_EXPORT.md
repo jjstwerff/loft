@@ -186,9 +186,39 @@ A page brings its own font by declaring `[[font]]` in its `loft.toml`: `--html`
 emits the `@font-face` (or the provider `<link>`) into the `<head>` and awaits
 `document.fonts.load` for every declared family ahead of `loft_start`
 (@PLN146 F5/F6, `src/html_fonts.rs`).  A library's declarations travel to the
-consumer's page the same way `[wasm.bridge] host_js` does, and a `family` that
-does not match the base name the program passes is refused before the build.
-Carrying the CSS by hand in `host_js` still works.
+consumer's page the same way `[wasm.bridge] host_js` does.  Carrying the CSS by
+hand in `host_js` still works — the declaration makes the common case
+declarative so a game writes no JS and the ordering is automatic rather than
+remembered.
+
+Three sources, one shape:
+
+| Source | Declared | Browser | Native / `--native-wasm` |
+|---|---|---|---|
+| a family the browser already has | `family` (+ `native`) | nothing shipped, nothing fetched | the TTF beside the game |
+| our own file server | `url = "…"` | `@font-face { src: url(…) }`, or the WOFF2 packed in the asset store and range-read like every other asset | the same store |
+| Google Fonts, or any CDN | `stylesheet = "…"` | the provider's stylesheet `<link>`; zero bytes of ours | the TTF beside the game |
+
+```toml
+[[font]]
+family = "PressStart2P"
+native = "fonts/PressStart2P.ttf"
+url    = "fonts/PressStart2P.woff2"
+```
+
+Two mechanics decide whether it works.  The declared `family` must **equal** the
+base name the program passes to `gl_load_font` — that string is the key
+`familyFor` builds, and drift is a silent fallback, never an error; `native` is
+that path, so the two are checked against each other at BUILD time and a
+mismatch is refused before the wasm compile.  And the await has to come before
+`loft_start`: a webfont is still in flight while the first frame draws, and
+`familyFor`'s answer is cached per handle, so an early `gl_load_font` paints in
+the fallback with nothing on stderr.
+
+A remote font is a third-party dependency: offline, or with the CDN blocked, the
+chain degrades to the generic rather than failing — which is right, and is why
+the native source stays declared beside the browser one.  What was wrong was
+doing it quietly.
 
 ⚠ `document.fonts.check` cannot be used to decide whether the page HAS a family:
 it is **true** for a family nothing declares and **false** for an `@font-face`
@@ -424,7 +454,7 @@ carried faithfully under a key the program never asks for: `store_load` answers
 This is the exception, not the pipeline.  Assets travel as a store on a dumb file
 server read by HTTP range; embedding is for the bytes a page needs before its first
 fetch, and for a page that has to be a single self-contained file
-([plans/146-content-delivery/ASSETS.md](plans/146-content-delivery/ASSETS.md)).  The
+([REMOTE_STORES.md](REMOTE_STORES.md) § An asset pack is a store, not a bundle).  The
 bytes go in base64, so the page grows by about 4/3 of the file — the size line
 `--html` prints is what to watch.
 
