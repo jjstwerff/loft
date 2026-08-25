@@ -278,7 +278,8 @@ both backends — `tests/scripts/pln102-f2-place-once.loft`.
 
 ## Deviations
 
-OPEN: **2** (D-op-1/2; the null-model keystone deviations D-op-null-1/2 both CLOSED 2026-07-10 by
+OPEN: **3** (D-op-1/2, and D-op-5 opened 2026-08-25 — two spellings of a following
+null-check still report, the sibling of a wrapper-list drift fixed the same day; the null-model keystone deviations D-op-null-1/2 both CLOSED 2026-07-10 by
 keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
 [the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md).)
 
@@ -404,13 +405,64 @@ keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
 - **Removal:** the differential oracle (D-op-1) makes "interp and native disagree on a
   program both accept" a *caught* failure (run-both-and-compare), not a coverage lottery —
   the corpus, not luck, decides what is exercised.
+- ⚠ **What the differential oracle structurally CANNOT catch** (2026-08-25): a defect in the
+  code the two backends SHARE.  Both consume the same parser IR, so a bad parser rewrite makes
+  them agree — wrongly — and agreement is the oracle's pass condition.  Worked example: the
+  defended-fault-site pass carried its own stale copy of the wrapper-getter list, so a defended
+  OOB read of a non-integer vector reported while `vector<integer>` stayed silent — measured
+  identical on interp and native, before AND after the fix.  So D-op-1 closing would not have
+  found this, and the shared front end needs its own oracle rather than a differential one.
+  Related: the reference-route discipline in [DEBUG.md](../DEBUG.md).
+
+### D-op-5 — OPEN (2026-08-25): two spellings of a following null-check still report
+
+- **Violates:** `(E-Report)` — *"a GUARDED site (the operand of `??` / **a following
+  null-check**) emits the silent `*Nullable` op and reports NOTHING (the guard owns the null)"*.
+- **Where:** `rewrite_defended_fault_sites` (`parser/control.rs`) recognises a guard as
+  *a following sibling `if` that tests the variable*.  The rule says "a following null-check",
+  which is wider.  Measured over six spellings of the same defended read, with a logger
+  attached, on both backends:
+
+  | spelling | reports? |
+  |---|---|
+  | `x = v[i]; if x == null` | no ✓ |
+  | `x = v[i]; if x != null` | no ✓ |
+  | `x = v[i]; if x == null \|\| …` | no ✓ |
+  | `x = v[i]; g = 1; if x == null` | no ✓ — **was yes; fixed 2026-08-25** |
+  | `if v[i] == null` (no binding) | **yes** ✗ |
+  | `x = v[i]; match x { null => … }` | **yes** ✗ |
+
+- **Effect:** a correctly defended program emits a runtime warning it did not earn.  The value
+  is right in every cell — this is a REPORT-channel deviation, which is why a value-scored
+  probe of this matrix comes back clean.
+- **Why the two survive, and they are not one problem:** the no-binding form puts the fault
+  site INSIDE the test rather than before it, so there is no `Set` to rewrite and the pass has
+  nothing to key on; the `match` form has no `Value::Match` in the IR at all — it lowers to a
+  subject temp, so the guard reaches the value through a COPY and the check names the temp,
+  not the variable.  Closing the second means following a copy chain, i.e. dataflow, not
+  adjacency.
+- **Status:** OPEN.  Deliberately not closed by loosening the predicate: widening "guarded"
+  SUPPRESSES a diagnostic, so an over-approximation goes silent on real faults while an
+  under-approximation is merely noisy.  The 2026-08-25 widening was taken only as far as a
+  soundness condition allows — *nothing else touches the variable between the site and the
+  check* — with three negative cells (`a_null_that_escapes_before_its_check_still_reports`)
+  pinning the loud direction.
+- **Guards:** `tests/runtime_logging.rs` — `a_defended_fault_site_reports_for_no_element_type`,
+  `a_null_check_after_an_unrelated_statement_still_owns_the_null`, and the two control cells.
 
 > **D-op-4 — CLOSED (formalize4), so it is deleted from the list above.** The runtime no
 > longer traps/halts on an uncomputable: div/mod-by-zero and integer overflow yield the null
 > sentinel and continue on BOTH backends (E-Uncomp + E-Report), OOB already complied, and
 > `NullDereference` was never raised. Guard: `tests/scripts/184-i333-div-zero-null-continues.loft`.
-> The `??` trap-suppression mode is gone behaviourally (the `*Nullable` op split is now dead
-> code — a separable cleanup). Kept as a one-line tombstone because it reshaped two rules
+> The `??` trap-suppression mode is gone behaviourally, but **the `*Nullable` op split is NOT
+> dead code** — an earlier version of this line called it "a separable cleanup", and measuring
+> it (2026-08-25) says otherwise. The peers no longer differ in VALUE (both answer the null
+> sentinel and continue), which is what that reading saw; they differ on the REPORT channel,
+> which is E-Report's half of C80. The peers never call `s.raise`, so a swapped site is silent
+> while an unswapped one logs — that is exactly what distinguishes a fault the program
+> DEFENDED (`v[i] ?? fb`, or `x = v[i]; if x == null {…}`) from one it did not. Deleting the
+> split would make every defended site report. Measured: of three sites in one program, only
+> the undefended one logs, on both backends. Kept as a one-line tombstone because it reshaped two rules
 > (E-Report's logging policy + the C80 refinement); see `git log` for the full entry.
 
 ---
@@ -418,7 +470,10 @@ keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
 ## Conformance
 
 The pinned rules are checkable directly: `5 / 0` is **null** and execution continues (an
-unguarded site also logs a `divide_by_zero` Warn); `a + 1` at `a = i64::MAX` is **null** and
+unguarded site also logs a `divide_by_zero` Warn — **only with a logger attached**, i.e.
+`--log-conf`/a `log.conf` beside the script; `raise_recoverable` is a no-op when
+`database.logger` is `None`, so a bare run shows nothing and that silence is not a
+counter-example to this rule); `a + 1` at `a = i64::MAX` is **null** and
 continues; `(i64::MAX + 1) ?? 0` is `0` (E-Coalesce); `integer` null is `i64::MIN`.
 D-op-1/D-op-2's falsifier is any program where the interpreter and `--native` disagree —
 e.g. #433's cbor `read_value` (interp `20`, native E0308 pre-fix). When the rules become the

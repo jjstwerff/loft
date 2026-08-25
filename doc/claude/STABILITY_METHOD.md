@@ -252,6 +252,23 @@ Two habits make that sweep reliable:
   the pre-fix tree, 0 after.  A screen that cannot find the bug you have already found is not
   evidence that no others exist.  Same discipline as `make profile-corpus`.
 
+**A second instance, and it inverts the intuition** (2026-08-25, the `*Nullable` swap).  The
+same family had TWO duplicated lists: a swap table, duplicated *deliberately* with a comment
+saying why (*"kept inline… so the dispatch table stays grep-discoverable from both swap
+sites"*), and a wrapper-getter list that nothing defended.  **The defended duplicate stayed in
+sync across all three copies; the undefended one drifted** — one copy was extended past the
+integer wrappers and another kept the four it was born with.  So the lesson is not "never
+duplicate": it is that a duplicate kept on purpose still needs something other than memory
+keeping it honest.  The copy is now one function, and the remaining pair has a gate
+(`doc_hygiene::the_nullable_swap_tables_do_not_drift`) that pays for the discoverability trade.
+
+**And it drifted on a channel nobody was checking.**  Every cell of that matrix answers the
+same VALUE either way — the defended read yields `null` whether or not the swap applied — so a
+value-based probe of the exact 2×2 comes back clean and reads as a pass.  The difference is on
+the REPORT channel: a defended site that still logs.  Before building a matrix, name the
+channel each cell is scored on, and check the one the mechanism actually acts on; see
+[DEBUG.md](DEBUG.md) on captured-but-uncompared channels.
+
 And **bound the blast radius with a property, not with confidence**.  The fix above changes
 *which* deps a value carries but never *whether* it carries any, so every decision reading
 `depend().is_empty()` — at least three of them, each measured load-bearing — provably cannot
