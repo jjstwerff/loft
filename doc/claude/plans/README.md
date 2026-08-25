@@ -729,21 +729,21 @@ non-goals *for these four* — see @PLN144 § Goal.
 |---|---|---|---|
 | **[@PLN144](144-2d-stage/README.md)** the 2-D stage ✅ **SHIPPED** | A scene ✅ · P presentation ✅ · L light ✅ · G paths *(deferred)* | 17 | A retained **flat** node array batched by a *merge-adjacent, never-reorder* rule, presenting a 3-D world through three knobs — sprite **origin**, `layer` + `depth`, projected position |
 | **[@PLN145](145-authoring-libs/README.md)** text, tweens, widgets ✅ **SHIPPED** | B text ✅ · C tweens ✅ · D widgets ✅ | 11 | What you write a game *with*: a font that works headless, text that costs no upload, property tweens, and a widget kit that turned out to be **someone else's to publish** rather than ours to extract |
-| **[@PLN146](146-content-delivery/README.md)** content + delivery | E audio · F assets · W drawing | 19 | The pack **is a loft store** on a dumb file server, range-read; plus authoring sprites in loft instead of Python, and browser audio that is currently a stub |
+| **[@PLN146](146-content-delivery/README.md)** content + delivery ✅ **SHIPPED** | E audio ✅ · F assets ✅ · W drawing ✅ | 18 | The pack **is a loft store** on a dumb file server, range-read; plus sprites authored in loft rather than Python, and browser audio that loops, pans and seeks where it used to be a stub |
 | **[@PLN147](147-content-editor/README.md)** the editor | S T U V · X sprites | 16 | An in-browser editor whose invariant is that **it edits the same store the game loads**, so editor↔runtime agreement is structural; arc X adds sprite + animation editing |
 
 **Why four and not one.** It was one plan of 40 phases until 2026-08-19, and the test that split
 it is whether phases can **fail together**. @PLN144's arcs share a gate family — pixels, batch
 counts, upload counts — so a regression in `A3`'s upload path reddens `P2` and `P4`, which is
 how both of those findings surfaced. @PLN146's gates are a byte-range log and a headless-Chrome
-audio handle; neither can redden the other or the stage. Phases that cannot fail together are a
+audio handle; neither can redden the other or the stage.  (Its phase count is **18**, not the
+19 this table carried — a miscount the plan's own tables never had.) Phases that cannot fail together are a
 programme, not a plan.
 
-**Where to start — @PLN144 and @PLN145 are both closed, so the set's open half is @PLN146
-and @PLN147** (`A0`, `B0` and `D0b` were the other no-dependency phases and have all shipped):
-
-- **`E1`** (@PLN146) — ~30 lines of JS. `loft_audio_load` answers `i32::MIN` in the browser, so
-  a `--html` game can only make procedural noise today.
+**Where to start — @PLN144, @PLN145 and @PLN146 are all closed, so the set's open half is
+@PLN147** (`A0`, `B0` and `D0b` were the other no-dependency phases and have all shipped).
+@PLN147's `X1` extends @PLN146 `W2`'s oracle gate across targets and its `X5` bakes through
+`W6`'s scene-to-pack route, so arc W is the half to read first.
 
 ⚠ **`D0b` is the one to read before starting either.** It was the set's cheapest phase — one
 probe program — and it did not do what it was cut to do: it was scoped on *"three consumers

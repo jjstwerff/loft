@@ -649,11 +649,18 @@ cadence (W.0c+W.0d-style tag + GH release + registry PR).
 spatial audio (sound at world position, listener position),
 ducking, category mixing.
 
-**Distinct from `graphics`'s audio:** graphics currently has
-`audio_play_raw` + `sfx_*` helpers — those are the mixer / output
-device interface (talks to rodio).  `audio_bus` is the
-game-side abstraction (categorise sounds, spatialize, manage groups);
-it composes graphics's low-level mixer as the output.
+**Shipped 2026-08-25 as `audio_bus` 0.1.0** (@PLN146 E3) — the bus tree, the
+gain composition and ducking.  Spatial audio is NOT in it: `pan` moves one voice
+and a caller supplies the position, because placing a sound needs a listener and
+a world, and neither belongs to a mixer.  That is the next slice, not a gap in
+this one.
+
+**Distinct from `graphics`'s audio:** graphics has `audio_load` / `audio_play`
+(with `looping` / `pan` / `start` since 0.9.0), `audio_play_raw` and the `sfx_*`
+helpers — those are the mixer / output device interface (talks to rodio, and to
+Web Audio in a page).  `audio_bus` is the game-side abstraction (categorise
+sounds, manage groups, duck); it composes graphics's low-level mixer as the
+output.
 
 ```
 game code
@@ -716,8 +723,8 @@ consumer migration + monorepo cleanup).
 | W.12 | Extract `particles` Stage A → Stage B → `loft-libs-game`. | M | W.11 |
 | W.13 | Design + implement `lib/input/`.  Wraps `graphics`'s polled key/mouse primitives → abstract action state, bindings, edge detection.  **Partial 2026-06-01** — design + API + 5-test suite drafted (`lib/input/{src/input.loft, tests/01-basics.loft}`, ~250 LOC), `loft.toml` declares the `graphics >=0.1` dep, but the lib is **PARKED on [@P391](PROBLEMS.md#open-issues--quick-reference)** (cross-package struct constructor lands in CONST_STORE → `Write to read-only store` panic on the first field write through `&InputState`).  Tests are gated by `LIB_PKGS_SKIP` in `tests/wrap.rs` + `tests/native.rs::LIB_PKGS_NATIVE_SKIP` + `tests/html_wasm.rs::LIB_PKGS_NODE_SKIP`.  Un-park when @P391 ships. | MH | @P391 blocker |
 | W.14 | Extract `input` Stage A → Stage B → `loft-libs-game`. | M | W.13 unpark (waits on @P391) |
-| W.15 | Audit graphics's existing audio surface (`audio_play_raw` + `sfx_*`) — clarify the boundary between graphics's mixer and game's `audio_bus`. | S | — |
-| W.16 | Design + implement `lib/audio_bus/` + extract Stage A → Stage B → `loft-libs-game`. | MH | W.15 |
+| W.15 | Audit graphics's existing audio surface (`audio_play_raw` + `sfx_*`) — clarify the boundary between graphics's mixer and game's `audio_bus`. | S | **Done** (@PLN146 E2/E3): graphics owns the OUTPUT (load, play, volume, pan, seek, stop, and the raw/`sfx_*` synthesis), `audio_bus` owns the GROUPING (a bus tree that multiplies, and ducking).  The line is that graphics moves one sink and knows nothing about why. |
+| W.16 | Design + implement `lib/audio_bus/` + extract Stage A → Stage B → `loft-libs-game`. | MH | **Shipped** — `audio_bus` 0.1.0 in loft-libs-game, built there directly rather than through a `lib/` stage.  Spatial audio (a listener, a world position) is deliberately left out: it needs a world, and a mixer does not have one. |
 | W.17 | Bootstrap `loft-libs-meta` chunk + ship `lavition_stack 0.1.0` meta-package. | S | enough chunks live to make the meta-package meaningful (typically after W.2 + W.0b ship) |
 
 **Total:** ~17 sub-phases.  Realistic shipping cadence: 1-2 per

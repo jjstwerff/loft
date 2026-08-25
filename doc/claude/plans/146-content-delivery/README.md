@@ -13,25 +13,33 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — arc F is built and gated end to end; arcs E and W are not.** Everything a game
+**Complete — all three arcs are built and gated end to end.** Everything a game
 needs that is not the frame: content in, sound out, native and browser alike. **Parity
 between the two targets is the through-line**, and the gates say so — a byte-range log, a
 headless-Chrome audio handle, a throttled font source.
 
-**16 of 18 shipped** (`E1` · `W0` · `W1` · `W2` · `W3` · `W4` · `W5` · `W6` · `F1` · `F2` · `F3` · `F4` · `F5` · `F6` · `F7a` · `F7`),
-**none blocked**, 2 open — **arc W is complete**, and **arc F really is complete now**: `F7` was still blocked when
-that sentence was first written, and it is the arc's last phase.  (Both tables below list 18
-phases; the "19" this line and the effort row carried was a miscount.) The pack exists, round-trips byte-identically on the
-interpreter, `--native` and wasm, pages over HTTP range at 9 % of the file per read, and takes
-**zero** fetches inside a frame; a page declares the font it draws with and gets that font
-rather than a fallback, and declares the pack it reads and can now carry it. Brick Buster's sprite sheet is
-now a packed asset rather than 180 lines of drawing per launch, and a sprite is content this
-stack builds rather than one Python draws: `drawing` renders a `.draw` scene pixel-identically
-to the tool that made the corpus, so `W3`–`W6` are the remaining marks and not a renderer.
-What is left is arc E alone — `graphics` and a new `audio_bus`. Arc W is finished: a
-`.draw` scene now says what it MEANS as well as what it draws (`W5`: the check channel is
-the oracle's report byte for byte, and the exit status is the verdict), and it reaches a
-content pack without becoming a file on the way (`W6`).
+**All 18 shipped** — `E1` · `E2` · `E3` · `W0`–`W6` · `F1`–`F7`, none blocked and none
+open. The pack exists, round-trips byte-identically on the interpreter, `--native` and
+wasm, pages over HTTP range at 9 % of the file per read, and takes **zero** fetches inside
+a frame; a page declares the font it draws with and gets that font rather than a fallback,
+and declares the pack it reads and can now carry it. Brick Buster's sprite sheet is a
+packed asset rather than 180 lines of drawing per launch. A sprite is content this stack
+builds rather than one Python draws: `drawing` renders a `.draw` scene pixel-identically
+to the tool that made the corpus, a scene now says what it MEANS as well as what it draws
+(`W5` — the check channel is the oracle's report byte for byte, and the exit status is the
+verdict), and it reaches the pack without becoming a file on the way (`W6`). Arc E closed
+last: a browser game loops, pans and seeks its audio the way a desktop one does, and one
+slider moves a whole category of sounds without the game keeping the list.
+
+**What is left is landing, not building.** Four PRs carry the last two arcs —
+[loft-libs-graphics#46](https://github.com/loft-lang/loft-libs-graphics/pull/46) (`drawing`
+W4/W5 + `graphics` 0.9.0), [loft-libs-assets#11](https://github.com/loft-lang/loft-libs-assets/pull/11)
+(`assets` 0.3.0), [loft-libs-game#12](https://github.com/loft-lang/loft-libs-game/pull/12)
+(`audio_bus` 0.1.0), and this repo's own branch. Then the registry: `drawing` 0.3.0,
+`assets` 0.3.0, `graphics` 0.9.0, `audio_bus` 0.1.0. ⚠ Two things are RED until a publish
+rather than until a fix — `audio_bus`' CI job (it needs `graphics` 0.9.0 to resolve) and
+`tools/brick-buster/pack_atlas.loft`'s local `rgba_bytes` (it can call `assets::texels`
+the day 0.3.0 lands).
 
 **The schema is now a package.** `assets` — merged and published through 0.2.0
 ([#7](https://github.com/loft-lang/loft-libs-assets/pull/7),
@@ -45,21 +53,22 @@ half refuses one), so one base would have loaded a game's scenes and silently no
 art; and the layout fingerprint is now **pinned**, which is what makes a format change say
 so. `F4` reads packs from there once it lands.
 
-⚠ **A pack's round-trip test needed a loft newer than the library CI's.** The library CI builds loft from
-`loft-lang/loft@main`, which still has the `store_load` hang F1 found — so the package's
-round-trip test hangs and the 300 s watchdog kills it. Measured both ways on the exact CI
-command: a loft binary from before the fix reproduces it, one from this branch passes 12/12.
-The pack is the shape that triggers it, so the package cannot avoid it and should not try —
-shrinking the fixture past the allocator's linear scan would hide a defect every real pack
-will hit.
+⚠ **A pack's round-trip test needed a loft newer than the library CI's** — the `store_load`
+hang F1 found. It is on `main` now, so the package's CI reaches it; while it was not,
+measured both ways on the exact CI command, a loft binary from before the fix hung and the
+300 s watchdog killed it. The pack is the shape that triggers it, so the package could not
+avoid it and should not have tried: shrinking the fixture past the allocator's linear scan
+would have hidden a defect every real pack will hit.
 
-**Four findings changed the plan rather than following it.** A pack is TWO stores because
+**Five findings changed the plan rather than following it.** A pack is TWO stores because
 the paged loaders refuse a wrapper-struct root; `Petals` and `landmark` have no user anywhere,
 so arc W is smaller than it was cut; `imaging` DROPPED alpha, which blocked `F7` and F1's
 premultiplication both, and is fixed in `imaging` 0.3.0; and `document.fonts.check` cannot say whether a page has a font —
 it answers **true** for a family nothing declares and **false** for one that is loading, which
 is how the browser text bridge came to take its exact-font branch for every page except the
-one that had brought a font. Each is written up in its phase's own doc.
+one that had brought a font; and the packer `W6` was cut on — *"`F1`'s packer already
+premultiplies, pads and places"* — **did not exist**, so the placer is part of that phase
+rather than a caller of one. Each is written up in its phase's own doc.
 
 **Seven loft defects were found by these gates and six are fixed** — a `store_load` that
 never returned, a paged load that refused any entry type with an `enum` field, a refusal
@@ -82,7 +91,7 @@ it loads was made with the same toolchain.
 
 ## Effort + design
 
-- **Effort:** H — 18 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22; `F4` + `F7` + `W1` + `W2` 2026-08-23; `W3` + `W4` 2026-08-24; `W5` + `W6` 2026-08-25.**
+- **Effort:** H — 18 phases in three arcs, none above M. **Design:** ✓. **`E1` shipped 2026-08-19; `W0` + `F7a` 2026-08-21; `F1` + `F2` + `F3` + `F5` + `F6` 2026-08-22; `F4` + `F7` + `W1` + `W2` 2026-08-23; `W3` + `W4` 2026-08-24; `W5` + `W6` + `E2` + `E3` 2026-08-25.**
 - **Scope:** 2-D games. Follows @PLN144's scope exactly.
 
 ## Sub-arcs
@@ -95,8 +104,8 @@ cut, not when it is implemented.
 | **F7a** — will `shapes` accept a derived proxy at all? | probe only | hand-build one proxy of the kind alpha-derivation produces and feed it to `shapes`' overlap test. Red if the shape kinds do not meet — `shapes` ships `Rect`/`Circle` and a derived hull is neither. **`shapes` has no consumer today** except loft's own demo, so this asks the question its absence of adoption already raises, for the cost of a compile | ✅ **Shipped** — [F7a.md](F7a.md): derive **16 `Rect` bands**, not a hull |
 | **F7** — a collision proxy derived from the sprite's alpha | `assets` | hexbody's contract, in 2-D: the proxy **contains** every opaque texel and its overshoot is **bounded** — `proxy ⊇ opaque ∧ overshoot ≤ +100 %`, measured per sprite over the corpus rather than asserted ([F7a](F7a.md) set the bound and the shape). Re-art a sprite and its proxy follows with no hand edit; that is the whole point | ✅ **Shipped** — `assets` 0.2.0. The blocker is FIXED, not worked around: `imaging` 0.3.0 gives `Pixel` an alpha channel ([loft-libs-graphics#37](https://github.com/loft-lang/loft-libs-graphics/issues/37), closed), so a decoded PNG answers which texels are opaque instead of the 6.0 %-wrong colour-as-alpha guess. `Cell.ce_proxy` is 16 `shapes::Rect` bands on the tighter axis, derived at pack time; containment is tested **texel by texel** and proven able to fail (shorten every box by one texel → three assertions red), and overshoot is bounded at +100 %. `shapes` 0.5.0 carries `Proxy` / `proxy_hits`, so the set test has one home |
 | **E1** — browser audio bridge | this repo | headless-Chrome page loads a clip: handle non-null, `audio_play` returns a sink. **Run it on the current tree first** — it returned `i32::MIN` / `-1`, so the harness went red before the fix | ✅ **Shipped** |
-| **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | Open |
-| **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | Open |
+| **E2** — loop, pan, seek, stop-all | `graphics` | each round-trips on native and in-browser | ✅ **Shipped** — [E2.md](E2.md): `graphics` 0.9.0 (`audio_play` gains defaulted `looping` / `pan` / `start`; `audio_set_pan` / `audio_seek` / `audio_stop_all` join it), and the browser bridge with it. ⚠ **The E1 gate was passing on a page that never finished** — the harness fails on a `console.error`, so saying nothing read as green, and the `looping` flag could be dropped with the test still green. Fixed by polling for each decode and asserting the probe's completion text; the same control now reddens it, as do controls on the start offset and the pan. Where the two targets could differ, the native side takes **Web Audio's** answer: `StereoPannerNode`'s two pan laws (a stereo clip panned by the mono one loses its far channel), `start` skipping the first pass only, and a sink id that carries its slot's generation — the native side had been reusing slot numbers, so a `stop` on a finished sound stopped whatever took its place |
+| **E3** — `audio_bus` | `audio_bus` | bus gain composition matches hand-computed values; ducking restores exactly | ✅ **Shipped** — `audio_bus` 0.1.0 in loft-libs-game ([#12](https://github.com/loft-lang/loft-libs-game/pull/12)), 12 tests on both backends. A bus is a number that multiplies, arranged in a tree; **a duck REMEMBERS the level it replaced** rather than dividing the gain back out, so a thousand duck/unduck pairs on `0.35` end on the same bits (a restore that multiplies by `1.0000000001` reddens three tests). Not one of the tests plays a sound — CI has no audio device, so a suite that needed one would gate nothing, and `attach` is the seam that makes every rule measurable. Spatial audio is deliberately out: placing a sound needs a listener and a world, and a mixer has neither |
 | *— arc **W**: sprite authoring, in loft —* | | | |
 | **W0** — the corpus and its oracle | probe only | every `.draw` scene in `crawler/assets/sprites/src/` and loft's `sketch/` renders under the **existing Python** `draw.py` to a committed golden. Red on a scene that will not parse — which is how the grammar the port owes gets *measured* rather than guessed | ✅ **Shipped** — [W0.md](W0.md), 37 scenes green |
 | **W1** — filled polygon in `graphics` | `graphics` | the one primitive genuinely missing (only `fill_triangle` exists today): hand-computed pixel counts for a convex, a concave and a self-intersecting polygon under even-odd, **and** a triangle drawn through the polygon path is pixel-identical to `fill_triangle` | ✅ **Shipped — both primitives.** [W0](W0.md) finding 5 was right that this row undercounts: the oracle draws at 3× and resamples with Pillow's LANCZOS, and nothing in `graphics` or `imaging` resampled at all. `graphics` 0.6.0 is the polygon, **0.7.0 is `resize_lanczos`** — byte-identical to Pillow on eight reference cases (the oracle's 3× downscale, non-integer ratios, degenerate axes, an upscale). The trap was that a faithful port of Pillow's coefficients still disagreed on RGBA: `Image.resize` with alpha is *defined* as `convert("RGBa") → resize → convert("RGBA")`, so premultiplication is contract, and neither rounding is the obvious one. Polygon counts hand-computed (60 / 112 / 60), even-odd pinned by the property that *distinguishes* it (a star's centre is crossed twice, so it is outside — non-zero would fill it), and the `fill_triangle` tie is a **sweep**: every triangle on a 5×5 lattice, 15 625 shapes, 0 pixels differ. Proven able to fail — leave the closing row half-open and 15 000 of them disagree. The agreement was the whole difficulty: a half-open edge rule is required for through-vertices and drops the polygon's lowest row, which is exactly and only where the two fills differed |
@@ -116,8 +125,8 @@ cut, not when it is implemented.
 | Phase | E | What the effort actually is |
 |---|---|---|
 | **E1** | XS | ~40 lines of JS. **Design call: `audio_load` is synchronous and `decodeAudioData` is not**, so it returns a handle immediately and the buffer lands later; a `play` on a still-decoding clip drops rather than queues — the same plan-then-use shape as the asset store. `play` builds BufferSource → GainNode, sinks go in a table that `stop`/`set_volume` index. |
-| **E2** | S | Native: widen the `#native` signatures and the cdylib (rodio already does all four). Browser: `loop` on the source, `StereoPannerNode`, `start(when, offset)`. Both together, or they drift. |
-| **E3** | S | Buses as a gain graph with per-bus volume and ducking. Pure composition over E2. |
+| **E2** | S ✅ | *Done, and "both together, or they drift" was the right instinct — but the drift was already there.* Native: widen the `#native` signatures and the cdylib. ⚠ rodio does NOT do all four: it has no pan on a `Sink` at all, so the native half needed a source wrapper reading an atomic per frame, with `StereoPannerNode`'s two laws in it. Browser: `loop`, a `StereoPannerNode`, and a rebuilt source behind the same handle for `seek` (a buffer source is one-shot). The effort the row missed was the GATE: it was green with the feature removed. |
+| **E3** | S ✅ | *Done, and the S held.* Buses as a gain graph with per-bus volume and ducking, pure composition over E2 — plus the one decision that is not composition: ducking restores by REMEMBERING, not by dividing back out, because a game ducks a thousand times an hour and a computed restore drifts. Testable with no audio device because `attach` takes a handle rather than making one. |
 | **W0** | XS | Collect and render. The corpus *is* the specification: whatever `draw.py` accepts today is what the port owes, and a scene that fails under the **existing** tool is a finding before a line of loft is written. |
 | **W1** | S | Scanline fill with an even-odd rule, in `graphics` beside `fill_triangle`. The only real primitive gap — lines, circles, ellipses, beziers, blending and `save_png` all ship already. |
 | **W2** | M ✅ | *Done, and right about where the effort would go — not about what the rig would find.* The comparison rig was most of it, and the first thing it measured was that **the primitive W1 had just shipped answers a different question**: a polygon filler that agrees with `fill_triangle` is not one that agrees with Pillow. So the drawing half grew a ported rasteriser (`Draw.c`'s `polygon_generic`, verbatim down to its three surprises), and that port needed two numeric facts nobody would guess — 32-bit floats, and a rounding whose sign lives outside the `ceil`. The parser was the small half: a byte scanner shaped after the regex constructs rather than after a tidier grammar, because which lines are ACCEPTED is part of the contract too. |
@@ -155,7 +164,9 @@ does on desktop — `E1`'s browser stub is a `--html` problem only. Both depend 
 and it is the phase that can shrink the arc. **`E1` first** — ~30 lines of JS, independent of everything, and it turns silent browser games
 into games with music. Its gate runs on the current tree *before* the fix, so the harness is
 proven red. **`F1` next**, because everything else stores into its schema. `F4` needs
-@PLN144's `A2`. `E2`/`E3` whenever a consumer asks — they are comfort, not capability.
+@PLN144's `A2`. `E2`/`E3` were cut as *"whenever a consumer asks — comfort, not
+capability"*, and landed last for that reason; `E2` then found the E1 gate green with the
+feature removed, which is not comfort.
 
 ## The sandbox boundary
 
@@ -179,6 +190,8 @@ suite written as `tests/<pkg>.loft` is what amputated nine published libraries. 
   `[[embed]]` is strict about how a path is spelled.
 - **[ASSETS.md](ASSETS.md)** — why the pack is a store on a dumb file server rather than an
   `[Embed]`-style bundler, and the two constraints that carry over from `routing`.
+- **[E2.md](E2.md)** — arc E's two phases: the gate that was green with the feature
+  removed, and why a duck remembers rather than divides.
 - **[W6.md](W6.md)** — the two routes into a pack, and the packer this plan said already
   existed.
 - **[W5.md](W5.md)** — the metric channel: why a report is pinned rather than described,
