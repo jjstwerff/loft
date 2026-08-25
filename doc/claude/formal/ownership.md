@@ -193,12 +193,44 @@ The `if`-expression joins through `merge_dependencies(&true_type, &false_type)`
 So an attempted fix aimed at `arm_join_type` — the obvious reading of the old text — would
 have changed code that never runs for the reported program.
 
-**Where the next attempt should start:** instrument `merge_dependencies` (and the
-`joined_deps` it delegates to, `parser/mod.rs`) to print the two arm types it is given.  The
-IR shows them as `["__ref_1"]` (the owning arm, a mint dep) and `["cp"]` (the borrowing
-arm), and a plain union of those two would keep BOTH — so the reduction to `["cp"]` happens
-somewhere between those types being formed and the binding being typed, and that step is
-still unidentified.
+**The real mechanism, found 2026-08-25 by instrumenting `merge_dependencies` and then
+`LOFT_LOG=type_timeline:line`.**  The union is computed CORRECTLY and is then collapsed by a
+setter that replaces where its caller assumes it accumulates:
+
+```
+[MD]  a=[5] b=[0] -> [5, 0]                    merge_dependencies: the union is RIGHT
+[type_timeline] line  Unknown -> [5, 0]        change_var_type stores both
+[type_timeline] line  [5, 0]  -> [5]           depend  (variables/mod.rs:1797)
+[type_timeline] line  [5]     -> [0]           depend  — last one wins
+```
+
+(var 5 is `__ref_1`, the owning arm's mint dep; var 0 is `cp`.)
+
+`Function::change_var_type`'s early-return does
+
+```rust
+for on in type_def.depend() { self.depend(var_nr, on); }
+```
+
+and `Function::depend` is `Type::depending(on)` = `with_deps(&Deps::frame1(on))` — it
+REPLACES the whole list with `[on]`.  So a type carrying N deps collapses to its LAST one.
+**Six sites in `variables/mod.rs` share that loop.**
+
+**It is not join-specific, and that is the wider finding.**  A two-BORROW join loses one
+source outright:
+
+```loft
+pick = if c { a } else { b };   // pick def deps=[b] — the dep on `a` is gone
+```
+
+`pick` aliases `a` on the taken path, and nothing records it.  The fix is a union rather
+than a replace (`Deps::union` already exists).
+
+⚠ **Still no symptom.**  The two-borrow shape was probed with the dropped source going out
+of scope first, under `LOFT_POISON` + `LOFT_STRICT_STORES`, and answers correctly — so
+something downstream keeps the dropped source alive.  The collapse is a real defect in the
+FACT with no demonstrated consequence, which is the same position Face A has always been in,
+now stated one layer deeper and at the right function.
 
 **One fact, two questions — and it is only right for one of them.**  `joined_deps`'
 own doc-comment justifies the union as the reading "no arm can contradict: it can only
