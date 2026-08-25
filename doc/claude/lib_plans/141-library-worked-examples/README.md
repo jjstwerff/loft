@@ -20,50 +20,86 @@ the way through. What is left is content and three unmerged PRs, not design.
 |---|---|
 | **A** probe | DONE |
 | **B** acronym registry | DONE (foundation + broadened to the distributed monorepos) |
-| **C** shared gate + indexer ingestion | **PARTIAL** — two follow-ups open, below |
-| **C2** feature catalogue (`FTR`) | **102 of 116 catalogue entries cited; 14 left** |
+| **C** shared gate + indexer ingestion | **DONE** — both follow-ups settled 2026-08-25 |
+| **C2** feature catalogue (`FTR`) | **DONE — 116 of 116 entries cited** |
 | **D** per-library rollout | **4 of 7 repos merged**; 3 PRs open |
 | **E** `loft-libs-world`'s twelve | DONE — PR [#15](https://github.com/loft-lang/loft-libs-world/pull/15) is MERGED |
 | **(last)** convention doc + CI ratchet | DONE |
 | monthly by-hand review | DONE (ongoing home) |
 
-**297 worked-example tags across the ecosystem** — 113 in loft's own index, 184 on the
-library repos' `origin/main`:
+**A citation may name ANY acronym, and that is the rule not an exception:** a feature
+whose real use is already demonstrated cites THAT demonstrator (`@STD-001`, `@GIT-001`,
+`@EHK-001`), and only one authored *for* a feature is an `@FTR`. So 102 of the 116 cite
+`FTR` and the other 14 cite the library or stdlib example that already showed the thing —
+counting `FTR` alone reads as "14 uncited" and is wrong. **The catalogue's gap was always
+the POINTER, not the example.**
 
-| Repo | Worked-examples PR | Tags on `origin/main` |
+**Worked-example tags across the ecosystem** — 113 in loft's own index, plus each library
+repo's own:
+
+| Repo | PR | `make examples-progress` |
 |---|---|---|
-| `loft-libs-core` | [#29](https://github.com/loft-lang/loft-libs-core/pull/29) + [#30](https://github.com/loft-lang/loft-libs-core/pull/30) MERGED | 25 |
-| `loft-libs-graphics` | [#26](https://github.com/loft-lang/loft-libs-graphics/pull/26) MERGED | 28 |
-| `loft-libs-net` | [#18](https://github.com/loft-lang/loft-libs-net/pull/18) + [#19](https://github.com/loft-lang/loft-libs-net/pull/19) MERGED | 8 |
-| `loft-libs-world` | [#15](https://github.com/loft-lang/loft-libs-world/pull/15) MERGED | 110 |
-| `loft-libs-game` | [#10](https://github.com/loft-lang/loft-libs-game/pull/10) **OPEN** | 13 (some already landed) |
-| `loft-libs-plugins` | [#3](https://github.com/loft-lang/loft-libs-plugins/pull/3) **OPEN** | 0 |
-| `loft-libs-assets` | [#5](https://github.com/loft-lang/loft-libs-assets/pull/5) **OPEN** | 0 |
+| `loft-libs-core` | [#29](https://github.com/loft-lang/loft-libs-core/pull/29) + [#30](https://github.com/loft-lang/loft-libs-core/pull/30) MERGED | READY — 6 tagged, 0 todo |
+| `loft-libs-net` | [#18](https://github.com/loft-lang/loft-libs-net/pull/18) + [#19](https://github.com/loft-lang/loft-libs-net/pull/19) MERGED | READY — 3 tagged, 1 exempt, 0 todo |
+| `loft-libs-world` | [#15](https://github.com/loft-lang/loft-libs-world/pull/15) MERGED | READY — 14 tagged, 0 todo |
+| `loft-libs-graphics` | [#26](https://github.com/loft-lang/loft-libs-graphics/pull/26) MERGED | ⚠ **NOT READY** — `drawing`, `text2d`, `tween` owe a verdict |
+| `loft-libs-game` | [#10](https://github.com/loft-lang/loft-libs-game/pull/10) **OPEN** | READY — 3 tagged, 0 todo |
+| `loft-libs-plugins` | [#3](https://github.com/loft-lang/loft-libs-plugins/pull/3) **OPEN** | READY — 1 tagged, 0 todo |
+| `loft-libs-assets` | [#5](https://github.com/loft-lang/loft-libs-assets/pull/5) **OPEN** | READY — 2 tagged, 0 todo |
 
 ### What is actually left
 
-1. **Phase C2 — 14 catalogue entries with no citation.** The mechanism is built and
-   self-tested; this is tracker content. The fourteen: `@F1` `@F3` `@F5` `@F6` `@F16`
-   `@F18` `@F23` `@F26` `@F40` `@F42` `@F47` `@F97` `@I85` `@I117`. They are the
-   FOUNDATIONAL entries — scalars, nullability, conversions, `vector<T>`, functions,
-   interfaces, the module system — which is the opposite of the order a rollout usually
-   reaches, and worth saying: the small hard-to-cite ones were left because a worked
-   example for "primitive scalar types" has to be a real call site rather than a
-   demonstration, and the corpus of real call sites for a primitive is every program.
-2. **Phase D — three unmerged PRs**: `loft-libs-game#10`, `loft-libs-plugins#3`,
-   `loft-libs-assets#5`.
-3. **Phase C's two follow-ups** (unchanged, both still open):
-   - hard **online** validation of a cross-repo tag when its sibling is not checked out.
-     Today it warns `unvalidated` and emits the link anyway; there is no online lookup.
-   - crawling a `~/.loft/`-style **hidden root** correctly — the traversal-from-root bug
-     (`find . -not -path './.*'`, `scripts/check_doc_drift.sh:530`).
+1. **Phase D — three unmerged PRs**: `loft-libs-game#10`, `loft-libs-plugins#3`,
+   `loft-libs-assets#5`. All three read **READY TO PR** under
+   `make examples-progress`, so the work is done and the landing is not.
+2. **Phase D — `loft-libs-graphics` owes three verdicts.** Its PR merged, and
+   `drawing`, `text2d` and `tween` have landed in it SINCE with no tags and no row in
+   `examples-exempt.tsv`, so the repo reads **NOT READY** again. This is the ratchet
+   working: a repo is not done once, it is done per package, and `drawing` in
+   particular is @PLN146's sprite renderer — a package whose correct use is exactly
+   what a worked example is for.
+**Phase C's two follow-ups are both settled** (2026-08-25) — one built, one measured away:
 
-⚠ **A hazard measured after this plan was last touched (2026-08-22):** a local sibling
-checkout is validated at the branch it is **parked on**, not at its default branch. So
-parking a sibling on a branch that predates a tag turns that tag `dangling` and reddens
-loft's own gate for something no loft file says — `loft-libs-assets` branched off `main`
-left `@MSH-002` / `@MSH-005` dangling. Push the work, and put the sibling back on the
-branch you found it on.
+- ✅ **Online validation when the sibling is not checked out — BUILT.** `EXAMPLES_ONLINE=1`
+  reads the owning repo's own published `examples-index.tsv` and validates against it, so
+  a tag that used to be `unvalidated` now resolves with a real link
+  (`validated online against loft-libs-core@main`). Four library repos publish that index,
+  which is what made this implementable rather than a design question.
+
+  **The index may CONFIRM a tag and never REFUTE one, and that is the design rather than
+  a hedge.** The follow-up asked for *hard* online validation; measured, the only
+  fetchable index is a `examples-index.tsv` a library COMMITTED, and
+  [LIBRARY_AUTHORING.md](../../LIBRARY_AUTHORING.md) is **retiring exactly that file** —
+  CI builds it now, and a leftover committed copy *"can only rot: you cannot regenerate
+  it where it sits"*. A repo that stops regenerating it would start reporting tags it
+  really carries as missing, and loft's gate would go red for something no loft file
+  says. So absence is not evidence: this path turns `unvalidated` into `ok`, and can
+  never turn it red.
+
+  **Opt-in, and a failed fetch is not a finding either.** The default gate stays
+  hermetic; no network, no `curl`, or a repo that never adopted the convention all keep
+  the `unvalidated` warning. A doc gate that goes red when a DNS lookup fails stops being
+  run — and that failure mode only appears on the machine with no network, which is never
+  the machine the test was written on. `check_examples_online_selftest` guards exactly
+  that, hermetically (the fetch is aimed at an RFC 2606 `.invalid` host that cannot
+  resolve), and it is proven able to fail.
+
+  A local checkout stays **preferred** over the index, and this is the reason: a checkout
+  can see unmerged refs, which is what tells a PENDING MERGE from a real dangling
+  citation. A published index cannot make that distinction.
+
+- ✅ **The `~/.loft/`-style hidden-root crawl — MEASURED, does not reproduce.** The
+  follow-up was carried over from dryopea, whose scan used `grep --exclude-dir='.*'`;
+  this gate uses `find . -not -path './.*'`, which prunes only a hidden directory
+  **directly under the scan root**. Measured all three shapes: a hidden root finds its
+  tags, a package nested at `<root>/.loft/registry/pkg` finds them when it is the root,
+  and scanning from *above* that prunes it — which is correct, because `.loft/` is a
+  build cache. Nothing to fix; the item was a premise inherited from another tree.
+
+⚠ The four `pending:` warnings loft's own gate prints (`@MSH-002` `@MSH-005` `@TIM-001`
+`@TIM-002`) are the **pending-merge** answer working as designed, not a defect: those
+examples live on `loft-libs-assets` / `loft-libs-game` branches whose PRs are still open.
+They clear when those PRs land.
 
 ### Historical — how the first distributed library landed
 
@@ -825,7 +861,7 @@ edit).
   the gate today guards duplicate *tags* within a repo, not acronym collisions across
   the registry.
 
-### Phase C — Shared gate + indexer ingestion — PARTIAL
+### Phase C — Shared gate + indexer ingestion — DONE
 
 - **Done:** the gate is one shared script — `scripts/check_doc_drift.sh examples` —
   not a per-library copy; it already resolves cross-repo citations and **emits the
@@ -840,12 +876,17 @@ edit).
   tag:…`) is a generic bucket lookup and needed no change. Verified: all 16
   `@AAA`-shaped tags in the tree index (12 `@STD` + the plan's `@DRY`/`@MOR`/`@FTR`
   mechanism examples), no accidental matches, `idx broken` + `broken-links` clean.
-- **Still to do (Follow-up from Status):** hard *online* validation of a cross-repo
-  tag when its sibling isn't checked out (fetch a published per-repo tag index),
-  crawling a `~/.loft/`-style hidden root correctly (dryopea's traversal-from-root
-  bug — a `--exclude-dir='.*'` scan reads zero files under any hidden path).
+- **Done (2026-08-25):** online validation of a cross-repo tag when its sibling is not
+  checked out — `EXAMPLES_ONLINE=1` reads the owning repo's published
+  `examples-index.tsv`. Opt-in, and it may CONFIRM a tag but never REFUTE one, because
+  the file it reads is the one LIBRARY_AUTHORING.md is retiring. See § What is actually
+  left.
+- **Closed by measurement (2026-08-25):** the `~/.loft/`-style hidden-root crawl does not
+  reproduce here. It was inherited from dryopea's `grep --exclude-dir='.*'`; this gate
+  uses `find . -not -path './.*'`, which prunes only a hidden directory directly under
+  the scan root.
 
-### Phase C2 — Worked examples for the feature catalogue (S) — **UNDER WAY (102 of 116 cited, 14 left — see Status)**
+### Phase C2 — Worked examples for the feature catalogue (S) — **DONE (116 of 116 cited)**
 
 **The mechanism half is built, self-tested and proved end to end (2026-08-18); what
 remains is the tracker content.** A feature's citation lives in its ISSUE BODY, reaches

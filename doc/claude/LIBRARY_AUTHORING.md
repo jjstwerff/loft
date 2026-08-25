@@ -280,6 +280,12 @@ publishes it folded into the job summary and uploads it as an artifact, so a der
 file that is never committed cannot be stale.  A leftover committed copy is not an
 error — CI says once that it is safe to delete.
 
+⚠ One thing DOES read a leftover copy, and it is built not to depend on it: with no
+sibling checkout, `EXAMPLES_ONLINE=1` fetches the owning repo's committed
+`examples-index.tsv` to resolve a cross-repo citation it could otherwise not check at
+all.  It may **confirm** a tag and never **refute** one, precisely because that file is
+being retired — so deleting yours costs a link, never a red gate.
+
 **Recording that a package owes nothing.**  Because there is no retroactive sweep, an
 untagged package is ambiguous: nobody can tell *no function here needs an example* from
 *nobody has looked yet*.  Resolve it in one line in `examples-exempt.tsv` at your repo
