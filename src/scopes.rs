@@ -8980,7 +8980,20 @@ fn walk_deep_parent_write(
         }
         Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, current_fn, visited),
         Value::Span(b) => walk_deep_parent_write(&b.1, data, current_fn, visited),
-        _ => None,
+        // Descends via the keystone, for the reason its twin `walk_par_unsafe_reason_value`
+        // does: the arms above are the same list, and they do not include `Return`, so a
+        // worker whose body is `return helper(...)` was reported free of parent writes without
+        // that call ever being examined.  The two walkers are near-copies; fixing one and not
+        // the other is how they came to differ from `is_par_safe` in the first place.
+        other => {
+            let mut found = None;
+            other.for_each_child(&mut |c| {
+                if found.is_none() {
+                    found = walk_deep_parent_write(c, data, current_fn, visited);
+                }
+            });
+            found
+        }
     }
 }
 
@@ -9266,6 +9279,26 @@ mod par_deep_tests {
             line: 0,
             pos: 0,
         }
+    }
+
+    /// A parent write reached only through a `Return` must still be found.
+    ///
+    /// `walk_deep_parent_write`'s arms are the same list as its twin
+    /// `walk_par_unsafe_reason_value`'s, and neither included `Return` — so a worker whose
+    /// body is `return helper(...)` was reported free of parent writes without that call ever
+    /// being examined. Both now descend via the keystone; this pins the half that would
+    /// otherwise drift back the moment one is edited alone.
+    #[test]
+    fn deep_parent_write_is_found_through_a_return() {
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Return(Box::new(Value::Call(bad, vec![])));
+        assert!(
+            worker_calls_parent_write_deep(&d, worker).is_some(),
+            "a parent write behind a `return` must still be reported"
+        );
     }
 
     #[test]

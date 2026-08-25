@@ -743,6 +743,37 @@ So a third of the "blockers" are the analysis working. Annotating changes what `
 ACCEPT once wired, and one of these ops is precisely the hazard the whole classifier exists to
 catch — an owner call, and not a cleanup.
 
+**The same shape a third time, found by screening for it.** `par_unsafe_reason`'s defect —
+a self-recursive walker with a `_ =>` catch-all that names SOME value-wrapping variants and not
+others — is mechanical to search for. Screening `src/` for it: 86 candidates, cut to **46**
+after excluding bodies that descend via the keystone (19) or peel `Span` themselves (98
+skipped for that reason across the whole set). Ranked by how many wrappers each omits, the top
+hit was `data::collect_callees` — the CALL-GRAPH collector, missing `Return`, `Drop` and `Span`.
+
+So `fn f() { return g(); }` recorded no edge from `f` to `g`. Its own comment said a missed
+variant *"would surface as a `callers_of returns empty` regression"* because the phase-5e tests
+covered it — and the only recursion test builds a `Value::If`, so nothing did. **Fixed**, with
+`callers_of_finds_a_call_under_a_wrapper`, verified to fail against the old arm.
+
+⚠ **No user impact today, and that is the pattern worth noticing rather than the bug.**
+`callers_of` is called only from tests, exactly like `is_par_safe`. A fourth instance turned up
+in the same screen: `walk_deep_parent_write` has an IDENTICAL arm list to
+`walk_par_unsafe_reason_value` — the same walker written twice, missing `Return` both times —
+so a worker whose body is `return helper(…)` was reported free of parent writes without that
+call being examined. Fixed and guarded alongside its twin, because fixing one of a near-copy
+pair and not the other is how they came to differ from `is_par_safe` to begin with.
+
+So Plan-06 phase 5b left a call graph, a purity classifier, a par-safety verdict and a
+parent-write detector — **all test-only, all wrong the same way**. That is one unfinished
+subsystem rather than four bugs: nothing exercises these analyses, so nothing reports that they
+drifted, and three of the four carried a comment asserting they were covered.
+
+⚠ **The screen over-reports, and `escapes_value` is the shape it cannot judge.** It looked like
+a fifth hit; its caller `guard_escapes` handles `Return(v)` and passes the already-unwrapped
+payload, so the helper never sees a wrapper. A predicate that takes the PAYLOAD rather than the
+node is indistinguishable, in text, from one that takes the node and forgot a case — the same
+over-reporting the `unspan` audit had, and the reason each hit is read before it is believed.
+
 #### C — process / skills
 
 | item | state |
