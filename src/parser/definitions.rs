@@ -759,26 +759,12 @@ impl Parser {
     /// Vector constants avoid the same trap by living in the const store and being
     /// referenced (`OpConstRef`) rather than pasted; text has no such store, and a
     /// literal fold makes one unnecessary.
+    ///
+    /// The fold itself is [`crate::const_eval::fold_text_block`] — a constant-store
+    /// ELEMENT needs the same answer (loft#1090), and one home keeps the two from
+    /// disagreeing about which initialisers are all-literal.
     fn fold_text_constant(&self, val: &Value) -> Option<String> {
-        let Value::Block(bl) = val.unspan() else {
-            return None;
-        };
-        let clear = self.data.def_nr("OpClearText");
-        let append = self.data.def_nr("OpAppendText");
-        let mut out = String::new();
-        for op in &bl.operators {
-            match op.unspan() {
-                // The buffer reset and the trailing read of it carry no text.
-                Value::Call(d, args) if *d == clear && args.len() == 1 => {}
-                Value::Var(_) => {}
-                Value::Call(d, args) if *d == append && args.len() == 2 => match args[1].unspan() {
-                    Value::Text(t) => out.push_str(t),
-                    _ => return None,
-                },
-                _ => return None,
-            }
-        }
-        Some(out)
+        crate::const_eval::fold_text_block(val, &self.data)
     }
 
     /// Whether a text constant's block can be re-pointed at a buffer owned by the
@@ -936,21 +922,42 @@ impl Parser {
             // (`NEST = [[7], [8]]` gave two rows of nothing; a `vector<integer>` field
             // read length 0).  Say so here, where the reader can act on it, instead of at
             // whichever use first trusts the value.
+            let mut refused_as_unbuildable = false;
             if !self.first_pass
                 && let Type::Vector(elem, _) = tp.base()
-                && let Some(what) = self.const_elem_unsupported(elem)
             {
-                let fn_name = id.to_lowercase();
-                let tn = tp.base().name(&self.data);
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "constant '{id}' has {what}, which a constant cannot hold — its elements \
-                     are pre-built in the constant store from their literal fields, and a \
-                     nested record has none to build from (it reads back empty).  Use a \
-                     zero-argument function instead: `fn {fn_name}() -> {tn} {{ … }}`, then \
-                     call `{fn_name}()`"
-                );
+                // The element TYPE first, because when it is the problem that message
+                // names the limitation better; then the initialiser, which is the only
+                // thing that can answer for a type the store could otherwise hold.
+                //
+                // loft#1090 — a constant that cannot be pre-built has no fallback: the
+                // use site emits `OpConstRef`, so an unbuilt constant reads `null` at
+                // every reference with no error and no warning.  `Row { r_id: BASE + 1 }`
+                // was enough, and the vector it was in reported length 0 — a `for` over
+                // the table ran zero times and every lookup fell through to a default,
+                // far away from the declaration.  Ask the pre-builder itself, so the
+                // refusal and the build can never disagree about what is buildable.
+                let unsupported = self
+                    .const_elem_unsupported(elem)
+                    .map(|what| format!("has {what}, which a constant cannot hold"))
+                    .or_else(|| {
+                        crate::compile::const_vector_blocker(&val, &self.data)
+                            .map(|what| format!("is built from {what}"))
+                    });
+                if let Some(what) = unsupported {
+                    refused_as_unbuildable = true;
+                    let fn_name = id.to_lowercase();
+                    let tn = tp.base().name(&self.data);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "constant '{id}' {what} — its elements are pre-built in the \
+                         constant store from their literal fields, and anything they do \
+                         not describe reads back empty.  Use a zero-argument function \
+                         instead: `fn {fn_name}() -> {tn} {{ … }}`, then call \
+                         `{fn_name}()`"
+                    );
+                }
             }
             // A constant is INLINED at each reference, so an initialiser that calls
             // something pays that cost per use.  Name it, because the word "constant"
@@ -1027,7 +1034,11 @@ impl Parser {
                     );
                 }
             }
+            // Not when the constant has already been refused: the error prescribes the
+            // same function, and a second line saying the initialiser is re-evaluated
+            // describes a constant that will not compile at all.
             if !self.first_pass
+                && !refused_as_unbuildable
                 && crate::keys::const_effect_lint_enabled()
                 && let Some(callee) = self.const_initialiser_cost(&val)
             {

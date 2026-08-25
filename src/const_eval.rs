@@ -133,6 +133,64 @@ fn fold_op(name: &str, args: &[Value]) -> Option<Value> {
     }
 }
 
+/// Fold `val` to a literal, looking through the source-position markers the parser
+/// leaves between the operands.
+///
+/// A `Span` records WHERE an operand was written; it is not part of the value, and an
+/// expression straight out of the parser carries one around every sub-expression
+/// (`(BASE + 1) * 2` is three spans deep).  [`const_eval`] declines a `Span` because
+/// widening the shared folder is not free — teaching it about `Block` woke O8.5's
+/// const-unroll in positions that lowering declines (loft#892) — so the span walk lives
+/// here, for the callers that hold a raw parse tree rather than a lowered one.
+#[must_use]
+pub fn const_eval_through_spans(val: &Value, data: &Data) -> Option<Value> {
+    const_eval(&strip_spans(val), data)
+}
+
+/// `val` with every position marker removed, so the folder sees only the expression.
+fn strip_spans(val: &Value) -> Value {
+    match val.unspan() {
+        Value::Call(op, args) => Value::Call(*op, args.iter().map(strip_spans).collect()),
+        Value::If(cond, then_val, else_val) => Value::If(
+            Box::new(strip_spans(cond)),
+            Box::new(strip_spans(then_val)),
+            Box::new(strip_spans(else_val)),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Fold an all-literal text expression to the string it spells, or `None` when some part
+/// of it is only known at run time.
+///
+/// `"x" + "y"` lowers to a block that builds its value in a WORK BUFFER —
+/// `{ OpClearText(w); OpAppendText(w, "x"); OpAppendText(w, "y"); w }` — so the value is
+/// not in the tree as a literal even when every piece of it is one.  Callers that must
+/// end up with a literal (a text constant, which is pasted at each use; a constant-store
+/// element, which is written with `set_str`) fold it here.
+#[must_use]
+pub fn fold_text_block(val: &Value, data: &Data) -> Option<String> {
+    let Value::Block(bl) = val.unspan() else {
+        return None;
+    };
+    let clear = data.def_nr("OpClearText");
+    let append = data.def_nr("OpAppendText");
+    let mut out = String::new();
+    for op in &bl.operators {
+        match op.unspan() {
+            // The buffer reset and the trailing read of it carry no text.
+            Value::Call(d, args) if *d == clear && args.len() == 1 => {}
+            Value::Var(_) => {}
+            Value::Call(d, args) if *d == append && args.len() == 2 => match args[1].unspan() {
+                Value::Text(t) => out.push_str(t),
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

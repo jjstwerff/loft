@@ -2693,6 +2693,25 @@ fn struct_valued_constant_rejected() {
         );
 }
 
+// loft#1090 — a vector constant the constant store cannot pre-build is refused at the
+// declaration.  It has no fallback: the use site references the pre-built store
+// (`OpConstRef`) rather than re-running the initialiser, so an unreported failure reads
+// `null` at every reference instead of merely being slower.  A call is the residue the
+// fold cannot reduce — `BASE + 1` and `"a" + "b"` are folded and build normally.
+#[test]
+fn unbuildable_vector_constant_rejected() {
+    code!(
+        "fn seven() -> integer { 7 }\nC = [seven(), 42];\nfn test() { assert(len(C) == 2, \"n\"); }"
+    )
+    .error(
+        "constant 'C' is built from an element value that is only known at run time, or a \
+         field of a kind a constant cannot hold — its elements are pre-built in the \
+         constant store from their literal fields, and anything they do not describe reads \
+         back empty.  Use a zero-argument function instead: `fn c() -> vector<integer> \
+         { … }`, then call `c()` at unbuildable_vector_constant_rejected:2:19",
+    );
+}
+
 // A text constant builds its value in ONE work buffer, and a constant is pasted at every
 // reference — so the paste re-points that buffer onto one the using function owns
 // (`rebind_constant_buffer`).  An initialiser that needs more than one buffer, such as a
