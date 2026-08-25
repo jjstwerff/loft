@@ -350,7 +350,7 @@ fn fold_const_field(op: &str, v: &IrNode, data: &Data) -> Option<ConstField> {
             other => crate::const_eval::fold_text_block(other, data).map(ConstField::Text),
         };
     }
-    let folded = crate::const_eval::const_eval_through_spans(&v.to_owned_value(), data)?;
+    let folded = crate::const_eval::const_eval(v.to_owned_value().unspan(), data)?;
     // loft spells a null as its type's extreme value ([CODE.md](../doc/claude/CODE.md)
     // null sentinels).  A fold that lands on one would pre-build a null the author never
     // wrote — `-2147483648` is not a literal anyone can spell, but wrapping arithmetic

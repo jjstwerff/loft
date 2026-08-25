@@ -499,12 +499,21 @@ not a defect found.
 
 **The const-vector pair — measured clean, and the measurement nearly wasn't.**
 `compile::build_const_vectors` and `generation::emit_const_vectors` are the same job in the
-two backends, and both have the worst-shaped fallback in the list: `_ => {}` around a literal
+two backends, and both had the worst-shaped fallback in the list: `_ => {}` around a literal
 match, so a spanned literal would write NOTHING and leave a zero in a const vector — silent,
-not lossy. The feeding path never unspans either (`extract_literal_values` takes an `IrNode`,
-whose `unspan()` is an explicit call it does not make). Measured anyway: **both sites are
-reached and see only plain literals, 0 spanned arrivals**, so const folding hands them clean
-values and neither needs the call.
+not lossy. The feeding path never unspanned either (`extract_literal_values` takes an
+`IrNode`, whose `unspan()` is an explicit call it did not make). Measured anyway: **both
+sites are reached and see only plain literals, 0 spanned arrivals**, so const folding hands
+them clean values and neither needed the call.
+
+✅ **The shape is now gone, not merely measured harmless.** loft#1090 replaced the `Value`
+payload with a `ConstField` enum, so both writers match EXHAUSTIVELY and neither has a `_`
+arm to drop a value into — a kind added on one side can no longer be silently ignored by the
+other. That defect was not hypothetical when the fallback existed: `boolean` and `character`
+fields were being dropped from constants that were built anyway, so `[Row { flag: true, id: 5 }]`
+read back `flag = false` with `id` correct. **The measurement above was right about spans and
+blind to the kinds** — it asked whether a SPANNED literal could arrive and answered no, while
+the arm was already discarding two ordinary literal kinds that did.
 
 ⚠ The first native run of that probe reported 0 and was VACUOUS — the site is exercised by
 only 6 of the 858 corpus programs, and none was in the 60-program native sample. The
