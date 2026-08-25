@@ -420,11 +420,24 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 238 | 205 | **33** |
+| 233 | 206 | **27** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
 
-⚠ **That was 41 until 2026-08-25, and the 8 it lost were never real** — the audit matched
+**A second false-positive class, and it held the two scariest-looking entries.** A match that
+is the BODY of a `any_node` / `for_each_child` closure can never be handed a `Span`, because
+`any_node` unwraps one before calling the predicate (`if let Value::Span(b) = self { return
+b.1.any_node(pred) }`) and `for_each_child` descends through it. Four sites were that shape,
+including the two whose failure direction is UNSAFE rather than merely lossy —
+`hoist.rs::writes_store`, the vector-header hoist's safety predicate, and `scopes::guard_escapes`.
+Neither can be reached with a `Span`. (A fifth, `walk_sub_rule_pure`, discriminates on `Purity`
+and never on a `Value` at all.) The tool now strips those closures before counting.
+
+⚠ **Do not diff two runs of this list by `path:line`** — a comment added above a site shifts its
+line and reads as a removal plus an addition. Compare by function NAME. That is how
+`is_void_value` briefly looked deleted when it had only moved eight lines.
+
+⚠ **The count was 41 until 2026-08-25, and the 8 it lost then were never real** — the audit matched
 the NAME `Value::<Variant>` without checking WHICH `Value`.  Three enums answer to that
 spelling here: `host::Value` (the host-call ABI, 5 sites) has no `Span` at all, `MValue`
 (2 sites) matched because `MValue::Scalar` literally contains the substring
@@ -450,10 +463,26 @@ and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo 
 `cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
 hits on the same arm; if those are zero too, the probe never ran.
 
-**Exactly 1 of the 33 is gated** (`walk_check`) — so the method holds for the other 32, and
+**Exactly 1 of the 27 is gated** (`walk_check`) — so the method holds for the other 32, and
 the bound is worth stating rather than leaving as a general worry. It is only notable because
 it is the top of the list by variant count, and so the natural place to start: the one site
 where a zero was going to be believed.
+
+**Two sites measured and FIXED 2026-08-25, and the counts are the point.** The raw arrival
+count is not the defect count — at both sites most arrivals change nothing, so the measurement
+that matters is *does unspanning change the answer*:
+
+| site | spanned values arriving | answer actually changes |
+|---|---:|---:|
+| `const_eval` (858 programs, interp) | 1000 | **2** — folds lost in `91-null-coalescing`, `store_compact_kinds` |
+| `generation::needs_pre_eval` (45 programs, native) | 1807 | **1264** |
+| `generation::is_void_value` (45 programs, native) | 22 | **0** — left alone |
+
+`needs_pre_eval` is the one that mattered: its arms single out `Call` / `Block` / `CallRef` /
+`Insert` / `Iter`, all of which can answer TRUE, while a `Span` matches none and takes
+`_ => false` — so a spanned call was reported as needing no pre-evaluation, which is the
+double-borrow the analysis exists to prevent. `is_void_value` is the control that keeps the
+rule honest: same file, same shape, and not worth touching.
 
 ⚠ **And then it changes nothing.** Adding the peel leaves the IR byte-identical on all six
 affected programs. The variables were already covered another way. **So: reachable,
