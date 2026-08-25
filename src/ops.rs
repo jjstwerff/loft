@@ -792,7 +792,7 @@ pub fn format_long(
 
 use std::fmt::Write as _;
 
-pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, dir: i8) {
+pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, plus: bool, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     // @PLN10 — NaN is the float null sentinel (`?? ` / `!` treat it as null) and
@@ -805,10 +805,11 @@ pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, dir: i
     } else {
         write!(res, "{val}").unwrap();
     }
+    sign_a_number(&mut res, plus);
     format_text(s, &res, width, dir, b' ');
 }
 
-pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, dir: i8) {
+pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, plus: bool, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     // @PLN10 — NaN is the float null sentinel; render as `null` (see `format_float`).
@@ -819,7 +820,21 @@ pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, dir: 
     } else {
         write!(res, "{val}").unwrap();
     }
+    sign_a_number(&mut res, plus);
     format_text(s, &res, width, dir, b' ');
+}
+
+/// Give an already-rendered number the `+` the format asked for.
+///
+/// Applied to the rendered TEXT rather than to the value, because that is the only form
+/// that answers every case with one rule: `-0.0` and `-1e-9` already print a `-` while
+/// comparing `>= 0.0` or rounding to `0.000` at the requested precision, and `null` (the
+/// NaN sentinel) is not a number and takes no sign at all.  Before the width is applied,
+/// so a signed number fills the field the same way an unsigned one does.
+fn sign_a_number(res: &mut String, plus: bool) {
+    if plus && !res.starts_with('-') && !res.starts_with("null") {
+        res.insert(0, '+');
+    }
 }
 
 #[must_use]

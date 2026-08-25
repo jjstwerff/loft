@@ -408,12 +408,13 @@ fn OpLtSingle(v1: single, v2: single) -> boolean;
 #rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeSingle(v1: single, v2: single) -> boolean;
 #rust"@v1.is_nan() || (!@v2.is_nan() && @v1 <= @v2)"
-fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer, dir: const i8);
+fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer, plus: const boolean, dir: const i8);
 fn OpFormatStackSingle(
   pos: const u16,
   val: single,
   width: integer,
   precision: integer,
+  plus: const boolean,
   dir: const i8
 );
 // Double-precision (64-bit) floating-point math.
@@ -627,8 +628,8 @@ fn OpLtFloat(v1: float, v2: float) -> boolean;
 #rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeFloat(v1: float, v2: float) -> boolean;
 #rust"@v1.is_nan() || (!@v2.is_nan() && @v1 <= @v2)"
-fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
-fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
+fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, plus: const boolean, dir: const i8);
+fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, plus: const boolean, dir: const i8);
 // --- min / max / clamp ---
 // @PLN25 F1b(b): each has a NON-NULL overload (`-> τ`) and a `τ?` overload (`-> τ?`). The call
 // dispatch picks the `τ?` overload whenever ANY argument is STATICALLY nullable, so an explicit

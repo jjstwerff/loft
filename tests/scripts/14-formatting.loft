@@ -137,4 +137,43 @@ fn main() {
   assert(`plain {"{y}"} done` == "plain 5 done", "plain literal inside a backtick hole");
   assert(`outer {`{y}`} done` == "outer 5 done", "backtick inside a backtick hole");
   assert("{"a" + `b{y}`}" == "ab5", "the two spellings mix in one hole");
+
+  // `+` — "always show a sign on a NUMBER" (formal/formatting.md F-Spec).  It was
+  // honoured for an integer and dropped for a float and a single, on both backends and
+  // with nothing said: the float format opcodes had no sign operand to put it in.  A
+  // template asked for a character and got a string missing it, which no differential
+  // oracle over the two backends can see — they agreed.
+  fplus = 0.5;
+  fminus = -0.5;
+  splus = 1.25f;
+  sminus = -1.25f;
+  assert("{fplus:+}" == "+0.5", "float sign: {fplus:+}");
+  assert("{fplus:+.3}" == "+0.500", "float sign with precision: {fplus:+.3}");
+  assert("{fplus:+8.3}" == "  +0.500", "float sign inside the field: {fplus:+8.3}");
+  // A negative number keeps its own sign — the flag adds one, it does not replace one.
+  assert("{fminus:+.3}" == "-0.500", "negative float keeps its sign: {fminus:+.3}");
+  // ... and without the flag nothing is added, which is the control for all of the above.
+  assert("{fplus:.3}" == "0.500", "no flag, no sign: {fplus:.3}");
+  assert("{splus:+.2}" == "+1.25", "single sign: {splus:+.2}");
+  assert("{sminus:+.2}" == "-1.25", "negative single keeps its sign: {sminus:+.2}");
+  // Signed zero prints its OWN sign, so a `+` must be decided on the rendered text and
+  // not on `value >= 0` — which is true for -0.0 and would have produced `+-0.0`.
+  fzero = 0.0;
+  assert("{fzero:+.1}" == "+0.0", "positive zero takes the sign: {fzero:+.1}");
+  // `null` is the float's NaN sentinel and is not a number, so it takes no sign at all.
+  fnull = nullable_float();
+  assert("{fnull:+.2}" == "null", "a null float takes no sign: {fnull:+.2}");
+
+  // A spec's flags are read in any ORDER.  They used to be read in a fixed one, and a
+  // flag written out of that order was left in the stream for the WIDTH expression:
+  // `{f:+<8.3}` read `+`, then parsed `<8.3` as a comparison.  The interpreter rendered
+  // `0.5` — no sign, no width, no precision — and the native backend emitted a
+  // comparison between an i64 and an f64, so the program failed to COMPILE with rustc
+  // errors about loft's own internals.  Neither said the spec was the problem.
+  assert("{fplus:+<8.3}" == "+0.500  ", "sign before alignment: {fplus:+<8.3}");
+  assert("{fplus:<+8.3}" == "+0.500  ", "alignment before sign: {fplus:<+8.3}");
+  assert("{12:+<6}" == "+12   ", "the same pair on an integer: {12:+<6}");
+  assert("{12:<+6}" == "+12   ", "and the other order: {12:<+6}");
 }
+
+fn nullable_float() -> float? { null }

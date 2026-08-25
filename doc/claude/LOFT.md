@@ -1254,12 +1254,14 @@ Both `"..."` and `` `...` `` strings support format specifiers using `{...}`:
 "Oct: {n:o}"             // octal
 "Bin: {n:b}"             // binary
 "Padded: {n:+4}"         // width 4, always show sign
+"Signed float: {f:+.3}"  // `+` applies to float and single too
 "Zero-padded: {n:03}"    // width 3, zero-padded
 "Float: {f:4.2}"         // width 4, 2 decimal places
 "Left: {s:<5}"           // left-aligned width 5
 "Right: {s:>5}"          // right-aligned
 "Center: {s:^7}"         // center-aligned
 "{x:j}"                  // JSON output
+// The flags before the width may be written in any order: `{f:+<8.3}` == `{f:<+8.3}`.
 "{x:#}"                  // pretty-printed multi-line output
 ```
 

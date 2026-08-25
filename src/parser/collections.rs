@@ -2024,18 +2024,20 @@ use #count instead"
             }
             Type::Float => {
                 let dir = Value::Int(state.dir);
+                let plus = Value::Boolean(state.plus);
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
                 list.push(self.cl(
                     &(start.to_owned() + "Float"),
-                    &[var, fmt, a_width, p_rec, dir],
+                    &[var, fmt, a_width, p_rec, plus, dir],
                 ));
             }
             Type::Single => {
                 let dir = Value::Int(state.dir);
+                let plus = Value::Boolean(state.plus);
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
                 list.push(self.cl(
                     &(start.to_owned() + "Single"),
-                    &[var, fmt, a_width, p_rec, dir],
+                    &[var, fmt, a_width, p_rec, plus, dir],
                 ));
             }
             Type::Vector(cont, _) => {

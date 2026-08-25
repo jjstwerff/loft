@@ -119,8 +119,11 @@ is a compact `{field:value}` form, and the `:j` spec switches it to JSON with qu
                0N                 zero-pad a number to width N
                .P                 fixed P fractional digits (float/single)
                #x  x  b  o        integer radix: hex-with-0x / hex / binary / octal
-               +                  always show a sign on a number
+               +                  always show a sign on a number — integer, float and single
+                                  alike; a negative number keeps its own sign, and `null`
+                                  (a sentinel, not a number) takes none
              width counts Unicode CODEPOINTS, not bytes.
+             The flags may be written in any ORDER (`+<8.3` and `<+8.3` are the same spec).
 ```
 
 **In words.** `{1:03}` is `001`, `{42:#x}` is `0x2a`, `{334.1:.2}` is `334.10`, `{"abc":>7}` is
@@ -167,7 +170,12 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
   `"{col}"` is `{r:128,g:0,b:128}` and `"{col:j}"` is `{"r":128,"g":0,"b":128}`; `null as integer?`
   renders `null`.
 - **Format spec (`F-Spec`)** — `"{1:03}"` is `001`, `"{42:#x}"` is `0x2a`, `"{334.1:.2}"` is
-  `334.10`, `"{\"abc\":>7}"` is `    abc`.
+  `334.10`, `"{\"abc\":>7}"` is `    abc`, `"{0.5:+.3}"` is `+0.500`.  **A differential
+  oracle cannot see a flag both backends drop** — `+` was honoured on an integer and
+  ignored on a float for as long as the suites had no cell for it, and the two backends
+  agreed throughout (loft#1087).  The `+`-on-a-float cells are in
+  `tests/scripts/14-formatting.loft` for that reason: what pins a rule is a cell that
+  spells out the expected string, not the agreement of two implementations.
 - **Fault-safety (`F-FaultSafe`)** — `a = 5; b = 0; "{a / b}"` is `null(/0)` on both backends, and
   the program continues.
 - **Target (`F-Target`)** — with `lit` + `hole_text` + `hole_int` on `Query`,

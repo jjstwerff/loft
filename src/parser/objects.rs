@@ -2688,23 +2688,48 @@ impl Parser {
         out
     }
 
+    /// Read the flags of a `{value:spec}` placeholder, in whatever order they are
+    /// written.
+    ///
+    /// Order used to be fixed — alignment, then `+` — and a flag written out of that
+    /// order was simply left in the stream for the WIDTH expression to find: `{f:+<8.3}`
+    /// read `+`, then parsed `<8.3` as a comparison.  The interpreter rendered `0.5`
+    /// (no sign, no width, no precision) and the native backend emitted a comparison
+    /// between an i64 and an f64, so the program failed to compile with rustc errors
+    /// about loft's own internals.  Neither said the spec was the problem.
+    ///
+    /// Looping until a round consumes nothing is what makes the order not matter.  Each
+    /// flag is a distinct token, so a round that matches none of them has reached the
+    /// width — and a round that matches one has consumed it, which is what ends the loop.
     pub(crate) fn string_states(&mut self, state: &mut OutputState) {
-        if self.lexer.has_token("<") {
-            state.dir = -1;
-        } else if self.lexer.has_token("^") {
-            state.dir = 0;
-        } else if self.lexer.has_token(">") {
-            state.dir = 1;
-        }
-        if self.lexer.has_token("+") {
-            state.plus = true;
-        }
-        if self.lexer.has_token("#") {
-            // show 0x 0b or 0o in front of numbers when applicable
-            state.note = true;
-        }
-        if self.lexer.has_token(".") {
-            state.float = true;
+        loop {
+            let mut consumed = false;
+            if self.lexer.has_token("<") {
+                state.dir = -1;
+                consumed = true;
+            } else if self.lexer.has_token("^") {
+                state.dir = 0;
+                consumed = true;
+            } else if self.lexer.has_token(">") {
+                state.dir = 1;
+                consumed = true;
+            }
+            if self.lexer.has_token("+") {
+                state.plus = true;
+                consumed = true;
+            }
+            if self.lexer.has_token("#") {
+                // show 0x 0b or 0o in front of numbers when applicable
+                state.note = true;
+                consumed = true;
+            }
+            if self.lexer.has_token(".") {
+                state.float = true;
+                consumed = true;
+            }
+            if !consumed {
+                return;
+            }
         }
     }
 
