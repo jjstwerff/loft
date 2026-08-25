@@ -430,8 +430,15 @@ and conflating them is how a backlog gets "cleared" with nothing fixed:
 | | count | |
 |---|---:|---|
 | shown IMPOSSIBLE | **22** | the audit could not tell which `Value`, or that something upstream already peeled |
-| FIXED | **6** | `const_eval`, `needs_pre_eval`, `find_first_ref_vars`, `sandbox::scan`, `move_rewrite`, `substitute_var` |
+| peeled | **6** | of which only **2** change an answer: `needs_pre_eval` (1264 sites) and `const_eval` (2 lost folds) |
 | still listed | **13** | of which 5 are measured clean and left unpeeled, 1 is gated, 7 unmeasured |
+
+⚠ **"Peeled" is not "fixed", and the difference is most of this table.** Of the six,
+`find_first_ref_vars` changes 46 decisions and gains 0 variables; `move_rewrite` and
+`substitute_var` are measured behaviour-identical over 120 and 150 corpus programs; and
+`sandbox::scan` needed no peel at all — the version I first wrote there was a double-count
+that made the analysis worse. The honest yield of the whole sweep is **two** sites whose
+answer changes, one of which (`const_eval`) changes it twice in 858 programs.
 
 Where the 22 went, by mechanism: **7** matched inside another enum's path (`MValue::Scalar`,
 `VariableValue::Long`, `ScalarValue::Single` all end in the substring the pattern looked for);
@@ -567,16 +574,31 @@ exactly.
 
 | site | arrivals | spanned around an ARM | verdict |
 |---|---:|---:|---|
-| `sandbox::intrinsic_space`'s scan | 188 | 6 | **fixed — admission bypass** |
-| `scopes::move_rewrite` | 567 | 41 | fixed — retarget skipped (safe direction) |
-| `const_eval::substitute_var` | 41 | 5 | fixed — substitution skipped |
+| `sandbox::intrinsic_space`'s scan | 188 | 6 | **no defect — see below** |
+| `scopes::move_rewrite` | 567 | 41 | no defect; peel is a no-op |
+| `const_eval::substitute_var` | 41 | 5 | no observable change; peel kept |
 | `scopes::is_ref_materialisation` | 2329 | **0** | clean, untouched |
 | `control::is_block_divergent` | **17 396** | **0** | clean, untouched |
 
-The sandbox one is the only defect in this whole sweep whose failure direction is not merely
-skipped work: `space_degree` never folded a spanned callee's footprint into its caller's, so
-the declared bound read `24 · n²` instead of `36 · n²`, and at a `data_budget` between those
-two the program was ADMITTED rather than REJECTED. Admission is the security boundary.
+⚠ **The sandbox entry was first written up as an admission bypass. It was not — the bypass was
+mine.** `for_each_child` DESCENDS THROUGH a `Span` (`Value::Span(b) => f(&b.1)`), so a scan that
+ends in `v.for_each_child(&mut |c| scan(c, …))` already visits a spanned node's payload one
+level down. The bare `match v` was therefore correct. Peeling only the SCRUTINEE — `match
+v.unspan()` — makes the node be counted **twice**: once from the peeled match, once when the
+trailing walk reaches the same payload. That inflated a program's declared bound from `24 · n²`
+to `36 · n²`, and I read the inflation as the fix rather than as the bug, wrote a regression
+test asserting `36`, and shipped it green through `make ci` at 4444/4444.
+
+**Nothing caught it, and the test I added was the thing that made it look verified.** No
+existing test covered that bound; the one I wrote pinned the over-count as the requirement. It
+only came apart when I tried to explain the mechanism afterwards and found `for_each_child`
+already handled the case — i.e. when the A/B's *direction* stopped matching the story.
+
+**The rule this yields:** `match x.unspan()` is safe only when nothing else in the body walks
+`x` again. Where there is a trailing `for_each_child` / `for_each_child_mut`, bind instead —
+`let x = x.unspan();` — so the match and the walk see the same node and each is visited once.
+The two forms are indistinguishable by eye and differ by a factor on the answer. `move_rewrite`
+keeps its inner `if let … = node` deliberately unpeeled for the same reason.
 
 **`is_block_divergent` is the strongest clean result here, and it looked like the worst.** Its
 negated caller does `bl.operators[p] = null_value(…)` on the LAST operator when the block is

@@ -2054,15 +2054,19 @@ fn base_var_of(expr: &Value, mo: &MoveOps) -> Option<u16> {
 /// `OpCopyRecord` / `OpFreeRef`, and RETARGET every remaining construction op that writes into
 /// the source (`OpSet*(s, …)`) onto that source's captured destination expression.
 fn move_rewrite(node: &mut Value, ready: &HashSet<u16>, dest: &HashMap<u16, Value>, mo: &MoveOps) {
-    // `Value::unspan`'s obligation, in its mutable form.  The `_` arm here is not a no-op —
-    // it looks for the `Value::Call` this rewrite retargets — so a spanned node fell through
-    // BOTH the `Block`/`Insert` recursion and that inner `if let`, and the retarget silently
-    // did not happen.  Like the sandbox scan, this body already unspanned an ARGUMENT while
-    // matching the node bare.  Measured over the 858-program corpus: 567 values arrive, 41 of
-    // them spanned around an arm (33 `Call`, 8 `Block`).
+    // `Value::unspan`'s obligation, in its mutable form.  Measured over the 858-program
+    // corpus: 567 values arrive here, 41 of them spanned around an arm (33 `Call`, 8 `Block`).
     //
-    // Not applying the rewrite is the SAFE direction — the copy simply stays — so this costs
-    // an optimisation rather than correctness, which is why nothing reported it.
+    // ⚠ Those 41 were NOT misses, and an earlier version of this comment claimed they were.
+    // The `_` arm ends in `node.for_each_child_mut(…)`, and that walk DESCENDS THROUGH a
+    // `Span`, so a spanned node was already reached one level down — measured
+    // behaviour-identical across 120 corpus programs with and without this peel.  It is kept
+    // because it obeys the rule and reaches the right arm directly; it fixes nothing.
+    //
+    // The `if let Value::Call(…) = node` below reads the ORIGINAL binding ON PURPOSE: peeling
+    // it as well would retarget the same call twice, once here and once when the trailing walk
+    // reaches it.  That is the double-count that peeling only the scrutinee produced in
+    // `sandbox::intrinsic_space` — a bound inflated from `24 · n²` to `36 · n²`.
     match node.unspan_mut() {
         Value::Block(b) => {
             b.operators.retain(|s| !move_drop(s, ready, mo));
