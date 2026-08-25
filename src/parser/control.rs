@@ -426,6 +426,43 @@ struct PatternArm {
 /// enum arm chain this mirrors; only an arm that actually carries a guard pays for it.
 /// Bindings are never duplicated: a slice arm's are a `..name` materialisation and a PEG
 /// cursor advance, neither of which survives being run twice.
+/// Is this arm or branch body a `null` — written bare (`0 => null`) or as a BLOCK
+/// (`0 => { null }`)?
+///
+/// loft#936 established that a branch-merge slot must carry the result type's typed null
+/// sentinel, never a bare `Value::Null`, which pushes nothing where the merge reads a
+/// 12-byte `DbRef`.  The repair then has to RECOGNISE a null arm, and the block spelling is
+/// the half that kept getting missed: three of the four match lowerings tested only the bare
+/// form, so `match n { 0 => { null }, _ => { [n] } }` answered null for every `n` while the
+/// bare-arm spelling of the same function was right.
+///
+/// One predicate for all of them, because the previous arrangement was one copy each.
+fn arm_body_is_null(code: &Value) -> bool {
+    match code {
+        Value::Null => true,
+        Value::Block(bl) => bl
+            .operators
+            .last()
+            .is_some_and(|o| matches!(o.unspan(), Value::Null)),
+        _ => false,
+    }
+}
+
+/// Put `typed_null` where [`arm_body_is_null`] found the null, in place.
+///
+/// A block keeps its block — only its LAST operator is replaced, and its result type is
+/// restated, so the arm still delivers through the same slot the merge reads.
+fn set_arm_null_typed(code: &mut Value, typed_null: &Value, result_type: &Type) {
+    match code {
+        Value::Block(bl) => {
+            let last = bl.operators.len() - 1;
+            bl.operators[last] = typed_null.clone();
+            bl.result = result_type.clone();
+        }
+        other => *other = typed_null.clone(),
+    }
+}
+
 fn chain_pattern_arms(arms: Vec<PatternArm>, fallback: Value, result_type: &Type) -> Value {
     let mut chain = fallback;
     for arm in arms.into_iter().rev() {
@@ -8436,12 +8473,17 @@ impl Parser {
         // collection has to be an allocated empty store, so its catch-all
         // answers a bare `Value::Null` for the entire collection family and
         // silently reintroduces the no-push this paragraph exists to prevent.
-        if arms.iter().any(|a| matches!(a.1, Value::Null)) {
+        // A BLOCK-bodied null arm (`0 => { null }`) needs the same repair as the bare one:
+        // it parses to `Value::Block` whose last operator is `Value::Null`, so a predicate
+        // that only matches a bare `Value::Null` walks straight past it and the arm keeps a
+        // value that pushes nothing.  The enum/struct match path already tests both forms;
+        // this one tested only the bare form, so `match n { 0 => { null }, _ => { [n] } }`
+        // answered null for EVERY n while the bare-arm spelling of the same function was
+        // right — a wrong value with no diagnostic, on both backends.
+        if arms.iter().any(|a| arm_body_is_null(&a.1)) {
             let typed_null = self.null_value(result_type);
-            for arm in &mut arms {
-                if matches!(arm.1, Value::Null) {
-                    arm.1 = typed_null.clone();
-                }
+            for arm in arms.iter_mut().filter(|a| arm_body_is_null(&a.1)) {
+                set_arm_null_typed(&mut arm.1, &typed_null, result_type);
             }
         }
         let fallback = if has_wildcard {

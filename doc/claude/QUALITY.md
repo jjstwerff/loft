@@ -630,6 +630,52 @@ interpreter run had already fired 12 times, which is the only reason the zero wa
 believed. **When a site is rare, sample the programs that REACH it, not the first N.** (All
 six are dedicated `*-const-*` regression tests, so the feature is deliberately covered.)
 
+#### B5 — `match` lowers through four paths and three mishandled a `null` arm (2026-08-25)
+
+`match n { 0 => { null }, _ => { [n] } }` answered **null for every `n`**, including the arm
+that builds a vector. Wrong value, no diagnostic, on `--interpret`; on `--native` the same
+program failed to COMPILE (E0308). Reproduced on pristine `origin/main`, so pre-existing.
+
+loft#936 established the rule — a branch-merge slot carries the result type's typed null
+sentinel, never a bare `Value::Null`, which pushes nothing where the merge reads a 12-byte
+`DbRef`. The repair exists in four lowerings, and only one of them was right:
+
+| lowering | state |
+|---|---|
+| enum / struct match | correct — tests bare AND block form |
+| `parse_if` (loft#936 itself) | correct |
+| **scalar chain** | **FIXED** — tested a bare `Value::Null` only, so `{ null }` walked past it |
+| **vector + tuple chains** | **OPEN** — different cause, see below |
+
+**Fixed:** `build_scalar_chain`'s predicate now recognises a block whose last operator is
+null, via one shared `arm_body_is_null` / `set_arm_null_typed` pair rather than a fourth copy.
+Guard: `tests/scripts/a-block-bodied-null-match-arm-delivers-the-sentinel.loft`, verified to
+fail (2 of 4 cells) against the unfixed build, green on both backends.
+
+**OPEN, with the requirement now specified.** The vector and tuple chains promote
+`result_type` out of `Void` but not out of `Null`, so a first `null` arm pins the chain to
+`Null` and every later arm's type is ignored. Adding `|| result_type == Type::Null` fixes the
+wrong value — and simultaneously changes what the NULL arm delivers, from the sentinel to an
+allocated empty vector. Measured both ways; the arm repair is load-bearing for the tuple chain
+and redundant for the vector one once the promotion is in.
+
+⚠ **I first recorded that second half as an unsettled design call. It is settled, and a
+deeper read of the rules is what settled it** — `(H-RefNull)` in [heap.md](formal/heap.md):
+*"nullref is the reference null — the per-type SENTINEL (E-Null) of a reference type … a real
+value (a reference that points at nothing), not a separate error state."* So a
+collection-typed null IS the sentinel, an allocated empty store is not it, and today's
+behaviour on the null arm is the CORRECT one. The promotion as written would have traded a
+wrong value for a rule violation.
+
+So the remaining work is specified rather than open-ended: **make the non-null arm deliver its
+own value while the null arm still answers `nullref`.** One grep for "collection null" found
+nothing and I called it undecided; the rule was under `(H-RefNull)` in the heap doc, which is
+where a reference-typed null belongs.
+
+⚠ The matrix that located this needed DISTINCTIVE values: a first attempt used `_ => { [] }`
+as the wildcard, which made "the null arm answered empty" and "it fell through to the
+wildcard" the same observation. `[99, 99]` separated them.
+
 #### C — process / skills
 
 | item | state |
