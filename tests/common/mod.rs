@@ -95,25 +95,51 @@ fn resolve_bindable_port(base: u16) -> u16 {
     if port_is_free(canonical) {
         return canonical;
     }
-    if let Some(pids) = holders_owned_by_this_checkout(canonical) {
-        eprintln!("[port] {canonical} held by our own leaked pid(s) {pids:?} — reaping");
-        for pid in pids {
-            // SAFETY: an ordinary kill(2) on a pid we just proved runs this checkout's
-            // own build artifact.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-        }
-        // SIGKILL is asynchronous and SO_REUSEPORT lets a dying listener still accept, so
-        // poll for the port to be genuinely bindable rather than racing onto a stale world.
-        for _ in 0..40 {
-            if port_is_free(canonical) {
-                return canonical;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
+    if reap_our_leaked_holders(canonical) {
+        return canonical;
     }
     let pivot = pivot_port(canonical.min(ephemeral_floor() - 8000)).unwrap_or(canonical);
     eprintln!("[port] {canonical} unavailable and not ours to kill — pivoting to {pivot}");
     pivot
+}
+
+/// Kill this checkout's own leaked holders of `port`, and answer whether the port came
+/// free.  `false` when there were none, when a holder was not ours to kill, or when the
+/// port stayed busy.
+///
+/// UNIX ONLY, and the whole mechanism is: it finds holders with `lsof`, proves ownership
+/// through `/proc/<pid>/exe`, and kills with `kill(2)`.  Windows has none of the three, so
+/// the port there is simply pivoted around instead — which is what the caller already does
+/// for a port that is not ours.
+#[cfg(unix)]
+#[allow(dead_code)]
+fn reap_our_leaked_holders(port: u16) -> bool {
+    let Some(pids) = holders_owned_by_this_checkout(port) else {
+        return false;
+    };
+    eprintln!("[port] {port} held by our own leaked pid(s) {pids:?} — reaping");
+    for pid in pids {
+        // SAFETY: an ordinary kill(2) on a pid we just proved runs this checkout's
+        // own build artifact.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    // SIGKILL is asynchronous and SO_REUSEPORT lets a dying listener still accept, so
+    // poll for the port to be genuinely bindable rather than racing onto a stale world.
+    for _ in 0..40 {
+        if port_is_free(port) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
+/// Windows has no `lsof`, no `/proc` and no `kill(2)`, so there is nothing to reap — the
+/// caller pivots to another port, exactly as it does for a holder that is not ours.
+#[cfg(not(unix))]
+#[allow(dead_code)]
+fn reap_our_leaked_holders(_port: u16) -> bool {
+    false
 }
 
 /// Has this process been reparented to init — i.e. did whoever spawned it die?
