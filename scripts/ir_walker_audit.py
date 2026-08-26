@@ -159,6 +159,18 @@ def audit_walkers():
 # an unpeeled hazard while discriminating on a debug enum.
 DISCRIM = re.compile(r"(?<![A-Za-z0-9_])Value::([A-Za-z]+)\s*(?:\([^)]*\))?\s*(?:=>|\||\)\s*=)")
 
+# A GUARDED arm — `Value::Call(nr, args) if data.def(*nr).name() == "OpGetField" => …`.  The
+# pattern above stops at the `if`, so an arm with a guard was invisible to it.
+GUARDED_ARM = re.compile(
+    r"(?<![A-Za-z0-9_])Value::([A-Za-z]+)\s*(?:\([^)]*\)|\{[^}]*\})?\s*if\b[^\n]*=>"
+)
+
+# A binding form — `if let Value::Call(..) = v`, `let Value::Block(bl) = v else`, `while let`.
+# `Value::unspan`'s rule is about *pattern-matching a specific variant*, and these do exactly
+# that: `pre_eval::create_stack_var` decides on `if let Value::Call(d, args) = v` and falls to
+# `None` for anything else, so a wrapper makes it emit no `&mut var_…` at all.
+BINDING_PAT = re.compile(r"(?:^|\W)(?:if\s+let|while\s+let|let)\s+(?:Some\()?Value::([A-Za-z]+)")
+
 
 def ir_value_variants():
     """The variant names of the IR `Value` enum, read from `src/data.rs`.
@@ -294,7 +306,11 @@ def audit_unspan():
         for name, start, body in functions(path):
             if any(lo <= start <= hi for lo, hi in regions):
                 continue  # a test fn: it constructs its own IR, spans included
-            named = set(DISCRIM.findall(strip_traversal_closures(body))) - {"Span"}
+            code = strip_traversal_closures(body)
+            named = set(DISCRIM.findall(code))
+            named |= set(GUARDED_ARM.findall(code))
+            named |= set(BINDING_PAT.findall(code))
+            named -= {"Span"}
             if named & HOST_ONLY:
                 continue  # a `host::Value` site — that enum has no `Span`
             specific = named & IR_VARIANTS

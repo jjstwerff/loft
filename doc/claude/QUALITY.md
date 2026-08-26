@@ -106,9 +106,10 @@ implementations, often in multiple files."* The response has three parts, and tw
 
 **State in one line:** the checklist is finished, the tooling is in place, and the two dead IR
 variants are removed (B3); what remains is three spec decisions (B), one unrun measurement (C),
-and a branch with **no PR**.  The catch-all backlog is no longer blocked on ranking — `reach`
-says 125 of its 126 sites are code production runs (B6b), so it is a read-one-at-a-time queue
-rather than something a filter will shrink.
+a **20-site `unspan` queue to measure** (B4f, widened in B4g), and a branch with **no PR**.
+The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
+code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
+will shrink.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -421,9 +422,13 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 221 | 211 | **10** |
+| 322 | 302 | **20** |
 
-`scripts/ir_walker_audit.py unspan` re-measures it.
+`scripts/ir_walker_audit.py unspan` re-measures it, and
+`doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
+The figures below the fold were measured against the NARROWER matcher this audit shipped with
+(221 · 211 · 10); B4g says what widening it added and why the backlog grew without anything
+regressing.
 
 **Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
 and conflating them is how a backlog gets "cleared" with nothing fixed:
@@ -515,7 +520,7 @@ and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo 
 `cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
 hits on the same arm; if those are zero too, the probe never ran.
 
-**Exactly 1 of the 10 is gated** (`walk_check`) — so the method holds for the rest, and
+**Exactly 1 of the then-10 was gated** (`walk_check`) — so the method holds for the rest, and
 the bound is worth stating rather than leaving as a general worry. It is only notable because
 it is the top of the list by variant count, and so the natural place to start: the one site
 where a zero was going to be believed.
@@ -638,6 +643,42 @@ only 6 of the 858 corpus programs, and none was in the 60-program native sample.
 interpreter run had already fired 12 times, which is the only reason the zero was not
 believed. **When a site is rare, sample the programs that REACH it, not the first N.** (All
 six are dedicated `*-const-*` regression tests, so the feature is deliberately covered.)
+
+#### B4g — the audit could only see ONE of the three ways to match a variant (2026-08-26)
+
+The `unspan` backlog went from **10 to 20** without anything regressing. `Value::unspan`'s rule
+is about *pattern-matching a specific variant*, and Rust spells that three ways; the audit's
+regex recognised one of them.
+
+| form | example | was counted |
+|---|---|---|
+| a plain arm | `Value::Call(nr, args) => …` | yes |
+| a **guarded** arm | `Value::Call(nr, args) if data.def(*nr).name() == "OpGetField" => …` | no — the pattern stopped at the `if` |
+| a **binding** | `if let Value::Call(d, args) = v` · `let Value::Block(bl) = v else` · `while let` | no |
+
+Population **221 → 322**, unpeeled **10 → 20**. Re-validated the way
+[STABILITY_METHOD](STABILITY_METHOD.md) asks, on the two answers already known: it still flags
+`scopes::walk_check` and still does not flag `find_assigned_vars`.
+
+**Three of the ten are worth naming, because a binding fails SILENTLY where an arm falls to a
+catch-all that at least exists:**
+
+| site | what a wrapper costs it |
+|---|---|
+| `state::codegen::add_const` | `if let Value::Int(nr) = p { self.code_add(…) }` per width, with no `else`. A spanned constant emits **nothing** — the same silent-not-lossy shape as the `build_const_vectors` pair, which loft#1090 had to close by removing the `_` arm entirely |
+| `generation::pre_eval::create_stack_var` | decides on `if let Value::Call(d, args) = v` and `let Value::Block(bl) = v else { return None }`; a wrapper takes the `None`, so the `&mut var_…` a by-ref argument needs is never emitted |
+| `scopes::check_args` | `if let Value::Insert(ops) = a` guarding the A5.6 corruption panic — and it is `#[cfg(debug_assertions)]`-gated, so it is the second entry that cannot be measured by instrumenting an ordinary build |
+
+⚠ **The widened matcher over-reports in the same way the narrow one did**, and the report says
+so rather than implying otherwise: `parse_object` BUILDS IR from tokens instead of traversing
+it, and `def_reshape_refusals` uses `matches!(def.code, Value::Null)` as an empty-body guard.
+Neither is a traversal. Each hit is a measurement to make.
+
+**Why this was found at all.** `reach` needed a "does this site peel `Span`" predicate, so the
+one in `unspan` was extracted and shared — and reading it beside a walker that peels via
+`base.unspan()` without ever naming `Value::Span` is what raised the question of what else the
+pattern could not see. Both modes now call one `peels_span`, so they cannot answer it
+differently.
 
 #### B5 — `match` lowers through four paths and three mishandled a `null` arm (2026-08-25)
 
