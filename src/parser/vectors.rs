@@ -3855,6 +3855,40 @@ impl Parser {
         Some(owned_tp)
     }
 
+    /// The heap local a [`Self::tuple_member_owned_copy`] block was built from — `None` for
+    /// any other value.
+    ///
+    /// That copy exists so a tuple ELEMENT does not become a second name for the member's
+    /// store.  A tuple written as a function's RETURN tail is rewritten to a synthetic
+    /// `__tuple<…>` record whose vector field is filled by `set_field_no_check`, and THAT
+    /// copies into the record's own storage — so on the return path the member is copied into
+    /// a frame-local backing and then copied again out of it.  The rewrite unwraps back to
+    /// this source and lets the record's copy be the only one (loft#1109); the element is
+    /// still copied, so `@FR-T-Cons` holds and the local cannot alias the tuple.
+    ///
+    /// Only the RETURN path may unwrap.  A tuple literal bound to a LOCAL has no second copy
+    /// to fall back on, and dropping the backing there is exactly the aliasing loft#1102
+    /// closed.
+    ///
+    /// One home, two readers, kept adjacent on purpose: the block is BUILT directly above and
+    /// MATCHED here, so its shape and the matcher cannot drift into different files.
+    pub(crate) fn tuple_member_copy_source(&self, val: &Value) -> Option<Value> {
+        let Value::Block(b) = val.unspan() else {
+            return None;
+        };
+        if b.name != "tuple_member_copy" {
+            return None;
+        }
+        // The block ends `OpAppendVector(backing, source, elem_tp); backing`, and the SOURCE is
+        // the only part of it the record's own copy still needs.
+        b.operators.iter().rev().find_map(|op| match op.unspan() {
+            Value::Call(d, args) if self.data.def(*d).name() == "OpAppendVector" => {
+                args.get(1).cloned()
+            }
+            _ => None,
+        })
+    }
+
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {
         // @PLN87 P2.4 — a REBIND vector param (`v = [..]` whole-binding replace on
         // a visible vector param, marked via `ensure_rebind_witness`) DOES get a

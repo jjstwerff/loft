@@ -3077,6 +3077,15 @@ impl Parser {
             } else {
                 elem
             };
+            // loft#1109 — `set_field_no_check` copies a heap member INTO the record's own
+            // storage, so the frame-local backing a tuple literal wraps the member in
+            // (`tuple_member_copy`, loft#1102) is a copy this path immediately copies again.
+            // Unwrapping to the source leaves exactly one copy and the same semantics: the
+            // record still owns its member and the local still cannot alias it.
+            let elem = match self.tuple_member_copy_source(&elem) {
+                Some(src) => src,
+                None => elem,
+            };
             ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
         }
         ops.push(Value::Var(w));
