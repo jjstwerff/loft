@@ -108,8 +108,9 @@ implementations, often in multiple files."* The response has three parts, and tw
 variants are removed (B3); what remains is three spec decisions (B), one unrun measurement (C),
 and a branch with **no PR**.  The `unspan` queue is CLOSED (B4h): all 16 sites are measured,
 gated, or read, with one latent decision change found and no defect.  The catch-all walker
-queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); two are worked,
-one of which yielded two shipped bugs (B4i/B4j).
+queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); three are
+worked, one of which yielded two shipped bugs (B4i/B4j), and the boundary question in B6b
+triages the rest.
 The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.
@@ -1082,6 +1083,29 @@ by comparison, and one returning a VALUE is usually a resolver over a narrower g
 |---|---|---:|---:|
 | `expressions::ir_has_user_call` | the compound-assign once-only hoist, and a re-evaluability check | 210 over 32 programs | **the corpus said 0** |
 | `generation::calls::may_borrow_store` | the argument hoist that keeps two `&mut Stores` borrows apart (E0499) | **151 823** over 214 of 220 | **0** |
+
+**Third site: `scopes::accessor_root_var`, clean — and it yields the reading rule.** Its `None`
+makes `raw_write_to_captured` bail, so the C93 par refusal never fires: the same soundness
+surface as B6's `walk_deep_parent_write`. The corpus is useless here — **7 programs, 47
+arrivals, 0 bails**, only `Var` and one `Call` ever arriving — so the shape was built:
+
+```loft
+fn getv(s: S) -> vector<integer> { s.v }
+fn w(s: S) -> integer { getv(s)[0] = 99; s.v[0] }   // base is a LIFTED container
+for e in rows par(r = w(e), 2) {}
+```
+
+The bail fires (`kind=Call`) **and the write does not reach parent state** — `rows` is
+unchanged — while the control `s.v[0] = 99` is still refused with the C93 error. So there was
+nothing to refuse.
+
+⚠ **The rule that makes 52 remaining sites triage rather than grind: does the fallback encode a
+SEMANTIC BOUNDARY, or is it just a shape nobody listed?** `accessor_root_var`'s does — a link
+that is neither `Var` nor `OpGet` produced a NEW value, so identity into parent state is lost
+there and no write through it can reach the caller. `may_borrow_store`'s arms already name
+every wrapper that can carry a call. `ir_has_user_call`'s did **not**: a call is a call wherever
+it sits, so `Block` hid one with no boundary to justify it — which is why that one was the bug
+and these two are not. Ask the boundary question first; measure only where the answer is no.
 
 ⚠ **Those two zeroes are not the same zero, and reading them as equal would have missed the
 bug.** `ir_has_user_call`'s 210 arrivals are thin, and only leaves and `Call` ever reached it —
