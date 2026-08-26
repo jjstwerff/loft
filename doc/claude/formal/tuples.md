@@ -247,6 +247,15 @@ Bounded by the oracle note below.
   place the native layout stops being inline bytes, so it is exactly where a layout differential
   earns its keep. Widening `17-tuples-recursion` to a heap element type is the fix; until then
   the zero above is bounded by what the oracle covers.
+- ⚠ **`(T-Cons)` says nothing about OWNERSHIP, and the third element type shows why that is a
+  gap rather than a silence.** Given a heap LOCAL, a tuple literal stores its handle while a
+  struct literal and a vector literal both COPY (`t = (vl, 9)` sees a later `vl[0] = 41`;
+  `S { v: vl }` and `[vl]` do not, both backends). So a tuple element is aliased without the
+  `&` that [binding.md](binding.md) `B-Copy` says aliasing requires — while `(T-Ref-El)` above
+  REFUSES a collection element in the `&(…)` form that asks for it. Which of the two answers is
+  the rule is an open design question (**loft#1102**); either way `(T-Cons)` owes a clause, and
+  the `OPEN: 0` above does not cover this because the oracle carries no collection element
+  either.
 
 ---
 

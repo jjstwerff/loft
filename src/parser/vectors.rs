@@ -535,7 +535,26 @@ impl Parser {
             {
                 self.expected = tuple_members[0].base().clone();
             }
-            let t = self.expression(val);
+            // An assignment's destination variable is the accumulator a heap-building RHS
+            // adopts (#501's watermark reuse, and `parse_append_vector`'s `orig_var`).  A
+            // parenthesised expression IS that whole value, so adopting is right there —
+            // but a tuple MEMBER is not, and member 0 is the one parsed before the `,` can
+            // say which this is.  Adopting it typed the destination as the MEMBER
+            // (`t = ([10, 20], 9)` → "Variable 't' cannot change type from vector<integer>
+            // to (vector<integer>, integer)", refusing a legal program) and, where the
+            // member built through the append path instead, left the tuple element reading
+            // null with no diagnostic at all (`t = (x + y, 9)`).  Ask the lexer first and
+            // give a member its own temp; the built value returns on the normal channel, so
+            // everything downstream is unchanged.
+            let divert = matches!(val, Value::Var(_)) && self.lexer.peek_tuple_literal();
+            let mut member0 = Value::Null;
+            let t = if divert {
+                let t = self.expression(&mut member0);
+                *val = member0;
+                t
+            } else {
+                self.expression(val)
+            };
             if seeding {
                 self.expected = Type::Unknown(0);
             }

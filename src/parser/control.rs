@@ -2999,6 +2999,12 @@ impl Parser {
     /// typed-null sentinel a bare `null` lowers to when coerced to a scalar (`OpConv*FromNull`).
     /// Descends `Block`/`Insert`/`Span` to the tail. Used so an `if`/`match` whose branch is a
     /// bare null widens the result to `Optional(τ)` under DN1 (the absorbed-branch-null fix).
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn branch_yields_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -3029,6 +3035,12 @@ impl Parser {
     /// its own nullability in `a.tp` (folded into `result_type` by the arm-join), and
     /// descending into its lowered chain would hit its synthesised unreachable
     /// `OpConv*FromNull` default and falsely widen (p54).
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn arm_yields_direct_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -9994,6 +10006,12 @@ impl Parser {
     /// not a bare `Value::Null`, so both forms count. A nested `if` arm is NOT null
     /// — that's how enc's nested match-default is distinguished from maybe's direct
     /// `else null`.
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn arm_is_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,

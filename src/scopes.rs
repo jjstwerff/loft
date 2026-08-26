@@ -7685,6 +7685,18 @@ impl Scopes {
     }
 }
 
+/// Does this return expression's terminal value reduce to `null` — a bare `Value::Null`
+/// or the reference sentinel `null_nr` names?
+///
+/// Descends `Block`/`Insert`/`Span` to the tail.  A nested `if` is NOT descended: an arm
+/// that IS null and a branch that merely CONTAINS one are different answers, and only the
+/// first belongs to a terminal — `return_has_null_arm` is the walker that asks the second.
+///
+/// A `Return`/`Drop` wrapper IS descended, because this is asked about a return
+/// EXPRESSION and the wrapper is the thing being examined.  The `parser::control`
+/// siblings (`branch_yields_null`, `arm_yields_direct_null`, `arm_is_null`) ask the same
+/// null question about what an ARM hands to a JOIN — where a `return` hands it nothing —
+/// and stop at the wrapper.
 fn is_null_terminal(expr: &Value, null_nr: u32) -> bool {
     match expr.unspan() {
         Value::Null => true,
@@ -7852,6 +7864,12 @@ fn return_has_non_source_arm(expr: &Value, sources: &[u16]) -> bool {
 ///
 /// `null_sentinel_nr` is `OpNullRefSentinel`'s def number (resolved by the
 /// caller, which holds `data`).
+///
+/// A `Return`/`Drop` wrapper IS descended, because this is asked about a return
+/// EXPRESSION and the wrapper is the thing being examined.  The `parser::control`
+/// siblings (`branch_yields_null`, `arm_yields_direct_null`, `arm_is_null`) ask the same
+/// null question about what an ARM hands to a JOIN — where a `return` hands it nothing —
+/// and stop at the wrapper.
 fn return_has_null_arm(expr: &Value, null_sentinel_nr: u32) -> bool {
     match expr.unspan() {
         Value::Null => true,

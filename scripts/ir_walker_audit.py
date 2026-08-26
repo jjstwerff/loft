@@ -43,6 +43,14 @@
 #             functions that were themselves only called from tests — so this walks the
 #             call graph transitively from each `[[bin]]`'s `main`.
 #
+#   spellings One notion, two IR spellings.  A PROJECTION is `OpGetField(Var(b), …)` *or*
+#             `Value::TupleGet(b, i)` — the same language-level notion, one spelled as a
+#             CALL and one as a `Value` variant carrying its base as a var NUMBER.  A site
+#             that resolves the notion by OP NAME cannot see the tuple half, and no test
+#             can tell: the shape simply never arrives.  Reports who resolves a projection
+#             op by `def_nr` (or via `is_projection_op`) and whether they also carry a
+#             `TupleGet` arm.
+#
 #   dead      `producers` INTERSECTED with a census of what the front end actually emits
 #             over the 854-program corpus.  Neither half is an oracle and the failures go
 #             opposite ways, which is the whole reason this mode exists: `Loop`/`Single`/
@@ -56,7 +64,8 @@
 # doc/claude/formal/IMPLEMENTATIONS.md.
 #
 # Usage:  python3 scripts/ir_walker_audit.py [walkers|producers|unspan|reach|dead|both]
-#         `reach` needs no binary; `dead` needs a built binary (target/debug/loft, or $LOFT_BIN) and takes ~1 min.
+#         [spellings]
+#         `reach` and `spellings` need no binary; `dead` needs a built binary (target/debug/loft, or $LOFT_BIN) and takes ~1 min.
 
 import glob
 import os
@@ -723,6 +732,49 @@ def audit_reach():
         print(f"  {tag} {guard} {site:<40} {name:<30} skips {shown:<26} (+{others} other)")
 
 
+PROJ_OPS = ("OpGetField", "OpGetVector", "OpGetText", "OpGetChar")
+PROJ_LOOKUP = re.compile(
+    r'def_nr\("(' + "|".join(PROJ_OPS) + r')"\)|\bis_projection_op\s*\('
+)
+LINE_COMMENT = re.compile(r"//.*")
+
+
+def audit_spellings():
+    """One notion, two IR spellings — who sees only the call-shaped one?
+
+    A PROJECTION is `OpGetField(Var(b), …)` *or* `Value::TupleGet(b, i)`: the same
+    language-level notion, one spelled as a CALL and one as a `Value` variant carrying its
+    base as a var NUMBER.  A site that resolves the notion by op name therefore cannot see
+    the tuple half, and no test can tell — the shape simply does not arrive.
+
+    Reports every function that resolves a projection op by `def_nr` (or calls
+    `is_projection_op`), and whether it also carries a `TupleGet` arm.  Comments are
+    stripped first, so a doc line NAMING the variant does not read as handling it.
+
+    ⚠ Per FUNCTION, so a pair that splits the question — one function matching the call and
+    a caller carrying the tuple arm — reads as a miss.  Every hit is a site to READ, and the
+    verdict is whether the fallback encodes a semantic boundary (QUALITY.md B6d), not
+    whether the arm is present.
+    """
+    rows = []
+    for path in rust_files():
+        for name, start, body in functions(path):
+            code = LINE_COMMENT.sub("", body)
+            if not PROJ_LOOKUP.search(code):
+                continue
+            rows.append((f"{rel(path)}:{start}", name, "Value::TupleGet" in code))
+    seen = len(rows)
+    handled = sum(1 for r in rows if r[2])
+    print(f"functions resolving a projection by OP NAME : {seen}")
+    print(f"  ALSO handling the `TupleGet` spelling     : {handled}")
+    print(f"  seeing only the call spelling             : {seen - handled}")
+    print()
+    print("  A hit is a site to READ: ask whether its fallback encodes a semantic boundary")
+    print("  (a tuple element cannot reach here) or is just a shape nobody listed.")
+    for site, name, ok in sorted(rows, key=lambda r: (r[2], r[0])):
+        print(f"  {'TupleGet' if ok else '  --    '}  {site:<40} {name}")
+
+
 mode = sys.argv[1] if len(sys.argv) > 1 else "both"
 if mode in ("walkers", "both"):
     print("== walkers ==")
@@ -741,3 +793,6 @@ if mode == "reach":
 if mode == "dead":
     print("== dead variants (no producer AND absent from the corpus) ==")
     audit_dead()
+if mode == "spellings":
+    print("== spellings (who sees only the CALL half of a projection?) ==")
+    audit_spellings()

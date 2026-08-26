@@ -115,7 +115,12 @@ FALLBACK is right.  One site (`body_has_buffer_return`) is handed to the sibling
 than worked, because its machinery is in flight there.
 The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
-will shrink.
+will shrink.  **A SECOND queue now runs beside it (B6g), and it is the sharper one:** the
+catch-all list asks who forgot a variant, while `spellings` asks who can only see one of a
+notion's two IR spellings — 18 functions resolve a projection by OP NAME and **2** of them
+handle `TupleGet`.  Following it produced three defects in one pass, two fixed here and one
+filed as a design question (**loft#1102**: a tuple literal ALIASES a heap local while a struct
+literal and a vector literal copy it).
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -1327,6 +1332,142 @@ the sentinel the DN1 pair cannot see — a silent null into a non-null `text`. I
 `fn pick(b: boolean) -> text { if b { "hi" } else { null } }` warns exactly as the `integer`
 version does, because a text null lowers to `OpConvTextFromNull` like every other scalar.
 
+#### B6g — the class B6e named, screened: 18 functions resolve a projection by OP NAME, two see the other spelling (2026-08-26)
+
+B6e's finding was not "a walker forgot a variant" but **one language-level notion with two IR
+spellings, only one of which is a `Call`** — a projection is `OpGetField(Var(b), …)` *or*
+`Value::TupleGet(b, i)`, and no call-shaped pattern can see the second. That is a mechanical
+question, so it was asked mechanically: every site that names a projection op by def-number,
+against whether its enclosing function handles `TupleGet` at all.
+
+**18 functions across six files resolve a projection by op name — by `def_nr("OpGet…")` or through
+`is_projection_op`. Two of them handle the tuple spelling: `return_field_base_var` and
+`return_projects_into_local`, the two B6e had just fixed.** The screen reproduces the answers
+already found by hand, which is what makes the other sixteen worth reading.
+
+| functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
+|---:|---:|---:|
+| 18 | **2** | 16 |
+
+(`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
+so the row cannot go stale — the same arrangement the `unspan` table has.)
+
+
+Following it produced three defects, and the first is the one worth the section:
+
+| what the screen pointed at | what was there |
+|---|---|
+| `classify_vec_bind` — `binding.md` names it *"where the parser asks"* the own-vs-borrow question — has a struct leg and no tuple leg | not a missing leg: **the tuple never OWNS its element**, so the base really is borrowed and the bind really is a view — **loft#1102** |
+| the tuple-literal parse, reached while building the probes | a member adopted the assignment's destination as its build accumulator — **fixed** |
+| `emit_tuple_put_ops` + two siblings | the five keyed collections were missing from a hand-spelled DbRef list — an ICE — **fixed** |
+
+**loft#1102 — a tuple literal ALIASES a heap local; a struct literal and a vector literal copy
+it.** `t = (vl, 9)` stores `vl`'s handle, so the element and the local are two names for one
+store; `s = S { n: 1, v: vl }` and `vv = [vl]` both copy, both backends. Everything downstream
+follows from it: `t.0` reads as a projection off a BORROWED base, so `c = t.0; c[0] = 41` writes
+through two levels of binding — while `lost-write` warns on that exact line that *"a whole-value
+bind COPIES the heap value (C86), so the mutation lands in the copy"*. The write is not lost; it
+lands in `vl`.
+
+⚠ **The measurement nearly went out as the wrong finding.** The first matrix scored `c = t.0`
+against `B-Copy` and read five failures — including the three CALL-spelled controls. All five are
+correct: `binding.md` states five clauses, and a struct-typed projection (`B-View`), an index read
+and a nested field read (`B-View-Depth`) are all views by rule. What survived re-scoring against
+the actual clause list was ONE cell — a one-level COLLECTION projection off an OWNED base — and
+then even that turned out to be a symptom rather than the defect. This is the third time the
+incomplete-rules-doc trap has been walked into from this thread; the cure that worked was reading
+`binding.md`'s clause list before believing the matrix, not after.
+
+**`formal/tuples.md` reads `OPEN: 0` and does not cover this**, which is the oracle caveat its own
+deviation note already carries: its corpus is `(integer, integer)`-shaped, so neither `text`
+(loft#1004/#1005) nor a collection element is inside what that zero measures. And
+`tests/scripts/bind-copies-or-views-the-whole-boundary.loft` — the file whose header says *"ask it
+rather than re-deriving"* — has two tuple cells, both **off a BORROWED base**. The owned-base
+tuple axis is the one that file never varies, and it is the axis the defect is on.
+
+##### The accumulator a tuple member should never have adopted
+
+A heap-building RHS adopts the assignment's destination variable as its build accumulator (#501's
+watermark reuse, `parse_append_vector`'s `orig_var`). A parenthesised expression IS that whole
+value, so adopting is right there. A tuple MEMBER is not — and member 0 is parsed before the `,`
+can say which of the two this is.
+
+So `t = ([10, 20], 9)` typed `t` as the MEMBER and then refused the retype it had just caused:
+*"Variable 't' cannot change type from vector<integer> to (vector<integer>, integer); use a new
+variable name or cast with 'as'"* — a legal program refused, naming a cure that cannot work. The
+declared spelling reported the same collision with the two types swapped. Where the member built
+through the append path instead (`t = (x + y, 9)`), there was no diagnostic at all: `t.0[1]`
+answered `null`.
+
+Fixed by asking the lexer first — `peek_tuple_literal` — and giving a member its own temp. Value
+position and argument position have no destination to adopt and were always correct; they are the
+controls. The concat member now lands on the P103 refusal every other position already gave it, so
+a silent null became an error that names its workaround. Guard:
+`tests/scripts/a-tuple-member-is-not-the-assignment-destination.loft`, thirteen cells.
+
+⚠ **The look-ahead itself took two goes, and both failures were the same fact about `revert`:
+it restores the token STREAM and nothing else.** Written as `recover_to(&[","])` it walked to
+end-of-input on an unclosed `(` — and because a replayed token deliberately leaves `position`
+where the scan reached, the next diagnostic's caret moved from the offending line to the end of
+the function (`error_messages::baselines_are_locked_in`, which is what that gate is for).
+Restoring `position` by hand is worse, not better: during a replay it does not advance, so the
+caret then lands short. The bound is the fix — stop at a depth-0 `;`, so the scan is
+statement-local and the drift cannot leave the statement. Then the suite found the second one: a
+string may carry an interpolation HOLE, and `in_format_expr` / `open_strings` / the backtick
+dedent stack are not restored either, so crossing one and coming back left the lexer describing a
+string it was no longer inside and the enclosing group never closed. Stop BEFORE a string and
+answer "not a tuple" — a text member does not adopt the destination, so that answer costs
+nothing. **A look-ahead over this lexer is safe only while it stays inside one statement and out
+of a string**, which is now written on `peek_tuple_literal` where the next caller will read it.
+
+##### The carve-out comment was the map, again
+
+`data::is_dbref`'s doc says what happens when its list is spelled inline: *"the three obvious
+kinds (`Reference` / `Vector` / struct-`Enum`) get written and the five keyed collections are
+forgotten … A short list is not a compile error anywhere — it routes a handle down the scalar
+path — so call this function rather than restating it."*
+
+Three of the four tuple emitters spelled exactly that short list, so `hash<S[n]>` in a tuple
+aborted the compiler with `emit_tuple_put_ops: unsupported elem Hash(710, ["n"], …)`. The fourth,
+`emit_tuple_var_push_recursive`, names every kind — which is why such a tuple could be read back
+but never written. **The family had already drifted once the other way**, and its own comment says
+so: loft#808 put `character` and payload-less `enum` in three of the four and left null-init
+short. Two drifts, opposite directions, one family — so the fix is the shared predicate, not a
+fourth copy of the list. Guard:
+`tests/scripts/a-tuple-element-of-every-dbref-kind.loft`, eight cells over four keyed kinds plus
+destructuring.
+
+⚠ `emit_tuple_var_push_recursive` keeps its own list rather than delegating, for a reason and with
+one loose end. The reason: its `Reference`/struct-`Enum` arm registers a known type before the op,
+which the collection arm does not, so the two are not one arm. The loose end: its list also carries
+`Type::Iterator`, which `is_dbref` does not — and neither does `element_stack_size`, the layout
+authority `is_dbref`'s own doc names. So the outlier is the push walker, not the predicate.  Left
+as a NOTE and not a change: nothing here builds a tuple with an iterator element, and an arm
+removed on that reasoning alone is a guess in the other direction.
+
+⚠ The wider sweep is a queue, not a rewrite. A four-line-window scan of `src/` finds **80 places
+across 24 files** where the three obvious kinds appear together with no keyed collection in sight —
+an OVER-count by construction, since the window is lexical and several of them are not the
+membership question at all. It sizes the backlog (dozens, not a handful) and ranks nothing. The
+tuple family earned its fix by having a bug AND a prior drift in the same four functions; the same
+evidence has to be found for each of the rest, one at a time.
+
+##### B6f's owed sentences are written
+
+The `Return`/`Drop` axis none of the five null-tail walkers documented now says, in each of them,
+why its answer is right: `parser::control`'s three are asked what a value hands to a JOIN, where a
+`return` hands it nothing, and stop at the wrapper; `scopes`' two are asked about a return
+EXPRESSION, where the wrapper is the subject, and pass through it. `is_null_terminal` had no doc
+comment at all and now has one.
+
+##### loft#1101's deferral, re-measured
+
+Still holds. The sibling checkout's last four commits are all in the collection-tail-return
+machinery (`control.rs`, `scopes.rs`) — *"a collection return's buffer belongs to the caller",
+"every value arm of a null-arm collection tail delivers into the caller's buffer"* — which is
+where #1101 is decided. `classify_vec_bind` is not in it, which is why the tuple-member and
+`is_dbref` fixes above were safe to take from here.
+
 #### C — process / skills
 
 | item | state |
@@ -1334,7 +1475,7 @@ version does, because a text null lowers to `OpConvTextFromNull` like every othe
 | a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
-| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, five modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
+| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, six modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
 
 #### B2 — open, and the owner's call
 
