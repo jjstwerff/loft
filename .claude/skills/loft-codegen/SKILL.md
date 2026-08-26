@@ -171,6 +171,32 @@ If you cannot write the sentence, that is the signal to probe the omitted shapes
 ship the arm. `python3 scripts/ir_walker_audit.py reach` lists these walkers, marks the ones
 whose fallback answers no, and ranks by production reachability.
 
+## One notion, two IR spellings — match the NODE, not the op
+
+A `Value` matcher that identifies a construct by an OP NAME can only see the construct's
+call-shaped spelling. Where the same language notion also exists as a `Value` VARIANT, every
+such matcher silently excludes it, and no grep for the op name will show the gap.
+
+The measured case is **projection**. `b.items` and `vv[0]` lower to
+`Call(OpGetField|OpGetVector, [base, …])`; `t.0` lowers to `TupleGet(base, i)`, which carries
+its base as a var NUMBER and is not a `Call` at all. The two return gates that decide whether a
+returned projection must be COPIED into the caller's buffer both matched the call spelling only,
+so a tuple-element tail renamed the TUPLE local onto a vector-shaped `__retbuf` — the prologue
+cleared a stack tuple slot as a vector, the tail became a discarded statement, the function
+returned null, and `--native` would not compile the result. Even the canonical helper cannot
+express the other spelling: `use_analysis::is_projection_op(data, d_nr)` takes a def number, and
+a projection that is not a call has none.
+
+The variants that carry a var number outside a `Value::Var` node are the ones to check against
+any "does this mention / project from variable X?" walker: `TupleGet`, `TuplePut`, `CallRef`,
+`FnRef`, `FnRefDnr`, `Set`, `Iter`. `scopes::dominance_walk` names three of them and is the
+model; the two Plan-57 gates beside it name none and are clean only because the corpus never
+puts a holder there (651 113 arrivals, 2 hits, both a write to the target).
+
+So when adding or auditing such a matcher, ask: **is there a second spelling of this notion?**
+If the answer is yes, match the node kind, and put both spellings in one predicate rather than
+adding the missing arm at the site that happened to break.
+
 ## Stop conditions (revert, don't push through)
 
 - You're editing the compiler but cannot point at the working bytecode you intend to

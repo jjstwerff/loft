@@ -108,9 +108,9 @@ implementations, often in multiple files."* The response has three parts, and tw
 variants are removed (B3); what remains is three spec decisions (B), one unrun measurement (C),
 and a branch with **no PR**.  The `unspan` queue is CLOSED (B4h): all 16 sites are measured,
 gated, or read, with one latent decision change found and no defect.  The catch-all walker
-queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); **six are
-worked and five more triaged by the boundary question**, one of which yielded two shipped
-bugs (B4i/B4j).  B6d has the reading rule that ranks the rest: ask whether the doc says why the
+queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); **eight are
+worked and eight more triaged by the boundary question**, two of which yielded shipped
+bugs (B4i/B4j, and the projection pair in B6e).  B6d has the reading rule that ranks the rest: ask whether the doc says why the
 FALLBACK is right.  One site (`body_has_buffer_return`) is handed to the sibling checkout rather
 than worked, because its machinery is in flight there.
 The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
@@ -1236,6 +1236,96 @@ a fifth hit; its caller `guard_escapes` handles `Return(v)` and passes the alrea
 payload, so the helper never sees a wrapper. A predicate that takes the PAYLOAD rather than the
 node is indistinguishable, in text, from one that takes the node and forgot a case — the same
 over-reporting the `unspan` audit had, and the reason each hit is read before it is believed.
+
+#### B6e — the queue's own predicate was the bug: a projection that does not look like one (2026-08-26)
+
+`Value::TupleGet` is a projection — `t.0` reads a container out of a local exactly as
+`OpGetField(Var(b), …)` does. It is a `Value` VARIANT carrying its base as a var NUMBER, so
+**no call-shaped pattern can see it**, and the two gates that decide whether a returned
+projection must be COPIED into the caller's buffer are both call-shaped:
+`return_field_base_var` (the #425 rung that suppresses the NRVO rename) and
+`return_projects_into_local` (the H12 predicate the vector return arm asks). Both are on the
+ranked `no!` queue.
+
+So a function whose tail projects a vector out of a tuple local renamed **the tuple** onto a
+vector-shaped `__retbuf`: the prologue cleared a stack tuple slot as a vector, the tail became a
+discarded statement, and the function returned null. The interpreter answered the right elements
+off the eval stack and then panicked on a corrupt reference at exit; `--native` refused to compile
+the program at all (parameter typed `DbRef`, assigned a `(DbRef, i64)`).
+
+```loft
+fn make() -> vector<integer> { v = [11, 22, 33]; t = (v, 7); t.0 }
+```
+
+Fixed by giving both predicates the tuple spelling (plus the chained `t.0.items` base). The
+lowering is now the canonical one the working siblings already produced — clear the caller's
+buffer, append into it, free the local store, return the buffer — on both backends. Guard:
+`tests/scripts/return-a-tuple-element-that-is-a-vector.loft`, falsified against a pre-fix binary.
+
+**This is the FOURTH sibling of one defect, and the third one's comment says so.** `#425` fixed
+the struct-field form, `H12` the vector-element form, `#488` the projection rooted at an inline
+call's temporary — *"the third sibling of the same defect, after the struct (#425) and element
+(H12) forms"*, in the code, two lines above the predicate that could not see a tuple. The class is
+the mechanism, and the mechanism here is not "a walker forgot a variant": it is that **one
+language-level notion — a projection — has two IR spellings, and only one of them is a `Call`.**
+Anything matching the call spelling silently excludes the other.
+
+⚠ **The churn is what made the measurement real.** The first probe of every cell printed the right
+values, so the boundary looked like "only the implicit tail is broken". Adding a loop that
+recycles freed records (the `941` idiom) moved the failure to two more cells that had "passed" by
+reading their own freed bytes — including the explicit `return t.0;` I had recorded as CLEAN and
+was about to write into the test as a control. A dangling read is not an absent one.
+
+⚠ **And it split the finding in two.** With the churn in place, BINDING the projection first
+(`e = t.0; e`) still hands back a view — and so does the vector-element spelling of it
+(`e = vv[0]; e`, which answers an EMPTY vector, both backends). That shape is not tuple-specific:
+the gates read the returned EXPRESSION, and a binding puts the fact in the DEPS instead, where
+only the struct path has a leg for it (`return_views_local`, the #306 case). Filed as **loft#1101**
+(`silent-wrong`, `wa:clean` — copy out with `o = []; o += t.0; o`, verified on both backends),
+not folded into this fix: it is the same question one level up, in machinery the sibling checkout
+is actively rewriting.
+
+**How the site was reached, because it is the queue's first hit from a non-fallback route.** Not
+by reading the ranked list top-down. The var-identity class — `TupleGet` / `TuplePut` / `FnRef` /
+`FnRefDnr` / `CallRef` / `Set` / `Iter` carry a var NUMBER outside a `Value::Var` node — came from
+reading `holder_retained` and `escapes_value`, the two Plan-57 soundness gates. Measured over the
+896-program corpus: **651 113 arrivals at those two fallbacks, every program reaching them**, the
+carrier shapes arriving 6 943 times, and the carried var naming the target exactly **twice** —
+both a `Set(target, …)`, which is a WRITE to the target rather than a hand-out, so both are
+correct. Those two gates are clean, with the reach to make that a believable zero. The class,
+followed one step further into the return path, is where the defect was.
+
+#### B6f — five null-tail walkers, three questions, and the axis none of them documents (2026-08-26)
+
+Working the ranked queue turns up a FAMILY rather than a site: five walkers answering
+*"does this yield null at its tail?"*, none deriving from another.
+
+| walker | null spelling it counts | `If` | `Return`/`Drop` |
+|---|---|---|---|
+| `control::branch_yields_null` | `OpConv*FromNull` | descends, either arm | no |
+| `control::arm_yields_direct_null` | `OpConv*FromNull` | **no** (documented) | no |
+| `control::arm_is_null` | `OpNullRefSentinel` | **no** (documented) | no |
+| `scopes::is_null_terminal` | `OpNullRefSentinel` | **no** (documented) | **yes** |
+| `scopes::return_has_null_arm` | `OpNullRefSentinel` | descends, either arm | **yes** |
+
+Two of the three axes are deliberate and written down: the `If` axis separates "an arm that IS
+null" from "a branch that CONTAINS one" (descending would catch a `match`'s synthesised
+unreachable default and falsely widen), and the spelling axis follows the type — DN1 only fires
+for non-null SCALARS, whose bare `null` lowers to `OpConv<T>FromNull`, while the reference
+sentinel is a heap value's. **The `Return`/`Drop` axis is documented nowhere**, in any of the
+five: the two `scopes` walkers pass through those wrappers, the three `control` ones do not.
+
+Both groups are right, for a reason neither states: `control`'s are asked about a branch's value,
+where a `return` yields nothing to the join, and `scopes`' are asked about a return EXPRESSION,
+where the wrapper is the thing being examined. That is the B6d rule paying out in the split
+direction — silence about the unlisted shapes is where to spend a probe, and here the probe says
+the code is right and the docs owe a sentence.
+
+**The one cell that looked like a hole was measured, not argued.** `is_non_null_scalar` includes
+`Type::Text`, and text is DbRef-backed, so a text branch's `null` looked like it should lower to
+the sentinel the DN1 pair cannot see — a silent null into a non-null `text`. It does not:
+`fn pick(b: boolean) -> text { if b { "hi" } else { null } }` warns exactly as the `integer`
+version does, because a text null lowers to `OpConvTextFromNull` like every other scalar.
 
 #### C — process / skills
 
