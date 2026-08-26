@@ -1471,13 +1471,56 @@ why its answer is right: `parser::control`'s three are asked what a value hands 
 EXPRESSION, where the wrapper is the subject, and pass through it. `is_null_terminal` had no doc
 comment at all and now has one.
 
-##### loft#1101's deferral, re-measured
+##### loft#1101 — landed in the sibling, and the shared-cause claim it falsified
 
-Still holds. The sibling checkout's last four commits are all in the collection-tail-return
-machinery (`control.rs`, `scopes.rs`) — *"a collection return's buffer belongs to the caller",
-"every value arm of a null-arm collection tail delivers into the caller's buffer"* — which is
-where #1101 is decided. `classify_vec_bind` is not in it, which is why the tuple-member and
-`is_dbref` fixes above were safe to take from here.
+Deferring it was right: the sibling checkout was inside that machinery and has since fixed it
+(`56c6374e`, register entry **D-own-10**).
+
+⚠ **What is worth carrying here is that my reading of the RELATIONSHIP was wrong, and one cell
+killed it.** Having found the tuple half first, I offered #1102 as the common cause under #1101
+— if a tuple owned its element there would be no freed view to hand back. The sibling answered
+with a program that has no tuple in it at all:
+
+```loft
+fn f() -> vector<integer> { vv = [[11, 22, 33], [44, 55]]; e = vv[0]; e }   // len=0
+```
+
+Re-measured here on this branch: `len=0`. Same defect, same fix site, and the suspected cause
+structurally absent — which is [DEBUG.md]'s rule for separating causes, applied to a CAUSE claim
+rather than to a repro. A shared-cause story is a hypothesis like any other, and the falsifier is
+the cell the suspected cause cannot be in. The tuple spelling was one of four, beside `e = vv[0]`,
+`e = s.items` through the lift temp, and an `if`-arm binding.
+
+**The real cause is the one this thread keeps meeting from the other side: a dep list read as an
+ownership answer.** `fresh_owned_vector_deps` and the promotion ladder took non-empty deps to mean
+"owns a backing store", and a view reads non-empty too. `formal/ownership.md` @FR-O-Proxy already
+sharpens it into three meanings — empty; a dep on the binding's OWN mint (`__vdb_N`, owns one);
+and a dep on ANOTHER LOCAL (borrows it) — and reading the third as the borrow it is leaves the
+candidate on `Bind`, which copies into a separate `__retbuf`.
+
+Two details from that fix generalise to anything reading deps in the parser, and both are worth
+having before the next one:
+
+* **Skipping the mint is not a refinement, it is what makes the verdict PASS-STABLE.**
+  `vector_db` adds the mint dep on pass 2 only, while a borrow dep is present on both. This
+  verdict decides whether the function takes a hidden buffer argument, so bare non-emptiness
+  moves the ABI between passes — which is what loft#1099 cost.
+* **One shape has no dep at all.** `e = mk().items` borrows a `__lift_N` whose container dep
+  loft#882/#889 record at the SUBSCRIPT only, so that leg has to read the DEFINING STATEMENT
+  instead.
+
+**The two fixes compose rather than collide.** `t.0` projects into `t`'s store and `t` is a local
+this function frees — true whether the element was aliased from `vl` or copied into `t` — so the
+sibling's rung still fires on the tuple spelling after #1102 lands, and #1102 does not make it
+redundant. Nothing of theirs touches `ConstructOps` / `move_elide` / `construct_fresh_rewrite`.
+
+⚠ **Rebase note:** `src/parser/control.rs` has moved under this branch — `56c6374e` adds
+`var_is_mint`, `expr_borrows_local`, `var_defining_expr`, `var_defined_by_projection`,
+`var_views_local`, `tail_ret_view_local`, a rung in `classify_ret_promotion_inner`'s
+`allow_rename` and an `.or_else` in `tail_ret_owned`; loft#1100 lands in the same file next and
+REMOVES the `do_if_acc` nullability term in favour of an `(N-Store)` report before the accumulator
+rewrite (`calls.md` D-call-5). The doc-comment-only edits to the five null-tail walkers above
+should merge clean; the `do_if_acc` block itself has not.
 
 #### C — process / skills
 
