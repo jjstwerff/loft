@@ -117,8 +117,56 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-OPEN: **0** (2026-08-23) — D-tup-2 closed the day the rule it needed was written down.
-Bounded by the oracle note below.
+OPEN: **0** (2026-08-26) — D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
+rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
+note was warning about**: it was found by giving an element a HEAP type, which this doc's
+all-`(integer, integer)` oracle cannot express, so the zero above never covered it.
+
+> **D-tup-3 — OPENED AND CLOSED (2026-08-26, loft#1104) — a tuple element is a projection that
+> the ownership machinery could not read as one.** `(T-Proj)` says `t.i` is element `i`, and for a
+> heap element that means a `DbRef` into the store the element lies in — the same thing `b.s` and
+> `v[0]` are. The @P290 borrow-vs-owned bracket could not see it, so a call whose return may
+> borrow the argument kept its conservative answer and LEAKED one record per call, both backends:
+>
+> ```loft
+> fn pick(s: S, c: boolean) -> S { if c { s } else { mk() } }
+> fn f(c: boolean) -> integer { s = S { a: 7 }; t = (s, 9); r = pick(t.0, c); r.a }   // 1 record / call
+> ```
+>
+> `pick(q, …)`, `pick(b.s, …)` and `pick(v[0], …)` were all clean. The bracket protects a store by
+> naming it through a variable whose VALUE is a `DbRef`, and `view_root_slots` walks a projection
+> chain to that variable using `is_projection_op` — which is keyed on `OpGetField` / `OpGetVector`.
+> A tuple element is neither: it is `Value::TupleGet`, not a `Call` at all.
+>
+> **Two cures are unavailable, and which ones is the useful part.** Widening the op list cannot
+> reach a shape that is not an op. Naming the TUPLE cannot work either — the bracket protects the
+> store a `DbRef` variable points at, and a tuple is not a `DbRef`; its ELEMENT carries the store.
+> So the argument is bound to a temp typed as the tuple element itself, deps and all, which is
+> exactly the hand-written spelling that was always clean (`e = t.0; pick(e, …)`) and emits the
+> same code — the argument loft#1029 used for the inline-construction family, one spelling over.
+> Closed in `Scopes::scan_args` (`tuple_elem_borrow_source`), gated exactly as its sibling is: a
+> heap-carrying element, at a `returns_borrowed_view` callee, and nothing else — binding an
+> argument reorders it relative to its left-hand siblings, which is a cost worth paying only where
+> the alternative is a leak.
+>
+> ⚠ **The class, and this is its fourth instance in a week: one notion, two spellings, one looked
+> for.** A projection resolved by OP NAME cannot see the `TupleGet` spelling; the same blindness
+> reaches `Parser::expr_borrows_local` (latent there — the deps leg covers what the op list
+> cannot). The blindness is not findable from the symptom: searching for the spelling you DO match
+> returns every site that gets it right, and the sites that get it wrong contain nothing to search
+> for. `scripts/ir_walker_audit.py spellings` counts the class — 18 functions resolve a projection
+> by op name and 2 handle the tuple spelling. See `IMPLEMENTATIONS.md` § *One notion, how many
+> SPELLINGS?*
+>
+> **Measured.** Nine cells, both backends, values identical before and after — this is a pure
+> leak, so `--interpret` under `LOFT_STRICT_STORES=1` is the instrument and the assertions score
+> nothing. On a control binary built at `9c1a0e4e` the two record-element cells report
+> `kt=78 S1104×50` over 25 rounds each; after, clean, and clean under `LOFT_POISON=1` too.
+> Emitted IR over the corpus: **no existing program changes** — only the guard. Controls: the
+> three already-nameable spellings, the hand-written binding, a SCALAR tuple element (which
+> carries no store and must not be bound) and a callee that does not return a borrowed view.
+> Guard: `tests/scripts/1104-a-tuple-element-argument-borrow-witness.loft`, scored by the wrap
+> harness's leak gate — `loft --tests` cannot fail it even with `LOFT_STRICT_STORES=1`.
 
 > **D-tup-1 — CLOSED (2026-08-20) — the reference tuple has a rule.** This doc specified
 > construction, projection, destructuring and returns and said nothing about `&(τ₁, …, τₙ)` —

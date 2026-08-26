@@ -6473,11 +6473,84 @@ impl Scopes {
                 ops.pop();
                 preamble.extend(ops);
                 ls.push(Value::Var(w));
+            } else if let Some(tp) =
+                Self::tuple_elem_borrow_source(&scanned, outer_call, data, function)
+            {
+                // loft#1104 — a TUPLE-ELEMENT argument (`pick(t.0, …)`) at a call whose
+                // return may borrow it.  Same defect as the inline-built case above and the
+                // same cure: the @P290 bracket names a store through a variable holding a
+                // `DbRef`, and a tuple element is a projection that no variable names, so
+                // the witness set read incomplete and the caller kept the conservative
+                // answer — copying the returned store and orphaning the callee's, one
+                // record per call on both backends.
+                //
+                // A field or element projection (`b.s`, `v[0]`) was always fine, because
+                // `view_root_slots` walks those to their root through `is_projection_op`.
+                // A tuple element is the SAME NOTION in a spelling that op list cannot
+                // express: it is `Value::TupleGet`, not a `Call`.  Widening the op list
+                // cannot reach it, and neither can naming the tuple — the bracket protects
+                // the store a DbRef VARIABLE points at, and a tuple is not a `DbRef`.
+                //
+                // So the argument is bound to a temp instead, which is exactly the
+                // hand-written spelling that was always clean (`e = t.0; pick(e, …)`) and
+                // emits the same code.  The temp takes the ELEMENT's own type, deps and
+                // all, so it is a borrow rather than an owner and nothing frees it here;
+                // the element's store keeps the owner it already had.
+                let tmp = self.new_lift_var(function, &tp);
+                preamble.push(v_set(tmp, scanned));
+                ls.push(Value::Var(tmp));
             } else {
                 ls.push(scanned);
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// loft#1104 — the TYPE to bind a tuple-element argument to, when the callee's return
+    /// may borrow it.
+    ///
+    /// `Some(tp)` for a `t.0` argument whose element carries a heap store, at a call whose
+    /// return names a visible parameter (`returns_borrowed_view`). The type is the TUPLE
+    /// ELEMENT's own — deps included — so the temp bound to it reads as the borrow it is and
+    /// no free is emitted for it; the element's store keeps whatever owner it already had.
+    ///
+    /// Gated exactly as [`inline_built_borrow_source`](Self::inline_built_borrow_source) is,
+    /// and for the same reason: every other call is already correct as it stands, and binding
+    /// an argument reorders it relative to its left-hand siblings — a cost worth paying only
+    /// where the alternative is a leak.
+    fn tuple_elem_borrow_source(
+        arg: &Value,
+        outer_call: u32,
+        data: &Data,
+        function: &Function,
+    ) -> Option<Type> {
+        if outer_call == u32::MAX {
+            return None;
+        }
+        let callee = data.def(outer_call);
+        if !callee.is_loft_defined() {
+            return None;
+        }
+        if matches!(callee.returned().base(), Type::Function(_, _, _)) {
+            return None;
+        }
+        if !callee.returns_borrowed_view() {
+            return None;
+        }
+        let Value::TupleGet(base, idx) = arg.unspan() else {
+            return None;
+        };
+        let Type::Tuple(elems) = function.tp(*base).base() else {
+            return None;
+        };
+        let tp = elems.get(*idx as usize)?.clone();
+        // Only an element that CARRIES a store needs a witness — the same question
+        // `is_protectable_store_type` asks of the bracket's own candidates, so a scalar
+        // element is left exactly as it was.
+        if !crate::data::is_dbref(&tp) {
+            return None;
+        }
+        Some(tp)
     }
 
     /// loft#1029 — the work-ref an INLINE-built argument yields, when the callee's return
