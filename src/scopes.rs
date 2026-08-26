@@ -6638,8 +6638,12 @@ impl Scopes {
             return None;
         }
         let tp = callee.attributes().get(arg_idx)?.typedef.clone();
-        // Only an argument that CARRIES a store needs a witness at all.
-        if !crate::data::is_dbref(&tp) {
+        // Only an argument that CARRIES a store needs a witness at all — asked through
+        // `base`, because a NULLABLE parameter (`s: S?`) is `Optional(Reference(S))` and
+        // carries exactly the store its non-null twin does.  Asked on the raw type this
+        // declined every nullable parameter, so a `??` argument at one was never lifted and
+        // kept leaking the callee's minted store while the dense twin was cured.
+        if !crate::data::is_dbref(tp.base()) {
             return None;
         }
         Some(tp.with_deps(&Deps::frame(lift_view_deps(arg, data)?)))

@@ -198,3 +198,40 @@ fn test_the_lifted_argument_survives_the_binds_own_slot() {
   for i in 0..12 { t = t + slot_reuse(true) + slot_reuse(false); }
   assert(t == 72, "12 rounds of 7 + -1, got {t}");
 }
+
+// ---- a NULLABLE parameter carries the same store its dense twin does ----
+//
+// The gate that decides whether an argument needs a witness at all asks whether the callee's
+// PARAMETER carries a store. Asked on the raw type it declines every nullable parameter, because
+// `S?` is `Optional(Reference(S))` and the store is under the marker — so a `??` argument at a
+// `s: S1105g?` parameter was never bound, and kept leaking the callee's minted store while the
+// identical call through a `s: S1105g` parameter was cured. The question is asked through `base`.
+
+fn pick_nullable_param(s: S1105g?, c: boolean) -> S1105g? { if c { s } else { mk1105g() } }
+fn pick_dense_param(s: S1105g, c: boolean) -> S1105g? { if c { s } else { mk1105g() } }
+
+fn coalesce_at_nullable_param(c: boolean) -> integer {
+  v: vector<S1105g?> = [S1105g { a: 7 }];
+  r = pick_nullable_param(v[0] ?? S1105g { a: 5 }, c);
+  r?.a
+}
+
+// The dense-parameter twin, which was already clean — the control that says the PARAMETER's
+// nullability is the axis and nothing else about the call changed.
+fn coalesce_at_dense_param(c: boolean) -> integer {
+  v: vector<S1105g?> = [S1105g { a: 7 }];
+  r = pick_dense_param(v[0] ?? S1105g { a: 5 }, c);
+  r?.a
+}
+
+fn test_a_coalesced_argument_at_a_nullable_parameter_leaks_nothing() {
+  t = 0;
+  for i in 0..12 { t = t + coalesce_at_nullable_param(true) + coalesce_at_nullable_param(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}
+
+fn test_the_dense_parameter_twin_is_untouched() {
+  t = 0;
+  for i in 0..12 { t = t + coalesce_at_dense_param(true) + coalesce_at_dense_param(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}

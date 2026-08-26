@@ -1930,8 +1930,15 @@ impl Type {
     /// silently no-opped on `S?` and no `S?` could ever be made an owner — the store it
     /// held at scope exit had nobody to free it (loft#1106).
     ///
-    /// `None` for a type that carries no dep list of its own. `Text` is deliberately
-    /// absent: it is not in the set the remove side has ever acted on.
+    /// `None` for a type that carries no dep list of its own.
+    ///
+    /// ⚠ `Text` is deliberately absent, and that IS an asymmetry: [`Type::depend`] reads a
+    /// text dep and this cannot clear one, so a `text` local can be given a dep it can never
+    /// lose. It is measured LATENT rather than assumed harmless — an env-gated counter in
+    /// `Function::make_independent` records **0 attempts across the 875-file
+    /// `tests/scripts` corpus**, so no caller has ever asked to strip one. Adding the arm
+    /// would change behaviour with nothing to measure the change against, which is why it
+    /// wants its own probe and a repro rather than a ride on a nullable fix.
     pub fn deps_mut(&mut self) -> Option<&mut Deps> {
         match self {
             Type::RefVar(inner) | Type::Optional(inner) => inner.deps_mut(),
