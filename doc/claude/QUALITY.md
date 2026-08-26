@@ -930,6 +930,22 @@ are reconcilable or whether one of them wants scoping to say where it applies. T
 owner call with two documented mechanisms behind it, not something to settle by measurement —
 which is why the promotion is not shipped here.
 
+⚠ **BEING ANSWERED ELSEWHERE — do not re-derive this (2026-08-26).** The sibling checkout's
+`tuxedo-work-2026-08-25` branch is working exactly this reconciliation, off the same
+`origin/main`: **loft#1096** (a callee freeing the CALLER's buffer on a null collection return
+— a collection return is now excluded from `free_vars`' loft#688 leg), **loft#1097** (a
+collection tail join with a null arm answering `f(-1) == null` false while `len(f(-1))`
+answered 2 — fixed with the per-arm `materialize_vector_arms_into` delivery), and in progress
+**loft#1098** (a null-arm tail with TWO OR MORE value arms leaks one store per call, because
+only one arm can BE the buffer and the rest were never delivered).
+
+Their #1098 note settles the scoping question this entry left open, in one sentence: the
+direct-`null`-arm exclusion *"was written for the return TYPE, not the delivery."* So the two
+mechanisms ARE reconcilable and the scope is delivery-versus-type — not an either/or between
+`(H-RefNull)` and @PLN85. **Nothing is cherry-picked here**: those commits carry their own
+guards and `Fixes` trailers and land on their own branch, and there is no `src/` file overlap
+with this one to force the issue.
+
 ⚠ The matrix that located this needed DISTINCTIVE values: a first attempt used `_ => { [] }`
 as the wildcard, which made "the null arm answered empty" and "it fell through to the
 wildcard" the same observation. `[99, 99]` separated them.
@@ -1098,6 +1114,22 @@ for e in rows par(r = w(e), 2) {}
 The bail fires (`kind=Call`) **and the write does not reach parent state** — `rows` is
 unchanged — while the control `s.v[0] = 99` is still refused with the C93 error. So there was
 nothing to refuse.
+
+**A site the corpus never reaches at all — recorded, not chased.**
+`control::body_has_buffer_return` (and its nested `terminal_is_buf`, which handles `Var` /
+`Block` / `Insert` and not `If`, while its own sibling `walk` two lines below DOES handle `If`)
+is **entered 0 times across all 863 corpus programs**, including `104-split-text` — the
+regression its doc comment names. Its `&&` chain short-circuits earlier: the site requires
+`!tail_terminal_is_branch(&l[last])`, while the `vec_match_candidate` gate 8 000 lines above
+requires that same predicate TRUE, so the two are complementary and only one fires.
+
+Left alone deliberately. The return-buffer machinery is being actively worked in the sibling
+checkout (loft#1096/#1097/#1098 — see B5), and their in-flight change edits that very gate.
+Sending a second person into the same decision chain from the other side is how a near-copy
+pair comes to differ, which is the defect this whole thread keeps finding. **The finding worth
+handing over is the asymmetry**: `terminal_is_buf` cannot see an `If` that its sibling `walk`
+can, and a false answer there RENAMES a buffer that is already taken — the double-own the
+call site's own comment warns about.
 
 ⚠ **The rule that makes 52 remaining sites triage rather than grind: does the fallback encode a
 SEMANTIC BOUNDARY, or is it just a shape nobody listed?** `accessor_root_var`'s does — a link
