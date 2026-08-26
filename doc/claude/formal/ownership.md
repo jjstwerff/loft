@@ -157,10 +157,10 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **3** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
-`match` arm — with every other cell fixed, its Face B CLOSED the same day; **D-own-11,
-2026-08-26**, the Join witness is still not total; **D-own-12, 2026-08-26**, a nullable heap
-local carries no ownership fact at all) — D-own-7
+OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+`match` arm — with every other cell fixed, its Face B CLOSED the same day; **D-own-13,
+2026-08-26**, a nullable heap local carries no ownership fact at all) — D-own-12 records the two
+witness spellings closed here and points at D-own-11 for the other two; D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
@@ -170,7 +170,7 @@ of the same join.  Face B is also this register's clearest case of a leak MASKIN
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
 
-### D-own-12 — OPEN (2026-08-26, loft#1106): a nullable heap local carries no ownership fact
+### D-own-13 — OPEN (2026-08-26, loft#1106): a nullable heap local carries no ownership fact
 
 `(O-Complete)` requires the ownership fact PER BINDING.  An `Optional(Reference)` local has
 none: `data::is_dbref` lists the eight store-carrying kinds and not the `Optional` wrapper, so
@@ -201,33 +201,45 @@ a decision about which of `is_dbref`'s callers see through the `Optional` wrappe
 `is_dbref`'s own doc already records that this list drifts SHORT when restated, with
 `Parser::is_heap_handle` named as "the same question with a `.base()` peel".
 
-### D-own-11 — OPEN (2026-08-26, loft#1105): the Join witness is still not total, and the axis is again the argument SPELLING
+### D-own-12 — CLOSED (2026-08-26): the witness list was short by two OPS, and the count of homes for that list was wrong
 
 D-own-6 closed on the claim that *"the runtime Join witness now covers every argument it can
 name."*  Four spellings have been found since that it could not name, all on the same axis its
-own closing paragraph identifies as the one its oracle never varied.  Three are fixed; one is
-not, and it is the one whose obvious cure is a use-after-free.
+own closing paragraph identifies as the one its oracle never varied.  Two of them are this
+entry's; the other two are D-own-11's, closed in the sibling checkout by the general
+`bracket_can_name` question rather than by a fifth shape.
 
-| spelling | what the walk answered | state |
+| spelling | what the walk answered | where it closed |
 |---|---|---|
-| `pick(t.0, …)` — a tuple ELEMENT | `None`: `Value::TupleGet` is not a call, so no op-name list can see it | **CLOSED** (loft#1104) — hoisted at the call site, like the construction family |
-| `pick(t.0.s, …)`, `pick(t.0.0, …)` — a chain over one | `None` for the same reason, one or two nodes down | **CLOSED** (loft#1104) — the ELEMENT is bound and the chain re-based on it |
-| `pick(h[k], …)` — a KEYED lookup | `None`: `OpGetRecord` was absent from `is_projection_op`, though the record it answers lives in the collection's own store | **CLOSED** — the op list merged onto one home |
-| `pick(v[i] ?? mk(), …)` — a join whose arm MINTS | `None`: the arm is a call, and a call is deliberately not a projection | **OPEN — loft#1105** |
+| `pick(t.0, …)` — a tuple ELEMENT | `None`: `Value::TupleGet` is not a call, so no op-name list can see it | loft#1104, bound at the call site like the construction family |
+| `pick(t.0.s, …)`, `pick(t.0[0], …)`, `pick(t.0.0, …)`, `pick(vt[0].0, …)` — a CHAIN over one | `None` for the same reason, one or two nodes down | loft#1104 — the ELEMENT is bound and the chain RE-BASED on it, so the temp carries the type the tuple declares |
+| `pick(h[k], …)` — a KEYED lookup at hash, sorted and index alike | `None`: `OpGetRecord` was absent from `is_projection_op` | **here** — the op list merged onto one home |
+| `pick(v[i] ?? mk(), …)` — a join whose arm MINTS | `None`: the arm is a call, and a call is deliberately not a projection | loft#1105, D-own-11 |
 
-**The open one is open for a reason, not for want of an arm.**  The `??` lowers to a block typed
-`ref(τ)["v"]` — a borrow of `v` — that on its else arm holds a store `__ref_2` owns.  Binding it
-to a temp typed off its own result would complete the witness set while protecting the wrong
-store, so the source-free it licenses would release `__ref_2`'s record before the frame's own
-free.  That is the exact trade D-own-6's construction-block paragraph refuses in the other
-direction.  The cure has to make the MINTING ARM nameable — either by witnessing the retbuf slot
-it already delivers into, or by giving it its own `__lift_N` owner — and both are decisions about
-what `(O-Complete)` accepts as a per-path witness, not code that follows from the rule as written.
+**The list `view_root_slots` reads was short by two ops, and three other homes already had them.**
+`OpGetRecord` is declared `-> reference[data]`, so a keyed lookup answers a record living in the
+collection's own store and the root variable is exactly the witness the bracket wants.
+`is_projection_op`'s doc said *"One list, two readers … Two lists of the same two ops would
+drift."*  Measured: **seven sites spell that list by hand across six files, in four distinct
+memberships**, and the two that had the right answer (`scopes::base_container_var`,
+`generation::container_element_base`) are byte-identical copies of each other.  Merged onto the
+one home rather than adding the op a fourth time; the doc now also states the criterion it is NOT
+(*"the return deps on parameter 0"*, which `OpNewRecord` and `OpInsertVector` also satisfy — they
+GROW the store rather than read it).
+
+⚠ **The chain rows are why binding is not always the answer.**  A chain's temp must carry the
+projection's RESULT type, which this pass cannot compute; binding its BASE needs only the type the
+tuple already declares.  A temp typed off the CALLEE'S PARAMETER instead carries no deps and so
+reads as an OWNER — and a free emitted for a store the tuple base still owns is a use-after-free,
+not a leak.  That is the one direction this machinery's own comments warn about, and it is why the
+element is bound and the chain re-based rather than the whole argument being bound.
 
 **What generalises past this entry:** D-own-6 named the argument spelling as the axis its oracle
 pinned, and then closed on a fix that enumerated the spellings *it had thought of*.  An axis named
 in a closure is not an axis measured by it.  Each found since was reached by moving one more thing
 — a tuple base, a projection above it, a keyed container, a `??` — and each took one probe.
+D-own-11's closing sentence is the generalisation both halves arrived at from opposite ends:
+**a predicate that enumerates SHAPES will keep being one shape short.**
 
 ### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
 
@@ -662,9 +674,10 @@ worktree at `f7a57124` (the value cells by assertion, the leak cell by the wrap 
 
 ### D-own-6 — CLOSED (2026-08-20, loft#1029): the runtime Join witness now covers every argument it can name
 
-> ⚠ **Read D-own-11 with this.**  The heading's claim did not hold: three further argument
-> spellings have been found that the witness could not name, on the very axis the closing
-> paragraph below identifies as the one its oracle never varied.  Two are fixed, one is open.
+> ⚠ **Read D-own-11 and D-own-12 with this.**  The heading's claim did not hold: four further
+> argument spellings have been found that the witness could not name, on the very axis the closing
+> paragraph below identifies as the one its oracle never varied.  All four are now closed, and
+> D-own-11 records why the cure had to become a QUESTION rather than a fifth shape.
 
 
 `(O-Complete)` accepts the Join as *inherently runtime*: a callee whose return may borrow a

@@ -45,6 +45,16 @@ fn kb_tuple(c: boolean) -> integer { g = Gk { by_a: [Sk { a: 7 }], all: [] }; t 
 // null, which reads as a pass on a leak channel while asserting nothing.
 fn kb_linked(c: boolean) -> integer { g = Gk { by_a: [], all: [Sk { a: 7 }] }; r = pickk(g.all[0], c); r.a }
 
+// The container OUTLIVES the call, which is the axis that separates a leak from a
+// USE-AFTER-FREE.  Where the argument is bound to a temp instead of witnessed, that temp must
+// BORROW — typed off the callee's declared parameter it carries no deps, reads as an owner of a
+// store it only views, and the frame frees a record the CALLER still reaches.  Every cell above
+// builds its container in the same function, so a bogus free there lands on a store that was
+// about to die anyway and neither the value nor the leak channel says anything.
+fn kb_outlives_hash(h: hash<Sk[a]>, c: boolean) -> integer { r = pickk(h[7], c); r.a }
+fn kb_outlives_field(g: Gk, c: boolean) -> integer { r = pickk(g.by_a[7], c); r.a }
+fn kb_outlives_elem(v: vector<Sk>, c: boolean) -> integer { r = pickk(v[0], c); r.a }
+
 // CONTROL — the spellings the walk could always witness must keep emitting what they emitted.
 fn kb_var(c: boolean) -> integer { q = Sk { a: 7 }; r = pickk(q, c); r.a }
 fn kb_elem(c: boolean) -> integer { v: vector<Sk> = [Sk { a: 7 }]; r = pickk(v[0], c); r.a }
@@ -80,6 +90,24 @@ fn main() {
   }
   kb_churn();
 
+  // Read the container back AFTER the call and after enough churn to recycle a freed record:
+  // an over-free is invisible until something reads the store it released.
+  for i in 0..12 {
+    reps = reps + i;
+    hh: hash<Sk[a]> = [Sk { a: 7 }];
+    assert(kb_outlives_hash(hh, true) == 7, "hash outlives the call, in-call read");
+    kb_churn();
+    assert(hh[7].a == 7, "hash outlives the call, read back = {hh[7].a}, want 7");
+    gg = Gk { by_a: [Sk { a: 7 }], all: [] };
+    assert(kb_outlives_field(gg, true) == 7, "keyed field outlives the call, in-call read");
+    kb_churn();
+    assert(gg.by_a[7].a == 7, "keyed field outlives the call, read back = {gg.by_a[7].a}, want 7");
+    vv: vector<Sk> = [Sk { a: 7 }];
+    assert(kb_outlives_elem(vv, true) == 7, "element outlives the call, in-call read");
+    kb_churn();
+    assert(vv[0].a == 7, "element outlives the call, read back = {vv[0].a}, want 7");
+  }
+
   for i in 0..12 {
     reps = reps + i;
     assert(kb_var(true) == 7, "var control, borrowing arm");
@@ -88,5 +116,5 @@ fn main() {
     assert(kb_elem(false) == -1, "element control, owning arm");
     assert(kb_plain() == 7, "no-bracket control = {kb_plain()}, want 7");
   }
-  assert(reps == 132, "both loops ran, got {reps}");
+  assert(reps == 198, "all three loops ran, got {reps}");
 }

@@ -1842,6 +1842,53 @@ repro still leaks, and the aliasing symptom found beside it — a `-> S?` return
 argument where the `-> S` twin COPIES, against `(B-Copy)` — is recorded on the issue, which is
 now `silent-wrong` / `sev:high` rather than a leak.
 
+#### B6k — the axis BOTH checkouts held fixed, and the leak it was hiding a use-after-free behind (2026-08-26)
+
+The sibling checkout closed loft#1105 by generalising: instead of a fourth shape it asks
+`bracket_can_name`, and binds any argument the witness walk cannot name. That is the right shape
+of answer — its own register entry says it, and so does this thread: *a predicate that enumerates
+SHAPES will keep being one shape short*. Built in an isolated worktree off this repo and measured,
+it is leak-clean on every cell of the loft#1104 matrix, all three keyed kinds included.
+
+**And it frees a record the CALLER owns.** The temp it binds is typed from
+`callee.attributes()[arg_idx].typedef` — the callee's DECLARED parameter, which carries no deps —
+so a temp holding a VIEW reads as an OWNER and `get_free_vars` emits a free for it:
+
+```
+__lift_1(1):ref(Sb) = OpGetRecord(h(1), 84i32, 1i32, 7i32);   // a view INTO h's store
+r(1) = n_pickb(__lift_1(1), c(0), __ref_1(1));
+OpFreeRef(__lift_1(1));                                        // frees h's record
+```
+
+⚠ **Neither checkout's matrix could see it, and the reason is one axis both of us pinned: every
+cell built its container INSIDE the function that called.** A bogus free then lands on a store
+that was about to die at the same scope exit, so it is absorbed by `H-FreeTwice`'s silent no-op
+and neither the value channel nor the leak channel says anything. Moving that one axis — pass the
+container IN, so it outlives the call, then read it back after enough churn to recycle the record —
+turns it into `after=null` (hash), `after=12884901900` (tuple), and a `LOFT_POISON=1` panic:
+*"Store access out of bounds: rec=3735928559 … the reference is corrupt, not merely out of range"*.
+`--native` answers 71 for the hash cell and garbage for the tuple one, which is the
+backend-dependent signature of a use-after-free rather than a second defect.
+
+**A leak channel cannot score an over-free.** That is the general lesson and it is the mirror of
+[absent-warning-is-not-a-pass](STABILITY_METHOD.md): this whole family was found through the leak
+gate, every cure is scored by it, and the gate is monotone in the wrong direction — freeing MORE
+than you should always reads as an improvement. The cells are now in both guards
+(`kb_outlives_*`, `tb_outlives*`), they fail on the sibling build and pass here, and the rule they
+encode is: **whenever a fix ADDS a free, one cell must let the freed store outlive the frame that
+freed it.**
+
+**The two fixes compose rather than compete, and the emitted code says which is which.** Where
+`is_projection_op` knows the op, the bracket NAMES the store and no temp is created at all —
+`n_pickb(OpGetRecord(h, …), c, __ref_1)` against the sibling's bind-then-free. Where a tuple stands
+in the way, binding the ELEMENT (typed off the tuple's own declared element type, deps included)
+and RE-BASING the projection keeps the projection at the call site. So the precise witness is not
+a rival to the general bind; it is what keeps the general bind from having to find a type it
+cannot compute. The cure the sibling needs is the same fact from the other side: the temp must
+carry the ARGUMENT's deps, and where the chain does not bottom out in a nameable var it must not
+be bound at all — a temp you cannot type correctly is one you must not create, which is exactly
+why loft#1029's construction is HOISTED rather than bound.
+
 #### C — process / skills
 
 | item | state |

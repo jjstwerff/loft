@@ -75,6 +75,15 @@ fn tb_block_vector(c: boolean) -> integer { vt: vector<(Sb, integer)> = [(Sb { a
 // Both at once — a projection chain standing above such a block.
 fn tb_block_chain(c: boolean) -> integer { w = Wb { s: Sb { a: 7 }, v: [1] }; t = ((w, 1), 9); r = pickb(t.0.0.s, c); r.a }
 
+// The tuple OUTLIVES the call, which is the axis that separates a leak from a USE-AFTER-FREE.
+// Where the argument is bound to a temp rather than witnessed, that temp must BORROW the base:
+// typed off the callee's declared parameter it carries no deps, reads as an owner of a store it
+// only views, and the frame frees a record the CALLER still reaches.  Every cell above builds
+// its tuple in the same function, so a bogus free there lands on a store that was about to die
+// anyway and neither the value nor the leak channel says anything.
+fn tb_outlives(t: (Wb, integer), c: boolean) -> integer { r = pickb(t.0.s, c); r.a }
+fn tb_outlives_elem(t: (Sb, integer), c: boolean) -> integer { r = pickb(t.0, c); r.a }
+
 // CONTROL — the two spellings the walk CAN witness must keep emitting what they emitted.
 fn tb_field(c: boolean) -> integer { b = Wb { s: Sb { a: 7 }, v: [1] }; r = pickb(b.s, c); r.a }
 fn tb_elem(c: boolean) -> integer { v: vector<Sb> = [Sb { a: 7 }]; r = pickb(v[0], c); r.a }
@@ -124,6 +133,22 @@ fn main() {
   }
   tb_churn();
 
+  // Read the tuple back AFTER the call and after enough churn to recycle a freed record: an
+  // over-free is invisible until something reads the store it released.
+  for i in 0..12 {
+    reps = reps + i;
+    ow = Wb { s: Sb { a: 7 }, v: [1] };
+    ot = (ow, 9);
+    assert(tb_outlives(ot, true) == 7, "tuple outlives the call, in-call read");
+    tb_churn();
+    assert(ot.0.s.a == 7, "tuple outlives the call, read back = {ot.0.s.a}, want 7");
+    os = Sb { a: 7 };
+    ot2 = (os, 9);
+    assert(tb_outlives_elem(ot2, true) == 7, "bare element outlives the call, in-call read");
+    tb_churn();
+    assert(ot2.0.a == 7, "bare element outlives the call, read back = {ot2.0.a}, want 7");
+  }
+
   for i in 0..12 {
     reps = reps + i;
     assert(tb_field(true) == 7, "field control, borrowing arm");
@@ -137,5 +162,5 @@ fn main() {
     assert(tb_scalar() == 16, "scalar-element control = {tb_scalar()}, want 16");
     assert(tb_scalar_chain() == 16, "scalar-chain control = {tb_scalar_chain()}, want 16");
   }
-  assert(reps == 132, "both loops ran, got {reps}");
+  assert(reps == 198, "all three loops ran, got {reps}");
 }
