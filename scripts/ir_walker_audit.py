@@ -512,7 +512,12 @@ def pass_through_variants():
     i = src.index("pub fn for_each_child(&self, f: &mut impl FnMut(&Value))")
     j = src.index("// Leaves \u2014 no child expressions.", i)
     out = set()
-    for arm in re.findall(r"((?:\s*Value::[A-Za-z0-9]+(?:\([^)]*\))?\s*\|?)+)=>\s*f\(", src[i:j]):
+    # `item (| item)*` rather than `(item |?)+`: the repeated form lets the leading and
+    # trailing `\s*` split the same whitespace two ways and makes the separator optional, so a
+    # segment that does NOT end in `=> f(` backtracks exponentially (CodeQL py/redos).  This
+    # form has one parse per input and extracts the identical set.
+    arm_re = r"(Value::[A-Za-z0-9]+(?:\([^)]*\))?(?:\s*\|\s*Value::[A-Za-z0-9]+(?:\([^)]*\))?)*)\s*=>\s*f\("
+    for arm in re.findall(arm_re, src[i:j]):
         out |= set(re.findall(r"Value::([A-Za-z0-9]+)", arm))
     if not out:
         raise SystemExit("for_each_child's shape changed \u2014 `reach` cannot derive its wrappers")
