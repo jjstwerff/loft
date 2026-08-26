@@ -1159,8 +1159,11 @@ doc comment says why the FALLBACK is right.**
 | `view_root_slots` | enumerates every exclusion with a reason, and states the direction — *"an extra marked store can only REFUSE a free, never license one"* | clean |
 | `may_borrow_store` | *"A USER function is not a conflict — it is called with `cell`, not with a live `&mut Stores` — so only `#rust` templates count."* | clean |
 | `worker_returns_capturing_closure` | *"Conservative — only flags closures found directly in return position … an indirect return … falls through to the runtime path rather than a false positive."* | clean |
-| `text_arm_ends_in_text_call` | names which calls are excluded and why (`Op*` yields `&str`, which already unifies) | clean |
+| `text_arm_ends_in_text_call` | ⚠ only PARTLY — it explains an exclusion INSIDE its `Call` arm (`Op*` yields `&str`, which already unifies) and still says nothing about `_ => false`. Listed because it is the honest middle case: measured clean at 102 073 arrivals, but the doc is not what earned that | clean |
 | **`ir_has_user_call`** | **nothing.** Its doc explains the QUESTION well — what a user call is, why a place reaching one must be bound once — and never mentions `_ => false` | **two shipped bugs** |
+
+So the correlation is five of six, not six of six — `text_arm_ends_in_text_call` documents an
+exclusion but not its fallback, and measured clean anyway. A heuristic, not a law.
 
 `ir_has_user_call` was not undocumented. It had a careful doc comment about what the function
 is FOR. What it lacked was a sentence about what happens to everything it does not name, and

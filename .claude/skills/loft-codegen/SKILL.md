@@ -155,7 +155,7 @@ carry this property"* — and a caller that guards on the answer stops guarding 
 wrong.
 
 **Write that claim down in the doc block, beside what the function computes.** Measured over
-the walkers audited so far, the ones whose doc gives a reason for the fallback were clean, and
+the walkers audited so far, every one whose doc gives a reason for the fallback was clean, and
 the one whose doc explained only the QUESTION carried two shipped bugs — a compound assign that
 ran its container call twice, and a hoist that wrote the wrong struct. That one was not
 undocumented; it had a careful comment about what a user call is and why a place reaching one
