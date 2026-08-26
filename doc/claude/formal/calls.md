@@ -172,9 +172,9 @@ can get back is an explicit `&T` return, which binding.md governs.
 
 ## Deviations
 
-OPEN: **0**. Three deviations have been carried and closed (D-call-1, D-call-2, D-call-3);
-otherwise this is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code
-deviation of its own.
+OPEN: **0**. Four deviations have been carried and closed (D-call-1 … D-call-4); otherwise
+this is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code deviation of its
+own.
 
 ⚠ All three are the SAME rule, `(F-Return)` / `(F-Block)`, and all three were *"the tail's
 value was dropped"*: D-call-1 dropped it because the block's type disagreed with the
@@ -182,6 +182,57 @@ signature, D-call-2 because a block reaching the expression parser is typed `Voi
 D-call-3 because a var stood in for the tail expression and could not carry one of its
 values. A zero here means no KNOWN survivor of that class, not that the class is closed —
 each was found by moving an axis the previous one held fixed.
+
+> **D-call-4 — OPENED AND CLOSED (2026-08-26, loft#1099).** `(F-Arity)` exempts a
+> compiler-inserted slot from the user-facing requirement — *"a return buffer is not a user
+> parameter"* — on the premise that the slot is THERE for every call. A two-pass parser owes
+> that premise an invariant it does not state: **the compiler-inserted slots a function takes
+> are fixed before any call to it is lowered.** A `-> text` function whose tail is a `match`
+> with a `null` arm broke it:
+>
+> ```loft
+> fn f(k: integer) -> text { a = "ab"; match k { -1 => null, _ => a } }
+> ```
+>
+> ```
+> H5 two-pass contract: def `n_f` (#710) grew a pass-2-only attribute `___acc_1`
+> (pass1=2, pass2=3) that is not a documented lazy append — a real cross-pass divergence
+> ```
+>
+> `do_if_acc` promotes a per-arm text accumulator and `text_return` makes it a hidden `&text`
+> parameter, so the verdict decides ARITY. One of its terms reads the tail's INFERRED type,
+> and that is not pass-stable: instrumented, it is `Optional(Text)` on pass 1 and `Text` on
+> pass 2 from IR the two passes leave byte-identical. The accumulator was therefore minted on
+> pass 2 alone, and the compiler aborted rather than lower a call against a signature that had
+> moved. The `if` spelling of the same program was stable throughout, which is what says this
+> is about the inference and not about the null arm.
+>
+> **The cure was already written down two blocks up, for the same hazard.** `do_tret_bind`
+> promotes its own hidden `&text` buffer and carries a gate whose comment states the rule and
+> the method: *"Rather than enumerate which tail shapes lower stably, make pass 2 FOLLOW pass
+> 1: promote on pass 2 only if pass 1 already minted the `__tret` attribute."* `do_if_acc` now
+> carries the twin (`def_has_acc_attr`). It generalises where a per-term repair would not:
+> the unstable term is fixed for every tail shape at once, including ones nobody has hit.
+>
+> ⚠ **This is the second time in three days a fix was found by reading the code beside the
+> defect rather than the defect.** loft#1096's belief was written in its own leg's comment,
+> and this one's cure was written in its sibling's. `ownership.md`'s D-own-9 draws the first
+> half of that lesson; this is the second.
+>
+> Guard `tests/scripts/1099-a-text-match-tail-with-a-null-arm.loft`, which fails on a
+> pristine tree at `66fb9bb4` before it can run a single assertion (the parse aborts) —
+> so its first job is to be a program the compiler accepts, and only then to check every
+> arm's value on both backends. Controls: a DECLARED-nullable return, which keeps its
+> accumulator on its own disjunct (loft#741 is what losing it costs), and a `match` with no
+> null arm. Emitted IR over the corpus: **1 of 900** programs changes — the guard itself —
+> so every existing text tail already answered the same on both passes.
+>
+> Two things it does NOT close, both measured and both pre-existing. A nullable tail into a
+> non-null `text` return reports `(N-Store)` for the `if` spelling and stays SILENT for a
+> `match` whose arm is the null literal — the same inferred type the gate could not trust is
+> what the report reads, and the guard's two `@EXPECT_WARNING` lines record which cells
+> speak. And a `match` arm that CALLS a `-> text?` function into a non-null `text` return
+> compiles on `--interpret` and fails `--native` with `E0716` (loft#1100).
 
 > **D-call-3 — OPENED AND CLOSED (2026-08-26, loft#1097).** `(F-Return)` did not hold for a
 > COLLECTION tail join with a `null` arm:
