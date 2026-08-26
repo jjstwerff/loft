@@ -117,7 +117,7 @@ The catch-all backlog is no longer blocked on ranking — `reach` says 125 of it
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.  **A SECOND queue now runs beside it (B6g), and it is the sharper one:** the
 catch-all list asks who forgot a variant, while `spellings` asks who can only see one of a
-notion's two IR spellings — **38** functions resolve a projection by OP NAME and **4** of them
+notion's two IR spellings — **39** functions resolve a projection by OP NAME and **4** of them
 handle `TupleGet` (18 · 2 when B6g wrote this; the SCREEN was widened in B6i, not the family).  Following it produced three defects in one pass, two fixed here and one
 filed as a design question (**loft#1102**: a tuple literal ALIASES a heap local while a struct
 literal and a vector literal copy it).  Reading the queue a second time produced a fourth
@@ -448,7 +448,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 317 | 300 | **17** |
+| 320 | 303 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -1362,13 +1362,14 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 38 | **4** | 34 |
+| 39 | **4** | 35 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
 
-⚠ **The row reads 38 · 4 · 34 and the paragraph above it says 18 · 2 · 16, because the SCREEN was
-widened, not because sites appeared.** The matcher saw two of the three ways Rust resolves an op
+⚠ **The row reads 39 · 4 · 35 and the paragraph above it says 18 · 2 · 16, mostly because the
+SCREEN was widened rather than because sites appeared** (38 · 4 · 34 before the sibling
+checkout's eleven commits were cherry-picked in; one of them resolves a projection by op name). The matcher saw two of the three ways Rust resolves an op
 here — `def_nr("OpGet…")` and a call to `is_projection_op` — and was blind to the third, a match
 on `data.def(d).name()` against a string literal, which is how every hand-spelled list in the tree
 is written. That is the B4g lesson arriving one mode later, and it is what B6i found by walking
@@ -1825,6 +1826,17 @@ it by NAME ALONE**. That is a queue, not a sweep — each is a different questio
 — but it is the sharpest instance of this thread's subject yet: one notion, 56 hand-spelled
 recognitions, and a bug in the gap between two of them.
 
+⚠ **The same notion has a THIRD face, and the write-side one had drifted** — found in the
+sibling checkout while fixing loft#1106, and it is the sharpest confirmation that the class is
+real rather than a story about one type. A dep list is READ by `Type::depend`, SET by
+`Type::with_deps` and CLEARED by `Function::make_independent`; the first two peel `Optional` and
+`RefVar` explicitly, and the third **spells its own arm list with neither — and without `Text`**.
+So a nullable local's dep can be read and written and never cleared, and a strip against one is a
+silent no-op. That is why this branch's unwrap-copy strip states the dense-`Reference` target as
+a PRECONDITION rather than an incidental fact. The cure is theirs (`Type::deps_mut`, the three
+faces on one home); the line worth carrying is that **a membership list has as many faces as it
+has verbs, and only the ones a test exercises stay in step.**
+
 ⚠ **What made this findable was a matrix of PAIRS, not of cells.** Every nullable cell was
 written beside its non-null twin or its direct-use twin — `s = o.f` beside `s = o.g`,
 `s = o.f ?? d` beside `(o.f ?? d).x` — so the expected value never had to be hand-derived. That
@@ -1849,6 +1861,11 @@ The sibling checkout closed loft#1105 by generalising: instead of a fourth shape
 of answer — its own register entry says it, and so does this thread: *a predicate that enumerates
 SHAPES will keep being one shape short*. Built in an isolated worktree off this repo and measured,
 it is leak-clean on every cell of the loft#1104 matrix, all three keyed kinds included.
+
+✅ **Both are on this branch now, reconciled** — the sibling's eleven commits are cherry-picked
+here so the two do not diverge, with the general arm ORDERED LAST and its temp `skip_free`. What
+follows is the finding as it was measured against their commit, which is what the guard cells
+below still score.
 
 **And it frees a record the CALLER owns.** The temp it binds is typed from
 `callee.attributes()[arg_idx].typedef` — the callee's DECLARED parameter, which carries no deps —

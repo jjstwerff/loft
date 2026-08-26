@@ -541,7 +541,7 @@ search for.
 
 **The instrument is per-notion and cheap.**  `scripts/ir_walker_audit.py spellings` asks it for
 the projection notion: who resolves a projection by op name, and do they also carry a `TupleGet`
-arm — **38 functions, 4 of them do**.  The mode is about thirty lines; the shape generalises to
+arm — **39 functions, 4 of them do**.  The mode is about thirty lines; the shape generalises to
 any notion whose two spellings can be named.  Its first outside use found a latent blindness in
 freshly-landed code (`expr_borrows_local` resolves by `OpGetField` / `OpGetVector` and cannot see
 `TupleGet`; five tuple spellings answer correctly today only because the DEPS leg covers what the
@@ -568,7 +568,8 @@ other spelling, constructed by hand, arriving where the matcher is not looking.
 knew two of the three ways Rust resolves an op here — `def_nr("OpGet…")` and a call to
 `is_projection_op` — and not `data.def(d).name() == "OpGetField"`, which is how every
 hand-spelled list in the tree is written.  Teaching it the third spelling took the count to
-38 · 4 · 34 and moved BOTH columns, which is what distinguishes precision from noise.  The
+38 · 4 · 34 at the time and moved BOTH columns, which is what distinguishes precision from
+noise.  The
 fourth row above was found by hand, from inside one of the lists the screen could not see; a
 mode that asks "who is blind to spelling B" is worth asking of the mode itself.
 

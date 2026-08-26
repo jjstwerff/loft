@@ -2530,6 +2530,14 @@ use a separate collection or add after the loop"
                     // Stripped on the VARIABLE, not just on `s_type`: pass 1 already wrote
                     // the borrowing type into the frame, and `change_var_type` treats a deps
                     // difference as no change at all, so re-assigning the type is a no-op.
+                    //
+                    // ⚠ The dense `Reference` target is a PRECONDITION of the strip working, not
+                    // an incidental fact about this arm.  `Type::depend` peels `Optional` /
+                    // `RefVar` and reads a `Text` dep, and `Function::make_independent` — the
+                    // CLEAR half — spells its own arm list with neither wrapper and without
+                    // `Text`, so on those the read answers deps the clear then silently cannot
+                    // remove.  `nullable_to_dense_assign` only fires with `f_type` a dense
+                    // `Reference`, which is inside the arms it does list.
                     s_type = Type::Reference(td, crate::data::Deps::none());
                     if var_nr != u16::MAX {
                         for d in self.vars.tp(var_nr).depend() {

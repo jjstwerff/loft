@@ -278,6 +278,24 @@ shapes more precisely: a construction is HOISTED rather than bound, for the loft
 **A predicate that enumerates SHAPES will keep being one shape short; the question it stands for
 does not run out.**
 
+⚠ **A bind is not free of consequences, and this entry's first form paid both.** The temp takes
+the CALLEE'S PARAMETER type, and a parameter declaration carries NO DEPS — so a temp holding a
+VIEW read as an OWNER and the frame freed a record the CALLER still reached. `use_hash(h, true)`
+then `h[7].tag` answered null; the tuple spelling answered `12884901900`; `LOFT_POISON=1` panicked
+on a corrupt reference. And the arm as first placed came BEFORE the tuple-element one, so a tuple
+element — not a `Var`, not nameable — never reached the arm that types its temp off the TUPLE's
+own declared element type. Both are fixed here: the arm is ORDERED LAST, and its temp is
+`skip_free`, because **a witness OWNS NOTHING** — something else already owns whatever it holds
+(the `??`'s own work-ref on the minting arm, the container on the view arm).
+
+⚠ **Neither checkout's matrix could see it, and the axis both pinned is worth the sentence:
+every cell built its container INSIDE the function that called.** A free that should not happen
+then lands on a store dying at the same scope exit, `H-FreeTwice` absorbs it as a silent no-op,
+and neither the value channel nor the leak channel says anything. The general form —
+**a leak channel cannot score an over-free**, because the gate is monotone and freeing MORE always
+reads as an improvement — is QUALITY.md § B6k. Cells:
+`kb_outlives_*` and `tb_outlives*` in the two `…-can-witness-the-bracket` guards.
+
 **Measured.** Six cells, both backends, values IDENTICAL before and after — a pure leak, so
 `LOFT_STRICT_STORES=1` is the instrument and the assertions score nothing.  A control at
 `9c1a0e4e` reports `kt=79 S1105g×12` over 12 rounds; after, clean, and clean under `LOFT_POISON=1`.
