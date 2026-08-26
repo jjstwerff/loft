@@ -1652,6 +1652,18 @@ the chain then stands on a `Var` that `view_root_slots` has always walked. The e
 byte-for-byte the hand-written spelling in every cell — `__lift_1:ref(Wb)["t"] = t.0;
 pick(__lift_1.s, …)` against `e = t.0; pick(e.s, …)`.
 
+⚠ **And that arm is now DELETED, because the general question answers the same cells.** The
+sibling checkout's loft#1105 cure walks the value for its deps (`lift_view_deps`), which reaches a
+`TupleGet` too — so it types the temp for every one of these six spellings without being told the
+shape. Measured before removing: the arm was REACHED 15 times across the 881-file corpus, the
+emitted IR differs from the general answer on the chained cells (it binds the ELEMENT and re-bases
+the chain; the general one binds the chain's RESULT with the dep walked to the same root), and
+**every cell passes with the arm disabled** — values, leak gate and `LOFT_POISON` alike. Two
+derivations of one answer that agree are still two derivations, and the one that reads the fact
+off the value beats the one that asserts it from a declaration. 133 lines out, and the same
+verdict the sibling reached about their own version of this arm from the opposite direction —
+theirs was unreachable, mine was reachable and redundant.
+
 **The filed matrix had two open cells; the family has six.** The sweep that produced the "two
 open cells" had pinned the chain's OP (a field read), the container the tuple sits in (a local),
 and the index. Moving those found three more before the fix, and a fourth only after it:

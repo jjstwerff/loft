@@ -472,25 +472,6 @@ enum ViewCause {
     Reassigned,
 }
 
-/// loft#1104 — what a tuple-element argument has to be BOUND to before the @P290 bracket
-/// can name the store it views.
-///
-/// The bracket names a store through a variable whose VALUE is a `DbRef`, and a tuple local's
-/// value is a `(DbRef, …)`.  So a tuple element has no witness variable at all and the call
-/// site has to make one.  WHICH node gets the name is the whole distinction, because it
-/// decides the type the temp carries — and a wrong dep there is a use-after-free, not a leak.
-#[derive(Debug)]
-enum TupleWitness {
-    /// Bind the argument itself: a bare `t.0`, or the `tuple_tmp` block a tuple element read
-    /// off a non-variable lowers to.  The value's own type is the temp's.
-    Whole(Type),
-    /// A projection chain (`t.0.s`, `t.0[0]`) stands above the tuple element.  Bind the
-    /// ELEMENT and re-base the chain on the temp: the chain is then rooted at a `Var`, which
-    /// `use_analysis::view_root_slots` already walks, and the temp's type is the one the
-    /// tuple declares rather than one this pass would have to infer.
-    Element(Type),
-}
-
 /// One disturbance of a container, as the walk saw it.
 ///
 /// The cause decides the advice line; `line` and `via` exist only so the F9 refusal can point
@@ -6375,7 +6356,7 @@ impl Scopes {
             // nothing to split — which is how loft#1029's hoisted argument reached the
             // emitters still wrapped, with the lift that owns its result never firing.
             // Peel it for the Insert case only, so every other argument keeps its position.
-            let mut scanned = match scanned {
+            let scanned = match scanned {
                 Value::Span(b) if matches!(b.1, Value::Insert(_)) => b.1,
                 other => other,
             };
@@ -6554,49 +6535,7 @@ impl Scopes {
                 ops.pop();
                 preamble.extend(ops);
                 ls.push(Value::Var(w));
-            } else if let Some(witness) =
-                Self::tuple_element_borrow_source(&mut scanned, outer_call, data, function)
-            {
-                // loft#1104 — a TUPLE-ELEMENT argument (`pick(t.0, …)`) that the callee's
-                // return may BORROW.  Same defect as the inline-construction family above
-                // and the same cure, for the opposite reason: that argument is not nameable
-                // YET, this one is not nameable AT ALL.
-                //
-                // The @P290 bracket names a store through a variable whose VALUE is a
-                // `DbRef`, which is why `view_root_slots` walks a projection chain to its
-                // root var.  A tuple local's value is a `(DbRef, …)`, so widening that walk
-                // to answer the tuple var cannot work: the native emit renders
-                // `n_protect_store_frees(cell, var_t)`, which does not compile, and the
-                // interpreter would read element 0's bytes whatever index was projected.
-                // The witness set therefore read incomplete, the caller kept the
-                // conservative never-free answer, copied the returned store and orphaned the
-                // one the callee minted — one record per call, both backends.
-                //
-                // Binding the projection first is what an author writes on hitting this
-                // (`e = t.0; pick(e, …)`) and it is clean on both backends, so the hoist
-                // makes the call site emit the program that already worked.  The temp
-                // BORROWS — its type carries a dep on the tuple base, so `get_free_vars`
-                // leaves it alone and the store's owner does not change; the only thing that
-                // changes is that the call site can now say a name for it.
-                match witness {
-                    TupleWitness::Whole(tp) => {
-                        let tmp = self.new_lift_var(function, &tp);
-                        preamble.push(v_set(tmp, scanned));
-                        ls.push(Value::Var(tmp));
-                    }
-                    TupleWitness::Element(tp) => {
-                        // The chain stays in argument position and only its ROOT moves out,
-                        // so the projection is still evaluated at the call — `__lift_1 = t.0;
-                        // pick(__lift_1.s, …)`, which is the spelling an author writes and
-                        // which was always clean.
-                        let tmp = self.new_lift_var(function, &tp);
-                        let root = Self::projection_chain_base(data, &mut scanned);
-                        let elem = std::mem::replace(root, Value::Var(tmp));
-                        preamble.push(v_set(tmp, elem));
-                        ls.push(scanned);
-                    }
-                }
-            } else if let Some(tp) =
+                        } else if let Some(tp) =
                 Self::unnameable_borrow_source(&scanned, outer_call, arg_idx, data)
             {
                 // loft#1105 — an argument the @P290 bracket cannot NAME, at a call whose return
@@ -6698,121 +6637,7 @@ impl Scopes {
         Some(tp.with_deps(&Deps::frame(lift_view_deps(arg, data)?)))
     }
 
-    /// loft#1104 — a `TupleGet` argument to a call whose return may BORROW it, and the
-    /// BORROWING type the hoisted temp must carry.
-    ///
-    /// The callee tests are [`inline_built_borrow_source`](Self::inline_built_borrow_source)'s,
-    /// for the same reason: only a loft-defined body with a borrowed-view heap return goes
-    /// through the @P290 bracket, so hoisting anything else changes emitted code and buys
-    /// nothing.  What differs is the argument shape — a tuple ELEMENT rather than an inline
-    /// construction — and why it cannot be witnessed: a construction's work-ref holds null
-    /// when the bracket is emitted, while a tuple element has no witness variable at all.
-    ///
-    /// Two axes, not a list of shapes.  WHAT reads the element is
-    /// [`tuple_read_type`](Self::tuple_read_type)'s question — a bare `TupleGet` or the
-    /// `tuple_tmp` block — and both spellings already carry their own type, so this pass never
-    /// has to type an arbitrary `Value`.  WHETHER a projection chain stands above it
-    /// (`t.0.s`, `t.0[0]`, `t.0.0.s`) decides only which node gets the name: the chain is
-    /// re-based on the temp rather than bound, because the chain's RESULT type is the one
-    /// thing here that would have to be inferred.
-    fn tuple_element_borrow_source(
-        arg: &mut Value,
-        outer_call: u32,
-        data: &Data,
-        function: &Function,
-    ) -> Option<TupleWitness> {
-        if outer_call == u32::MAX {
-            return None;
-        }
-        let callee = data.def(outer_call);
-        if !callee.is_loft_defined()
-            || matches!(callee.returned().base(), Type::Function(_, _, _))
-            || !callee.returns_borrowed_view()
-        {
-            return None;
-        }
-        let is_chain = matches!(
-            arg.unspan(),
-            Value::Call(d, _) if crate::use_analysis::is_projection_op(data, *d)
-        );
-        let tp = Self::tuple_read_type(Self::projection_chain_base(data, arg), function)?;
-        Some(if is_chain {
-            TupleWitness::Element(tp)
-        } else {
-            TupleWitness::Whole(tp)
-        })
-    }
-
-    /// The BORROWING type of a value that reads a tuple element, or `None` for anything else.
-    ///
-    /// Both spellings carry it already, which is why this pass never has to type an arbitrary
-    /// `Value` — the thing whose type it could not compute is the projection chain's RESULT,
-    /// and the chain is re-based rather than bound:
-    ///
-    /// * `Value::TupleGet(base, idx)` — the tuple's own element type, borrowing `base`.
-    /// * the `tuple_tmp` block the parser emits when the element is read off something that is
-    ///   not a plain variable (`t.0.0`, `vt[0].0`) — its result type, deps included.  Matched
-    ///   on SHAPE (a `TupleGet` tail) rather than on the block's label, which is a debug string.
-    ///
-    /// A SCALAR element answers `None`: it owns no store, so there is nothing for the @P290
-    /// bracket to protect and the conservative answer costs nothing.
-    ///
-    /// ⚠ The `TupleGet` TAIL is what makes the block admissible, and it is not a formality.
-    /// A block whose tail is a JOIN carries a type that describes only one arm: the `??`
-    /// lowering `{ __ncc_1 = v[i]; if <not null> __ncc_1 else mk(__ref_2) }` is typed
-    /// `ref(τ)["v"]`, yet on the else arm it holds a store `__ref_2` owns.  Binding that to a
-    /// temp would complete the witness set while protecting the wrong store, so the source-free
-    /// it licenses would release `__ref_2`'s record before the frame's own free — a
-    /// use-after-free traded for a leak.  That shape is loft#1105 and is left alone here.
-    fn tuple_read_type(v: &Value, function: &Function) -> Option<Type> {
-        match v.unspan() {
-            Value::TupleGet(base, idx) => {
-                let Type::Tuple(elems) = function.tp(*base).base() else {
-                    return None;
-                };
-                let elem = elems.get(*idx as usize)?;
-                crate::data::is_dbref(elem.base()).then(|| elem.depending(*base))
-            }
-            Value::Block(bl)
-                if matches!(
-                    bl.operators.last().map(Value::unspan),
-                    Some(Value::TupleGet(_, _))
-                ) && crate::data::is_dbref(bl.result.base()) =>
-            {
-                Some(bl.result.clone())
-            }
-            _ => None,
-        }
-    }
-
-    /// The innermost base of a chain of field/element projections — the node a chain is
-    /// ultimately reading out of — or `v` itself when `v` is not a projection.
-    ///
-    /// The chain shape is [`crate::use_analysis::is_projection_op`]'s, the one home the @P290
-    /// bracket's witness walk, the parser's `projection_root_mut` and the two
-    /// container-base walks all read.  A fifth spelling of the same op list is how they
-    /// drifted apart the last time.
-    ///
-    /// The node it answers is the one the caller HOISTS, and hoisting moves it ahead of the
-    /// argument's left-hand siblings.  That is unobservable here because every step of the
-    /// chain is a pure address read — the reorder would matter for a call, which is not a
-    /// projection and stops the walk.
-    fn projection_chain_base<'a>(data: &Data, v: &'a mut Value) -> &'a mut Value {
-        let descend = matches!(
-            v.unspan(),
-            Value::Call(d, cargs)
-                if crate::use_analysis::is_projection_op(data, *d) && !cargs.is_empty()
-        );
-        if !descend {
-            return v;
-        }
-        let Value::Call(_, cargs) = v.unspan_mut() else {
-            unreachable!("matched a projection Call just above")
-        };
-        Self::projection_chain_base(data, cargs.first_mut().expect("checked non-empty"))
-    }
-
-    /// loft#1029 — the work-ref an INLINE-built argument yields, when the callee's return
+        /// loft#1029 — the work-ref an INLINE-built argument yields, when the callee's return
     /// may borrow it.
     ///
     /// `Some(w)` for a value block that fills a work-ref and ends in it — the shape the
