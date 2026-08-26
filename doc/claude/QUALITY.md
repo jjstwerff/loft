@@ -106,7 +106,8 @@ implementations, often in multiple files."* The response has three parts, and tw
 
 **State in one line:** the checklist is finished, the tooling is in place, and the two dead IR
 variants are removed (B3); what remains is three spec decisions (B), one unrun measurement (C),
-a **20-site `unspan` queue to measure** (B4f, widened in B4g), and a branch with **no PR**.
+and a branch with **no PR**.  The `unspan` queue is CLOSED (B4h): all 16 sites are measured,
+gated, or read, with one latent decision change found and no defect.
 The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.
@@ -741,13 +742,48 @@ documented method — the tool is not asked to judge them:
 | site | why it is not a traversal |
 |---|---|
 | `parser::objects::parse_object` | builds IR from tokens; its `Value::` mentions are constructions |
-| `parser::vectors::build_comprehension_code` | likewise a builder, matching on parameters its own caller assembled |
 | `ownership_cfg::op_label` | formats a CFG block's DEBUG LABEL; a `Span` yields `"op"` and nothing decides on it |
 | `scopes::def_reshape_refusals` | `matches!(def.code, Value::Null)` as an empty-body guard |
 | `scopes::construct_rewrite_ops` | its catch-all descends via `for_each_child_mut` into a self-recursive call, so a wrapper is entered rather than dropped — the B6 cure, already applied |
 
 Two more (`scopes::walk_check`, `scopes::check_args`) are `#[cfg(debug_assertions)]`-gated and
 cannot be measured by instrumenting an ordinary build at all.
+
+#### B4h — the queue is CLOSED: every site measured, gated, or read (2026-08-26)
+
+All **16** are now accounted for, and the honest headline is that the sweep found **one**
+latent decision change (`output_if_inner`, above) and no defect. The measurements, corpus-wide
+unless noted:
+
+| site | programs reaching it | arrivals | spanned | answer changes |
+|---|---:|---:|---:|---:|
+| `codegen::add_const` | 863 | 907 453 | 0 | — |
+| `parser::control::is_block_divergent` | 150 | 17 396 | 0 | — |
+| `scopes::is_ref_materialisation` | — | 2 329 | 0 | — |
+| `parser::control::parse_match`'s null-arm test | 54 | 548 | **3** | **0** |
+| `parser::mod::add_defaults` — `&substituted` | 70 | 614 | 0 | — |
+| `parser::vectors::build_comprehension_code` | 28 | 84 | 0 | — |
+| `parser::vectors::try_const_unroll_comprehension` | 16 | 41 | 0 | — |
+| `generation::ops::key_ops::emit` | 18 | 41 | 0 | — |
+| `parser::mod::add_defaults` — `&default` | **2** | **10** | 0 | — |
+| `sandbox::intrinsic_space`'s scan | — | 188 | 6 | 0 (B4f) |
+| `generation::pre_eval::is_void_value` | 45 | 22 | 0 | — (B4f) |
+
+⚠ **`add_defaults`' `&default` position is reported with its reach because 10 arrivals in 2
+programs is not coverage.** It is the true corpus count, not a sample — the whole 863 were
+run — so the right reading is a suite gap, like `Parallel` being reached 4 times in 854
+programs (B2). A zero there is much weaker than the zero beside it at 614.
+
+**`parse_match`'s null-arm test is the third of the three predicates B5 said must not be
+folded, and the only one that had never been measured.** 3 spanned arrivals, 0 answer changes —
+the same result `arm_body_is_null` gave over 4 323, and for the same structural reason: a
+spanned arm is never a null arm. Two independent copies now agree, which is a better argument
+for leaving them separate than the original reasoning was.
+
+⚠ **`build_comprehension_code` was listed above as dismissible by reading, and that was a claim
+rather than a measurement.** It matches on `for_next`, which is IR its own caller assembled and
+which can therefore carry spanned sub-expressions. Measured instead: 84 arrivals over 28
+programs, 0 spanned. The verdict held; the reason it held is now evidence.
 
 **Why this was found at all.** `reach` needed a "does this site peel `Span`" predicate, so the
 one in `unspan` was extracted and shared — and reading it beside a walker that peels via
