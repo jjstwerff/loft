@@ -1546,10 +1546,25 @@ impl Parser {
                     Type::Never | Type::Void | Type::Vector(_, _)
                 )
                 && Self::tail_terminal_is_branch(&l[last])
-                && (result.ret_promo_peels() || !self.tail_if_has_null_arm(&l[last]));
+                // A DIRECT `null` arm was excluded outright (64bd0984, 2026-06-21) because
+                // materialising set `returned = Vector[__retbuf]` on a path that yields
+                // null; @PLN25 then let a DECLARED-nullable return through
+                // (`ret_promo_peels`, which keeps the `?` around the buffer-dep'd base).
+                // The remaining exclusion also suppressed the DELIVERY, and that is
+                // loft#1098: at most ONE arm can BE the buffer (the promotion renames it),
+                // so with TWO OR MORE non-null arms the rest are stores nobody delivers —
+                // the callee's `OpFreeRefIfDistinct` sees the returned store and keeps it,
+                // the caller's binding is typed as a borrow of ITS buffer and frees that
+                // instead, and one store orphans per call. Measured over `-1 => null`
+                // tails: one non-null arm is clean (the rename covers it), and two, three
+                // or a local-plus-literal pair each leaked one per call.
+                && (result.ret_promo_peels()
+                    || !self.tail_if_has_null_arm(&l[last])
+                    || self.tail_nonnull_arm_count(&l[last]) >= 2);
             if std::env::var_os("LOFT_DBG_VMC").is_some() && matches!(result, Type::Vector(_, _)) {
                 eprintln!(
-                    "[vmc] fn={} !tup={} !ifu={} !p1={} ctx={context:?} resV={} tOk={} branch={} !null={} => {vec_match_candidate}",
+                    "[vmc] fn={} !tup={} !ifu={} !p1={} ctx={context:?} resV={} tOk={} \
+                     branch={} !null={} peels={} nonnull={} => {vec_match_candidate}",
                     self.vars.name,
                     !tuple_rewritten,
                     !if_unified,
@@ -1558,6 +1573,8 @@ impl Parser {
                     matches!(t, Type::Never | Type::Void | Type::Vector(_, _)),
                     Self::tail_terminal_is_branch(&l[last]),
                     !self.tail_if_has_null_arm(&l[last]),
+                    result.ret_promo_peels(),
+                    self.tail_nonnull_arm_count(&l[last]),
                 );
             }
             if vec_match_candidate && let Type::Vector(elm, _) = result.ret_promo_base() {
@@ -9998,6 +10015,28 @@ impl Parser {
             Value::Insert(ops) => ops.last().is_some_and(|x| self.tail_if_has_null_arm(x)),
             Value::If(_, t, f) => self.arm_is_null(t) || self.arm_is_null(f),
             _ => false,
+        }
+    }
+
+    /// How many LEAF arms of this branch tail deliver a value rather than the null
+    /// sentinel?  The promotion can rename exactly ONE local onto the caller's return
+    /// buffer, so a tail with two or more of these has arms that must MATERIALISE into
+    /// the buffer instead — the alternative is a store the callee returns and neither
+    /// side frees (loft#1098).  Counts through nested `If`s, which is how a `match`
+    /// lowers, so an else-if chain and a `match` answer alike.
+    fn tail_nonnull_arm_count(&self, v: &Value) -> usize {
+        if self.arm_is_null(v) {
+            return 0;
+        }
+        match v.unspan() {
+            Value::Return(i) | Value::Drop(i) => self.tail_nonnull_arm_count(i),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .map_or(0, |x| self.tail_nonnull_arm_count(x)),
+            Value::Insert(ops) => ops.last().map_or(0, |x| self.tail_nonnull_arm_count(x)),
+            Value::If(_, t, f) => self.tail_nonnull_arm_count(t) + self.tail_nonnull_arm_count(f),
+            _ => 1,
         }
     }
 
