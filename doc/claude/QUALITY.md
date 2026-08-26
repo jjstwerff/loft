@@ -109,8 +109,9 @@ variants are removed (B3); what remains is three spec decisions (B), one unrun m
 and a branch with **no PR**.  The `unspan` queue is CLOSED (B4h): all 16 sites are measured,
 gated, or read, with one latent decision change found and no defect.  The catch-all walker
 queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); **six are
-worked and three more triaged by the boundary question**, one of which yielded two shipped
-bugs (B4i/B4j).  One site (`body_has_buffer_return`) is handed to the sibling checkout rather
+worked and five more triaged by the boundary question**, one of which yielded two shipped
+bugs (B4i/B4j).  B6d has the reading rule that ranks the rest: ask whether the doc says why the
+FALLBACK is right.  One site (`body_has_buffer_return`) is handed to the sibling checkout rather
 than worked, because its machinery is in flight there.
 The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
@@ -1146,6 +1147,34 @@ pair comes to differ, which is the defect this whole thread keeps finding. **The
 handing over is the asymmetry**: `terminal_is_buf` cannot see an `If` that its sibling `walk`
 can, and a false answer there RENAMES a buffer that is already taken — the double-own the
 call site's own comment warns about.
+
+#### B6d — the fallback the author never wrote down is the one that was wrong
+
+Six sites in, the sharpest predictor is not which variants a walker omits. It is **whether its
+doc comment says why the FALLBACK is right.**
+
+| site | what its doc says about the fallback | verdict |
+|---|---|---|
+| `borrow_base_guarded` | *"A revisited var yields `None`: a cyclic chain has no single borrow base, and every caller handles `None` conservatively."* | clean |
+| `view_root_slots` | enumerates every exclusion with a reason, and states the direction — *"an extra marked store can only REFUSE a free, never license one"* | clean |
+| `may_borrow_store` | *"A USER function is not a conflict — it is called with `cell`, not with a live `&mut Stores` — so only `#rust` templates count."* | clean |
+| `worker_returns_capturing_closure` | *"Conservative — only flags closures found directly in return position … an indirect return … falls through to the runtime path rather than a false positive."* | clean |
+| `text_arm_ends_in_text_call` | names which calls are excluded and why (`Op*` yields `&str`, which already unifies) | clean |
+| **`ir_has_user_call`** | **nothing.** Its doc explains the QUESTION well — what a user call is, why a place reaching one must be bound once — and never mentions `_ => false` | **two shipped bugs** |
+
+`ir_has_user_call` was not undocumented. It had a careful doc comment about what the function
+is FOR. What it lacked was a sentence about what happens to everything it does not name, and
+that is exactly where the defect was.
+
+**As a reading rule:** for a negative-fallback subtree predicate, ask what the author wrote
+about the shapes it does not list. A stated reason is evidence someone considered them; silence
+is not evidence of anything, and that is where to spend a probe. Deliberately NOT a detector —
+the axis is semantic, and [DOC_QUALITY.md § B2](DOC_QUALITY.md)'s `incident` pattern is the
+standing reminder that a lexical thermometer for a semantic property gets ignored.
+
+**As a review rule, it is worth more than as a screen:** a walker of this shape should say why
+its fallback is right, in the same block that says what it computes. That is one sentence at
+write time against a measured two bugs.
 
 ⚠ **The rule that makes 52 remaining sites triage rather than grind: does the fallback encode a
 SEMANTIC BOUNDARY, or is it just a shape nobody listed?** `accessor_root_var`'s does — a link

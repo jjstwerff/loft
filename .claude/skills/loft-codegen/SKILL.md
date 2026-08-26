@@ -147,6 +147,30 @@ write an encoded field, and their own comments said so. Merging on the list alon
 folded a raw-slot writer onto an encoded-field writer. Read what each site asks; cite the
 rule it enforces; leave a note where two look alike and must stay apart.
 
+## Say why the FALLBACK is right, not just what the function computes
+
+A walker that recurses over `Value` and ends in `_ => false` / `_ => None` is answering a
+question ABOUT A SUBTREE. Its fallback is a claim — *"none of the shapes I did not name can
+carry this property"* — and a caller that guards on the answer stops guarding when the claim is
+wrong.
+
+**Write that claim down in the doc block, beside what the function computes.** Measured over
+the walkers audited so far, the ones whose doc gives a reason for the fallback were clean, and
+the one whose doc explained only the QUESTION carried two shipped bugs — a compound assign that
+ran its container call twice, and a hoist that wrote the wrong struct. That one was not
+undocumented; it had a careful comment about what a user call is and why a place reaching one
+must be bound once, and nothing about `_ => false`.
+
+Good fallback sentences already in the tree, as models:
+
+- *"a cyclic chain has no single borrow base, and every caller handles `None` conservatively"*
+- *"an extra marked store can only REFUSE a free, never license one"*
+- *"a USER function is not a conflict — it is called with `cell`, not with a live `&mut Stores`"*
+
+If you cannot write the sentence, that is the signal to probe the omitted shapes rather than
+ship the arm. `python3 scripts/ir_walker_audit.py reach` lists these walkers, marks the ones
+whose fallback answers no, and ranks by production reachability.
+
 ## Stop conditions (revert, don't push through)
 
 - You're editing the compiler but cannot point at the working bytecode you intend to
