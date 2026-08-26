@@ -422,13 +422,13 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 322 | 302 | **20** |
+| 322 | 303 | **19** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
 The figures below the fold were measured against the NARROWER matcher this audit shipped with
-(221 · 211 · 10); B4g says what widening it added and why the backlog grew without anything
-regressing.
+(221 · 211 · 10); B4g says what widening it added, why the backlog grew without anything
+regressing, and which site the measurement then took back off it.
 
 **Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
 and conflating them is how a backlog gets "cleared" with nothing fixed:
@@ -646,7 +646,8 @@ six are dedicated `*-const-*` regression tests, so the feature is deliberately c
 
 #### B4g — the audit could only see ONE of the three ways to match a variant (2026-08-26)
 
-The `unspan` backlog went from **10 to 20** without anything regressing. `Value::unspan`'s rule
+The `unspan` backlog went from **10 to 20** without anything regressing (and to **19** once
+one of the new entries was measured and peeled — see below). `Value::unspan`'s rule
 is about *pattern-matching a specific variant*, and Rust spells that three ways; the audit's
 regex recognised one of them.
 
@@ -668,6 +669,26 @@ catch-all that at least exists:**
 | `state::codegen::add_const` | `if let Value::Int(nr) = p { self.code_add(…) }` per width, with no `else`. A spanned constant emits **nothing** — the same silent-not-lossy shape as the `build_const_vectors` pair, which loft#1090 had to close by removing the `_` arm entirely |
 | `generation::pre_eval::create_stack_var` | decides on `if let Value::Call(d, args) = v` and `let Value::Block(bl) = v else { return None }`; a wrapper takes the `None`, so the `&mut var_…` a by-ref argument needs is never emitted |
 | `scopes::check_args` | `if let Value::Insert(ops) = a` guarding the A5.6 corruption panic — and it is `#[cfg(debug_assertions)]`-gated, so it is the second entry that cannot be measured by instrumenting an ordinary build |
+
+**Two of the three measured, 2026-08-26 — one clean, one reachable-and-latent:**
+
+| site | arrivals | spanned | answer changes |
+|---|---:|---:|---:|
+| `codegen::add_const` (863 programs, interp) | 907 453 | **0** | — clean, left alone |
+| `pre_eval::create_stack_var` (54 native programs, 52 reach it) | 95 556 | **4 022** | **0** |
+
+`add_const` is the control this time: the probe fired 907 453 times, so the zero is a
+measurement rather than a vacuum, and no `Span` has ever reached it. `create_stack_var` is the
+`find_first_ref_vars` verdict again — **reachable, latent**. The A/B ran the function's own
+body twice per call, bare and peeled, and the two answers never once differed, which is a
+stronger check than diffing emitted code because the return value is the function's only
+effect. The peel is in anyway: it is one line, it obeys the documented rule, and 4 022 arrivals
+is what makes it a trap rather than a hypothetical — a wrapper there does not pick a different
+arm, it answers `None`, and the `&mut var_…` is then simply not emitted.
+
+Written as a BINDING (`let v = v.unspan();`), not `match v.unspan()`, per the rule B4f arrived
+at: peeling only the scrutinee while something else still walks the original is what
+double-counted the sandbox bound.
 
 ⚠ **The widened matcher over-reports in the same way the narrow one did**, and the report says
 so rather than implying otherwise: `parse_object` BUILDS IR from tokens instead of traversing

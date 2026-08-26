@@ -181,6 +181,11 @@ impl Output<'_> {
     /// local text variable by mutable reference. Returns the variable index so the call site
     /// can emit `&mut var_<name>` without generating a spurious empty block expression.
     pub(super) fn create_stack_var(&self, v: &Value) -> Option<u16> {
+        // `Value::unspan`'s rule: a site that pattern-matches a specific variant peels first.
+        // Both tests below are BINDINGS with no catch-all to fall into, so a wrapper does not
+        // pick a different arm — it answers `None`, and the `&mut var_…` a by-ref argument
+        // needs is then never emitted, with nothing to report it.
+        let v = v.unspan();
         // Direct OpCreateStack call on a variable (text or numeric by-ref): `fn f(x: &T)` called as `f(v)`.
         // The parser wraps the argument as Value::Call("OpCreateStack", [Value::Var(n)]).
         // output_call emits nothing for OpCreateStack, so we must intercept here and emit
