@@ -3102,6 +3102,12 @@ impl Parser {
     /// typed-null sentinel a bare `null` lowers to when coerced to a scalar (`OpConv*FromNull`).
     /// Descends `Block`/`Insert`/`Span` to the tail. Used so an `if`/`match` whose branch is a
     /// bare null widens the result to `Optional(τ)` under DN1 (the absorbed-branch-null fix).
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn branch_yields_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -3132,6 +3138,12 @@ impl Parser {
     /// its own nullability in `a.tp` (folded into `result_type` by the arm-join), and
     /// descending into its lowered chain would hit its synthesised unreachable
     /// `OpConv*FromNull` default and falsely widen (p54).
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn arm_yields_direct_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -10329,6 +10341,12 @@ impl Parser {
     /// not a bare `Value::Null`, so both forms count. A nested `if` arm is NOT null
     /// — that's how enc's nested match-default is distinguished from maybe's direct
     /// `else null`.
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn arm_is_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -10382,14 +10400,20 @@ impl Parser {
         }
     }
 
-    /// #425 — if the return tail is a struct/enum FIELD projection
-    /// (`OpGetField(Var(base), …)`, possibly wrapped in `Return`/`Block`),
-    /// return the base var being projected. Used to decide whether the
-    /// projected field's record is locally owned (and freed at scope exit) or
-    /// caller-owned (a parameter).
+    /// #425 — if the return tail is a projection of a container held by a variable
+    /// (a struct/enum FIELD `OpGetField(Var(base), …)`, or a TUPLE element
+    /// `TupleGet(base, i)`, possibly wrapped in `Return`/`Block`), return the base var
+    /// being projected. Used to decide whether the projected value's record is locally
+    /// owned (and freed at scope exit) or caller-owned (a parameter).
+    ///
+    /// A tuple element is the same question in a different spelling: the read is a
+    /// `Value` VARIANT rather than an op call, so it carries its base as a var NUMBER
+    /// and never appears as `Call(OpGetField, [Var(base), …])`. Both spellings must
+    /// answer, because the caller acts on the projection, not on how it is written.
     fn return_field_base_var(&self, tail: &Value) -> Option<u16> {
         match tail.unspan() {
             Value::Return(inner) | Value::Drop(inner) => self.return_field_base_var(inner),
+            Value::TupleGet(base, _) => Some(*base),
             Value::Block(bl) => bl
                 .operators
                 .last()
@@ -10993,10 +11017,16 @@ impl Parser {
             Value::Insert(ops) => ops
                 .last()
                 .is_some_and(|t| self.return_projects_into_local(t)),
+            // A TUPLE element read is a projection like the two op calls below, spelled as
+            // a `Value` variant: it carries its base as a var NUMBER, so no call pattern
+            // can see it. Rooted at a local, its store dies at scope exit like any other.
+            Value::TupleGet(base, _) => !self.vars.is_argument(*base),
             Value::Call(d, args) if *d == get_field || *d == get_vector => {
                 match args.first().map(Self::projection_base) {
                     // Rooted at a local: freed at scope exit, so the projection dangles.
                     Some(Value::Var(base)) => !self.vars.is_argument(*base),
+                    // A field of a tuple element (`t.0.items`) roots at the tuple local.
+                    Some(Value::TupleGet(base, _)) => !self.vars.is_argument(*base),
                     // A chained projection — recurse to find the root.
                     Some(inner @ Value::Call(bd, _)) if *bd == get_field || *bd == get_vector => {
                         self.return_projects_into_local(inner)

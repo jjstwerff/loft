@@ -186,7 +186,7 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
         let Value::Call(d, args) = cur.unspan() else {
             return None;
         };
-        if !is_view_op(data, *d) {
+        if !crate::use_analysis::is_projection_op(data, *d) {
             return None;
         }
         match args.first().map(Value::unspan) {
@@ -195,23 +195,6 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
             None => return None,
         }
     }
-}
-
-/// Does this op answer a `DbRef` that lives INSIDE its first argument's store?
-///
-/// The one list for the accessor chain a view is read through: a field offset within a
-/// record, an element within a vector, and a keyed lookup, which answers a record of the
-/// collection's own store.  Every walk that asks *"what does this value ultimately read
-/// out of?"* reads it, so a chain recognised by one walk cannot be unrecognised by the
-/// next.
-///
-/// [`crate::use_analysis::is_projection_op`] is the narrower question the @P290 bracket
-/// asks — which ops it can name a PROTECTABLE slot through — and stays separate.
-fn is_view_op(data: &Data, d_nr: u32) -> bool {
-    matches!(
-        data.def(d_nr).name(),
-        "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
-    )
 }
 
 /// What an argument LIFTED into a `__lift_N` temp borrows — the deps its type must carry.
@@ -252,7 +235,9 @@ fn lift_view_deps(arg: &Value, data: &Data) -> Option<Vec<u16>> {
             }
             Some(d)
         }
-        Value::Call(d_nr, cargs) if is_view_op(data, *d_nr) => lift_view_deps(cargs.first()?, data),
+        Value::Call(d_nr, cargs) if crate::use_analysis::is_projection_op(data, *d_nr) => {
+            lift_view_deps(cargs.first()?, data)
+        }
         _ => None,
     }
 }
@@ -6570,15 +6555,31 @@ impl Scopes {
                 // call is nameable — so the witness set read incomplete and the caller copied
                 // the returned store, orphaning the one the callee minted.
                 //
-                // Binding it to a temp is the same cure the two cases above take, generalised to
-                // the question itself: if the bracket cannot name the value, give it a name.  The
-                // preamble runs BEFORE the bracket is emitted, so the temp holds the real `DbRef`
-                // by then — which is why the hand-written `e = v[0] ?? mk(); pick(e, …)` was
-                // always clean and this now emits the same thing.
+                // Binding it to a temp is the same cure the cases above take, generalised to the
+                // question itself: if the bracket cannot name the value, give it a name.  The
+                // preamble runs BEFORE the bracket is emitted, so the temp holds the real
+                // `DbRef` by then — which is why the hand-written `e = v[0] ?? mk(); pick(e, …)`
+                // was always clean and this now emits the same thing.  And because the name is
+                // taken at RUNTIME, the bracket protects whichever store the value turned out to
+                // be, which is what makes one temp serve a join whose arms disagree about it.
                 //
-                // The temp takes the CALLEE'S PARAMETER type, because that is what the argument
-                // is converted to anyway and it is the one type available for a value with no
-                // variable behind it.
+                // ⚠ LAST in the chain, and that is load-bearing rather than tidy.  The temp
+                // takes the CALLEE'S PARAMETER type — the one type available for a value with no
+                // variable behind it — and a parameter declaration carries NO DEPS, so the temp
+                // reads as an OWNER of whatever it holds.  For every shape the arms above claim
+                // that is wrong: a tuple element and a projection chain are VIEWS of a store the
+                // caller owns, and an owner's scope-exit free would release a record the caller
+                // still reaches.  Ordered after them, this arm only ever sees values no earlier
+                // arm could type.
+                //
+                // …and the temp BORROWS what the value borrows, which is the type
+                // `unnameable_borrow_source` answers: the callee's parameter SHAPE carrying
+                // `lift_view_deps`'s answer for the argument.  A `skip_free` temp would also
+                // stop the over-free, and it says less — "do not free me" rather than "whose
+                // store is this", which is the question `Type::depend`'s other readers ask.
+                // Where the walk can name no source the argument is NOT bound at all, so a
+                // value with no provenance costs the leak it already had rather than a name
+                // that cannot say why it is safe.
                 let tmp = self.new_lift_var(function, &tp);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
@@ -7910,6 +7911,18 @@ impl Scopes {
     }
 }
 
+/// Does this return expression's terminal value reduce to `null` — a bare `Value::Null`
+/// or the reference sentinel `null_nr` names?
+///
+/// Descends `Block`/`Insert`/`Span` to the tail.  A nested `if` is NOT descended: an arm
+/// that IS null and a branch that merely CONTAINS one are different answers, and only the
+/// first belongs to a terminal — `return_has_null_arm` is the walker that asks the second.
+///
+/// A `Return`/`Drop` wrapper IS descended, because this is asked about a return
+/// EXPRESSION and the wrapper is the thing being examined.  The `parser::control`
+/// siblings (`branch_yields_null`, `arm_yields_direct_null`, `arm_is_null`) ask the same
+/// null question about what an ARM hands to a JOIN — where a `return` hands it nothing —
+/// and stop at the wrapper.
 fn is_null_terminal(expr: &Value, null_nr: u32) -> bool {
     match expr.unspan() {
         Value::Null => true,
@@ -8077,6 +8090,12 @@ fn return_has_non_source_arm(expr: &Value, sources: &[u16]) -> bool {
 ///
 /// `null_sentinel_nr` is `OpNullRefSentinel`'s def number (resolved by the
 /// caller, which holds `data`).
+///
+/// A `Return`/`Drop` wrapper IS descended, because this is asked about a return
+/// EXPRESSION and the wrapper is the thing being examined.  The `parser::control`
+/// siblings (`branch_yields_null`, `arm_yields_direct_null`, `arm_is_null`) ask the same
+/// null question about what an ARM hands to a JOIN — where a `return` hands it nothing —
+/// and stop at the wrapper.
 ///
 /// One home, because the same fact decides two things at opposite ends of one return:
 /// whether scope analysis may suppress the work-ref's free (here), and whether the
@@ -9143,7 +9162,19 @@ pub fn worker_calls_parent_write_deep(data: &Data, worker_d_nr: u32) -> Option<S
     })
 }
 
-#[allow(dead_code)]
+/// Find a parent-state write reachable from `value`, following calls into user fns.
+///
+/// The recursive half of `worker_calls_parent_write_deep`: it answers with the chain
+/// `" → helper → bad_callee"` for the first write it reaches, and `None` when every path
+/// bottoms out in a pure, host-io or unannotated-native primitive.  `visited` stops a
+/// recursive call graph from looping.
+///
+/// This is PRODUCTION-WIRED — `parse_parallel` turns a `Some` into the C93 `Level::Error`
+/// that refuses the program — so a subtree it does not enter is a refusal that does not
+/// happen, and the write then runs in a worker thread against a read-only store.  That is
+/// why the fallback descends via the keystone instead of naming arms: the arm list below
+/// is shared with `walk_par_unsafe_reason_value`, and a wrapper missing from both is a
+/// verdict issued without looking.
 fn walk_deep_parent_write(
     value: &Value,
     data: &Data,
@@ -9211,11 +9242,9 @@ fn walk_deep_parent_write(
         }
         Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, current_fn, visited),
         Value::Span(b) => walk_deep_parent_write(&b.1, data, current_fn, visited),
-        // Descends via the keystone, for the reason its twin `walk_par_unsafe_reason_value`
-        // does: the arms above are the same list, and they do not include `Return`, so a
-        // worker whose body is `return helper(...)` was reported free of parent writes without
-        // that call ever being examined.  The two walkers are near-copies; fixing one and not
-        // the other is how they came to differ from `is_par_safe` in the first place.
+        // Every other shape descends through the keystone, so a wrapper the arms above do
+        // not name still has its subtree searched.  `walk_par_unsafe_reason_value` is a
+        // near-copy of this arm list and ends the same way for the same reason.
         other => {
             let mut found = None;
             other.for_each_child(&mut |c| {

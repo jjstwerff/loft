@@ -302,6 +302,25 @@ to anchor the question on named rules once the system outgrows one head, and the
 error of merging two things that are merely equal *today*, is the **`design-protocol`
 sibling skill**, § *Before you write it*.
 
+## The dual sensor — "does this notion have a second spelling?"
+
+The sensor above asks whether the thing you are about to write already exists. Its dual asks
+whether the thing you are about to MATCH arrives more than one way. A notion the system treats as
+one — a projection, a null, a borrow, an identifier, a unit — can reach your input in two
+representations, and a matcher keyed on one is blind to the other **silently**: the missing
+representation shares no token with the one you search for, so the blindness cannot be found from
+the symptom. Searching for what you DO match returns every site that gets it right.
+
+The normal appearance of it is therefore a matcher that is **right about every case it can see**,
+which is why care does not catch it and why a passing suite is not evidence. The check is a
+question before you write the predicate — *what else IS one of these?* — and the proof is the
+other representation, constructed by hand, arriving where the matcher is not looking.
+
+Where a project has more than a couple of these, the answer belongs in an instrument rather than
+in attention: a screen that lists every site resolving the notion one way and says which of them
+also handle the other. That is a short script, and it ranks a backlog that otherwise reads as
+uniformly suspect.
+
 ## The blind-instrument tell — upgrade the eyes, don't guess
 
 *The tell* above fires on your **code**; this one fires on your **instrument**. You

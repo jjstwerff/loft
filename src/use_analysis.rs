@@ -2402,26 +2402,44 @@ fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
 /// One home for the question, because the answer must be the same one
 /// [`protectable_ref_args`] will reach later — a hoist decided on a different reading would
 /// either bind arguments nothing needed, or leave the leak it was meant to close.
+///
+/// Every op [`is_projection_op`] lists widens what this can name, so a precise witness and the
+/// bind below are not rivals: the bind is what catches whatever the witness still cannot reach.
 #[must_use]
 pub fn bracket_can_name(data: &Data, arg: &Value) -> bool {
     view_root_slots(data, arg).is_some()
 }
 
-/// Is `d_nr` a field/element PROJECTION — an op that answers a `DbRef` derived from
-/// its first argument and living in that argument's store?
+/// Is `d_nr` a field/element PROJECTION — an op that READS a `DbRef` out of its first
+/// argument and answers one living in that argument's store?
 ///
-/// `OpGetField` offsets within the record (`DbRef { store_nr, rec, pos: pos + off }`)
-/// and `OpGetVector` indexes within the vector's own store (its out-of-range sentinel
-/// preserves `store_nr` too), so for both the root variable's store IS the result's
-/// store. That makes a projection chain nameable by its root, which is what lets the
-/// @P290 bracket protect `pick(b.s, …)` and `pick(w[0], …)`.
+/// Each of the four offsets or indexes within a store somebody else owns and allocates
+/// nothing: `OpGetField` moves within the record (`DbRef { store_nr, rec, pos: pos + off }`),
+/// `OpGetVector` indexes within the vector's own store (its out-of-range sentinel preserves
+/// `store_nr` too), `OpVectorRef` dereferences a linked element's record pointer, and
+/// `OpGetRecord` looks a key up in a keyed collection.  For all four the root variable's
+/// store IS the result's store, which is what makes a projection chain nameable by its root
+/// and lets the @P290 bracket protect `pick(b.s, …)`, `pick(w[0], …)` and `pick(h[k], …)`.
 ///
-/// One list, two readers: the parser's `Parser::projection_root_mut` walks the same
-/// chain to decide which inline container needs a name, and this decides which store
-/// the bracket marks. Two lists of the same two ops would drift.
+/// **The criterion is not "the return deps on parameter 0"**, which several more ops also
+/// satisfy: `OpNewRecord` and `OpInsertVector` both answer a `DbRef` in argument 0's store
+/// and are excluded, because they GROW that store rather than read it — a chain rooted at one
+/// is a construction, and the readers below ask which container an existing view came out of.
+///
+/// One list, four readers, because the alternative is measured rather than hypothetical: a
+/// list SHORT by `OpGetRecord` left `pick(h[k], …)` without a witness, so the caller kept the
+/// conservative never-free answer and leaked one record per call at every keyed kind (hash /
+/// sorted / index, both backends).  The four readers are this bracket's
+/// [`view_root_slots`], the parser's `Parser::projection_root_mut` (which inline container
+/// needs a name), `scopes::base_container_var` and `generation::container_element_base` (@PLN130
+/// F2 — which container a view reads out of).  They ask different questions of the same shape;
+/// keeping the shape in one place is what stops the answers drifting apart.
 #[must_use]
 pub fn is_projection_op(data: &Data, d_nr: u32) -> bool {
-    d_nr == data.def_nr("OpGetField") || d_nr == data.def_nr("OpGetVector")
+    matches!(
+        data.def(d_nr).name(),
+        "OpGetField" | "OpGetVector" | "OpVectorRef" | "OpGetRecord"
+    )
 }
 
 /// loft#981 / loft#982 — may this call site set `OpCopyRecord`'s `0x8000` source-free

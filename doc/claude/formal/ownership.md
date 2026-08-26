@@ -157,18 +157,115 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A NARROWED 2026-08-25
-to a single cell — an inline-minting `match` arm — with every other cell fixed, and that
-cell's one known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-11,
-D-own-10 and D-own-9 opened and closed 2026-08-26, D-own-7 opened and closed 2026-08-23, and
-D-own-6 before it;
-the five original D-own deviations remain resolved.  Read those entries for what their oracles vary before treating any zero
+OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+`match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; **D-own-13,
+2026-08-26**, a nullable heap local carries no ownership fact at all) — D-own-12 records the two
+witness spellings closed here and points at D-own-11 for the other two; D-own-9, D-own-10 and
+D-own-11 opened and closed 2026-08-26, D-own-7
+opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
+remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
 axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
 rather than from an oracle at all, and how its second face was found by varying the POSITION
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-13 — NARROWED (2026-08-26, loft#1106): the ELEMENT position still has no ownership fact
+
+`(O-Complete)` requires the ownership fact PER BINDING, and a nullable heap LOCAL now has one:
+loft#1106 routes its first bind through the same `OpBindOrCopy` the non-null twin uses, so the
+value is copied out and owned and `(B-Copy)` holds again. Measured here after the merge —
+`r?.x = 55` no longer reaches `q`, and the repro is leak-clean.
+
+**The nullable value in an ELEMENT position is outside that cure**, and the cure is deliberately
+narrow: it fires for a JOIN with a nameable witness and every other nullable bind keeps the plain
+adopt.
+
+```loft
+fn pickn(s: Sn?, c: boolean) -> Sn? { if c { s } else { mkn() } }
+fn elem(c: boolean)  -> integer { v: vector<Sn?> = [Sn { a: 7 }]; r = pickn(v[0], c); r?.a }
+fn local(c: boolean) -> integer { q: Sn? = Sn { a: 7 }; r = pickn(q, c); r?.a }        // clean
+```
+
+Two records per iteration at `kt=__nullable<Sn>`, values correct on both arms, both backends —
+and **binding `v[0]` to a local first does NOT cure it**, which is the discriminator that told
+D-own-13 from D-own-11 in the first place: a witness gap is cured by a name, an ownership gap is
+not. Pre-existing rather than a merge artefact (measured on a build from before the loft#1106
+work). Left to the checkout that owns `nullable_join_first_bind`, because widening it is the
+decision that has to stay clear of the by-accident trap the entry below records.
+
+### D-own-13 (first face) — CLOSED (2026-08-26, loft#1106): a nullable heap local carried no ownership fact
+
+`(O-Complete)` requires the ownership fact PER BINDING.  An `Optional(Reference)` local has
+none: `data::is_dbref` lists the eight store-carrying kinds and not the `Optional` wrapper, so
+`--show-ownership` renders a `P?` variable as `— (scalar)`, nothing frees it, and the @P290
+bracket cannot name it either.
+
+```loft
+struct P { x: integer = 3 }
+fn mk() -> P? { P { x: -1 } }
+fn pick(a: P?, c: boolean) -> P? { if c { a } else { mk() } }
+fn plain(c: boolean) -> integer { q = P { x: 7 }; r = pick(q, c); r?.x }   // leaks one per call
+fn declared(c: boolean) -> integer { q: P? = P { x: 7 }; r = pick(q, c); r?.x }  // clean
+```
+
+Both backends, values correct throughout.  The axis is the ARGUMENT'S OWN declared type: with
+`q` declared `P?` the result's deps come back empty and the caller frees it, and with `q`
+inferred `P` they name `q`, so the caller reads a borrow and the minted store is orphaned.
+
+⚠ **This is not D-own-11 with a different argument, and the test that separates them is the
+hand-bound spelling.** Every witness gap in D-own-11 is cured by binding the argument to a
+local first; this one is not — `e = q; pick(e, c)` leaks identically.  A witness gap is about
+what the bracket can NAME; this is about what the type system says anyone OWNS.
+
+The obvious cure was measured and rejected: peeling `is_protectable_store_type` to `.base()`
+(matching the `heap_dep` gate three lines above it, which peels for exactly this reason) leaves
+the leak untouched, because the missing free is not the bracket's to license.  Resolving it is
+a decision about which of `is_dbref`'s callers see through the `Optional` wrapper — and
+`is_dbref`'s own doc already records that this list drifts SHORT when restated, with
+`Parser::is_heap_handle` named as "the same question with a `.base()` peel".
+
+### D-own-12 — CLOSED (2026-08-26): the witness list was short by two OPS, and the count of homes for that list was wrong
+
+D-own-6 closed on the claim that *"the runtime Join witness now covers every argument it can
+name."*  Four spellings have been found since that it could not name, all on the same axis its
+own closing paragraph identifies as the one its oracle never varied.  Two of them are this
+entry's; the other two are D-own-11's, closed in the sibling checkout by the general
+`bracket_can_name` question rather than by a fifth shape.
+
+| spelling | what the walk answered | where it closed |
+|---|---|---|
+| `pick(t.0, …)` — a tuple ELEMENT | `None`: `Value::TupleGet` is not a call, so no op-name list can see it | loft#1104, bound at the call site like the construction family |
+| `pick(t.0.s, …)`, `pick(t.0[0], …)`, `pick(t.0.0, …)`, `pick(vt[0].0, …)` — a CHAIN over one | `None` for the same reason, one or two nodes down | loft#1104 — the ELEMENT is bound and the chain RE-BASED on it, so the temp carries the type the tuple declares |
+| `pick(h[k], …)` — a KEYED lookup at hash, sorted and index alike | `None`: `OpGetRecord` was absent from `is_projection_op` | **here** — the op list merged onto one home |
+| `pick(v[i] ?? mk(), …)` — a join whose arm MINTS | `None`: the arm is a call, and a call is deliberately not a projection | loft#1105, D-own-11 |
+
+**The list `view_root_slots` reads was short by two ops, and three other homes already had them.**
+`OpGetRecord` is declared `-> reference[data]`, so a keyed lookup answers a record living in the
+collection's own store and the root variable is exactly the witness the bracket wants.
+`is_projection_op`'s doc said *"One list, two readers … Two lists of the same two ops would
+drift."*  Measured: **seven sites spell that list by hand across six files, in four distinct
+memberships**, and the two that had the right answer (`scopes::base_container_var`,
+`generation::container_element_base`) are byte-identical copies of each other.  Merged onto the
+one home rather than adding the op a fourth time; the doc now also states the criterion it is NOT
+(*"the return deps on parameter 0"*, which `OpNewRecord` and `OpInsertVector` also satisfy — they
+GROW the store rather than read it).
+
+⚠ **The chain rows are why binding is not always the answer.**  A chain's temp must carry the
+projection's RESULT type, which this pass cannot compute; binding its BASE needs only the type the
+tuple already declares.  A temp typed off the CALLEE'S PARAMETER instead carries no deps and so
+reads as an OWNER — and a free emitted for a store the tuple base still owns is a use-after-free,
+not a leak.  That is the one direction this machinery's own comments warn about, and it is why the
+element is bound and the chain re-based rather than the whole argument being bound.
+
+**What generalises past this entry:** D-own-6 named the argument spelling as the axis its oracle
+pinned, and then closed on a fix that enumerated the spellings *it had thought of*.  An axis named
+in a closure is not an axis measured by it.  Each found since was reached by moving one more thing
+— a tuple base, a projection above it, a keyed container, a `??` — and each took one probe.
+D-own-11's closing sentence is the generalisation both halves arrived at from opposite ends:
+**a predicate that enumerates SHAPES will keep being one shape short.**
 
 ### D-own-11 — CLOSED (2026-08-26, loft#1105): an argument the borrow bracket could not NAME leaked the callee's minted store
 
@@ -212,6 +309,24 @@ leaves the IR byte-identical over all 875.**  Forced ahead it disagrees with the
 oracle (`tuples.md` D-tup-3 has the measurement), so it is removed rather than reordered.  Neither
 guard could tell: both pass with it live, dead, or gone.  **A shape arm behind a question arm is
 dead code that still reads like a safety net.**
+
+⚠ **A bind is not free of consequences, and this entry's first form paid both.** The temp takes
+the CALLEE'S PARAMETER type, and a parameter declaration carries NO DEPS — so a temp holding a
+VIEW read as an OWNER and the frame freed a record the CALLER still reached. `use_hash(h, true)`
+then `h[7].tag` answered null; the tuple spelling answered `12884901900`; `LOFT_POISON=1` panicked
+on a corrupt reference. And the arm as first placed came BEFORE the tuple-element one, so a tuple
+element — not a `Var`, not nameable — never reached the arm that types its temp off the TUPLE's
+own declared element type. Both are fixed here: the arm is ORDERED LAST, and its temp is
+`skip_free`, because **a witness OWNS NOTHING** — something else already owns whatever it holds
+(the `??`'s own work-ref on the minting arm, the container on the view arm).
+
+⚠ **Neither checkout's matrix could see it, and the axis both pinned is worth the sentence:
+every cell built its container INSIDE the function that called.** A free that should not happen
+then lands on a store dying at the same scope exit, `H-FreeTwice` absorbs it as a silent no-op,
+and neither the value channel nor the leak channel says anything. The general form —
+**a leak channel cannot score an over-free**, because the gate is monotone and freeing MORE always
+reads as an improvement — is QUALITY.md § B6k. Cells:
+`kb_outlives_*` and `tb_outlives*` in the two `…-can-witness-the-bracket` guards.
 
 **Measured.** Six cells, both backends, values IDENTICAL before and after — a pure leak, so
 `LOFT_STRICT_STORES=1` is the instrument and the assertions score nothing.  A control at
@@ -936,6 +1051,12 @@ Both answered wrong IDENTICALLY on the two backends, so `(O-NoDiverge)` held whi
 worktree at `f7a57124` (the value cells by assertion, the leak cell by the wrap leak gate).
 
 ### D-own-6 — CLOSED (2026-08-20, loft#1029): the runtime Join witness now covers every argument it can name
+
+> ⚠ **Read D-own-11 and D-own-12 with this.**  The heading's claim did not hold: four further
+> argument spellings have been found that the witness could not name, on the very axis the closing
+> paragraph below identifies as the one its oracle never varied.  All four are now closed, and
+> D-own-11 records why the cure had to become a QUESTION rather than a fifth shape.
+
 
 `(O-Complete)` accepts the Join as *inherently runtime*: a callee whose return may borrow a
 parameter is completed per-path by the @P290 bracket — `protect_store_frees` marks each ref

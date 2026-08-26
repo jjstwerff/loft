@@ -228,6 +228,18 @@ all-`(integer, integer)` oracle cannot express, so the zero above never covered 
 > the general one on every case it can still reach, and disagrees with the ORACLE on the one case
 > it cannot, is not precision being preserved — it is a second derivation drifting.**
 >
+> ⚠ **The bare `t.0` is one cell of six, and the other five were found by moving the axes the
+> first sweep pinned** — the chain's OP, the container the tuple sits in, and the index.
+> `pick(t.0.s, …)`, `pick(t.0[0], …)` and `pick(t.1.s, …)` put a projection CHAIN above the
+> element; `pick(t.0.0, …)` and `pick(vt[0].0, …)` read the element off something that is not a
+> plain variable, which the parser lowers to a `tuple_tmp` block; and `pick(t.0.0.s, …)` is both
+> at once, invisible until the block shape had a cure. **WHICH NODE gets the name is the whole
+> distinction, because it decides the type the temp carries.** A chain is RE-BASED on the temp
+> rather than bound: the ELEMENT's type is one the tuple declares, while the chain's RESULT type
+> would have to be inferred, and a temp typed off the CALLEE'S PARAMETER instead carries no deps —
+> it then reads as an OWNER of a store it only views, and the free that follows is a
+> use-after-free rather than a leak (QUALITY.md § B6k).
+>
 > ⚠ **The class, and this is its fourth instance in a week: one notion, two spellings, one looked
 > for.** A projection resolved by OP NAME cannot see the `TupleGet` spelling; the same blindness
 > reaches `Parser::expr_borrows_local` (latent there — the deps leg covers what the op list
@@ -374,6 +386,15 @@ all-`(integer, integer)` oracle cannot express, so the zero above never covered 
   place the native layout stops being inline bytes, so it is exactly where a layout differential
   earns its keep. Widening `17-tuples-recursion` to a heap element type is the fix; until then
   the zero above is bounded by what the oracle covers.
+- ⚠ **`(T-Cons)` says nothing about OWNERSHIP, and the third element type shows why that is a
+  gap rather than a silence.** Given a heap LOCAL, a tuple literal stores its handle while a
+  struct literal and a vector literal both COPY (`t = (vl, 9)` sees a later `vl[0] = 41`;
+  `S { v: vl }` and `[vl]` do not, both backends). So a tuple element is aliased without the
+  `&` that [binding.md](binding.md) `B-Copy` says aliasing requires — while `(T-Ref-El)` above
+  REFUSES a collection element in the `&(…)` form that asks for it. Which of the two answers is
+  the rule is an open design question (**loft#1102**); either way `(T-Cons)` owes a clause, and
+  the `OPEN: 0` above does not cover this because the oracle carries no collection element
+  either.
 
 ---
 

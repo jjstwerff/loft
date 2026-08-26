@@ -3745,6 +3745,14 @@ impl Parser {
             // Type-only: consume the body so the parser stays aligned.
             let mut throwaway = Value::Null;
             self.parse_object(struct_d, &mut throwaway);
+            // …and leave a NON-NULL placeholder behind.  Pass 1 builds no IR here, so `code`
+            // would keep the `Value::Null` its caller initialised it with — and a caller that
+            // asks "is this operand the `null` LITERAL?" cannot tell that apart from "not
+            // built yet".  `??`'s `?? null` soundness check asks exactly that, so on pass 1 it
+            // read `v[i] ?? S { … }` as a nullable fallback and typed the result `τ?`, which
+            // pass 2 could not take back: `s.x` then resolved against `__nullable<S>` and the
+            // program was refused with a synthetic type name the author never wrote.
+            *code = Value::Insert(Vec::new());
             return enum_tp;
         }
         let some_kt = self.data.def(some_d).known_type();

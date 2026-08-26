@@ -2229,6 +2229,66 @@ impl Lexer {
         }
     }
 
+    /// Is the parenthesised group just opened a TUPLE literal — does a top-level `,`
+    /// reach the caller before the group's own `)`?
+    ///
+    /// The caller needs the answer BEFORE it parses member 0, which is the only member
+    /// parsed before a `,` has proved anything: a tuple MEMBER is not the enclosing
+    /// assignment's whole value, so it must not adopt that assignment's destination
+    /// variable as its build accumulator the way a parenthesised expression legitimately
+    /// does.
+    ///
+    /// Two things stop the walk short of the closer, and both answer `false`:
+    ///
+    /// * a depth-0 `;`, or end of input — inside parentheses that means the source is
+    ///   malformed, and stopping keeps the scan STATEMENT-LOCAL.  That bound is not only
+    ///   about speed: [`revert`](Self::revert) restores the token STREAM and not the
+    ///   reporting cursor (a replayed token deliberately leaves `position` where the scan
+    ///   reached), so however far this walks is how far a diagnostic raised inside the
+    ///   replayed region has its caret pushed.  Unbounded, an unclosed `(` moved its caret
+    ///   from the offending line to the end of the function.
+    /// * a string literal, stopped BEFORE it is consumed.  A string may carry an
+    ///   interpolation HOLE, and the scanner's hole state (`in_format_expr`,
+    ///   `open_strings`, the backtick dedent stack) is not part of what a revert restores —
+    ///   crossing one and coming back leaves the lexer describing a string it is no longer
+    ///   inside, and the enclosing group then fails to close.  The answer given up costs
+    ///   nothing: a text member does not adopt the destination, so a `(` group led by a
+    ///   string was already correct without this.  A vector LITERAL whose first element is
+    ///   an interpolated string is the shape this concedes.
+    ///
+    /// Deliberately not [`recover_to`](Self::recover_to), whose depth walk this otherwise
+    /// mirrors: recovery is allowed to cross a string, and this is not.
+    pub fn peek_tuple_literal(&mut self) -> bool {
+        let saved = self.link();
+        let mut depth: i32 = 0;
+        let mut found = false;
+        loop {
+            if matches!(self.peek.has, LexItem::None | LexItem::CString(_)) {
+                break;
+            }
+            if depth == 0 {
+                if self.peek_token(",") {
+                    found = true;
+                    break;
+                }
+                if self.peek_token(";") {
+                    break;
+                }
+            }
+            if self.peek_token("(") || self.peek_token("[") || self.peek_token("{") {
+                depth += 1;
+            } else if self.peek_token(")") || self.peek_token("]") || self.peek_token("}") {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            self.cont();
+        }
+        self.revert(saved);
+        found
+    }
+
     /// Shorthand test if the current element is a specific token and skip it if found.
     pub fn has_token(&mut self, token: &'static str) -> bool {
         if self.peek_token(token) {

@@ -1780,3 +1780,57 @@ fn quality_unspan_table_matches_the_audit() {
          {nums:?} — re-run the audit and update the row"
     );
 }
+
+/// The `spellings` table in QUALITY.md must match what the audit actually reports.
+///
+/// The sibling of [`quality_unspan_table_matches_the_audit`], for the same reason: the row is
+/// a count offered as open work, and a hand-maintained figure describing a mechanically
+/// derivable fact is a promise to remember. This is the check that replaces remembering.
+///
+/// Skips rather than fails when the script cannot run, so a machine without python3 does not
+/// turn a doc gate into a red build.
+#[test]
+fn quality_spellings_table_matches_the_audit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new("python3")
+        .arg(root.join("scripts/ir_walker_audit.py"))
+        .arg("spellings")
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            eprintln!("SKIP quality_spellings_table_matches_the_audit: cannot run the audit");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let nums: Vec<u32> = stdout
+        .lines()
+        .filter_map(|l| l.rsplit(':').next())
+        .filter_map(|t| t.trim().parse::<u32>().ok())
+        .take(3)
+        .collect();
+    assert_eq!(nums.len(), 3, "audit header changed shape; got: {stdout}");
+
+    // Anchored on the table's own header, like the unspan gate: another numeric table added
+    // above it must not silently become the subject of this check.
+    let doc = std::fs::read_to_string(root.join("doc/claude/QUALITY.md")).expect("QUALITY.md");
+    let lines: Vec<&str> = doc.lines().collect();
+    let header = lines
+        .iter()
+        .position(|l| l.starts_with("| functions resolving a projection by OP NAME"))
+        .expect("the spellings table header is gone from QUALITY.md — update this gate with it");
+    let row = lines
+        .get(header + 2)
+        .expect("the spellings table is truncated after its header");
+    let cells: Vec<u32> = row
+        .split('|')
+        .filter_map(|c| c.trim().trim_matches('*').parse::<u32>().ok())
+        .collect();
+    assert_eq!(
+        cells, nums,
+        "QUALITY.md's spellings row says {cells:?} and `ir_walker_audit.py spellings` reports \
+         {nums:?} — re-run the audit and update the row"
+    );
+}

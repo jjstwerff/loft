@@ -522,6 +522,35 @@ fn maybe(k: integer) -> integer? { if k > 5 { 7 } else { null } }
 
 x: integer = maybe(k);                            // ERROR, correctly
 x: integer = if k == 9 { maybe(k) } else { 1 };   // ERROR, correctly  (the FIRST arm)
+x: integer = if k == 9 { 1 } else { maybe(k) };   // compiles; x is `integer` and holds null
+```
+
+The variable is genuinely non-null — the IR reads `x(1):integer` and `LOFT_VAR_TABLE` agrees, so
+nothing was widened to `integer?` behind the declaration. The same hole reaches a RETURN
+(`fn c(k) -> integer { if k == 9 { 1 } else { maybe(k) } }` returns null), a non-null FIELD, a
+`text` slot, a struct slot, and — worst — a NARROW width, where this rule keeps a hard error
+precisely because *"the null would collide with a real value"*: `x: u8 = if k == 9 { 1 as u8 }
+else { maybe8(k) }` compiles and `x` is null.
+
+**Mechanism.** The FIRST arm's type becomes the join type, and a later arm is checked against the
+first arm's type rather than against the declaration, so its `Optional` is dropped instead of
+reported (`parse_if` hands the else arm the then arm's type as its expected type — the loft#978
+site in `src/parser/control.rs`). `(N-Join)` — *"made OPTIONAL iff some `τᵢ` is optional"* — is
+the rule the join is missing; the declared destination should then take `(N-Decl)` + `(N-Store)`
+against that join, exactly as the direct spelling does.
+
+A LITERAL null in a later arm IS caught, by a different mechanism — the DN1 null-arm walkers
+match the `OpConv*FromNull` spelling. So this is the same shape QUALITY.md § B6g names: one
+notion with two spellings, and only one of them is looked for. Nothing asks about a
+nullable-TYPED value at a join.
+
+⚠ **This entry is why the `OPEN: 0` above needed re-measuring.** The register recorded `(N-Store)`
+as *"CLOSED + verified both backends"*; that zero is bounded by its oracle, and every cell here is
+a BRANCH JOIN while the verified spelling is the direct one.
+
+Tracked as **loft#1103**. Workaround (verified both backends): discharge inside the arm
+(`else { maybe(k) ?? 0 }`) or at the join (`(if … else …) ?? 0`).
+
 x: integer = if k == 9 { 1 } else { maybe(k) };   // compiled; x was `integer` and held null
 ```
 

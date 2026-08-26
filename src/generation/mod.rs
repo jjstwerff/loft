@@ -954,10 +954,7 @@ pub fn container_element_base(data: &Data, value: &Value) -> Option<u16> {
         let Value::Call(d, args) = cur.unspan() else {
             return None;
         };
-        if !matches!(
-            data.def(*d).name(),
-            "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
-        ) {
+        if !crate::use_analysis::is_projection_op(data, *d) {
             return None;
         }
         match args.first().map(Value::unspan) {
