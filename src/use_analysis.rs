@@ -2383,6 +2383,22 @@ fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
     }
 }
 
+/// Can the @P290 bracket NAME the store this argument's value will lie in?
+///
+/// `false` means the witness set would read incomplete at this argument, and the caller then
+/// keeps the conservative never-free answer — correct, but it copies the returned store and
+/// orphans the one the callee minted, one record per call. The cure is to give the value a
+/// NAME (bind it to a temp before the call), which is what `Scopes::scan_args` does; this is
+/// the question it asks first.
+///
+/// One home for the question, because the answer must be the same one
+/// [`protectable_ref_args`] will reach later — a hoist decided on a different reading would
+/// either bind arguments nothing needed, or leave the leak it was meant to close.
+#[must_use]
+pub fn bracket_can_name(data: &Data, arg: &Value) -> bool {
+    view_root_slots(data, arg).is_some()
+}
+
 /// Is `d_nr` a field/element PROJECTION — an op that answers a `DbRef` derived from
 /// its first argument and living in that argument's store?
 ///

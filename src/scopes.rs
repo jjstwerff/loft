@@ -6474,6 +6474,29 @@ impl Scopes {
                 preamble.extend(ops);
                 ls.push(Value::Var(w));
             } else if let Some(tp) =
+                Self::unnameable_borrow_source(&scanned, outer_call, arg_idx, data, function)
+            {
+                // loft#1105 — an argument the @P290 bracket cannot NAME, at a call whose return
+                // may borrow it.  The bracket protects a store through a variable holding a
+                // `DbRef`, and `view_root_slots` walks a bare `Var`, a projection chain and a
+                // JOIN to find one.  A `??` in argument position lowers to an `ncc` BLOCK whose
+                // tail is a join with a CALL arm, and neither the multi-statement block nor the
+                // call is nameable — so the witness set read incomplete and the caller copied
+                // the returned store, orphaning the one the callee minted.
+                //
+                // Binding it to a temp is the same cure the two cases above take, generalised to
+                // the question itself: if the bracket cannot name the value, give it a name.  The
+                // preamble runs BEFORE the bracket is emitted, so the temp holds the real `DbRef`
+                // by then — which is why the hand-written `e = v[0] ?? mk(); pick(e, …)` was
+                // always clean and this now emits the same thing.
+                //
+                // The temp takes the CALLEE'S PARAMETER type, because that is what the argument
+                // is converted to anyway and it is the one type available for a value with no
+                // variable behind it.
+                let tmp = self.new_lift_var(function, &tp);
+                preamble.push(v_set(tmp, scanned));
+                ls.push(Value::Var(tmp));
+            } else if let Some(tp) =
                 Self::tuple_elem_borrow_source(&scanned, outer_call, data, function)
             {
                 // loft#1104 — a TUPLE-ELEMENT argument (`pick(t.0, …)`) at a call whose
@@ -6504,6 +6527,53 @@ impl Scopes {
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// loft#1105 — the TYPE to bind an argument to when the @P290 bracket cannot NAME the store
+    /// its value will lie in, at a call whose return may borrow it.
+    ///
+    /// `Some(tp)` is the callee's PARAMETER type — the one type available for a value with no
+    /// variable behind it, and the type the argument is converted to regardless.
+    ///
+    /// Gated as its two siblings are, plus one exclusion of its own: a bare `Var` is already
+    /// nameable and must not be re-bound, and an argument the bracket CAN name needs nothing.
+    /// The inline-construction and tuple-element cases are tried first and handle their shapes
+    /// more precisely — a construction is HOISTED rather than bound, because binding a work-ref
+    /// that still holds null at bracket-emit time would read as covered while protecting
+    /// nothing (loft#981).
+    fn unnameable_borrow_source(
+        arg: &Value,
+        outer_call: u32,
+        arg_idx: usize,
+        data: &Data,
+        function: &Function,
+    ) -> Option<Type> {
+        let _ = function;
+        if outer_call == u32::MAX {
+            return None;
+        }
+        let callee = data.def(outer_call);
+        if !callee.is_loft_defined() {
+            return None;
+        }
+        if matches!(callee.returned().base(), Type::Function(_, _, _)) {
+            return None;
+        }
+        if !callee.returns_borrowed_view() {
+            return None;
+        }
+        if matches!(arg.unspan(), Value::Var(_)) {
+            return None;
+        }
+        if crate::use_analysis::bracket_can_name(data, arg) {
+            return None;
+        }
+        let tp = callee.attributes().get(arg_idx)?.typedef.clone();
+        // Only an argument that CARRIES a store needs a witness at all.
+        if !crate::data::is_dbref(&tp) {
+            return None;
+        }
+        Some(tp)
     }
 
     /// loft#1104 — the TYPE to bind a tuple-element argument to, when the callee's return
