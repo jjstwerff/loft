@@ -305,17 +305,27 @@ only changes the delivery still faults on cell one.  Controls: the `[]` arm (the
 workaround, which keeps its rename), the RECORD family (which keeps rename AND free), and a
 join with no null arm at all.
 
-⚠ **A second defect found by the same probes and deliberately NOT folded in.**
+⚠ **A second defect found by the same probes — and the SAME dead premise, one site over.
+Closed as `calls.md` D-call-3 (loft#1097).**
 `fn g(k) -> vector<integer> { a = [1,2]; if k < 0 { null } else if k == 0 { a } else { [k] } }`
-answers `g(0) == []`; dropping the null arm answers `[1,2]`.  The null arm makes `__vdb_1` a
+answered `g(0) == []`; dropping the null arm answered `[1,2]`.  The null arm makes `__vdb_1` a
 second promotion candidate, which takes `Bind`'s whole-tail copy —
 `OpClearVector(a); OpAppendVector(a, <the join>, 0)` — and `a` IS the promoted buffer, so the
 clear runs before the join is evaluated and the `k == 0` arm answers the buffer it just
 emptied.  That is loft#1078's *"the re-mint destroys the store the copy is about to read"*
 with a CLEAR in place of the re-mint, and `classify_ret_promotion`'s `tail_reads_buffer`
 guard against exactly that shape is RECORD-only.  Both backends agree, so backend agreement
-is again not an oracle.  `silent-wrong`, filed separately: it is a delivery-ORDER fault, not
-a store-lifetime one.
+is again not an oracle.
+
+**And the null arm of that same tail never reached the caller.**
+`returned_var_null_unified` folds a null arm onto its sibling's var on the belief that the
+var holds the sentinel on the null path — *the same belief this entry's free leg holds, at a
+different site*.  For a RECORD it is true; for a collection buffer it is false in both
+places, and it cost a use-after-free here and a wrong value there.  **One wrong belief, two
+defects, one day apart** — so grep the belief, not the symptom: any site reasoning that a
+collection slot holds the sentinel on a path that did not write it is suspect.  Both are
+fixed; `calls.md` D-call-3 carries the return half.  What is left is loft#1098, a per-call
+leak on a `match` tail that needs a null arm, a local arm and a literal arm all three.
 
 ### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
 

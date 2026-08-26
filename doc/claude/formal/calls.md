@@ -172,8 +172,64 @@ can get back is an explicit `&T` return, which binding.md governs.
 
 ## Deviations
 
-OPEN: **0**. Two deviations have been carried and closed (D-call-1, D-call-2); otherwise this
-is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code deviation of its own.
+OPEN: **0**. Three deviations have been carried and closed (D-call-1, D-call-2, D-call-3);
+otherwise this is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code
+deviation of its own.
+
+⚠ All three are the SAME rule, `(F-Return)` / `(F-Block)`, and all three were *"the tail's
+value was dropped"*: D-call-1 dropped it because the block's type disagreed with the
+signature, D-call-2 because a block reaching the expression parser is typed `Void`, and
+D-call-3 because a var stood in for the tail expression and could not carry one of its
+values. A zero here means no KNOWN survivor of that class, not that the class is closed —
+each was found by moving an axis the previous one held fixed.
+
+> **D-call-3 — OPENED AND CLOSED (2026-08-26, loft#1097).** `(F-Return)` did not hold for a
+> COLLECTION tail join with a `null` arm:
+>
+> ```loft
+> fn f(k: integer) -> vector<integer> { a = [1,2]; b = [3,4]; if k < 0 { null } else if k == 0 { a } else { b } }
+> ```
+>
+> `f(-1)` answered `[1,2]` — `== null` read **false** while `len` read **2**, one value with
+> two answers, on both backends and with no diagnostic. Two arms naming a local means there is
+> a store to free before the return, so `scopes::free_vars` demotes the tail `if` to a
+> STATEMENT and appends `Return(Var(ret_var))`: the expression still RUNS, and its value is
+> discarded exactly as D-call-2's block tail was.
+>
+> `ret_var` comes from `returned_var_null_unified`, which folds a `null` arm onto its
+> sibling's var — and states its own premise: *"the work-ref null-inits at function entry and
+> a null arm never allocates into it, so `Return(Var(v))` yields the same null the sentinel
+> did"*. True of a RECORD work-ref, which `gen_set_first_ref_null` sentinel-inits. **False of
+> a collection**, whose owned local gets `OpInitRef` + `OpDatabase` and whose promoted buffer
+> arrives ALIVE from the caller — so on the null path that var is a live, populated vector.
+> `(E-Null)` is what it costs: the sentinel is a real, observable, RESERVED value, and a
+> populated vector is not it. Closed by hoisting the tail's value to a temp when the fold
+> lands on a collection (`scopes::free_vars`), the shape the null-arm RECORD join beside it
+> already used — the frees still run between the value and the return.
+>
+> ⚠ **That same premise had already failed once, at a different site, and this is what makes
+> it a class rather than a cell.** loft#1096 (`ownership.md` D-own-9, the day before) is
+> `scopes::free_vars` reading *"a buffer not yet minted on this path is the null sentinel,
+> which `free` ignores"* — the identical belief about a collection buffer's null-path
+> contents, costing a use-after-free instead of a wrong value. **One wrong belief, two sites,
+> two defects.** Grep the belief, not the symptom: any site reasoning that a collection slot
+> holds the sentinel on a path that did not write it is suspect.
+>
+> Two more faults met at this tail and are fixed with it, both from the `Bind` leg's
+> whole-tail copy `OpClearVector(buf); OpAppendVector(buf, <the join>)` — which answers the
+> buffer on every path and evaluates the join AFTER the clear. An arm whose value IS the
+> buffer answered what the clear had just emptied (`[]`), and an arm that had already
+> delivered into the buffer was appended to itself and came back DOUBLED (`[3,4,5,3,4,5]`).
+> Both are cured by the CONDITIONAL delivery that leg's own note names as what would close it
+> — `materialize_vector_arms_into`, one arm at a time — plus leaving alone an arm whose value
+> is a VIEW of the buffer, whose answer is already in it.
+>
+> Guard `tests/scripts/1097-a-null-arm-in-a-collection-tail-join.loft`: all three faults
+> falsified on a pristine tree at `d98e60ef` (5 of 7 cells red), with a no-null-arm join and
+> the RECORD family — where the fold's premise HOLDS — as the controls that keep the repair
+> from widening. Fixes loft#1097. The leak left behind (a `match` tail needing a null arm, a
+> local arm AND a literal arm, one store per call) is loft#1098: a lifetime fault with its own
+> trigger, not this rule.
 
 > **D-call-1 — OPENED AND CLOSED (2026-08-22).** `(F-Drop)` did not exist, and the edge it
 > now names is where the two backends parted: a function DECLARED void whose body ends in a

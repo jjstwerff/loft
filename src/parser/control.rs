@@ -10916,7 +10916,17 @@ impl Parser {
             Value::Insert(ops) => ops
                 .last_mut()
                 .is_some_and(|last| self.materialize_vector_arms_collect(elm, last, w, consumed)),
-            Value::Var(v) if *v != w && matches!(self.vars.tp(*v), Type::Vector(_, _)) => {
+            // A local whose value is a VIEW OF `w` — `_vec_N: vector<T>["__vdb_1"]` where
+            // `__vdb_1` IS the buffer — already holds its answer in the buffer, so it is
+            // `w` one indirection down and the `*v != w` guard above does not see it.
+            // Delivering it emits `OpClearVector(w); OpAppendVector(w, v)`, which empties
+            // the buffer before appending it to itself (the arm answered `[]`), and the
+            // dep-free leg below then frees `w` — the CALLER's store.  Leave it alone.
+            Value::Var(v)
+                if *v != w
+                    && !self.vars.tp(*v).depend().contains(&w)
+                    && matches!(self.vars.tp(*v), Type::Vector(_, _)) =>
+            {
                 let local = *v;
                 let deps = self.vars.tp(local).depend();
                 let rec_tp = self.append_elem_tp(elm);
@@ -11726,6 +11736,7 @@ impl Parser {
             );
         }
         let newrecord_nr = self.data.def_nr("OpNewRecord");
+        let null_sentinel_nr = self.data.def_nr("OpNullRefSentinel");
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
@@ -11961,6 +11972,44 @@ impl Parser {
                             match ret.clone() {
                                 Type::Reference(td, _) | Type::Enum(td, true, _) => {
                                     self.materialize_return_into(td, tail, buf_var);
+                                }
+                                // The CONDITIONAL delivery the note above names as what
+                                // would close it.  A tail that is a branch with a `null` arm
+                                // must not be copied WHOLE into the buffer: the wrap is
+                                // `OpClearVector(buf); OpAppendVector(buf, <join>)`, which
+                                // answers the buffer on EVERY path and evaluates the join
+                                // AFTER the clear.  Three faults at once, all of them silent
+                                // — the null arm delivered an EMPTY vector instead of the
+                                // sentinel; an arm naming the buffer answered the buffer the
+                                // clear had just emptied (`a = [1,2]; if k<0 { null } else if
+                                // k==0 { a } else { [k] }` gave `[]`); and an arm that had
+                                // already delivered into the buffer was appended to itself
+                                // and came back DOUBLED (`[3,4,5,3,4,5]`).
+                                // `materialize_vector_arms_into` delivers ONE ARM AT A TIME
+                                // and leaves the buffer var and its views alone, so all
+                                // three answer correctly.  It is the same per-arm machinery
+                                // the join pre-pass above already uses.
+                                //
+                                // Found by loft#1096's boundary probes; loft#1097 with the
+                                // matching half in `scopes::free_vars`, which keeps the
+                                // sentinel reachable when frees force the tail into
+                                // statement position.  Per-arm DELIVERY here, conditional
+                                // RETURN there — two changes, one shape.
+                                Type::Vector(elm, _)
+                                    if crate::scopes::return_has_null_arm(
+                                        tail,
+                                        null_sentinel_nr,
+                                    ) =>
+                                {
+                                    // No fall-back to the whole-tail copy: with a null arm
+                                    // present it is wrong on every path, and "no arm to
+                                    // deliver" here means every arm ALREADY answers the
+                                    // buffer (each was delivered into it by its own leg) or
+                                    // is the sentinel — both of which want nothing added.
+                                    // Wrapping those was the doubling: a four-arm chain
+                                    // answered `[3,4,5,3,4,5]` because the outer append put
+                                    // the buffer into itself.
+                                    self.materialize_vector_arms_into(&elm, tail, buf_var);
                                 }
                                 Type::Vector(elm, _) => {
                                     self.materialize_vector_return_into(&elm, tail, buf_var);

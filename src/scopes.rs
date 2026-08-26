@@ -5603,7 +5603,42 @@ impl Scopes {
                 // statement leaves all writes in place; native
                 // `return var___ref_N` then returns the active
                 // branch's value correctly.
-                if ret_var != u16::MAX {
+                // loft#1097 — `ret_var` cannot carry the sentinel when the tail has a
+                // NULL arm and the var it unified onto is a COLLECTION.
+                // `returned_var_null_unified` folds a null arm into its sibling's var
+                // on the premise it states itself: *"the work-ref null-inits at
+                // function entry and a null arm never allocates into it, so
+                // `Return(Var(v))` yields the same null the sentinel did"*.  That holds
+                // for a RECORD work-ref, which `gen_set_first_ref_null` sentinel-inits.
+                // It is false for a collection: `gen_set_first_vector_null` gives an
+                // owned vector local `OpInitRef` + `OpDatabase`, and a PROMOTED buffer
+                // arrives alive from the caller — so on the null path `Var(v)` is a
+                // live, populated vector.  `f(-1) == null` answered FALSE while
+                // `len(f(-1))` answered 2, with no diagnostic: @FR-E-Null says the
+                // sentinel is a real observable value, and calls.md's `(F-Return)` says
+                // a body ending in an expression returns THAT expression — here the
+                // expression was demoted to a statement and its value dropped.
+                //
+                // Hoist the tail's value to a temp instead — the shape the null-arm
+                // RECORD join above already uses — so the frees still run between the
+                // value and the return while the arm's own answer, sentinel included,
+                // is what comes back.  Like loft#957's temp below it is deliberately
+                // NOT registered in `var_scope`: it holds the value being transferred
+                // to the caller, and a scope-exit free of it would free what the caller
+                // adopts.
+                let null_arm_needs_the_value = ret_var != u16::MAX
+                    && frees_follow
+                    && !expr_is_terminal
+                    && (ret_var as usize) < function.count() as usize
+                    && crate::parser::vectors::is_collection(function.tp(ret_var))
+                    && return_has_null_arm(expr, data.def_nr("OpNullRefSentinel"));
+                if null_arm_needs_the_value {
+                    self.ret_temp_counter += 1;
+                    let name = format!("__ret_tail_{}", self.ret_temp_counter);
+                    let tmp = function.add_temp_var(&name, tp);
+                    ls[0] = v_set(tmp, expr.clone());
+                    ls.push(Value::Return(Box::new(Value::Var(tmp))));
+                } else if ret_var != u16::MAX {
                     ls.push(Value::Return(Box::new(Value::Var(ret_var))));
                 } else if frees_follow
                     && *tp != Type::Void
@@ -8063,7 +8098,13 @@ fn return_has_non_source_arm(expr: &Value, sources: &[u16]) -> bool {
 /// siblings (`branch_yields_null`, `arm_yields_direct_null`, `arm_is_null`) ask the same
 /// null question about what an ARM hands to a JOIN — where a `return` hands it nothing —
 /// and stop at the wrapper.
-fn return_has_null_arm(expr: &Value, null_sentinel_nr: u32) -> bool {
+///
+/// One home, because the same fact decides two things at opposite ends of one return:
+/// whether scope analysis may suppress the work-ref's free (here), and whether the
+/// `Bind` leg may copy the tail into the return buffer WHOLE or has to deliver the arms
+/// one at a time (`ref_return`) — the whole-tail copy answers the buffer on every path,
+/// so with a null arm present it swallows the sentinel.
+pub(crate) fn return_has_null_arm(expr: &Value, null_sentinel_nr: u32) -> bool {
     match expr.unspan() {
         Value::Null => true,
         Value::Call(d, _) => *d == null_sentinel_nr,
