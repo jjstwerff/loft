@@ -186,10 +186,7 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
         let Value::Call(d, args) = cur.unspan() else {
             return None;
         };
-        if !matches!(
-            data.def(*d).name(),
-            "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
-        ) {
+        if !is_view_op(data, *d) {
             return None;
         }
         match args.first().map(Value::unspan) {
@@ -197,6 +194,66 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
             Some(inner) => cur = inner,
             None => return None,
         }
+    }
+}
+
+/// Does this op answer a `DbRef` that lives INSIDE its first argument's store?
+///
+/// The one list for the accessor chain a view is read through: a field offset within a
+/// record, an element within a vector, and a keyed lookup, which answers a record of the
+/// collection's own store.  Every walk that asks *"what does this value ultimately read
+/// out of?"* reads it, so a chain recognised by one walk cannot be unrecognised by the
+/// next.
+///
+/// [`crate::use_analysis::is_projection_op`] is the narrower question the @P290 bracket
+/// asks — which ops it can name a PROTECTABLE slot through — and stays separate.
+fn is_view_op(data: &Data, d_nr: u32) -> bool {
+    matches!(
+        data.def(d_nr).name(),
+        "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
+    )
+}
+
+/// What an argument LIFTED into a `__lift_N` temp borrows — the deps its type must carry.
+///
+/// A lift temp holds a value the caller reads out of something it does not own: an element
+/// of a container, a field of a record, the surviving arm of a `??`.  Typed without deps it
+/// reads as the OWNER of that store and `get_free_vars` emits a scope-exit `OpFreeRef` for
+/// it — releasing a container the caller still names.  Where the container is a local of the
+/// same frame the bogus free lands on a store that was dying anyway and nothing reports it;
+/// where it OUTLIVES the frame (a parameter, a global) the next allocation recycles the
+/// record and the container reads back as another type's bytes.
+///
+/// So the temp borrows what the value borrows.  The walk bottoms out at:
+/// * a plain `Var` — the chain reads out of that local's store;
+/// * a `TupleGet` — out of the tuple's;
+/// * a BLOCK, whose `result` type already carries the deps the parser derived for it (a
+///   `??` lowers to one, and its type names the container the surviving arm reads);
+/// * an `If`, where either arm can be the value, so the deps are the union.
+///
+/// `None` where none of those is reached — a value whose source cannot be named must not be
+/// bound at all.  The caller then leaves the argument as it was, which costs the leak that
+/// is already there; a temp typed as an owner of somebody else's store costs a
+/// use-after-free, and a leak is the better of those two.
+fn lift_view_deps(arg: &Value, data: &Data) -> Option<Vec<u16>> {
+    match arg.unspan() {
+        Value::Var(v) => Some(vec![*v]),
+        Value::TupleGet(base, _) => Some(vec![*base]),
+        Value::Block(bl) => {
+            let d = bl.result.depend();
+            if d.is_empty() { None } else { Some(d) }
+        }
+        Value::If(_, then_v, else_v) => {
+            let mut d = lift_view_deps(then_v, data)?;
+            for x in lift_view_deps(else_v, data)? {
+                if !d.contains(&x) {
+                    d.push(x);
+                }
+            }
+            Some(d)
+        }
+        Value::Call(d_nr, cargs) if is_view_op(data, *d_nr) => lift_view_deps(cargs.first()?, data),
+        _ => None,
     }
 }
 
@@ -6474,7 +6531,7 @@ impl Scopes {
                 preamble.extend(ops);
                 ls.push(Value::Var(w));
             } else if let Some(tp) =
-                Self::unnameable_borrow_source(&scanned, outer_call, arg_idx, data, function)
+                Self::unnameable_borrow_source(&scanned, outer_call, arg_idx, data)
             {
                 // loft#1105 — an argument the @P290 bracket cannot NAME, at a call whose return
                 // may borrow it.  The bracket protects a store through a variable holding a
@@ -6532,8 +6589,19 @@ impl Scopes {
     /// loft#1105 — the TYPE to bind an argument to when the @P290 bracket cannot NAME the store
     /// its value will lie in, at a call whose return may borrow it.
     ///
-    /// `Some(tp)` is the callee's PARAMETER type — the one type available for a value with no
-    /// variable behind it, and the type the argument is converted to regardless.
+    /// `Some(tp)` is the callee's PARAMETER shape — the type the argument is converted to
+    /// regardless — carrying the DEPS the value itself borrows ([`lift_view_deps`]).
+    ///
+    /// The deps are the load-bearing half.  The parameter's declared type has none, and a
+    /// temp typed that way reads as the OWNER of a store it only VIEWS: `get_free_vars`
+    /// emits a scope-exit free that releases the caller's container.  It is silent while the
+    /// container is a local of the same frame — the store was dying at that scope exit
+    /// anyway — and a use-after-free the moment the container OUTLIVES the call, which is
+    /// why `pick(h[k], …)` corrupted a `hash` passed in as a parameter.
+    ///
+    /// So a value whose source cannot be named is NOT bound (`lift_view_deps` answers
+    /// `None`), and the argument stays exactly as it was — the leak that is already there,
+    /// which is the better of the two.
     ///
     /// Gated as its two siblings are, plus one exclusion of its own: a bare `Var` is already
     /// nameable and must not be re-bound, and an argument the bracket CAN name needs nothing.
@@ -6546,9 +6614,7 @@ impl Scopes {
         outer_call: u32,
         arg_idx: usize,
         data: &Data,
-        function: &Function,
     ) -> Option<Type> {
-        let _ = function;
         if outer_call == u32::MAX {
             return None;
         }
@@ -6573,7 +6639,7 @@ impl Scopes {
         if !crate::data::is_dbref(&tp) {
             return None;
         }
-        Some(tp)
+        Some(tp.with_deps(&Deps::frame(lift_view_deps(arg, data)?)))
     }
 
     /// loft#1104 — the TYPE to bind a tuple-element argument to, when the callee's return

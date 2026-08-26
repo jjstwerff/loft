@@ -420,7 +420,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 224 | 214 | **10** |
+| 225 | 215 | **10** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
 
