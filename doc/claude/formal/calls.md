@@ -172,7 +172,7 @@ can get back is an explicit `&T` return, which binding.md governs.
 
 ## Deviations
 
-OPEN: **0**. Four deviations have been carried and closed (D-call-1 … D-call-4); otherwise
+OPEN: **0**. Five deviations have been carried and closed (D-call-1 … D-call-5); otherwise
 this is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code deviation of its
 own.
 
@@ -182,6 +182,67 @@ signature, D-call-2 because a block reaching the expression parser is typed `Voi
 D-call-3 because a var stood in for the tail expression and could not carry one of its
 values. A zero here means no KNOWN survivor of that class, not that the class is closed —
 each was found by moving an axis the previous one held fixed.
+
+> **D-call-5 — OPENED AND CLOSED (2026-08-26, loft#1100).** `(N-Store)` did not hold for a
+> nullable tail reaching a non-null `text` return: one backend RAN it and the other REFUSED
+> to compile it.
+>
+> ```loft
+> fn maybe(k: integer) -> text? { if k == 0 { null } else { "z" } }
+> fn f(k: integer) -> text { a = "ab"; match k { -1 => maybe(k), _ => a } }
+> ```
+>
+> `--interpret` warned and answered; `--native` — the DEFAULT backend — failed in rustc with
+> `E0716` (`E0308` for the `if` spelling, once the arms' Rust representations disagree too),
+> on a program the compiler had already type-checked, since it warned about it.
+>
+> **The issue filed this as a design call** — *"the two answers the language currently gives
+> this program are warn-and-coerce and refuse, and it has to pick one"* — **and the rules had
+> already picked.** `types.md` writes `(N-Store)` as *"a WARNING (nudge, compiles + runs, the
+> slot holds null) when the null is REPRESENTABLE-AND-DISTINCT in τ's non-null form"*, and its
+> per-type table puts `text` in that class (out-of-band on the heap); the narrow integer
+> widths are the sole error case, because their sentinel collides with a real value. Refusing
+> was never the other half of a choice — it was the deviation. This is the second time in a
+> week an issue's *"design call"* was settled by a rule already written (loft#1002 and
+> `(Slice-Open)` was the first), and the cheap move is to read the rule BEFORE deliberating.
+>
+> `do_if_acc` promotes a per-arm text accumulator, and its nullability term declined to
+> promote exactly here — deliberately. The rewrite retypes the tail as the accumulator, after
+> which `block_result`'s `(N-Store)` check compares two non-null types and says nothing, so
+> declining was what KEPT the diagnostic; without the accumulator each arm stays
+> `&*(callee(…))`, a borrow of the `Str` temporary the callee returned, dead at the arm's
+> `}`. One tail type answered two questions, and the gate could only serve one.
+>
+> Closed by separating them: report the store from the tail's OWN type BEFORE the rewrite,
+> then promote (`parse_block`, citing `@FR-N-Store`). **A diagnostic describes the SOURCE
+> program; which lowering the compiler picks for it cannot decide whether the program is
+> diagnosed** — that is the transferable half, and it is why one edit closed a refusal and a
+> silence at once. It also removes the term loft#1099 found to be non-pass-stable, so the
+> gate no longer depends on an inference the two passes disagree about.
+>
+> Measured, nine cells on both backends. Four were REFUSED natively and now compile and answer
+> what the interpreter answers (`match`-call, `if`-call, three-arm, and the cell that actually
+> REACHES the null — which answers `null` on both, the *"slot holds null"* half). Three cells
+> that already compiled now also WARN where they were silent: the `match` null literal (the
+> asymmetry D-call-4 recorded), a three-arm variant, and a call BOUND to a variable first.
+> Untouched: a declared-`text?` return, and a non-null call arm.
+>
+> ⚠ **One silent cell survives and it is NOT this gate.** `if k == 9 { a } else { maybe(k) }`
+> — the nullable call in the ELSE arm — compiles, answers `null` correctly on both backends,
+> and reports nothing, because `parse_if` hands the else arm the THEN arm's type as its
+> expected type (the loft#978 note), so the `Optional` is erased before any store check sees
+> it. A value that is right with a diagnostic missing is a coverage gap, not a wrong answer;
+> the fix belongs at the join, not here.
+>
+> Emitted IR over the corpus: **4 of 968** programs change, and three are this fix's guard, the
+> loft#1101 guard and the loft#1099 guard, whose shape now promotes. The one existing program
+> is `947-feature-worked-examples.loft`, where the delta is a `__work_cN` counter shift plus
+> ONE `OpFreeRef` moving five places within a run of scope-exit frees — all of distinct
+> stores, so their order is inert, and the file is green including the wrap leak gate.
+>
+> Guard `tests/scripts/1100-a-nullable-call-arm-in-a-non-null-text-return.loft` — eight cells,
+> and its first job is to be a program `--native` ACCEPTS: on a control binary built at
+> `159e0b42` the whole file fails in rustc before an assertion runs.
 
 > **D-call-4 — OPENED AND CLOSED (2026-08-26, loft#1099).** `(F-Arity)` exempts a
 > compiler-inserted slot from the user-facing requirement — *"a return buffer is not a user
@@ -227,12 +288,14 @@ each was found by moving an axis the previous one held fixed.
 > null arm. Emitted IR over the corpus: **1 of 900** programs changes — the guard itself —
 > so every existing text tail already answered the same on both passes.
 >
-> Two things it does NOT close, both measured and both pre-existing. A nullable tail into a
-> non-null `text` return reports `(N-Store)` for the `if` spelling and stays SILENT for a
-> `match` whose arm is the null literal — the same inferred type the gate could not trust is
-> what the report reads, and the guard's two `@EXPECT_WARNING` lines record which cells
-> speak. And a `match` arm that CALLS a `-> text?` function into a non-null `text` return
-> compiles on `--interpret` and fails `--native` with `E0716` (loft#1100).
+> Two things it did NOT close, both measured and both pre-existing — **and D-call-5 below
+> closed BOTH the same day, with one edit.** A nullable tail into a non-null `text` return
+> reported `(N-Store)` for the `if` spelling and stayed SILENT for a `match` whose arm is the
+> null literal; and a `match` arm that CALLS a `-> text?` function into a non-null `text`
+> return compiled on `--interpret` and failed `--native` with `E0716` (loft#1100). They read
+> as an accept/reject bug and a diagnostic-coverage gap, which is why they were recorded
+> apart. They are one defect: the report and the promotion were reading the SAME tail type,
+> so whichever the gate chose, the other was lost.
 
 > **D-call-3 — OPENED AND CLOSED (2026-08-26, loft#1097).** `(F-Return)` did not hold for a
 > COLLECTION tail join with a `null` arm:
