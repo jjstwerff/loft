@@ -2249,6 +2249,60 @@ impl Parser {
 
     /// `lhs ?? default` — emit the `if` (or temp + `if` for non-trivial lhs)
     /// that selects the default when `lhs` is null.
+    /// @PLN25 — wrap a DENSE `S` default in a `__nullable<S>::Some` so both arms of a `??`
+    /// have the same shape.
+    ///
+    /// The coalesce over a nullable STRUCT keeps its `__nullable<S>` result on purpose — the
+    /// E2 gap-2 note in [`build_null_coalesce_default`](Self::build_null_coalesce_default)
+    /// records why, and every use site coerces from there.  So the `if` it builds projects the
+    /// payload out of its result, and an arm that is a bare `S` record is read at the
+    /// payload's OFFSET instead: `s = o.f ?? dflt` answered the default's SECOND field.
+    ///
+    /// A LITERAL default never needs this — it is parsed against the join's shape and
+    /// `parse_object` builds the `Some` directly.  A value that already exists (a variable, a
+    /// call result, a field read) cannot be re-parsed, which is the whole difference.
+    ///
+    /// A no-op unless the result really is the synth for the default's own struct, so a
+    /// nullable default (`S? ?? S?`) and every non-struct coalesce are untouched.
+    fn wrap_dense_default_as_some(&mut self, result_type: &Type, rhs_type: &Type, rhs: &mut Value) {
+        if self.first_pass {
+            return;
+        }
+        let (Type::Enum(syn, true, _), Type::Reference(struct_d, _)) =
+            (result_type.base(), rhs_type.base())
+        else {
+            return;
+        };
+        if !self.data.is_nullable_synth_of(*syn, *struct_d) {
+            return;
+        }
+        let syn = *syn;
+        let some_d = self.data.variant_of(syn, "Some");
+        let kt = self.data.def(syn).known_type();
+        if some_d == u32::MAX || kt == u16::MAX {
+            return;
+        }
+        let w = self.vars.work_refs(
+            &Type::Enum(syn, true, crate::data::Deps::none()),
+            &mut self.lexer,
+        );
+        if w == u16::MAX {
+            return;
+        }
+        let src = std::mem::replace(rhs, Value::Null);
+        let mut ops = vec![
+            v_set(w, Value::Null),
+            self.cl("OpDatabase", &[Value::Var(w), Value::Int(i32::from(kt))]),
+        ];
+        ops.extend(self.build_some_present(some_d, Value::Var(w), src));
+        ops.push(Value::Var(w));
+        *rhs = v_block(
+            ops,
+            Type::Enum(syn, true, crate::data::Deps::frame1(w)),
+            "NullableSome",
+        );
+    }
+
     fn build_null_coalesce_default(
         &mut self,
         var_tp: &Type,
@@ -2267,6 +2321,22 @@ impl Parser {
         // which downstream classifies the ncc `if` as a null-arm shape — the
         // return delivery then skips materialisation and native emits `()`.
         let rhs_hint = if matches!(var_tp, Type::Unknown(_) | Type::Null) {
+            lhs_type.base()
+        } else if let (Type::Enum(syn, true, _), Type::Reference(struct_d, _)) =
+            (lhs_type.base(), var_tp.base())
+            && self.data.is_nullable_synth_of(*syn, *struct_d)
+        {
+            // @PLN25 — the target is the DENSE `S` while the subject is the synthetic
+            // `__nullable<S>`: one notion, two spellings, and the hint has to answer for the
+            // JOIN, not for the destination.  The two arms of the `if` this builds must have
+            // the SAME shape, and reaching the dense target is a separate step the assignment
+            // site already does (`nullable_to_dense_assign` unwraps the payload and copies).
+            //
+            // Hinted with the dense `S`, `?? S { … }` built a bare `S` record beside a
+            // `__nullable<S>` one, and the payload projection over the join then read the
+            // literal at the payload's OFFSET: `s = o.f ?? P { x: 6, y: 5 }` answered `s.x ==
+            // 5` and `s.y` past the end of the record, silently, on both backends.  The same
+            // expression used directly — with no target to hint from — was always right.
             lhs_type.base()
         } else {
             var_tp
@@ -2573,6 +2643,7 @@ impl Parser {
             let null_check = null_check_builder(self, &Value::Var(tmp));
             let mut true_branch = Value::Var(tmp);
             self.convert(&mut true_branch, lhs_type, &result_type);
+            self.wrap_dense_default_as_some(&result_type, &rhs_type, &mut rhs);
             let if_expr = v_if(null_check, true_branch, rhs);
             // @PLN102 `??` Vector view-model (OWNED subject only): the subject
             // `__ncc_N` is a function-scope OWNER freed by `get_free_vars` (see

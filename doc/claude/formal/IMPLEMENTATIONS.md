@@ -517,10 +517,11 @@ occurrences now state the current register and say to re-read it rather than the
 **a claim about another document's register goes stale silently**, which is the same failure
 as `L-Tuple` naming a renamed function, one document further out.
 
-## One notion, how many SPELLINGS? — the dual question, and its four instances (2026-08-26)
+## One notion, how many SPELLINGS? — the dual question, and its five instances (2026-08-26)
 
 Everything above asks *"is this the same question asked twice?"*.  This asks the dual, and it
-turned up four times in one week in four different subsystems:
+turned up five times in one week in five different subsystems — the last of them not in the IR
+at all, but in the TYPE lattice:
 
 > **A notion the language treats as ONE thing can reach the IR in more than one SPELLING, and a
 > matcher keyed on one spelling is blind to the other — silently, because the missing spelling
@@ -536,6 +537,7 @@ search for.
 | a **null at a branch join** | the LITERAL, lowering to `OpConv*FromNull` / `OpNullRefSentinel`, which the five DN1 null-arm walkers match | a nullable-**TYPED** value — a `-> τ?` call, an index read — which is a null by TYPE and carries no null-shaped node | `x: integer = if k == 9 { 1 } else { maybe(k) }` compiles and `x` holds null, narrow widths included ([types.md](types.md) D-Null-Join, loft#1103) |
 | a **borrow** | a value with a non-empty DEP list | a borrow with NO dep — `e = mk().items` views a `__lift_N` whose container dep loft#882/#889 record at the SUBSCRIPT only | the return promotion had to grow a leg that reads the DEFINING STATEMENT instead of the deps (loft#1101, [ownership.md](ownership.md) D-own-10) |
 | a **projection**, again, one level out | the op NAMES a matcher happens to list — `OpGetField`, `OpGetVector` | `OpGetRecord` (a keyed lookup) and `OpVectorRef` (a linked element), which answer a `DbRef` in the same store by the same declaration `-> reference[data]` | `pick(h[k], …)` had no @P290 witness at hash, sorted and index alike, so every call orphaned the record the callee minted — one per call, both backends ([ownership.md](ownership.md) D-own-11) |
+| a **nullable struct**, as a TYPE | `Optional(Reference(S))` — what `f: S?` parses to | `Enum(__nullable<S>, true)` — what `typedef::synth_nullable_struct_fields` rewrites the declared FIELD type to, in `fill_all`, BETWEEN the two parser passes | four failures from one root: `s = o.f` refused as a type change between one type and itself; `s = o.f ?? S { … }` reading the default at the payload's OFFSET; a VALUE default doing the same with no hint able to cure it; and `v[i] ?? S { … }` refused because the pass-1 `Some` build leaves its operand `Value::Null`, which the `?? null` check reads as a nullable fallback (QUALITY.md § B6j) |
 
 **The instrument is per-notion and cheap.**  `scripts/ir_walker_audit.py spellings` asks it for
 the projection notion: who resolves a projection by op name, and do they also carry a `TupleGet`
@@ -545,9 +547,15 @@ freshly-landed code (`expr_borrows_local` resolves by `OpGetField` / `OpGetVecto
 `TupleGet`; five tuple spellings answer correctly today only because the DEPS leg covers what the
 structural leg cannot see — recorded on D-own-10).
 
+⚠ **The fifth instance says the question is not only about the IR.**  A TYPE can have two
+spellings for the same reason a node can — one is what the author wrote and one is what a
+lowering produced — and the trap is sharper, because the two are separated by a PASS rather than
+by a match arm.  Any rewrite that runs in `fill_all` puts the author's spelling on one side of it
+and the lowered one on the other, so every cross-pass comparison of that type is a candidate.
+
 **As a rule for writing one:** before you write *"is this an X?"* over the IR, ask whether X has
-a second spelling — a `Value` VARIANT beside an op call, a TYPE fact beside a node shape, an
-absence beside a presence.  Match the notion, not the spelling, and put both in ONE predicate.
+a second spelling — a `Value` VARIANT beside an op call, a TYPE beside a lowered TYPE, a TYPE
+fact beside a node shape, an absence beside a presence.  Match the notion, not the spelling, and put both in ONE predicate.
 In loft the variants carrying a var number outside `Value::Var` are `TupleGet`, `TuplePut`,
 `CallRef`, `FnRef`, `FnRefDnr`, `Set` and `Iter`; `scopes::dominance_walk` names three of them and
 is the model.

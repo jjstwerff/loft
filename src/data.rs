@@ -6426,6 +6426,58 @@ impl Data {
         d
     }
 
+    /// @PLN25 — is `syn` the synthetic `__nullable<S>` enum that
+    /// [`nullable_enum_for`](Self::nullable_enum_for) mints for struct `struct_d`?
+    ///
+    /// The two are ONE notion with two spellings: the source says `f: S?`, which reaches the
+    /// parser as `Optional(Reference(S))`, and `typedef::synth_nullable_struct_fields`
+    /// rewrites the declared FIELD type to `Enum(__nullable<S>, true)` so absence has a
+    /// discriminant to live in.  Anything comparing a nullable struct type against another
+    /// has to know they are the same type, and this is where that is decided.
+    ///
+    /// Asked the way the MINT keys its cache — the name AND the STRUCT's own source.  The
+    /// source half is not decoration: two libraries may each define a `Chunk`, the synth is
+    /// per-`(name, source)` for exactly that reason, and a name-only test would answer yes
+    /// for the other library's `Chunk` (@PLN22 p379).
+    #[must_use]
+    pub fn is_nullable_synth_of(&self, syn: u32, struct_d: u32) -> bool {
+        syn != u32::MAX
+            && struct_d != u32::MAX
+            && (syn as usize) < self.definitions.len()
+            && (struct_d as usize) < self.definitions.len()
+            && self.definitions[syn as usize].source == self.definitions[struct_d as usize].source
+            && self.definitions[syn as usize].name
+                == format!("__nullable<{}>", self.definitions[struct_d as usize].name)
+    }
+
+    /// The two spellings of a nullable STRUCT, compared as one type: `τ?` written by the
+    /// author (`Optional(Reference(S))`) against the synthetic enum the field rewrite
+    /// produces (`Enum(__nullable<S>, true)`).
+    ///
+    /// `None` when either side is not a nullable struct; `Some(struct_d)` naming the payload
+    /// when both denote the same one.  Deps are deliberately ignored — this asks which TYPE,
+    /// not which borrow.
+    #[must_use]
+    pub fn same_nullable_struct(&self, a: &Type, b: &Type) -> Option<u32> {
+        let payload = |t: &Type| -> Option<(u32, bool)> {
+            match t {
+                Type::Optional(inner) => match &**inner {
+                    Type::Reference(d, _) => Some((*d, false)),
+                    _ => None,
+                },
+                Type::Enum(syn, true, _) => Some((*syn, true)),
+                _ => None,
+            }
+        };
+        let (a_d, a_syn) = payload(a)?;
+        let (b_d, b_syn) = payload(b)?;
+        match (a_syn, b_syn) {
+            (false, true) if self.is_nullable_synth_of(b_d, a_d) => Some(a_d),
+            (true, false) if self.is_nullable_synth_of(a_d, b_d) => Some(b_d),
+            _ => None,
+        }
+    }
+
     /// @PLN25 E2a.1 — synthesize (once per struct) the nullable-enum type that
     /// backs a nullable embedded struct field / vector element: a 2-variant
     /// enum `{ Null, Some<fields-of struct_d> }`.  A nullable inline `Row` is

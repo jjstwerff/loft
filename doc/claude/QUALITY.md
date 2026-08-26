@@ -130,7 +130,12 @@ every keyed kind leaked, because `is_projection_op` — the site whose own doc c
 single home — was short by the two ops that three other homes already carried.  Fixed by merging
 the homes; four hand-spelled lists remain, as a queue.  Two shapes are filed rather than cured: **loft#1105**, whose obvious cure turns the leak into a
 use-after-free, and **loft#1106**, where binding the argument does not help at all because the
-gap is in what OWNS a nullable record, not in what can witness it.
+gap is in what OWNS a nullable record, not in what can witness it.  Probing #1106 then found the
+class ONE LEVEL DOWN — a notion with two TYPE spellings — where a nullable struct FIELD is
+`Optional(Reference(S))` on pass 1 and the synthetic `Enum(__nullable<S>)` on pass 2, because the
+rewrite that produces the second runs BETWEEN the passes.  Four failures from that one root, two
+of them silent wrong answers and two of them legal programs refused; all fixed (B6j), with the
+predicate given one home and the 56 hand-spelled recognitions of it left as a ranked queue.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -1766,6 +1771,76 @@ printed the marker as part of the offending line and every failure read as a pas
 failing on a null: I had filled the group's other member, so the array was empty and the cell
 asserted nothing. The fix is a marker the source cannot contain — a computed running sum — plus
 the exit code. `channel-captured-never-compared` and `absent-warning-is-not-a-pass`, met together.
+
+#### B6j — one TYPE, two spellings, and the rewrite that happens between the passes (2026-08-26)
+
+B6g named the class as *a notion with two IR spellings*. This is the same class one level down —
+**a notion with two TYPE spellings** — and it produced four failures that look nothing alike, in
+one afternoon, from one root.
+
+A nullable struct is written `f: S?` and reaches the parser as `Optional(Reference(S))`.
+`typedef::synth_nullable_struct_fields` then rewrites the declared FIELD type to the synthetic
+`Enum(__nullable<S>, true)`, because an inline field has no `DbRef` of its own and absence needs a
+discriminant to live in (@PLN25 E2a.2 / loft#896). **That rewrite runs in `fill_all`, which is
+between the two parser passes** — so every site comparing a nullable struct type sees one
+spelling on pass 1 and the other on pass 2.
+
+| what the author wrote | what happened | channel |
+|---|---|---|
+| `s = o.f` | **REFUSED** — *"cannot change type from `S?` to `__nullable<S>`; use a new variable name or cast with 'as'"*: one type reported as two, naming two cures that cannot reach it | a legal program rejected |
+| `s = o.f ?? S { x: 6, y: 5 }` | `s.x` answered **5** and `s.y` read past the record | **silent-wrong**, both backends |
+| `s = o.f ?? d` (a VALUE default) | the same, and no hint can cure it — a value cannot be re-parsed at another shape | **silent-wrong**, both backends |
+| `s = v[i] ?? S { … }` | **REFUSED** with the synthetic name again | a legal program rejected |
+| any of the above that reached a dense target | one leaked record per evaluation | the leak gate only |
+
+**Each fix is at the site that had the wrong idea, and they are four different sites.**
+
+* **`change_var_type`** now treats the two spellings as one type — a REFINEMENT across passes,
+  not a retype. The synth wins, because the value really is a `__nullable<S>` record and both
+  spellings occupy a `DbRef` slot, so the frame the two passes lay out is unchanged.
+* **The `??` default's HINT** is the join's shape, not the destination's. Hinted with the dense
+  target, `?? S { … }` built a bare `S` beside a `__nullable<S>` one and the payload projection
+  over the join then read the literal at the payload's OFFSET. The coalesce deliberately keeps
+  its nullable result — `build_null_coalesce_default`'s own *"E2 gap 2"* note says why — so the
+  arms have to agree with each other and the dense target is reached afterwards.
+* **A default that is a VALUE is WRAPPED** into a `Some` (`wrap_dense_default_as_some`), because
+  the hint only reaches a literal. `build_some_present` already existed for the append path; this
+  is its second caller.
+* **`parse_some_payload_object` leaves a non-null placeholder on pass 1.** It builds no IR there,
+  so its operand kept the `Value::Null` its caller initialised — and `??`'s `?? null` soundness
+  check asks *"is this operand the `null` LITERAL?"*, which cannot tell that apart from *"not
+  built yet"*. It typed the result `τ?` on pass 1 and pass 2 could not take it back, so
+  `s.x` resolved against `__nullable<S>` and the program was refused.
+* **The unwrap-copy target is typed as an OWNER.** The copy is what makes it independent; pass 1
+  had typed it off the un-copied expression, whose deps name the holder. Stripped on the
+  VARIABLE and not only on the type, because `change_var_type` treats a deps difference as no
+  change at all.
+
+**The predicate has one home now.** `Data::is_nullable_synth_of` asks the question the way the
+MINT keys its cache — the name AND the struct's own SOURCE — and `Data::same_nullable_struct`
+compares the two spellings as one type. The source half is not decoration: two libraries may each
+define a `Chunk`, `nullable_enum_for` is per-`(name, source)` for exactly that reason, and the
+**43 `starts_with("__nullable<")` and 13 `format!("__nullable<…")` sites already in the tree ask
+it by NAME ALONE**. That is a queue, not a sweep — each is a different question of the same shape
+— but it is the sharpest instance of this thread's subject yet: one notion, 56 hand-spelled
+recognitions, and a bug in the gap between two of them.
+
+⚠ **What made this findable was a matrix of PAIRS, not of cells.** Every nullable cell was
+written beside its non-null twin or its direct-use twin — `s = o.f` beside `s = o.g`,
+`s = o.f ?? d` beside `(o.f ?? d).x` — so the expected value never had to be hand-derived. That
+is [reference-route-is-the-oracle](STABILITY_METHOD.md) applied to a type, and it is what turned
+"`s.x` is 5" from a number into "the twin says 6, so the read is off by a field".
+
+⚠ **And the first cell of that matrix was found by accident, while probing something else.**
+The refusal turned up as a parse error in a probe file written for loft#1106's ownership
+question — a cell that would not compile, in a matrix about something entirely different. The
+matrix for THIS bug only exists because a cell that failed to build was read instead of edited
+around.
+
+**loft#1106 is unchanged by any of it, and that is the check that keeps the two apart.** Its
+repro still leaks, and the aliasing symptom found beside it — a `-> S?` return ALIASES its
+argument where the `-> S` twin COPIES, against `(B-Copy)` — is recorded on the issue, which is
+now `silent-wrong` / `sev:high` rather than a leak.
 
 #### C — process / skills
 

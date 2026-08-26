@@ -1943,6 +1943,25 @@ impl Function {
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
+        // @PLN25 — the SAME nullable struct, spelled two ways, and the two spellings arrive
+        // in DIFFERENT PASSES.  A field written `f: S?` reaches the parser as
+        // `Optional(Reference(S))`, and `typedef::synth_nullable_struct_fields` rewrites the
+        // declared field type to the synthetic `Enum(__nullable<S>, true)` — in `fill_all`,
+        // which runs BETWEEN the two parser passes.  So `s = o.f` infers the Optional on pass
+        // 1 and the synth on pass 2, and refusing that reported a legal program as a type
+        // change between one type and itself ("cannot change type from S? to __nullable<S>"),
+        // naming cures — a new name, an `as` cast — that cannot reach it.
+        //
+        // The SYNTH wins, because the value really is a `__nullable<S>` record: absence needs
+        // the discriminant, and a payload sub-reference cannot be null (its record is the
+        // holder's — loft#1071).  Both spellings occupy a `DbRef` slot, so the frame the two
+        // passes lay out is the same either way.
+        if data.same_nullable_struct(var_tp, type_def).is_some() {
+            self.trace_type_change(var_nr, type_def, "change_var_type(nullable-synth)");
+            self.variables[var_nr as usize].type_def = type_def.clone();
+            self.depend_all(var_nr, type_def);
+            return self.is_new(var_nr);
+        }
         // Allow assigning an iterator (vector slice) to a vector variable
         // when element types are compatible — the iterator is materialised.
         if let (Type::Vector(_, _), Type::Iterator(_, _)) = (var_tp, type_def) {

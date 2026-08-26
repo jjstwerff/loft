@@ -2520,6 +2520,22 @@ use a separate collection or add after the loop"
                         kt,
                         crate::copy_manifest::Origin::ParserMaterialise,
                     );
+                    // The copy is what makes the target INDEPENDENT, so it must be typed as
+                    // an owner.  Pass 1 typed the target off the un-copied expression — the
+                    // nullable source is a VIEW of its holder, so the deps named the holder —
+                    // and inheriting them here left the fresh store with nobody to free it:
+                    // one leaked record per evaluation, on both backends.  The work-ref is
+                    // `skip_free` precisely so this variable is the single owner.
+                    //
+                    // Stripped on the VARIABLE, not just on `s_type`: pass 1 already wrote
+                    // the borrowing type into the frame, and `change_var_type` treats a deps
+                    // difference as no change at all, so re-assigning the type is a no-op.
+                    s_type = Type::Reference(td, crate::data::Deps::none());
+                    if var_nr != u16::MAX {
+                        for d in self.vars.tp(var_nr).depend() {
+                            self.vars.make_independent(var_nr, d);
+                        }
+                    }
                 }
             }
         }
