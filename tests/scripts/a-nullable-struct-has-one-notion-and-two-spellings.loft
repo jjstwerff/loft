@@ -30,6 +30,8 @@
 // This file pins values AND the harness's store-leak gate, because two of the five are only
 // visible on one channel.  Every nullable cell has a non-null twin or a direct-use twin beside
 // it: the same question already has a working answer somewhere, and that answer is the oracle.
+//
+// @falsified-at: d6a21b73 — interpret exit 1 -> 0, native exit 1 -> 0 (the two refusals)
 
 struct Pn { x: integer = 3, y: integer = 0 }
 struct Hn { f: Pn?, g: Pn }

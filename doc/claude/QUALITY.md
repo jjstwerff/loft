@@ -1987,6 +1987,106 @@ same comparison is what settled the arm's fate. **A comparison inherits the blin
 entry point both sides share**, and two identical numbers from a channel that cannot see the
 subject are the most convincing wrong answer available.
 
+#### B6m — what one day of 11 tickets says about the apparatus that found them (2026-08-26)
+
+Eleven issues (loft#1096–#1106) closed across two checkouts in a day, plus about nine more defects
+fixed without a ticket. Worth asking what that says about the quality work itself rather than
+only about the code, because the answer is not flattering in the direction one would expect.
+
+| the window | |
+|---|---|
+| tickets | 11, **all `hit-by:loft`** — no consumer reported any of them |
+| both backends | 11 of 11 |
+| `silent-wrong` | 5 of 11 · `sev:high` 5 of 11 |
+| areas | store-lifetime 7 · parser 6 · runtime 4 · codegen 2 · native 1 |
+| commits | 41, of which **3 fixed one of the other 38** |
+| guard-bearing commits | 29, of which **12** record a falsification against a control |
+| bugs filed in August | **258**, against 67 in July and 54 in June |
+
+##### 1. The gate is biased toward FALSE GREEN, and that is the headline
+
+Four distinct channels reported success while measuring nothing, in one afternoon:
+
+* **the entry point** — `--interpret` on a `main`-less guard runs no assertion at all, and
+  `--tests` on a `main`-ful one runs the zero-parameter HELPERS (B6l);
+* **the probe harness's own marker** — grepping stdout for the literal the program prints on
+  success, which loft's error report echoes as part of the offending source line (B6i);
+* **the leak gate's direction** — monotone, so an over-free always reads as an improvement (B6k);
+* **a guard cell that cannot reach its subject** — a non-null return never reaches the join bind
+  the cell was written for, so it passed on a control (found in the sibling checkout).
+
+And two defects passed a FULL green gate — `make ci` 4464/4464 plus 42/42 published libraries —
+and were caught only by a second reader: a use-after-free in loft#1105's first cure, and a silent
+wrong answer that needs TWO commits present and so could not fail either commit's own suite.
+
+**The apparatus is good at FINDING and weak at CONFIRMING.** Every instrument built this month
+points at candidates; almost nothing verifies that a check can fail. That asymmetry is the single
+most actionable thing this window shows.
+
+##### 2. Every matrix pinned an axis that mattered — five times in one day
+
+loft#1104's filed matrix pinned chain depth AND container AND index; loft#1105's pinned container
+LIFETIME (every cell built its container inside the calling function, which is what hid the
+over-free); this branch's nullable matrix pinned the DEFAULT'S SHAPE (literal vs value); D-own-6's
+oracle pinned argument SPELLING and said so in its own closing paragraph; loft#1098 exists because
+someone moved loft#1097's axis.
+
+The matrix-first rule is being followed and still fails, because **"which axis did I hold fixed"
+has no instrument** — it is entirely a matter of the author remembering, and every one of these
+five was caught by a different person, on a different day, or by accident.
+
+##### 3. The instruments find CLASSES; people find DEFECTS
+
+Of the eleven tickets the `spellings` screen produced two. The largest single yield of the day —
+four defects in the nullable-type-spelling family — came from **a parse error in a probe written
+for a different issue**. loft#1106 came from re-measuring a filed blocker's own excuse. The keyed
+lookup came from walking INTO a predicate in order to widen it.
+
+That is not an argument against the tooling: a screen that ranks 35 sites is what makes reading
+them tractable. It is an argument against expecting DETECTION from it, and against reading a
+quiet screen as a quiet subsystem.
+
+##### 4. The sample is entirely self-generated, so it measures our reach and not the language
+
+Eleven of eleven `hit-by:loft`, seven of eleven in one subsystem. The store-lifetime concentration
+may be where the defects are or may be where we were standing; this window cannot tell the
+difference, and neither can the monthly bug review while the filing rate is dominated by our own
+sweeps. August's 258 against July's 67 is a fact about how hard we looked.
+
+##### 5. Two agents in one subsystem need a sequencing discipline, not just a shared register
+
+The three self-corrections were all integration faults, not coding errors: an arm ordered so that
+another fix became unreachable, a temp typed off a declaration that carried no deps, and a slot
+written before the call that still needed it. The register numbers collided as well. Both
+checkouts had "one home for the fact" and it did not help, because **one home secures the
+QUESTION and says nothing about WHICH VALUE each caller hands it, or WHEN.**
+
+##### 6. Performance is invisible to the whole apparatus
+
+loft#1109 — a 26 % regression on the tuple return introduced by loft#1102 — was found by hand
+afterwards. Every gate we run is a CORRECTNESS gate, `make speed` is explicitly a report nobody
+blocks on, and not one of the 41 commits measured an op count except where somebody chose to.
+
+##### What to do about it, ranked
+
+1. ✅ **Make the negative control mechanical — DONE.** `scripts/falsify.sh` /
+   `make falsify GUARD=… REF=…` builds the control, runs the guard on both trees **through the
+   entry point the corpus runner would pick** (derived from the file, because getting that wrong
+   is the first of the four channels above), and compares exit code, assertion failures, leaked
+   stores and panic APART — so the recorded line names which channel moved rather than only that
+   something did. `doc_hygiene::every_new_guard_records_its_control` requires an
+   `// @falsified-at:` line on every new file under `tests/scripts/`, ratcheted against
+   `tests/falsified.baseline` (894 pre-existing files, shrinks only). `none — <reason>` is the
+   honest opt-out. Both the tool and the gate were falsified before they were trusted: the tool
+   reports INERT against a ref that already carries the fix, and the gate fails on all three of
+   its shapes — a new file with no record, a retrofitted file still in the baseline, and a
+   baseline line for a file that no longer exists.
+2. **A screen for `Optional` transparency.** `is_dbref`, `heap_dep` and `deps_mut` each decide
+   whether they peel the wrapper, three verbs disagreed this week, and there is no list of which
+   callers go through `.base()`. Same shape as the `spellings` screen, one type former over.
+3. **Record the axes a matrix HELD FIXED, in the guard file.** Cheaper than an instrument and it
+   is the thing five separate failures had in common.
+
 #### C — process / skills
 
 | item | state |
