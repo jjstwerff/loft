@@ -1723,3 +1723,60 @@ fn the_nullable_swap_tables_do_not_drift() {
          grep-discoverability, so they must agree entry for entry"
     );
 }
+
+/// The `unspan` backlog table in QUALITY.md must match what the audit actually reports.
+///
+/// That table is a count offered as OPEN WORK, and the doc says in as many words that such a
+/// count "has to be right, or it is a bill someone else pays in review". It went stale inside
+/// the same session that wrote the rule: fixes moved the number from 13 to 10 and the table
+/// kept saying 13. A hand-maintained figure describing a mechanically-derivable fact is a
+/// promise to remember, and this is the check that replaces remembering.
+///
+/// Skips rather than fails when the script cannot run, so a machine without python3 does not
+/// turn a doc gate into a red build.
+#[test]
+fn quality_unspan_table_matches_the_audit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new("python3")
+        .arg(root.join("scripts/ir_walker_audit.py"))
+        .arg("unspan")
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            eprintln!("SKIP quality_unspan_table_matches_the_audit: cannot run the audit");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let nums: Vec<u32> = stdout
+        .lines()
+        .filter_map(|l| l.rsplit(':').next())
+        .filter_map(|t| t.trim().parse::<u32>().ok())
+        .take(3)
+        .collect();
+    assert_eq!(nums.len(), 3, "audit header changed shape; got: {stdout}");
+
+    // Anchored on the table's own header, not on "the first line that looks like a numeric
+    // row": another numeric table added above it would otherwise silently become the subject
+    // of this gate, which is the failure a doc check must not have.
+    let doc = std::fs::read_to_string(root.join("doc/claude/QUALITY.md")).expect("QUALITY.md");
+    let lines: Vec<&str> = doc.lines().collect();
+    let header = lines
+        .iter()
+        .position(|l| l.starts_with("| sites discriminating on 2+ specific"))
+        .expect("the unspan table header is gone from QUALITY.md — update this gate with it");
+    let row = lines
+        .get(header + 2)
+        .expect("the unspan table is truncated after its header");
+    let cells: Vec<u32> = row
+        .split('|')
+        .filter_map(|c| c.trim().trim_matches('*').parse::<u32>().ok())
+        .collect();
+    assert_eq!(
+        cells, nums,
+        "QUALITY.md's unspan row says {cells:?} and `ir_walker_audit.py unspan` reports \
+         {nums:?} — re-run the audit and update the row"
+    );
+}

@@ -420,18 +420,26 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 222 | 209 | **13** |
+| 221 | 211 | **10** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
 
-**Six false-positive classes, and 41 → 13.** The precision work and the fixes are separate,
+**Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
 and conflating them is how a backlog gets "cleared" with nothing fixed:
 
 | | count | |
 |---|---:|---|
 | shown IMPOSSIBLE | **22** | the audit could not tell which `Value`, or that something upstream already peeled |
 | peeled | **6** | of which only **2** change an answer: `needs_pre_eval` (1264 sites) and `const_eval` (2 lost folds) |
-| still listed | **13** | of which 5 are measured clean and left unpeeled, 1 is gated, 7 unmeasured |
+| descended, not peeled | **3** | `par_unsafe_reason`, `collect_callees`, `walk_deep_parent_write` — see B6 |
+| still listed | **10** | of which 5 are measured clean and left unpeeled, 1 is gated, the rest unmeasured |
+
+⚠ **The three in the middle row leave by a different door, and the row is there so the
+arithmetic closes.** They were fixed by DESCENDING (`for_each_child`), not by peeling, because
+what they were missing is a `Return` ARM rather than an `unspan` call. B6 is where they are
+worked; keeping them in their own row is the same separation the two columns above exist for —
+a count that moves for two different reasons, reported as one, is how a backlog reads as
+shrinking with no fix behind it.
 
 ⚠ **"Peeled" is not "fixed", and the difference is most of this table.** Of the six,
 `find_first_ref_vars` changes 46 decisions and gains 0 variables; `move_rewrite` and
@@ -506,7 +514,7 @@ and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo 
 `cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
 hits on the same arm; if those are zero too, the probe never ran.
 
-**Exactly 1 of the 13 is gated** (`walk_check`) — so the method holds for the other 32, and
+**Exactly 1 of the 10 is gated** (`walk_check`) — so the method holds for the rest, and
 the bound is worth stating rather than leaving as a general worry. It is only notable because
 it is the top of the list by variant count, and so the natural place to start: the one site
 where a zero was going to be believed.
