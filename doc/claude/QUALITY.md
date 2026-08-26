@@ -1362,7 +1362,18 @@ Following it produced three defects, and the first is the one worth the section:
 | `emit_tuple_put_ops` + two siblings | the five keyed collections were missing from a hand-spelled DbRef list — an ICE — **fixed** |
 
 **loft#1102 — a tuple literal ALIASES a heap local; a struct literal and a vector literal copy
-it.** `t = (vl, 9)` stores `vl`'s handle, so the element and the local are two names for one
+it.** ⚠ **Settled 2026-08-26, and the answer is a model that already ships:** construction may
+alias, but only where aliasing cannot change the semantics a normal variable has — so the
+contract is `B-Copy` and aliasing is admissible only as the LAST-USE elision. That is what the
+STRUCT constructor does, default-on since @PLN90 phase B B1.5. Measured: with the source dead
+after, `s = S { n: 1, v: vl }` builds the literal STRAIGHT INTO the field
+(`OpNewRecord(OpGetField(s, 8, 21), …)`, no second store, no copy — `construct_fresh_rewrite`);
+with `LOFT_NO_MOVE_ELIDE=1` the same function builds `__vdb_1` and copies; and with the source
+still LIVE the copy happens. So the filing's cost objection is answered — the common case is a
+move, not an allocation, and only the observable case pays. The tuple constructor is outside
+BOTH halves: no copy, and therefore no elision either, because `ConstructOps` is record-shaped
+(`op_get_field` / `op_new_record` / `op_finish_record`) and `Value::Tuple` is not a container
+`move_elide` can see. `t = (vl, 9)` stores `vl`'s handle, so the element and the local are two names for one
 store; `s = S { n: 1, v: vl }` and `vv = [vl]` both copy, both backends. Everything downstream
 follows from it: `t.0` reads as a projection off a BORROWED base, so `c = t.0; c[0] = 41` writes
 through two levels of binding — while `lost-write` warns on that exact line that *"a whole-value
