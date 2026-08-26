@@ -3121,15 +3121,25 @@ impl State {
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.var_pos(v);
-        stack.add_op("OpInitRefSentinel", self);
-        self.code_add(slot_offset);
         // The call result (`src`) FIRST, then the witness on top — so the witness's
         // frame-relative `var_pos` accounts for `src` already sitting on the eval stack.
         // `OpBindOrCopy` pops witness, then src.  A PUSH op reads at the PRE-push
         // position, so `var_pos(base)` is taken BEFORE `add_op`; the POP op's
         // `var_pos(v)` is taken AFTER it.  (Mirrors the reassignment site exactly.)
         self.generate(value, stack, false);
+        // The sentinel goes in AFTER the call is evaluated, which is the @P290 rule the
+        // reassignment path states: touch the destination only once the call no longer
+        // needs what is there.  `v` is a FIRST bind, so the call cannot name it — but it
+        // can name a variable the slot allocator gave `v`'s slot to, and that is not the
+        // same question.  A lifted argument is exactly that neighbour: it dies at the call
+        // and its slot is reused for the very local the call is bound to, so a sentinel
+        // written first replaced the argument with `null` between its write and its read.
+        // Writing it here still satisfies `OpBindOrCopy`'s precondition — the slot holds a
+        // sentinel before the guard writes it, which is all the borrow arm's
+        // `alloc_record_at` needs.
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRefSentinel", self);
+        self.code_add(slot_offset);
         let witness_pos = stack.var_pos(base);
         stack.add_op("OpVarRef", self);
         self.code_add(witness_pos);

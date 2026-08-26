@@ -1974,6 +1974,14 @@ impl<'a> Ownership<'a> {
     /// Map the callee's borrowed parameter `callee_base` (a var in the callee's
     /// space) to the CALLER's argument var at the same VISIBLE-parameter position.
     /// `u16::MAX` when it is not a visible param or the matching arg is not a var.
+    ///
+    /// ⚠ A PROJECTION argument answers `u16::MAX` and therefore leaks the join's minting arm
+    /// (`pick(v[0], …)` into a nullable parameter, one record per call).  Widening it to the
+    /// projection's root through [`view_root_slots`] — the same walk the @P290 bracket
+    /// protects through — cures that and is MEASURED WRONG: `pick(v[0], c)` then answers the
+    /// field DEFAULT on the borrowing arm instead of the element, because the copy the join
+    /// guard emits against a container witness does not deliver.  A leak is the better of
+    /// those two, so the narrow reading stands until the delivery half is understood.
     fn caller_arg_base(&self, callee_d: u32, callee_base: u16, caller_args: &[Value]) -> u16 {
         let attrs = self.data.def(callee_d).attributes();
         if callee_base == u16::MAX

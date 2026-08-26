@@ -164,3 +164,37 @@ fn test_a_keyed_argument_leaves_the_callers_hash_intact() {
   churn1105g();
   assert(h[7].a == 7, "the hash outlives the call, read back {h[7].a}");
 }
+
+// ---- the lifted temp's SLOT outlives the sentinel of the local bound from the call ----
+//
+// Giving the temp real deps takes its scope-exit free away, which SHORTENS its live interval —
+// and the slot allocator then hands its slot to the very local the call is bound to. That is
+// legal only if nothing writes the shared slot between the temp's last write and its read as the
+// argument, and the join bind used to write it first: it sentinelled the destination BEFORE
+// evaluating the call, so the argument was replaced by `null` on the way in and the borrow arm
+// answered the field DEFAULT.
+//
+// A FIRST bind cannot name its own destination, which is why the sibling rule ("evaluate the call
+// before touching the destination") reads as inapplicable here — but the call can name a
+// NEIGHBOUR the allocator gave that slot to, and that is a different question. The sentinel is
+// written after the call now.
+//
+// ⚠ VALUES score this one, unlike every cell above: the interpreter answered 3 (the field
+// default) where `--native` answered 7, so it is also the only cell here where the two backends
+// disagreed.
+
+// A NULLABLE return, so the bind goes through the runtime join guard that writes the sentinel
+// (loft#1106). With a non-null return the local takes another path and the cell is vacuous.
+fn pick_opt1105g(s: S1105g, c: boolean) -> S1105g? { if c { s } else { mk1105g() } }
+
+fn slot_reuse(c: boolean) -> integer {
+  v: vector<S1105g?> = [S1105g { a: 7 }];
+  r = pick_opt1105g(v[0] ?? S1105g { a: 5 }, c);
+  r?.a
+}
+
+fn test_the_lifted_argument_survives_the_binds_own_slot() {
+  t = 0;
+  for i in 0..12 { t = t + slot_reuse(true) + slot_reuse(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}

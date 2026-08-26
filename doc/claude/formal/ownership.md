@@ -231,6 +231,37 @@ container.  `pick(h[k], …)` over a `hash` passed in as a PARAMETER then read b
 dereference.  A value whose source `lift_view_deps` cannot name is NOT bound at all: a leak is the
 better of the two, and it is the one that was already there.
 
+⚠ **AND TAKING A FREE AWAY MOVES A SLOT.** The deps that stop the temp being freed also SHORTEN
+its live interval — a variable with no scope-exit free is dead earlier — and the slot allocator
+then hands its slot to the local the call's result is bound to. That is legal only while nothing
+writes the shared slot between the temp's last write and its read as the ARGUMENT, and the join
+bind wrote it first: `gen_set_first_ref_join` sentinelled its destination BEFORE evaluating the
+call, so the argument arrived `null` and the borrowing arm answered the field DEFAULT
+(interpreter only; `--native` gives each local its own Rust binding and never noticed).
+
+The rule broken is the one `generate_set` already states for @P290 — *evaluate the call before
+touching the destination* — and it reads as inapplicable here for a real reason: it is gated on
+the RHS naming `v`, and a FIRST bind cannot name its own destination. **But the call can name a
+NEIGHBOUR the allocator gave that slot to, and that is not the same question.** The sentinel is
+written after the value now; `OpBindOrCopy`'s precondition is unchanged, since the slot still
+holds a sentinel before the guard writes it. Guard:
+`test_the_lifted_argument_survives_the_binds_own_slot`, which needs a NULLABLE-return callee to
+reach the join bind at all — with a non-null return the local takes another path and the cell is
+inert. It is also the only cell in that file the VALUES score: everything else there is a pure
+leak.
+
+⚠ **AND A SHARED PREDICATE IS ONLY SHARED IF ITS CALLERS AGREE ON THE ARGUMENT.** The strip and
+the two emitters read ONE question (`nullable_join_first_bind`) so a strip always has a guard
+under it — and they still disagreed, because `scan_set` asked it against the RAW right-hand side
+while codegen only ever sees the SCANNED one. Between them sits the very rewrite this entry is
+about: `scan_args` LIFTS an argument the bracket cannot name into a temp, and that temp IS the
+witness the join resolves. Read before the lift the call answers *"no nameable witness"* and the
+strip declines; read after it the guard goes in. The local then owned a store with no free — one
+leaked record per call on the minting arm, from two readers of one predicate. It asks about
+`set_value` now. **One home secures the QUESTION and says nothing about WHICH VALUE each caller
+hands it; a pass that rewrites the IR sits between two readers of the same fact, and the one
+upstream of the rewrite is asking about a program that will not exist.**
+
 ⚠ **AND THE AXIS THAT HID IT IS GENERAL: A LEAK CHANNEL CANNOT SCORE AN OVER-FREE.** Every cell of
 the six above builds its container INSIDE the calling function, so a free that should not happen
 lands on a store dying at the same scope exit — `H-FreeTwice` absorbs it and neither the values nor
