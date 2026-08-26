@@ -159,8 +159,9 @@ implication that reading `deps` is *sufficient*.
 
 OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A NARROWED 2026-08-25
 to a single cell — an inline-minting `match` arm — with every other cell fixed, and that
-cell's one known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-9
-opened and closed 2026-08-26, D-own-7 opened and closed 2026-08-23, and D-own-6 before it;
+cell's one known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-10
+and D-own-9 opened and closed 2026-08-26, D-own-7 opened and closed 2026-08-23, and D-own-6
+before it;
 the five original D-own deviations remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
 axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
@@ -168,6 +169,83 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-10 — CLOSED (2026-08-26, loft#1101): a BOUND projection was renamed onto the caller's buffer, and it owned nothing to rename
+
+`(O-Move)` says a returned heap value's ownership TRANSFERS, and that a return which merely
+BORROWS is copied instead.  A collection return that views another local did neither — it was
+renamed onto the caller's buffer, which is the promotion ladder saying *this local IS the
+buffer*:
+
+```loft
+fn f() -> vector<integer> { vv = [[11, 22, 33], [44, 55]]; e = vv[0]; e }   // answers []
+fn g() -> vector<integer> { v = [11, 22, 33]; t = (v, 7); e = t.0; e }      // answers churn's bytes
+```
+
+Writing the same projection AS the tail was always correct: the gates on that path
+(`return_projects_into_local`, the H12 predicate) read the tail's SHAPE, and `returns_own_field`
+suppresses the rename for `return d.value`.  Its own comment names the hole — *"a local-bind
+(`v = d.value; return v`) returns `v` itself (not a projection)"* — and once the projection
+happens at a binding the tail IS a bare `Var`, so no shape gate can see it.
+
+**This is `O-Proxy` read as an ownership answer.**  `fresh_owned_vector_deps` accepts a local
+whose dep list is non-empty as *"a named non-argument local vector with a backing store"*, and
+a view reads non-empty too.  `O-Oracle` is the fact both sites want and it is STRUCTURALLY
+UNAVAILABLE here for the reason this file already records for `vector_needs_db`: the oracle
+classifies a finished body from `data.def(d_nr).code`, and the parser has no def handle.  What
+IS available is the sharpened reading of the proxy this file states three sections up — the
+dep list carries THREE meanings, not two: empty (no store yet), a dep on the binding's OWN
+mint (`__vdb_N`, which says *I own one*), and a dep on ANOTHER LOCAL (*I borrow that one*).
+Closed by reading the third case as the borrow it is, citing `@FR-O-Move` / `@FR-O-Borrow`
+(`Parser::var_views_local`, `src/parser/control.rs`), which leaves the candidate on `Bind` —
+the copy-into-a-separate-`__retbuf` leg an owning local already takes.
+
+⚠ **Skipping the mint is not a refinement of that reading, it is what makes it USABLE**, and
+that is the entry's transferable half.  This verdict decides whether the function takes a
+hidden buffer argument, so it must agree on both parser passes — the obligation
+`var_bound_to_branch` states, and the one loft#1099 had just cost.  Measured: `vector_db` adds
+the mint dep on pass 2 ONLY, while a borrow dep comes from the projection and is present on
+both, so an owning `o` reads `[]` then `["__vdb_1"]` and a viewing `e` reads `["vv"]` twice.
+Bare non-emptiness would therefore answer *owns* on pass 1 and *borrows* on pass 2 for one
+body, moving the ABI between the passes.  The mint test is what collapses that to one answer.
+
+**Two facts, because neither covers the other.**  A read out of an inline call's result
+(`e = mk().items; e`) carries an EMPTY dep list: loft#882/#889 record the container dep at the
+SUBSCRIPT only, leaving a bare field read to *"the delivery machinery already copies out"* —
+true of the tail `mk().items`, false the moment it is BOUND.  So the second leg reads the
+DEFINING STATEMENT (`var_defined_by_projection`), and it carries the same mint test, because
+the vector backing rewrites an owned literal into `OpGetField(__vdb_N, 0)` on pass 2 and a
+verbatim shape read called that a view on one pass and not the other.
+
+**Measured, not reasoned.**  The filed scope was two cells; the boundary matrix found six.
+Beyond the two reported: a `-> vector<T>?` return, which additionally raised an internal
+`BUG (#306): refused to free the stack store`; an `if` ARM that binds the view; the explicit
+`return e` spelling, which answered the RIGHT length while leaking one store per call, because
+its classifier handed the promotion the local's BORROW SOURCE — `vv`, a `vector<vector<T>>`,
+renamed onto a `vector<T>`-shaped buffer; and the inline-call read, which diverged, answering
+stale-but-right interpreted and EMPTY on `--native`.
+
+The IR sweep bounds the cut from the other side: **1 of 967 corpus programs emits different
+bytecode, and it is this fix's own guard file** — no existing program's code moves, so the
+rungs fire only on the shapes that were broken, and the corpus had no coverage of them at
+all, which is why they survived.  Normalise the stdlib paths before believing a sweep: the
+control worktree resolves `default/` through its own prefix, which reads as a diff in every
+program and reported 29 false changes before it was normalised away.
+
+Guard: `tests/scripts/1101-a-projection-bound-to-a-local-then-returned.loft` — fifteen cells,
+five of them falsified on a HEAD-built control binary, and the file is scored on both backends
+plus the wrap leak gate (the explicit-return cell is the one only the leak gate can fail).
+Controls: the tail projection, an owned literal and an owned build (which must KEEP the
+rename — refusing it is the over-fire a bare-emptiness reading produces), the issue's
+copy-out workaround, an ARGUMENT-rooted projection (the caller owns that store, so the view
+outlives the call), a copied rebinding, and the RECORD twin, which reaches its own view repair
+through `classify_reference_delivery`.
+
+⚠ **A stale `target/release/loft` is not a control.**  It answered the guard file GREEN — not
+because the shapes were fixed there, but because it predates the code under test; a
+freed-then-reused store also depends on the build's own allocation pattern, so a binary that
+merely *looks* older can report either verdict.  The control has to be BUILT from the commit
+under test (`git worktree add` + a separate `CARGO_TARGET_DIR`).
 
 ### D-own-9 — CLOSED (2026-08-26, loft#1096): a COLLECTION return's promoted buffer is the CALLER's store, and the callee freed it
 

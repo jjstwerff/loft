@@ -1791,7 +1791,10 @@ impl Parser {
                 && matches!(result.ret_promo_base(), Type::Vector(_, _))
                 && let Some(Value::Return(inner)) = l.last().map(Value::unspan)
             {
+                // loft#1101 — a viewing local is not fresh-owned, but it still has to be
+                // DELIVERED; `tail_ret_view_local` supplies the candidate that copies.
                 self.fresh_owned_vector_deps(inner)
+                    .or_else(|| self.tail_ret_view_local(l, inner))
             } else {
                 None
             };
@@ -9902,6 +9905,146 @@ impl Parser {
         false
     }
 
+    /// Is `d` a MINT — a compiler-generated slot that OWNS the store it points at,
+    /// minted to back one binding (`__vdb_N`, a return work-ref)?
+    ///
+    /// The middle of @FR-O-Proxy's three readings, and the one that makes the other two
+    /// separable: a dep on a mint says *I own a store*, a dep on anything else that is
+    /// not a parameter says *I borrow that one*.  Both facts are read, because neither
+    /// alone answers it — `_elm_N` and `__lift_N` are compiler-generated too and are
+    /// borrows (`inline_ref`, so they own nothing), while a user local that owns a store
+    /// is still somebody else's owner as far as this binding is concerned.
+    fn var_is_mint(&self, d: u16) -> bool {
+        self.vars.is_compiler_generated(d) && self.vars.owns_store(d)
+    }
+
+    /// Does expression `e` READ OUT OF a store this function frees — an element or field
+    /// of a local, or of an inline call's temporary?
+    ///
+    /// The same shape `return_projects_into_local` recognises at a tail, with one
+    /// difference that matters at a BINDING: a projection rooted at a MINT is not a
+    /// borrow.  The vector backing rewrites an owned literal into `OpGetField(__vdb_N, 0)`
+    /// on pass 2, so reading the tail predicate here verbatim called `vv = [[…]]` a view
+    /// of something on pass 2 and not on pass 1 — a verdict that moves between the
+    /// passes, which at this site moves the ABI with it.  @FR-O-Proxy via
+    /// [`var_is_mint`](Self::var_is_mint) is what keeps the two passes saying the same
+    /// thing.
+    fn expr_borrows_local(&self, e: &Value) -> bool {
+        let (get_field, get_vector) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+        );
+        match e.unspan() {
+            Value::Call(d, args) if *d == get_field || *d == get_vector => {
+                match args.first().map(Self::projection_base) {
+                    Some(Value::Var(base)) => {
+                        !self.vars.is_argument(*base) && !self.var_is_mint(*base)
+                    }
+                    Some(inner @ Value::Call(bd, _)) if *bd == get_field || *bd == get_vector => {
+                        self.expr_borrows_local(inner)
+                    }
+                    // An inline call's result is an owned temporary (`__lift_N`), freed
+                    // on the way out — the H9 case.
+                    Some(Value::Call(_, _)) => true,
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// The expression `body` most recently ASSIGNS to `v`, seen through the statement
+    /// wrappers a body carries.  Walked in reverse so a rebound variable answers with the
+    /// assignment that survives to the tail, not the first one.
+    fn var_defining_expr(body: &[Value], v: u16) -> Option<&Value> {
+        fn walk(node: &Value, v: u16) -> Option<&Value> {
+            match node.unspan() {
+                Value::Set(w, rhs) if *w == v => Some(rhs),
+                Value::Insert(ops) => ops.iter().rev().find_map(|o| walk(o, v)),
+                Value::Block(bl) => bl.operators.iter().rev().find_map(|o| walk(o, v)),
+                _ => None,
+            }
+        }
+        body.iter().rev().find_map(|s| walk(s, v))
+    }
+
+    /// Is `v` DEFINED by a projection into something this function frees?  The same
+    /// question `return_projects_into_local` asks of a tail, asked of the statement that
+    /// produced the tail's variable.
+    ///
+    /// It exists because one projection shape cannot answer through `deps`.  A read out
+    /// of an inline call's result (`e = mk().items; e`) borrows a `__lift_N` temp, and
+    /// loft#882/#889 record the container dep at the SUBSCRIPT only — a bare field read
+    /// is left to "the delivery machinery already copies out", which is true of the tail
+    /// `mk().items` and false the moment the read is BOUND: the tail is then a bare
+    /// `Var` with an empty dep list, so the rename fires, `e` becomes `__retbuf`, and
+    /// `OpFreeRef(__lift_1)` two statements later frees what it now points at.
+    /// @FR-O-Borrow — the borrow is real whether or not a dep records it.
+    fn var_defined_by_projection(&self, body: &[Value], v: u16) -> bool {
+        Self::var_defining_expr(body, v).is_some_and(|rhs| self.expr_borrows_local(rhs))
+    }
+
+    /// Does `v` BORROW another local's store?  The BINDING form of the view a tail
+    /// spells inline — `e = vv[0]; e` beside the bare `vv[0]`, `e = t.0; e` beside `t.0`.
+    ///
+    /// Ask before renaming a local onto the caller's return buffer.  The rename says
+    /// *this local IS the buffer*, which is an ownership claim; for a view the owner is
+    /// the base local, the callee frees it at scope exit, and the caller is handed a
+    /// store that has been freed and recycled.  Enforces @FR-O-Move / @FR-O-Borrow: a
+    /// value that aliases another must not be transferred out as owned — the caller
+    /// COPIES instead, which is what refusing the rename leaves, on `Bind`.
+    ///
+    /// @FR-O-Oracle is the fact this wants, and it is structurally unavailable at a
+    /// PARSER site: the oracle classifies a finished body from `data.def(d_nr).code`
+    /// and the parser has no def handle (`formal/ownership.md` measured this for
+    /// `vector_needs_db`).  So it reads the sharpened @FR-O-Proxy fact the same
+    /// register writes down — a dep list carries THREE meanings, not two: EMPTY (no
+    /// store yet), a dep on the binding's OWN mint (`__vdb_N`, which says *I own a
+    /// store*), and a dep on ANOTHER LOCAL (*I borrow that one*).  Only the third is a
+    /// borrow, so bare non-emptiness is the wrong reading.
+    ///
+    /// Skipping the mint is what makes the verdict agree on BOTH PARSER PASSES, and
+    /// that is a correctness requirement rather than a refinement.  `vector_db` adds
+    /// the mint dep on pass 2 only, while a borrow dep comes from the projection and
+    /// is present on both: an owning `o` reads `[]` then `["__vdb_1"]`, a viewing `e`
+    /// reads `["vv"]` on both.  Bare non-emptiness would therefore answer *owns* on
+    /// pass 1 and *borrows* on pass 2 for one body — and this verdict decides whether
+    /// the function takes a hidden buffer argument, so the ABI would move between the
+    /// passes (the shape loft#1099 cost).  `var_bound_to_branch` states the same
+    /// two-pass obligation and answers it structurally, for the same reason.
+    ///
+    /// An ARGUMENT dep is deliberately not a borrow here: the CALLER owns that store,
+    /// so it outlives the call, and `classify_vector_delivery`'s `CopyBorrow` leg
+    /// already gives that shape value semantics.
+    fn var_views_local(&self, v: u16) -> bool {
+        let mut work: Vec<u16> = vec![v];
+        let mut seen: std::collections::HashSet<u16> = work.iter().copied().collect();
+        let mut i = 0;
+        while i < work.len() {
+            let cur = work[i];
+            i += 1;
+            if cur >= self.vars.count() {
+                continue;
+            }
+            for d in self.vars.tp(cur).depend() {
+                if d >= self.vars.count() || !seen.insert(d) {
+                    continue;
+                }
+                if self.vars.is_argument(d) {
+                    continue;
+                }
+                if self.var_is_mint(d) {
+                    // Its own mint: owns a store and borrows nothing.  Walk through it
+                    // rather than stopping, so a mint that itself views a local counts.
+                    work.push(d);
+                    continue;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
     /// #306: rewrite a return value that views a local's store into an owned
     /// copy — `{ __ref_N = null; OpDatabase(__ref_N, kt);
     /// OpCopyRecord(<orig>, __ref_N, kt); __ref_N }`.  The returned work-ref
@@ -10819,9 +10962,18 @@ impl Parser {
             // already been peeled (six of them); this one is on the RETURNED VALUE rather
             // than on the return TYPE, which is why it outlived the sweep that fixed them.
             // Identity while `LOFT_NULLABLE_RETBUF` is off.
+            // loft#1101 — `!d.is_empty()` reads @FR-O-Proxy as "has a backing store", and a
+            // VIEW of another local reads non-empty too (`e = vv[0]; return e;` deps on
+            // `vv`).  This arm answers with the local's DEPS, which for an owner is its
+            // own mint — the store to rename — and for a view is somebody else's store:
+            // `vv`, a `vector<vector<T>>` container, was renamed onto the `vector<T>`
+            // -shaped `__retbuf` and the store it abandoned leaked one per call.  A view
+            // owns nothing to rename (@FR-O-Move), so it is not this arm's answer; it is
+            // `tail_ret_view_local`'s, which delivers it by COPY instead.
             Value::Var(o)
                 if self.vars.exists(*o)
                     && !self.vars.is_argument(*o)
+                    && !self.var_views_local(*o)
                     && matches!(self.vars.tp(*o).ret_promo_base(), Type::Vector(_, d) if !d.is_empty()) =>
             {
                 let Type::Vector(_, d) = self.vars.tp(*o).ret_promo_base() else {
@@ -10843,6 +10995,40 @@ impl Parser {
                 }
                 _ => None,
             },
+            _ => None,
+        }
+    }
+
+    /// loft#1101 — the VIEW counterpart of [`fresh_owned_vector_deps`](Self::fresh_owned_vector_deps)
+    /// for an explicit `return <local>` tail: a named non-argument local that BORROWS
+    /// another local's store (`vv = […]; e = vv[0]; return e;`).  Reads the same two
+    /// facts the promotion ladder's rung does — the dep list, and the statement that
+    /// defined the local — so the explicit and implicit spellings cannot disagree.
+    ///
+    /// It answers the LOCAL ITSELF rather than that local's deps, and the difference is
+    /// the whole point.  An owner's deps ARE the store to rename onto `__retbuf`; a
+    /// view's deps are the store somebody else owns, so handing them over renames a
+    /// container onto an element-shaped buffer and orphans what it abandoned.  Naming
+    /// the local instead puts the explicit-return spelling on exactly the candidate the
+    /// IMPLICIT tail already uses (`ls = ["e"]`), where the promotion ladder's
+    /// `var_views_local` rung declines the rename and `Bind` copies the view into the
+    /// buffer — value semantics, @FR-O-Move.
+    ///
+    /// Answering `None` here instead is not the same thing and was measured: with no
+    /// candidate the `return` is never stripped, the vector arm below never delivers it,
+    /// and the signature stays a BARE vector — the pre-#437 shape whose NRVO caller
+    /// chains into a buffer the callee never writes, so `--native` answered an empty
+    /// vector while the interpreter looked clean.
+    fn tail_ret_view_local(&self, body: &[Value], v: &Value) -> Option<Vec<u16>> {
+        match v.unspan() {
+            Value::Var(o)
+                if self.vars.exists(*o)
+                    && !self.vars.is_argument(*o)
+                    && (self.var_views_local(*o) || self.var_defined_by_projection(body, *o))
+                    && matches!(self.vars.tp(*o).ret_promo_base(), Type::Vector(_, _)) =>
+            {
+                Some(vec![*o])
+            }
             _ => None,
         }
     }
@@ -11515,6 +11701,15 @@ impl Parser {
     /// — it prints the candidate AND the VERDICT, because those are two different questions.
     /// No line at all for a function means a gate UPSTREAM of the classifier; a line whose
     /// verdict is a `Skip*` means the classifier was asked and said no.
+    ///
+    /// It also prints the FACTS the verdict is read from — the parser pass, the candidate's
+    /// dep NAMES, and the two borrow answers as `vl=<deps>/<statement>` — so a wrong verdict
+    /// can be attributed without a second run.  Read the two passes in PAIRS: pass 1 is where
+    /// a rename is decided and pass 2 normally answers `MergeAttr` for the same candidate
+    /// (it IS the attribute by then).  A fact that differs between the pair is the bug to
+    /// chase, because this verdict decides whether the function takes a hidden buffer
+    /// argument — the deps alone do differ, since a mint dep is added on pass 2 only, which
+    /// is why the borrow answers and not the raw list are what the rungs read.
     fn classify_ret_promotion(
         &self,
         v: u16,
@@ -11526,10 +11721,19 @@ impl Parser {
         let verdict = self.classify_ret_promotion_inner(v, transitive, body, dep, ctx);
         if crate::keys::trace_ret_promotion() {
             eprintln!(
-                "[retpromo] fn={} v={} name={} site={:?} ret={:?} plain={} buf={:?} => {verdict:?}",
+                "[retpromo] fn={} v={} name={} pass={} vl={}/{} deps={:?} site={:?} ret={:?} plain={} buf={:?} => {verdict:?}",
                 self.data.def(self.context).name(),
                 v,
                 self.vars.name(v),
+                if self.first_pass { 1 } else { 2 },
+                self.var_views_local(v),
+                self.var_defined_by_projection(body, v),
+                self.vars
+                    .tp(v)
+                    .depend()
+                    .iter()
+                    .map(|&d| self.vars.name(d).to_string())
+                    .collect::<Vec<_>>(),
                 ctx.site,
                 ctx.ret,
                 ctx.is_plain_fn,
@@ -11660,10 +11864,21 @@ impl Parser {
         // has nothing to abandon there.
         let bound_to_vector_join = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
             && Self::var_bound_to_branch(body, v);
+        // loft#1101 — the candidate is a VIEW of another local (`e = vv[0]; e`), the
+        // binding twin of the tail projection `returns_own_field` above suppresses.
+        // That rung reads the tail SHAPE, so it only sees a projection written at the
+        // return; once the projection happens at a binding the tail is a bare `Var` and
+        // the fact lives in that binding's DEPS instead.  `var_views_local` reads it
+        // there (@FR-O-Move / @FR-O-Borrow).  Vector only: the record return reaches
+        // its own view repair earlier, through `classify_reference_delivery`'s
+        // `return_views_local` leg (#306).
+        let views_local = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
+            && (self.var_views_local(v) || self.var_defined_by_projection(body, v));
         let allow_rename = !(bound_already
             || reassigned
             || returns_own_field
             || bound_to_vector_join
+            || views_local
             // A1b — the site-value (g's buffer) must NOT rename onto __retbuf (that
             // aliases the borrowed subject into the return); fall through to Bind so
             // the return materialises an owned copy into a distinct __retbuf.
