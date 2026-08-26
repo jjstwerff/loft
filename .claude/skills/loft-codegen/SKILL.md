@@ -147,6 +147,32 @@ write an encoded field, and their own comments said so. Merging on the list alon
 folded a raw-slot writer onto an encoded-field writer. Read what each site asks; cite the
 rule it enforces; leave a note where two look alike and must stay apart.
 
+## And the dual: does this notion have a SECOND spelling?
+
+The section above asks whether your predicate already exists. This asks whether the thing it
+matches reaches the IR more than one way — because a matcher keyed on one spelling is blind to
+the other, silently, and the blindness cannot be grepped for from the symptom. Searching for the
+spelling you DO match returns every site that gets it right; the sites that get it wrong contain
+nothing to search for.
+
+Three instances in one week, in three subsystems: a PROJECTION is `Call(OpGetField|OpGetVector,…)`
+**and** `Value::TupleGet(base, i)`, which is a variant carrying its base as a var NUMBER and is
+not a call at all; a NULL AT A JOIN is a literal lowering to `OpConv*FromNull` **and** a
+nullable-TYPED value that carries no null-shaped node; a BORROW is a value with a dep list **and**
+one with no dep at all. Each cost a wrong answer that no test could see.
+
+So before writing *"is this an X?"* over the IR, ask whether X has a second spelling — a `Value`
+VARIANT beside an op call, a TYPE fact beside a node shape, an absence beside a presence. Match
+the notion, not the spelling, and put both in ONE predicate. `python3
+scripts/ir_walker_audit.py spellings` asks it for the projection notion (18 functions, 2 handle
+both); the mode is ~30 lines and the shape generalises to any notion whose two spellings can be
+named. Full treatment, with what each instance cost:
+`doc/claude/formal/IMPLEMENTATIONS.md` § *One notion, how many SPELLINGS?*
+
+⚠ The normal appearance of this defect is a matcher that is RIGHT about every site it can see.
+So the evidence is never a failing site — it is the other spelling, built by hand, arriving where
+the matcher is not looking.
+
 ## Say why the FALLBACK is right, not just what the function computes
 
 A walker that recurses over `Value` and ends in `_ => false` / `_ => None` is answering a

@@ -1463,6 +1463,22 @@ membership question at all. It sizes the backlog (dozens, not a handful) and ran
 tuple family earned its fix by having a bug AND a prior drift in the same four functions; the same
 evidence has to be found for each of the rest, one at a time.
 
+##### The class has one home now, and the mode has an outside validation
+
+Three instances of one shape in a week — the projection (B6e/B6g), the null at a join (loft#1103),
+and a borrow with no dep at all (loft#1101, `e = mk().items`) — is a class, not three bugs, and
+stating it once per issue is how it stays three bugs. It is written once in
+[formal/IMPLEMENTATIONS.md](formal/IMPLEMENTATIONS.md) § *One notion, how many SPELLINGS?*, as the
+dual of that document's own question, with what each instance cost; `engineering-rigor` and
+`loft-codegen` carry the trigger that gets it read.
+
+**The `spellings` mode's first use outside this thread found something.** The sibling checkout
+ran it against `expr_borrows_local`, which it had just landed for loft#1101: the predicate
+resolves by op name (`OpGetField` / `OpGetVector`) and is blind to `TupleGet` exactly as the
+18-vs-2 count predicts. Five tuple spellings answer correctly today only because the DEPS leg
+covers what the structural leg cannot see — latent, not live, and recorded on D-own-10. That is
+the verdict the mode exists to give: a matcher that is right about every site it can see.
+
 ##### B6f's owed sentences are written
 
 The `Return`/`Drop` axis none of the five null-tail walkers documented now says, in each of them,
