@@ -133,6 +133,52 @@ is why `loft::c_call` may stay gated. `generated_loft_paths_survive_the_wasm_fea
 module file's own inner `#![cfg(…)]` — and is always-on, because the end-to-end
 wasip2 test self-skips wherever wasmtime is not installed.
 
+#### When the crate needs a device the target does not have
+
+A `[native] crate` is cross-built as a whole, so ONE dependency that has no
+wasm32 target takes the entire package off `--native-wasm` — including the parts
+that never wanted a device.  `graphics` shipped that way for months: `winit` and
+`glutin` were unconditional, cargo failed before reaching any of the package's
+own code, and its software canvas, mesh maths and PNG encoder went down with the
+window layer they have nothing to do with.
+
+**The shape that works** (`loft-libs-graphics/graphics/native`):
+
+1. Put only the crates that genuinely cannot target wasm32 under
+   `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`, and cross-build
+   each remaining one on its own to know which those are — the list is usually
+   shorter than it looks.  For graphics it was two of nine: `gl` compiles
+   anywhere (it is a table of function pointers), and so do `fontdue`, `png`,
+   `image` and `rodio`.
+2. Give a wasm32 twin only to the entry points that touch the absent device
+   DIRECTLY.  Everything reached through a readiness flag needs none: graphics
+   sets `GL_READY` inside window creation only, so on a target with no window
+   the flag never opens and ~90 GL functions answer their documented defaults
+   through the guard they already had.  Five needed a twin.
+3. Make each twin answer what the SIGNATURE already documents for the missing
+   device — `false` from a constructor, `0` from a handle, nothing from a setter
+   — not a refusal and not a plausible-looking success.  This is loft#709's
+   disposition: unavailability is a fact about this run on this target, not
+   about whether the program is well-formed.
+4. Re-export publicly every `n_*` entry point the generated code calls.  The
+   backends reach them differently and only one notices: `--native` loads the
+   cdylib and binds the `#[unsafe(no_mangle)]` SYMBOL, which a private `use`
+   still exports, while `--native-wasm` links the rlib statically and generated
+   code writes the Rust PATH.  A privately-`use`d one is `E0603` on wasm with
+   the native build green beside it (graphics' `n_audio_play_raw`).
+
+**Nothing gates this today, in either half.**  The shared library CI
+(`.github/workflows/library-ci-reusable.yml`) builds `--interpret` and
+`--native` and no wasm target, and `loft test` has no `--native-wasm` mode at
+all — it compiles a program and a suite is not one — so a library reporting a
+green suite has said nothing about whether it cross-builds.  Until that changes,
+a package with a `[native] crate` carries its own guard: graphics'
+`native/tests/headless_safety.rs` holds an ALLOW-list of wasm-clean
+unconditional dependencies (always runs, no toolchain needed, so a NEW
+dependency fails until someone places it) plus a real cross-build that skips
+where the target is absent.  A deny-list of known-bad crates would be silent
+about the next one.
+
 ### The page filesystem (`--html`)
 
 A page draws AND stores.  `--html` used to bind no filesystem at all: the file

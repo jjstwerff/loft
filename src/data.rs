@@ -3083,13 +3083,20 @@ fn collect_callees(value: &Value, caller: u32, edges: &mut Vec<(u32, u32)>) {
         Value::Set(_, rhs) => {
             collect_callees(rhs, caller, edges);
         }
-        // Leaves and Value variants without nested expressions —
-        // nothing to walk.  Conservative: any future Value variant
-        // not enumerated here is treated as a leaf, missing any
-        // nested calls inside it.  Phase 5e's tests cover this so
-        // a missed variant surfaces as a "callers_of returns
-        // empty" regression.
-        _ => {}
+        // Every OTHER node descends via the keystone rather than being treated as a leaf.
+        //
+        // This arm used to be `_ => {}`, with a comment saying a missed variant would surface
+        // as a "callers_of returns empty" regression because the phase-5e tests covered it.
+        // They did not: the only recursion test builds a `Value::If`, and the arms above never
+        // included `Return`, `Drop` or `Span` — which are not future variants, they are the
+        // ones a body uses every day.  So `fn f() { return g(); }` recorded NO edge from `f`
+        // to `g`, and the caller index simply did not know about it.
+        //
+        // Descending through the keystone means a variant nobody thought of cannot silently
+        // become a leaf, which is the property the old comment claimed and did not have.
+        other => {
+            other.for_each_child(&mut |c| collect_callees(c, caller, edges));
+        }
     }
 }
 
@@ -8442,6 +8449,40 @@ mod caller_graph_tests {
         assert!(d.caller_index.get().is_some());
         // Second call returns the same answer cheaply.
         assert_eq!(d.callers_of(1), vec![0]);
+    }
+
+    /// A call reached only through a `Return` must still record its edge.
+    ///
+    /// `collect_callees`' fallback was `_ => {}`, and its arms named `Block` / `Insert` / `If`
+    /// / `Loop` / `Set` but not `Return` — so `fn f() { return g(); }`, the most ordinary body
+    /// there is, contributed NO edge and `callers_of(g)` came back empty. The comment above
+    /// that arm asserted the phase-5e tests would catch a missed variant; the only recursion
+    /// test built a `Value::If`, so nothing did.
+    ///
+    /// `Drop` is here for the same reason and `Span` because the parser wraps nodes with it.
+    #[test]
+    fn callers_of_finds_a_call_under_a_wrapper() {
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
+        let wraps: [(&str, fn(Value) -> Value); 2] = [
+            ("Return", |c| Value::Return(Box::new(c))),
+            ("Drop", |c| Value::Drop(Box::new(c))),
+        ];
+        for (label, wrap) in wraps {
+            let mut d = Data::new();
+            let inner = d.add_def("inner", &pos, DefType::Function);
+            let outer = d.add_def("outer", &pos, DefType::Function);
+            d.definitions[inner as usize].code = Value::Int(1);
+            d.definitions[outer as usize].code = wrap(Value::Call(inner, vec![]));
+            assert_eq!(
+                d.callers_of(inner),
+                vec![outer],
+                "a call under a `{label}` must still record its caller edge"
+            );
+        }
     }
 
     #[test]

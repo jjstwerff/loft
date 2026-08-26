@@ -4534,14 +4534,36 @@ impl Parser {
             // forced a mental flip and confused users new to the
             // language.  `pos` is the offending value's start, captured at
             // parse time — the lexer cursor has drifted to the `;` by now.
-            diagnostic_at!(
-                self.lexer,
-                pos,
-                Level::Error,
-                "expected {}, got {} on {context}",
-                should.name(&self.data),
-                test_type.name(&self.data)
+            let want = should.name(&self.data);
+            let have = test_type.name(&self.data);
+            // Two DIFFERENT definitions can render the same name — loft#1094: a package
+            // declaring `Frame` while a module beside it wildcard-imports a dependency
+            // that also has one.  Then "expected Frame, got Frame" names the two types
+            // identically and the reader has nothing to go on; the collision is exactly
+            // what they need told, and it is the one case where the position of a TYPE
+            // (rather than of the value) is the useful fact.
+            let (want_nr, have_nr) = (
+                self.data.type_def_nr(should),
+                self.data.type_def_nr(test_type),
             );
+            if want == have && want_nr != have_nr && want_nr != u32::MAX && have_nr != u32::MAX {
+                diagnostic_at!(
+                    self.lexer,
+                    pos,
+                    Level::Error,
+                    "expected the `{want}` declared at {}, got the one declared at {} — two \
+                     different types share this name on {context}",
+                    self.data.def(want_nr).position(),
+                    self.data.def(have_nr).position()
+                );
+            } else {
+                diagnostic_at!(
+                    self.lexer,
+                    pos,
+                    Level::Error,
+                    "expected {want}, got {have} on {context}"
+                );
+            }
         }
     }
 

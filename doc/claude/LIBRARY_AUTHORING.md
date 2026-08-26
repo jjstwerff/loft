@@ -169,6 +169,20 @@ warning count reaches zero.  Chunk CI flips the
 `LOFT_DENY_WARNINGS` env to `0` when the opt-out file is
 present.
 
+`.wasm_exempt` is its sibling, and the same shape: a package
+whose `[native] crate` cannot cross-build for `wasm32-wasip2`
+puts one at the package root, with the REASON as its contents.
+Without it, CI cross-builds every native crate and a failure is
+red — because one dependency lacking a wasm32 target takes the
+whole package off `--native-wasm`, the parts that never wanted a
+device included.  Prefer fixing it to declaring it: usually only
+one or two dependencies are the problem and they can be moved
+under `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`
+([WASM.md § When the crate needs a device the target does not
+have](WASM.md)).  An exemption is right where the unbuildable
+part IS the package — the TLS in `server` / `web` / `ssh` — not
+where it is a device the package merely touches.
+
 **Your warning count moves even when you don't touch the code** —
 loft keeps adding deprecations (`not null`, the `&`-parameter
 lint, null-flow), so a package that was clean at publish time

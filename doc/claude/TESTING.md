@@ -60,6 +60,29 @@ until [ ! -f .ci-running ]; do sleep 30; done; tail -3 result.txt
 this reason: it dates the verdict, so a stale one can be told from a fresh one by
 reading rather than by remembering.
 
+**The other end of the same race: a run that is KILLED mid-flight.** It leaves both
+halves of the state misleading, in opposite directions:
+
+* `.ci-running` is still there, so `until [ ! -f .ci-running ]` waits forever on a run
+  that no longer exists.  Before clearing it by hand, confirm nothing is actually
+  building — `for p in $(pgrep -x "cargo|rustc"); do readlink /proc/$p/cwd; done`, which
+  also tells you whether the build belongs to THIS checkout.  A bare
+  `pgrep -f "make ci"` is not that check: it matches its own command line.
+* `result.txt` is truncated but still holds the PREVIOUS run's
+  `CI-RESULT: ALL GATES PASSED`, so grepping for the verdict after a kill can report a
+  pass that never happened.  **Gate on the lock's absence first, then read the verdict**
+  — and read the timestamp header, which is what dates it.
+
+This is not hypothetical: two gates here were killed as collateral when a SIBLING
+checkout's run was killed (2026-08-25), the case `scripts/find_problems.sh` warns about
+in its own comments — *"`pkill -f nextest` reaches into other checkouts and starts a
+run-killing battle."*  The tell is that the `make ci` shell and its independent waiter
+died in the same second; a per-process kill takes one process, not two unrelated ones.
+
+⚠ And do not end a status command with `grep -c "^ *FAIL" result.txt`: `grep -c` exits
+**1** when the count is ZERO, so a clean gate is reported as a failed command.  Three
+passing runs were misread that way in one session.  Use `|| true`, or put the count first.
+
 ### Preferred shape — background + peek + wait
 
 ```bash

@@ -1324,8 +1324,17 @@ jobs:
       # binaryen provides `wasm-opt`, which `make game` / `loft --html`
       # require to inject asyncify (frame-yield) — without it the bundle's
       # self-validation gate (@P350) fails "no asyncify exports".
-      - name: Install mold + binaryen (wasm-opt)
-        run: sudo apt-get update && sudo apt-get install -y mold binaryen
+      # `libgl-dev` + `libasound2-dev` are the GL and ALSA HEADERS that
+      # `graphics`' native library needs to build from source.  `make game`
+      # reaches it through `brick-buster-pack` → `pack_atlas.loft`, which `use`s
+      # `graphics` and therefore builds its cdylib on this runner — so the job
+      # needs the same dev packages the Test job installs, even though nothing
+      # here opens a window.  Without them `pkg_config` panics in the build
+      # script and the failure surfaces four layers up as
+      # `assertion failed: pack_atlas: could not write assets/bb`, which names
+      # neither GL nor ALSA.
+      - name: Install mold + binaryen (wasm-opt) + GL/ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y mold binaryen libgl-dev libasound2-dev
 
       - name: Install wasm-pack
         run: |

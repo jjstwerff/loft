@@ -144,7 +144,12 @@ def audit_walkers():
 
 
 # A site DISCRIMINATES when it pattern-matches a specific variant (an arm, an `if let`).
-DISCRIM = re.compile(r"Value::([A-Za-z]+)\s*(?:\([^)]*\))?\s*(?:=>|\||\)\s*=)")
+# The lookbehind is load-bearing: without it this matches INSIDE another enum's path,
+# because `MValue::Scalar` and `VariableValue::Long` both literally contain "Value::".
+# Intersecting against the IR variant set does not save you — `Long` and `Single` are
+# real IR variant names, so `VariableValue` scored two and `state::static_call` read as
+# an unpeeled hazard while discriminating on a debug enum.
+DISCRIM = re.compile(r"(?<![A-Za-z0-9_])Value::([A-Za-z]+)\s*(?:\([^)]*\))?\s*(?:=>|\||\)\s*=)")
 
 
 def ir_value_variants():
@@ -182,7 +187,45 @@ IR_VARIANTS = ir_value_variants()
 # site naming one of them is deciding a host value and cannot be hidden by a `Span`.
 HOST_ONLY = {"Void", "Bool", "Ref"}
 
-TRAVERSAL_OPEN = re.compile(r"\.(any_node|for_each_child|for_each_child_mut)\(")
+# `walk` peels a `Span` before calling `f` exactly as `any_node` does
+# (`if let Value::Span(b) = self { return b.1.walk(f) }`), so its closure is safe too.
+TRAVERSAL_OPEN = re.compile(r"\.(any_node|for_each_child|for_each_child_mut|walk)\(")
+
+# A match whose SCRUTINEE is a span-transparent accessor cannot see a `Span` either.
+# `Value::tail` peels (`Value::Span(b) => b.1.tail()`), so `match val.tail() { … }` is safe
+# however many specific variants it then names.
+PEELED_SCRUTINEE = re.compile(r"match\s+[^{;]*\.(tail|unspan|unspan_mut)\(\)")
+
+
+def test_regions(path):
+    """Line ranges covered by `#[cfg(test)]`, as (start, end) pairs.
+
+    Test functions build IR by hand, so a `Span` reaches one only if the test writes it.
+    Counting them as unpeeled production sites overstates the backlog — `vectors.rs` alone
+    contributed two.
+
+    ⚠ Brace-balanced on purpose, NOT "everything after the first `#[cfg(test)]`".  That
+    cheaper rule looks right because test modules sit at the end of a file by convention,
+    and it is wrong wherever they do not: `src/trie_db.rs` has one at line 245 of 1355, so
+    the shortcut would discard 82 % of a production file and silently shrink the backlog.
+    """
+    lines = open(path, encoding="utf-8").read().split("\n")
+    regions, i = [], 0
+    while i < len(lines):
+        if "#[cfg(test)]" in lines[i]:
+            j, depth, seen = i, 0, False
+            while j < len(lines):
+                depth += lines[j].count("{") - lines[j].count("}")
+                if "{" in lines[j]:
+                    seen = True
+                if seen and depth <= 0:
+                    break
+                j += 1
+            regions.append((i + 1, j + 1))
+            i = j + 1
+        else:
+            i += 1
+    return regions
 
 
 def strip_traversal_closures(body):
@@ -223,7 +266,10 @@ def audit_unspan():
     for path in rust_files():
         if os.path.basename(path).endswith(skip):
             continue
+        regions = test_regions(path)
         for name, start, body in functions(path):
+            if any(lo <= start <= hi for lo, hi in regions):
+                continue  # a test fn: it constructs its own IR, spans included
             named = set(DISCRIM.findall(strip_traversal_closures(body))) - {"Span"}
             if named & HOST_ONLY:
                 continue  # a `host::Value` site — that enum has no `Span`
@@ -231,7 +277,12 @@ def audit_unspan():
             if len(specific) < 2:
                 continue  # not discriminating between shapes of the IR `Value`
             total += 1
-            if ".unspan()" in body or ".unspan_mut()" in body or "Value::Span" in body:
+            if (
+                ".unspan()" in body
+                or ".unspan_mut()" in body
+                or "Value::Span" in body
+                or PEELED_SCRUTINEE.search(body)
+            ):
                 handled += 1
             else:
                 rows.append((f"{rel(path)}:{start}", name, len(specific)))

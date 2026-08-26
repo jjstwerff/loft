@@ -258,10 +258,29 @@ fn print_help() {
     println!(
         "  --deps[=direct|=transitive]   under `loft test`, also run `loft test` in every
                                 dependency directory listed in loft.toml.  Default is
-                                =transitive; =direct walks only first-level deps.  Reads
-                                path-form deps `{{ path = \"...\" }}`; registry-version deps
-                                require a loft.lock (T4 follow-up).  Returns non-zero if
-                                the host project's tests OR any dep's tests fail."
+                                =transitive; =direct walks only first-level deps.  A dep
+                                resolves to a path-form dep `{{ path = \"...\" }}`, a sibling
+                                directory, or a version pinned by loft.lock (installed in
+                                ~/.loft/registry).  Returns non-zero if the host project's
+                                tests OR any dep's tests fail."
+    );
+    println!(
+        "  --lock=PATH                   with --deps, resolve registry deps through THIS
+                                lockfile instead of the project's loft.lock, so a candidate
+                                lock can be tested before it is committed.  While given, it
+                                outranks a sibling directory of the same name."
+    );
+    println!(
+        "  --strict-deps                 with --deps, hold dependencies to the same warning
+                                bar as the project itself.  Off by default: lint debt
+                                inside a package you do not own is not your build's
+                                failure."
+    );
+    println!(
+        "  --skip=name[,name]            with --deps, do not run these packages' tests
+                                (known-broken on this platform, say).  Their own
+                                dependencies are still walked, so nothing reachable only
+                                through a skipped package is silently dropped."
     );
     println!(
         "  --check                       parse and compile only; report errors without running
@@ -450,40 +469,152 @@ fn handle_generate_log_config(path_opt: Option<&str>) {
 ///
 /// Reads loft.toml from `pkg_path`, copies src/*.loft and loft.toml to
 /// the user's library directory.  The package is then available via `use <name>;`.
-/// Phase 6t Tier 4 — walk the current project's dep tree and invoke
-/// `loft test` in each dep's directory.  Direct mode walks only
-/// `manifest.dependencies` of the cwd; transitive mode recurses into
-/// every walked dep's own `loft.toml`.  Returns 1 if any dep failed,
-/// 0 otherwise.
+/// Walk the current project's dep tree and invoke `loft test` in each dep's
+/// directory.  Direct mode walks only `manifest.dependencies` of the cwd;
+/// transitive mode recurses into every walked dep's own `loft.toml`.  Returns 1
+/// if any dep failed, 0 otherwise.
 ///
-/// Today this resolves PATH dependencies only (manifest `{ path = ".." }`
-/// form).  Registry-installed deps live at
-/// `~/.loft/registry/<id>-<version>/` but their version lookup needs the
-/// lockfile loader, which is the T4 follow-up (per lib_plans/12 Phase
-/// 6t Tier 4 step T4); without a lockfile, registry-version deps fall
-/// through silently.
-fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
-    use std::collections::{HashSet, VecDeque};
+/// # How a dependency becomes a directory
+///
+/// Four sources, tried in this order, and the order is the contract:
+///
+/// 1. **A path dep** (`{ path = ".." }`) — an explicit local override, so it
+///    outranks everything.
+/// 2. **An explicit `--lock=PATH` pin** — pre-flighting a candidate lockfile is
+///    the whole purpose of that flag, so while it is given the lock is the
+///    authority for every package it names.
+/// 3. **A sibling directory** (`../<name>/loft.toml`) — inside a multi-package
+///    repo this is the WORKING COPY, which is what someone running the suite
+///    there means by "the dependency".
+/// 4. **The project's own `loft.lock`** — read when present, and only where the
+///    three above found nothing.
+///
+/// Ranking the implicit lock last is what keeps this additive: with no lockfile
+/// anywhere, every edge that resolved before resolves the same way, and a repo
+/// whose siblings already resolved keeps testing its working copies rather than
+/// silently switching to published tarballs out of the cache.
+///
+/// A registry dep with no pin anywhere is still reported and skipped — it is the
+/// one case that cannot be resolved, and saying so is the point.
+fn run_dep_tests(
+    transitive: bool,
+    native_mode: bool,
+    lock_override: Option<&str>,
+    skip: &[String],
+    strict_deps: bool,
+) -> i32 {
+    use std::collections::{BTreeMap, HashSet, VecDeque};
     use std::path::PathBuf;
     let cwd = std::env::current_dir().unwrap_or_default();
     let loft_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("loft"));
 
-    // Resolve a dep name + value to a directory.  Path deps win; we
-    // ignore version-only registry refs for now (T4 follow-up).
-    fn resolve_dep(name: &str, value: &str, from_pkg: &std::path::Path) -> Option<PathBuf> {
+    // `name -> version` for every package a lockfile pins, plus whether that
+    // lock was ASKED for.  An unreadable `--lock` is a hard error: the flag says
+    // "resolve against this file", and walking on with an empty pin set would
+    // answer a different question while looking like success.
+    let (lock_pins, lock_is_authoritative): (BTreeMap<String, String>, bool) = match lock_override {
+        Some(raw) => {
+            let path = PathBuf::from(raw);
+            match loft::lockfile::read_lockfile(&path) {
+                Ok(Some(l)) => (
+                    l.packages
+                        .into_iter()
+                        .map(|pkg| (pkg.name, pkg.version))
+                        .collect(),
+                    true,
+                ),
+                // Unreachable in practice — the flag parser already read this
+                // file.  Kept because the caller folds any RETURNED code into
+                // "tests failed", so the honest exit for a lock that vanished
+                // mid-run is the same usage code the parser gives.
+                Ok(None) => {
+                    eprintln!("  --lock: no lockfile at {}", path.display());
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!("  --lock: cannot read {} — {e}", path.display());
+                    std::process::exit(2);
+                }
+            }
+        }
+        None => match loft::lockfile::read_lockfile(&cwd.join("loft.lock")) {
+            Ok(Some(l)) => (
+                l.packages
+                    .into_iter()
+                    .map(|pkg| (pkg.name, pkg.version))
+                    .collect(),
+                false,
+            ),
+            // A missing lock is ordinary; an unreadable one is worth a word, but
+            // not fatal when nobody asked for it.
+            Ok(None) => (BTreeMap::new(), false),
+            Err(e) => {
+                eprintln!("  --deps: ignoring unreadable loft.lock — {e}");
+                (BTreeMap::new(), false)
+            }
+        },
+    };
+
+    // Where a locked version lives once installed.  `None` when the lock names a
+    // version this box has never extracted — reported at the call site, because
+    // "pinned but not installed" is a different answer from "not pinned".
+    // Without the registry feature nothing consumes the pins, but the read above still
+    // happens so that `--lock` is validated identically on every build.
+    #[cfg(not(feature = "registry"))]
+    let _ = &lock_pins;
+
+    // `registry_index` is behind the `registry` feature, and a build without it has
+    // no package cache to point at — so there, a lock pin resolves to nothing and the
+    // dep falls through to the "cannot resolve" report rather than to a path that
+    // cannot exist.  Deriving `~/.loft/registry` by hand here instead would put a
+    // second copy of that rule in the tree, which is how the two drift.
+    #[cfg(feature = "registry")]
+    let locked_dir = |name: &str| -> Option<PathBuf> {
+        let version = lock_pins.get(name)?;
+        Some(loft::registry_index::cache_dir().join(format!("{name}-{version}")))
+    };
+    #[cfg(not(feature = "registry"))]
+    let locked_dir = |_name: &str| -> Option<PathBuf> { None };
+
+    // Every `--skip` name that never matched anything in the walk.  A skip that
+    // matches nothing is almost always a typo, and a typo that silently widens
+    // the run is the wrong way for this flag to fail.
+    let mut skip_unused: HashSet<String> = skip.iter().cloned().collect();
+
+    // Resolve a dep name + value to a directory, in the four-source order the
+    // doc-comment above states.  `locked` is the lockfile's answer for this name
+    // (already turned into a path); `lock_first` is whether an explicit `--lock`
+    // makes that answer outrank the sibling directory.
+    let resolve_dep = |name: &str,
+                       value: &str,
+                       from_pkg: &std::path::Path,
+                       locked: Option<PathBuf>,
+                       lock_first: bool|
+     -> Option<PathBuf> {
+        // 1 — an explicit path dep.
         if let Some(p) = loft::manifest::extract_path_dep(value) {
             let candidate = from_pkg.join(p);
             if candidate.join("loft.toml").exists() {
                 return Some(candidate.canonicalize().unwrap_or(candidate));
             }
         }
-        // Fallback — sibling directory: from_pkg/../<name>/loft.toml.
+        let usable = |d: &Option<PathBuf>| -> Option<PathBuf> {
+            d.as_ref()
+                .filter(|c| c.join("loft.toml").exists())
+                .map(|c| c.canonicalize().unwrap_or_else(|_| c.clone()))
+        };
+        // 2 — an asked-for lock outranks the working copy.
+        if lock_first && let Some(d) = usable(&locked) {
+            return Some(d);
+        }
+        // 3 — the sibling working copy.
         let sibling = from_pkg.join("..").join(name);
         if sibling.join("loft.toml").exists() {
             return Some(sibling.canonicalize().unwrap_or(sibling));
         }
-        None
-    }
+        // 4 — the project's own lock, filling what nothing above reached.
+        usable(&locked)
+    };
 
     let mut queue: VecDeque<PathBuf> = VecDeque::new();
     queue.push_back(cwd.clone());
@@ -501,15 +632,46 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
             continue;
         };
         for (dep_name, dep_value) in &manifest.dependencies {
-            let Some(dep_dir) = resolve_dep(dep_name, dep_value, &pkg) else {
+            let locked = locked_dir(dep_name);
+            let Some(dep_dir) = resolve_dep(
+                dep_name,
+                dep_value,
+                &pkg,
+                locked.clone(),
+                lock_is_authoritative,
+            ) else {
                 if pkg == cwd {
-                    eprintln!(
-                        "  --deps: skipping {dep_name} (no path-dep; registry resolution not yet wired)"
-                    );
+                    // Two different answers, and they need different words: a
+                    // package the lock PINS but this box never installed is one
+                    // `loft install` away, while one the lock does not name at
+                    // all cannot be resolved by any amount of installing.
+                    if let Some(d) = locked {
+                        eprintln!(
+                            "  --deps: skipping {dep_name} (locked, but not installed at {}) — run `loft install`",
+                            d.display()
+                        );
+                    } else {
+                        eprintln!(
+                            "  --deps: skipping {dep_name} (no path-dep and no lockfile pin — `loft install` writes one)"
+                        );
+                    }
                 }
                 continue;
             };
             if visited.contains(&dep_dir) {
+                continue;
+            }
+            // A skipped package still has its dependencies WALKED — only its own
+            // tests are dropped.  Skipping the subtree instead would silently
+            // drop every package reachable only through this one, and a skip is
+            // asked for because a package is broken here, not because the things
+            // it depends on are.
+            if skip.iter().any(|s| s == dep_name) {
+                skip_unused.remove(dep_name);
+                println!("  --deps: skipping {dep_name} (--skip)");
+                if transitive {
+                    queue.push_back(dep_dir);
+                }
                 continue;
             }
             if dep_dir.join("tests").is_dir() {
@@ -519,11 +681,27 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
                 if native_mode {
                     cmd.arg("--native");
                 }
-                // Suppress warnings inside deps unless the user opts in
-                // via LOFT_DENY_WARNINGS_DEPS=1 — the consumer should
-                // not be blocked by lint debt inside a dep they don't
-                // own.  (Errors still surface via exit code.)
-                cmd.arg("--no-warnings");
+                // A dep's warnings are suppressed by default: a consumer should
+                // not be blocked by lint debt inside a package it does not own,
+                // and the project's OWN tests still honour `LOFT_DENY_WARNINGS`.
+                // `--strict-deps` opts back in, for the one who DOES own them.
+                // (Errors surface through the exit code either way.)
+                //
+                // This comment used to promise a `LOFT_DENY_WARNINGS_DEPS=1`
+                // opt-in that was read nowhere — the flag is the opt-in, and now
+                // it exists.
+                if !strict_deps {
+                    cmd.arg("--no-warnings");
+                    // `--no-warnings` only silences the PRINTING; whether a
+                    // warning is fatal is decided separately, and
+                    // `LOFT_DENY_WARNINGS` is read from the environment the
+                    // child inherits.  So without this the promise above held
+                    // only for a consumer who happened not to export it: with
+                    // `LOFT_DENY_WARNINGS=1` set, a dep's lint debt failed the
+                    // consumer's run — the exact thing the default exists to
+                    // prevent.  Measured, not reasoned: exit 1 where 0 was owed.
+                    cmd.env("LOFT_DENY_WARNINGS", "0");
+                }
                 let label = dep_dir
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
@@ -546,6 +724,18 @@ fn run_dep_tests(transitive: bool, native_mode: bool) -> i32 {
         println!("  --deps: {tested} dep(s) tested, {total_fail} failed");
     } else {
         println!("  --deps: no deps with tests/ directory found");
+    }
+    // A `--skip` name that matched nothing is nearly always a misspelling, and
+    // the way it fails otherwise is silent: the package it was meant to exclude
+    // runs anyway, and the run looks exactly like one where the flag worked.
+    if !skip_unused.is_empty() {
+        let mut unused: Vec<&String> = skip_unused.iter().collect();
+        unused.sort();
+        let names: Vec<&str> = unused.iter().map(|s| s.as_str()).collect();
+        eprintln!(
+            "  --deps: --skip named {} which no dependency matched — check the spelling",
+            names.join(", ")
+        );
     }
     i32::from(total_fail > 0)
 }
@@ -6504,6 +6694,11 @@ fn main() {
     // project's dep tree and runs `loft test` in each dep.  None = off,
     // Direct = only manifest.dependencies, Transitive = also deps-of-deps.
     let mut test_deps: Option<&'static str> = None;
+    // @PLN77 T4/T5 — which lockfile drives registry-dep resolution, and which
+    // packages to leave untested.  Both only mean anything under `--deps`.
+    let mut deps_lock: Option<String> = None;
+    let mut deps_skip: Vec<String> = Vec::new();
+    let mut strict_deps = false;
     let mut user_args: Vec<String> = Vec::new();
     // loft#684 — an explicit `--` ends the CLI's own options: every token after it
     // is the script path (if still unknown) or a program argument, whatever it
@@ -6826,6 +7021,48 @@ fn main() {
             test_deps = Some("direct");
         } else if a == "--deps=transitive" {
             test_deps = Some("transitive");
+        } else if let Some(v) = a.strip_prefix("--lock=") {
+            // @PLN77 T4 — resolve registry deps through THIS lockfile, so a
+            // candidate `loft.lock` can be tested before it is committed.
+            if v.is_empty() {
+                eprintln!("--lock= requires a path to a lockfile");
+                std::process::exit(2);
+            }
+            // Read it HERE, not at the walk.  The walk happens after the host
+            // project's whole suite, so a mistyped path would cost a full test
+            // run before saying so — and it exits 2, a usage error, rather than
+            // the 1 that means "tests failed".
+            match loft::lockfile::read_lockfile(std::path::Path::new(v)) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    eprintln!("--lock: no lockfile at {v}");
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!("--lock: cannot read {v} — {e}");
+                    std::process::exit(2);
+                }
+            }
+            deps_lock = Some(v.to_string());
+        } else if let Some(v) = a.strip_prefix("--skip=") {
+            // @PLN77 T5 — leave these packages untested (known-broken on this
+            // platform, or simply not this run's business).  Their own deps are
+            // still walked; see `run_dep_tests`.
+            deps_skip.extend(
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string),
+            );
+            if deps_skip.is_empty() {
+                eprintln!("--skip= requires at least one package name");
+                std::process::exit(2);
+            }
+        } else if a == "--strict-deps" {
+            // @PLN77 — hold dependencies to the same warning bar as the project
+            // itself.  Off by default: lint debt inside a package you do not own
+            // is not your build's failure.
+            strict_deps = true;
         } else if a == "--deny-warnings" {
             // Lib CI gate: any Warning-level diagnostic on the run becomes
             // a non-zero exit, just like a parse error.  Used by extracted
@@ -8025,9 +8262,28 @@ fn main() {
         // in each dep's directory.  Failures are reported per-dep; the
         // process exits non-zero if any dep failed OR if the host
         // project's own tests failed.
+        // `--lock` / `--skip` only mean anything under `--deps`.  Passed without it
+        // they would change nothing and look accepted, so say so — the run is still
+        // valid, which is why this reports rather than refuses.
+        if test_deps.is_none() && (deps_lock.is_some() || !deps_skip.is_empty() || strict_deps) {
+            let flag = if deps_lock.is_some() {
+                "--lock"
+            } else if strict_deps {
+                "--strict-deps"
+            } else {
+                "--skip"
+            };
+            eprintln!("  note: {flag} has no effect without --deps");
+        }
         let final_code = if let Some(mode) = test_deps {
             let transitive = mode == "transitive";
-            let dep_fail = run_dep_tests(transitive, native_mode);
+            let dep_fail = run_dep_tests(
+                transitive,
+                native_mode,
+                deps_lock.as_deref(),
+                &deps_skip,
+                strict_deps,
+            );
             i32::from(exit_code != 0 || dep_fail != 0)
         } else {
             exit_code

@@ -5,13 +5,29 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # lib-plan 28 — `loft test --deps`: walk a project's dep tree
 
-**Status:** PARTIAL (T1-T3 + T6 SHIPPED 2026-05-28; T4 lockfile + T5
-`--skip` filter open).  Driven by the library-extraction work in
-[lib_plans/12](../12-library-extraction/README.md) — once
-libraries extract to external chunk repos, the only way to catch
-"my new release broke a downstream consumer's tests" without
-manually fanning out is to run each dep's tests from the consumer's
-project root.
+**Status:** COMPLETE — T1-T3 + T6 shipped 2026-05-28; T4 `--lock=PATH`, T5
+`--skip=name,name` and the `--strict-deps` design note shipped 2026-08-25.
+
+A dependency now resolves through four sources in a fixed order — a path dep, an
+explicit `--lock` pin, a sibling directory, then the project's own `loft.lock`.
+Ranking the implicit lock LAST is what made T4 additive: a multi-package repo
+keeps testing its sibling working copies instead of silently switching to
+published tarballs out of the cache, while the lock fills the cross-repo hole
+that made `--deps` print *"registry resolution not yet wired"* and test nothing.
+Measured before the change: of 13 dependency edges across the eight library
+repos, 8 resolved and 5 — every cross-repo one — did not.
+
+Two things found while building it, both fixed here rather than filed:
+
+- A code comment promised a `LOFT_DENY_WARNINGS_DEPS=1` opt-in that was read
+  nowhere.  `--strict-deps` is that opt-in, and it now exists.
+- The design note's own promise did not hold: `--no-warnings` silences the
+  PRINTING of a warning, while whether one is FATAL is read from the environment
+  the child inherits — so a consumer exporting `LOFT_DENY_WARNINGS=1` was failed
+  by lint debt inside a package it does not own.  The dep run now neutralises
+  that variable unless `--strict-deps` asks for it.
+
+Cells: `tests/dep_test_walk.rs`.
 
 ## Why
 

@@ -420,9 +420,60 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 233 | 206 | **27** |
+| 221 | 211 | **10** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it.
+
+**Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
+and conflating them is how a backlog gets "cleared" with nothing fixed:
+
+| | count | |
+|---|---:|---|
+| shown IMPOSSIBLE | **22** | the audit could not tell which `Value`, or that something upstream already peeled |
+| peeled | **6** | of which only **2** change an answer: `needs_pre_eval` (1264 sites) and `const_eval` (2 lost folds) |
+| descended, not peeled | **3** | `par_unsafe_reason`, `collect_callees`, `walk_deep_parent_write` — see B6 |
+| still listed | **10** | of which 5 are measured clean and left unpeeled, 1 is gated, the rest unmeasured |
+
+⚠ **The three in the middle row leave by a different door, and the row is there so the
+arithmetic closes.** They were fixed by DESCENDING (`for_each_child`), not by peeling, because
+what they were missing is a `Return` ARM rather than an `unspan` call. B6 is where they are
+worked; keeping them in their own row is the same separation the two columns above exist for —
+a count that moves for two different reasons, reported as one, is how a backlog reads as
+shrinking with no fix behind it.
+
+⚠ **"Peeled" is not "fixed", and the difference is most of this table.** Of the six,
+`find_first_ref_vars` changes 46 decisions and gains 0 variables; `move_rewrite` and
+`substitute_var` are measured behaviour-identical over 120 and 150 corpus programs; and
+`sandbox::scan` needed no peel at all — the version I first wrote there was a double-count
+that made the analysis worse. The honest yield of the whole sweep is **two** sites whose
+answer changes, one of which (`const_eval`) changes it twice in 858 programs.
+
+Where the 22 went, by mechanism: **7** matched inside another enum's path (`MValue::Scalar`,
+`VariableValue::Long`, `ScalarValue::Single` all end in the substring the pattern looked for);
+**5** discriminate on `host::Value`, a separate enum with no `Span` variant; **6** are the body
+of an `any_node` / `for_each_child` / `walk` closure, which peel before calling the predicate;
+**2** match on a span-transparent scrutinee (`match val.tail()`); **2** are test functions that
+build their own IR. In order of
+discovery: a non-IR `Value` (`host::Value`, `MValue`); a host-only variant name; a match that
+is a traversal closure's body; a match whose scrutinee is span-transparent; a test function;
+and — the one that subsumes the first — a match on an enum whose NAME merely ends in `Value`.
+
+⚠ **That last one is the root cause the first fix only patched.** The pattern `Value::(\w+)`
+matches inside `MValue::Scalar`, `VariableValue::Long` and `ScalarValue::Single`, and
+intersecting against the IR variant set does not save you, because `Long` and `Single` ARE
+real IR variant names — so `state::static_call` scored two and read as an unpeeled hazard
+while discriminating on a debug enum. A lookbehind for a non-identifier character fixes the
+class; it cleared four repl/debug sites at once. The lesson is the ordinary one about
+substring matching, arriving late: I fixed the symptom (`MValue`) with an allow-list before
+noticing the pattern was simply wrong. Each was found by hand-checking a site the list called a hazard and finding it
+could not be one — which is the only way this list gets shorter honestly.
+
+⚠ **The test-region filter is brace-balanced, and the cheap version of it is a trap.**
+"Everything after the first `#[cfg(test)]`" looks right because test modules sit at the end
+of a file by convention. `src/trie_db.rs` has one at line 245 of 1355, so that shortcut
+discards 82 % of a production file. It happened not to move the headline here (20 either way)
+but it corrupted the denominator, 212 against the true 226 — a shrinking backlog with no
+fix behind it is exactly the failure this whole exercise is meant to avoid.
 
 **A second false-positive class, and it held the two scariest-looking entries.** A match that
 is the BODY of a `any_node` / `for_each_child` closure can never be handed a `Span`, because
@@ -463,7 +514,7 @@ and `[profile.dev.package.loft] debug-assertions = false` strips it from `cargo 
 `cargo test` alike (TESTING.md § Hang guard). Before believing a zero, count the *unfiltered*
 hits on the same arm; if those are zero too, the probe never ran.
 
-**Exactly 1 of the 27 is gated** (`walk_check`) — so the method holds for the other 32, and
+**Exactly 1 of the 10 is gated** (`walk_check`) — so the method holds for the rest, and
 the bound is worth stating rather than leaving as a general worry. It is only notable because
 it is the top of the list by variant count, and so the natural place to start: the one site
 where a zero was going to be believed.
@@ -515,11 +566,238 @@ read back `flag = false` with `id` correct. **The measurement above was right ab
 blind to the kinds** — it asked whether a SPANNED literal could arrive and answered no, while
 the arm was already discarding two ordinary literal kinds that did.
 
+**`scopes::find_first_ref_vars` — the sibling of the site that started this, and the same
+verdict.** `scan_if` calls it two lines above `find_assigned_vars`, for the same job, and only
+one of the pair was peeled. Its arms are `Set` / `Block` / `If` / `Insert`, so a spanned one
+took `_ => {}` and contributed nothing for that subtree. Reachable: 108 838 arrivals over 250
+programs, 8 of them wrapping an arm. The peel changes the decision at **46 sites in 16
+programs** — and newly pre-initialises **0** variables at every one of them, because the same
+variables were already reaching `result` another way. Reachable, latent, peel kept. Measured
+without an A/B build: the pre-fix code contributed nothing on that path, so running the
+subtree into a scratch vector and counting what `result` did not already hold gives the gain
+exactly.
+
+**The sandbox batch — one of these was not a lost optimisation.** Measured over the full
+858-program corpus (and, for the sandbox, a `[sandbox]`-policy program):
+
+| site | arrivals | spanned around an ARM | verdict |
+|---|---:|---:|---|
+| `sandbox::intrinsic_space`'s scan | 188 | 6 | **no defect — see below** |
+| `scopes::move_rewrite` | 567 | 41 | no defect; peel is a no-op |
+| `const_eval::substitute_var` | 41 | 5 | no observable change; peel kept |
+| `scopes::is_ref_materialisation` | 2329 | **0** | clean, untouched |
+| `control::is_block_divergent` | **17 396** | **0** | clean, untouched |
+
+⚠ **The sandbox entry was first written up as an admission bypass. It was not — the bypass was
+mine.** `for_each_child` DESCENDS THROUGH a `Span` (`Value::Span(b) => f(&b.1)`), so a scan that
+ends in `v.for_each_child(&mut |c| scan(c, …))` already visits a spanned node's payload one
+level down. The bare `match v` was therefore correct. Peeling only the SCRUTINEE — `match
+v.unspan()` — makes the node be counted **twice**: once from the peeled match, once when the
+trailing walk reaches the same payload. That inflated a program's declared bound from `24 · n²`
+to `36 · n²`, and I read the inflation as the fix rather than as the bug, wrote a regression
+test asserting `36`, and shipped it green through `make ci` at 4444/4444.
+
+**Nothing caught it, and the test I added was the thing that made it look verified.** No
+existing test covered that bound; the one I wrote pinned the over-count as the requirement. It
+only came apart when I tried to explain the mechanism afterwards and found `for_each_child`
+already handled the case — i.e. when the A/B's *direction* stopped matching the story.
+
+**Swept for the class, 2026-08-25.** Five functions in `src/` peel the scrutinee AND walk the
+original binding. None is a live defect, and the reasons differ enough to be worth listing —
+this is what the shape looks like when it is harmless:
+
+| site | why it survives |
+|---|---|
+| `sandbox::intrinsic_space`'s scan | was the live one; now binds |
+| `scopes::move_rewrite` | its walk sits INSIDE the `_` arm, and the inner `if let` reads the original on purpose |
+| `scopes::elide_rewrite` | peels only to compute a `replacement`, then re-matches the original for recursion |
+| `scopes::collect_def_order`'s walk | double-visits, but `or_insert` ignores the second write and `idx` feeds a relative order |
+| `scopes::construct_prescan` | double-visits, and its accumulation is NOT idempotent — measured 77 first-appends over 45 files with exactly one mark, which is genuine (it survives binding the peel) |
+
+The last is the one to watch: it is safe by measurement, not by construction. Both double-visiting
+sites now carry a comment saying so, because the invariant that protects them — the accumulation
+being idempotent — is nowhere else stated and is one edit from being broken silently.
+
+**The rule this yields:** `match x.unspan()` is safe only when nothing else in the body walks
+`x` again. Where there is a trailing `for_each_child` / `for_each_child_mut`, bind instead —
+`let x = x.unspan();` — so the match and the walk see the same node and each is visited once.
+The two forms are indistinguishable by eye and differ by a factor on the answer. `move_rewrite`
+keeps its inner `if let … = node` deliberately unpeeled for the same reason.
+
+**`is_block_divergent` is the strongest clean result here, and it looked like the worst.** Its
+negated caller does `bl.operators[p] = null_value(…)` on the LAST operator when the block is
+judged non-divergent — so a spanned `Return` would have been overwritten, destroying a return
+statement. 17 396 calls across 150 programs, and the bare and peeled answers never once
+differ. The structural fact behind it: spans DO appear among block operators (`find_first_ref_vars`
+sees `Span(Block)` and `Span(Set)` there), but `Return` / `Break` / `Continue` are never
+spanned. Worth knowing before anyone reasons from "a Span can be anywhere".
+
 ⚠ The first native run of that probe reported 0 and was VACUOUS — the site is exercised by
 only 6 of the 858 corpus programs, and none was in the 60-program native sample. The
 interpreter run had already fired 12 times, which is the only reason the zero was not
 believed. **When a site is rare, sample the programs that REACH it, not the first N.** (All
 six are dedicated `*-const-*` regression tests, so the feature is deliberately covered.)
+
+#### B5 — `match` lowers through four paths and three mishandled a `null` arm (2026-08-25)
+
+`match n { 0 => { null }, _ => { [n] } }` answered **null for every `n`**, including the arm
+that builds a vector. Wrong value, no diagnostic, on `--interpret`; on `--native` the same
+program failed to COMPILE (E0308). Reproduced on pristine `origin/main`, so pre-existing.
+
+loft#936 established the rule — a branch-merge slot carries the result type's typed null
+sentinel, never a bare `Value::Null`, which pushes nothing where the merge reads a 12-byte
+`DbRef`. The repair exists in four lowerings, and only one of them was right:
+
+| lowering | state |
+|---|---|
+| enum / struct match | correct — tests bare AND block form |
+| `parse_if` (loft#936 itself) | correct |
+| **scalar chain** | **FIXED** — tested a bare `Value::Null` only, so `{ null }` walked past it |
+| **vector + tuple chains** | **OPEN** — different cause, see below |
+
+**Fixed:** `build_scalar_chain`'s predicate now recognises a block whose last operator is
+null, via one shared `arm_body_is_null` / `set_arm_null_typed` pair rather than a fourth copy.
+Guard: `tests/scripts/a-block-bodied-null-match-arm-delivers-the-sentinel.loft`, verified to
+fail (2 of 4 cells) against the unfixed build, green on both backends.
+
+**OPEN, with the requirement now specified.** The vector and tuple chains promote
+`result_type` out of `Void` but not out of `Null`, so a first `null` arm pins the chain to
+`Null` and every later arm's type is ignored. Adding `|| result_type == Type::Null` fixes the
+wrong value — and simultaneously changes what the NULL arm delivers, from the sentinel to an
+allocated empty vector. Measured both ways; the arm repair is load-bearing for the tuple chain
+and redundant for the vector one once the promotion is in.
+
+⚠ **This entry twice recorded a wrong reading of that second half. Both are kept because the
+sequence is the point.**
+
+*First:* "an unsettled design call" — wrong, because I grepped `formal/` for "collection null"
+and stopped. `(H-RefNull)` in [heap.md](formal/heap.md) does speak to it: *"nullref is the
+reference null — the per-type SENTINEL (E-Null) of a reference type … a real value (a
+reference that points at nothing), not a separate error state."*
+
+*Second:* "so the empty vector is a rule violation" — also wrong, and reading the CODE is what
+settled it. `parser::materialize_null_slice_arms` (@PLN85) deliberately rewrites a null arm of
+a slice-match tail to a fresh empty vector, *"so a `[]` arm bound to a local … is a real
+`DbRef`, not a bare `null` native emits as `()`"*, and its `arm_is_null` already recognises
+BOTH the bare form and `{ OpNullRefSentinel() }`. So the empty vector is intentional on that
+path, and today's `isnull=true` is the BUG bypassing the materialisation — not the rule being
+honoured.
+
+**What is actually open**, then: whether `(H-RefNull)`'s sentinel and @PLN85's materialisation
+are reconcilable or whether one of them wants scoping to say where it applies. That is an
+owner call with two documented mechanisms behind it, not something to settle by measurement —
+which is why the promotion is not shipped here.
+
+⚠ The matrix that located this needed DISTINCTIVE values: a first attempt used `_ => { [] }`
+as the wildcard, which made "the null arm answered empty" and "it fell through to the
+wildcard" the same observation. `[99, 99]` separated them.
+
+**Three null-arm predicates, and folding them would be WRONG.** The obvious follow-up to B5 is
+to notice that `arm_body_is_null`, the enum path's inline test, and `Parser::arm_is_null` all
+answer "is this arm a null?" and to consolidate. They do not answer the same question:
+`arm_is_null` also counts `OpNullRefSentinel`, the shape an arm has AFTER the repair, because
+its caller (@PLN85's slice materialisation) runs later in the pipeline. A repair predicate that
+learned the sentinel would re-repair its own output.
+
+Measured rather than argued: over the 858-program corpus the strong and weak predicates
+disagree **once**, and that case is a nested-block tail `arm_is_null` recurses into. The
+`arm_body_is_null` gap that looked worst — it does not peel its own top — takes **4323** spanned
+values and changes the answer **0** times, because a spanned arm is never a null arm. Left as
+it is, with the count in its doc comment, for the same reason `is_void_value` was left alone.
+
+#### B6 — the par-safety classifier disagreed with itself (2026-08-26)
+
+`parallel.rs`'s module doc names an undetected UB surface: *"the guarantee is CONDITIONAL
+(@FR-C-Impure) … a worker that touches shared mutable state has no defined behaviour — loft
+pins no interleaving — and nothing here detects that. See `scopes::is_par_safe`, which
+classifies it but is **wired to nothing**."*
+
+Wired to nothing understates it. `is_par_safe` returns a bool and `par_unsafe_reason` returns
+the REASON for it, and over the corpus's par workers they **disagreed 16 times in 42** — every
+one of them `is_par_safe=false` against `reason=none`. A verdict of "unsafe" with no reason to
+give for it.
+
+**Cause, and it is the keystone lesson again.** `par_unsafe_reason` was hand-rolled with named
+arms and a `_ => None` fallback, and its arms do not include `Return` — so `fn dbl(x) { return
+x * 2; }` was reported par-SAFE without its body ever being looked at. `is_par_safe` walks with
+`any_node`, which visits every node, and saw the call. One walker exhaustive, one with a
+catch-all, and the catch-all silently answered for a subtree it never entered.
+
+**Fixed:** the fallback descends via `for_each_child`, so a wrapper nobody thought of cannot
+reintroduce the gap. The two now agree on **136 of 136** corpus verdicts. Guard:
+`scopes::par_safety_tests::the_two_par_classifiers_agree_through_a_return`, verified to fail
+against the old walker with exactly that message.
+
+**What still blocks WIRING it, named, sized and TRIAGED.** With the two in agreement the
+reasons are actionable and all of one kind: **15 distinct unannotated native ops**, led by
+`OpMulInt` (38 hits), `OpAddInt` (11), `OpEqInt` (8), `OpDatabase` (6), `OpLtInt` (3). Only 32
+of 136 verdicts come back clean.
+
+The annotation system is not missing — the stdlib carries **230** of them (132 `#pure`, 39
+`#impure(host_io)`, 36 `#impure(io)`, 15 `#impure(parent_write)`, 8 `#impure(par_call)`). What
+it never reached is the PRIMITIVE operator layer: the arithmetic block in `01_code.loft` runs
+about sixty lines with one `#pure` in it.
+
+⚠ **But "annotate the 15" is the wrong instruction, and reading their bodies is what shows it.**
+They are three different cases:
+
+| op | body | verdict |
+|---|---|---|
+| `OpAddInt`, `OpMulInt`, `OpEqInt`, `OpLtInt`, `OpAddFloat`, `OpMulFloat` | integer/float arithmetic, no state | genuinely pure — annotating unblocks |
+| **`OpSetInt`** | `stores.store_mut(&db).set…` — a store WRITE | the classifier is **RIGHT** to reject it; this is the shared-mutable-state case `par` has no defined behaviour for |
+| `OpGetInt` (a store READ), `OpDivFloat` (raises, so it logs), the `OpFormat*` family (append to a work buffer) | | a judgement, per op |
+
+So a third of the "blockers" are the analysis working. Annotating changes what `par` would
+ACCEPT once wired, and one of these ops is precisely the hazard the whole classifier exists to
+catch — an owner call, and not a cleanup.
+
+**The same shape a third time, found by screening for it.** `par_unsafe_reason`'s defect —
+a self-recursive walker with a `_ =>` catch-all that names SOME value-wrapping variants and not
+others — is mechanical to search for. Screening `src/` for it: 86 candidates, cut to **46**
+after excluding bodies that descend via the keystone (19) or peel `Span` themselves (98
+skipped for that reason across the whole set). Ranked by how many wrappers each omits, the top
+hit was `data::collect_callees` — the CALL-GRAPH collector, missing `Return`, `Drop` and `Span`.
+
+So `fn f() { return g(); }` recorded no edge from `f` to `g`. Its own comment said a missed
+variant *"would surface as a `callers_of returns empty` regression"* because the phase-5e tests
+covered it — and the only recursion test builds a `Value::If`, so nothing did. **Fixed**, with
+`callers_of_finds_a_call_under_a_wrapper`, verified to fail against the old arm.
+
+⚠ **No user impact today, and that is the pattern worth noticing rather than the bug.**
+`callers_of` is called only from tests, exactly like `is_par_safe`. A fourth instance turned up
+in the same screen: `walk_deep_parent_write` has an IDENTICAL arm list to
+`walk_par_unsafe_reason_value` — the same walker written twice, missing `Return` both times —
+so a worker whose body is `return helper(…)` was reported free of parent writes without that
+call being examined. Fixed and guarded alongside its twin, because fixing one of a near-copy
+pair and not the other is how they came to differ from `is_par_safe` to begin with.
+
+So Plan-06 phase 5b left a call graph, a purity classifier, a par-safety verdict and a
+parent-write detector — **all test-only, all wrong the same way**. That is one unfinished
+subsystem rather than four bugs: nothing exercises these analyses, so nothing reports that they
+drifted, and three of the four carried a comment asserting they were covered.
+
+**Where the sweep stops, and why.** After the four fixes the screen still lists ~43 sites, and
+it cannot rank them: the filter that matters is "does production reach this?", and a one-level
+check answers **44 of 44 yes** — wrong, because `par_unsafe_reason` and `callers_of` are called
+by ordinary-looking functions that are themselves only called from tests. Transitivity is the
+whole question and a caller count cannot see it.
+
+So the remaining sites need reading one at a time. The highest-value one was worth doing:
+`collect_parallel_violations` is genuinely production-wired (reachable from `parse_parallel`,
+no `#[cfg(test)]` above it), it guards a SOUNDNESS floor — rejecting unsound `parallel {}`
+captures — and the screen flagged it `MISSING[Span]`. Measured: **113 calls, 41 fallthroughs**
+(all leaves: `Int` 30, `Text` 4, `Boolean` 4, `Null`, `Line`, `Break`) and **0** spanned. A
+false positive; that collector already names every wrapper including `Return`/`Drop`/`Yield`.
+
+⚠ The first run of that probe reported zero because it selected programs matching `par(…)`
+while the guard is for `parallel { … }` BLOCKS — a different construct. Vacuous, and the second
+such miss this session. Selecting the corpus subset is part of the measurement, not setup.
+
+⚠ **The screen over-reports, and `escapes_value` is the shape it cannot judge.** It looked like
+a fifth hit; its caller `guard_escapes` handles `Return(v)` and passes the already-unwrapped
+payload, so the helper never sees a wrapper. A predicate that takes the PAYLOAD rather than the
+node is indistinguishable, in text, from one that takes the node and forgot a case — the same
+over-reporting the `unspan` audit had, and the reason each hit is read before it is believed.
 
 #### C — process / skills
 

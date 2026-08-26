@@ -1496,6 +1496,22 @@ fn intrinsic_space(data: &Data, f: u32) -> (u32, u32, bool, Vec<(u32, u32)>) {
         calls: Vec<(u32, u32)>,
     }
     fn scan(data: &Data, v: &Value, nesting: u32, st: &mut St) {
+        // Peeled into a BINDING, not into the match scrutinee — and that distinction is the
+        // whole content of this comment.
+        //
+        // This scan ends in `v.for_each_child(&mut |c| scan(…))`, and `for_each_child`
+        // DESCENDS THROUGH a `Span` (`Value::Span(b) => f(&b.1)`).  So the bare `match v`
+        // this replaces was already correct: a spanned `Call` took `_ => {}` here and was
+        // counted once, one level down.  Writing `match v.unspan()` instead — which is the
+        // obvious way to obey `Value::unspan`'s rule — counts it TWICE: once from the peeled
+        // scrutinee, then again when the trailing walk descends into the same node.  Measured:
+        // that inflated one program's declared bound from `24 · n²` to `36 · n²`, and a
+        // `data_budget` between the two then REJECTED a program that fits.
+        //
+        // Shadowing `v` fixes both halves at once: the match sees the unspanned node and the
+        // trailing walk descends from it, so each node is visited exactly once.  Verified
+        // behaviour-identical to the original on the same program.
+        let v = v.unspan();
         match v {
             Value::Loop(_) | Value::Iter(..) => {
                 // vars reset somewhere in this loop don't accumulate across it.

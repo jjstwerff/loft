@@ -2017,6 +2017,14 @@ fn source_escapes(node: &Value, src: u16, co: &ConstructOps) -> bool {
 /// retargeting the source's construction into `container.field` writes into an un-allocated slot
 /// (`b = SABag { extra: extra }`: `b` allocated AFTER `extra` → `var_b` not in scope).
 fn collect_def_order(node: &Value, mo: &MoveOps) -> HashMap<u16, usize> {
+    // ⚠ Peels the SCRUTINEE while the recursion below walks the ORIGINAL `node`, so a spanned
+    // node is visited TWICE: once here through the peel, once when `for_each_child` descends
+    // to the same payload (it sees through a `Span` itself).  Safe here only because both
+    // accumulations are IDEMPOTENT — `or_insert` ignores the second write, and `idx` feeds a
+    // relative ORDER, so an extra tick shifts every later index equally.  Keep it that way, or
+    // bind (`let node = node.unspan();`) so the match and the walk see the same node.  The
+    // same shape counted a sandbox callee twice and inflated a heap bound by half — see
+    // `sandbox::intrinsic_space`.
     fn walk(node: &Value, mo: &MoveOps, idx: &mut usize, out: &mut HashMap<u16, usize>) {
         match node.unspan() {
             Value::Set(v, _) => {
@@ -2054,7 +2062,20 @@ fn base_var_of(expr: &Value, mo: &MoveOps) -> Option<u16> {
 /// `OpCopyRecord` / `OpFreeRef`, and RETARGET every remaining construction op that writes into
 /// the source (`OpSet*(s, …)`) onto that source's captured destination expression.
 fn move_rewrite(node: &mut Value, ready: &HashSet<u16>, dest: &HashMap<u16, Value>, mo: &MoveOps) {
-    match node {
+    // `Value::unspan`'s obligation, in its mutable form.  Measured over the 858-program
+    // corpus: 567 values arrive here, 41 of them spanned around an arm (33 `Call`, 8 `Block`).
+    //
+    // ⚠ Those 41 were NOT misses, and an earlier version of this comment claimed they were.
+    // The `_` arm ends in `node.for_each_child_mut(…)`, and that walk DESCENDS THROUGH a
+    // `Span`, so a spanned node was already reached one level down — measured
+    // behaviour-identical across 120 corpus programs with and without this peel.  It is kept
+    // because it obeys the rule and reaches the right arm directly; it fixes nothing.
+    //
+    // The `if let Value::Call(…) = node` below reads the ORIGINAL binding ON PURPOSE: peeling
+    // it as well would retarget the same call twice, once here and once when the trailing walk
+    // reaches it.  That is the double-count that peeling only the scrutinee produced in
+    // `sandbox::intrinsic_space` — a bound inflated from `24 · n²` to `36 · n²`.
+    match node.unspan_mut() {
         Value::Block(b) => {
             b.operators.retain(|s| !move_drop(s, ready, mo));
             for op in &mut b.operators {
@@ -2249,6 +2270,14 @@ fn construct_prescan(
                 && con.contains(s)
             {
                 if dest.contains_key(s) {
+                    // ⚠ NOT idempotent, and this function double-visits a spanned node: the
+                    // scrutinee above is peeled while `for_each_child` below walks the ORIGINAL,
+                    // and that walk sees through a `Span` itself.  A second visit of the SAME
+                    // append lands here and reads as two appends, which silently disqualifies the
+                    // var from the construct rewrite.  Measured over the 858-program corpus: 77
+                    // first-appends in 45 files and exactly ONE mark, which is genuine — it
+                    // survives binding the peel.  So the hazard does not fire today; it is one
+                    // edit away from firing.  See `sandbox::intrinsic_space` for the shape biting.
                     ambiguous.insert(*s); // appended into two places — not the clean shape.
                 } else {
                     container.insert(*s, get_field_base(dst, co));
@@ -6053,7 +6082,21 @@ impl Scopes {
     /// Recurses into nested `If` and `Block` but NOT into `Loop` — loop variables have
     /// per-iteration scope management and must not be pre-inited at the enclosing scope.
     fn find_first_ref_vars(&self, val: &Value, function: &Function, result: &mut Vec<u16>) {
-        match val {
+        // Peeled for the same reason as its sibling [`Self::find_assigned_vars`], which
+        // `scan_if` calls two lines below this one for the same job.  The arms discriminate
+        // on `Set` / `Block` / `If` / `Insert`, so a spanned one took `_ => {}` — contributing
+        // nothing for that whole subtree, where the shape being looked for is a branch's
+        // FIRST assignment of a Reference/Vector/Text, i.e. the thing that decides pre-init.
+        //
+        // Reachable, and measured latent.  Over the 858-program corpus the peel changes the
+        // decision at 46 sites in 16 programs, and at every one of them it newly
+        // pre-initialises **0** variables: the same variables were already reaching `result`
+        // by another path.  So no emitted code moves today.  The peel stays because it is one
+        // word and it obeys `Value::unspan`'s documented rule, and because the reachability is
+        // what makes it a trap — span placement has moved before, and the failure mode here is
+        // a missing initialisation with nothing to report it.  Claiming a defect was fixed
+        // would be the dressed-up version of this result.
+        match val.unspan() {
             Value::Set(v, _) => {
                 let resolved = *self.var_mapping.get(v).unwrap_or(v);
                 // For borrowed types (non-empty dep), only pre-init if every dep is already
@@ -8289,6 +8332,40 @@ mod par_safety_tests {
         assert!(is_par_safe(&d, user));
     }
 
+    /// The two classifiers must give the same verdict — one returns a bool, the other the
+    /// REASON for it, and a verdict with no reason to give is a contradiction.
+    ///
+    /// They did not. `par_unsafe_reason` was hand-rolled with a `_ => None` fallback and no
+    /// `Return` arm, so a body of `return <call>` was reported par-SAFE without ever being
+    /// looked at, while `is_par_safe` (walking with `any_node`, which visits every node)
+    /// called the same function unsafe. Measured over the corpus par workers: 16 of 42
+    /// disagreed, every one of them `is_par_safe=false` against `reason=none`.
+    ///
+    /// `Return` is the arm that exposed it; the fallback now descends via `for_each_child`,
+    /// so a wrapper nobody thought of cannot reintroduce the gap.
+    #[test]
+    fn the_two_par_classifiers_agree_through_a_return() {
+        let mut d = Data::new();
+        let native = d.add_def("OpMulInt", &pos(), DefType::Function);
+        d.definitions[native as usize].purity = Purity::Unknown;
+        d.definitions[native as usize].code = Value::Null; // a native: no loft body
+        let user = d.add_def("dbl", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Return(Box::new(Value::Call(native, vec![])));
+
+        let flag = is_par_safe(&d, user);
+        let reason = super::par_unsafe_reason(&d, user);
+        assert_eq!(
+            flag,
+            reason.is_none(),
+            "bool says {flag} while the reason is {reason:?} — a verdict with no reason \
+             behind it, or a reason behind no verdict"
+        );
+        assert!(
+            reason.is_some_and(|r| r.contains("OpMulInt")),
+            "and the reason must NAME the call it found through the `Return`"
+        );
+    }
+
     #[test]
     fn fn_calling_parent_write_stdlib_is_not_par_safe() {
         let mut d = Data::new();
@@ -8473,7 +8550,23 @@ fn walk_par_unsafe_reason_value(
         }
         Value::Set(_, rhs) => walk_par_unsafe_reason_value(rhs, data, visited),
         Value::Span(b) => walk_par_unsafe_reason_value(&b.1, data, visited),
-        _ => None,
+        // Every OTHER node descends via the keystone rather than stopping.
+        //
+        // This arm used to be `_ => None`, and the named arms above do not include `Return` —
+        // so `fn dbl(x) { return x * 2; }` was reported par-SAFE without its body ever being
+        // looked at, while `is_par_safe` (which walks with `any_node`, so it sees every node)
+        // called the same function unsafe.  16 of 42 par workers in the corpus disagreed that
+        // way, every one of them `is_par_safe=false` against `reason=none`: a verdict of
+        // "unsafe" with no reason to give for it.
+        other => {
+            let mut found = None;
+            other.for_each_child(&mut |c| {
+                if found.is_none() {
+                    found = walk_par_unsafe_reason_value(c, data, visited);
+                }
+            });
+            found
+        }
     }
 }
 
@@ -8887,7 +8980,20 @@ fn walk_deep_parent_write(
         }
         Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, current_fn, visited),
         Value::Span(b) => walk_deep_parent_write(&b.1, data, current_fn, visited),
-        _ => None,
+        // Descends via the keystone, for the reason its twin `walk_par_unsafe_reason_value`
+        // does: the arms above are the same list, and they do not include `Return`, so a
+        // worker whose body is `return helper(...)` was reported free of parent writes without
+        // that call ever being examined.  The two walkers are near-copies; fixing one and not
+        // the other is how they came to differ from `is_par_safe` in the first place.
+        other => {
+            let mut found = None;
+            other.for_each_child(&mut |c| {
+                if found.is_none() {
+                    found = walk_deep_parent_write(c, data, current_fn, visited);
+                }
+            });
+            found
+        }
     }
 }
 
@@ -9173,6 +9279,26 @@ mod par_deep_tests {
             line: 0,
             pos: 0,
         }
+    }
+
+    /// A parent write reached only through a `Return` must still be found.
+    ///
+    /// `walk_deep_parent_write`'s arms are the same list as its twin
+    /// `walk_par_unsafe_reason_value`'s, and neither included `Return` — so a worker whose
+    /// body is `return helper(...)` was reported free of parent writes without that call ever
+    /// being examined. Both now descend via the keystone; this pins the half that would
+    /// otherwise drift back the moment one is edited alone.
+    #[test]
+    fn deep_parent_write_is_found_through_a_return() {
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Return(Box::new(Value::Call(bad, vec![])));
+        assert!(
+            worker_calls_parent_write_deep(&d, worker).is_some(),
+            "a parent write behind a `return` must still be reported"
+        );
     }
 
     #[test]

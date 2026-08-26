@@ -95,6 +95,15 @@ holding a bug fix (same rule as `lint_comments.sh` — advisory, never fails CI)
 - [ ] Interpret and native produce **identical** results (the both-backend test run covers it).
 - [ ] Rendering/output libraries have **gold tests** (e.g. `native/tests/gold.rs`); a regen is a deliberate, reviewed change.
 - [ ] wasm: builds + runs if the library targets wasm, else a documented N/A.
+      *(`[auto]` for anything with a `[native] crate`: the unified library CI cross-builds
+      it for `wasm32-wasip2` on every push, because ONE dependency with no wasm32 target
+      takes the whole package off `--native-wasm` — the pure halves included, which is how
+      `graphics` lost its canvas and PNG encoder to `winit`.  A package that genuinely
+      cannot targets it declares so in a `.wasm_exempt` file at the package root, whose
+      CONTENTS are the reason; CI reprints them into the job summary every run, so the
+      "documented N/A" above is now a document CI reads rather than one it takes on trust.
+      The shape that usually avoids needing one:
+      [WASM.md § When the crate needs a device the target does not have](WASM.md).)*
 
 ### Goal E — Predictable memory — `[review]` (+ `[auto]` guard where applicable)
 - [ ] No store-lifetime surprises: heap values freed at scope end, no hidden retention. `[auto]` via `LOFT_STORE_GUARD` for store-managing libs; `[review]` that the API doesn't leak ownership the caller can't reason about.
