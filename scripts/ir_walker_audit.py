@@ -732,9 +732,28 @@ def audit_reach():
         print(f"  {tag} {guard} {site:<40} {name:<30} skips {shown:<26} (+{others} other)")
 
 
-PROJ_OPS = ("OpGetField", "OpGetVector", "OpGetText", "OpGetChar")
+PROJ_OPS = (
+    "OpGetField",
+    "OpGetVector",
+    "OpVectorRef",
+    "OpGetRecord",
+    "OpGetText",
+    "OpGetChar",
+)
+# Three ways to resolve a projection op, and a screen that sees only some of them
+# under-reports the very family it exists to rank (the B4g lesson, one mode later):
+#   * by def-number      — `d == data.def_nr("OpGetField")`
+#   * through the shared predicate — `is_projection_op(data, d)`
+#   * by NAME against a literal    — `data.def(*d).name() == "OpGetField"`, and the
+#     `matches!(…name(), "OpGetVector" | "OpVectorRef" | …)` form, which is how every
+#     hand-spelled list in the tree is written.
+# The name form is anchored on `name()` so a `cl("OpGetRecord", …)` that CONSTRUCTS the
+# op does not read as one that resolves it.
 PROJ_LOOKUP = re.compile(
-    r'def_nr\("(' + "|".join(PROJ_OPS) + r')"\)|\bis_projection_op\s*\('
+    r'def_nr\("(?:' + "|".join(PROJ_OPS) + r')"\)'
+    r'|\bis_projection_op\s*\('
+    r'|name\(\)[^;{}]{0,120}?"(?:' + "|".join(PROJ_OPS) + r')"',
+    re.S,
 )
 LINE_COMMENT = re.compile(r"//.*")
 

@@ -157,8 +157,10 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A NARROWED 2026-08-25
-to a single cell — an inline-minting `match` arm — with every other cell fixed) — D-own-7
+OPEN: **3** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+`match` arm — with every other cell fixed, its Face B CLOSED the same day; **D-own-11,
+2026-08-26**, the Join witness is still not total; **D-own-12, 2026-08-26**, a nullable heap
+local carries no ownership fact at all) — D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
@@ -167,6 +169,65 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-12 — OPEN (2026-08-26, loft#1106): a nullable heap local carries no ownership fact
+
+`(O-Complete)` requires the ownership fact PER BINDING.  An `Optional(Reference)` local has
+none: `data::is_dbref` lists the eight store-carrying kinds and not the `Optional` wrapper, so
+`--show-ownership` renders a `P?` variable as `— (scalar)`, nothing frees it, and the @P290
+bracket cannot name it either.
+
+```loft
+struct P { x: integer = 3 }
+fn mk() -> P? { P { x: -1 } }
+fn pick(a: P?, c: boolean) -> P? { if c { a } else { mk() } }
+fn plain(c: boolean) -> integer { q = P { x: 7 }; r = pick(q, c); r?.x }   // leaks one per call
+fn declared(c: boolean) -> integer { q: P? = P { x: 7 }; r = pick(q, c); r?.x }  // clean
+```
+
+Both backends, values correct throughout.  The axis is the ARGUMENT'S OWN declared type: with
+`q` declared `P?` the result's deps come back empty and the caller frees it, and with `q`
+inferred `P` they name `q`, so the caller reads a borrow and the minted store is orphaned.
+
+⚠ **This is not D-own-11 with a different argument, and the test that separates them is the
+hand-bound spelling.** Every witness gap in D-own-11 is cured by binding the argument to a
+local first; this one is not — `e = q; pick(e, c)` leaks identically.  A witness gap is about
+what the bracket can NAME; this is about what the type system says anyone OWNS.
+
+The obvious cure was measured and rejected: peeling `is_protectable_store_type` to `.base()`
+(matching the `heap_dep` gate three lines above it, which peels for exactly this reason) leaves
+the leak untouched, because the missing free is not the bracket's to license.  Resolving it is
+a decision about which of `is_dbref`'s callers see through the `Optional` wrapper — and
+`is_dbref`'s own doc already records that this list drifts SHORT when restated, with
+`Parser::is_heap_handle` named as "the same question with a `.base()` peel".
+
+### D-own-11 — OPEN (2026-08-26, loft#1105): the Join witness is still not total, and the axis is again the argument SPELLING
+
+D-own-6 closed on the claim that *"the runtime Join witness now covers every argument it can
+name."*  Four spellings have been found since that it could not name, all on the same axis its
+own closing paragraph identifies as the one its oracle never varied.  Three are fixed; one is
+not, and it is the one whose obvious cure is a use-after-free.
+
+| spelling | what the walk answered | state |
+|---|---|---|
+| `pick(t.0, …)` — a tuple ELEMENT | `None`: `Value::TupleGet` is not a call, so no op-name list can see it | **CLOSED** (loft#1104) — hoisted at the call site, like the construction family |
+| `pick(t.0.s, …)`, `pick(t.0.0, …)` — a chain over one | `None` for the same reason, one or two nodes down | **CLOSED** (loft#1104) — the ELEMENT is bound and the chain re-based on it |
+| `pick(h[k], …)` — a KEYED lookup | `None`: `OpGetRecord` was absent from `is_projection_op`, though the record it answers lives in the collection's own store | **CLOSED** — the op list merged onto one home |
+| `pick(v[i] ?? mk(), …)` — a join whose arm MINTS | `None`: the arm is a call, and a call is deliberately not a projection | **OPEN — loft#1105** |
+
+**The open one is open for a reason, not for want of an arm.**  The `??` lowers to a block typed
+`ref(τ)["v"]` — a borrow of `v` — that on its else arm holds a store `__ref_2` owns.  Binding it
+to a temp typed off its own result would complete the witness set while protecting the wrong
+store, so the source-free it licenses would release `__ref_2`'s record before the frame's own
+free.  That is the exact trade D-own-6's construction-block paragraph refuses in the other
+direction.  The cure has to make the MINTING ARM nameable — either by witnessing the retbuf slot
+it already delivers into, or by giving it its own `__lift_N` owner — and both are decisions about
+what `(O-Complete)` accepts as a per-path witness, not code that follows from the rule as written.
+
+**What generalises past this entry:** D-own-6 named the argument spelling as the axis its oracle
+pinned, and then closed on a fix that enumerated the spellings *it had thought of*.  An axis named
+in a closure is not an axis measured by it.  Each found since was reached by moving one more thing
+— a tuple base, a projection above it, a keyed container, a `??` — and each took one probe.
 
 ### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
 
@@ -600,6 +661,11 @@ Both answered wrong IDENTICALLY on the two backends, so `(O-NoDiverge)` held whi
 worktree at `f7a57124` (the value cells by assertion, the leak cell by the wrap leak gate).
 
 ### D-own-6 — CLOSED (2026-08-20, loft#1029): the runtime Join witness now covers every argument it can name
+
+> ⚠ **Read D-own-11 with this.**  The heading's claim did not hold: three further argument
+> spellings have been found that the witness could not name, on the very axis the closing
+> paragraph below identifies as the one its oracle never varied.  Two are fixed, one is open.
+
 
 `(O-Complete)` accepts the Join as *inherently runtime*: a callee whose return may borrow a
 parameter is completed per-path by the @P290 bracket — `protect_store_frees` marks each ref

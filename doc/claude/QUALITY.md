@@ -117,13 +117,20 @@ The catch-all backlog is no longer blocked on ranking — `reach` says 125 of it
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.  **A SECOND queue now runs beside it (B6g), and it is the sharper one:** the
 catch-all list asks who forgot a variant, while `spellings` asks who can only see one of a
-notion's two IR spellings — 18 functions resolve a projection by OP NAME and **2** of them
-handle `TupleGet`.  Following it produced three defects in one pass, two fixed here and one
+notion's two IR spellings — **38** functions resolve a projection by OP NAME and **4** of them
+handle `TupleGet` (18 · 2 when B6g wrote this; the SCREEN was widened in B6i, not the family).  Following it produced three defects in one pass, two fixed here and one
 filed as a design question (**loft#1102**: a tuple literal ALIASES a heap local while a struct
 literal and a vector literal copy it).  Reading the queue a second time produced a fourth
 (**loft#1104**, B6h): a tuple-element ARGUMENT cannot witness the @P290 bracket, so a
-borrowed-view call leaks one record per call — fixed for the bare spelling, with the two chained
-ones measured and left open rather than guessed at.
+borrowed-view call leaks one record per call.  **That issue is now closed across its whole matrix
+(B6i)** — the two "open" cells rested on a premise that did not survive re-measurement, and
+moving the axes the first sweep held fixed found three more before the fix.  Widening the list
+those cells run through then exposed a defect with **no tuple in it at all**: `pick(h[k], …)` at
+every keyed kind leaked, because `is_projection_op` — the site whose own doc calls itself the
+single home — was short by the two ops that three other homes already carried.  Fixed by merging
+the homes; four hand-spelled lists remain, as a queue.  Two shapes are filed rather than cured: **loft#1105**, whose obvious cure turns the leak into a
+use-after-free, and **loft#1106**, where binding the argument does not help at all because the
+gap is in what OWNS a nullable record, not in what can witness it.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -1350,10 +1357,18 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 18 | **2** | 16 |
+| 38 | **4** | 34 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
+
+⚠ **The row reads 38 · 4 · 34 and the paragraph above it says 18 · 2 · 16, because the SCREEN was
+widened, not because sites appeared.** The matcher saw two of the three ways Rust resolves an op
+here — `def_nr("OpGet…")` and a call to `is_projection_op` — and was blind to the third, a match
+on `data.def(d).name()` against a string literal, which is how every hand-spelled list in the tree
+is written. That is the B4g lesson arriving one mode later, and it is what B6i found by walking
+into one of those lists from the other side. The 18 · 2 · 16 figures are what the narrower matcher
+reported; re-run the tool rather than reading a number off this page.
 
 
 Following it produced three defects, and the first is the one worth the section:
@@ -1589,7 +1604,9 @@ after:   __lift_1(1):ref(S9)["t"] = t.0;
 Guard: `tests/scripts/a-tuple-element-argument-can-witness-the-bracket.loft`, falsified against
 the pre-fix gate (60 leaked records → 0).
 
-⚠ **Two cells of the matrix are STILL OPEN, and saying so is the point.** The axes the first
+⚠ **Two cells of the matrix are STILL OPEN, and saying so is the point.** ✅ **Both are closed
+as of later the same day — see B6i, including why the reason recorded below did not survive
+re-measurement.** The axes the first
 sweep held fixed were the index (fixed at 0) and the chain DEPTH. Moving the index found nothing
 — index 1 is fixed by the same change. Moving the depth found two live cells the fix does not
 reach: `pick(t.0.s, c)` (an `OpGetField` over a tuple element) and `pick(t.0.0, c)` (a nested
@@ -1604,6 +1621,151 @@ use-after-free**, which is the one direction this machinery's own comments warn 
 cells are recorded on the issue with their measurements rather than guessed at. Fixing one shape
 of a two-shape class is what produced this defect in the first place; fixing two of four would
 be the same mistake with better manners.
+
+#### B6i — the two open cells closed, and the list under them was short for a second reason (2026-08-26)
+
+B6h left two cells of loft#1104's matrix open and said why: the chained spellings `pick(t.0.s, c)`
+and `pick(t.0.0, c)` *"need the hoisted temp to carry the PROJECTION's result type, which
+`scopes.rs` has no helper to compute, and a wrong dep there is a use-after-free rather than a
+leak."* Both are closed, and **the blocker was a premise, not a shortage** — the register's own
+rule that a filed *"why I did not fix it"* is a claim to re-measure.
+
+**Neither cell needs the chain's result type, because neither binds the chain.** Two axes, and
+B6h had them fused into one:
+
+| what reads the element | who gets the NAME | where the type comes from |
+|---|---|---|
+| `t.0` — a bare `TupleGet` | the argument itself | the tuple's declared element type, borrowing the base |
+| `t.0.s`, `t.0[0]`, `t.0.w.s` — a projection CHAIN above it | the ELEMENT; the chain is RE-BASED on the temp | the same declared element type |
+| `t.0.0`, `vt[0].0` — the element read off a non-variable | the `tuple_tmp` block, bound whole | the block's own result type, deps included |
+
+The parser already wrote both types down. Binding the chain's RESULT would indeed have needed a
+`Value`-typing helper this pass does not have; binding its BASE needs one the tuple declares, and
+the chain then stands on a `Var` that `view_root_slots` has always walked. The emitted IR is
+byte-for-byte the hand-written spelling in every cell — `__lift_1:ref(Wb)["t"] = t.0;
+pick(__lift_1.s, …)` against `e = t.0; pick(e.s, …)`.
+
+**The filed matrix had two open cells; the family has six.** The sweep that produced the "two
+open cells" had pinned the chain's OP (a field read), the container the tuple sits in (a local),
+and the index. Moving those found three more before the fix, and a fourth only after it:
+
+| cell | verdict before |
+|---|---|
+| `pick(t.0.s, c)` — `OpGetField` over the element | filed open |
+| `pick(t.0.0, c)` — nested tuple | filed open |
+| `pick(t.0[0], c)` — `OpGetVector` over the element | **leaked, not filed** |
+| `pick(vt[0].0, c)` — the tuple in a VECTOR | **leaked, not filed** |
+| `pick(t.1.s, c)` — the same chain at index 1 | **leaked, not filed** |
+| `pick(t.0.0.s, c)` — a chain OVER a `tuple_tmp` | **leaked, and found only after the first fix** |
+
+The last one is the one worth keeping: it was invisible until the block shape had a cure, because
+until then the whole family read as one open cell. Guard:
+`tests/scripts/a-tuple-element-argument-can-witness-the-bracket.loft`, now ten defect cells and
+six controls, falsified against a pristine pre-fix build at **168 leaked records → 0 on both
+backends** (`LOFT_NATIVE_LEAK_CHECK=1` for the native half — a bare `--native` run does not
+leak-check).
+
+##### The boundary that is NOT an arm, and why the block test is a `TupleGet` TAIL
+
+Binding a block whole is admissible only because a `tuple_tmp` block's result type describes every
+value it can yield. **A block whose tail is a JOIN does not**, and the difference is a
+use-after-free rather than a missed optimisation. `v[i] ?? mk()` lowers to an `ncc` block typed
+`ref(τ)["v"]` — a borrow of `v` — while on the else arm it holds a store `__ref_2` owns. Binding
+that to a temp typed off its own result completes the witness set while protecting the WRONG
+store, and the source-free it then licenses releases `__ref_2`'s record before the frame's own
+`OpFreeRef`. So the shape is refused structurally (the tail must be a `TupleGet`), the reason is
+written where the next reader will hit it, and the leak is filed as **loft#1105** with both cures
+named and neither taken.
+
+##### The list `view_root_slots` reads was short by two ops, and three homes already knew it
+
+Walking into `is_projection_op` to widen it exposed the defect this section is really about, and
+**there is no tuple in it**:
+
+```loft
+h: hash<S[a]> = [S { a: 7 }];
+r = pick(h[7], c);        // one leaked record per call, both backends
+e = h[7]; r = pick(e, c); // clean
+```
+
+`h[k]` lowers to `OpGetRecord(h, …)`, declared in `default/01_code.loft` as
+`-> reference[data]` — the record it answers lives in the collection's own store, so the root
+variable is exactly the witness the bracket wants. `is_projection_op` listed `OpGetField` and
+`OpGetVector` and nothing else, so the site read as uncovered and kept the conservative never-free
+answer. Reproduced at **hash, sorted and index** (one op serves all three), through a keyed
+FIELD, and through a tuple.
+
+**The op was not missing everywhere — it was missing from the home that claims to be the only
+one.** `is_projection_op`'s doc said *"One list, two readers … Two lists of the same two ops would
+drift."* The measurement says otherwise:
+
+| site | list |
+|---|---|
+| `use_analysis::is_projection_op` (read by `view_root_slots` + `parser::projection_root_mut`) | GetField, GetVector |
+| `scopes::base_container_var` | GetVector, VectorRef, GetField, **GetRecord** |
+| `generation::container_element_base` | GetVector, VectorRef, GetField, **GetRecord** |
+| `scopes::amp_writeback_owned_copy` | GetVector, VectorRef, GetField |
+| `data::is_place_read` | GetField, GetVector, VectorRef |
+| `generation::dispatch` — the `&`-ref construction | GetField, GetVector, VectorRef |
+| `parser::operators` — the C86 view materialise | GetField, GetVector, VectorRef, **GetDbRef** |
+
+Seven hand-spelled lists, four distinct memberships, and the two that had the right answer are
+byte-identical copies of each other. The keystone claim was a measurement and it did not survive
+one (`keystone-claim-is-a-measurement`, third time on this thread).
+
+**Fixed by merging, not by adding an op in a fourth place.** `is_projection_op` now carries the
+four ops, states the criterion it is NOT (*"the return deps on parameter 0"* — `OpNewRecord` and
+`OpInsertVector` satisfy that and are excluded, because they GROW the store rather than read it),
+and `base_container_var` and `container_element_base` call it instead of restating it. Guard:
+`tests/scripts/a-keyed-lookup-argument-can-witness-the-bracket.loft`, six defect cells and three
+controls, falsified at **156 leaked records → 0 on both backends**. The remaining four lists
+stay a queue rather than a sweep: each asks a different question of the same shape (which place a
+`&` may name, which view a bind materialises), and merging them on the strength of a shared op
+list is the early-abstraction failure this thread was opened to avoid.
+
+**They are also DE-RANKED, because the shape each one's missing op predicts was probed and every
+cell is clean.** All four omit `OpGetRecord`, so the prediction is that a keyed lookup behaves
+differently from a vector element at each: `e = h[k]; bump(e)` through a `&` parameter,
+`r = &h[k]; r.b = 55`, and `w = mkg().h[k]` bound and read after forty stores of churn — the C86
+escape the last one materialises for. Every cell answers what its vector twin answers, on both
+backends. So the count of drifted lists is seven and the count of defects behind them is one; the
+others need their own evidence before anyone spends a session on them, which is what the queue is
+for.
+
+##### One more the sweep found, and why binding does not cure it
+
+Moving the argument-spelling axis onto a NULLABLE parameter turned up a leak that looks like the
+family above and is not: `pick(q, c)` into `fn pick(a: P?, …) -> P?` leaks the minting arm's
+record, one per call, both backends — and **binding `q` to a local first does not help**, which
+is exactly the test that separates a witness gap from an ownership gap. What does help is
+declaring the local `q: P?`.
+
+The overlay names it in one line: `Optional(Reference)` is classified `— (scalar)`.
+`data::is_dbref` lists the eight store-carrying kinds and not the `Optional` wrapper, so a
+nullable record local owns nothing and nothing frees it. The obvious cure was measured and
+REJECTED before filing — making `is_protectable_store_type` peel to `.base()` leaves the leak
+untouched, because the bracket is not what is missing. Filed as **loft#1106** with that negative
+result in it, since it is a decision about which of `is_dbref`'s callers see through the wrapper
+rather than a widening of the list, and the list is the thing this thread keeps finding drifted.
+
+##### The screen could see two of the three ways to resolve an op
+
+`is_projection_op` dropped OFF the `spellings` list the moment it was rewritten to match by name
+— the matcher knew `def_nr("OpGet…")` and `is_projection_op(`, and not
+`data.def(d).name() == "OpGetField"`, which is how all seven lists above are written. So the mode
+that found this class had been blind to most of the class the whole time. Widening the matcher
+moved the count from 21 · 2 · 19 to **38 · 4 · 34** and turned up two more sites that DO handle
+the tuple spelling (`generation::dispatch::output_set_inner`, `parser::operators::parse_part`) —
+movement on both sides, which is what says the change is precision rather than noise. It also
+surfaced `OpGetVectorNullable` as a spelling nothing lists at all.
+
+⚠ **And the probe harness was scoring itself.** Its pass test grepped stdout for the literal the
+program prints on success — and loft's error report ECHOES THE SOURCE LINE, so a failing assert
+printed the marker as part of the offending line and every failure read as a pass. One cell
+(`pick(g.all[0], …)` on a linked group) was recorded CLEAN on that basis when it was in fact
+failing on a null: I had filled the group's other member, so the array was empty and the cell
+asserted nothing. The fix is a marker the source cannot contain — a computed running sum — plus
+the exit code. `channel-captured-never-compared` and `absent-warning-is-not-a-pass`, met together.
 
 #### C — process / skills
 
