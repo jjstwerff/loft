@@ -30,12 +30,17 @@
 // are not accumulated is where the native emitter reports E0716/E0599 while the interpreter
 // is correct, so an interpreter-only pass would not have said much.
 //
-// ⚠ The two declared warnings below record a REAL asymmetry this fix does not close: a
-// nullable tail reaching a non-null `text` return reports `(N-Store)` for the `if` spelling
-// and for a null nested inside an arm, and says NOTHING for a `match` whose arm IS the null
-// literal. The silence has the same root as the ICE — the inferred tail type the report
-// reads is the term that was not pass-stable — so it is worth knowing which cells speak.
+// The five declared warnings below record which cells report `(N-Store)`, and every cell that
+// stores a nullable tail into a non-null `text` return is one of them: the four `match`
+// spellings and the `if`. That symmetry arrived with loft#1100 (`calls.md` D-call-5) — until
+// then a `match` whose arm IS the null literal said nothing, because the report and the
+// per-arm accumulator read the SAME inferred tail type and the gate could only serve one of
+// them. The report now reads that type before the accumulator rewrite retypes it, so the
+// spelling no longer decides whether the store is diagnosed.
 //
+// @EXPECT_WARNING: a nullable `text?` is stored into the return value of the non-null type `text`
+// @EXPECT_WARNING: a nullable `text?` is stored into the return value of the non-null type `text`
+// @EXPECT_WARNING: a nullable `text?` is stored into the return value of the non-null type `text`
 // @EXPECT_WARNING: a nullable `text?` is stored into the return value of the non-null type `text`
 // @EXPECT_WARNING: a nullable `text?` is stored into the return value of the non-null type `text`
 

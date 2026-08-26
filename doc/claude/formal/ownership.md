@@ -314,6 +314,16 @@ copy-out workaround, an ARGUMENT-rooted projection (the caller owns that store, 
 outlives the call), a copied rebinding, and the RECORD twin, which reaches its own view repair
 through `classify_reference_delivery`.
 
+⚠ **The structural leg resolves a projection by OP NAME, so it cannot see a `TupleGet`
+spelling.**  `expr_borrows_local` matches `OpGetField` / `OpGetVector`; a tuple element read
+that lowers to `Value::TupleGet` reaches none of them.  It is latent rather than live — five
+tuple spellings (`t = (v,7); e = t.0`, `e = mk_tup().0`, `t = mk_tup(); e = t.0`, the explicit
+return and the tail) all answer correctly on both backends, because the DEPS leg covers each of
+them — but the two legs are not interchangeable, and a future tuple shape carrying no dep would
+fall between them exactly as `e = mk().items` did.  `scripts/ir_walker_audit.py spellings`
+counts this class repo-wide: 18 functions resolve a projection by op name and 2 handle the
+tuple spelling.
+
 ⚠ **A stale `target/release/loft` is not a control.**  It answered the guard file GREEN — not
 because the shapes were fixed there, but because it predates the code under test; a
 freed-then-reused store also depends on the build's own allocation pattern, so a binary that

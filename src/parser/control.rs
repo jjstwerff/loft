@@ -1193,29 +1193,36 @@ impl Parser {
         // Gated on BOTH arms YIELDING a text value (not a guard `if c { return
         // … }` — that would suppress the missing-return diagnostic).
         //
-        // loft#741 — the nullability condition is about the store this rewrite
-        // PERFORMS, so it reads the DECLARED RETURN, not the tail.
+        // NULLABILITY DOES NOT GATE THIS PROMOTION — it is reported instead.
         //
-        // The accumulator writes each arm into the caller's text buffer. When
-        // the function declares `-> text?` that is a nullable value reaching a
-        // nullable destination: legitimate, and a null survives it because loft
-        // carries one as a content sentinel. When it declares `-> text` and the
-        // tail is nullable, the SAME rewrite is a nullable-into-non-null store
-        // — exactly what the `(N-Store)` teeth exist to catch — and performing
-        // it silently swallows the diagnostic.
+        // The accumulator writes each arm into the caller's text buffer, and it retypes the
+        // tail as the accumulator, so a `(N-Store)` check downstream then compares two
+        // non-null types and stays silent.  Declining to promote is what used to keep that
+        // diagnostic for a nullable tail in a `-> text` function, and it cost the program its
+        // `--native` build: with no accumulator each arm stays `&*(callee(…))`, a borrow of
+        // the `Str` temporary its callee returned and dead at the arm's `}` (E0716 — E0308
+        // once the arms' Rust representations also disagree), while the interpreter ran it.
         //
-        // Keying on the TAIL conflated the two and excluded both. That cost
-        // every `-> text?` branch tail its per-arm delivery, so the whole
-        // `match` compiled as ONE Rust expression whose arms must unify — a
-        // buffered call yields `Str` where a formatted string yields `&String`,
-        // E0308, while the interpreter was correct. Keying on the declared
-        // return keeps `read_off() -> text { … self.w[i] … }` reporting its
-        // N-Store (the tail is nullable, the destination is not) and lets a
-        // `-> text?` tail deliver per arm.
+        // `@FR-N-Store` does not leave that open: storing `e:τ?` into a non-null `τ` slot is a
+        // WARNING that "compiles + runs, the slot holds null" wherever the null is
+        // representable-and-distinct, which `text` is (types.md's per-type table); only the
+        // narrow integer widths error, where the sentinel collides with a real value.  So the
+        // store is reported below from the tail's OWN type, BEFORE the rewrite erases it, and
+        // the promotion proceeds — a diagnostic describes the SOURCE program, and which
+        // lowering the compiler picks for it cannot decide whether the program is diagnosed
+        // (loft#1100, `calls.md` D-call-5).
+        //
+        // Both earlier keyings failed for the same reason: one tail type was answering two
+        // questions.  Keying on the TAIL excluded a `-> text?` tail from per-arm delivery too,
+        // so the whole `match` compiled as ONE Rust expression whose arms must unify — a
+        // buffered call yields `Str` where a formatted string yields `&String` (loft#741,
+        // E0308).  Keying on the DECLARED RETURN restored that and left this case refused.
+        // Neither is needed once the report no longer rides on the gate.
+        let nullable_into_nonnull =
+            !matches!(result, Type::Optional(_)) && matches!(t, Type::Optional(_));
         let do_if_acc = !do_tret_bind
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
-            && (matches!(result, Type::Optional(_)) || !matches!(t, Type::Optional(_)))
             && !self
                 .data
                 .def(self.context)
@@ -1247,17 +1254,39 @@ impl Parser {
             && context == "return from block"
         {
             eprintln!(
-                "[acc] fn={} pass1={} tret={} optOk={} yields={} acc_attr={} t={t:?} \
+                "[acc] fn={} pass1={} tret={} nstore={} yields={} acc_attr={} t={t:?} \
                  => {do_if_acc}",
                 self.data.def(self.context).name(),
                 self.first_pass,
                 do_tret_bind,
-                (matches!(result, Type::Optional(_)) || !matches!(t, Type::Optional(_))),
+                nullable_into_nonnull,
                 l.last().is_some_and(Self::if_tail_yields_text),
                 self.def_has_acc_attr(),
             );
         }
         if do_if_acc {
+            // loft#1100 — report the nullable-into-non-null store from the tail's OWN type,
+            // here, because the rewrite below retypes the tail as the accumulator (non-null
+            // `Text`) and `block_result`'s `(N-Store)` check would then see two non-null
+            // types and stay silent.
+            //
+            // Refusing the promotion is what USED to keep this diagnostic, and it cost the
+            // program its `--native` build: each arm stayed a borrow of the `Str` temporary
+            // its callee returned, which dies at the arm's `}` (E0716 — E0308 once the arms'
+            // Rust types also disagree), while the interpreter ran it.  @FR-N-Store does not
+            // leave that open: for a type whose null is representable-and-distinct it is a
+            // WARNING that compiles and runs, so a backend REFUSING it is a deviation and
+            // not the other half of a design choice.  A diagnostic describes the SOURCE
+            // program; which lowering the compiler picks for it cannot decide whether the
+            // program is diagnosed.
+            if nullable_into_nonnull {
+                let at = l
+                    .last()
+                    .and_then(Value::span_pos)
+                    .cloned()
+                    .or_else(|| Some(self.data.def(self.context).position().clone()));
+                self.n_store_violation(&t, result, "the return value", at.as_ref());
+            }
             // The accumulator IS the return value, so it carries the declared
             // return's nullability. Typing it non-null while a `-> text?` tail
             // writes nullable arms through it would leave the destination
