@@ -70,6 +70,22 @@ unsound step is"* — and the `tests/scripts/` cell that guards it. Reading it f
 skipped the whole attempt. This is CLAUDE.md's *"READ THE FORMAL SPEC FIRST when the fix has a
 choice in it"* with a price tag on it.
 
+⚠ **And the second half of that lesson, which is the harder one: loft#1096's fix was NOT at
+the promotion.** *"Closed at the promotion"* is loft#1081's sentence about loft#1081. Refusing
+the rename for loft#1096 was built and measured too, and it over-fires (a `match` with no
+catch-all lowers its fallthrough to the same null sentinel, so an ordinary two-variant `match`
+loses its NRVO) and needs a second half or the null arm delivers an empty vector instead of the
+sentinel. The unsound step was one site over, in `scopes::free_vars`. Read the register for
+what was TRIED and what the measurement was; a closure names where ITS unsound step was, and
+the next defect in the same machinery has to be measured, not inherited (`ownership.md`
+D-own-9).
+
+⚠ **Grep the BELIEF, not the op.** loft#1096 and loft#1097 are one wrong sentence — *a
+collection slot holds the null sentinel on a path that did not write it* — at two sites, found
+a day apart, costing a use-after-free and a silently wrong value. Both sites had written the
+belief down in their own comment. When a register entry names a false premise, the next search
+is for other places that hold it.
+
 **And a citation gap is a finding, not a dead end.** If the site you are about to edit enforces
 a rule and cites none — `src/fill.rs` carries zero `@FR-` tags, so no `rule_tags.py sites` query
 reaches the free it performs — say so in the fix. A rule the enforcing site does not name is a
