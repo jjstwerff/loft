@@ -423,7 +423,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 317 | 301 | **16** |
+| 317 | 300 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -745,6 +745,7 @@ documented method — the tool is not asked to judge them:
 | `ownership_cfg::op_label` | formats a CFG block's DEBUG LABEL; a `Span` yields `"op"` and nothing decides on it |
 | `scopes::def_reshape_refusals` | `matches!(def.code, Value::Null)` as an empty-body guard |
 | `scopes::construct_rewrite_ops` | its catch-all descends via `for_each_child_mut` into a self-recursive call, so a wrapper is entered rather than dropped — the B6 cure, already applied |
+| `parser::expressions::ir_has_user_call` | same, since B4i — it TRADED its explicit `Value::Span` arm for a descending catch-all, which handles the wrapper it named and every one it did not.  The audit reads the loss of the arm and not the gain, which is why the count went 16 → 17 while the site got stronger |
 
 Two more (`scopes::walk_check`, `scopes::check_args`) are `#[cfg(debug_assertions)]`-gated and
 cannot be measured by instrumenting an ordinary build at all.
@@ -790,6 +791,91 @@ one in `unspan` was extracted and shared — and reading it beside a walker that
 `base.unspan()` without ever naming `Value::Span` is what raised the question of what else the
 pattern could not see. Both modes now call one `peels_span`, so they cannot answer it
 differently.
+
+#### B4i — a compound assign ran its container call TWICE (2026-08-26)
+
+Working the catch-all walker queue (B6b) the same way, `parser::expressions::ir_has_user_call`
+is the one that was wrong. It is a subtree predicate — *does this IR contain a user call?* —
+with arms for `Span`, `Call` and `CallRef` and `_ => false` for everything else. Both its
+callers use it as a RE-EVALUATION guard, so answering false wrongly duplicates a side effect:
+
+| caller | what a false answer costs |
+|---|---|
+| `parse_assign`'s @PLN102 F2 hoist | the compound-assign place is not bound to a `_place` temp, so the accessor — and its call — is evaluated once for the read and again for the write |
+| `control::record_text_payload_view` | a subject carrying a user call is recorded as a re-evaluable view, and its own doc says such a subject "would run that call again" |
+
+**Measured, then constructed.** Over the corpus the bare predicate and a descending one agree
+210 times in 32 programs — and only leaves and `Call` ever arrive, so the other arms look
+unreachable. That is a statement about the corpus, not about the language, so the shape was
+BUILT instead:
+
+```loft
+fn getv(c: Ctr, src: vector<integer>) -> vector<integer> { c.n = c.n + 1; src }
+getv(k, cw)[0] += 5;          // one call in the source
+```
+
+`getv` ran **twice**, on both backends. The accessor lifts to
+`Call(OpGet…, [Block("inline_container", [Set(tmp, getv(…)), Var(tmp)]), Int(8), Int(0)])`, and
+`_ => false` never enters that `Block`.
+
+**The rule had already decided it.** `formal/operational.md` `(E-Asgn-Compound)`: the
+addressing sub-expressions — *"an index, **or a call that produces the container/struct being
+indexed**"* — evaluate **exactly once**, and *"this holds for every place a compound assignment
+can target."* So this is a deviation, not a design question, and the fix direction was not
+open. Fixed by descending via the keystone, the same cure as B6's four.
+
+⚠ **The guard tested one half of a two-half rule.** `pln102-f2-place-once.loft` varied the
+INDEX call — `w[nxt(c)] += 5`, every operator, nested indices, const and var controls — and
+never once varied the CONTAINER call, though the rule names both in the same sentence. The
+corpus cannot find what it never varies. Three cases added (container call, nested container
+call, and plain `=` as the contrast the rule itself draws); verified to FAIL against pristine
+`origin/main` on both backends at exactly the new assertion.
+
+Only the call COUNT is asserted for those cases: `getv` hands back a copy, so the write lands
+in the temporary. Whether it should land at all is the lost-temp-write question (loft#894), a
+different rule — and asserting the element would have pinned an answer this test has no opinion
+about.
+
+#### B4j — the same hoist had a second arm, and it aliased the wrong struct (2026-08-26)
+
+The probe that found B4i also failed to COMPILE on `--native` — `error[E0425]: cannot find
+value var___place_1` — for `pick(c, ps).x += 5`, where `pick` RETURNS a struct. Pre-existing on
+pristine `origin/main` and independent of B4i: the hoist already fired here, and this is its
+own emission.
+
+**Completing the matrix is what identified the culprit, and it was not the cell that looked
+broken.** The interpreter ran the same program "correctly" — until the neighbouring field was
+tried:
+
+| case | source after | |
+|---|---|---|
+| `pick(c,qs).x += 5` (offset 0) | **15** | the write reached `qs[0]` |
+| `pick(c,qs).y += 5` (offset 8) | 99 | untouched |
+| `cp = pick(c,qs); cp.x += 5` | 10, copy 15 | untouched |
+| `cp = pick(c,qs); cp.y += 5` | 99, copy 104 | untouched |
+| `pick(c,qs).x = 77` (plain `=`, no hoist) | 10 | untouched |
+
+Two fields of one struct, one expression shape, opposite answers, no diagnostic. Three
+independent control cells agree a returned struct is a COPY — binding first leaves the source
+alone at BOTH offsets, and so does a plain `=`. So the outlier is the **`.x` write landing**,
+not the `.y` write missing, and my first reading had it backwards. The reference route is the
+oracle: score the broken cell against the working one rather than against a guess.
+
+**Cause: the hoist had TWO arms for one question.** An offset-0 arm bound the accessor straight
+into a scalar `RefVar` on the reasoning that *"the accessor IS a `&element` ref"* — true for
+`w[idx()]`, false for a call that returns a struct, where it aliased the callee's SOURCE
+instead of the returned copy. The other arm hoists the element reference and rebuilds the field
+access, and it answers **both** offsets correctly.
+
+**Fixed by deleting the offset-0 arm.** One shape for every offset; the surviving one is the
+one measured right. Both symptoms go with it — the interpreter's silent wrong write and the
+native E0425 — and the two backends now agree cell for cell on all five rows. This is the
+thread's own subject arriving in the code it was reading: two implementations of one question,
+where the second was not a refinement but a wrong special case.
+
+Guard: four cases in `pln102-f2-place-once.loft`, including the bound-copy reference route and
+the plain-`=` contrast, verified to fail against pristine `origin/main` — `x=15` on the
+interpreter and E0425 on native.
 
 #### B5 — `match` lowers through four paths and three mishandled a `null` arm (2026-08-25)
 

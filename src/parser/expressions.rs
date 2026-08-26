@@ -3752,14 +3752,27 @@ use a separate collection or add after the loop"
     /// reaches a user call must be bound once (compound-assign place-once, C92).
     pub(crate) fn ir_has_user_call(&self, v: &Value) -> bool {
         match v {
-            Value::Span(b) => self.ir_has_user_call(&b.1),
             Value::Call(d, args) => {
                 !self.data.def(*d).name.starts_with("Op")
                     || args.iter().any(|a| self.ir_has_user_call(a))
             }
             // A dynamic call through a fn-ref is always a user call (non-idempotent).
             Value::CallRef(_, _) => true,
-            _ => false,
+            // Every other shape descends through the keystone, so a call the callers must
+            // not re-evaluate cannot hide under a wrapper nobody thought to name.  A lifted
+            // container is the shape that reaches here: `getv(v)[0]` puts the call inside a
+            // `Block("inline_container", [Set(tmp, getv(v)), Var(tmp)])` and hands that to
+            // `OpGet…` as the accessor.  Answering FALSE there let @PLN102 F2 skip the
+            // once-only hoist, and the accessor's call ran twice.
+            other => {
+                let mut found = false;
+                other.for_each_child(&mut |c| {
+                    if !found {
+                        found = self.ir_has_user_call(c);
+                    }
+                });
+                found
+            }
         }
     }
 
@@ -4276,8 +4289,7 @@ use a separate collection or add after the loop"
                                 && gargs.len() == 2
                                 && self.ir_has_user_call(&gargs[0]) =>
                         {
-                            let offset0 = matches!(gargs[1].unspan(), Value::Int(0));
-                            Some((*get_d, gargs[0].clone(), gargs[1].clone(), offset0))
+                            Some((*get_d, gargs[0].clone(), gargs[1].clone()))
                         }
                         _ => None,
                     }
@@ -4286,38 +4298,34 @@ use a separate collection or add after the loop"
                 };
                 let mut f2_setup: Option<Value> = None;
                 let mut f2_hoisted = false;
-                if let Some((get_d, accessor, offset, offset0)) = f2_place {
+                if let Some((get_d, accessor, offset)) = f2_place {
                     // The hoist rewrites `to` to reference a fresh temp, which hides the
                     // ORIGINAL place's const / value-const base from `validate_write` (it walks
                     // the expression). Run the write-legality check on the original place NOW,
                     // and tell parse_assign_op to skip its own (it would re-fire on the rewrite).
                     self.validate_write(&to, &parent_tp, op);
                     f2_hoisted = true;
-                    if offset0 {
-                        // Scalar element (offset 0): the accessor IS a `&element` ref, so bind
-                        // it directly and read/write via the RefVar deref. Non-null base — the
-                        // `?` on a dynamic index is OOB-safety on the read, not the slot's type.
-                        let ref_tp = Type::RefVar(Box::new(f_type.base().clone()));
-                        let place_var = self.create_unique("_place", &ref_tp);
-                        f2_setup = Some(v_set(place_var, accessor));
-                        to = Value::Var(place_var);
-                        *code = Value::Var(place_var);
-                        f_type = ref_tp;
-                    } else {
-                        // Field at a NONZERO offset (`elem.fld`): hoist the ELEMENT reference
-                        // and rebuild the field access on it, preserving `offset`. Without this
-                        // the accessor — and its call — was emitted twice, so a divergent index
-                        // silently read from one element and wrote another (the exact C92
-                        // corruption, previously live for any non-first struct field). The
-                        // element is a `Reference(struct)`; strip the dynamic-index `?` (OOB
-                        // safety on the read, not the slot type) via `base()`, as offset-0 does.
-                        let elem_tp = parent_tp.base().clone();
-                        let elem_var = self.create_unique("_place", &elem_tp);
-                        f2_setup = Some(v_set(elem_var, accessor));
-                        let rebuilt = Value::Call(get_d, vec![Value::Var(elem_var), offset]);
-                        to = rebuilt.clone();
-                        *code = rebuilt;
-                    }
+                    // Hoist the ELEMENT reference and rebuild the field access on it,
+                    // preserving `offset`.  Without this the accessor — and its call — was
+                    // emitted twice, so a divergent index silently read from one element and
+                    // wrote another (the exact C92 corruption).  The element is a
+                    // `Reference(struct)`; strip the dynamic-index `?` (OOB safety on the
+                    // read, not the slot type) via `base()`.
+                    //
+                    // ONE shape for every offset, including 0.  A separate offset-0 arm used
+                    // to bind the accessor straight into a scalar `RefVar` on the reasoning
+                    // that "the accessor IS a `&element` ref" — true for `w[idx()]`, false for
+                    // a call that RETURNS a struct, where it aliased the callee's source
+                    // instead of the returned copy.  `pick(ps).x += 5` then wrote into
+                    // `ps[0]` while `.y` correctly did not, and native emitted a `_place` it
+                    // never declared.  This arm answers both offsets correctly, so there is
+                    // nothing for a second one to add.
+                    let elem_tp = parent_tp.base().clone();
+                    let elem_var = self.create_unique("_place", &elem_tp);
+                    f2_setup = Some(v_set(elem_var, accessor));
+                    let rebuilt = Value::Call(get_d, vec![Value::Var(elem_var), offset]);
+                    to = rebuilt.clone();
+                    *code = rebuilt;
                 }
                 let var_nr = self.assign_var_nr(code, op, &f_type, &mut parent_tp);
                 // Handle `f += X` for File variables before type-changing logic.
