@@ -158,7 +158,8 @@ implication that reading `deps` is *sufficient*.
 ## Deviations
 
 OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A NARROWED 2026-08-25
-to a single cell — an inline-minting `match` arm — with every other cell fixed) — D-own-9
+to a single cell — an inline-minting `match` arm — with every other cell fixed, and that
+cell's one known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-9
 opened and closed 2026-08-26, D-own-7 opened and closed 2026-08-23, and D-own-6 before it;
 the five original D-own deviations remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
@@ -460,6 +461,65 @@ removing it trades this deviation for that one.  It is the entry's *"one derived
 homes"* hazard in its sharpest form: the strip is RIGHT for the delivery question and WRONG
 for the ownership question, and one dep list answers both.  **Face A stays OPEN for the
 inline-mint `match` arm only**, pending a way to separate those two readings.
+
+**2026-08-26 (loft#1098): the surviving cell's SYMPTOM is closed; the FACT is not, and the
+two are worth keeping apart.**  The cell had a consequence after all, at the RETURN position:
+because the stripped mint never reaches `ls`, the arm that minted it is never a promotion
+candidate, so nothing ever DELIVERS it into the caller's return buffer.  It is returned
+instead, the callee's `OpFreeRefIfDistinct` sees the store it is about to return and keeps it,
+the caller's binding is typed as a borrow of ITS buffer and frees that, and one store orphans
+per call — the 65,535-entry exhaustion class.
+
+⚠ The dep list still reads `line def deps=[cp]` for an inline-mint `match` arm where the `if`
+spelling reads `[__vdb_1, cp]` (re-measured with `LOFT_VAR_TABLE` after the fix), so
+`(O-Complete)` is still not satisfied for it and **Face A stays OPEN**.  What changed is that
+its one known symptom is gone, which puts the cell back in the position the entry describes
+above: a false fact looking for a symptom.  The BOUND-local shape the register reduces it to
+(`line = match … { 0 => cp, _ => [for v in cp {…}] }`) was probed at 200 rounds under
+`LOFT_POISON=1` + `LOFT_STRICT_STORES=1` on both backends and is correct with no leak, so the
+next symptom, if there is one, is not there.
+
+**The cure does not need the two readings separated after all, and that is the finding.**  The
+strip's harm is that ONE arm's store goes undelivered; delivering every arm removes the
+question rather than answering it.  `block_result`'s #416 per-arm materialiser already does
+exactly that, and was excluded for a tail with a direct `null` arm — an exclusion written for
+the return TYPE (64bd0984: *"materializing would set `returned = Vector[__retbuf]` on a path
+that yields null, which native cannot represent"*), which @PLN25 had already relaxed for a
+DECLARED-nullable return.  The rule that replaces it is the one the promotion itself states:
+**at most ONE arm can BE the buffer**, so a tail with two or more value arms must materialise
+the rest.  One value arm keeps its rename and its NRVO; two or more take the per-arm delivery.
+
+**The fix is at the DELIVERY, not at the fact, and that is what makes it small.**
+
+**Measured, and the filed scope was a third of it.**  The report needed a null arm, a LOCAL
+arm and a LITERAL arm together.  Sweeping the arm KINDS against the arm COUNT over `-1 =>
+null` tails says the local arm is not required and the count is:
+
+| tail | before |
+|---|---|
+| `-1 => null, _ => [k]` | clean — the rename covers the one value arm |
+| `-1 => null, 0 => [7], _ => [k]` | **one store per call** |
+| `-1 => null, 0 => a, _ => [k]` | **one store per call** (the filed cell) |
+| `-1 => null, 0 => [7], 1 => [8], _ => [k]` | **one store per call** |
+| `-1 => null, 0 => a, _ => b` | clean |
+| `-1 => null, 0 => [7], _ => a` | clean |
+
+The two clean multi-arm cells are clean by other routes, not by the rule, so they are controls
+rather than evidence — they now take the per-arm delivery like the rest.  The `if`-chain
+spelling of every cell was clean throughout, because `if` and `match` reach this tail through
+different legs; a sweep of one spelling would have found nothing.
+
+Emitted IR over the corpus: **1 of 898** programs changes, and the change is one duplicated
+entry `OpClearVector` removed.  So the gate was live for exactly the shape it was written for
+and nothing else, and the NRVO on the single-value-arm shape — loft#1096's own — is untouched.
+Guard: `tests/scripts/1098-a-null-arm-tail-with-two-value-arms.loft`, falsified on a pristine
+tree at `0df2ca45` by the wrap leak gate (1198 stores).  ⚠ `loft --tests` on that file alone
+does NOT falsify it: the leak gate lives in `tests/wrap.rs::run_test`, so `cargo test --test
+wrap loft_suite` is what scores it.
+
+A residue and a sibling, both filed: the **`text`** family aborts before it can be measured at
+all (loft#1099, an H5 two-pass ICE on `-> text` + `match` + a null arm + a local arm), and the
+`-> vector<T>?` spelling still leaks one store on `--native` (loft#948).
 
 **Face A — the allocation answer (the original statement).**  A borrow-typed slot owns no store, so a
 whole-value assignment into it has nowhere to land.  The false fact reduces to ~55 lines — a
