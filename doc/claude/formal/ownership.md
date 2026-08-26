@@ -243,6 +243,50 @@ in a closure is not an axis measured by it.  Each found since was reached by mov
 D-own-11's closing sentence is the generalisation both halves arrived at from opposite ends:
 **a predicate that enumerates SHAPES will keep being one shape short.**
 
+### D-own-11 — CLOSED (2026-08-26, loft#1105): an argument the borrow bracket could not NAME leaked the callee's minted store
+
+The model claims **no leak**.  A call whose return may BORROW an argument decides borrow-vs-owned
+at runtime with the @P290 bracket, and the bracket protects a store by naming it through a
+variable whose VALUE is a `DbRef`.  Where it cannot name one the witness set reads incomplete and
+the caller keeps the conservative never-free answer — which is SOUND but copies the returned store
+and orphans the one the callee minted, one record per call on both backends:
+
+```loft
+fn pick(s: S, c: boolean) -> S { if c { s } else { mk() } }
+fn f(c: boolean) -> integer { v: vector<S?> = [S { a: 7 }]; r = pick(v[0] ?? mk(), c); r.a }
+```
+
+A `??` in argument position lowers to an `ncc` BLOCK whose tail is a join with a CALL arm.
+`view_root_slots` walks a bare `Var`, a projection chain and a join, and neither a
+multi-statement block nor a call is nameable — the call deliberately so, since its returned store
+may be the argument's or one it minted, which is the very split the bracket exists to decide.
+
+Closed by binding the argument to a temp before the call (`Scopes::scan_args`,
+`unnameable_borrow_source`), which is the hand-written spelling that was always clean
+(`e = v[0] ?? mk(); pick(e, …)`).  **The preamble runs BEFORE the bracket is emitted**, so the
+temp holds a real `DbRef` by then — which is exactly why a WIDER WITNESS is the wrong cure and a
+bind is the right one: marking the block's own work-ref would read as covered while it still held
+its null, and the source-free that licenses would release a store the caller still reaches.  That
+trades a leak for a use-after-free (loft#981).  A bind cannot make that mistake, because the value
+is already computed when the name is taken.
+
+⚠ **This is the THIRD cell of one class, and the fix is finally the class rather than the cell.**
+loft#1029 hoisted an inline CONSTRUCTION, `tuples.md` D-tup-3 bound a TUPLE ELEMENT, and this
+binds anything else the walk cannot name — asking `bracket_can_name` instead of enumerating a
+fourth shape.  The two earlier cases stay ahead of it in the chain because they answer their
+shapes more precisely: a construction is HOISTED rather than bound, for the loft#981 reason above.
+**A predicate that enumerates SHAPES will keep being one shape short; the question it stands for
+does not run out.**
+
+**Measured.** Six cells, both backends, values IDENTICAL before and after — a pure leak, so
+`LOFT_STRICT_STORES=1` is the instrument and the assertions score nothing.  A control at
+`9c1a0e4e` reports `kt=79 S1105g×12` over 12 rounds; after, clean, and clean under `LOFT_POISON=1`.
+Controls: the hand-written binding, a bare `Var` argument (already nameable — most calls in the
+language, and re-binding it would reorder an argument for nothing), a projection the walk already
+resolves, and a callee whose return does not borrow.  Guard:
+`tests/scripts/1105-an-unnameable-argument-borrow-witness.loft`, scored by the wrap harness's leak
+gate.
+
 ### D-own-10 — CLOSED (2026-08-26, loft#1101): a BOUND projection was renamed onto the caller's buffer, and it owned nothing to rename
 
 `(O-Move)` says a returned heap value's ownership TRANSFERS, and that a return which merely

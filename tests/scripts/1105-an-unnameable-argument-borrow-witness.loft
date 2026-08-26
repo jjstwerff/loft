@@ -1,0 +1,122 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// An argument the @P290 bracket cannot NAME is given a name, so a call whose return may BORROW
+// it can decide borrow-vs-owned instead of falling back to a copy (loft#1105).
+//
+// The bracket protects a store through a variable whose value is a `DbRef`, and
+// `view_root_slots` walks a bare `Var`, a projection chain, and a JOIN to find one. A `??` in
+// argument position lowers to an `ncc` BLOCK whose tail is a join with a CALL arm — and neither
+// a multi-statement block nor a call is nameable, by design: a call's returned store may be the
+// argument's OR one it minted, which is the very split the bracket exists to decide. So the
+// witness set read incomplete, the caller kept the conservative never-free answer, copied the
+// returned store and orphaned the one the callee minted: one record per call, both backends,
+// with every value correct.
+//
+// The cure is the one its two neighbours already take, generalised to the QUESTION rather than
+// to a shape: if the bracket cannot name the value, give it a name. Binding the argument to a
+// temp before the call is exactly the hand-written spelling that was always clean
+// (`e = v[0] ?? mk(); pick(e, …)`), and the preamble runs BEFORE the bracket is emitted, so the
+// temp holds a real `DbRef` by then rather than a null.
+//
+// ⚠ WHY THIS IS A BIND AND NOT A WIDER WITNESS. Marking the block's own work-ref instead would
+// read as covered while protecting nothing — the bracket is emitted before the arguments are
+// evaluated, so that ref still holds its null — and the source-free it then licenses would
+// release a store the caller still reaches. That trades a leak for a use-after-free (loft#981).
+// A bind cannot make that mistake, because the value is already computed when the name is taken.
+//
+// ⚠ THE ASSERTIONS DO NOT SCORE THIS FIX — the wrap harness's LEAK GATE does. Values were
+// correct before it. On a control binary built at `9c1a0e4e` the inline cell reports
+// `not freed at program exit: kt=79 S1105g×12` while answering the same numbers.
+
+struct S1105g { a: integer = 3 }
+
+fn mk1105g() -> S1105g { S1105g { a: -1 } }
+
+// `returns_borrowed_view`: the return names a visible parameter on one path and mints its own
+// store on the other — the split the bracket decides.
+fn pick1105g(s: S1105g, c: boolean) -> S1105g { if c { s } else { mk1105g() } }
+
+// A callee that does NOT return a borrowed view: no bracket, so no bind.
+fn reads1105g(s: S1105g, c: boolean) -> integer { if c { s.a } else { 0 } }
+
+fn coalesce_arg(c: boolean) -> integer {
+  v: vector<S1105g?> = [S1105g { a: 7 }];
+  r = pick1105g(v[0] ?? mk1105g(), c);
+  r.a
+}
+
+// The `??` whose left side is a plain nullable LOCAL rather than an index read — the same join,
+// reached without a projection in front of it.
+fn coalesce_local(c: boolean) -> integer {
+  n: S1105g? = S1105g { a: 7 };
+  r = pick1105g(n ?? mk1105g(), c);
+  r.a
+}
+
+// The reported shape.  Both arms run, because the leak is on the arm where the CALLEE mints its
+// own store — the caller copied that store and orphaned it.
+fn test_a_coalesced_argument_leaks_nothing() {
+  t = 0;
+  for i in 0..12 { t = t + coalesce_arg(true) + coalesce_arg(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}
+
+fn test_a_coalesced_local_argument_leaks_nothing() {
+  t = 0;
+  for i in 0..12 { t = t + coalesce_local(true) + coalesce_local(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}
+
+// ---- controls ----
+
+// The hand-written binding this fix makes the inline form emit.  It was always clean and is the
+// target the cure is measured against.
+fn bound_arg(c: boolean) -> integer {
+  v: vector<S1105g?> = [S1105g { a: 7 }];
+  e = v[0] ?? mk1105g();
+  r = pick1105g(e, c);
+  r.a
+}
+
+fn test_the_hand_written_binding_still_works() {
+  t = 0;
+  for i in 0..12 { t = t + bound_arg(true) + bound_arg(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}
+
+// A bare `Var` is ALREADY nameable and must not be re-bound — binding it would reorder an
+// argument for nothing.  It is most calls in the language.
+fn plain_arg(c: boolean) -> integer { q = S1105g { a: 7 }; r = pick1105g(q, c); r.a }
+
+fn test_a_nameable_argument_is_untouched() {
+  t = 0;
+  for i in 0..12 { t = t + plain_arg(true) + plain_arg(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}
+
+// A projection the walk ALREADY resolves — it reaches a root variable, so the witness is
+// complete without a bind.
+fn field_arg(c: boolean) -> integer {
+  v: vector<S1105g> = [S1105g { a: 7 }];
+  r = pick1105g(v[0], c);
+  r.a
+}
+
+fn test_an_already_walkable_projection_is_untouched() {
+  t = 0;
+  for i in 0..12 { t = t + field_arg(true) + field_arg(false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+}
+
+// A callee whose return does not borrow needs no bracket at all.
+fn nonview_arg(c: boolean) -> integer {
+  v: vector<S1105g?> = [S1105g { a: 7 }];
+  reads1105g(v[0] ?? mk1105g(), c)
+}
+
+fn test_a_non_borrowing_callee_is_untouched() {
+  t = 0;
+  for i in 0..12 { t = t + nonview_arg(true) + nonview_arg(false); }
+  assert(t == 84, "12 rounds of 7 + 0, got {t}");
+}
