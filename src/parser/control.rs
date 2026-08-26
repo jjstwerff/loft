@@ -1221,7 +1221,42 @@ impl Parser {
                 .def(self.context)
                 .original_name()
                 .starts_with("replmain_")
-            && l.last().is_some_and(Self::if_tail_yields_text);
+            && l.last().is_some_and(Self::if_tail_yields_text)
+            // Pass-stability gate — the same one `do_tret_bind` carries above, for the same
+            // reason and by the same means.  This promotion grows a hidden `&text`
+            // SIGNATURE parameter (`text_return` promotes `__acc`), so a pass-2-only
+            // verdict moves the ABI after pass 1 fixed it: `ownership.md`'s *"a verdict
+            // that differed across passes would move the hidden buffer argument between
+            // them"*, which the H5 two-pass contract turns into a fatal abort.
+            //
+            // The unstable term is the tail's INFERRED type just above.  Measured
+            // (loft#1099): `fn f(k) -> text { a = "ab"; match k { -1 => null, _ => a } }`
+            // reads `t = Optional(Text)` on pass 1 and `Text` on pass 2 from IR that is
+            // byte-identical on both, so the accumulator was minted on pass 2 alone and
+            // every such program aborted the compiler.  Rather than enumerate which tails
+            // infer stably, make pass 2 FOLLOW pass 1: promote on pass 2 only where pass 1
+            // already minted the `__acc` attribute.  Pass 1 evaluates the verdict directly
+            // and the attribute it mints persists, so a stable tail still promotes twice.
+            && (self.first_pass || self.def_has_acc_attr());
+        // `LOFT_DBG_ACC=1` — one line per pass per text-returning function, printing every
+        // term of the gate above.  It is what located loft#1099: the two lines for one
+        // function differ in `optOk` alone, which is how a non-pass-stable term shows
+        // itself.  Read them in PAIRS; a single line says nothing about stability.
+        if std::env::var_os("LOFT_DBG_ACC").is_some()
+            && matches!(result.base(), Type::Text(_))
+            && context == "return from block"
+        {
+            eprintln!(
+                "[acc] fn={} pass1={} tret={} optOk={} yields={} acc_attr={} t={t:?} \
+                 => {do_if_acc}",
+                self.data.def(self.context).name(),
+                self.first_pass,
+                do_tret_bind,
+                (matches!(result, Type::Optional(_)) || !matches!(t, Type::Optional(_))),
+                l.last().is_some_and(Self::if_tail_yields_text),
+                self.def_has_acc_attr(),
+            );
+        }
         if do_if_acc {
             // The accumulator IS the return value, so it carries the declared
             // return's nullability. Typing it non-null while a `-> text?` tail
@@ -10367,6 +10402,18 @@ impl Parser {
             .attr_names
             .keys()
             .any(|k| k.starts_with("___tret"))
+    }
+
+    /// The `__acc` twin of [`Self::def_has_tret_attr`] — did PASS 1 promote this function's
+    /// text accumulator to a hidden `&text` parameter?  It is the whole pass-2 verdict
+    /// (loft#1099): the accumulator changes the signature, so pass 2 must not reach a
+    /// different answer than the one pass 1 already published to every caller.
+    fn def_has_acc_attr(&self) -> bool {
+        self.data
+            .def(self.context)
+            .attr_names
+            .keys()
+            .any(|k| k.starts_with("___acc"))
     }
 
     fn tret_bind_ok(&self, tail: &Value, block: &[Value]) -> bool {
