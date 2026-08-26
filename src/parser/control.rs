@@ -1732,7 +1732,26 @@ impl Parser {
             // cross-space read loft#666 was made of, so the shape alone is taken there,
             // exactly as before.
             tp = if context == "else" {
-                result.with_deps_of(t)
+                // loft#1103 — the SHAPE comes from the expected type, but the arm's own
+                // NULLABILITY does not: `(N-Join)` says a join is optional iff some arm is,
+                // and this is the arm whose answer was being dropped.  `x: integer = if c
+                // { 1 } else { maybe(k) }` took the then-arm's `integer` whole, so the join
+                // typed non-null, the destination's `(N-Store)` teeth had nothing to bite,
+                // and a declared `integer` held null with no diagnostic on either backend.
+                //
+                // The `null` LITERAL in the same position was always caught — by the DN1
+                // walkers in `parse_if`, which match the `OpConv*FromNull` spelling.  One
+                // notion with two spellings and only one of them asked about; this is the
+                // other spelling, asked about here where the arm's own type is still in hand.
+                let honest = result.with_deps_of(t);
+                if crate::keys::pln25_dn1_enabled()
+                    && matches!(t, Type::Optional(_))
+                    && !matches!(honest, Type::Optional(_))
+                {
+                    Type::optional(honest)
+                } else {
+                    honest
+                }
             } else {
                 result.clone()
             };
@@ -3393,6 +3412,40 @@ impl Parser {
         if let Some(chain) = &chain_borrow {
             result_tp = result_tp.joined_deps(chain);
         }
+        // loft#1103 — `(N-Join)`: the join is OPTIONAL iff SOME arm is.  `merge_dependencies`
+        // takes the THEN arm's shape and merges only the deps, so a nullable arm on the other
+        // side was joined away: `x: integer = if c { 1 } else { maybe(k) }` typed the join
+        // `integer`, the destination's `(N-Store)` teeth had nothing to bite, and a declared
+        // non-null slot held null with no diagnostic on either backend — including `u8`, where
+        // `(N-Store)` is a hard ERROR precisely because the null collides with a real value.
+        //
+        // The `null` LITERAL in the same position was always caught, by the DN1 walkers just
+        // below: they match the `OpConv*FromNull` node the literal lowers to.  A nullable-TYPED
+        // value produces no null-shaped node at all, so nothing asked about it — one notion, two
+        // spellings, one of them looked for.  This asks the TYPE, which is the spelling-free
+        // form of the same question, and it runs BEFORE the DN1 block so neither double-wraps.
+        //
+        // Widening here rather than at the arm keeps `(N-Decl)` / `(N-Store)` as the things that
+        // REPORT: the destination compares its declaration against an honest join and speaks for
+        // itself, so every store site — a declared local, a field, a return — is covered by the
+        // teeth it already had, and a `τ?` destination stays legal and silent.
+        //
+        // An `else if` CHAIN counts as an arm here, because it IS one — loft#936's words, and
+        // its type reaches this point in `chain_borrow` rather than in `false_type` (the chain
+        // deliberately keeps its SHAPE out of the join; only what it borrows was being read).
+        // Left out, `if a { 1 } else if b { 2 } else { maybe(k) }` and every `match` with more
+        // than two arms stayed silent, since a `match` lowers to exactly this nesting.
+        if had_else
+            && crate::keys::pln25_dn1_enabled()
+            && !matches!(result_tp, Type::Optional(_))
+            && (matches!(true_type, Type::Optional(_))
+                || matches!(false_type, Type::Optional(_))
+                || chain_borrow
+                    .as_ref()
+                    .is_some_and(|c| matches!(c, Type::Optional(_))))
+        {
+            result_tp = Type::optional(result_tp);
+        }
         if had_else && crate::keys::pln25_dn1_enabled() && !matches!(result_tp, Type::Optional(_)) {
             let t_null = self.branch_yields_null(&true_code);
             let f_null = self.branch_yields_null(&false_code);
@@ -3688,7 +3741,7 @@ impl Parser {
                 // loft#978 — every arm can deliver this match's value, so the result carries
                 // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
                 // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-                result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
+                result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
                 if result_type == Type::Void || result_type == Type::Null {
                     result_type = arm_type.clone();
                 } else if !self.first_pass
@@ -4162,7 +4215,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             } else if !self.first_pass
@@ -4416,7 +4469,7 @@ impl Parser {
             self.expression(&mut arm_code)
         };
         // loft#978 — see the arm sites above: the wildcard is an arm like any other.
-        let joined = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
+        let joined = self.join_arm_into(result_type, &arm_code, &arm_type);
         *result_type = joined;
         if *result_type == Type::Void {
             *result_type = arm_type.clone();
@@ -7157,7 +7210,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             }
@@ -8166,7 +8219,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -8483,7 +8536,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -9896,6 +9949,42 @@ impl Parser {
             return tp.clone();
         }
         tp.rewrap_deps(&kept)
+    }
+
+    /// Fold one `match`/`if` arm into the branch JOIN — the deps it contributes
+    /// ([`arm_join_type`](Self::arm_join_type)) and its NULLABILITY.
+    ///
+    /// `joined_deps` keeps the shape of the type it is called on, which is the FIRST arm's, and
+    /// merges only the borrow set. That is right for the shape and wrong for the `?`:
+    /// `(N-Join)` says a join has type `⨆ᵢ τᵢ`, *made OPTIONAL iff some `τᵢ` is optional*, and
+    /// a later arm's `Optional` was being dropped rather than joined. `x: integer = match k
+    /// { 9 => { 1 }, _ => { maybe(k) } }` typed the join `integer`, so the destination's
+    /// `(N-Store)` teeth had nothing to bite and a declared non-null slot held null with no
+    /// diagnostic on either backend (loft#1103, `types.md` D-Null-Join).
+    ///
+    /// A `null` LITERAL in the same arm was always caught, by the DN1 walkers that match the
+    /// `OpConv*FromNull` node it lowers to. A nullable-TYPED value produces no null-shaped node
+    /// at all, so nothing asked about it. Asking the TYPE is the spelling-free form of that
+    /// question, which is why it belongs here rather than beside another walker.
+    ///
+    /// One home for the fact because there are SIX arm sites — the ordinary arm, the wildcard,
+    /// the struct and enum arms, the vector-match arm — and a per-site fix would answer the
+    /// same question six times and drift at the first one anybody forgets. `Void` / `Null` arms
+    /// are left alone: they carry no type of their own to contribute, and the DN1 walkers own
+    /// the bare-`null` arm.
+    fn join_arm_into(&self, so_far: &Type, arm: &Value, tp: &Type) -> Type {
+        let joined = so_far.joined_deps(&self.arm_join_type(arm, tp));
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(tp, Type::Optional(_))
+            && !matches!(joined, Type::Optional(_))
+            && !matches!(
+                joined,
+                Type::Void | Type::Null | Type::Never | Type::Unknown(_)
+            )
+        {
+            return Type::optional(joined);
+        }
+        joined
     }
 
     /// loft#918 — the variable a block hands back, when its tail is nothing but a

@@ -503,19 +503,19 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **1** (D-Null-Join, 2026-08-26 — below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
-### D-Null-Join — OPEN (2026-08-26): a nullable in a LATER branch arm stores into a non-null slot in silence
+### D-Null-Join — OPENED AND CLOSED (2026-08-26, loft#1103): a nullable in a LATER branch arm stored into a non-null slot in silence
 
 `(N-Store)` says storing `e:τ?` into a `τ` slot without discharge is REJECTED, and `(N-Decl)`
-says a declared slot is a commitment that FORBIDS a later nullable write. Four spellings of that
-store are refused. The same store written in a later branch ARM compiles, and the non-null slot
-holds `null` — measured on both backends, so a rule/code divergence and not a backend split:
+says a declared slot is a commitment that FORBIDS a later nullable write.  Four spellings of that
+store were refused.  The same store written in a later branch ARM compiled, and the non-null slot
+held `null` — both backends, so a rule/code divergence and not a backend split:
 
 ```loft
 fn maybe(k: integer) -> integer? { if k > 5 { 7 } else { null } }
@@ -550,6 +550,65 @@ a BRANCH JOIN while the verified spelling is the direct one.
 
 Tracked as **loft#1103**. Workaround (verified both backends): discharge inside the arm
 (`else { maybe(k) ?? 0 }`) or at the join (`(if … else …) ?? 0`).
+
+x: integer = if k == 9 { 1 } else { maybe(k) };   // compiled; x was `integer` and held null
+```
+
+The variable was genuinely non-null — the IR read `x(1):integer` and `LOFT_VAR_TABLE` agreed, so
+nothing had been widened behind the declaration.  The same hole reached a RETURN, a non-null
+FIELD, a `text` slot, a struct slot, and — worst — a NARROW width, where this rule keeps a hard
+error precisely because *"the null would collide with a real value"*: `x: u8 = if k == 9 { 1 as
+u8 } else { maybe8(k) }` compiled and `x` was null, indistinguishable from `255`.
+
+**Mechanism.** The FIRST arm's type became the join type.  `merge_dependencies` is
+`a.joined_deps(b)` — it keeps `a`'s shape and merges only the borrow set — and `a` is the then
+arm, so a later arm's `Optional` was dropped rather than joined.  The arm's own type was erased
+before that even: `parse_if` hands the else arm the THEN arm's type as its expected type, and
+`block_result` returns that expected type (the loft#978 site).
+
+Closed by `(N-Join)` — *"made OPTIONAL iff some `τᵢ` is optional"* — in the two places a join is
+formed: the else arm keeps its own nullability through `block_result`, and `parse_if` /
+`parse_match` widen the join when any arm is optional.  **The widening is all that was added; the
+REPORTING is unchanged**, which is what keeps the three site verdicts distinct instead of
+flattening them: a declared slot is refused by `(N-Decl)`, a return and a field WARN and hold the
+null by `(N-Store)`, and a narrow width is refused wherever it appears.  Each now answers in a
+branch exactly as it already answered for the direct spelling.
+
+**One home, six producers.**  A `match` reaches the join through six arm sites — the ordinary
+arm, the wildcard, the struct and enum arms, the vector-match arm — all spelling
+`result_type.joined_deps(&self.arm_join_type(…))`.  They fold through one `join_arm_into` rather
+than six copies of the rule, because a per-site fix answers the same question six times and
+drifts at the first one anybody forgets.  An `else if` CHAIN needed carrying separately: it keeps
+its SHAPE out of the join deliberately (loft#936), so only what it BORROWED was being read.
+
+⚠ **This entry is why the `OPEN: 0` above needed re-measuring.**  The register recorded
+`(N-Store)` as *"CLOSED + verified both backends"*; that zero was bounded by its oracle, and every
+cell here is a BRANCH JOIN while the verified spelling is the direct one.  **A zero is only as
+strong as the spellings its oracle contains.**
+
+⚠ **The class, and it is the third instance in a week: one notion, two spellings, one looked
+for.**  A `null` LITERAL in a later arm was ALWAYS caught — by the DN1 walkers, which match the
+`OpConv*FromNull` node a literal lowers to.  A nullable-TYPED value produces no null-shaped node
+at all, so nothing asked about it.  The blindness cannot be found from the symptom: searching for
+the spelling you DO match returns every site that gets it right, and the sites that get it wrong
+contain nothing to search for.  Asking the TYPE is the spelling-free form of the question.  See
+`IMPLEMENTATIONS.md` § *One notion, how many SPELLINGS?* for the other two instances.
+
+**Measured.**  Thirteen cells, both backends identical, covering every spelling in the issue plus
+the narrow width.  Emitted IR over the corpus: **3 of 970** programs change, two of them these
+guards.  The third is `25-nullable-branch-join.loft`, and it is worth reading — the file exists
+to assert THIS RULE (*"@PLN25 — branch-join widening: `integer ⊔ integer? = integer?`"*), and it
+was GREEN while its own `pick_local` inferred `x` as plain `integer`.  The assertions passed
+because the runtime answered null anyway; the emitted type disagreed with the title of the file
+testing it.  **A green gate is not coverage** — it checked the value and never the type it was
+named for, and the fix is what brings the IR to what the file already claimed.  Guards:
+`tests/scripts/1103-a-nullable-in-a-later-branch-arm.loft` (the value half — the join really is
+`τ?`, the null arrives, and the non-null joins beside it did not move) and
+`tests/scripts/1103b-a-nullable-branch-arm-refused.loft` (the refusals — six `@EXPECT_ERROR`s,
+none of which fire on a control binary built at `9c1a0e4e`).  **Neither half implies the other,
+and the value half alone is VACUOUS**: it declares the nullable type the rules require, and a
+join that wrongly types non-null still stores into a nullable slot happily, so it passes on the
+pre-fix binary.  Only the refusal file scores the change.
 
 ### D-Opt-Zero — CLOSED (2026-08-24): a nullable field defaults to its BASE ZERO, not null
 
