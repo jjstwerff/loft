@@ -209,7 +209,14 @@ HOST_ONLY = {"Void", "Bool", "Ref"}
 
 # `walk` peels a `Span` before calling `f` exactly as `any_node` does
 # (`if let Value::Span(b) = self { return b.1.walk(f) }`), so its closure is safe too.
-TRAVERSAL_OPEN = re.compile(r"\.(any_node|for_each_child|for_each_child_mut|walk)\(")
+#
+# `map_nodes` is the one that does NOT peel, and its closure is safe anyway — for the other
+# reason.  Its doc says so outright: "`f` SEES `Span` nodes (it may want to replace them);
+# descent still enters the wrapped value."  So a closure whose `if let` misses the wrapper is
+# handed the payload one level down, exactly as with `for_each_child`.  The two are worth
+# telling apart when reading a closure: moving one from `walk` to `map_nodes` starts feeding
+# it `Span` nodes, and only the descent makes that harmless.
+TRAVERSAL_OPEN = re.compile(r"\.(any_node|for_each_child|for_each_child_mut|walk|map_nodes)\(")
 
 # A match whose SCRUTINEE is a span-transparent accessor cannot see a `Span` either.
 # `Value::tail` peels (`Value::Span(b) => b.1.tail()`), so `match val.tail() { … }` is safe

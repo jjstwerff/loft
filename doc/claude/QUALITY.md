@@ -422,7 +422,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 322 | 303 | **19** |
+| 317 | 301 | **16** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -657,7 +657,8 @@ regex recognised one of them.
 | a **guarded** arm | `Value::Call(nr, args) if data.def(*nr).name() == "OpGetField" => …` | no — the pattern stopped at the `if` |
 | a **binding** | `if let Value::Call(d, args) = v` · `let Value::Block(bl) = v else` · `while let` | no |
 
-Population **221 → 322**, unpeeled **10 → 20**. Re-validated the way
+Population **221 → 322**, unpeeled **10 → 20** (and to 317 · 16 once `map_nodes` joined the
+traversal list — see below). Re-validated the way
 [STABILITY_METHOD](STABILITY_METHOD.md) asks, on the two answers already known: it still flags
 `scopes::walk_check` and still does not flag `find_assigned_vars`.
 
@@ -690,10 +691,63 @@ Written as a BINDING (`let v = v.unspan();`), not `match v.unspan()`, per the ru
 at: peeling only the scrutinee while something else still walks the original is what
 double-counted the sandbox bound.
 
+**The two native emitters, measured (2026-08-26).** Both decide how code is EMITTED, so a
+shape they cannot see is a shape they generate the wrong thing for:
+
+| site | programs reaching it | arrivals | spanned | decision changes |
+|---|---:|---:|---:|---:|
+| `generation::emit::output_if_inner` | 863 | 110 157 | **4 193** | **1** |
+| `generation::ops::key_ops::emit` | 18 of 140 | 41 | **0** | — |
+
+`key_ops::emit` is clean: neither the `Keys` slot nor the `from`/`till` counts ever arrive
+wrapped. The count is low, so it is reported with its reach — 18 programs — rather than as a
+bare zero.
+
+`output_if_inner` is the more interesting result **because the two decisions inside it answer
+differently**. Its `wrap_block` test (`Value::Insert` with ≥2 ops — the statement-lift that
+keeps `( stmt; expr )` out of the generated Rust) never once differed in 110 157 calls. Its
+`b_true` / `b_false` test (`Value::Block`) differed **once**, in `808-tuple-return-value-abi`,
+and that pair feeds `text_unify` / `text_string_unify` — how a text branch is wrapped so the
+two arms unify in Rust. A spanned block reads as "not a block", which is simply the wrong
+answer to the question being asked.
+
+⚠ **One differing decision in a program that PASSES is not a bug found, and treating it as one
+is the failure mode this section keeps repeating.** The peel was applied and
+`808-tuple-return-value-abi` still passes, so nothing observable changed — the finding is that
+the predicate now answers the question it asks. Both tests are peeled, not just the one that
+differed: `peels_span` is body-wide, so peeling only `b_true` would have moved the whole
+function into the "handled" column while `test` stayed blind. That is the audit's own
+under-reporting hazard, and it is worth stating plainly — **a function that peels in one place
+and matches unpeeled in another reads as handled, so 18 is a lower bound.**
+
+**`walk` peels a `Span`; `map_nodes` does not — and both closures are safe, for different
+reasons.** Five sites were flagged only because their match sits inside a `map_nodes` closure,
+which the stripper did not know. `map_nodes`'s own doc states the contract: *"Unlike the
+read-side walkers, `f` SEES `Span` nodes (it may want to replace them); descent still enters
+the wrapped value."* So a closure whose `if let` misses the wrapper is handed the payload one
+level down, exactly as with `for_each_child`. Adding it to the traversal list takes the
+population **322 → 317** and the backlog **18 → 16**.
+
+Worth telling the two apart when reading a closure rather than filing it as a stripper detail:
+`walk` returns early on a `Span` so `f` never sees one, `map_nodes` calls `f` on the wrapper
+AND on the payload. Moving a closure from one to the other starts feeding it `Span` nodes, and
+only the descent makes that harmless — the same double-visit shape the `construct_prescan`
+entry above is watched for.
+
 ⚠ **The widened matcher over-reports in the same way the narrow one did**, and the report says
-so rather than implying otherwise: `parse_object` BUILDS IR from tokens instead of traversing
-it, and `def_reshape_refusals` uses `matches!(def.code, Value::Null)` as an empty-body guard.
-Neither is a traversal. Each hit is a measurement to make.
+so rather than implying otherwise. Four of the sixteen are dismissible by READING, which is the
+documented method — the tool is not asked to judge them:
+
+| site | why it is not a traversal |
+|---|---|
+| `parser::objects::parse_object` | builds IR from tokens; its `Value::` mentions are constructions |
+| `parser::vectors::build_comprehension_code` | likewise a builder, matching on parameters its own caller assembled |
+| `ownership_cfg::op_label` | formats a CFG block's DEBUG LABEL; a `Span` yields `"op"` and nothing decides on it |
+| `scopes::def_reshape_refusals` | `matches!(def.code, Value::Null)` as an empty-body guard |
+| `scopes::construct_rewrite_ops` | its catch-all descends via `for_each_child_mut` into a self-recursive call, so a wrapper is entered rather than dropped — the B6 cure, already applied |
+
+Two more (`scopes::walk_check`, `scopes::check_args`) are `#[cfg(debug_assertions)]`-gated and
+cannot be measured by instrumenting an ordinary build at all.
 
 **Why this was found at all.** `reach` needed a "does this site peel `Span`" predicate, so the
 one in `unspan` was extracted and shared — and reading it beside a walker that peels via
