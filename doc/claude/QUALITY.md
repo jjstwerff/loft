@@ -107,7 +107,9 @@ implementations, often in multiple files."* The response has three parts, and tw
 **State in one line:** the checklist is finished, the tooling is in place, and the two dead IR
 variants are removed (B3); what remains is three spec decisions (B), one unrun measurement (C),
 and a branch with **no PR**.  The `unspan` queue is CLOSED (B4h): all 16 sites are measured,
-gated, or read, with one latent decision change found and no defect.
+gated, or read, with one latent decision change found and no defect.  The catch-all walker
+queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); two are worked,
+one of which yielded two shipped bugs (B4i/B4j).
 The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.
@@ -1050,10 +1052,11 @@ ordinary-looking functions that are themselves only called from tests. Transitiv
 whole question, so it is now a mode: **`ir_walker_audit.py reach`** walks the call graph from
 each `[[bin]]`'s `main` and annotates every catch-all walker.
 
-**The answer inverts the premise.** One level says **126 of 126 reached** — the useless check,
-reproduced so the delta is visible. Transitively it is **125 of 126**, the single exception
+**The answer inverts the premise.** One level says **125 of 125 reached** — the useless check,
+reproduced so the delta is visible. Transitively it is **124 of 125**, the single exception
 being `ir_schema::value_from_parsed`, whose decode half has no production caller at all and
-which omits nothing anyway. So the remaining backlog **cannot be triaged as test-only**: the
+which omits nothing anyway. (Both totals were one higher until B4i fixed
+`ir_has_user_call`, which left the list by descending rather than by being read.) So the remaining backlog **cannot be triaged as test-only**: the
 four Plan-06 analyses were the anomaly, not the rule, and every other catch-all walker on that
 list is code a loft binary runs.
 
@@ -1064,6 +1067,28 @@ listed): skipping `If` or `Call` is usually a decision about a shape the walker 
 about, while a pass-through carries no information of its own, so skipping one is only ever
 "the subtree was not entered and a verdict was issued anyway". All four Plan-06 defects were
 exactly that.
+
+**The third column is what made the queue workable, and it came from working it.** Ranking by
+omitted pass-throughs still left ~125 equally-suspect rows. The property that separated the two
+sites actually measured is whether the fallback ANSWERS NO — `_ => false`, `_ => None`. That is
+where a missed wrapper costs something: the walker reports the absence of a property it never
+looked for, and a caller guarding on it stops guarding. A fallback answering `true` fails safe
+by comparison, and one returning a VALUE is usually a resolver over a narrower grammar
+(`holder_type`, `of_const`). **55 of the 124** are that shape, and the report marks them `no!`.
+
+**Two worked so far, and the contrast is the useful part:**
+
+| site | what a false answer disables | arrivals | disagreements |
+|---|---|---:|---:|
+| `expressions::ir_has_user_call` | the compound-assign once-only hoist, and a re-evaluability check | 210 over 32 programs | **the corpus said 0** |
+| `generation::calls::may_borrow_store` | the argument hoist that keeps two `&mut Stores` borrows apart (E0499) | **151 823** over 214 of 220 | **0** |
+
+⚠ **Those two zeroes are not the same zero, and reading them as equal would have missed the
+bug.** `ir_has_user_call`'s 210 arrivals are thin, and only leaves and `Call` ever reached it —
+a statement about the corpus, not the language. Building the missing shape by hand found a real
+defect (B4i). `may_borrow_store`'s 151 823 arrivals across 97 % of the sample, plus a
+hand-built tuple-key probe that also failed to reach it, is a zero worth believing. **The
+strength of a zero is the reach behind it**, which is why the report prints both.
 
 ⚠ **Both of its false-negative classes were found by hand-checking hits, and both would have
 manufactured findings.** The verdict this mode exists to give is *not reached*, so an edge it

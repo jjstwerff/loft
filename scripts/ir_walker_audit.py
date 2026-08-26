@@ -641,6 +641,13 @@ def call_graph():
     return defs, bodies, edges, reached, called, len(roots)
 
 
+# A fallback that answers "no" — `_ => false`, `_ => None`.  This is the shape where a missed
+# wrapper COSTS something: the walker reports the absence of a property it never looked for, and
+# a caller that guards on it stops guarding.  A fallback answering `true` fails safe by
+# comparison, and one that RETURNS A VALUE is usually a resolver over a narrower grammar.
+NEGATIVE_FALLBACK = re.compile(r"^\s*(?:_|other|rest)\s*(?:if\b[^=]*)?=>\s*(?:false|None)\b", re.M)
+
+
 def audit_reach():
     """Which catch-all `Value` walkers does a running loft binary actually reach?
 
@@ -674,6 +681,7 @@ def audit_reach():
             omitted = wrappers - named
             if peels_span(body):
                 omitted -= {"Span"}
+            negative = bool(NEGATIVE_FALLBACK.search(body))
             rows.append(
                 (
                     f"{rel(path)}:{start}",
@@ -682,6 +690,7 @@ def audit_reach():
                     len(omitted - passthrough),
                     name in reached,
                     name in called,
+                    negative,
                 )
             )
 
@@ -698,16 +707,20 @@ def audit_reach():
     print("     trustworthy verdict; a `reached` is weak.  The library's public API as called")
     print("     by another crate is not a root — this asks what a loft binary runs.")
     print()
+    guards = [r for r in rows if r[4] and r[6]]
+    print(f"  of the reached, fallback answers false/None : {len(guards)}   <- where a miss COSTS")
+    print()
     print("  Production-reached first, then by omitted PASS-THROUGH wrappers — the shapes that")
     print("  carry no information, so skipping one is never a decision about the shape.  The")
     print("  trailing count is other child-bearing variants omitted, which is usually a choice.")
     print("  A hit is a MEASUREMENT to make, not a defect found.")
-    for site, name, miss, others, is_live, _ in sorted(
-        rows, key=lambda r: (not r[4], -len(r[2]), -r[3])
+    for site, name, miss, others, is_live, _, neg in sorted(
+        rows, key=lambda r: (not r[4], not r[6], -len(r[2]), -r[3])
     ):
         tag = "reached" if is_live else "  \u2014    "
         shown = ",".join(miss) if miss else "-"
-        print(f"  {tag}  {site:<40} {name:<30} skips {shown:<26} (+{others} other)")
+        guard = "no!" if neg else "   "
+        print(f"  {tag} {guard} {site:<40} {name:<30} skips {shown:<26} (+{others} other)")
 
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "both"
