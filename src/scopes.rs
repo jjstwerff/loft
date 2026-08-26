@@ -5030,6 +5030,26 @@ impl Scopes {
             // local's name but leaves `hidden` set, and a user-declared parameter
             // is never hidden.  The un-renamed `__retbuf` placeholder is left alone
             // — no local was promoted onto it, so it holds no store of ours.
+            //
+            // loft#1096 — and a COLLECTION return's promoted buffer is left alone too,
+            // because the premise above ("a buffer not yet minted on this path is the
+            // null sentinel, which `free` ignores") is false for it.  The leg reads the
+            // buffer as a local THIS function mints; that is true where the caller's
+            // work-ref reaches the call as a bare `OpInitRef` sentinel, which is what a
+            // record work-ref does.  A collection work-ref does not:
+            // `codegen::gen_set_first_vector_null` gives an owned vector local
+            // `OpInitRef` + `OpDatabase`, so the buffer arrives ALIVE, and the callee's
+            // own `OpDatabase` then only clears it in place (`alloc_record_at` reuses a
+            // live slot rather than minting beside it).  So there is never a distinct
+            // callee-minted store to reclaim here, and the store this free reached was
+            // always the CALLER's — which the caller still names and still frees at its
+            // own scope exit.  A `-> vector<T>` function with a `null` arm therefore
+            // handed the next call a freed record to `OpClearVector`, and a loop faulted
+            // on its second iteration on both backends (`@FR-O-Owner`: a free is for a
+            // store the value OWNS).
+            let collection_return = crate::parser::vectors::is_collection(
+                data.def(self.d_nr).returned.ret_promo_base(),
+            );
             for v in 0..function.count() {
                 if function.is_argument(v)
                     && !sources.contains(&v)
@@ -5041,6 +5061,7 @@ impl Scopes {
                 {
                     let n = function.name(v);
                     if n != "__retbuf"
+                        && !collection_return
                         && let Some(&a) = data.def(self.d_nr).attr_names.get(n)
                         && data.def(self.d_nr).attributes()[a].hidden
                     {

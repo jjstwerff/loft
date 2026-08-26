@@ -158,15 +158,90 @@ implication that reading `deps` is *sufficient*.
 ## Deviations
 
 OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A NARROWED 2026-08-25
-to a single cell — an inline-minting `match` arm — with every other cell fixed) — D-own-7
-opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
-remain resolved.  Read those entries for what their oracles vary before treating any zero
+to a single cell — an inline-minting `match` arm — with every other cell fixed) — D-own-9
+opened and closed 2026-08-26, D-own-7 opened and closed 2026-08-23, and D-own-6 before it;
+the five original D-own deviations remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
 axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
 rather than from an oracle at all, and how its second face was found by varying the POSITION
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-9 — CLOSED (2026-08-26, loft#1096): a COLLECTION return's promoted buffer is the CALLER's store, and the callee freed it
+
+`(O-Owner)` says a free is for a store the value OWNS.  A `-> vector<T>` function whose tail
+may deliver `null` freed one it did not:
+
+```loft
+fn f(n: integer) -> vector<integer> { if n == 0 { null } else { [n] } }
+fn main() { t = 0; for i in 0..2 { r = f(i); t += len(r); } }
+```
+
+`ref_return` renames the value arm's backing ref `__vdb_1` onto the hidden `__retbuf`, and
+`scopes::free_vars`' loft#688 leg then enrols that renamed argument as *a local this function
+minted* and emits `OpFreeRefIfDistinct(__vdb_1, __ret_1)`.  On the null arm the witness is
+the sentinel, the store numbers differ, and the free fires — on the CALLER's store.  The
+caller still names it (`__ref_1`, freed at its own scope exit) and still passes it to the
+next call, whose entry `OpClearVector` then reads a freed record: `rec=0xDEADBEEF` under
+`LOFT_POISON`, on BOTH backends, from the second iteration on.  One call is clean, which is
+why it took a loop in the poison corpus to surface it — a newly-armed guard reporting old UB.
+
+**The premise that failed is written in the leg's own comment**: *"a buffer not yet minted on
+this path is the null sentinel, which `free` ignores."*  That is true of a RECORD return,
+whose caller-side work-ref reaches the call as a bare `OpInitRef` sentinel.  It is false of a
+collection: `codegen::gen_set_first_vector_null` gives an owned vector work-ref `OpInitRef` +
+`OpDatabase`, so the buffer arrives ALIVE — and the callee's own `OpDatabase` then reuses that
+store in place (`alloc_record_at` clears and re-claims a live slot rather than minting beside
+it), so there is never a distinct callee-minted store for this free to reclaim.  Closed by
+excluding a collection return from that leg, citing `@FR-O-Owner` (`src/scopes.rs`).
+
+**Measured, not reasoned:** the free was emitted in **44 of ~1000** corpus programs and
+FIRED 375 times across 20 of them, so removing it is live rather than theoretical; every one
+of those 44 is green under `LOFT_POISON=1` + `LOFT_STRICT_STORES=1` with no leak, which is
+what says the store it reached was always the caller's.  Emitted IR is otherwise identical:
+the whole diff is the `__ret_N` hoist and the free it existed to carry.
+
+⚠ **The fix is NOT at the promotion, and that corrects an extrapolation this file invited.**
+D-own-8's Face B (loft#1081) closed *"at the promotion, which is where the unsound step is"*,
+and the loft-codegen skill's loft#1096 note reads that line as naming where THIS fix belongs.
+Refusing the rename was built and measured, and it is the wrong cut twice over:
+
+* it **over-fires**.  The gate has to be *"the tail may deliver the sentinel"*, and a `match`
+  with no catch-all lowers its fallthrough to exactly that sentinel — so an ordinary
+  `match e { A { xs } => { xs }, B { ys } => { ys } }` loses its NRVO and copies each arm
+  through a second store (`tests/use_analysis.rs::ownership_pins_match_return_resisting_cases`
+  is what caught it).
+* it needs a **second half** to stay correct.  Dropping to `Bind` copies the WHOLE tail into
+  the buffer and answers the buffer on every path, so the null arm delivered an EMPTY vector
+  instead of the sentinel and `f(0) == null` read false — loft#936's contract, broken by the
+  repair for loft#1096.
+
+The rename is sound here: building into the caller's buffer is the NRVO the design wants, and
+it produces correct values with no leak.  What was unsound is the free that read the rename as
+*minted here*.  **A closure names where ITS unsound step was; the next defect in the same
+machinery has to be measured, not inherited.**
+
+Guard: `tests/scripts/1096-a-null-return-must-not-free-the-callers-buffer.loft` — twelve
+cells, five of them falsified on the pre-fix binary under `LOFT_POISON=1` (and none without
+it: the freed bytes are still usable, so the poison job is what scores this file).  Both
+halves are pinned, because neither implies the other — a fix that only refuses the rename
+passes every use-after-free cell and fails `the_null_arm_still_answers_null`, and a fix that
+only changes the delivery still faults on cell one.  Controls: the `[]` arm (the issue's
+workaround, which keeps its rename), the RECORD family (which keeps rename AND free), and a
+join with no null arm at all.
+
+⚠ **A second defect found by the same probes and deliberately NOT folded in.**
+`fn g(k) -> vector<integer> { a = [1,2]; if k < 0 { null } else if k == 0 { a } else { [k] } }`
+answers `g(0) == []`; dropping the null arm answers `[1,2]`.  The null arm makes `__vdb_1` a
+second promotion candidate, which takes `Bind`'s whole-tail copy —
+`OpClearVector(a); OpAppendVector(a, <the join>, 0)` — and `a` IS the promoted buffer, so the
+clear runs before the join is evaluated and the `k == 0` arm answers the buffer it just
+emptied.  That is loft#1078's *"the re-mint destroys the store the copy is about to read"*
+with a CLEAR in place of the re-mint, and `classify_ret_promotion`'s `tail_reads_buffer`
+guard against exactly that shape is RECORD-only.  Both backends agree, so backend agreement
+is again not an oracle.  `silent-wrong`, filed separately: it is a delivery-ORDER fault, not
+a store-lifetime one.
 
 ### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
 
