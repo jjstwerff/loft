@@ -556,6 +556,45 @@ for finding where you owe one is asking what a *worked example* for the function
 would have to assert — that question names the outside values by construction,
 which is how this one was found.
 
+### A guard that never failed is not a guard — `make falsify`
+
+**`make falsify GUARD=tests/scripts/<file>.loft REF=<commit-before-the-fix>`**
+(`scripts/falsify.sh`). It builds `REF` in a cached worktree, runs the guard THERE and
+HERE, and compares four channels apart — **exit code, assertion failures, leaked stores,
+panic** — so the verdict names *which one moved*:
+
+```
+backend      tree       exit|asserts|leak|panic       verdict
+interpret    control    0|0|kt=78 Sk×156|none
+interpret    here       0|0|none|none                 falsified
+…
+// @falsified-at: 3ca5ec79 — interpret leaked kt=78 Sk×156 -> clean, native leaked … -> clean
+```
+
+Paste that line into the guard.  `doc_hygiene::every_new_guard_records_its_control`
+requires one on every file added under `tests/scripts/`, against the ratchet in
+`tests/falsified.baseline`; `// @falsified-at: none — <reason>` is the honest opt-out for a
+file that genuinely cannot fail on any earlier build.
+
+**Why a record and not just a habit.** Four distinct channels reported success while
+measuring nothing in a single afternoon (QUALITY.md § B6m), and two defects passed a full
+green gate the same day:
+
+| how a check reported success while measuring nothing |
+|---|
+| the wrong ENTRY POINT — `run_test` runs `main` when the file HAS one and every zero-parameter function otherwise, so `--interpret` on a `main`-less guard runs no assertion, and `--tests` on a `main`-ful one runs the HELPERS |
+| a success marker the ERROR REPORT echoes — loft prints the offending source line, so grepping stdout for the literal the program prints on success scores every failure as a pass |
+| a MONOTONE gate — the leak channel cannot score an over-free, because freeing more than you should always reads as an improvement |
+| a cell that never reaches its subject — a non-null return never reaches the join bind the cell was written for, so it passed on a control |
+
+The tool derives the entry point from the FILE rather than taking it as an argument,
+because picking it wrongly is the first of those and the easiest to repeat.
+
+⚠ **An on/off comparison inherits the blindness of the entry point both sides share.**
+Comparing a compiler arm's effect under `--tests` on a `main`-ful guard answered
+"4 passed / 4 passed" — which reads as *this changes nothing* and means *neither side ran
+the thing that changes*.
+
 ### The set a suite RUNS is not the set it CONTAINS (`LOFT_TRACE_ASSERTS`)
 
 The third shape of self-satisfaction, and the quietest: an `assert` that is written,
