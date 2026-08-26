@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A call whose return may BORROW an argument decides borrow-vs-owned at RUNTIME with the
+// @P290 bracket, and the bracket names a store through a variable whose VALUE is a `DbRef`.
+// `use_analysis::view_root_slots` walks a projection chain to that variable, recognising a
+// projection with `is_projection_op` — which is keyed on `OpGetField` / `OpGetVector`.
+//
+// A TUPLE element is a projection too, and it is neither of those ops: `Value::TupleGet`
+// carries its base as a var NUMBER and is not a call at all. The walk answered `None`, the
+// witness set read incomplete, and the caller kept the conservative never-free answer —
+// copying the returned store and orphaning the one the callee minted, one record per call on
+// both backends.
+//
+// Widening the walk would be wrong rather than merely incomplete: a tuple local's value is a
+// `(DbRef, …)`, so `n_protect_store_frees(cell, var_t)` does not compile natively and the
+// interpreter would read element 0's bytes whatever index was projected. The witness
+// mechanism cannot name a tuple element, which is a real boundary. So the cure is the one
+// already in the tree for the inline-construction family that cannot be witnessed either:
+// hoist at the call site, making the emitted code the spelling an author writes by hand
+// (`e = t.0; pick(e, …)`) — which was always clean.
+//
+// This file asserts the harness's store-leak gate; the values are here so a fix that silenced
+// the leak by freeing the DELIVERED store would fail too, which is the over-free this shape
+// sits one step away from. Both arms of the join are exercised in every cell.
+//
+// ⚠ KNOWN-OPEN, deliberately absent: the CHAINED spellings, where the `TupleGet` is not the
+// outermost node — `pick(t.0.s, c)` (an `OpGetField` over a tuple element) and `pick(t.0.0, c)`
+// (a nested tuple, which lowers to a `tuple_tmp` block). Both still leak, both backends, and
+// both are clean when bound by hand. They need the hoisted temp to carry the PROJECTION's
+// result type, which `scopes.rs` has no helper to compute, and a wrong dep there is a
+// use-after-free rather than a leak. Measured and recorded on loft#1104 rather than guessed.
+
+struct Sb { a: integer = 3 }
+struct Wb { s: Sb, v: vector<integer> }
+
+fn mkb() -> Sb { Sb { a: -1 } }
+fn pickb(s: Sb, c: boolean) -> Sb { if c { s } else { mkb() } }
+fn mkvb() -> vector<integer> { [9] }
+fn pickvb(v: vector<integer>, c: boolean) -> vector<integer> { if c { v } else { mkvb() } }
+fn plainb(s: Sb) -> integer { s.a }
+
+// The filed cell: a tuple element at index 0.
+fn tb_first(c: boolean) -> integer { s = Sb { a: 7 }; t = (s, 9); r = pickb(t.0, c); r.a }
+
+// Index 1, so the cure is not tied to offset 0 — the tuple slot's layout puts this element
+// somewhere the bracket could never have read as a bare `DbRef`.
+fn tb_second(c: boolean) -> integer { s = Sb { a: 7 }; t = (9, s); r = pickb(t.1, c); r.a }
+
+// A COLLECTION element rather than a struct one: the same question at the other heap shape.
+fn tb_vector(c: boolean) -> integer { v: vector<integer> = [7]; t = (v, 9); r = pickvb(t.0, c); len(r) }
+
+// CONTROL — the two spellings the walk CAN witness must keep emitting what they emitted.
+fn tb_field(c: boolean) -> integer { b = Wb { s: Sb { a: 7 }, v: [1] }; r = pickb(b.s, c); r.a }
+fn tb_elem(c: boolean) -> integer { v: vector<Sb> = [Sb { a: 7 }]; r = pickb(v[0], c); r.a }
+fn tb_var(c: boolean) -> integer { q = Sb { a: 7 }; r = pickb(q, c); r.a }
+
+// CONTROL — the tuple is a PARAMETER, so the base is borrowed and its store is the caller's.
+fn tb_paramv(t: (Sb, integer), c: boolean) -> integer { r = pickb(t.0, c); r.a }
+fn tb_param(c: boolean) -> integer { s = Sb { a: 7 }; t = (s, 9); tb_paramv(t, c) }
+
+// CONTROL — a SCALAR element owns no store, and a callee that does not return a borrowed view
+// needs no bracket: neither may be hoisted, or every such call site changes for nothing.
+fn tb_scalar() -> integer { s = Sb { a: 7 }; t = (s, 9); plainb(t.0) + t.1 }
+
+fn tb_churn() -> integer {
+  n = 0;
+  for i in 0..30 { h: vector<integer> = [i, i + 1, i + 2]; n = n + len(h); }
+  n
+}
+
+fn main() {
+  // Repeat, because the defect is one leaked record PER CALL: a single call leaks one store
+  // and reads as noise, while a loop is what exhausted the store table in the field.
+  reps = 0;
+  for i in 0..12 {
+    reps = reps + i;
+    assert(tb_first(true) == 7, "tuple[0], borrowing arm = {tb_first(true)}, want 7");
+    assert(tb_first(false) == -1, "tuple[0], owning arm = {tb_first(false)}, want -1");
+    assert(tb_second(true) == 7, "tuple[1], borrowing arm = {tb_second(true)}, want 7");
+    assert(tb_second(false) == -1, "tuple[1], owning arm = {tb_second(false)}, want -1");
+    assert(tb_vector(true) == 1, "tuple vector, borrowing arm = {tb_vector(true)}, want 1");
+    assert(tb_vector(false) == 1, "tuple vector, owning arm = {tb_vector(false)}, want 1");
+  }
+  tb_churn();
+
+  for i in 0..12 {
+    reps = reps + i;
+    assert(tb_field(true) == 7, "field control, borrowing arm");
+    assert(tb_field(false) == -1, "field control, owning arm");
+    assert(tb_elem(true) == 7, "element control, borrowing arm");
+    assert(tb_elem(false) == -1, "element control, owning arm");
+    assert(tb_var(true) == 7, "var control, borrowing arm");
+    assert(tb_var(false) == -1, "var control, owning arm");
+    assert(tb_param(true) == 7, "tuple-parameter control, borrowing arm");
+    assert(tb_param(false) == -1, "tuple-parameter control, owning arm");
+    assert(tb_scalar() == 16, "scalar-element control = {tb_scalar()}, want 16");
+  }
+  assert(reps == 132, "both loops ran, got {reps}");
+}

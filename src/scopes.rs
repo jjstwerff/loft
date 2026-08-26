@@ -6417,6 +6417,33 @@ impl Scopes {
                 ops.pop();
                 preamble.extend(ops);
                 ls.push(Value::Var(w));
+            } else if let Some(tp) =
+                Self::tuple_element_borrow_source(&scanned, outer_call, data, function)
+            {
+                // loft#1104 — a TUPLE-ELEMENT argument (`pick(t.0, …)`) that the callee's
+                // return may BORROW.  Same defect as the inline-construction family above
+                // and the same cure, for the opposite reason: that argument is not nameable
+                // YET, this one is not nameable AT ALL.
+                //
+                // The @P290 bracket names a store through a variable whose VALUE is a
+                // `DbRef`, which is why `view_root_slots` walks a projection chain to its
+                // root var.  A tuple local's value is a `(DbRef, …)`, so widening that walk
+                // to answer the tuple var cannot work: the native emit renders
+                // `n_protect_store_frees(cell, var_t)`, which does not compile, and the
+                // interpreter would read element 0's bytes whatever index was projected.
+                // The witness set therefore read incomplete, the caller kept the
+                // conservative never-free answer, copied the returned store and orphaned the
+                // one the callee minted — one record per call, both backends.
+                //
+                // Binding the projection first is what an author writes on hitting this
+                // (`e = t.0; pick(e, …)`) and it is clean on both backends, so the hoist
+                // makes the call site emit the program that already worked.  The temp
+                // BORROWS — its type carries a dep on the tuple base, so `get_free_vars`
+                // leaves it alone and the store's owner does not change; the only thing that
+                // changes is that the call site can now say a name for it.
+                let tmp = self.new_lift_var(function, &tp);
+                preamble.push(v_set(tmp, scanned));
+                ls.push(Value::Var(tmp));
             } else {
                 ls.push(scanned);
             }
@@ -6436,6 +6463,47 @@ impl Scopes {
     /// Gated on `returns_borrowed_view` on purpose. Every other call is already correct as
     /// it stands, and hoisting an argument reorders it relative to its left-hand siblings —
     /// a cost worth paying only where the alternative is a leak.
+    /// loft#1104 — a `TupleGet` argument to a call whose return may BORROW it, and the
+    /// BORROWING type the hoisted temp must carry.
+    ///
+    /// The callee tests are [`inline_built_borrow_source`](Self::inline_built_borrow_source)'s,
+    /// for the same reason: only a loft-defined body with a borrowed-view heap return goes
+    /// through the @P290 bracket, so hoisting anything else changes emitted code and buys
+    /// nothing.  What differs is the argument shape — a tuple ELEMENT rather than an inline
+    /// construction — and why it cannot be witnessed: a construction's work-ref holds null
+    /// when the bracket is emitted, while a tuple element has no witness variable at all.
+    ///
+    /// A SCALAR element is not hoisted: it owns no store, so there is nothing for the bracket
+    /// to protect and the conservative answer costs nothing.
+    fn tuple_element_borrow_source(
+        arg: &Value,
+        outer_call: u32,
+        data: &Data,
+        function: &Function,
+    ) -> Option<Type> {
+        if outer_call == u32::MAX {
+            return None;
+        }
+        let callee = data.def(outer_call);
+        if !callee.is_loft_defined()
+            || matches!(callee.returned().base(), Type::Function(_, _, _))
+            || !callee.returns_borrowed_view()
+        {
+            return None;
+        }
+        let Value::TupleGet(base, idx) = arg.unspan() else {
+            return None;
+        };
+        let Type::Tuple(elems) = function.tp(*base).base() else {
+            return None;
+        };
+        let elem = elems.get(*idx as usize)?;
+        if !crate::data::is_dbref(elem.base()) {
+            return None;
+        }
+        Some(elem.depending(*base))
+    }
+
     fn inline_built_borrow_source(
         &self,
         arg: &Value,

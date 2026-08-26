@@ -120,7 +120,10 @@ catch-all list asks who forgot a variant, while `spellings` asks who can only se
 notion's two IR spellings — 18 functions resolve a projection by OP NAME and **2** of them
 handle `TupleGet`.  Following it produced three defects in one pass, two fixed here and one
 filed as a design question (**loft#1102**: a tuple literal ALIASES a heap local while a struct
-literal and a vector literal copy it).
+literal and a vector literal copy it).  Reading the queue a second time produced a fourth
+(**loft#1104**, B6h): a tuple-element ARGUMENT cannot witness the @P290 bracket, so a
+borrowed-view call leaks one record per call — fixed for the bare spelling, with the two chained
+ones measured and left open rather than guessed at.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -1537,6 +1540,70 @@ redundant. Nothing of theirs touches `ConstructOps` / `move_elide` / `construct_
 REMOVES the `do_if_acc` nullability term in favour of an `(N-Store)` report before the accumulator
 rewrite (`calls.md` D-call-5). The doc-comment-only edits to the five null-tail walkers above
 should merge clean; the `do_if_acc` block itself has not.
+
+#### B6h — the queue's second hit: a witness the bracket cannot name (2026-08-26)
+
+`use_analysis::view_root_slots` is one of the sixteen the `spellings` screen lists, and it was
+already read once (B6d) and recorded CLEAN — *"enumerates every exclusion with a reason, and
+states the direction"*. Reading it a second time with the tuple question in hand gives the
+opposite answer, and the difference is instructive: B6d asked whether the doc justifies the
+FALLBACK, and this one does. What it does not say is that a projection has a spelling its walk
+cannot reach.
+
+**The defect.** A call whose return may BORROW an argument decides borrow-vs-owned at runtime
+with the @P290 bracket. `view_root_slots` walks a projection chain to the variable that names
+the store, recognising a projection with `is_projection_op` — `OpGetField` / `OpGetVector`. A
+tuple element is neither, so the walk answers `None`, the witness set reads incomplete, and the
+caller keeps the conservative never-free answer: it copies the returned store and orphans the
+one the callee minted. **One record per call, both backends** — `loft#1104`.
+
+| argument | leaked? |
+|---|---|
+| `pick(q, c)` — a bare var | clean |
+| `pick(b.s, c)` — `OpGetField` | clean |
+| `pick(v[0], c)` — `OpGetVector` | clean |
+| **`pick(t.0, c)` — `TupleGet`** | **one per call** |
+
+⚠ **And the fix is NOT the arm the screen points at.** Widening `view_root_slots` to answer the
+tuple's base var would be wrong rather than incomplete: the bracket consumes a slot as a `DbRef`
+VALUE — the native emit renders `n_protect_store_frees(cell, var_t)` — and a tuple local's value
+is a `(DbRef, …)`, which does not compile there and which the interpreter would read as element
+0's bytes whatever index was projected. **The witness mechanism cannot name a tuple element**,
+and that is a real boundary. So the screen's verdict here is *"this site cannot answer the
+question"*, not *"this site forgot an arm"* — a distinction worth keeping, because the two have
+opposite fixes.
+
+**The cure was already in the tree, for the family that cannot be witnessed for the other
+reason.** loft#1029 hoists an argument still wrapped in its construction block, because the
+bracket is emitted before the block runs. The two are opposites — that argument is not nameable
+YET, this one is not nameable AT ALL — and the same hoist serves both: bind the projection to a
+temp that BORROWS the tuple base, and the call site gains a name for it. The emitted IR is then
+byte-for-byte the spelling an author writes by hand, which was always clean:
+
+```
+before:  r = n_pick9(t.0, c, __ref_1);
+after:   __lift_1(1):ref(S9)["t"] = t.0;
+         r = n_pick9(__lift_1, c, __ref_1);
+```
+
+Guard: `tests/scripts/a-tuple-element-argument-can-witness-the-bracket.loft`, falsified against
+the pre-fix gate (60 leaked records → 0).
+
+⚠ **Two cells of the matrix are STILL OPEN, and saying so is the point.** The axes the first
+sweep held fixed were the index (fixed at 0) and the chain DEPTH. Moving the index found nothing
+— index 1 is fixed by the same change. Moving the depth found two live cells the fix does not
+reach: `pick(t.0.s, c)` (an `OpGetField` over a tuple element) and `pick(t.0.0, c)` (a nested
+tuple, which lowers to a `tuple_tmp` block). Both still leak on both backends; both are clean
+when bound by hand, so the cure is the same hoist.
+
+What blocks them is the TYPE the hoisted temp must carry. The temp's DEP decides who frees the
+store, so it has to be the projection's result type depending on the chain's ROOT — and
+`scopes.rs` has no helper that types a `Value`; `inline_struct_return` derives from a callee's
+DECLARED return, which a projection does not have. **A wrong dep there turns a leak into a
+use-after-free**, which is the one direction this machinery's own comments warn about, so the
+cells are recorded on the issue with their measurements rather than guessed at. Fixing one shape
+of a two-shape class is what produced this defect in the first place; fixing two of four would
+be the same mistake with better manners.
 
 #### C — process / skills
 
