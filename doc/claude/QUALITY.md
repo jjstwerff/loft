@@ -108,9 +108,10 @@ implementations, often in multiple files."* The response has three parts, and tw
 variants are removed (B3); what remains is three spec decisions (B), one unrun measurement (C),
 and a branch with **no PR**.  The `unspan` queue is CLOSED (B4h): all 16 sites are measured,
 gated, or read, with one latent decision change found and no defect.  The catch-all walker
-queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); three are
-worked, one of which yielded two shipped bugs (B4i/B4j), and the boundary question in B6b
-triages the rest.
+queue is OPEN and now ranked — 55 of 124 have a fallback that answers no (B6b); **six are
+worked and three more triaged by the boundary question**, one of which yielded two shipped
+bugs (B4i/B4j).  One site (`body_has_buffer_return`) is handed to the sibling checkout rather
+than worked, because its machinery is in flight there.
 The catch-all backlog is no longer blocked on ranking — `reach` says 125 of its 126 sites are
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.
@@ -1093,12 +1094,27 @@ looked for, and a caller guarding on it stops guarding. A fallback answering `tr
 by comparison, and one returning a VALUE is usually a resolver over a narrower grammar
 (`holder_type`, `of_const`). **55 of the 124** are that shape, and the report marks them `no!`.
 
-**Two worked so far, and the contrast is the useful part:**
+**Worked so far — one bug-bearing site in six, and the contrast is the useful part:**
 
 | site | what a false answer disables | arrivals | disagreements |
 |---|---|---:|---:|
-| `expressions::ir_has_user_call` | the compound-assign once-only hoist, and a re-evaluability check | 210 over 32 programs | **the corpus said 0** |
+| `expressions::ir_has_user_call` | the compound-assign once-only hoist, and a re-evaluability check | 210 over 32 programs | **the corpus said 0 — see B4i** |
 | `generation::calls::may_borrow_store` | the argument hoist that keeps two `&mut Stores` borrows apart (E0499) | **151 823** over 214 of 220 | **0** |
+| `emit::text_arm_yields_owned_string` + `text_arm_ends_in_text_call` | the `.to_string()` unification that keeps a `String` arm and a `&str` arm compiling (E0308) | **102 073** over 253 of 260 | **0** |
+| `scopes::accessor_root_var` | the C93 par refusal (B6b below) | 47 over 7 — useless; settled by construction | **0** |
+
+⚠ **The text pair is the case where the shapes DO arrive and the answer still never moves.**
+`If` and `Return` both reach their `_ => false` — 42 `Return`s in a single program — and a
+hand-built nested-`if` text arm paired with a literal sibling compiles clean. The boundary is
+subtler than "this shape cannot carry the property": the question is what the arm YIELDS to the
+join, and a `Return` yields nothing to it. Worth recording because *"the omitted shape arrives"*
+is the reading that looks most like a defect and is not one.
+
+**Triaged by the boundary question alone, no probe needed:** `lit_nonzero` (`None` = not a
+literal — and a literal is a leaf by definition, the one look-through being the widening cast
+it already handles), `index_loop_bounded` (`false` = not provably bounded, which KEEPS the
+warning — the safe direction), `tail_has_tuple_leaf` (its scrutinee is `.tail()`, which already
+peels `Block`/`Insert`/`Span`).
 
 **Third site: `scopes::accessor_root_var`, clean — and it yields the reading rule.** Its `None`
 makes `raw_write_to_captured` bail, so the C93 par refusal never fires: the same soundness
