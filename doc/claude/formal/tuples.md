@@ -27,7 +27,14 @@ compile-time index).
 
 ```
   (T-Cons)   ⟨(e₁, …, eₙ), σ⟩   evaluates e₁, …, eₙ LEFT TO RIGHT (operational.md E-Left) into
-             the tuple value (v₁, …, vₙ),  n ≥ 2.
+             the tuple value (v₁, …, vₙ),  n ≥ 2.  A HEAP element is COPIED in, exactly as
+             [binding.md](binding.md)'s `B-Copy` copies a plain bind: the tuple's element and
+             the source are INDEPENDENT afterwards, and mutating either does not reach the
+             other.  Aliasing is admissible only where it cannot be observed — the source is
+             dead after the construction — which is the same last-use elision the STRUCT
+             constructor already applies (`LOFT_NO_MOVE_ELIDE` restores the copy).  A
+             PARAMETER handed to a tuple keeps aliasing its caller: that is `B-Ref-Alias`, and
+             it is a property of the parameter rather than of the construction.
   (T-Paren)  a single parenthesised expression `(e)` is NOT a tuple — it is just grouping.  A
              tuple needs ≥ 2 comma-separated elements.
 ```
@@ -35,7 +42,9 @@ compile-time index).
 **In words.** `(3, 7)` builds a 2-tuple, evaluating the elements in source order. Tuples are
 anonymous (no declared type name) and positional — the elements can be of different types
 (`(integer, text)`). A lone `(e)` is ordinary parenthesisation, not a 1-tuple; the minimum tuple
-width is 2.
+width is 2. And a tuple given a heap local takes a COPY of it, so `t = (vl, 9); vl[0] = 41`
+leaves `t.0[0]` unchanged — the same answer `S { v: vl }` and `[vl]` give, because a constructor
+handing a value to a new name is the same step a plain bind is (D-tup-4).
 
 ### Projection — `.i` reads the i-th element
 
@@ -117,10 +126,64 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-OPEN: **0** (2026-08-26) — D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
+OPEN: **1** (D-tup-4's KEYED half, 2026-08-26 — below); D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
 all-`(integer, integer)` oracle cannot express, so the zero above never covered it.
+
+> **D-tup-4 — OPENED 2026-08-26 (loft#1102); the VECTOR half CLOSED the same day, the KEYED
+> half OPEN — a tuple literal ALIASED a heap local while both sibling constructors copied it.**
+>
+> ```loft
+> vl: vector<integer> = [10, 20];
+> t = (vl, 9);   s = S { v: vl };   vv = [vl];
+> vl[0] = 41;
+> t.0[0]  // was 41          s.v[0]  // 10          vv[0][0]  // 10
+> ```
+>
+> Both backends agreed, so this was a shared semantic gap and not a parity bug. `(T-Cons)` said
+> nothing about ownership, which is why nothing caught it: **an edge the rules cannot express
+> means the RULE wants extending**, and `(T-Cons)` now states the copy.
+>
+> The struct literal deep-copies its member into the field's own storage and the vector literal
+> copies its elements. A tuple has no such storage — its element slot holds a `DbRef` — so it
+> stored the source's handle. The store the copy needs does not have to belong to the TUPLE
+> though: a frame-local backing owns it and frees it at scope exit, exactly as a hand-written
+> `o: vector<T> = []; o += vl; o` does, which is the shape now emitted at the literal.
+>
+> ⚠ **A shipped DIAGNOSTIC already asserted the fixed behaviour**, and that is the strongest
+> argument here — stronger than the aliasing itself. `c = t.0; c[0] = 41` drew
+> `warning[lost-write]: a whole-value bind COPIES the heap value (C86), so the mutation lands in
+> the copy`, while the write reached `vl` through two levels of binding. A diagnostic that
+> describes the contract wrongly is worse than a missing one, because it is believed.
+>
+> **What is NOT closed, and why.** A KEYED collection given to a tuple aliases in the same way
+> (`hash<S[k]>`), and the fix here excludes a keyed local deliberately: that shape is a
+> pre-existing codegen ICE (three of the four tuple emitters hand-spelled the `DbRef` type set
+> and were short by the five keyed collections), reproduced identically on a control binary, and
+> the emitter repair lives on a sibling branch. Copying cannot be added to a shape that does not
+> compile, so the keyed half stays OPEN and this entry stays open with it.
+>
+> **A cost this pays and does not yet recover.** A tuple RETURN was already correct — it is
+> rewritten to a synthetic `__tuple<…>` record, which copies like any struct — so a returned
+> tuple now copies TWICE, once at the literal and once into that record. It is correct and
+> measurable (`941-tuple-destructure-owns-its-element.loft` grows the second copy in its IR).
+> The cure is the last-use elision `(T-Cons)` now admits — the source is dead after the
+> construction, so nobody can tell — which is what the struct constructor already does and what
+> `Value::Tuple` is not yet visible to. Not attempted here.
+>
+> **Measured.** Nine cells on both backends, five of them falsified on a control built at
+> `9c1a0e4e`. Emitted IR: three existing corpus programs change, all of them tuple tests, all
+> green. Controls: a PARAMETER member, which must keep aliasing its caller (`B-Ref-Alias`); a
+> returned tuple after churn; a scalar-only tuple; and DESTRUCTURING — whose left side is parsed
+> by the same branch as a literal, so a rewrite that does not exclude an assignment TARGET turns
+> those names into expressions and the destructure reports *"left has 0 names"*. That cell needs
+> its loop: the names only exist to be rewritten from the SECOND iteration on, which is why the
+> first suite run caught it and a single-shot probe would not have. Guard:
+> `tests/scripts/1102-a-tuple-literal-copies-a-heap-member.loft`.
+>
+> Unrelated and still open beside it: `t = ([10, 20], 9)` is refused as a type change
+> (reproduced on the control; repaired on the sibling branch).
 
 > **D-tup-3 — OPENED AND CLOSED (2026-08-26, loft#1104) — a tuple element is a projection that
 > the ownership machinery could not read as one.** `(T-Proj)` says `t.i` is element `i`, and for a
