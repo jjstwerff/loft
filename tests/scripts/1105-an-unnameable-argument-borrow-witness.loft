@@ -120,3 +120,47 @@ fn test_a_non_borrowing_callee_is_untouched() {
   for i in 0..12 { t = t + nonview_arg(true) + nonview_arg(false); }
   assert(t == 84, "12 rounds of 7 + 0, got {t}");
 }
+
+// ---- the store must OUTLIVE the frame that would free it ----
+//
+// ⚠ A LEAK CHANNEL CANNOT SCORE AN OVER-FREE. Every cell above builds its container inside the
+// function that calls, so a free that should not happen lands on a store that was dying at the
+// same scope exit: the runtime absorbs it as a no-op and neither the leak gate nor the values
+// say anything. The gate is monotone the wrong way — freeing MORE than you should always reads
+// as an improvement. So a fix that ADDS a free needs at least one cell where the freed store
+// outlives the frame, and these are it: the container arrives as a PARAMETER and is read back
+// after enough allocation to recycle a released record.
+//
+// The bind's temp is what makes this reachable. Typed with the callee's declared PARAMETER type
+// it carries no deps, reads as the OWNER of a store it only VIEWS, and earns a scope-exit free
+// that releases the caller's container. It borrows what the value borrows instead.
+
+fn churn1105g() -> integer {
+  n = 0;
+  for i in 0..40 { t: vector<integer> = [i, i + 1, i + 2]; n = n + len(t); }
+  n
+}
+
+fn outlives_coalesce(v: vector<S1105g?>, c: boolean) -> integer { r = pick1105g(v[0] ?? mk1105g(), c); r.a }
+
+fn test_a_coalesced_argument_leaves_the_callers_vector_intact() {
+  v: vector<S1105g?> = [S1105g { a: 7 }];
+  t = 0;
+  for i in 0..12 { t = t + outlives_coalesce(v, true) + outlives_coalesce(v, false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+  churn1105g();
+  assert(v[0]?.a == 7, "the vector outlives the call, read back {v[0]?.a}");
+}
+
+// A KEYED lookup — `h[k]` answers a record of the collection's own store through `OpGetRecord`,
+// which the bracket's own walk does not name, so it reaches the bind exactly as the `??` does.
+fn outlives_keyed(h: hash<S1105g[a]>, c: boolean) -> integer { r = pick1105g(h[7], c); r.a }
+
+fn test_a_keyed_argument_leaves_the_callers_hash_intact() {
+  h: hash<S1105g[a]> = [S1105g { a: 7 }];
+  t = 0;
+  for i in 0..12 { t = t + outlives_keyed(h, true) + outlives_keyed(h, false); }
+  assert(t == 72, "12 rounds of 7 + -1, got {t}");
+  churn1105g();
+  assert(h[7].a == 7, "the hash outlives the call, read back {h[7].a}");
+}

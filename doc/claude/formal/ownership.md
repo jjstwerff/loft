@@ -305,6 +305,26 @@ resolves, and a callee whose return does not borrow.  Guard:
 `tests/scripts/1105-an-unnameable-argument-borrow-witness.loft`, scored by the wrap harness's leak
 gate.
 
+⚠ **THE TEMP TAKES THE DEPS OF THE VALUE IT HOLDS, AND THAT HALF IS LOAD-BEARING.** The bind's
+type is the callee's parameter SHAPE carrying `lift_view_deps(arg)` — what the argument itself
+borrows.  The parameter's DECLARED type has no deps, and a temp typed that way reads as the OWNER
+of a store it only VIEWS: `get_free_vars` gives it a scope-exit free that releases the caller's
+container.  `pick(h[k], …)` over a `hash` passed in as a PARAMETER then read back as `null`, and
+`pick(t.0.s, …)` as another type's bytes, on both backends and under `LOFT_POISON=1` as a corrupt
+dereference.  A value whose source `lift_view_deps` cannot name is NOT bound at all: a leak is the
+better of the two, and it is the one that was already there.
+
+⚠ **AND THE AXIS THAT HID IT IS GENERAL: A LEAK CHANNEL CANNOT SCORE AN OVER-FREE.** Every cell of
+the six above builds its container INSIDE the calling function, so a free that should not happen
+lands on a store dying at the same scope exit — `H-FreeTwice` absorbs it and neither the values nor
+the leak gate says anything.  That gate is monotone the wrong way: freeing MORE than you should
+always reads as an improvement.  **So a fix that ADDS a free needs at least one cell where the
+freed store OUTLIVES the frame that freed it** — the container arriving as a parameter, read back
+after enough allocation to recycle a released record.  Those cells are in the guard now
+(`test_a_coalesced_argument_leaves_the_callers_vector_intact`,
+`test_a_keyed_argument_leaves_the_callers_hash_intact`), and they fail outright on a binary built
+at `15be379a`.
+
 ### D-own-10 — CLOSED (2026-08-26, loft#1101): a BOUND projection was renamed onto the caller's buffer, and it owned nothing to rename
 
 `(O-Move)` says a returned heap value's ownership TRANSFERS, and that a return which merely
