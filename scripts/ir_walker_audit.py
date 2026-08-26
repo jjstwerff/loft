@@ -35,6 +35,14 @@
 #             on real corpus programs, yet peeling changed no program's IR.  Treat a hit as
 #             "measure this one", not "fix this one".
 #
+#   reach     Of the catch-all walkers `walkers` lists, which ones does a running loft
+#             binary actually reach?  The list is long and every entry looks equally
+#             suspect; the filter that ranks it is *does production run this*.  A
+#             one-level "is it called from outside a test" cannot answer that — the four
+#             walkers that turned out to be test-only were called by ordinary-looking
+#             functions that were themselves only called from tests — so this walks the
+#             call graph transitively from each `[[bin]]`'s `main`.
+#
 #   dead      `producers` INTERSECTED with a census of what the front end actually emits
 #             over the 854-program corpus.  Neither half is an oracle and the failures go
 #             opposite ways, which is the whole reason this mode exists: `Loop`/`Single`/
@@ -47,8 +55,8 @@
 # SITE, so read the sites it prints before acting.  Verdicts live in
 # doc/claude/formal/IMPLEMENTATIONS.md.
 #
-# Usage:  python3 scripts/ir_walker_audit.py [walkers|producers|unspan|dead|both]
-#         `dead` needs a built binary (target/debug/loft, or $LOFT_BIN) and takes ~1 min.
+# Usage:  python3 scripts/ir_walker_audit.py [walkers|producers|unspan|reach|dead|both]
+#         `reach` needs no binary; `dead` needs a built binary (target/debug/loft, or $LOFT_BIN) and takes ~1 min.
 
 import glob
 import os
@@ -257,6 +265,22 @@ def strip_traversal_closures(body):
         i = j + 1
 
 
+def peels_span(body):
+    """Does this body see through a `Span` — by unwrapping it, or by giving it an arm?
+
+    Shared by `unspan` and `reach` so the two cannot answer it differently.  `reach` needs
+    it to avoid reporting `Span` as a skipped wrapper at a site that peels it without ever
+    naming the variant: `collections::holder_type` opens with `base.unspan()`, and reading
+    its arms alone says it forgot the case it in fact handles first.
+    """
+    return (
+        ".unspan()" in body
+        or ".unspan_mut()" in body
+        or "Value::Span" in body
+        or bool(PEELED_SCRUTINEE.search(body))
+    )
+
+
 def audit_unspan():
     """Sites that read a specific `Value` shape without seeing through `Span`."""
     total, handled, rows = 0, 0, []
@@ -277,12 +301,7 @@ def audit_unspan():
             if len(specific) < 2:
                 continue  # not discriminating between shapes of the IR `Value`
             total += 1
-            if (
-                ".unspan()" in body
-                or ".unspan_mut()" in body
-                or "Value::Span" in body
-                or PEELED_SCRUTINEE.search(body)
-            ):
+            if peels_span(body):
                 handled += 1
             else:
                 rows.append((f"{rel(path)}:{start}", name, len(specific)))
@@ -431,6 +450,243 @@ def audit_dead():
         print(f"  {v:<12} {n:>13}   {'none' if flagged else 'yes':<9}  {verdict}")
 
 
+
+# ---------------------------------------------------------------- reach ------
+# `for_each_child`'s leaf arm names every variant with no child expression, so the
+# CHILD-BEARING set is its complement — derived from the keystone rather than listed
+# here, because a new variant must not silently join the wrong side of it.
+def child_bearing_variants():
+    src = open(DATA_RS, encoding="utf-8").read()
+    i = src.index("pub fn for_each_child(&self, f: &mut impl FnMut(&Value))")
+    j = src.index("// Leaves — no child expressions.", i)
+    end = src.index("\n        }\n", j)
+    leaves = set(re.findall(r"Value::([A-Za-z0-9]+)", src[j:end]))
+    named = set(re.findall(r"Value::([A-Za-z0-9]+)", src[i:j]))
+    if not leaves or not named:
+        raise SystemExit("for_each_child's shape changed — `reach` cannot derive its child set")
+    return named - leaves
+
+
+def pass_through_variants():
+    """Variants that forward exactly ONE child and carry nothing else, per `for_each_child`.
+
+    These are the sharp signal.  Omitting `If` or `Call` from a walker's arms is usually a
+    decision — the walker does not care about that shape.  Omitting a pass-through is never
+    a decision about the shape, because the shape carries no information of its own: it
+    means the subtree underneath is not entered and a verdict about it is issued anyway.
+    All four walkers that turned out to be wrong the same way were missing one of these.
+    """
+    src = open(DATA_RS, encoding="utf-8").read()
+    i = src.index("pub fn for_each_child(&self, f: &mut impl FnMut(&Value))")
+    j = src.index("// Leaves \u2014 no child expressions.", i)
+    out = set()
+    for arm in re.findall(r"((?:\s*Value::[A-Za-z0-9]+(?:\([^)]*\))?\s*\|?)+)=>\s*f\(", src[i:j]):
+        out |= set(re.findall(r"Value::([A-Za-z0-9]+)", arm))
+    if not out:
+        raise SystemExit("for_each_child's shape changed \u2014 `reach` cannot derive its wrappers")
+    return out
+
+
+def bin_entry_files():
+    """The `[[bin]] path =` entries from Cargo.toml — the roots production actually starts at.
+
+    Read from the manifest rather than listed here so a new binary joins the root set on
+    its own; a missed root reports its whole subtree as unreached, which is the direction
+    that manufactures findings.
+    """
+    txt = open(os.path.join(ROOT, "Cargo.toml"), encoding="utf-8").read()
+    paths = re.findall(r"^\[\[bin\]\]$(.*?)(?=^\[|\Z)", txt, re.M | re.S)
+    out = []
+    for block in paths:
+        m = re.search(r'^path\s*=\s*"([^"]+)"', block, re.M)
+        if m:
+            out.append(os.path.normpath(m.group(1)))
+    if not out:
+        raise SystemExit("no [[bin]] path in Cargo.toml — `reach` has no roots")
+    return out
+
+
+RUST_FN = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?"
+    r'(?:extern\s+"[^"]*"\s+)?fn\s+([a-z_][A-Za-z0-9_]*)'
+)
+# A call, and a function handed over as a VALUE (`.and_then(Self::arg_root_var)`), which
+# has no parentheses after the name.  `parser::control::arg_root_var` has that as its only
+# use, so a call-only matcher reports it as code production never runs.
+CALL = re.compile(r"\b([a-z_][A-Za-z0-9_]*)\s*\(")
+PATH_REF = re.compile(r"::([a-z_][A-Za-z0-9_]*)\b(?!\s*\()")
+
+# An identifier merely PASSED as an argument (`.map(helper)`) is deliberately not matched:
+# it cannot be told apart from an ordinary variable whose name collides with a function's,
+# and adding it invented an edge to `ir_schema::value_from_parsed`, whose decode half has
+# no production caller at all.
+_STRING = re.compile(r'"(?:\\.|[^"\\\n])*"')
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+def code_only(body):
+    """`body` with string literals and comments blanked, so prose cannot forge a call edge.
+
+    Load-bearing: `parallel.rs`'s module doc names `scopes::is_par_safe` in a sentence
+    explaining that it is wired to nothing, and counting that mention as a reference makes
+    the function read as production-reached — inverting the one answer this mode exists to
+    give.
+
+    Strings go FIRST and do not cross a newline.  Stripping comments first lets a `//`
+    inside a string truncate real code, and an unterminated quote inside a comment then
+    swallows to the next quote anywhere in the file.  Block comments go LAST for the same
+    kind of reason: `/*.loft` appears inside a line comment in `main.rs`, and treated as an
+    opener it ate 97 KB — 1219 functions dropped out of the reachable set at a stroke.
+    """
+    return _BLOCK_COMMENT.sub(" ", _LINE_COMMENT.sub(" ", _STRING.sub('""', body)))
+
+
+def fn_bodies(path):
+    """Yield (name, line, indent, body) for each `fn` in a file, nested ones INCLUDED.
+
+    The body runs to the first `}` at the fn's own indentation, which is exact for
+    rustfmt'd source and — unlike brace counting — cannot be thrown by a `'{'` char
+    literal.  An outer fn's body therefore CONTAINS its nested helpers, which is the
+    whole point: `parser::operators`'s two `try_swap`s are declared inside the functions
+    that call them, and a splitter that ends the outer body at the nested `fn` line drops
+    the only call edge either one has.  That reads as "production never reaches this",
+    which is precisely the verdict this mode exists to make trustworthy.
+    """
+    lines = open(path, encoding="utf-8").read().split("\n")
+    for i, line in enumerate(lines):
+        m = RUST_FN.match(line)
+        if not m:
+            continue
+        indent = len(line) - len(line.lstrip())
+        sig = line
+        j = i
+        while "{" not in sig and ";" not in sig and j + 1 < len(lines):
+            j += 1
+            sig += lines[j]
+        if "{" not in sig:
+            continue  # a bodiless declaration (trait item, `extern` block)
+        close = " " * indent + "}"
+        end = len(lines)
+        for k in range(j + 1, len(lines)):
+            if lines[k].rstrip() == close:
+                end = k
+                break
+        yield m.group(1), i + 1, indent, "\n".join(lines[j + 1 : end])
+
+
+def call_graph():
+    """(defs, bodies, edges, reached, called, root count) over `src/`, keyed by NAME.
+
+    A name-keyed graph MERGES same-named functions, and every merge can only ADD
+    reachability — so *not reached* is the strong verdict and *reached* is the weak one.
+    Read the report that way round: this mode exists to find analyses production never
+    runs, and over-reporting one would manufacture a finding.
+    """
+    defs = {}       # name -> [(path, line, is_test)]
+    bodies = {}     # (path, line) -> body text
+    for path in rust_files():
+        regions = test_regions(path)
+        for name, line, _indent, body in fn_bodies(path):
+            is_test = any(lo <= line <= hi for lo, hi in regions)
+            defs.setdefault(name, []).append((path, line, is_test))
+            bodies[(path, line)] = body
+
+    edges = {}
+    for k, raw in bodies.items():
+        b = code_only(raw)
+        names = set(CALL.findall(b)) | set(PATH_REF.findall(b))
+        edges[k] = {c for c in names if c in defs}
+    roots = []
+    for entry in bin_entry_files():
+        full = os.path.join(ROOT, entry)
+        roots += [(p, ln) for p, ln, t in defs.get("main", []) if os.path.samefile(p, full)]
+    seen, stack = set(), list(roots)
+    while stack:
+        k = stack.pop()
+        if k in seen:
+            continue
+        seen.add(k)
+        for callee in edges.get(k, ()):
+            for p, ln, is_test in defs[callee]:
+                if not is_test and (p, ln) not in seen:
+                    stack.append((p, ln))
+    reached = {n for n, sites in defs.items() if any((p, ln) in seen for p, ln, _ in sites)}
+    called = set()
+    for cs in edges.values():
+        called |= cs
+    return defs, bodies, edges, reached, called, len(roots)
+
+
+def audit_reach():
+    """Which catch-all `Value` walkers does a running loft binary actually reach?
+
+    The catch-all list (see `walkers`) is long and every entry looks equally suspect.  The
+    filter that ranks it is *does production run this*, and a one-level "is it called by
+    anything outside a test" cannot answer it: the walkers that turned out to be test-only
+    were called by ordinary-looking functions that were themselves only called from tests.
+    Transitivity is the whole question, so this walks the call graph from each binary's
+    `main`.
+
+    A walker production never reaches costs nothing today and cannot be checked by running
+    the suite either — nothing exercises it, so nothing reports that it drifted.  A walker
+    production DOES reach is where a missing arm is a live wrong answer.
+    """
+    wrappers = child_bearing_variants()
+    passthrough = pass_through_variants()
+    defs, bodies, edges, reached, called, nroots = call_graph()
+    rows = []
+    for path in rust_files():
+        if os.path.basename(path) == "data.rs":
+            continue  # the keystone's own home
+        regions = test_regions(path)
+        for name, start, body in functions(path):
+            if any(lo <= start <= hi for lo, hi in regions):
+                continue
+            named = set(VARIANT.findall(body))
+            if len(named) < 3 or not re.search(rf"\b{re.escape(name)}\s*\(", body):
+                continue
+            if any(k in body for k in KEYSTONE) or not CATCHALL.search(body):
+                continue
+            omitted = wrappers - named
+            if peels_span(body):
+                omitted -= {"Span"}
+            rows.append(
+                (
+                    f"{rel(path)}:{start}",
+                    name,
+                    sorted(omitted & passthrough),
+                    len(omitted - passthrough),
+                    name in reached,
+                    name in called,
+                )
+            )
+
+    live = [r for r in rows if r[4]]
+    print(f"catch-all `Value` walkers                      : {len(rows)}")
+    print(f"  reached transitively from a binary's `main`  : {len(live)}")
+    print(f"  production never reaches                     : {len(rows) - len(live)}")
+    print(f"  (one-level 'called from outside a test'      : {sum(1 for r in rows if r[5])} — "
+          "the check that cannot rank them)")
+    print(f"  roots: {nroots} `main` fns from Cargo.toml's [[bin]] entries")
+    print()
+    print("  ⚠ The graph is keyed by function NAME, so same-named functions merge and every")
+    print("     merge can only ADD reachability.  `production never reaches` is therefore the")
+    print("     trustworthy verdict; a `reached` is weak.  The library's public API as called")
+    print("     by another crate is not a root — this asks what a loft binary runs.")
+    print()
+    print("  Production-reached first, then by omitted PASS-THROUGH wrappers — the shapes that")
+    print("  carry no information, so skipping one is never a decision about the shape.  The")
+    print("  trailing count is other child-bearing variants omitted, which is usually a choice.")
+    print("  A hit is a MEASUREMENT to make, not a defect found.")
+    for site, name, miss, others, is_live, _ in sorted(
+        rows, key=lambda r: (not r[4], -len(r[2]), -r[3])
+    ):
+        tag = "reached" if is_live else "  \u2014    "
+        shown = ",".join(miss) if miss else "-"
+        print(f"  {tag}  {site:<40} {name:<30} skips {shown:<26} (+{others} other)")
+
+
 mode = sys.argv[1] if len(sys.argv) > 1 else "both"
 if mode in ("walkers", "both"):
     print("== walkers ==")
@@ -443,6 +699,9 @@ if mode in ("unspan", "both"):
     print("== unspan ==")
     audit_unspan()
     print()
+if mode == "reach":
+    print("== reach (which catch-all walkers does production actually run?) ==")
+    audit_reach()
 if mode == "dead":
     print("== dead variants (no producer AND absent from the corpus) ==")
     audit_dead()

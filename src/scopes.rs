@@ -8912,7 +8912,19 @@ pub fn worker_calls_parent_write_deep(data: &Data, worker_d_nr: u32) -> Option<S
     })
 }
 
-#[allow(dead_code)]
+/// Find a parent-state write reachable from `value`, following calls into user fns.
+///
+/// The recursive half of `worker_calls_parent_write_deep`: it answers with the chain
+/// `" → helper → bad_callee"` for the first write it reaches, and `None` when every path
+/// bottoms out in a pure, host-io or unannotated-native primitive.  `visited` stops a
+/// recursive call graph from looping.
+///
+/// This is PRODUCTION-WIRED — `parse_parallel` turns a `Some` into the C93 `Level::Error`
+/// that refuses the program — so a subtree it does not enter is a refusal that does not
+/// happen, and the write then runs in a worker thread against a read-only store.  That is
+/// why the fallback descends via the keystone instead of naming arms: the arm list below
+/// is shared with `walk_par_unsafe_reason_value`, and a wrapper missing from both is a
+/// verdict issued without looking.
 fn walk_deep_parent_write(
     value: &Value,
     data: &Data,
@@ -8980,11 +8992,9 @@ fn walk_deep_parent_write(
         }
         Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, current_fn, visited),
         Value::Span(b) => walk_deep_parent_write(&b.1, data, current_fn, visited),
-        // Descends via the keystone, for the reason its twin `walk_par_unsafe_reason_value`
-        // does: the arms above are the same list, and they do not include `Return`, so a
-        // worker whose body is `return helper(...)` was reported free of parent writes without
-        // that call ever being examined.  The two walkers are near-copies; fixing one and not
-        // the other is how they came to differ from `is_par_safe` in the first place.
+        // Every other shape descends through the keystone, so a wrapper the arms above do
+        // not name still has its subtree searched.  `walk_par_unsafe_reason_value` is a
+        // near-copy of this arm list and ends the same way for the same reason.
         other => {
             let mut found = None;
             other.for_each_child(&mut |c| {

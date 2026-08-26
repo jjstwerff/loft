@@ -105,9 +105,10 @@ implementations, often in multiple files."* The response has three parts, and tw
    triggers actually fire — see C.
 
 **State in one line:** the checklist is finished, the tooling is in place, and the two dead IR
-variants are removed (B3); what remains is three spec decisions (B), one missing drift guard
-(B3a), one queued documentation rewrite (B4), one unrun measurement (C), and a branch with **no
-PR**.
+variants are removed (B3); what remains is three spec decisions (B), one unrun measurement (C),
+and a branch with **no PR**.  The catch-all backlog is no longer blocked on ranking — `reach`
+says 125 of its 126 sites are code production runs (B6b), so it is a read-one-at-a-time queue
+rather than something a filter will shrink.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -763,26 +764,96 @@ variant *"would surface as a `callers_of returns empty` regression"* because the
 covered it — and the only recursion test builds a `Value::If`, so nothing did. **Fixed**, with
 `callers_of_finds_a_call_under_a_wrapper`, verified to fail against the old arm.
 
-⚠ **No user impact today, and that is the pattern worth noticing rather than the bug.**
-`callers_of` is called only from tests, exactly like `is_par_safe`. A fourth instance turned up
-in the same screen: `walk_deep_parent_write` has an IDENTICAL arm list to
-`walk_par_unsafe_reason_value` — the same walker written twice, missing `Return` both times —
-so a worker whose body is `return helper(…)` was reported free of parent writes without that
-call being examined. Fixed and guarded alongside its twin, because fixing one of a near-copy
-pair and not the other is how they came to differ from `is_par_safe` to begin with.
+⚠ **`callers_of` has no user impact today** — it is called only from tests, exactly like
+`is_par_safe`. A fourth instance turned up in the same screen: `walk_deep_parent_write` has an
+IDENTICAL arm list to `walk_par_unsafe_reason_value` — the same walker written twice, missing
+`Return` both times — so a worker whose body is `return helper(…)` was reported free of parent
+writes without that call being examined. Fixed and guarded alongside its twin, because fixing
+one of a near-copy pair and not the other is how they came to differ from `is_par_safe`.
 
-So Plan-06 phase 5b left a call graph, a purity classifier, a par-safety verdict and a
-parent-write detector — **all test-only, all wrong the same way**. That is one unfinished
-subsystem rather than four bugs: nothing exercises these analyses, so nothing reports that they
-drifted, and three of the four carried a comment asserting they were covered.
+#### B6a — the fourth one was NOT test-only, and it was the live bug (2026-08-26)
 
-**Where the sweep stops, and why.** After the four fixes the screen still lists ~43 sites, and
-it cannot rank them: the filter that matters is "does production reach this?", and a one-level
-check answers **44 of 44 yes** — wrong, because `par_unsafe_reason` and `callers_of` are called
-by ordinary-looking functions that are themselves only called from tests. Transitivity is the
-whole question and a caller count cannot see it.
+⚠ **I wrote "all four test-only, no user impact" and it was wrong about
+`walk_deep_parent_write`.** `parse_parallel` calls it through
+`worker_calls_parent_write_deep` (`parser/collections.rs`) and turns a `Some` into the C93
+`Level::Error` that REFUSES the program. A subtree the walker does not enter is a refusal that
+does not happen.
 
-So the remaining sites need reading one at a time. The highest-value one was worth doing:
+Measured as an A/B on one binary — the fixed arm against the `_ => None` it replaced:
+
+| worker | pre-fix | fixed |
+|---|---|---|
+| `par(r = via_plain(e), 2)`, body `bump(e)` | clean compile error | clean compile error |
+| `par(r = via_return(e), 2)`, body `return bump(e)` | **thread panic: `Write to read-only store at rec=3 fld=16 (locked by: borrow_locked_for_light_worker)`** | clean compile error |
+
+So the promise on the first line of `pln102-c93-par-write.loft` — *"a clean COMPILE error …
+no runtime errors, ever"* — was broken by writing the worker with a `return`, and the failure
+landed in a worker thread. Guard: that file grew a `ret_outer → bump_ret` case, verified live
+by making its `@EXPECT_ERROR` unmatchable and watching the suite fail on it.
+
+**What made me misread it.** The function carried a bare `#[allow(dead_code)]` and no doc
+comment at all, and I read the attribute as the author's statement about the function. It was
+stale — removing it is clean under `--all-features`, default features and
+`--no-default-features` alike. It now carries a doc comment that says it is production-wired
+and why the fallback descends.
+
+**The pattern that survives the correction** is the narrower one: Plan-06 phase 5b left a call
+graph, a purity classifier, a par-safety verdict and a parent-write detector, **all wrong the
+same way** — one unfinished subsystem rather than four bugs, and three of the four carried a
+comment asserting they were covered. Three are test-only. The fourth is the one that was
+shipping, which is the ordinary way round: the class was found in the dead code and the live
+instance came free.
+
+#### B6b — the screen can rank now, and the ranking says the opposite of what I expected
+
+The filter that matters is *does production reach this?*, and a one-level "is it called from
+outside a test" cannot answer it — `par_unsafe_reason` and `callers_of` are called by
+ordinary-looking functions that are themselves only called from tests. Transitivity is the
+whole question, so it is now a mode: **`ir_walker_audit.py reach`** walks the call graph from
+each `[[bin]]`'s `main` and annotates every catch-all walker.
+
+**The answer inverts the premise.** One level says **126 of 126 reached** — the useless check,
+reproduced so the delta is visible. Transitively it is **125 of 126**, the single exception
+being `ir_schema::value_from_parsed`, whose decode half has no production caller at all and
+which omits nothing anyway. So the remaining backlog **cannot be triaged as test-only**: the
+four Plan-06 analyses were the anomaly, not the rule, and every other catch-all walker on that
+list is code a loft binary runs.
+
+It discriminates — 4 415 of the crate's 7 163 function NAMES reach `main`, so nearly two in
+five do not — it simply does not discriminate *here*. Ranking is now by omitted **pass-through** wrappers
+(`Span` `Set` `Return` `Drop` `Yield` `TuplePut`, derived from `for_each_child` rather than
+listed): skipping `If` or `Call` is usually a decision about a shape the walker does not care
+about, while a pass-through carries no information of its own, so skipping one is only ever
+"the subtree was not entered and a verdict was issued anyway". All four Plan-06 defects were
+exactly that.
+
+⚠ **Both of its false-negative classes were found by hand-checking hits, and both would have
+manufactured findings.** The verdict this mode exists to give is *not reached*, so an edge it
+cannot see becomes a fabricated one:
+
+| miss | what it cost | seen because |
+|---|---|---|
+| a **nested `fn`** — the body splitter ended the outer function at the inner `fn` line, dropping the outer's only call to it | 10 unreached → 2 | `parser::operators`'s two `try_swap`s both sit inside their caller |
+| a function passed as a **VALUE** (`.and_then(Self::arg_root_var)`), which has no `(` after the name | 2 unreached → 1 | `arg_root_var` has no other use |
+
+And one false POSITIVE nearly shipped in the fix for the second: matching any bare identifier
+picked the name out of PROSE — `parallel.rs`'s module doc says *"see `scopes::is_par_safe`,
+which is wired to nothing"*, and counting that sentence as a reference reports the function as
+production-reached, inverting the one answer the mode exists to give. Comments and strings are
+stripped first, and the stripper's own order is load-bearing: `/*.loft` inside a line comment
+in `main.rs`, read as a block-comment opener, ate 97 KB and dropped 1 219 functions out of the
+reachable set at a stroke.
+
+**Validated against the answers already found by hand** — `is_par_safe`, `par_unsafe_reason`,
+`callers_of`, `collect_callees`, `walk_par_unsafe_reason_value` not reached;
+`walk_deep_parent_write`, `collect_parallel_violations`, `execute`, `compile`, `const_eval`,
+`find_assigned_vars` reached — **11 of 11**, which is what each candidate matcher was scored
+on. The graph is keyed by NAME, so same-named functions merge and every merge can only ADD
+reachability: *not reached* is the trustworthy verdict and *reached* is the weak one. The
+library's public API as called by another crate is not a root — the question is what a loft
+binary runs.
+
+Read one at a time, the highest-value site was worth doing:
 `collect_parallel_violations` is genuinely production-wired (reachable from `parse_parallel`,
 no `#[cfg(test)]` above it), it guards a SOUNDNESS floor — rejecting unsound `parallel {}`
 captures — and the screen flagged it `MISSING[Span]`. Measured: **113 calls, 41 fallthroughs**
@@ -806,7 +877,7 @@ over-reporting the `unspan` audit had, and the reason each hit is read before it
 | a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
-| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, two modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `dead` intersects a producer screen with an 854-program corpus census to find variants nothing can build. Both are REPORTS. It was **rejected twice before it shipped** for failing to reproduce the answer already found by hand — the `make profile-corpus` discipline, applied to a new instrument |
+| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, five modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
 
 #### B2 — open, and the owner's call
 
