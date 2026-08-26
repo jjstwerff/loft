@@ -204,13 +204,29 @@ all-`(integer, integer)` oracle cannot express, so the zero above never covered 
 > **Two cures are unavailable, and which ones is the useful part.** Widening the op list cannot
 > reach a shape that is not an op. Naming the TUPLE cannot work either — the bracket protects the
 > store a `DbRef` variable points at, and a tuple is not a `DbRef`; its ELEMENT carries the store.
-> So the argument is bound to a temp typed as the tuple element itself, deps and all, which is
-> exactly the hand-written spelling that was always clean (`e = t.0; pick(e, …)`) and emits the
-> same code — the argument loft#1029 used for the inline-construction family, one spelling over.
-> Closed in `Scopes::scan_args` (`tuple_elem_borrow_source`), gated exactly as its sibling is: a
-> heap-carrying element, at a `returns_borrowed_view` callee, and nothing else — binding an
-> argument reorders it relative to its left-hand siblings, which is a cost worth paying only where
-> the alternative is a leak.
+> So the argument is bound to a temp, which is exactly the hand-written spelling that was always
+> clean (`e = t.0; pick(e, …)`) and emits the same code — the argument loft#1029 used for the
+> inline-construction family, one spelling over.  Closed in `Scopes::scan_args`, gated as its
+> sibling is: a heap-carrying element, at a `returns_borrowed_view` callee, and nothing else —
+> binding an argument reorders it relative to its left-hand siblings, which is a cost worth paying
+> only where the alternative is a leak.
+>
+> ⚠ **THE SHAPE-SPECIFIC ARM IS GONE, AND MEASURING IT IS WHY.** It was written as
+> `tuple_elem_borrow_source`, typing the temp as the tuple ELEMENT's own type, deps and all.
+> loft#1105 then answered the same question in general (*can the bracket NAME this?*) and its arm
+> sat AHEAD of this one in the chain, so a `TupleGet` — which is not a `Var` and which
+> `bracket_can_name` refuses — never reached the tuple arm again: **0 reaches across the 875-file
+> corpus.** Deleting it leaves the emitted IR byte-identical over all 875.
+>
+> And it was not merely dead. Forced ahead of the general arm it CHANGES the emit, in the one
+> direction that matters: the tuple's declared element type still carries the dep of the local the
+> literal was built FROM (`t = (s, 9)` types as `(ref(S)["s"], integer)`), so the temp came out
+> `ref(S)["s"]` — while the hand-written `e = t.0` this cure exists to match measures
+> `ref(S)["t"]`. `(T-Cons)` makes a tuple literal COPY its heap source (D-tup-4), so the element
+> lies in the TUPLE's store and `["s"]` is a dep the copy already invalidated. The general arm
+> reads the value's actual source and answers `["t"]`. **A shape-specific answer that agrees with
+> the general one on every case it can still reach, and disagrees with the ORACLE on the one case
+> it cannot, is not precision being preserved — it is a second derivation drifting.**
 >
 > ⚠ **The class, and this is its fourth instance in a week: one notion, two spellings, one looked
 > for.** A projection resolved by OP NAME cannot see the `TupleGet` spelling; the same blindness
@@ -218,8 +234,8 @@ all-`(integer, integer)` oracle cannot express, so the zero above never covered 
 > cannot). The blindness is not findable from the symptom: searching for the spelling you DO match
 > returns every site that gets it right, and the sites that get it wrong contain nothing to search
 > for. `scripts/ir_walker_audit.py spellings` counts the class — 18 functions resolve a projection
-> by op name and 2 handle the tuple spelling. See `IMPLEMENTATIONS.md` § *One notion, how many
-> SPELLINGS?*
+> by op name and 2 handled the tuple spelling, one of which is the arm deleted above, so the
+> handler count is now 1 against 18. See `IMPLEMENTATIONS.md` § *One notion, how many SPELLINGS?*
 >
 > **Measured.** Nine cells, both backends, values identical before and after — this is a pure
 > leak, so `--interpret` under `LOFT_STRICT_STORES=1` is the instrument and the assertions score

@@ -200,10 +200,18 @@ is already computed when the name is taken.
 ⚠ **This is the THIRD cell of one class, and the fix is finally the class rather than the cell.**
 loft#1029 hoisted an inline CONSTRUCTION, `tuples.md` D-tup-3 bound a TUPLE ELEMENT, and this
 binds anything else the walk cannot name — asking `bracket_can_name` instead of enumerating a
-fourth shape.  The two earlier cases stay ahead of it in the chain because they answer their
-shapes more precisely: a construction is HOISTED rather than bound, for the loft#981 reason above.
-**A predicate that enumerates SHAPES will keep being one shape short; the question it stands for
-does not run out.**
+fourth shape.  **A predicate that enumerates SHAPES will keep being one shape short; the question
+it stands for does not run out.**
+
+⚠ **AND IT SUBSUMED ONE OF THEM, WHICH IS THE CLAIM THIS ENTRY ORIGINALLY GOT WRONG.**  Only the
+CONSTRUCTION case stays ahead in the chain, and it has a reason: a construction is HOISTED rather
+than bound, for the loft#981 reason above.  The tuple arm was ahead of nothing — this general arm
+precedes it, a `TupleGet` is not a `Var` and `bracket_can_name` refuses it, so the tuple arm was
+unreachable from the moment this landed: **0 reaches across the 875-file corpus, and deleting it
+leaves the IR byte-identical over all 875.**  Forced ahead it disagrees with the hand-written
+oracle (`tuples.md` D-tup-3 has the measurement), so it is removed rather than reordered.  Neither
+guard could tell: both pass with it live, dead, or gone.  **A shape arm behind a question arm is
+dead code that still reads like a safety net.**
 
 **Measured.** Six cells, both backends, values IDENTICAL before and after — a pure leak, so
 `LOFT_STRICT_STORES=1` is the instrument and the assertions score nothing.  A control at
