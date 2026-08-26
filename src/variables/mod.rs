@@ -1227,39 +1227,22 @@ impl Function {
     pub fn make_independent(&mut self, var_nr: u16, remove: u16) {
         if crate::log_config::type_timeline_target().is_some() {
             let mut after = self.variables[var_nr as usize].type_def.clone();
-            if let Type::Reference(_, to)
-            | Type::Enum(_, _, to)
-            | Type::Vector(_, to)
-            | Type::Sorted(_, _, to)
-            | Type::Hash(_, _, to)
-            | Type::Index(_, _, to)
-            | Type::Radix(_, _, to)
-            | Type::Trie(_, _, to) = &mut after
+            if let Some(to) = after.deps_mut()
                 && let Some(pos) = to.iter().position(|x| x == &remove)
             {
                 to.remove(pos);
             }
             self.trace_type_change(var_nr, &after, "make_independent");
         }
-        match &mut self.variables[var_nr as usize].type_def {
-            Type::Reference(_, to)
-            | Type::Enum(_, _, to)
-            | Type::Vector(_, to)
-            // @P295 — keyed collections carry a lifetime dep list too
-            // (`Sorted`/`Hash`/`Index`/`Radix`'s last field).  Without
-            // these arms `s = ns` left `s` depending on `ns`, so scope
-            // analysis suppressed `s`'s own `OpFreeRef` (treating it as a
-            // borrow) and deferred `ns`'s free — leaking the deep-copied
-            // store and, in a loop, never re-clearing `ns` (accumulation).
-            | Type::Sorted(_, _, to)
-            | Type::Hash(_, _, to)
-            | Type::Index(_, _, to)
-            | Type::Radix(_, _, to) | Type::Trie(_, _, to) => {
-                if let Some(pos) = to.iter().position(|x| x == &remove) {
-                    to.remove(pos);
-                }
-            }
-            _ => (),
+        // `Type::deps_mut` is the one home for the list, and it peels the dep-transparent
+        // wrappers the READ side (`Type::depend`) already peels. Spelled inline here, this
+        // arm list had drifted behind that one by an `Optional`: a `S?` local's dep could
+        // be read and set but never removed, so no nullable heap local could be made an
+        // owner and the store it held at scope exit was freed by nobody (loft#1106).
+        if let Some(to) = self.variables[var_nr as usize].type_def.deps_mut()
+            && let Some(pos) = to.iter().position(|x| x == &remove)
+        {
+            to.remove(pos);
         }
     }
 

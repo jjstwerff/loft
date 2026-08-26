@@ -4342,6 +4342,26 @@ impl Scopes {
         //   the buffer the callee filled IS what the caller now holds, so the
         //   scope-exit `OpFreeRef(__ref_N)` freed the record the caller went
         //   on reading and writing through.
+        // loft#1106 — a NULLABLE heap local first-bound from a call whose return may
+        // borrow an argument.  `S?` is `Optional(Reference(S))`, and the shape question
+        // below is asked against the bare type, so the nullable spelling of the same
+        // storage never reached the deps strip: the local kept the argument's dep, read
+        // as a permanent borrow, and nothing freed the store the callee minted on its
+        // other arm.  Both backends now bind it through the runtime join guard, which
+        // leaves the local owning a store either way — so the deps have to go, or the
+        // free that guard exists to make correct is never emitted.
+        //
+        // Gated on the SAME question the two emitters read, so a strip here always has
+        // a guard under it.  Without that pairing the strip would license a scope-exit
+        // free on a plain alias, which is the caller's store.
+        if crate::use_analysis::nullable_join_first_bind(data, self.d_nr, function.tp(v), value)
+            .is_some()
+        {
+            let deps: Vec<u16> = function.tp(v).depend().clone();
+            for d in deps {
+                function.make_independent(v, d);
+            }
+        }
         let publishes_through_ref = matches!(function.tp(v), Type::RefVar(_));
         let mut record_target = function.tp(v);
         while let Type::RefVar(inner) = record_target {

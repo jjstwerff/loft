@@ -2449,6 +2449,62 @@ pub fn call_return_frees_source(data: &Data, call: &Value) -> bool {
     !data.def(*fn_nr).returns_borrowed_view() || protectable_ref_args(data, call).1
 }
 
+/// loft#1106 — does a FIRST bind of a NULLABLE heap local from this call have to go
+/// through the runtime join guard, the way its non-null twin already does?
+///
+/// `Some((record_def, base))` names the record type to allocate and the argument the
+/// callee's return may borrow.  `None` leaves the bind exactly as it was.
+///
+/// `S?` is `Optional(Reference(S))` — the same storage as `S` behind a nullability
+/// marker — and the heap first-bind dispatch on both backends asks its shape question
+/// against the BARE type, so a nullable local never reached it.  It therefore got
+/// neither of the two things that dispatch does: the (B-Copy) copy that keeps a bound
+/// call result INDEPENDENT of the argument it may alias, and the @P290 bracket that
+/// frees the callee's minted store on the arm where the return is not a borrow.  A
+/// write through the bound result reached the caller's own variable, and the minting
+/// arm leaked one record per call — the `-> S` twin of the same call did neither.
+///
+/// One home for the question, because three sites act on the answer and they must
+/// agree: `scopes::scan_set` strips the local's deps so a free is emitted at all, and
+/// the two backends emit the guard that makes that free correct.  A site that decided
+/// this differently would either free a store the caller still names, or strip the
+/// deps off a bind that stays a plain alias.
+///
+/// Narrow on purpose: only a JOIN with a nameable witness.  Every other nullable bind
+/// keeps today's plain adopt — which is what a call that borrows nothing, or one whose
+/// witness the bracket cannot name, already correctly does.
+#[must_use]
+pub fn nullable_join_first_bind(
+    data: &Data,
+    d_nr: u32,
+    tp: &Type,
+    value: &Value,
+) -> Option<(u32, u16)> {
+    if !crate::keys::join_own_enabled() {
+        return None;
+    }
+    if !matches!(tp, Type::Optional(_)) {
+        return None;
+    }
+    let (Type::Reference(rec, _) | Type::Enum(rec, true, _)) = tp.base() else {
+        return None;
+    };
+    let Value::Call(fn_nr, _) = value.unspan() else {
+        return None;
+    };
+    let callee = data.def(*fn_nr);
+    if !callee.is_loft_defined() || !callee.returns_borrowed_view() {
+        return None;
+    }
+    let Own::Join { base } = ownership_of(data, d_nr, value) else {
+        return None;
+    };
+    if base == u16::MAX {
+        return None;
+    }
+    Some((*rec, base))
+}
+
 /// See [`HeapDelivery`].
 #[must_use]
 pub fn heap_return_delivery(data: &Data, d_nr: u32) -> HeapDelivery {

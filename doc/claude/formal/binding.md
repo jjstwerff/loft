@@ -311,9 +311,48 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **1** (D-bind-11); D-bind-12 opened and CLOSED the same day. B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
+OPEN: **1** (D-bind-11); D-bind-12 and D-bind-13 each opened and CLOSED the same day.
+B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-bind-13 — CLOSED (2026-08-26, loft#1106) — `(B-Copy)` did not reach a bind whose
+> destination was NULLABLE, and the same blindness left the callee's minted store
+> unowned.**
+>
+> `r = pick(q, c)` where `pick(a: P?, …) -> P?` ALIASED its argument: `r?.x = 55` set `q`.
+> The identical call written `-> P` copies, which is the oracle. `(B-Copy)` is not
+> ambiguous here — a call RESULT is a whole value, not a projection, so none of B-View /
+> B-View-Base / B-View-Depth reach it — and the same shape leaked one record per call on
+> the arm where the callee minted its own store.
+>
+> **One cause, and it is a spelling.** `P?` is `Optional(Reference(P))`: the same storage
+> behind a nullability marker. Every shape question in the heap first-bind dispatch —
+> `gen_set_first_at_tos`'s arm list, `generation::dispatch`'s `heap_def_nr`, and
+> `scan_set`'s `record_target` — was asked against the BARE type, so the nullable spelling
+> reached none of them and the bind stayed a plain adopt of the returned `DbRef`.
+>
+> **The trap this issue carries, and it is worth stating.** The clean-looking twin
+> (`q: P? = …`) was clean BY ACCIDENT: its dep was dropped only because the caller-side
+> dep resolver has no `Optional` arm either, so the local read as an owner and earned a
+> free. Classifying `Optional` "properly" without the runtime guard turns that clean case
+> INTO the leaking one. So the deps strip and both backends' guard read ONE predicate,
+> `use_analysis::nullable_join_first_bind`: a strip always has a guard under it, and a
+> guard always has the free it was emitted for.
+>
+> **The fifth spelling was the one that hid.** `Function::make_independent` — the REMOVE
+> half of the dep list — had its own inline arm list, and it too had no `Optional`. So a
+> nullable local's dep could be READ (`Type::depend` peels) and SET (`Type::with_deps`
+> peels) but never CLEARED: no `S?` could be made an owner by any caller, and the strip
+> above was a silent no-op until this was folded onto `Type::deps_mut`. A dep list reached
+> through three faces has to peel on all three.
+>
+> Enforced at: `use_analysis::nullable_join_first_bind` (the question), `scopes::scan_set`
+> (the strip), `state/codegen::gen_set_first_at_tos` and `generation/dispatch` (the guard),
+> `Type::deps_mut` (the one home for the mutable dep list).
+> Guard: `tests/scripts/1106-a-nullable-heap-local-owns-its-bind.loft` — 15 cells including
+> the null-answer arm, the struct-enum spelling, the nullable COLLECTION return (a
+> different delivery, untouched) and an argument that OUTLIVES the call.
 
 > **D-bind-12 — CLOSED (2026-08-23) — the struct write-back was a real defect; the
 > collection alias was the RULE being under-stated.** Filed as two halves; measuring the

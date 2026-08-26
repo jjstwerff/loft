@@ -2645,6 +2645,26 @@ impl State {
             // now aliases on BOTH backends, exactly as the undestructured read `ca = t.0`
             // already did on both.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
+        } else if let Some((join_d_nr, base)) = crate::use_analysis::nullable_join_first_bind(
+            stack.data,
+            stack.def_nr,
+            stack.function.tp(v),
+            value,
+        ) {
+            // loft#1106 — a NULLABLE heap local (`r: S?`) first-bound from a call whose
+            // return may borrow one of its arguments.  `S?` is `Optional(Reference(S))`,
+            // and every arm of this dispatch asks its shape question against the bare
+            // type, so the nullable spelling of the same storage reached none of them:
+            // the bind stayed a plain `OpPutRef` alias.  A write through the result then
+            // reached the caller's own variable — which `(B-Copy)` says a bind cannot do —
+            // and the arm where the callee MINTED its store left it with no owner.
+            //
+            // The `-> S` twin of the same call already resolves this per execution, and
+            // this is that bind: `OpBindOrCopy` copies when the returned store is the
+            // witness's and adopts when it is not, so the scope-exit free is right on
+            // both arms.  It is also what makes a `null` answer safe — a null `src` has
+            // no store to alias, so the guard adopts it and the local stays null.
+            self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
         } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
             stack.function.tp(v).clone()
             && let Value::Call(fn_nr, _) = value.unspan()
