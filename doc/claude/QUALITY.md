@@ -881,7 +881,7 @@ which omits nothing anyway. So the remaining backlog **cannot be triaged as test
 four Plan-06 analyses were the anomaly, not the rule, and every other catch-all walker on that
 list is code a loft binary runs.
 
-It discriminates — 4 415 of the crate's 7 163 function NAMES reach `main`, so nearly two in
+It discriminates — 4 414 of the crate's 7 162 function NAMES reach `main`, so nearly two in
 five do not — it simply does not discriminate *here*. Ranking is now by omitted **pass-through** wrappers
 (`Span` `Set` `Return` `Drop` `Yield` `TuplePut`, derived from `for_each_child` rather than
 listed): skipping `If` or `Call` is usually a decision about a shape the walker does not care
