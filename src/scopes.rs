@@ -6535,7 +6535,7 @@ impl Scopes {
                 ops.pop();
                 preamble.extend(ops);
                 ls.push(Value::Var(w));
-                        } else if let Some(tp) =
+            } else if let Some(tp) =
                 Self::unnameable_borrow_source(&scanned, outer_call, arg_idx, data)
             {
                 // loft#1105 — an argument the @P290 bracket cannot NAME, at a call whose return
@@ -6637,7 +6637,7 @@ impl Scopes {
         Some(tp.with_deps(&Deps::frame(lift_view_deps(arg, data)?)))
     }
 
-        /// loft#1029 — the work-ref an INLINE-built argument yields, when the callee's return
+    /// loft#1029 — the work-ref an INLINE-built argument yields, when the callee's return
     /// may borrow it.
     ///
     /// `Some(w)` for a value block that fills a work-ref and ends in it — the shape the

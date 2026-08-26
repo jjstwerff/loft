@@ -117,7 +117,7 @@ The catch-all backlog is no longer blocked on ranking — `reach` says 125 of it
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.  **A SECOND queue now runs beside it (B6g), and it is the sharper one:** the
 catch-all list asks who forgot a variant, while `spellings` asks who can only see one of a
-notion's two IR spellings — **40** functions resolve a projection by OP NAME and **5** of them
+notion's two IR spellings — **38** functions resolve a projection by OP NAME and **5** of them
 handle `TupleGet` (18 · 2 when B6g wrote this; the SCREEN was widened in B6i, not the family).  Following it produced three defects in one pass, two fixed here and one
 filed as a design question (**loft#1102**: a tuple literal ALIASES a heap local while a struct
 literal and a vector literal copy it).  Reading the queue a second time produced a fourth
@@ -1362,15 +1362,16 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 40 | **5** | 35 |
+| 38 | **5** | 33 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
 
-⚠ **The row reads 40 · 5 · 35 and the paragraph above it says 18 · 2 · 16, mostly because the
-SCREEN was widened rather than because sites appeared** (38 · 4 · 34 before the sibling
-checkout's commits were cherry-picked in; `lift_view_deps` resolves a projection by op name and
-DOES carry a `TupleGet` arm, which is why both of the first two columns moved). The matcher saw two of the three ways Rust resolves an op
+⚠ **The row reads 38 · 5 · 33 and the paragraph above it says 18 · 2 · 16, mostly because the
+SCREEN was widened rather than because sites appeared.** It has moved four times in one merge —
+the sibling checkout's commits add `lift_view_deps`, which resolves a projection by op name AND
+carries a `TupleGet` arm, and this branch's two tuple helpers came back out again once that arm
+proved to answer their cells. Re-run the tool after any merge rather than reading a number here. The matcher saw two of the three ways Rust resolves an op
 here — `def_nr("OpGet…")` and a call to `is_projection_op` — and was blind to the third, a match
 on `data.def(d).name()` against a string literal, which is how every hand-spelled list in the tree
 is written. That is the B4g lesson arriving one mode later, and it is what B6i found by walking
@@ -1850,12 +1851,29 @@ a PRECONDITION rather than an incidental fact. The cure is theirs (`Type::deps_m
 faces on one home); the line worth carrying is that **a membership list has as many faces as it
 has verbs, and only the ones a test exercises stay in step.**
 
-⚠ **And the `Text` hole is a FOURTH member, deliberately left open.** `deps_mut` peels the two
-wrappers and still has no `Text` arm, so a text local's dep is as unclearable as a nullable one
-was. It is not closed because the remove side has never acted on a text dep: adding the arm is a
-behaviour change with no measurement under it, and it wants its own probe rather than a ride on a
-nullable fix. Recorded here so the count is honest — the class has four faces and three are in
-step.
+✅ **The `Text` hole was a FOURTH member, and it is closed — by measuring it rather than by
+arguing it.** `deps_mut` peeled the two wrappers and had no `Text` arm and no `Function` one,
+while `depend` reads a dep from both. It was left open on the grounds that adding the arm is a
+behaviour change with no measurement under it, which was the right call at the time and the wrong
+one afterwards, because the measurement is one env-gated counter:
+
+| `make_independent` calls, 881-file corpus | on `Text` or `Function` |
+|---:|---:|
+| **13 926** | **0** |
+
+Every call is `Vector` (8 871), `Reference` (5 017), `Optional` (5 — the arm loft#1106 added) or
+four others, and twelve hand-written text / fn-ref shapes — a var-to-var bind, a field read, an
+element read, `+=`, `??`, a call result, a `&text` parameter, a fn-ref reassignment — added none.
+So the arms are **inert today and correct when a caller arrives**, which is the only ordering that
+does not require someone to debug the no-op first.
+
+**And the arms are the smaller half: the gate is `data::dep_faces_agree`.** It builds every
+single-dep-list variant carrying one dep and asserts the READ face and the CLEAR face reach it,
+then does the same through both dep-transparent wrappers — so a variant added to one verb and not
+the other is a failing test rather than a silent no-op at whichever site asks the other question.
+It was written FIRST and watched fail on `Text` before either arm went in. `Tuple` is the
+documented exception (its deps are the union of its elements', so there is no single list to hand
+back). **A membership list has as many faces as it has verbs — and now they cannot drift.**
 
 ⚠ **What made this findable was a matrix of PAIRS, not of cells.** Every nullable cell was
 written beside its non-null twin or its direct-use twin — `s = o.f` beside `s = o.g`,
@@ -1934,6 +1952,40 @@ cannot compute. The cure the sibling needs is the same fact from the other side:
 carry the ARGUMENT's deps, and where the chain does not bottom out in a nameable var it must not
 be bound at all — a temp you cannot type correctly is one you must not create, which is exactly
 why loft#1029's construction is HOISTED rather than bound.
+
+#### B6l — the entry point is part of the harness, and a comparison is only as good as the one both sides share (2026-08-26)
+
+Two method faults, found within an hour of each other, both of which had already produced a
+"verified" reading that measured nothing.
+
+**A `--interpret` run of a guard file may execute NOTHING.** `tests/wrap.rs::run_test` runs
+`main` if the file HAS one, and otherwise every zero-parameter function. A guard written in the
+`fn test_*` idiom therefore has no `main`, and `loft --interpret <guard>` compiles it, prints its
+diagnostics and its leak line, and exits 0 having run no assertion. Four cherry-picked guards were
+checked that way here and read "clean" for that reason; re-scored under `--tests` they are
+genuinely green (7, 8, 9 and 8 assertions), so the readings survived — by luck of file shape, not
+by method. The two guards written here carry a `main` and were being run correctly.
+
+The rule is not *"use `--tests`"*, because that is wrong for half the corpus: **`--tests` on a
+`main`-ful guard runs the zero-parameter HELPERS and not the assertions** — it reported "4 passed"
+for a file whose `main` runs thirty. The rule is that the entry point is part of the harness, the
+file's shape decides which one the corpus runner picks, and the number to read is the ASSERTION
+COUNT rather than the exit code.
+
+⚠ **THREE ways to run a comparison that measures nothing turned up in one afternoon, all of them
+reporting success**, and that is the thing to write down rather than any one of them. Beside the
+two below: a probe harness scored on a marker its own SOURCE contains, which loft's error report
+echoes (§ B6i); and, in the sibling checkout, a guard cell that passed on a control because a
+non-null return never reaches the code path it was written for. Different costumes, one shape —
+**a channel that cannot see the subject reports agreement.**
+
+⚠ **The second fault is the one worth the section, because it makes a difference disappear.** An
+on/off comparison of a compiler arm was first run through `--tests` on a `main`-ful guard and
+answered *"4 passed / 4 passed"* — which reads as *the arm changes nothing* and is instead *the
+four helpers do not exercise it*. Re-run through the entry point that runs the assertions, the
+same comparison is what settled the arm's fate. **A comparison inherits the blindness of the
+entry point both sides share**, and two identical numbers from a channel that cannot see the
+subject are the most convincing wrong answer available.
 
 #### C — process / skills
 

@@ -541,7 +541,7 @@ search for.
 
 **The instrument is per-notion and cheap.**  `scripts/ir_walker_audit.py spellings` asks it for
 the projection notion: who resolves a projection by op name, and do they also carry a `TupleGet`
-arm — **40 functions, 5 of them do**.  The mode is about thirty lines; the shape generalises to
+arm — **38 functions, 5 of them do**.  The mode is about thirty lines; the shape generalises to
 any notion whose two spellings can be named.  Its first outside use found a latent blindness in
 freshly-landed code (`expr_borrows_local` resolves by `OpGetField` / `OpGetVector` and cannot see
 `TupleGet`; five tuple spellings answer correctly today only because the DEPS leg covers what the
