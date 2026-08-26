@@ -117,7 +117,7 @@ The catch-all backlog is no longer blocked on ranking — `reach` says 125 of it
 code production runs (B6b), so it is a read-one-at-a-time queue rather than something a filter
 will shrink.  **A SECOND queue now runs beside it (B6g), and it is the sharper one:** the
 catch-all list asks who forgot a variant, while `spellings` asks who can only see one of a
-notion's two IR spellings — **39** functions resolve a projection by OP NAME and **4** of them
+notion's two IR spellings — **40** functions resolve a projection by OP NAME and **5** of them
 handle `TupleGet` (18 · 2 when B6g wrote this; the SCREEN was widened in B6i, not the family).  Following it produced three defects in one pass, two fixed here and one
 filed as a design question (**loft#1102**: a tuple literal ALIASES a heap local while a struct
 literal and a vector literal copy it).  Reading the queue a second time produced a fourth
@@ -448,7 +448,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 320 | 303 | **17** |
+| 321 | 304 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -1362,14 +1362,15 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 39 | **4** | 35 |
+| 40 | **5** | 35 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
 
-⚠ **The row reads 39 · 4 · 35 and the paragraph above it says 18 · 2 · 16, mostly because the
+⚠ **The row reads 40 · 5 · 35 and the paragraph above it says 18 · 2 · 16, mostly because the
 SCREEN was widened rather than because sites appeared** (38 · 4 · 34 before the sibling
-checkout's eleven commits were cherry-picked in; one of them resolves a projection by op name). The matcher saw two of the three ways Rust resolves an op
+checkout's commits were cherry-picked in; `lift_view_deps` resolves a projection by op name and
+DOES carry a `TupleGet` arm, which is why both of the first two columns moved). The matcher saw two of the three ways Rust resolves an op
 here — `def_nr("OpGet…")` and a call to `is_projection_op` — and was blind to the third, a match
 on `data.def(d).name()` against a string literal, which is how every hand-spelled list in the tree
 is written. That is the B4g lesson arriving one mode later, and it is what B6i found by walking
@@ -1837,6 +1838,13 @@ a PRECONDITION rather than an incidental fact. The cure is theirs (`Type::deps_m
 faces on one home); the line worth carrying is that **a membership list has as many faces as it
 has verbs, and only the ones a test exercises stay in step.**
 
+⚠ **And the `Text` hole is a FOURTH member, deliberately left open.** `deps_mut` peels the two
+wrappers and still has no `Text` arm, so a text local's dep is as unclearable as a nullable one
+was. It is not closed because the remove side has never acted on a text dep: adding the arm is a
+behaviour change with no measurement under it, and it wants its own probe rather than a ride on a
+nullable fix. Recorded here so the count is honest — the class has four faces and three are in
+step.
+
 ⚠ **What made this findable was a matrix of PAIRS, not of cells.** Every nullable cell was
 written beside its non-null twin or its direct-use twin — `s = o.f` beside `s = o.g`,
 `s = o.f ?? d` beside `(o.f ?? d).x` — so the expected value never had to be hand-derived. That
@@ -1862,7 +1870,16 @@ of answer — its own register entry says it, and so does this thread: *a predic
 SHAPES will keep being one shape short*. Built in an isolated worktree off this repo and measured,
 it is leak-clean on every cell of the loft#1104 matrix, all three keyed kinds included.
 
-✅ **Both are on this branch now, reconciled** — the sibling's eleven commits are cherry-picked
+✅ **Both are on this branch now, reconciled** — and so is the sibling's own cure for what follows
+(`lift_view_deps`, cherry-picked): the temp carries the callee's parameter SHAPE with the deps its
+VALUE borrows, and where no source can be named the argument is not bound at all, so a value with
+no provenance keeps the leak it already had. That was taken over this branch's first answer — a
+`skip_free` temp, which also stops the over-free and says less: `skip_free` answers *"do not free
+me"*, a dep answers *"whose store is this"*, and the second is the question `Type::depend`'s other
+readers ask. `is_view_op` and `is_projection_op` carried the identical four names by then and are
+folded onto one.
+
+**Both are on this branch now, reconciled** — the sibling's eleven commits are cherry-picked
 here so the two do not diverge, with the general arm ORDERED LAST and its temp `skip_free`. What
 follows is the finding as it was measured against their commit, which is what the guard cells
 below still score.

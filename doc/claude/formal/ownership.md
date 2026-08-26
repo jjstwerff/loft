@@ -172,7 +172,31 @@ of the same join.  Face B is also this register's clearest case of a leak MASKIN
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
 
-### D-own-13 — OPEN (2026-08-26, loft#1106): a nullable heap local carries no ownership fact
+### D-own-13 — NARROWED (2026-08-26, loft#1106): the ELEMENT position still has no ownership fact
+
+`(O-Complete)` requires the ownership fact PER BINDING, and a nullable heap LOCAL now has one:
+loft#1106 routes its first bind through the same `OpBindOrCopy` the non-null twin uses, so the
+value is copied out and owned and `(B-Copy)` holds again. Measured here after the merge —
+`r?.x = 55` no longer reaches `q`, and the repro is leak-clean.
+
+**The nullable value in an ELEMENT position is outside that cure**, and the cure is deliberately
+narrow: it fires for a JOIN with a nameable witness and every other nullable bind keeps the plain
+adopt.
+
+```loft
+fn pickn(s: Sn?, c: boolean) -> Sn? { if c { s } else { mkn() } }
+fn elem(c: boolean)  -> integer { v: vector<Sn?> = [Sn { a: 7 }]; r = pickn(v[0], c); r?.a }
+fn local(c: boolean) -> integer { q: Sn? = Sn { a: 7 }; r = pickn(q, c); r?.a }        // clean
+```
+
+Two records per iteration at `kt=__nullable<Sn>`, values correct on both arms, both backends —
+and **binding `v[0]` to a local first does NOT cure it**, which is the discriminator that told
+D-own-13 from D-own-11 in the first place: a witness gap is cured by a name, an ownership gap is
+not. Pre-existing rather than a merge artefact (measured on a build from before the loft#1106
+work). Left to the checkout that owns `nullable_join_first_bind`, because widening it is the
+decision that has to stay clear of the by-accident trap the entry below records.
+
+### D-own-13 (first face) — CLOSED (2026-08-26, loft#1106): a nullable heap local carried no ownership fact
 
 `(O-Complete)` requires the ownership fact PER BINDING.  An `Optional(Reference)` local has
 none: `data::is_dbref` lists the eight store-carrying kinds and not the `Optional` wrapper, so
