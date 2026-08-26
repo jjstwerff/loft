@@ -41,6 +41,41 @@ NOT — a parser change went in with no working IR proven first; it regressed
 `loft_suite` and never closed the case. Same method, opposite outcomes. The
 difference was this gate.
 
+## Zeroth: has the spec already TRIED your fix?
+
+`doc/claude/formal/` is not only the rule book. For the store-lifetime and return-buffer
+machinery it is also the **record of attempts** — which fixes were made, which were reverted,
+and WHY — so it answers three questions before you write a line, and each one costs a session
+if you learn it by hand instead:
+
+1. **Has this exact change been tried and reverted?** Reverted attempts are written up beside
+   the rule they failed, with the measurement that killed them.
+2. **Where does the spec say the unsound step IS?** It usually names a site, and it is usually
+   not the site where the symptom appears.
+3. **What guards it now?** Each closure names its `tests/scripts/` cell, so you get a working
+   control for free.
+
+Grep the mechanism, not the symptom — the op or the pass (`OpFreeRefIfDistinct`, `work-ref`,
+`classify_ret_promotion`), across `formal/*.md`. `IMPLEMENTATIONS.md` is the index of what is
+already merged; `ownership.md` carries the store-lifetime narrative.
+
+⚠ **The anti-example is loft#1096, and it is recent.** A callee freeing the caller's work-ref
+buffer on a null return was traced to `OpFreeRefIfDistinct`, and the obvious repair — skip the
+free when the witness is null — was written and measured: use-after-free gone on both backends,
+values correct. Then the poison sweep exhausted the store table. `formal/ownership.md` had
+already recorded that same move: *"removed the wrong answer and left both leaks — a trade, not
+a closure"*, **reverted as inert**, because *"a guard that cannot fail proves nothing"*. Two
+lines further it names where the fix belongs — *"Closed at the promotion, which is where the
+unsound step is"* — and the `tests/scripts/` cell that guards it. Reading it first would have
+skipped the whole attempt. This is CLAUDE.md's *"READ THE FORMAL SPEC FIRST when the fix has a
+choice in it"* with a price tag on it.
+
+**And a citation gap is a finding, not a dead end.** If the site you are about to edit enforces
+a rule and cites none — `src/fill.rs` carries zero `@FR-` tags, so no `rule_tags.py sites` query
+reaches the free it performs — say so in the fix. A rule the enforcing site does not name is a
+rule the next reader cannot find from the code. (`fill.rs` is `@generated` from the `#rust`
+templates in `default/*.loft`, so the citation, like the fix, belongs in the template.)
+
 ## The method — bytecode → types → code, smallest scale first
 
 1. **Bytecode first (the target, proven).** Write the minimal case. Capture the
@@ -159,6 +194,10 @@ rule it enforces; leave a note where two look alike and must stay apart.
 
 - **Keep `git diff main` a usable codegen compass** — ONE branch held close to main, rebased on `origin/main` often (the `engineering-rigor` skill § "Keep `git diff main` usable"); a diverged branch loses the working-vs-broken comparison this method depends on.
 
+- [`doc/claude/formal/`](../../../doc/claude/formal/) — the rules AND the record of attempts:
+  `ownership.md` for store-lifetime (which fixes were reverted and why, and where each closure
+  put the unsound step), `IMPLEMENTATIONS.md` for what is already merged. Read BEFORE writing a
+  store-lifetime or return-buffer fix, not after it fails.
 - [CODEGEN_METHOD.md](../../../doc/claude/CODEGEN_METHOD.md) — the full method
 - [OWNERSHIP_MODEL.md](../../../doc/claude/OWNERSHIP_MODEL.md) — `deps` as loft's borrow checker (the north star for store-lifetime work)
 - Worked example + rungs: `doc/claude/plans/85-store-lifetime-retirement/` (`bytecode-comparisons/`, `type-ownership-design.md`); probe 05 = method followed (clean), probe 04 = method skipped (regressed) — read both

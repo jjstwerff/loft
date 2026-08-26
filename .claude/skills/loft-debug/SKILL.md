@@ -25,6 +25,15 @@ irreversible moves not to make.
   § The composition axes.
 - **Brittleness vs bugs** — `doc/claude/DESIGN_VERIFICATION.md` § C1 (the real target
   is robust algorithms; a green matrix can still be brittle).
+- **Prior attempts on THIS mechanism** — `doc/claude/formal/`, and grep it by the MECHANISM
+  (the op, the pass) rather than the symptom. For store lifetime and return buffers it is
+  the record of what was tried: `ownership.md` writes each reverted fix up beside the rule
+  it failed, with the measurement that killed it, names where the closure decided the
+  unsound step actually is, and cites the `tests/scripts/` cell now guarding it — so you
+  inherit a working control. Measured cost of skipping it (loft#1096): a repair was written
+  and validated on both backends before the poison sweep exhausted the store table, and the
+  spec had already recorded that same move as *"a trade, not a closure"*, reverted as inert,
+  two lines above where it says the fix belongs. `IMPLEMENTATIONS.md` indexes what is merged.
 - **Investigation plans** (heavyweight) — `doc/claude/plans/_INVESTIGATION_TEMPLATE.md`.
 
 ## Running a bug down — mechanics
