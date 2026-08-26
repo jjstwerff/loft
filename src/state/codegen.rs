@@ -3138,12 +3138,12 @@ impl State {
         // Writing it here still satisfies `OpBindOrCopy`'s precondition — the slot holds a
         // sentinel before the guard writes it, which is all the borrow arm's
         // `alloc_record_at` needs.
-        let slot_offset = stack.var_pos(v);
-        stack.add_op("OpInitRefSentinel", self);
-        self.code_add(slot_offset);
         let witness_pos = stack.var_pos(base);
         stack.add_op("OpVarRef", self);
         self.code_add(witness_pos);
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRefSentinel", self);
+        self.code_add(slot_offset);
         stack.add_op("OpBindOrCopy", self);
         self.code_add(stack.var_pos(v));
         self.code_add(tp_nr);

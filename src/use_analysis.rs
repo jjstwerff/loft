@@ -1975,13 +1975,10 @@ impl<'a> Ownership<'a> {
     /// space) to the CALLER's argument var at the same VISIBLE-parameter position.
     /// `u16::MAX` when it is not a visible param or the matching arg is not a var.
     ///
-    /// ⚠ A PROJECTION argument answers `u16::MAX` and therefore leaks the join's minting arm
-    /// (`pick(v[0], …)` into a nullable parameter, one record per call).  Widening it to the
-    /// projection's root through [`view_root_slots`] — the same walk the @P290 bracket
-    /// protects through — cures that and is MEASURED WRONG: `pick(v[0], c)` then answers the
-    /// field DEFAULT on the borrowing arm instead of the element, because the copy the join
-    /// guard emits against a container witness does not deliver.  A leak is the better of
-    /// those two, so the narrow reading stands until the delivery half is understood.
+    /// A PROJECTION argument is mapped to its ROOT container through [`view_root_slots`] —
+    /// the same walk the @P290 bracket protects through, so the store the guard witnesses
+    /// against is the store the bracket marks.  `u16::MAX` when the argument is not a view
+    /// of one nameable container: a mint, or a join reaching two different roots.
     fn caller_arg_base(&self, callee_d: u32, callee_base: u16, caller_args: &[Value]) -> u16 {
         let attrs = self.data.def(callee_d).attributes();
         if callee_base == u16::MAX
@@ -1995,8 +1992,20 @@ impl<'a> Ownership<'a> {
             .iter()
             .filter(|a| !a.hidden)
             .count();
-        match caller_args.get(arg_index).map(Value::unspan) {
-            Some(Value::Var(cv)) => *cv,
+        let Some(arg) = caller_args.get(arg_index) else {
+            return u16::MAX;
+        };
+        // A PROJECTION argument is witnessed by its ROOT: `pick(v[0], …)`, `pick(w.s, …)`
+        // and `pick(h[k], …)` all answer a `DbRef` living in the root container's store, so
+        // comparing the returned store against the root decides borrow-vs-mint exactly as a
+        // bare `Var` does.  One walk, shared with the @P290 bracket, so the base the guard
+        // witnesses against and the slot the bracket protects cannot disagree.
+        //
+        // A walk reaching MORE than one root — a join whose arms name different containers —
+        // has no single store to compare against, and the caller keeps the conservative
+        // never-free answer rather than guessing one of them.
+        match view_root_slots(self.data, arg).as_deref() {
+            Some([root]) => *root,
             _ => u16::MAX,
         }
     }

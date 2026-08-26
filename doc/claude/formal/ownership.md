@@ -157,11 +157,11 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; **D-own-13,
-2026-08-26**, a nullable heap local carries no ownership fact at all) — D-own-12 records the two
-witness spellings closed here and points at D-own-11 for the other two; D-own-9, D-own-10 and
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-13's second face
+closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 records the two
+witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
 D-own-11 opened and closed 2026-08-26, D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
@@ -172,29 +172,33 @@ of the same join.  Face B is also this register's clearest case of a leak MASKIN
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
 
-### D-own-13 — NARROWED (2026-08-26, loft#1106): the ELEMENT position still has no ownership fact
+### D-own-13 (second face) — CLOSED (2026-08-27, loft#1107): the ELEMENT position witnesses its ROOT
 
-`(O-Complete)` requires the ownership fact PER BINDING, and a nullable heap LOCAL now has one:
-loft#1106 routes its first bind through the same `OpBindOrCopy` the non-null twin uses, so the
-value is copied out and owned and `(B-Copy)` holds again. Measured here after the merge —
-`r?.x = 55` no longer reaches `q`, and the repro is leak-clean.
-
-**The nullable value in an ELEMENT position is outside that cure**, and the cure is deliberately
-narrow: it fires for a JOIN with a nameable witness and every other nullable bind keeps the plain
-adopt.
+`(O-Complete)` requires the ownership fact PER BINDING.  A nullable value in an ELEMENT position
+now has one: `caller_arg_base` maps a PROJECTION argument to the root container it reads out of,
+through the same `view_root_slots` walk the @P290 bracket protects through, so the join guard has
+a store to compare the return against and frees the minting arm.
 
 ```loft
 fn pickn(s: Sn?, c: boolean) -> Sn? { if c { s } else { mkn() } }
 fn elem(c: boolean)  -> integer { v: vector<Sn?> = [Sn { a: 7 }]; r = pickn(v[0], c); r?.a }
-fn local(c: boolean) -> integer { q: Sn? = Sn { a: 7 }; r = pickn(q, c); r?.a }        // clean
+fn local(c: boolean) -> integer { q: Sn? = Sn { a: 7 }; r = pickn(q, c); r?.a }
 ```
 
-Two records per iteration at `kt=__nullable<Sn>`, values correct on both arms, both backends —
-and **binding `v[0]` to a local first does NOT cure it**, which is the discriminator that told
-D-own-13 from D-own-11 in the first place: a witness gap is cured by a name, an ownership gap is
-not. Pre-existing rather than a merge artefact (measured on a build from before the loft#1106
-work). Left to the checkout that owns `nullable_join_first_bind`, because widening it is the
-decision that has to stay clear of the by-accident trap the entry below records.
+Twenty records over ten rounds at `kt=__nullable<Sn>` on the control, clean on both backends
+after, values 180 throughout.
+
+⚠ **This entry read as an OWNERSHIP gap on the strength of one discriminator that was itself
+broken.**  It recorded *"binding `v[0]` to a local first does NOT cure it — a witness gap is
+cured by a name, an ownership gap is not"*, and that is a sound test whose input was wrong: on
+that build the hand-bound spelling did not merely fail to cure the leak, it CORRUPTED the
+caller's container, because the join bind read its witness out of a slot its own sentinel had
+just overwritten.  The name was being taken and then destroyed.  With the read ordered before
+the write the discriminator answers the other way and the gap is the witness gap it always was.
+
+**What generalises:** a discriminator is only as good as the build under it, exactly as a filed
+negative is.  This one was run on a tree carrying an unfixed defect in the very mechanism it was
+discriminating on, so it could not have answered anything else.
 
 ### D-own-13 (first face) — CLOSED (2026-08-26, loft#1106): a nullable heap local carried no ownership fact
 
