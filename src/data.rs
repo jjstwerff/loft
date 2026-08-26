@@ -1919,6 +1919,38 @@ impl Type {
         }
     }
 
+    /// The dep list this type carries, for a WRITE — reached through the dep-TRANSPARENT
+    /// wrappers.
+    ///
+    /// `Optional` and `RefVar` do not change what a value aliases, which is why
+    /// [`Type::depend`] reads through them and [`Type::with_deps`] writes through them.
+    /// This is the third face of that one fact, the one a caller needs to REMOVE a dep,
+    /// and it has to peel in lockstep with the other two: while it did not, a nullable
+    /// heap local's dep could be read and set but never cleared, so `Function::make_independent`
+    /// silently no-opped on `S?` and no `S?` could ever be made an owner — the store it
+    /// held at scope exit had nobody to free it (loft#1106).
+    ///
+    /// `None` for a type that carries no dep list of its own. `Text` is deliberately
+    /// absent: it is not in the set the remove side has ever acted on.
+    pub fn deps_mut(&mut self) -> Option<&mut Deps> {
+        match self {
+            Type::RefVar(inner) | Type::Optional(inner) => inner.deps_mut(),
+            Type::Reference(_, to)
+            | Type::Enum(_, _, to)
+            | Type::Vector(_, to)
+            // @P295 — keyed collections carry a lifetime dep list too (`Sorted`/`Hash`/
+            // `Index`/`Radix`'s last field). Without these arms `s = ns` left `s`
+            // depending on `ns`, so scope analysis suppressed `s`'s own `OpFreeRef`
+            // (treating it as a borrow) and deferred `ns`'s free.
+            | Type::Sorted(_, _, to)
+            | Type::Hash(_, _, to)
+            | Type::Index(_, _, to)
+            | Type::Radix(_, _, to)
+            | Type::Trie(_, _, to) => Some(to),
+            _ => None,
+        }
+    }
+
     /// True if this type owns a heap store (heap_dep is Some and dep is empty).
     #[must_use]
     pub fn is_heap_owned(&self) -> bool {

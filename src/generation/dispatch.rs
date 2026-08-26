@@ -535,8 +535,24 @@ impl Output<'_> {
         // why the predicate lives in one place (loft#810)"; this end had drifted off it.
         // Measured: the identical body written as a FREE function was correct on
         // `--native` and as a METHOD answered zeros from the second call on.
-        if let (Some(d_nr), Value::Call(fn_nr, args)) =
-            (variables.tp(var).heap_def_nr(), to_unspanned)
+        // loft#1106 — a NULLABLE heap local reaches this dispatch too.  `S?` is
+        // `Optional(Reference(S))`, the same storage behind a nullability marker, and
+        // `heap_def_nr` answers `None` for it — so a `r: S?` bound from a call whose
+        // return may borrow an argument got neither the runtime adopt-or-copy guard
+        // below nor the @P290 bracket, and stayed a plain alias that nothing freed.
+        // The peel is gated on the same one question the interpreter and `scopes` read
+        // (`nullable_join_first_bind`), so the three cannot disagree about which binds
+        // change shape.
+        let record_def = variables.tp(var).heap_def_nr().or_else(|| {
+            crate::use_analysis::nullable_join_first_bind(
+                self.data,
+                self.def_nr,
+                variables.tp(var),
+                to_unspanned,
+            )
+            .map(|(rec, _)| rec)
+        });
+        if let (Some(d_nr), Value::Call(fn_nr, args)) = (record_def, to_unspanned)
             && self.data.def(*fn_nr).is_loft_defined()
             && !self.data.def(*fn_nr).return_adopts_fresh_store()
         {
