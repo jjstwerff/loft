@@ -768,6 +768,23 @@ parent-write detector — **all test-only, all wrong the same way**. That is one
 subsystem rather than four bugs: nothing exercises these analyses, so nothing reports that they
 drifted, and three of the four carried a comment asserting they were covered.
 
+**Where the sweep stops, and why.** After the four fixes the screen still lists ~43 sites, and
+it cannot rank them: the filter that matters is "does production reach this?", and a one-level
+check answers **44 of 44 yes** — wrong, because `par_unsafe_reason` and `callers_of` are called
+by ordinary-looking functions that are themselves only called from tests. Transitivity is the
+whole question and a caller count cannot see it.
+
+So the remaining sites need reading one at a time. The highest-value one was worth doing:
+`collect_parallel_violations` is genuinely production-wired (reachable from `parse_parallel`,
+no `#[cfg(test)]` above it), it guards a SOUNDNESS floor — rejecting unsound `parallel {}`
+captures — and the screen flagged it `MISSING[Span]`. Measured: **113 calls, 41 fallthroughs**
+(all leaves: `Int` 30, `Text` 4, `Boolean` 4, `Null`, `Line`, `Break`) and **0** spanned. A
+false positive; that collector already names every wrapper including `Return`/`Drop`/`Yield`.
+
+⚠ The first run of that probe reported zero because it selected programs matching `par(…)`
+while the guard is for `parallel { … }` BLOCKS — a different construct. Vacuous, and the second
+such miss this session. Selecting the corpus subset is part of the measurement, not setup.
+
 ⚠ **The screen over-reports, and `escapes_value` is the shape it cannot judge.** It looked like
 a fifth hit; its caller `guard_escapes` handles `Return(v)` and passes the already-unwrapped
 payload, so the helper never sees a wrapper. A predicate that takes the PAYLOAD rather than the
