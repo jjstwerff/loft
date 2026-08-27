@@ -2086,8 +2086,15 @@ blocks on, and not one of the 41 commits measured an op count except where someb
    goes through `.base()` before asking each opaque verb. It reproduced 15 of 15 hand answers, and
    the corpus ranking behind it says only four (verb, caller) pairs are ever REACHED by a `τ?`.
    Three peels and one lock came out of it; see B6p.
-3. **Record the axes a matrix HELD FIXED, in the guard file.** Cheaper than an instrument and it
-   is the thing five separate failures had in common.
+3. ⚠ **Record the axes a matrix HELD FIXED — DONE, but not in the form proposed.** The DECLARED
+   form is falsified by this repo's own register: D-own-6 wrote its pinned axis into its closing
+   paragraph and four more defects still came from moving it (*"an axis named in a closure is not
+   an axis measured by it"*). A declared list is only as good as the author's awareness, which is
+   the thing that failed. What shipped is DERIVED — `scripts/matrix_axes.py`, eight axes each
+   carrying the DOMAIN the language offers, so the tool can name an axis nobody considered.
+   Scored 6 of 6 against hand answers written first. Its own depth-RANKING was then falsified by
+   the same oracle, so there is no corpus queue; the products are a per-file census and a PAIR
+   cross. See B6q.
 
 #### B6n — retrofitting 878 guards, and five ways the retrofit reported success while doing less than it said (2026-08-27)
 
@@ -2245,11 +2252,12 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 640 | 266 | 4 | **370** |
+| 641 | 267 | 4 | **370** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
-picked in, which added three opaque sites; re-run the tool rather than reading a number here.)  It reproduces **15 of 15** hand answers written down before it was
+picked in, which added three opaque sites, and 640 · 266 until B6q's `parse_stored_default`
+added one that asks through `.base()`; re-run the tool rather than reading a number here.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
 `is_scalar` / `heap_def_nr` / `is_unknown` are opaque; `contains_def` descends; `is_heap_owned`
@@ -2384,6 +2392,156 @@ corpus ranking is only as wide as the four verbs instrumented — `is_equal`, `c
 `unrewritten` have 126 bare call sites between them and were not measured.  So **370 is a floor
 and four is a floor**.
 
+#### B6q — the axis a matrix pinned, derived instead of declared (2026-08-27)
+
+B6m's ranked list put *"record the axes a matrix HELD FIXED, in the guard file"* third, and
+called it cheaper than an instrument. The premise does not survive contact with the repo's own
+register. `formal/ownership.md` D-own-6 wrote its pinned axis into its closing paragraph and the
+next four defects still came from moving it, which is what that entry says in one line:
+
+> An axis named in a closure is not an axis measured by it.
+
+A DECLARED axis list is only as good as the author's awareness, and awareness is the thing that
+failed. So the form that can work is a DERIVED one: a fixed vocabulary of axes, each carrying the
+DOMAIN of values the language offers, applied to the guard file by a tool. The domain comes from
+the language rather than from the author's list, which is the only reason it can name an axis
+nobody considered.
+
+`./scripts/matrix_axes.py` is that tool. Eight axes, each with a citation to a defect that
+actually moved it — container kind (loft#1104), container provenance (loft#1105), argument
+spelling (D-own-6), statement context (loft#1118), nullability (loft#1106), `??` default shape,
+element type (`formal/tuples.md`'s all-`(integer, integer)` oracle), evaluation count. It is a
+vocabulary of things that have bitten, not a taxonomy invented up front.
+
+**It was scored against hand answers written before it existed, and the scoring is what found its
+bugs.** The oracle is guards later WIDENED: the axis added between a guard's first commit and
+today IS the answer. Six of six reproduced — 1104's `{hash, sorted, index, spatial}` (where B6i
+later found `pick(h[k], …)` leaking at every keyed kind), 1104's missing `coalesce-result` (which
+is loft#1105), 1105's provenance at one of four (the axis B6m names as the one that hid the
+over-free), and 1118b's missing `discarded` (which is loft#1119). Getting there took two detector
+fixes, both of the same kind — a shape the tool could not spell reading as a shape the file does
+not have. `t += (f(x))` has a GROUPING paren, and treating any preceding `(` as an argument list
+hid seven of loft#1118's eight statement contexts; and blanking string bodies erased the code
+inside an interpolation, so a call written there vanished. An eight-context sweep read as three.
+
+⚠ **The tool's own ranking claim was falsified by that oracle, and the tool now says so.** The
+first design ranked files by how many values of an axis they reach — a file reaching several and
+stopping short being an author who was enumerating and ran out of ideas, a file reaching one
+never having claimed to sweep. loft#1105's killer axis sits at ONE of four. Reaching one value is
+not a point test; it is exactly what a pinned axis looks like. There is therefore **no
+corpus-wide queue**, because nothing measured supports one — *every* file in the corpus leaves
+some axis short (892 of 892), which is a thermometer nobody reads (§ B4). Two measurements
+replace it: the per-file census, to run while writing a guard, and the PAIR cross, which is the
+sharper one because every failure B6m counted was a matrix that moved one axis and pinned
+another. A pair, not a value.
+
+`cross A1 A3` over the corpus reads (file-level co-occurrence, so an UPPER bound on real
+interaction — a small number can only be smaller in truth):
+
+```
+                literal   local   field element tuple-el coalesce call-res   chain
+vector              435     428     166      86       44       47       87      68
+hash                126     122      83      57       12       21       23      47
+sorted               60      53      41      22        9       11       12      18
+index                51      45      36      19        9        8       11      14
+spatial              14      12      10       8        4        3        5       7
+tuple               149     148      46      22       66       10       28      27
+```
+
+The thin row is `spatial`, which 20 of 892 guards reach at all, and its thinnest cells are 3–8
+files. Re-run the tool rather than reading these numbers.
+
+⚠ **This table is the tool's SECOND answer, and the first one was wrong in the direction that
+would have been quoted.** It originally reported `spatial × tuple-element` and `spatial × chain`
+at ZERO — never crossed — and a zero is exactly the finding one writes down. The cause was the
+screen's own predicate, which is B6e's lesson recurring: `_classify_arg` returned ONE label per
+argument, so `sp[x, y].t.0` — an element access AND a tuple projection AND a chain — was
+whichever test ran first. The corpus looked as though no guard ever reached a tuple element
+through a container. **What caught it was writing the guard for the zero and finding the tool
+still said zero**, which is a check available for free whenever an instrument reports an absence:
+construct the thing it says does not exist and ask again. The classifier now answers with the
+SET of spellings an argument contains, because a coverage question asks what is present; every
+one of the six hand answers is unchanged by the fix, which is what says the correction did not
+buy its zeros back somewhere else.
+
+**Probing the thinnest cells found a defect with no store-lifetime in it: a tuple-typed struct
+field cannot carry a default.** `t: (text, text) = ("a", "b")` is refused with *"Expect token
+}"* — punctuation, for a composition the language supports on both halves. The boundary is exact
+and it makes the case: integer, text, float, boolean, nullable, `vector<T>`, `hash<T[k]>`,
+`sorted<T[k]>` and a struct field all take a default; tuple is the only type former that does
+not, and the same tuple takes a default as a LOCAL and as a function PARAMETER.
+
+Neither half is in doubt. Tuple struct fields are supported — Plan-06 phase 4d lifted the
+restriction and TUPLES.md § Non-goals lists named tuple fields, single-element tuples, tuple
+iteration, whole-tuple formatting and variadic tuples, not this. Declared field defaults are
+advertised: loft#914's `omitted-field-zero` advice names them as the cure that already exists.
+Only the composition was missing.
+
+The cause is the shape this whole thread is about. `parse_field` reaches a field's type down two
+branches — one for a type written as an IDENTIFIER, one for a type written with a leading `(` —
+and the `= expr` shorthand lived in the first. Plan-06 4d added the second branch for the TYPE,
+beside a sibling carrying a capability, and did not inherit it. `parse_stored_default` is now the
+one home both call.
+
+**Asking what ELSE that branch could not reach found a second capability, which is the point of
+asking.** The identifier branch gets a field `assert(...)` by falling back into `parse_field`'s
+loop; the tuple branch ends the field with a `break` and never arrives. So `t: (integer, integer)
+assert(t.0 > 0)` was refused too, for the same structural reason and with the same message.
+`parse_field_assert` is its one home. Both now parse AND fire: a constraint that is accepted is
+not one that is enforced, so each was violated on purpose and each refuses with *"field
+constraint failed"*.
+
+**The gates, because a refactor's claim is byte-identity and a feature's claim is values.** The
+emitted IR + bytecode of **879** corpus programs is byte-identical between the control at
+`94bbd860` and here; of 880 compared the only one that moves is the tuple-default guard, which
+the control cannot parse. The coverage guard added alongside it does NOT move, which is the same
+fact its `INERT` control record states, arrived at by a different instrument.
+That comparison was falsified two ways before being trusted — it fires on the new shape (0 lines
+vs 2995) and on a one-character change to an ordinary field's default — and its first run was a
+FALSE 878-of-878 caused by an asymmetric path normalisation, each binary resolving `default/`
+beside itself.
+
+`tests/scripts/a-tuple-field-takes-a-default.loft` carries the cells, which are the REPLAY axes
+rather than the filed shape: a default is lowered once in the struct's context, which has no
+frame, and replayed at every construction site, so what decides soundness is the element type,
+whether the default needs a TEMPORARY (routed into `__dflt_*` by loft#698), whether it reads `$`,
+and how many times it is replayed. Its `@falsified-at:` records `94bbd860 — interpret exit 1 ->
+0, native exit 1 -> 0`, and says plainly that the channel which moved is EXIT, because the control
+cannot parse the file at all. That says nothing about whether the VALUES are checked, so every
+assertion was mutated in turn and each fails on the assert channel. **A guard falsified only on
+exit is a guard whose values are unproven, and the record has to say which channel moved or it
+reads as more than it is.**
+
+**The thinnest pairs were then crossed, and they are clean.** 30 cells — five container kinds ×
+chain / tuple-element / `??`-result × two container provenances, each rooted in a keyed lookup
+and handed to a borrow-deciding call — pass on both backends with no leak, against a control
+cell that fails. **The third axis is there because the census asked for it.** The first draft
+read `A2 container provenance 1/4 — reaches local-literal`: every cell built its container in
+the function that indexed it, which is precisely the axis loft#1105's matrix pinned and precisely
+why an over-free hid there, a container dying with the frame being unable to witness a free that
+outlives it. That is the instrument doing the job B6m asked for — naming a pinned axis to the
+author who just pinned it, in a file written by someone who had spent the day reading about that
+exact failure.
+
+So the thin cells are a COVERAGE gap and not a defect, which is a result worth having rather
+than a null one: `spatial × chain` and `spatial × tuple-element`, 7 and 4 files across the whole
+corpus, now have a guard that states an expected value.
+`tests/scripts/a-keyed-projection-witnesses-every-kind.loft` graduates them, and its control
+record says `none — INERT`, measured rather than assumed (`make falsify` reports
+`0|0|none|none` on both trees). Naming a channel there would be a false claim of regression
+cover. Two things keep that verdict readable rather than the mislabelling B6p warns about: the
+file has a `main`, so the leak column is the live one and not the blind `main`-less shape; and
+six cells were mutated by moving their expected total by one, and all six fail on the assert
+channel. **Writing the cells also caught one vacuous by construction** — the `??` cells first
+reached a NON-null field, where the compiler elides the coalesce as redundant and says so, which
+would have left five cells claiming a spelling the program no longer contained.
+
+⚠ **What this does not establish.** The census reads SYNTAX, so every count is a floor: a value
+reached through a `use`d library is invisible, and a file that reaches a value only in a
+commented-out cell reads as never having considered it. The cross is co-occurrence, not
+interaction. And the instrument found this defect the way B6m § 3 predicts instruments work — it
+ranked the cells, and the defect came from a person reading one.
+
 #### C — process / skills
 
 | item | state |
@@ -2391,6 +2549,7 @@ and four is a floor**.
 | a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
+| a tool for the axis a matrix HELD FIXED | ✅ done — `scripts/matrix_axes.py`, derived rather than declared (the declared form is falsified by D-own-6). `file <path>` censuses one guard against the language's own domains; `cross <A> <B>` names the value PAIRS no corpus file reaches, which is the shape every failure B6m counted actually had. Scored 6 of 6 against hand answers written before it was built, and that scoring found two detector bugs — a grouping paren read as an argument list, and `strip()` erasing the code inside an interpolation. Its depth ranking was falsified by its own oracle and removed. All REPORTS. See B6q |
 | a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, seven modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g); `optional` asks the same question over the TYPE former — who resolves a shape without peeling `τ?`, plus the caller-side `.base()` list (B6p). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
 | a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
 | the negative-control gate's LEAK channel | ⚠ **blind for the corpus's standard guard shape** — `falsify.sh` reads "stores not freed" off stderr, which only a `main`-ful `--interpret` run prints; `--tests` does not leak-check at all (that gate lives in `tests/wrap.rs`). So a leak guard written `main`-less scores INERT on both trees and is recorded as a LOCK. Measured on `a-nullable-return-joins-its-branch-arms.loft`, which `make ci` failed while falsify read `0|0|none|none` (B6p). Warning written into the tool's header; the cure — a leak check on `--tests` — is a decision about every library's `loft test` |

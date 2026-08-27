@@ -4062,14 +4062,7 @@ impl Parser {
                 is_computed |= comp;
                 is_init |= init;
             }
-            if self.lexer.has_token("assert") {
-                // assert(condition) or assert(condition, message) on struct fields.
-                self.lexer.token("(");
-                self.expression(&mut check);
-                if self.lexer.has_token(",") {
-                    self.expression(&mut check_message);
-                }
-                self.lexer.token(")");
+            if self.parse_field_assert(&mut check, &mut check_message) {
             } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "CHECK" {
                     // Legacy CHECK syntax — parse and discard for backward compat
@@ -4100,84 +4093,7 @@ impl Parser {
                     }
                     a_type = tp;
                     // '= expr' shorthand for a field default value
-                    if self.lexer.has_token("=") {
-                        // #91: enable dep tracking so $.field accesses are recorded
-                        // for circular-init detection (same as init(expr) path).
-                        self.init_field_tracking = true;
-                        self.init_field_deps.clear();
-                        self.init_reads_record = false;
-                        // @PLN22 Phase 1 — hint the field's enum so a bare variant
-                        // default (`level: Level = Warning`) resolves against the
-                        // declared field type.
-                        // loft#1067 — a DEFAULT is checked against the declared type, so
-                        // `fn takes(f: fn(integer) -> integer = |x| { x * 2 })` infers `x`
-                        // exactly as a caller passing the same lambda would.
-                        if self.enum_context(&a_type) || Self::seeds_lambda_hint(&a_type) {
-                            self.expected = a_type.clone();
-                        }
-                        // loft#698 — where the default's value is BUILT decides whether it
-                        // can be replayed.  Mark the source position first: a default that
-                        // turns out to need a temporary is re-parsed from here into a
-                        // function of its own (`default_value_fn`).
-                        let value_start = self.lexer.link();
-                        let tp = self.expression(&mut value);
-                        self.expected = Type::Unknown(0);
-                        self.init_field_tracking = false;
-                        if a_type.is_unknown() {
-                            a_type = tp;
-                        }
-                        // A default is lowered HERE, in the STRUCT's context, which has no
-                        // frame, and replayed at every construction site inside some
-                        // FUNCTION.  So it may reference only the record being built
-                        // (`Var(0)`, the `$` placeholder); any other variable is an index
-                        // into this struct's variable table, which is discarded before
-                        // replay.  The indices then resolved against whatever locals the
-                        // construction site happened to have, and the default's own
-                        // `OpDatabase` re-allocated one of them mid-construction — `= [1, 2]`
-                        // hung, `text = "a" + "b"` SIGSEGV'd.
-                        //
-                        // Every default that needs no temporary needs no help: a scalar, a
-                        // text literal, arithmetic, a struct literal, `= []`.  One that DOES
-                        // is re-parsed into a function of its own, and the stored default
-                        // becomes the var-free call to it — so nothing crosses tables.
-                        //
-                        // A default reading `$` is the one shape that cannot move: it needs
-                        // the record, which the function it would move into does not have.
-                        // Needing BOTH `$` and a temporary stays refused, and says so.
-                        // `$` is `Var(0)`, and so is the first temporary the struct's empty
-                        // table hands out — the dep tracking above is what tells the two
-                        // apart, so the replay question cannot be asked without it.
-                        let reads_record = self.init_reads_record;
-                        let site = DefaultSite::Field {
-                            reads_record,
-                            struct_typed: matches!(a_type.base(), Type::Reference(_, _)),
-                        };
-                        let dflt_fn = format!("__dflt_{}_{a_name}", self.data.def(d_nr).name());
-                        if self.default_hoisted_in_pass_1(&dflt_fn)
-                            || !default_replayable_in_place(&value, site)
-                        {
-                            // A non-empty KEYED default was refused here because loft had no
-                            // keyed literal as a VALUE at all — `[K { … }]` was a `vector<K>`
-                            // wherever it stood alone, so there was nothing for the function
-                            // it moves into to return.  loft#703 gave it one, so it is now
-                            // lowered like any other default needing a temporary.
-                            if !reads_record {
-                                self.lexer.revert(value_start);
-                                value = self.default_value_fn(&dflt_fn, &[], &a_type, Vec::new());
-                            } else if !self.first_pass {
-                                let tn = a_type.name(&self.data);
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "the default for `{a_name}: {tn}` both reads `$` and \
-                                     needs a temporary value — one that reads `$` is built \
-                                     against the record at every construction site, so it \
-                                     cannot be built once and shared; drop the `$` reference \
-                                     or set the field at each construction site"
-                                );
-                            }
-                        }
-                    }
+                    self.parse_stored_default(d_nr, a_name, &mut a_type, &mut value);
                     // @PLN86 P6.4 — links after a scalar/named field type.
                     self.parse_field_links(d_nr, a_name);
                 }
@@ -4191,8 +4107,16 @@ impl Parser {
                 // and `get_val` for the per-element write/read paths.
                 defined = true;
                 a_type = tp;
+                // ⚠ This branch ENDS the field: it breaks out of the loop instead of
+                // falling back into it, so every capability a field carries AFTER its
+                // type has to be asked for here by name.  The identifier branch above
+                // collects them by looping, which is why a capability added there does
+                // not appear here on its own.  Each one has a single home, called from
+                // both, so the two spellings of a field type stay in step.
+                self.parse_stored_default(d_nr, a_name, &mut a_type, &mut value);
                 // @PLN86 P6.4 — links after a vector/generic/tuple field type.
                 self.parse_field_links(d_nr, a_name);
+                self.parse_field_assert(&mut check, &mut check_message);
                 break;
             } else {
                 break;
@@ -4296,6 +4220,119 @@ impl Parser {
     // <field_default> ::= 'virtual' <value-expr> | 'init' '(' <value-expr> ')'
     //                   | 'default' '(' <value-expr> ')'
     // Returns (is_computed, is_init).
+    /// Parse a field's `assert(condition)` / `assert(condition, message)` check.
+    ///
+    /// One home for both field-type branches of `parse_field`.  Answers whether a check
+    /// was consumed, so the identifier branch can keep using it as the head of its
+    /// if-chain while the tuple branch, which ends the field itself, calls it directly.
+    pub(crate) fn parse_field_assert(&mut self, check: &mut Value, message: &mut Value) -> bool {
+        if !self.lexer.has_token("assert") {
+            return false;
+        }
+        self.lexer.token("(");
+        self.expression(check);
+        if self.lexer.has_token(",") {
+            self.expression(message);
+        }
+        self.lexer.token(")");
+        true
+    }
+
+    /// Parse the `= expr` shorthand that gives a struct field a stored default.
+    ///
+    /// One home for every field type former.  A field whose type is written as an
+    /// IDENTIFIER (`integer`, `text`, `vector<T>`, a struct name) and one written as a
+    /// TUPLE (`(text, text)`) reach `parse_field` down different branches, and a default
+    /// means the same thing in both: an expression lowered in the STRUCT's context, which
+    /// has no frame, and replayed at every construction site.
+    ///
+    /// Answers whether a default was consumed.
+    pub(crate) fn parse_stored_default(
+        &mut self,
+        d_nr: u32,
+        a_name: &String,
+        a_type: &mut Type,
+        value: &mut Value,
+    ) -> bool {
+        if !self.lexer.has_token("=") {
+            return false;
+        }
+        // #91: enable dep tracking so $.field accesses are recorded
+        // for circular-init detection (same as init(expr) path).
+        self.init_field_tracking = true;
+        self.init_field_deps.clear();
+        self.init_reads_record = false;
+        // @PLN22 Phase 1 — hint the field's enum so a bare variant
+        // default (`level: Level = Warning`) resolves against the
+        // declared field type.
+        // loft#1067 — a DEFAULT is checked against the declared type, so
+        // `fn takes(f: fn(integer) -> integer = |x| { x * 2 })` infers `x`
+        // exactly as a caller passing the same lambda would.
+        if self.enum_context(a_type) || Self::seeds_lambda_hint(a_type) {
+            self.expected = a_type.clone();
+        }
+        // loft#698 — where the default's value is BUILT decides whether it
+        // can be replayed.  Mark the source position first: a default that
+        // turns out to need a temporary is re-parsed from here into a
+        // function of its own (`default_value_fn`).
+        let value_start = self.lexer.link();
+        let tp = self.expression(value);
+        self.expected = Type::Unknown(0);
+        self.init_field_tracking = false;
+        if a_type.is_unknown() {
+            *a_type = tp;
+        }
+        // A default is lowered HERE, in the STRUCT's context, which has no
+        // frame, and replayed at every construction site inside some
+        // FUNCTION.  So it may reference only the record being built
+        // (`Var(0)`, the `$` placeholder); any other variable is an index
+        // into this struct's variable table, which is discarded before
+        // replay.  The indices then resolved against whatever locals the
+        // construction site happened to have, and the default's own
+        // `OpDatabase` re-allocated one of them mid-construction — `= [1, 2]`
+        // hung, `text = "a" + "b"` SIGSEGV'd.
+        //
+        // Every default that needs no temporary needs no help: a scalar, a
+        // text literal, arithmetic, a struct literal, `= []`.  One that DOES
+        // is re-parsed into a function of its own, and the stored default
+        // becomes the var-free call to it — so nothing crosses tables.
+        //
+        // A default reading `$` is the one shape that cannot move: it needs
+        // the record, which the function it would move into does not have.
+        // Needing BOTH `$` and a temporary stays refused, and says so.
+        // `$` is `Var(0)`, and so is the first temporary the struct's empty
+        // table hands out — the dep tracking above is what tells the two
+        // apart, so the replay question cannot be asked without it.
+        let reads_record = self.init_reads_record;
+        let site = DefaultSite::Field {
+            reads_record,
+            struct_typed: matches!(a_type.base(), Type::Reference(_, _)),
+        };
+        let dflt_fn = format!("__dflt_{}_{a_name}", self.data.def(d_nr).name());
+        if self.default_hoisted_in_pass_1(&dflt_fn) || !default_replayable_in_place(value, site) {
+            // A non-empty KEYED default was refused here because loft had no
+            // keyed literal as a VALUE at all — `[K { … }]` was a `vector<K>`
+            // wherever it stood alone, so there was nothing for the function
+            // it moves into to return.  loft#703 gave it one, so it is now
+            // lowered like any other default needing a temporary.
+            if !reads_record {
+                self.lexer.revert(value_start);
+                *value = self.default_value_fn(&dflt_fn, &[], a_type, Vec::new());
+            } else if !self.first_pass {
+                let tn = a_type.name(&self.data);
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "the default for `{a_name}: {tn}` both reads `$` and \
+                     needs a temporary value — one that reads `$` is built \
+                     against the record at every construction site, so it \
+                     cannot be built once and shared; drop the `$` reference \
+                     or set the field at each construction site"
+                );
+            }
+        }
+        true
+    }
     pub(crate) fn parse_field_default(
         &mut self,
         value: &mut Value,

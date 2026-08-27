@@ -228,7 +228,13 @@ signal you haven't earned it:**
 2. Build the matrix in throwaway `/tmp` probes on `--interpret` (`scripts/probe-matrix`), varying ONE
    composition axis per probe, distinctive values everywhere. But **count the axes you HELD FIXED** —
    a sweep varying one while pinning four reads as proof and isn't (@PLN130's broken cell needed
-   nesting depth, Set-count, param kind and caller-count moved TOGETHER).
+   nesting depth, Set-count, param kind and caller-count moved TOGETHER). Counting them by hand
+   is what keeps failing, so **run `python3 scripts/matrix_axes.py file <guard.loft>`**: it
+   carries a fixed vocabulary of composition axes, each with the DOMAIN the language offers, and
+   answers which values your cells reach and which they do not. DERIVED, not declared — an axis
+   named in your own closing paragraph is not an axis measured by it (`formal/ownership.md`
+   D-own-6). `cross <A> <B>` asks the sharper question, which pairs the whole corpus never
+   crosses; and an absence it reports is checkable by building that case and asking again.
 3. **Hand-compute each cell's expected value** (agreement between two binaries is NOT a pass);
    prove the harness can fail (a no-output cell is vacuous); assert **value AND length AND leak**.
 4. Map pass/fail → find the REAL boundary (filed scope is usually wrong). Resisting a read twice →
