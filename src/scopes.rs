@@ -7079,10 +7079,44 @@ impl Scopes {
         // the @PLN85 skip_free-orphan pass ([`collect_consumed_ncc_text`]) and a
         // vector one by its own delivery path; both measured clean, and lifting
         // them too would free what those mechanisms free.
+        // An EMPTY dep list licenses the lift because it says the value is owned.  It says
+        // that for a `Call`; for a `CallRef` it says nothing.  `fnref_result_type` maps the
+        // callee's return deps through the caller's ARGUMENTS and drops every index naming a
+        // HIDDEN attribute, on the stated grounds that the value then arrives owned — and
+        // `__closure` is a hidden attribute.  So a lambda returning a value it CAPTURED
+        // hands the caller an empty dep list for a store the outer scope still owns, and
+        // lifting it emits a free that reaches into that scope: the capture is released
+        // while the variable it came from is still live, and the next read of it answers
+        // garbage (loft#1114).
+        //
+        // The witnessed-`Join` route stays open to a `CallRef`, because there the bind that
+        // follows is the runtime guard rather than a static bet.  Declining the other route
+        // costs the leak that was already there, which is the direction this gate has always
+        // taken when it cannot name what it would be freeing.
+        let subject_is_call_ref = match val.unspan() {
+            Value::Block(bl) if bl.name == "ncc" => {
+                match bl.operators.first().map(Value::unspan) {
+                    Some(Value::Set(_, rhs)) => match rhs.unspan() {
+                        // Only a CAPTURING fn-ref can hand back a store the caller's scope
+                        // owns; a fn-ref carrying no captures has nothing to borrow FROM,
+                        // so its empty dep list means what it says and the lift stands.
+                        // The fn-ref type's own deps are exactly that question, and they
+                        // name the closure the call reads.
+                        Value::CallRef(fn_var, _) => !matches!(
+                            function.tp(*fn_var),
+                            Type::Function(_, _, d) if d.is_empty()
+                        ),
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
         if let Value::Block(bl) = val.unspan()
             && bl.name == "ncc"
             && let (Type::Reference(d_nr, dep), opt) = bl.result.peel_optional()
-            && (dep.is_empty() || self.ncc_join_is_witnessed(val, data))
+            && ((dep.is_empty() && !subject_is_call_ref) || self.ncc_join_is_witnessed(val, data))
         {
             return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
         }

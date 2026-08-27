@@ -560,7 +560,13 @@ impl Parser {
             // proven struct-capture representation), so the closure BORROWS the outer
             // collection.  The body still needs the ORIGINAL collection type so `h[key]`
             // / iteration type-check; recover it below from `capture_context`.
-            let is_collection_capture = Self::is_collection_type(&ctype);
+            // A capture the closure record stores as a SHARED `DbRef` must still read back
+            // as the type the source wrote: the shared reference is the sharing mechanism,
+            // not the type.  Collections have always been in this set; a nullable heap
+            // value joins it, because `S?` is a `DbRef` whose `rec == 0` means absent and
+            // it shares exactly as its dense twin does (loft#1114).
+            let is_collection_capture = Self::is_collection_type(&ctype)
+                || self.data.nullable_struct_payload(&ctype).is_some();
             // record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {
                 self.captured_names.push((name.to_string(), ctype.clone()));

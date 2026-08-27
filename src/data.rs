@@ -2290,6 +2290,23 @@ impl Type {
                     && sp.iter().zip(op.iter()).all(|(a, b)| a.is_equal(b))
                     && sr.is_equal(or);
             }
+            // A `τ?` is the same type as another `τ?` when the types it wraps are the same
+            // type.  Derived `==` on the wrapper compares the INNER's deps, so one `Ps?`
+            // handed back through a local and another returned straight from a call read as
+            // two different types — with the same name, since the renderer omits deps
+            // (*"cannot change type from `fn(integer) -> Ps?` to `fn(integer) -> Ps?`"*).
+            // [`Self::is_same`] has carried this peel for exactly that presentation.
+            //
+            // Restricted to inners that CARRY deps, and that restriction is the whole of it:
+            // a scalar has none, so for it derived `==` is comparing the SPEC, and an
+            // integer's spec is its WIDTH — which this routine deliberately collapses
+            // (loft#663, the width is layout-bearing).  Peeling scalars made `u8?` and a
+            // wider `integer?` one type and lost the implicit narrowing check with them.
+            (Type::Optional(s), Type::Optional(o))
+                if s.deps_ref().is_some() && o.deps_ref().is_some() =>
+            {
+                return s.is_equal(o);
+            }
             // T1.7: tuple equality ignores `not_null` on Integer elements (runtime type is same).
             (Type::Tuple(se), Type::Tuple(oe)) => {
                 return se.len() == oe.len()
@@ -6630,6 +6647,33 @@ impl Data {
             && self.definitions[syn as usize].source == self.definitions[struct_d as usize].source
             && self.definitions[syn as usize].name
                 == format!("__nullable<{}>", self.definitions[struct_d as usize].name)
+    }
+
+    /// The STRUCT a nullable heap type denotes, in either of its two spellings — the `τ?`
+    /// the author writes (`Optional(Reference(S))`) and the synthetic enum the field
+    /// rewrite produces (`Enum(__nullable<S>, true)`).
+    ///
+    /// `None` for anything that is not a nullable struct.  Use it wherever a site must
+    /// treat a nullable heap value the same as its dense twin: the two spellings are ONE
+    /// notion, and a site that recognises only the one it happens to see gives the same
+    /// value two different layouts.  [`Self::same_nullable_struct`] is the two-sided
+    /// question; this is the one-sided one.
+    #[must_use]
+    pub fn nullable_struct_payload(&self, tp: &Type) -> Option<u32> {
+        match tp {
+            Type::Optional(inner) => match &**inner {
+                Type::Reference(d, _) => Some(*d),
+                _ => None,
+            },
+            Type::Enum(syn, true, _) => {
+                let def = self.definitions.get(*syn as usize)?;
+                let inner = def.name.strip_prefix("__nullable<")?.strip_suffix('>')?;
+                self.def_names
+                    .get(&(inner.to_string(), def.source))
+                    .copied()
+            }
+            _ => None,
+        }
     }
 
     /// The two spellings of a nullable STRUCT, compared as one type: `τ?` written by the

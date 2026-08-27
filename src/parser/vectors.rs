@@ -1929,6 +1929,16 @@ impl Parser {
     /// user-defined struct fields.  Ownership (which marker) is decided later, after
     /// scope analysis — see `scopes::mark_borrowed_captures` (#682).
     fn closure_attr_type(&mut self, tp: &Type) -> Type {
+        // A NULLABLE heap value takes the same storage as its dense twin, and that is the
+        // whole of the rule rather than a special case: `S?` IS a `DbRef` whose `rec == 0`
+        // means absent, so sharing it needs no wrapper.  Left to fall through, the `S?`
+        // spelling kept its `__nullable<S>` enum type, was COPIED into the closure record
+        // inline while `S` was SHARED as a DbRef, and the body's read then applied the
+        // enum's payload offset on top of a record the write had placed without one — a
+        // garbage read out of a lambda that looked like a capture problem (loft#1114).
+        if let Some(d) = self.data.nullable_struct_payload(tp) {
+            return Type::Reference(d, Deps::share_sentinel());
+        }
         match tp {
             Type::Reference(d, _) => Type::Reference(*d, Deps::share_sentinel()),
             Type::Hash(c, _, _)

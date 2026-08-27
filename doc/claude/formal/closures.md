@@ -92,7 +92,9 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **0**. Closed: both lambda forms capture identically (D-clo-1), the
+OPEN: **1** — a lambda that BINDS its return value to a local first leaks one store
+(D-clo-7, below; the value half of that entry is closed). Closed: both lambda forms capture
+identically (D-clo-1), the
 stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
 2026-07-04 —
 `L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22), a lambda
@@ -139,6 +141,48 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-7 — value half CLOSED, leak half OPEN (2026-08-27, loft#1114).** `(L-CapHeap)`
+> says a captured heap value is SHARED. A NULLABLE one was not: `closure_attr_type`
+> recognised `Reference`, the keyed collections and `Vector`, and let `S?` fall through — so
+> the capture kept its `__nullable<S>` enum type, was COPIED into the closure record INLINE
+> while its dense twin was SHARED as a `DbRef`, and the body's read then applied the enum's
+> payload offset on top of a record the write had placed without one. The lambda answered
+> `4294967199`, with nothing saying so.
+>
+> `S?` IS a `DbRef` whose `rec == 0` means absent, which is why the cure is a peel and not a
+> new storage class. `Data::nullable_struct_payload` answers the one-sided question in BOTH
+> spellings — the `Optional(Reference(S))` the author writes and the `Enum(__nullable<S>,
+> true)` the field rewrite produces — and that is the whole of it: **recognising only the
+> spelling a site happens to see is what gives one value two layouts.** The same gap wore an
+> ICE (the tail's type changes KIND between the passes, so the delivery arms differ and pass
+> 2 grows an attribute pass 1 never minted) and a REFUSAL of a legal program (`Type::is_equal`
+> had a peel for eight wrappers and none for `Optional`, so derived `==` compared the inner's
+> deps and printed one type as two).
+>
+> ⚠ **The refusal was MASKING the wrong answer.** With the `Optional` peel applied and the
+> capture still copied, a refused cell stops being refused and starts answering
+> `4294967199` — a loud refusal traded for a silent wrong one. The peel is restricted to
+> inners that CARRY DEPS, because a scalar has none and derived `==` then compares the SPEC,
+> whose integer half is the layout-bearing WIDTH (loft#663): without that restriction `u8?`
+> and a wider `integer?` become one type and `overflow(300)` answers `300`.
+>
+> ⚠ **And fixing the capture exposed a use-after-free behind it.** With the store shared, a
+> caller's `??` over the fn-ref return LIFTED that join into a temp and freed it, releasing
+> the captured record while the outer variable was still live — so a second lambda over the
+> same variable read a released store. The licence was an empty return dep, and it is empty
+> because `fnref_result_type` DROPS an index naming a hidden attribute on the stated grounds
+> that *"the value arrives OWNED"*. `__closure` is a hidden attribute, and a captured value
+> does not arrive owned: **a dep dropped as uninteresting is not a dep that was never there.**
+> The lift now declines for a CAPTURING fn-ref and still fires for one that captures nothing.
+>
+> **OPEN: the leak.** A lambda that BINDS its return to a local (`d = q ?? P{}; d`) leaks one
+> store, as does a lambda's `??`-default store discarded inline. Neither needs a capture and
+> the NAMED twin is clean for both, which is what separates them from this entry: a direct
+> call site mints the return buffer as a caller LOCAL it frees at scope exit, while the
+> fn-ref path has `fn_call_ref` allocate a store the rebinding body never adopts.
+>
+> Guarded by `tests/scripts/1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft`.
 
 > **D-clo-6 — CLOSED (2026-08-27).** `(L-FnRef)` says a bare function name is a first-class
 > value. It was not, for a function that carries TWO hidden `RefVar(Text)` work buffers:
