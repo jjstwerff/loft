@@ -7038,15 +7038,18 @@ impl Scopes {
         let Value::Block(bl) = val.unspan() else {
             return false;
         };
-        // The subject is the block's first REAL statement.  A reused `__ncc_N` opens its
-        // block with its own overwrite `OpFreeRef`, which is not a subject and must not be
-        // read as one: positionally that free shifts the `Set` to second, and reading
-        // `first()` alone then answered "not a user call" for every spelling outside a
-        // `for` body — top level, an `if` arm, a bare block, another function — so the lift
-        // fired only in loops while the single-evaluation leak stayed (measured on this
-        // branch right after the pick).  Skipping a LEADING FREE cannot re-admit the
-        // `t[p] ?? dflt()` cell the narrowing above excludes: the first non-free statement
-        // still has to be a `Set` of a loft-defined call.
+        // The subject is the block's first REAL statement, not its first.  A REUSED
+        // `__ncc_N` opens its block with an overwrite `OpFreeRef`, which is not a subject:
+        // it shifts the `Set` to second, and a predicate reading `first()` then answers
+        // "not a user call" for a block that is one.  Whether a given spelling reuses the
+        // temp is a numbering property, so the set of spellings this hides is not stable
+        // enough to name here —
+        // `tests/scripts/1118b-an-inline-join-lifts-in-every-statement-context.loft` is
+        // the measurement, one cell per statement context.
+        //
+        // Skipping a LEADING FREE cannot re-admit the `t[p] ?? dflt()` cell the narrowing
+        // above excludes: the first non-free statement still has to be a `Set` of a
+        // loft-defined call.
         let subject = bl
             .operators
             .iter()
