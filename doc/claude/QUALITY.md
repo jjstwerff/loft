@@ -2165,7 +2165,7 @@ and nothing would have said if one stopped.  `make doc-probes`
 |---|---:|---|
 | clean exit | **798** | ran to completion; says nothing about the ANSWER (see the caveat below) |
 | refused (exit 1) | **55** | read: all legitimate — the `40-reshape-refusal/X*` probes assert exactly the diagnostic they get, four more are stale against the `spacial`→`spatial` rename (@PLN48), and `80-nested-closure` is refused by the restriction its own header documents |
-| hard fault | **4** | two environmental, two real |
+| hard fault | **4** | two environmental, two real — **2 after the fix below landed**, both environmental |
 
 **The two real ones are loft#1113, and the second file is new to it.** Both
 `52-value-block-borrow-cleanup/probes/85-closure-returns-coalesce.loft` (the file the issue was
@@ -2189,10 +2189,26 @@ into both parameters, `n___lambda_0(cell, _farg_0, _farg_0)`, which is the E0499
 lambda BODY is byte-identical to the working named-function twin, so the callee side was never
 wrong — only the call.
 
-⚠ **Not fixed here, because the sibling checkout is fixing it as this was written** — their tree
-carries `TextDep::SkipSecondLambdaBuf` plus a shared `lambda_holds_work_buf` predicate that also
-absorbs the duplicated inline check, edited minutes before this entry.  Same enforcement point
-this analysis reached independently: cap the lambda at one buffer, first asker takes it.
+**Fixed in the sibling checkout and cherry-picked here** (`4458a9ec`, their `1d00a25f`) — the
+enforcement point this analysis reached independently: both minting sites read one
+`holds_text_work_buf` predicate, so the first promotion to ask takes the buffer and a later text
+local stays a local, delivered by copy exactly as `SkipOwnedLocal` already prescribes.  Verified
+after the pick rather than assumed: the two doc probes print their own `PASSED` again, the 20
+matrix cells above pass on BOTH backends, and the guard
+(`tests/scripts/1113-a-lambda-carries-one-text-work-buffer.loft`, 15 asserted cells) carries
+`@falsified-at: 20e25e9a — interpret exit 139 -> 0, native exit 1 -> 0` — a line re-measured here
+rather than taken on trust, and it reproduces exactly.  `make ci` 4473/4473, and the sweep that
+opened this entry now reports two hard faults where it reported four.
+
+⚠ **And their reading of the shape is wider than mine was** — worth recording because my matrix
+agreed with the filed scope and the filed scope was a third of the defect.  I moved backend,
+result type, capture, entry point and `return`-vs-tail, and concluded the crash needed a lambda +
+`return` + `??` + text.  Only the LAMBDA is real: `?` reaches it (the other discharge rule), so
+does the null branch, a zero-argument closure, and **two plain text locals with no discharge
+anywhere**.  What the shapes share is a SECOND buffer, not the spelling that asked for one — and
+`??` was simply the cheapest way to ask.  The axis I never moved was *how many promotions the body
+makes*, which is the axis the defect lives on; it is now `formal/closures.md` deviation D-clo-4,
+whose `OPEN: 0` has been re-measured twice and broken both times.
 
 ##### What the sweep cannot say, and the two ways it said something wrong first
 
