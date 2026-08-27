@@ -503,12 +503,50 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **0** — `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Var-Join — OPENED AND CLOSED (2026-08-27, loft#1117): an `if` whose arms are two variants of one enum was refused
+
+`(C-Var)` licenses `Reference(S) ⤳ Enum(E)` for `S ∈ variants(E)` and licenses NOTHING between
+two variants; `(T-Chk-Var)` checks each variant against the enum. So two arms that are two
+variants join to `E`, and asking whether one converts to its SIBLING is a question the relation
+does not answer. `parse_if` asked exactly that — it handed the THEN arm's type down as the else
+arm's expected type — and refused a legal program, on both backends, at parse time:
+
+```loft
+enum E { A { x: integer = 1 }, B { x: integer = 2 } }
+
+fn pick_if(c: boolean)    -> E { if c { E::A { x: 7 } } else { E::B { x: 9 } } }   // ERROR: expected A, got B on else
+fn pick_match(k: integer) -> E { match k { 0 => E::A { x: 7 }, _ => E::B { x: 9 } } }   // fine
+fn pick_return(c: boolean)-> E { if c { return E::A { x: 7 }; } E::B { x: 9 } }         // fine
+```
+
+Two spellings of one program disagreeing is what made this a deviation rather than a design
+choice — and `match` lowers to the very node `if` builds, so the accepting spelling was already
+running the code the refused one could not reach.
+
+**Fixed as a JOIN, not as a conversion.** `parse_block` no longer asks `convert` about a sibling
+arm (`sibling_variants`) and lets it keep its OWN type; `parse_if` then joins two differing
+variants to their enum. Both halves are load-bearing:
+
+* without the first, the refusal stands;
+* without the second, `v: A = if c { E::A { … } } else { E::B { … } }` is ACCEPTED and a slot
+  declared as one variant holds another, read at this variant's offsets — loft#980's class,
+  silent. The widening makes that declaration fail where it should, naming the real conflict
+  (*"cannot change type from A to E"*) instead of blaming the else arm.
+
+Two arms of the SAME variant widen nothing, so a variant-typed destination stays legal for
+them — that was verified against a release control, having been broken by an earlier attempt
+that widened unconditionally. Guarded by
+`tests/scripts/1117-an-if-joins-two-variants-to-their-enum.loft` (falsified at `cd263f7c`:
+interpret exit 1 → 0, native exit 1 → 0). The four refusals that must SURVIVE — a sibling
+enum's variant, an unrelated struct, an integer, and the variant-typed destination — were each
+re-measured against that control.
 
 ### D-Null-Join — OPENED AND CLOSED (2026-08-26, loft#1103): a nullable in a LATER branch arm stored into a non-null slot in silence
 

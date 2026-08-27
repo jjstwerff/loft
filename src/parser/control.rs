@@ -1684,8 +1684,17 @@ impl Parser {
             // i32 { n }` reported the narrowing on the closing brace while the same
             // narrowing in an assignment, an argument and a struct-literal field all
             // named their own line.  Seek for the duration and restore.
-            let needs_convert =
-                !tuple_rewritten && !if_unified && !vec_match_candidate && !vec_arm_handled;
+            // @FR-C-Var — an `else` arm that is a SIBLING variant of the then arm's is not
+            // a conversion question at all.  `Reference(S) ⤳ Enum(E)` is licensed for each
+            // of them and nothing is licensed BETWEEN them, so asking `convert` produced
+            // *"expected A, got B on else"* for a join `match` accepts (loft#1117).  The
+            // arm keeps its own type and `parse_if` joins the two to their enum.
+            let sibling_variant = context == "else" && self.sibling_variants(t, result);
+            let needs_convert = !tuple_rewritten
+                && !if_unified
+                && !vec_match_candidate
+                && !vec_arm_handled
+                && !sibling_variant;
             let converted = if needs_convert {
                 self.lexer.to((tail_pos.line, tail_pos.pos));
                 let done = self.convert(&mut l[last], t, result);
@@ -1747,7 +1756,14 @@ impl Parser {
                 // walkers in `parse_if`, which match the `OpConv*FromNull` spelling.  One
                 // notion with two spellings and only one of them asked about; this is the
                 // other spelling, asked about here where the arm's own type is still in hand.
-                let honest = result.with_deps_of(t);
+                // A sibling variant keeps its OWN shape: the expected type names the
+                // then arm's variant, and taking it whole would report this arm as that
+                // one — which is also what lets `parse_if` see that the two differ.
+                let honest = if sibling_variant {
+                    t.clone()
+                } else {
+                    result.with_deps_of(t)
+                };
                 if crate::keys::pln25_dn1_enabled()
                     && matches!(t, Type::Optional(_))
                     && !matches!(honest, Type::Optional(_))
@@ -3376,7 +3392,48 @@ impl Parser {
                     chain_borrow = Some(chain_type);
                 }
             } else {
+                // @FR-C-Var — an `else` arm is checked against the ENUM, not against its
+                // SIBLING.  `types.md (C-Var)` licenses `Reference(S) ⤳ Enum(E)` for
+                // `S ∈ variants(E)` and licenses nothing between two variants, so handing
+                // the then-arm's type down asked a question the rules do not answer:
+                // `if c { E::A { … } } else { E::B { … } }` was refused *"expected A, got B
+                // on else"* while `match` — which lowers to this very node — accepted the
+                // identical join (loft#1117).  `match` gets this right by expecting
+                // `Unknown` per arm; an `if` cannot, because its else arm needs the
+                // sibling's type for `null` / `[]` / a bare variant name.  The enum is the
+                // type that serves both: it is what the arms actually join to, and it still
+                // carries the context those spellings need.
+                let variant_enum = self.variant_parent_enum(&true_type);
                 false_type = self.parse_block("else", &mut false_code, &true_type);
+                // @FR-C-Var — two DIFFERENT variants of one enum join to the ENUM, and
+                // that is this expression's type.  `parse_block` accepted the sibling arm
+                // and kept its own type (see its `sibling_variants` carve-out); deciding
+                // the join is this site's half, because only here are both arms in hand.
+                //
+                // The widening is what keeps the acceptance sound.  Left at the then-arm's
+                // variant, `v: A = if c { E::A { … } } else { E::B { … } }` would be
+                // accepted and a slot declared as one variant would hold another, read at
+                // this variant's offsets (loft#980's class).  Two arms of the SAME variant
+                // widen nothing, so a variant-typed destination stays legal for them.
+                if let Some(enum_tp) = &variant_enum
+                    && Self::joins_to_enum(enum_tp, &true_type, &false_type)
+                {
+                    true_type = enum_tp.clone();
+                }
+                // ...and when the arms really are two DIFFERENT variants, the join is the
+                // ENUM, so that is this expression's type.  Keeping the then-arm's variant
+                // would let `v: A = if c { E::A { … } } else { E::B { … } }` through — a
+                // slot declared as one variant holding another, whose fields are read at
+                // this variant's offsets (loft#980's class).  `(C-Var)` converts the enum
+                // to nothing narrower, so the declaration is refused where it belongs.
+                //
+                // Two arms of the SAME variant keep that variant: nothing was widened, and
+                // a `v: A` destination stays legal for them.
+                if let Some(enum_tp) = &variant_enum
+                    && Self::joins_to_enum(enum_tp, &true_type, &false_type)
+                {
+                    true_type = enum_tp.clone();
+                }
             }
             if true_type == Type::Unknown(0) {
                 if let Value::Block(bl) = &mut true_code {
@@ -10032,6 +10089,66 @@ impl Parser {
     /// same question six times and drift at the first one anybody forgets. `Void` / `Null` arms
     /// are left alone: they carry no type of their own to contribute, and the DN1 walkers own
     /// the bare-`null` arm.
+    /// Are these two types two DIFFERENT variants of one enum?
+    ///
+    /// @FR-C-Var licenses `Reference(S) ⤳ Enum(E)` for each variant and nothing between
+    /// two of them, so this is the pair for which "does one convert to the other?" is the
+    /// wrong question — they join to their enum instead.  The SAME variant twice is not a
+    /// sibling pair: that conversion is reflexive and takes the ordinary path.
+    fn sibling_variants(&self, a: &Type, b: &Type) -> bool {
+        let (Type::Reference(x, _), Type::Reference(y, _)) = (a, b) else {
+            return false;
+        };
+        if x == y {
+            return false;
+        }
+        let (dx, dy) = (self.data.def(*x), self.data.def(*y));
+        matches!(self.data.def_type(*x), DefType::EnumValue)
+            && matches!(self.data.def_type(*y), DefType::EnumValue)
+            && dx.parent != u32::MAX
+            && dx.parent == dy.parent
+    }
+
+    /// Do a then-arm and an else-arm join to `enum_tp` rather than to the then-arm's own
+    /// variant?
+    ///
+    /// True when the else arm is a DIFFERENT variant of the same enum, or the enum itself.
+    /// False for the same variant (nothing widened), and false for a `Void` / `Never` /
+    /// `Null` else arm — a diverging or valueless arm states no type to join with, and an
+    /// `else if` chain deliberately keeps its shape out of `false_type` (loft#936).
+    fn joins_to_enum(enum_tp: &Type, true_type: &Type, false_type: &Type) -> bool {
+        let Type::Enum(e, _, _) = enum_tp else {
+            return false;
+        };
+        match (true_type, false_type) {
+            (Type::Reference(a, _), Type::Reference(b, _)) => a != b,
+            (_, Type::Enum(f, _, _)) => f == e,
+            _ => false,
+        }
+    }
+
+    /// The ENUM a variant type belongs to — `Some(Enum(E))` for a `Reference(S)` whose def
+    /// is one of `E`'s variants, `None` for anything else.
+    ///
+    /// @FR-C-Var is the rule: `Reference(S) ⤳ Enum(E)` when `S ∈ variants(E)`, and there is
+    /// no conversion between two SIBLING variants.  So wherever one variant's type would be
+    /// handed to a position that another variant may also fill, this is the type to hand
+    /// down instead.  The deps travel with it: which store the value borrows is not changed
+    /// by naming its type more widely.
+    ///
+    /// `Definition::parent` makes this O(1) — a variant records its enum — so it is cheap
+    /// enough to ask on every `if` that yields a record.
+    fn variant_parent_enum(&self, tp: &Type) -> Option<Type> {
+        let Type::Reference(d, deps) = tp else {
+            return None;
+        };
+        let def = self.data.def(*d);
+        if !matches!(self.data.def_type(*d), DefType::EnumValue) || def.parent == u32::MAX {
+            return None;
+        }
+        Some(Type::Enum(def.parent, true, deps.clone()))
+    }
+
     fn join_arm_into(&self, so_far: &Type, arm: &Value, tp: &Type) -> Type {
         let joined = so_far.joined_deps(&self.arm_join_type(arm, tp));
         if crate::keys::pln25_dn1_enabled()
