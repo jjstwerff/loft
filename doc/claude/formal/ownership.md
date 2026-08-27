@@ -159,7 +159,8 @@ implication that reading `deps` is *sufficient*.
 
 OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-13's second face
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-14 opened and
+closed 2026-08-27 with loft#1118; D-own-13's second face
 closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 records the two
 witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
 D-own-11 opened and closed 2026-08-26, D-own-7
@@ -171,6 +172,46 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-14 — CLOSED (2026-08-27, loft#1118): a JOIN return used INLINE had no owner
+
+`(O-Deps)` places a free from the deps a value carries. A callee whose return may be its
+ARGUMENT or a store it MINTED answers `Own::Join`, and which one it is cannot be settled
+statically — only per execution. Bound to a local that already works: the bind goes through
+`OpBindOrCopy`, which adopts the minted arm (so the scope-exit free is right) and
+materialises the borrowed arm (so the caller's argument is intact).
+
+Used INLINE it did not. The `??` / `?` discharge lowers to an `ncc` value-block whose temp is
+`skip_free` — the block's result ALIASES it — so the minted store was owned by nothing: one
+leaked record per EVALUATION, unbounded in a loop, and the values right throughout, so only
+the leak channel spoke. `scopes::inline_struct_return` is the lift that cures exactly this
+(loft#879), and its `dep.is_empty()` guard refused the shape, because a `Join` return carries
+a dep on the argument it may borrow.
+
+The guard was not careless: lifting a value that really IS a borrow and freeing the temp is a
+use-after-free, the direction that cannot be recovered from. What makes the lift admissible
+is that the bind which follows is the runtime guard and not a static bet — a lifted temp is a
+DENSE `Reference`, so the heap first-bind dispatch reaches it and emits `OpBindOrCopy`. The
+lift therefore asks the same `Own::Join`-with-a-nameable-witness question that decides
+whether the guard is emitted at all, so it cannot fire where the guard would not.
+
+**The narrowing is the load-bearing half, and it was measured rather than reasoned.** loft's
+IR spells every operator as a `Value::Call`, so "the subject is a call" also matches an
+ELEMENT READ — `t[p] ?? d` is an `OpGetVector` — which is a view into a container the caller
+still owns. Admitting it made the ownership fuzz gate's `local_source` cell answer WRONG on
+`--native` with the two backends diverging. Only a call to a LOFT-DEFINED function is lifted,
+and only the block's FIRST statement is read: a default arm is frequently a call of its own
+(`t[p] ?? dflt()`), and searching the block for ANY call re-admits the cell just excluded.
+
+Three narrowings were tried against that gate before this one held, which is the record worth
+keeping — the gate falsified each in turn, and none of the hand-built cells could.
+
+Guarded by `tests/scripts/1118-an-inline-join-return-is-lifted-and-guarded.loft`, whose
+borrow-arm cells are scored by the caller's variable AFTER the loop rather than by the leak
+channel: a leak channel cannot see an over-free, because freeing more always reads as an
+improvement. Falsified at `aed98943` — interpret leaked `SN×750` → clean, native `SN×3` →
+clean. That native count is the second thing worth keeping: a small repro is clean on
+`--native`, which reads as "interpreter-only" until the loop counts show otherwise.
 
 ### D-own-13 (second face) — CLOSED (2026-08-27, loft#1107): the ELEMENT position witnesses its ROOT
 

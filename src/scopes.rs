@@ -7003,6 +7003,56 @@ impl Scopes {
         if was_optional { Type::optional(tp) } else { tp }
     }
 
+    /// loft#1118 — may an `ncc` block that DOES carry a dep be lifted anyway?
+    ///
+    /// The empty-dep test is the conservative reading of "nobody else owns this", and it
+    /// refuses the shape a NULLABLE PARAMETER produces: a callee whose return may be the
+    /// argument or may be a store it minted answers `Own::Join`, whose dep names that
+    /// argument. The block then stayed inline with the minted store owned by nothing — one
+    /// leaked record per evaluation, unbounded in a loop.
+    ///
+    /// Lifting is safe exactly when the bind that follows is the RUNTIME guard rather than
+    /// a static bet. It is: a lifted `__lift_N` is a dense `Reference`, so the heap
+    /// first-bind dispatch reaches it and emits `OpBindOrCopy`, which adopts the arm where
+    /// the callee minted (making the scope-exit free right) and materialises the arm where
+    /// the value is the witness's store (leaving the caller's argument intact). This asks
+    /// the same `Own::Join` question of the same value, so the lift cannot fire where that
+    /// guard would not.
+    ///
+    /// **The subject must be a call to a LOFT-DEFINED function**, and that is the whole of
+    /// the narrowing rather than a detail. loft's IR spells every operator as a
+    /// `Value::Call`, so "the subject is a call" also matches an element read (`t[p] ?? d`
+    /// is `OpGetVector`) — a view INTO a container the caller still owns, where the lift
+    /// hands the temp a free that reaches inside it. Measured, not hypothetical: admitting
+    /// the read made the ownership fuzz gate's `local_source` cell answer WRONG on
+    /// `--native` with the two backends diverging. Only the FIRST statement is read, too:
+    /// the block's default arm is often a call of its own (`t[p] ?? dflt()`), and asking
+    /// `any` operator re-admits the very cell this excludes.
+    ///
+    /// A join whose witness the bracket cannot name keeps the conservative no-lift, which
+    /// costs the leak that was already there rather than a free nothing protects.
+    fn ncc_join_is_witnessed(&self, val: &Value, data: &Data) -> bool {
+        if !crate::keys::join_own_enabled() {
+            return false;
+        }
+        let Value::Block(bl) = val.unspan() else {
+            return false;
+        };
+        let subject_is_user_call = match bl.operators.first().map(Value::unspan) {
+            Some(Value::Set(_, rhs)) => match rhs.unspan() {
+                Value::Call(fn_nr, _) => data.def(*fn_nr).is_loft_defined(),
+                Value::CallRef(_, _) => true,
+                _ => false,
+            },
+            _ => false,
+        };
+        subject_is_user_call
+            && matches!(
+                crate::use_analysis::ownership_of(data, self.d_nr, val),
+                crate::use_analysis::Own::Join { base } if base != u16::MAX
+            )
+    }
+
     fn inline_struct_return(
         &self,
         val: &Value,
@@ -7032,7 +7082,7 @@ impl Scopes {
         if let Value::Block(bl) = val.unspan()
             && bl.name == "ncc"
             && let (Type::Reference(d_nr, dep), opt) = bl.result.peel_optional()
-            && dep.is_empty()
+            && (dep.is_empty() || self.ncc_join_is_witnessed(val, data))
         {
             return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
         }
