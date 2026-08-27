@@ -2501,6 +2501,15 @@ vs 2995) and on a one-character change to an ordinary field's default — and it
 FALSE 878-of-878 caused by an asymmetric path normalisation, each binary resolving `default/`
 beside itself.
 
+⚠ **That gate had a hole exactly where a parser change is most dangerous, and it is now
+closed.** `introspect` emits nothing for a program that does not compile, so the **45
+`@EXPECT_ERROR` fixtures** — the refusal corpus, which is precisely the population a parsing
+change moves — were counted as "no output" on both trees and compared for nothing. A byte
+comparison of their `--interpret` stderr says **45 compared, 0 moved**, and that comparison
+fires on a one-token edit to a fixture. So the corpus is covered twice over: 879 programs by
+emitted IR, 45 by the diagnostic they refuse with. **A file the instrument cannot read is not a
+file that agrees** — it was reported in the same "no-output" bucket as a genuinely empty run.
+
 `tests/scripts/a-tuple-field-takes-a-default.loft` carries the cells, which are the REPLAY axes
 rather than the filed shape: a default is lowered once in the struct's context, which has no
 frame, and replayed at every construction site, so what decides soundness is the element type,
