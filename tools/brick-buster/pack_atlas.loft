@@ -237,6 +237,13 @@ fn main() {
   p.pages += [assets::PageInfo { pi_name: PAGE_NAME, pi_w: at.width,
                                  pi_h: at.height, pi_blob: PAGE_BLOB }];
   assets::blob_put(blobs, PAGE_BLOB, assets::BlobKind.Bytes, px);
+  // `pack_write` writes FILES, and this directory is build output — `.gitignore` carries
+  // `/tools/brick-buster/assets/`, so a fresh checkout has no directory to write into and the
+  // write fails with nothing but "could not write".  Created here rather than in the Makefile
+  // recipe, because that recipe is the SECOND spelling of this step: `loft build` reaches this
+  // script through loft.toml's `[[build.asset]]`, and a fix in the recipe would leave that
+  // path broken.  `mkdir_all` is a no-op when the directory already exists.
+  mkdir_all("assets");
   assert(assets::pack_write(p, blobs, PACK_BASE),
          "pack_atlas: could not write {PACK_BASE}");
 
