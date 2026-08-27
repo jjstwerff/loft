@@ -2693,7 +2693,8 @@ written at `is_keyed` where the next reader meets the question. The three peels 
 their own stayed.
 
 ⚠ **And the probes for that chain found a defect pair with no `Optional` opacity in it at
-all**, filed rather than fixed because curing it wants one representation decision:
+all** — **loft#1120**, filed rather than fixed because curing it wants one representation
+decision:
 
 | spelling | right about | wrong about |
 |---|---|---|
@@ -2707,7 +2708,10 @@ measured: the delegation fixed the field cells and broke `116-default-fallback-o
 `85-ncc-literal-return-delivery`, both vector-lookup shapes. `??`'s list is also short by
 `Radix` and `Trie`, so `spatial?` / `trie?` answer **0** for a collection holding elements,
 and a null `hash?` / `index?` field PANICS. All measured on both backends; the whole matrix
-and the reason a third list is not the answer are written at the arm.
+and the reason a third list is not the answer are written at the arm.  The workaround is
+`if b.c == null { d } else { … b.c? … }`, verified on both backends and both kinds; **binding
+the field to a local first does NOT work** (the sub-reference travels with the value), which
+is worth knowing because it is the natural first attempt.
 
 ⚠ **`?? []` cannot witness any of it, and that is why a corpus testing nullable collection
 fields kept the bug**: an empty default is what the wrong answer looks like, so the cell
