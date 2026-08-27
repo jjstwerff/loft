@@ -18,10 +18,14 @@
 // is scored by the wrap harness rather than by these assertions (`--tests` does not
 // leak-check — see falsify.sh's header).
 //
-// ⚠ ONE CONTEXT IS STILL OPEN and deliberately not asserted here: a bare CALL STATEMENT
-// inside a loop body — `for … { use_it(pick(p, false)?.x); }` and the same with `assert` —
-// still leaks one record per iteration, because the argument hoist does not reach a block
-// nested inside a discarded call's arguments there.  loft#1119.
+// The context this file could not cover when it was written — a bare CALL STATEMENT inside a
+// loop body — turned out to be a SECOND cause, not a corner of this one, and it is fixed
+// (loft#1119): `Ownership`'s in-flight var set crossed the caller/callee boundary, where a
+// slot number means a different variable, so the callee's own temp read as self-referential
+// and the oracle answered `Join { base: MAX }` — no nameable witness — for a value that has
+// one.  Measured A/B on this branch, and it is why both halves are here: with only the
+// slot-scoping fix, eleven of the cells below leak; with only the leading-free fix, the
+// loop-discard cells leak; with both, every cell is clean.
 //
 // @falsified-at: 2df4a99a — interpret leaked kt=78 S1118×1 -> clean, one cell at a time
 // (top level, `if` arm, bare block, other function, call argument, interpolation, `if`

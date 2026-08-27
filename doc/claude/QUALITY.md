@@ -2319,9 +2319,20 @@ only where the temp was fresh — a `for` body — and leaked one record per eva
 else.  Skipping a leading FREE (not any statement: that would re-admit the `t[p] ?? dflt()` cell
 their narrowing was measured to exclude) takes the matrix from 1 of 13 clean to 12 of 13, values
 unchanged, and the release fuzz sweep — the 54-cell both-backends replay that falsified three of
-their candidate narrowings — passes.  The thirteenth is **loft#1119**: a DISCARDED call statement
-inside a loop body, where the argument hoist does not reach the nested block.
-`tests/scripts/1118b-…` pins the twelve and names the thirteenth in its header.
+their candidate narrowings — passes.  The thirteenth was filed as **loft#1119** — a DISCARDED call statement inside a
+loop body — and the sibling's fix for it says my filed diagnosis was wrong in an instructive
+way: neither the loop nor the discard decides it.  `Ownership`'s in-flight var set crossed the
+caller/callee boundary, where a slot number names a different variable, so a callee's own temp
+read as self-referential and the oracle answered `Join { base: MAX }` — no nameable witness —
+for a value that has one.  Which caller's temp collides is a numbering accident, which is why
+the symptom looked like "loops".
+
+⚠ **The two fixes are orthogonal, and the A/B is the reason both are here.**  With only their
+slot-scoping fix, ELEVEN of my eighteen cells still leak; with only my leading-free fix, the
+loop-discard cells leak; with both, all eighteen are clean.  So the leading-free half is not a
+symptom patch on their cause — it is a second, independent one, and either alone reads as a
+complete cure on the half of the matrix it covers.  `tests/scripts/1118b-…` carries the A/B in
+its header so the next reader does not have to redo it.
 
 **And the lock earned its place on its first run — loft#1118.**  `make ci` failed on it: one
 `SNRet` record leaked.  Not from anything in this thread — the same cell leaks identically on the
