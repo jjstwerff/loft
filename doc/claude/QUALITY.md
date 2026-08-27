@@ -2087,6 +2087,69 @@ blocks on, and not one of the 41 commits measured an op count except where someb
 3. **Record the axes a matrix HELD FIXED, in the guard file.** Cheaper than an instrument and it
    is the thing five separate failures had in common.
 
+#### B6n — retrofitting 878 guards, and five ways the retrofit reported success while doing less than it said (2026-08-27)
+
+The negative-control gate (B6m recommendation 1) shipped with a baseline of **878** guard files
+that predate it. Retrofitting them is mechanical in principle — the control for a guard is the
+PARENT of the commit that added it, `git log --diff-filter=A` answers that, and
+`falsify.sh --bulk` groups by ref so each control is built once. 187 distinct refs, one shared
+target dir so the dependency crates compile once: **61 s cold, 8.7 s warm**, which turns six
+hours of building into thirty minutes.
+
+**The verdicts split three ways, and the split is the deliverable.** A file that has FAILED on an
+earlier build can catch a regression; a file that never has is a LOCK on current behaviour. The
+retrofit says which in the line rather than writing one uniform string:
+
+| verdict | the line it writes |
+|---|---|
+| **falsified** | `@falsified-at: <ref> — <channel and numbers>` — e.g. `exit 139 -> 0` (the control SIGSEGVs), `leaked kt=64 M×150 -> clean` |
+| **INERT** | `none — LOCK, not a guard: measured inert against <ref> …, so it has never failed on any build` |
+| **annotation-scored** | `none — scored by @EXPECT_ERROR / @EXPECT_FAIL, where a REFUSAL is the passing answer` |
+| **not runnable alone** | `none — a plain single-file run cannot score this one` (the `850*` cross-package guards need `--lib` dirs) |
+
+⚠ **The INERT residue is real and its reading is not the obvious one.** Around a quarter of the
+corpus passes on its own control — and a large part of that is PROVENANCE, not rot: `@PLN25`'s
+finish-line commit added a batch of files for a model that landed behind a default-on gate, so
+the parent already answers the same. Those files are not broken; they are locks, and calling them
+guards was the inaccuracy. Four were hand-checked before any of it was written down
+(`372-field-elem-set-nested-vector-uaf` answers 4 passed on both trees).
+
+##### Five ways the retrofit itself reported success while measuring less than it claimed
+
+This is the part worth the section. The tool built to catch inert measurements produced five of
+them, in one sitting, and each was found by a different accident:
+
+| | what reported success |
+|---|---|
+| **`--path` with no separator** | `run_tests` builds the stdlib directory as `default_dir.to_string() + "default"`, so `--path /tree` looks for `/treedefault` and answers *"cannot load default library"*, exit 1 — which reads as a DIFFERENCE and scored every `main`-less guard as falsified by the tree. A quarter of the first sweep's verdicts. |
+| **a missing `--path` on the other side** | giving the HEAD build its own `--target-dir` (so it cannot take the main cargo lock during a gate) without the matching `--path` made HEAD exit 1 for want of a stdlib |
+| **stdin swallow** | `git worktree add` and `cargo build` read stdin; inside a `… \| while read` loop they ate the rest of the ref list. The sweep stopped after **51 of 186 refs, in order, with exit status 0** — a run that did 29 % of its work and reported success |
+| **no outer bound** | an OLD control running a NEW guard hung somewhere `LOFT_TIMEOUT` does not reach — measured at ten minutes against a 180 s bound — and the sweep stopped silently on that one file |
+| **a self-matching `pkill`** | `pkill -f "falsify.sh --bulk"` matched the shell running the `pkill`, so the command killed itself and reported the job as still running |
+
+Three of the five are the SAME shape as the four in B6m — a channel measuring the harness rather
+than the subject — and two are new: **a loop that silently processes a prefix**, and **a bound
+that is not a bound**. Both now have their cure written where the next reader hits it: the ref
+list is read on FD 3 with `</dev/null` on every command that reads stdin, and every run carries a
+`timeout` backstop so a run the outer bound kills scores `exit 124`, which is a difference like
+any other and says plainly which side could not finish.
+
+**The generalisation, which is not "test your tools":** every one of these five was found by
+noticing that a NUMBER was wrong — a quarter of a class sharing one verdict, 51 being suspiciously
+round, zero rows after fifteen minutes. None was found by reading the code. **A batch instrument
+needs a count you can sanity-check at a glance**, and the ratio between what it processed and what
+it was given is the cheapest one there is.
+
+⚠ **And the corollary, from the sibling checkout, which is the sharper half:** *a number that is
+wrong in an interesting way is a finding even when it is not the finding you were after.* Their
+`--tests` run reported **3255 files** where one was named, and it read as noise for an hour
+because they were hunting a leak; mine reported **51 of 186 refs** and read as a completed sweep
+because I was reading verdicts. Same failure in opposite directions — a count nobody was looking
+at, carrying the answer. What came out of theirs was loft#1113, a SIGSEGV in a three-condition
+closure shape that has been in the tree for months, reachable only because the tree walk ran a
+probe under `doc/claude/plans/**/probes/` **that no suite runs** — which is a second finding
+again: a whole directory of executable `.loft` files no gate reaches.
+
 #### C — process / skills
 
 | item | state |
