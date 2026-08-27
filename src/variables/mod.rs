@@ -2947,6 +2947,15 @@ impl Function {
     /// `work_kvb` field for why it is neither a `__ref_N` nor a `__vdb_N`.
     #[track_caller]
     pub fn work_keyed(&mut self, tp: &Type, lexer: &mut Lexer) -> u16 {
+        // The accumulator OWNS the store it builds — that is the whole reason this
+        // namespace is function-scoped, so the exit sweep frees it.  It therefore takes
+        // the target's SHAPE and none of its borrows: `tp` is an expected type read off
+        // the context, and in a `??` default that context is the JOIN, whose deps name the
+        // holder the other arm reads.  Adopting them made the accumulator read as a
+        // borrow, so no free leg claimed it and every keyed `h ?? […]` retained one store
+        // per evaluation — unbounded in a loop, while the `vector` twin, whose default is
+        // a dep-free function-scoped temp, was clean.
+        let tp = &tp.without_deps();
         let n = format!("__kvb_{}", self.work_kvb + 1);
         self.work_kvb += 1;
         let v = if let Some(nr) = self.names.get(&n) {

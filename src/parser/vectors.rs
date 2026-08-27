@@ -2933,7 +2933,23 @@ impl Parser {
     /// Registration is idempotent (the same call the typedef walker makes), so asking
     /// is also how the type comes to exist.  `None` for a non-keyed type, or one whose
     /// content has no layout yet.
+    ///
+    /// **The one home for the question** — `Parser::keyed_type_id` delegates here.  One
+    /// list of the keyed kinds, because a site that names four of the five reads as a
+    /// complete rule and is not one: the field-replace site named three, so `spatial` and
+    /// `trie` fields silently kept the whole-collection-assign defect it exists to fix
+    /// (loft#922).
+    ///
+    /// Nullability-agnostic, and the peel lives HERE rather than in a note telling callers
+    /// to do it — which is what `keyed_type_id`'s doc used to say, one contract per
+    /// spelling.  `Optional(τ)` lays out exactly like `τ` (@FR-L-Null), so a `hash<S[k]>?`
+    /// needs the same registered store type as its bare twin.  Answering `None` for the
+    /// wrapper sends `new_record` to its `vector_of(in_t)` fallback, which registers a
+    /// SECOND db type: the literal then builds into `vector<S>` while every read goes to
+    /// `hash<S[k]>`, and the collection reads back empty.  Measured on a nullable keyed
+    /// LOCAL — a shape [`is_keyed`] still refuses, so nothing reaches it that way today.
     pub(crate) fn keyed_known_type(&mut self, tp: &Type) -> Option<u16> {
+        let tp = tp.base();
         let content = match tp {
             Type::Sorted(td, _, _)
             | Type::Hash(td, _, _)
@@ -4179,6 +4195,19 @@ impl Parser {
 ///
 /// ⚠ No rule names the KEYED FAMILY as a category, though that is the question 16 sites
 /// actually ask — see doc/claude/formal/IMPLEMENTATIONS.md.
+///
+/// ⚠ NOT nullability-agnostic, and that is a KNOWN GAP rather than a decision.  A
+/// `hash<S[k]>?` is a keyed collection that may be absent, and `Optional(τ)` occupies τ's
+/// storage exactly (@FR-L-Null) — yet all 24 call sites ask this bare, so every one of them
+/// answers "not keyed" for a `τ?`.  The visible cost is that `h: hash<S[k]>? = [S { … }]`
+/// builds a `vector<S>` and is then refused against its own declared type.
+///
+/// Peeling HERE is the one-home fix and it is measured INSUFFICIENT: with the peel (plus
+/// `content`, `keyed_known_type` and `gen_keyed_null` peeled to match) the literal compiles
+/// and answers correctly on `--interpret`, and `--native` panics in `keys.rs` on a
+/// `u16::MAX` store number.  A refusal is better than a backend divergence, so the peel is
+/// not here.  [`Parser::get_type`] above carries it, for the narrower question it asks
+/// (loft#909).
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp,

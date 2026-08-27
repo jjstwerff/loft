@@ -6,7 +6,7 @@
 //!
 //! `it = b.items[k]?` inline types `it` as `ref(Item)["b"]`, so scope exit leaves it
 //! alone. The same lookup behind `fn get(b: Bag, k: text) -> Item?` declared
-//! `optional(reference(Item, deps {}))` — no dep at all — so the caller read the result
+//! `Item?` with an EMPTY dep list — no dep at all — so the caller read the result
 //! as OWNED and emitted `OpFreeRef(it)`, releasing a store the CALLER's `b` still owned.
 //! The next unrelated allocation claimed the recycled slot, and every later lookup
 //! answered out of it: `2, 0, 0` where the inline spelling reads `2, 2, 2`. Silent, both
@@ -93,9 +93,12 @@ fn write_temp(tag: &str, src: &str) -> PathBuf {
 /// The deterministic half, and the one that states the invariant: a returned view of a
 /// parameter must appear in the declared return deps.
 ///
-/// `optional(reference(Y974, deps { items: [] }))` — the shape before the fix — is a
-/// return type that claims to own what it points at. The caller believes it, frees the
-/// caller's own record at scope exit, and nothing anywhere reports a thing.
+/// `Y974?` with an EMPTY dep list — the shape before the fix — is a return type that claims
+/// to own what it points at. The caller believes it, frees the caller's own record at scope
+/// exit, and nothing anywhere reports a thing.
+///
+/// The dump renders a dep list as the VARIABLE NAMES it holds, so the assertion below reads
+/// the parameter's own name out of the signature rather than an attribute index.
 #[test]
 fn an_accessors_returned_view_names_its_parameter() {
     let path = write_temp("static", MINIMAL);
@@ -114,14 +117,15 @@ fn an_accessors_returned_view_names_its_parameter() {
         .find(|l| l.starts_with("fn n_y974_get("))
         .unwrap_or_default()
         .to_string();
+    let ret = sig.split("->").nth(1).unwrap_or_default().to_string();
     assert!(
-        sig.contains("deps { items: [0] }"),
-        "the accessor's return must name the parameter it is a view of (attr 0 = `b`) — \
+        ret.contains("[\"b\"]"),
+        "the accessor's return must name the parameter it is a view of (`b`) — \
          an empty dep list reads as OWNED at the call site, and the caller then frees a \
          store it does not own (loft#974)\nsignature: {sig}\n{text}"
     );
     assert!(
-        sig.contains("optional("),
+        ret.contains('?'),
         "and it must still be NULLABLE — the borrow fact is about the storage, the `?` \
          about the value, and re-typing one must not drop the other\nsignature: {sig}"
     );

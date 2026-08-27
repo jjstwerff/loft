@@ -136,6 +136,11 @@ class ONE LEVEL DOWN — a notion with two TYPE spellings — where a nullable s
 rewrite that produces the second runs BETWEEN the passes.  Four failures from that one root, two
 of them silent wrong answers and two of them legal programs refused; all fixed (B6j), with the
 predicate given one home and the 56 hand-spelled recognitions of it left as a ranked queue.
+**B6s then measured the floor B6p had left**: ten more opaque verbs over 198 bare call sites,
+**eight** `(verb, caller)` pairs — five of which only a second ENTRY POINT can see, because the
+dump renderers are on the diagnostic path a passing program never takes — three defects fixed,
+two duplications merged, and one one-home peel built, measured to diverge on `--native`, and
+BACKED OUT with the measurement written at the site.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -2252,13 +2257,14 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 642 | 270 | 4 | **368** |
+| 641 | 277 | 4 | **360** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
 picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
 added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
-again — every count here is a snapshot of two moving checkouts, so re-run the tool rather than
+again, then 642 · 270 until B6s peeled seven and merged one body away — every count here is a
+snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
@@ -2596,6 +2602,124 @@ is what both comments were doing, so the resolved comment states the rule and po
 All six guards — four ours, three theirs — pass on the merged tree, and the remaining
 difference against their branch is exactly our own work: the `parse_field` extraction, B6p's
 three `.base()` peels, and four guard files.
+
+#### B6s — the floor B6p left, measured: 10 more verbs, 8 pairs, and 5 of them only a second entry point can see (2026-08-27)
+
+B6p ranked the `Optional`-opacity list by instrumenting four heap-shape verbs inside the verb
+and naming the caller off the corpus — four `(verb, caller)` pairs — and closed with the
+limit stated plainly: *"the corpus ranking is only as wide as the four verbs instrumented …
+so 370 is a floor and four is a floor."* This is that floor measured. The other **ten** opaque
+`data.rs` verbs the caller table lists — `is_unknown` (82 bare sites), `content` (44), `show`
+(38), `find_fn` (12), `unrewritten` (5), `borrow_deps` (5), `rewrap_deps` (4), `argument` (3),
+`owned_elements` (3), `fmt` (2), **198 bare call sites** — were instrumented the same way and
+swept over the 895-file corpus.
+
+**`#[track_caller]`, not a backtrace.** Each verb fires only when the receiver is `Optional`
+*and peeling would change the answer*, and `std::panic::Location::caller()` names the site
+directly. The predicate is written per verb, which is the honest form: *"would peeling change
+it"* is a different sentence for a verb returning a `Type` than for one returning a `String`.
+
+**Eight `(verb, caller)` pairs — and the entry point decides five of them.**
+
+| verb ← caller | corpus files | seen by |
+|---|---:|---|
+| `show` ← `Definition::header` (return type) | 53 | `LOFT_LOG=static` only |
+| `argument` ← `Definition::header` (return type) | 53 | `LOFT_LOG=static` only |
+| `show` ← `Function::show_code` (block result) | 51 | `LOFT_LOG=static` only |
+| `show` / `argument` ← `Definition::header` (parameters) | 15 | `LOFT_LOG=static` only |
+| `content` ← `Parser::parse_vector` | 12 | any run |
+| `show` ← `Type::show` (tuple element) | 5 | `LOFT_LOG=static` only |
+| `owned_elements` ← `scopes::tuple_owned_elem_frees` | 4 | any run |
+
+⚠ **The first sweep found two pairs. The second found six more, and the only difference was
+how the corpus was run** — `--tests` for the test functions a `main`-ful `--interpret` skips,
+and `LOFT_LOG=static` to make the dump renderers run at all. `show` and `argument` are reached
+on the DIAGNOSTIC path, which a passing program never takes, so a sweep that only runs
+programs reports zero for them. That is [a guard's entry point decides what
+runs](STABILITY_METHOD.md) applied to an instrument rather than to a guard, and it is the
+cheapest correction available: the same binary, the same corpus, one environment variable.
+
+**Three defects, and each was invisible in a different way.**
+
+*A tuple element declared `S?` was never freed* — one record per evaluation, unbounded in a
+loop, values correct throughout. `owned_elements` was a hand-spelled copy of `is_dbref`'s
+list, whose own doc says *"call this function rather than restating it"*; asked bare it did
+not recognise `Optional(Reference(S))`. **The corpus had four programs with a nullable tuple
+element and none could see it**: every one pins the element to `text?`, `integer?` or a type
+variable, and `text` is the one owning shape `tuple_owned_elem_frees` skips ON PURPOSE
+(loft#1004). The store-backed cell is the one nobody wrote — [a pinned channel is not an
+exercised one](STABILITY_METHOD.md), one axis over.
+
+*Every `τ?` in an IR dump rendered as its lowercased `Debug` spelling.* `fn n_takes(p:SD?,
+q:text?, r:vector<integer>?) -> SD["p"]?` read as `fn n_takes(p:optional(reference(710, deps
+{ items: [] })), …)` — the struct by def NUMBER and the dep list by INDEX, in the file
+CLAUDE.md's debugging policy sends you to read first. `Type::name`, the user-facing renderer,
+grew its `Optional` arm in Plan-07 phase 6.1 with a comment saying exactly why; `Type::show`,
+the dump renderer, did not. One notion, two renderers, one of them told.
+
+*The element variable of a nullable collection literal was typed as an unrelated struct.*
+`content()` answered `Unknown` for `Optional(Vector(τ))`, so `unique_elm_var`'s
+`type_def_nr(Unknown)` resolved to def 0 and three corpus programs declared
+`_elm_1: ref(i_parse_errors)` where the element is a `Nine09`, an `Inner`, an `Ent`. It is
+the loft#666 shape — a variable table naming something impossible — and it had been passing
+for as long as nullable collection literals have existed.
+
+**Two duplications merged, both onto a home that already declared itself one.**
+`Parser::keyed_type_id` and `Parser::keyed_known_type` are the same function, 40 lines apart
+in two files, each spelling the five keyed kinds itself — and they carried DIFFERENT
+nullability contracts, one saying *"peel the `?` before calling"* in its doc and the other
+peeling nowhere. `keyed_type_id` now delegates. `owned_elements` asks `is_dbref`. And the two
+`par` record walkers restated `owned_elements`' membership a third and fourth time, guarded by
+a `debug_assert` that says *"hitting it would indicate `owned_elements` and the match above
+are out of sync"* — absent from release builds and [absent from the ordinary debug build
+too](STABILITY_METHOD.md). They ask the one list now, so there is nothing left to assert.
+
+**A leak cured on the way, in `work_keyed`.** The accumulator a `??` builds for its default
+took the target type WHOLE — and in a `??` the target type is the JOIN's, whose deps name the
+holder the other arm reads. So the accumulator declared a borrow of something it does not
+borrow, no free leg claimed it, and every keyed `h ?? […]` retained one store per evaluation
+while the `vector` twin was clean. A hint's deps are not the value's: `Type::without_deps`
+exists for exactly this and says so.
+
+⚠ **One chain was BUILT, measured, and BACKED OUT, which is the finding worth keeping.**
+`is_keyed` is the declared one home for *"is this a keyed collection"* and **all 24 of its
+callers ask it bare**, so `h: hash<S[k]>? = [S { … }]` builds a `vector<S>` and is refused
+against its own declared type. Peeling there is the one-home fix; it took four more peels
+(`content`, `keyed_known_type`, `gen_keyed_null`) to get from the refusal through an
+`unreachable!` and a wrong schema id to a program that compiles and answers correctly — on
+`--interpret`. `--native` panics in `keys.rs` on a `u16::MAX` store number. **A refusal is
+better than a backend divergence**, so the peel is not in; what IS in is the measurement,
+written at `is_keyed` where the next reader meets the question. The three peels that stand on
+their own stayed.
+
+⚠ **And the probes for that chain found a defect pair with no `Optional` opacity in it at
+all**, filed rather than fixed because curing it wants one representation decision:
+
+| spelling | right about | wrong about |
+|---|---|---|
+| `??` — `OpConvBoolFromRef`, `rec != 0` | a collection LOOKUP miss (`vv[9]`) | a collection FIELD: the read yields a sub-reference whose `rec` is the HOLDER's record, so `b.c ?? d` on a null `vector<T>?` field answers the EMPTY FIELD and drops `d` |
+| `== null` — `null_test`, `OpVectorIsNull` | a collection FIELD | a LOOKUP miss: `vv[9] == null` answers `false` |
+
+`null_test`'s doc calls itself *"the ONE place that answers what is `τ`'s null"* and warns
+that answering it elsewhere mints another spelling; `??` is that other spelling. **Delegating
+is not the cure** — it trades one silent wrong answer for the other, which is how it was
+measured: the delegation fixed the field cells and broke `116-default-fallback-operator` and
+`85-ncc-literal-return-delivery`, both vector-lookup shapes. `??`'s list is also short by
+`Radix` and `Trie`, so `spatial?` / `trie?` answer **0** for a collection holding elements,
+and a null `hash?` / `index?` field PANICS. All measured on both backends; the whole matrix
+and the reason a third list is not the answer are written at the arm.
+
+⚠ **`?? []` cannot witness any of it, and that is why a corpus testing nullable collection
+fields kept the bug**: an empty default is what the wrong answer looks like, so the cell
+agrees with itself. Every cell of the replacement matrix hands `??` a default whose length
+differs from the field's. My own first reading — *"the `vector` twin is the clean reference
+route"* — was wrong for exactly this reason, and only a NON-EMPTY default separated them.
+
+**Blast radius, measured rather than argued.** Emitted IR compared against a pristine
+`HEAD` worktree over all 895 corpus programs, with the renderer change applied to BOTH sides
+so the dump improvement could not mask a code change: **4 files differ**, and all four are the
+intended ones — `1028` gains the `OpFreeRef` for its nullable tuple element, and `909`,
+`909b`, `923` get their element variable's real type. Everything else is byte-identical.
 
 #### C — process / skills
 

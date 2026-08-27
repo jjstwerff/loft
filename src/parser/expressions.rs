@@ -1559,35 +1559,12 @@ use a separate collection or add after the loop"
     /// `spatial` / `trie` — or `None` for anything else, including a keyed type whose
     /// element record has no runtime type yet (pass 1).
     ///
-    /// One list of the keyed kinds, because a site that names four of the five reads as a
-    /// complete rule and is not one: the field-replace site named three, so `spatial` and
-    /// `trie` fields silently kept the whole-collection-assign defect the site exists to
-    /// fix (loft#922).  Peel the `?` before calling — an `Optional(τ)` collection lays out
-    /// exactly like `τ`.
+    /// [`Parser::keyed_known_type`] is the home; this is its name at the expression sites.
+    /// It carries the one list of the keyed kinds and the `?` peel, so the two cannot give
+    /// different answers about the same collection — which is what they did while each
+    /// spelled the five kinds itself.
     fn keyed_type_id(&mut self, tp: &Type) -> Option<u16> {
-        match tp {
-            Type::Sorted(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.sorted(c, key))
-            }
-            Type::Hash(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.hash(c, key))
-            }
-            Type::Index(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.index(c, key))
-            }
-            Type::Radix(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.spatial(c, key))
-            }
-            Type::Trie(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.trie(c, key))
-            }
-            _ => None,
-        }
+        self.keyed_known_type(tp)
     }
 
     /// The clear that must run before a whole-collection literal is built into the
@@ -2992,7 +2969,7 @@ use a separate collection or add after the loop"
             && var_nr == u16::MAX
             && self.is_field(to)
             && (matches!(&*code, Value::Insert(_)) || matches!(s_type, Type::Null));
-        if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type.base()) {
+        if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type) {
             let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
             match code {
                 // A literal: run the clear FIRST, so the element-construction ops that

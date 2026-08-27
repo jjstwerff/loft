@@ -2209,7 +2209,11 @@ impl Type {
             | Type::Hash(tp, _, dep)
             | Type::Sorted(tp, _, dep) => Type::Reference(*tp, dep.clone()),
             Type::Vector(tp, _) => *tp.clone(),
-            Type::RefVar(tp) => tp.content(),
+            // `Optional(τ)` shares τ's storage (@FR-L-Null), so a nullable collection holds
+            // exactly what the bare one holds.  Answering `Unknown` instead leaves a literal
+            // with no element hint — which a `vector` survives, because its elements retype
+            // it, and a KEYED collection cannot, because the key has nowhere to come from.
+            Type::RefVar(tp) | Type::Optional(tp) => tp.content(),
             _ => Type::Unknown(0),
         }
     }
@@ -2511,6 +2515,12 @@ impl Type {
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
             Type::Text(dep) if dep.is_empty() => "text".to_string(),
             Type::Text(dep) => format!("text{}", Self::dep_var(dep, vars)),
+            // `τ?` is the base plus the marker.  Without this arm it falls to the `Debug`
+            // catch-all, which spells a struct by its def NUMBER and a dep list as
+            // `deps { items: [0] }` — and the dump is the primary debugging instrument, so a
+            // type rendered by number points the reader at nothing.  [`Type::name`] carries
+            // the same arm for the user-facing spelling.
+            Type::Optional(tp) => format!("{}?", tp.show(data, vars)),
             Type::Tuple(elems) => {
                 let inner = elems
                     .iter()
@@ -2548,6 +2558,9 @@ impl Type {
             }
             Type::Text(dep) if dep.is_empty() => "text".to_string(),
             Type::Text(dep) => format!("text{:?}", Self::dep_att(data, d_nr, dep)),
+            // Recursed rather than left to the `show` fallback below: an argument type's deps
+            // name ATTRIBUTES, and `show` renders them as frame variables.
+            Type::Optional(tp) => format!("{}?", tp.argument(data, d_nr)),
             _ => {
                 let d = data.def(d_nr);
                 self.show(data, &Function::new(&d.name, &d.position.file))
@@ -3156,19 +3169,15 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
     let offsets = element_stack_offsets(types);
     let mut result = Vec::new();
     for (i, t) in types.iter().enumerate() {
-        match t {
-            Type::Text(_)
-            | Type::Reference(_, _)
-            | Type::Vector(_, _)
-            | Type::Sorted(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Hash(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-            | Type::Enum(_, true, _) => {
-                result.push((offsets[i], i));
-            }
-            _ => {}
+        // The store-backed set plus `text`, which owns a heap `String` rather than a store.
+        // Asked through [`is_dbref`] rather than restated — that function's own doc says a
+        // hand-spelled copy drifts short by the five keyed collections, and this was a copy.
+        //
+        // Peeled: `Optional(τ)` occupies τ's slot exactly (@FR-L-Null), so a `(integer, S?)`
+        // element carries the same `DbRef` as `(integer, S)` and owns the same store.
+        let base = t.base();
+        if is_dbref(base) || matches!(base, Type::Text(_)) {
+            result.push((offsets[i], i));
         }
     }
     result
