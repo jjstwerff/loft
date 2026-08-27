@@ -157,9 +157,10 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-15 opened and
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+D-own-15 opened and
 closed 2026-08-27 with loft#1119; D-own-14 opened and
 closed 2026-08-27 with loft#1118; D-own-13's second face
 closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 records the two
@@ -173,6 +174,34 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-16 — OPEN (2026-08-27): a SELF-referential join never frees the store it displaces
+
+`(O-Deps)` places a free from the deps a value carries.  A local reassigned from a join over
+ITSELF gets none placed: `c = mk(i) ?? c` retains every displaced store, nine of ten over ten
+rounds, both backends, values right throughout — so only the leak channel speaks.
+
+```loft
+c: SN? = SN { x: 5 };
+for i in 0..10 { c = mk(i) ?? c; }   // kt=78 SN×9 at exit
+```
+
+It is genuinely the hard shape rather than an oversight: the borrow arm IS the variable being
+assigned, so freeing the displaced store before the assignment is a use-after-free on the arm
+that takes it, and only a per-execution comparison can tell the two apart.  That is what
+`OpBindOrCopy` exists for, and the reassignment does not reach it.
+
+**Measured and REVERTED — do not re-run this.**  `Ownership::classify`'s var-cycle back-edge
+answers `Borrowed { base: u16::MAX }`, which reads as *"no nameable witness"*, and the obvious
+reading is that the cycle arm's base is the variable itself, so naming it would make the join
+witnessed.  It changes nothing: the leak is identical on both backends with `base: *v`.  The
+missing free is therefore not the witness's to license, and the next place to look is the
+reassign-site machinery that excludes it — `owned_slot_reassignments` skips a var that is an
+ARGUMENT, and its comment records that param-slot displaced frees *"stay with the witness
+mechanism"*, which is the sentence this measurement falsifies for the self-referential case.
+
+Found while building loft#1119's boundary matrix; distinct from D-own-15, which was the
+oracle answering differently per caller rather than a free that is absent for everyone.
 
 ### D-own-15 — CLOSED (2026-08-27, loft#1119): the ORACLE answered differently depending on who asked
 
