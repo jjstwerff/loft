@@ -159,7 +159,8 @@ implication that reading `deps` is *sufficient*.
 
 OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-14 opened and
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-15 opened and
+closed 2026-08-27 with loft#1119; D-own-14 opened and
 closed 2026-08-27 with loft#1118; D-own-13's second face
 closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 records the two
 witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
@@ -172,6 +173,52 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-15 — CLOSED (2026-08-27, loft#1119): the ORACLE answered differently depending on who asked
+
+`@FR-O-Oracle` is the claim that there is ONE own-vs-borrow derivation. That claim needs the
+answer to be a function of the value alone; here it was a function of the value AND of which
+caller happened to be asking.
+
+`Ownership` carries a set of variable slots that are already in flight, so a self-referential
+chain (`c = t[k] ?? c`) yields a conservative answer instead of recursing for ever. A slot
+number only names a variable within ONE function's variable space, and `return_ownership`
+walks the CALLEE's body — with the caller's set still in hand. The caller's `__ncc_3` and the
+callee's `__ret_1` are both var 3, so the walk read the callee's own temp as self-referential
+and answered `Borrowed { base: MAX }` for an arm that borrows nothing. The callee's return
+then read `Join { base: MAX }` — "no nameable witness" — where the identical call in a
+different statement context answered `Join { base: 0 }`.
+
+Everything downstream reads that one fact, so everything downstream declined: D-own-14's lift
+(`scopes::inline_struct_return` via `ncc_join_is_witnessed`) left the block inline and the
+store the callee minted was owned by nothing, one record per EVALUATION on both backends. The
+filed symptom was a discarded call statement inside a loop; the loop and the discard were
+neither of them the condition. What decided it was which SLOT NUMBER the caller's temp got.
+
+```loft
+fn pick(a: SN?, c: boolean) -> SN? { if c { a } else { SN { x: 9 } } }
+fn main() { p = SN { x: 7 }; for i in 0..4 { use_it(pick(p, false)?.x); } }
+```
+
+Closed by scoping the in-flight set to the function whose body is being walked — the callee
+gets a fresh one and the caller's is restored after. The FUNCTION-level guard (`visiting`)
+is untouched and still stops genuine recursion.
+
+**What generalises past this entry, and it is the same lesson D-own-12 closed on from the
+other end:** an oracle whose answer depends on the ORDER it was asked in is not one
+derivation, whatever its doc says. The give-away was in the issue before the cause was — the
+same call site, the same arguments, the same callee, two different answers — and that shape
+is a statement about the ANALYSER's state, never about the program. Reading it as a gap in
+the gate cost a day; the gate was doing exactly what it said.
+
+⚠ **The guard for this is a numbering SWEEP, and it has to be.** The collision needs the
+caller's in-flight slot to equal a slot the callee's tail walk reaches, and the callee reaches
+exactly one — measured, and measured again with a seven-armed callee, which widened nothing.
+So which caller hits it is a coincidence of how many locals that caller declares first: one
+extra compiler temp anywhere moves every number by one and a single hand-written cell goes
+quiet without saying so. `tests/scripts/1119-a-callees-var-slots-are-its-own.loft` is twelve
+callers over two callees for that reason, and its header says what to do if every cell ever
+goes quiet at once (widen the sweep — do not delete the file).
 
 ### D-own-14 — CLOSED (2026-08-27, loft#1118): a JOIN return used INLINE had no owner
 

@@ -1859,7 +1859,18 @@ impl<'a> Ownership<'a> {
         }
         let mut defs = Defs::default();
         collect_defs(&def.code, &FillOps::of(self.data), &mut defs);
+        // @FR-O-Oracle — the answer must be a function of the VALUE, never of who asked.
+        // The in-flight var set belongs to the function whose body is being walked: a slot
+        // number names a variable within ONE function's variable space, so the caller's set
+        // says nothing here and must not cross the boundary.  A caller's `__ncc_3` and a
+        // callee's `__ret_1` are both var 3, and a set that travels reads the callee's own
+        // temp as self-referential — `Borrowed { base: MAX }` for an arm that borrows
+        // nothing, which every witness-gated free downstream then declines on (loft#1119).
+        // The FUNCTION-level guard above is the one that stops genuine recursion; this
+        // scoping does not weaken it.
+        let outer_vars = std::mem::take(&mut self.visiting_vars);
         let class = self.classify(tail.unwrap(), &def.variables, &defs);
+        self.visiting_vars = outer_vars;
         self.visiting.remove(&d_nr);
         self.ret_memo.insert(d_nr, class);
         class
