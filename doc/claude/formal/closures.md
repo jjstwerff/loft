@@ -92,14 +92,14 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **1** — `L-FnRef` does not hold for a function carrying two text work buffers
-(D-clo-6, below). Closed: both lambda forms capture identically (D-clo-1), the
+OPEN: **0**. Closed: both lambda forms capture identically (D-clo-1), the
 stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
 2026-07-04 —
 `L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22), a lambda
-now carries one text work buffer however many promotions ask for one (D-clo-4), and a
-combinator's inline callback is handed the buffer its ABI expects (D-clo-5) — both opened
-and closed 2026-08-27.
+now carries one text work buffer however many promotions ask for one (D-clo-4), a
+combinator's inline callback is handed the buffer its ABI expects (D-clo-5), and a fn-ref
+call carries every text buffer its target declares (D-clo-6) — all three opened and closed
+2026-08-27.
 
 ⚠ This zero is only as strong as the axes the corpus below varies, and it has now been
 re-measured TWICE and broken both times. D-clo-3 found the *first-Set vs re-Set* axis;
@@ -140,9 +140,9 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
-> **D-clo-6 — OPEN (2026-08-27).** `(L-FnRef)` says a bare function name is a first-class
-> value. It is not, for a function that carries TWO hidden `RefVar(Text)` work buffers:
-> `g = nb; g()` crashes the interpreter. loft#1116.
+> **D-clo-6 — CLOSED (2026-08-27).** `(L-FnRef)` says a bare function name is a first-class
+> value. It was not, for a function that carries TWO hidden `RefVar(Text)` work buffers:
+> `g = nb; g()` crashed the interpreter. loft#1116, both halves closed the same day.
 >
 > A function acquires two the ordinary way — a text local AND a discharge accumulator, each
 > promoted to a hidden `&text` out-param. That is legal for a NAMED function, whose own call
@@ -159,13 +159,26 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > rather than deliver. Guarded by
 > `tests/scripts/1116-a-fn-ref-arm-does-not-spend-one-buffer-twice.loft`.
 >
-> **The interpreter half is open**, and is where the buffer IS the delivery, so the same
-> trick would swallow the result. The call site injects its single buffer as part of
-> `arg_size`, before `fn_call_ref` runs; `fn_call_ref`'s hidden-buffer loop pushes in the
-> right position to add more, but it cannot know how many without the callee's count
-> reaching the site. The admissible cures are recorded on the issue: give the call site that
-> count, or decline the fn-ref where the ABI cannot honour it (`B-Ref-Reshape`'s precedent —
-> nothing working is lost, since every such call faults today).
+> **The interpreter half is CLOSED too (2026-08-27, loft#1116).** There the buffer IS the
+> delivery, so an extra temporary would have swallowed the result — and a `&text` is a
+> pointer into the CALLER's frame, so the dispatcher cannot supply one that outlives its own
+> return either. The count had to travel outward: the call site pushes what the WIDEST
+> candidate of that signature could want (`Data::fnref_text_buffers`) and `fn_call_ref` pops
+> what the actual target does not take, which is the same trim it already did for a target
+> wanting none. One count, two readers.
+>
+> ⚠ **The other admissible cure on the issue — declining the fn-ref (`B-Ref-Reshape`'s
+> precedent) — rested on a premise that had expired.** It was recorded as costing nothing
+> *"since every such call faults today"*, and that was true when written; by the time it was
+> taken up the `--native` half had landed and `g = nb_two; g()` ANSWERED there. Declining
+> would have removed a working capability from one backend to make it match the other, and
+> `(L-FnRef)` says the value is first-class in the first place. Re-measure a filed
+> "nothing is lost" before building on it — a sibling fix can have made it false.
+>
+> Guarded by `tests/scripts/1116b-a-fn-ref-call-carries-every-text-buffer-its-target-wants.loft`,
+> whose wide target holds DIFFERENT text in its two buffers on purpose: the obvious
+> two-buffer function (`loc: text = "x"; return loc ?? "fb"`) has both buffers holding the
+> same value, so reading the wrong one is invisible and that shape can only score a crash.
 
 > **D-clo-5 — CLOSED (2026-08-27).** The third route to the same fault line, found by
 > varying where `(L-Apply)` happens. `xs.map(fn(n: integer) -> text { return s; })` on a

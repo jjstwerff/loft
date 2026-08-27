@@ -937,12 +937,17 @@ impl Output<'_> {
             write!(w, "{:?}", crate::data::Value::CallRef(v_nr, args.to_vec()))?;
             return Ok(());
         };
-        // P227: parser appends ONE work-buffer arg for text-returning
-        // fn-ref calls.  The candidate filter compares against the
-        // user-visible param count, not raw `args.len()`.
-        let is_text_return_match = matches!(ret_type, Type::Text(_));
-        let user_arg_match = if is_text_return_match && args.len() > param_types.len() {
-            args.len() - 1
+        // P227: a text-returning fn-ref call site appends the `&text` work buffers the
+        // widest candidate of this signature could want, which is one OR MORE
+        // (`Data::fnref_text_buffers`, loft#1116).  So the candidate filter reads the
+        // user-visible count off the fn-ref TYPE rather than subtracting a fixed one from
+        // `args.len()` — a count that was right only while every call appended exactly
+        // one, and that silently matched NO candidate once a call appended two (the arm
+        // collapsed to `_ => unreachable!()` and rustc answered E0282 rather than naming
+        // anything about loft).
+        let user_arg_match = if matches!(ret_type, Type::Text(_)) && args.len() > param_types.len()
+        {
+            param_types.len()
         } else {
             args.len()
         };

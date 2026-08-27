@@ -9189,6 +9189,44 @@ impl Parser {
     /// The verdict is pass-stable: a var promoted on pass 1 is an attribute by
     /// pass 2 and takes `classify_text_dep`'s `Attr` branch, so it re-acquires the
     /// same buffer rather than asking for a new one.
+    /// Mint the hidden `&text` work buffers a fn-ref call of this signature must carry,
+    /// and answer their variables.
+    ///
+    /// A `&text` is a pointer into the CALLER's frame, so only the caller can supply a
+    /// buffer that outlives the call — and a call through a fn-typed slot cannot know which
+    /// function the slot holds.  So it mints what the widest candidate of that signature
+    /// could want and `State::fn_call_ref` trims the frame to what the actual target
+    /// declares (loft#1116).
+    ///
+    /// **Every site that builds a text-returning `CallRef` must mint through here.**  The
+    /// trim is computed from the same count, so a site that mints fewer has a REAL buffer
+    /// trimmed away, and the callee then reads its `__closure` from the wrong offset — a
+    /// corrupt `DbRef` rather than a diagnostic.  Minting happens on BOTH passes so the
+    /// work-variable numbering does not shift across the pass boundary;
+    /// [`Self::push_fnref_text_buffers`] builds the argument blocks on pass 2.
+    pub(crate) fn fnref_text_buffer_vars(&mut self, params: usize, ret: &Type) -> Vec<u16> {
+        (0..self.data.fnref_text_buffers(params, ret))
+            .map(|_| self.vars.work_text(&mut self.lexer))
+            .collect()
+    }
+
+    /// Append one `OpCreateStack` argument block per buffer from
+    /// [`Self::fnref_text_buffer_vars`], cleared so a loop iteration starts fresh.
+    ///
+    /// Order matters and is the callee's: visible parameters, then work buffers, then the
+    /// closure `fn_call_ref` reads out of the fn-ref slot.
+    pub(crate) fn push_fnref_text_buffers(&mut self, args: &mut Vec<Value>, work_vars: &[u16]) {
+        let ref_def = self.data.def_nr("reference");
+        for &wv in work_vars {
+            let create = self.cl("OpCreateStack", &[Value::Var(wv)]);
+            args.push(v_block(
+                vec![crate::data::v_set(wv, Value::Text(String::new())), create],
+                Type::Reference(ref_def, Deps::frame1(wv)),
+                "cref_work_buf",
+            ));
+        }
+    }
+
     fn holds_text_work_buf(&self) -> bool {
         self.data
             .def(self.context)
@@ -13411,38 +13449,20 @@ impl Parser {
                     // @PLN85 L1 — callee-attr-space deps must not leak into the
                     // caller (see `fnref_result_type`).
                     let ret_type = Box::new(Self::fnref_result_type(*ret_type, &[]));
-                    // P227: text-returning fn-ref calls need exactly ONE
-                    // work-buffer at caller-function scope (the return-value
-                    // buffer that the lambda fills via its hidden RefVar(Text)
-                    // attr).  The fn-ref TYPE's `Type::Text(deps)` is always
-                    // `deps = []`, so the previous `(0..deps.len())` count
-                    // was always zero — leaving the lambda's stack slot for
-                    // its work-buffer empty and causing a SIGSEGV when the
-                    // lambda body read it.  Allocating one work_text var here
-                    // matches the canonical "one return buffer per text fn"
-                    // ABI; lambdas with multiple `RefVar(Text)` hidden attrs
-                    // (the rare case) are diagnosed separately.
-                    let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
-                        vec![self.vars.work_text(&mut self.lexer)]
-                    } else {
-                        vec![]
-                    };
+                    // P227: a text-returning fn-ref call carries its target's `&text`
+                    // work buffers at caller-function scope, because a `&text` is a
+                    // pointer into the CALLER's frame — the callee cannot conjure one
+                    // that outlives its own return.  The call site cannot know which
+                    // function the slot holds, so it pushes what the widest candidate of
+                    // this signature wants and `State::fn_call_ref` pops the excess once
+                    // the target IS known (loft#1116).
+                    let work_vars = self.fnref_text_buffer_vars(0, ret_type.as_ref());
                     if !self.first_pass {
                         self.var_usages(v_nr, true);
                         let mut args = vec![];
                         // inject work-buffer DbRef blocks before __closure (zero-param case).
                         // clear the work buffer before each call so loop iterations start fresh.
-                        let ref_def = self.data.def_nr("reference");
-                        for &wv in &work_vars {
-                            args.push(v_block(
-                                vec![
-                                    crate::data::v_set(wv, Value::Text(String::new())),
-                                    self.cl("OpCreateStack", &[Value::Var(wv)]),
-                                ],
-                                Type::Reference(ref_def, Deps::frame1(wv)),
-                                "cref_work_buf",
-                            ));
-                        }
+                        self.push_fnref_text_buffers(&mut args, &work_vars);
                         // closure is embedded in the 16-byte fn-ref slot; fn_call_ref
                         // pushes it automatically — no explicit injection needed here.
                         // mark captured vars as read at the call site
@@ -14008,18 +14028,11 @@ impl Parser {
         // (see `fnref_result_type`): map visible-param deps through the actual
         // argument types, drop hidden/grown indices (the value arrives OWNED).
         let ret_type = Box::new(Self::fnref_result_type(*ret_type, types));
-        // P227: one work-buffer per text-returning fn-ref call.
-        // The fn-ref TYPE's `Type::Text(deps)` is always `deps = []`,
-        // so the previous deps-derived count was zero — leaving the
-        // lambda's stack slot for its work-buffer empty and causing
-        // SIGSEGV.  Allocating one work_text matches the canonical
-        // "one return buffer per text fn" ABI; lambdas with multiple
-        // `RefVar(Text)` hidden attrs are diagnosed separately.
-        let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
-            vec![self.vars.work_text(&mut self.lexer)]
-        } else {
-            vec![]
-        };
+        // P227 — see the zero-argument twin above: the call site pushes the widest
+        // candidate's `&text` buffer count and the dispatcher pops the excess, because a
+        // `&text` points into the CALLER's frame and only the caller can supply one that
+        // outlives the call (loft#1116).
+        let work_vars = self.fnref_text_buffer_vars(param_types.len(), ret_type.as_ref());
         if !self.first_pass {
             if list.len() != param_types.len() {
                 diagnostic!(
@@ -14039,17 +14052,7 @@ impl Parser {
             // Each block emits OpCreateStack → 12-byte DbRef, matching callee's &text param.
             // Order: visible params → work bufs → __closure (must match callee slot layout).
             // prepend v_set(wv, "") to clear the buffer so loop iterations start fresh.
-            let ref_def = self.data.def_nr("reference");
-            for &wv in &work_vars {
-                converted.push(v_block(
-                    vec![
-                        crate::data::v_set(wv, Value::Text(String::new())),
-                        self.cl("OpCreateStack", &[Value::Var(wv)]),
-                    ],
-                    Type::Reference(ref_def, Deps::frame1(wv)),
-                    "cref_work_buf",
-                ));
-            }
+            self.push_fnref_text_buffers(&mut converted, &work_vars);
             // inject hidden __closure argument — the closure allocation
             // expression is generated inline so it runs at the call site, avoiding
             // closure is embedded in the 16-byte fn-ref slot; fn_call_ref

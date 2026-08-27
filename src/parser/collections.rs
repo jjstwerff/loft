@@ -4813,15 +4813,22 @@ use #count instead"
     /// `caller_text_buf` is the sequence for exactly this: a buffer the CALLER allocates
     /// for a callee's hidden `&text` out-param.
     fn callback_call_ref(&mut self, fn_ref_var: u16, mut args: Vec<Value>, ret: &Type) -> Value {
-        if matches!(ret, Type::Text(_)) && !self.first_pass {
-            let wv = self.vars.caller_text_buf(&mut self.lexer);
-            let create = self.cl("OpCreateStack", &[Value::Var(wv)]);
-            let ref_def = self.data.def_nr("reference");
-            args.push(v_block(
-                vec![v_set(wv, Value::Text(String::new())), create],
-                Type::Reference(ref_def, crate::data::Deps::frame1(wv)),
-                "cref_work_buf",
-            ));
+        if !self.first_pass {
+            // The COUNT is the one every text-returning `CallRef` site reads
+            // (`Data::fnref_text_buffers`), because `fn_call_ref` trims the frame against
+            // it: a combinator's callback can be a NAMED function declaring more buffers
+            // than the one a lambda ever takes (loft#1116).
+            //
+            // The VARIABLES come from `caller_text_buf` rather than
+            // `Parser::fnref_text_buffer_vars`' `work_text`, and that difference is
+            // load-bearing: the map family early-returns on pass 1, so this mint is
+            // pass-2-only, and taking it from the shared counter would shift every later
+            // `__work_N` (loft#662's class).
+            let n = self.data.fnref_text_buffers(args.len(), ret);
+            let work_vars: Vec<u16> = (0..n)
+                .map(|_| self.vars.caller_text_buf(&mut self.lexer))
+                .collect();
+            self.push_fnref_text_buffers(&mut args, &work_vars);
         }
         Value::CallRef(fn_ref_var, args)
     }

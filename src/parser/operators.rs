@@ -1600,16 +1600,17 @@ impl Parser {
                     if !self.first_pass && !owns_closure {
                         self.vars.set_skip_free(fn_work);
                     }
-                    // P227: one work-buffer per text-returning fn-ref
-                    // call (the return-value buffer the lambda fills via
-                    // its hidden RefVar(Text) attr).  Previously
-                    // `deps.len()` — but fn-ref types carry `deps = []`,
-                    // so the count was zero, causing SIGSEGV.
-                    let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
-                        vec![self.vars.work_text(&mut self.lexer)]
-                    } else {
-                        vec![]
-                    };
+                    // P227 — the fn-ref call through a FIELD, tuple member or other
+                    // expression.  Like its two siblings in `control.rs` it pushes the
+                    // `&text` work buffers the widest candidate of this signature could
+                    // want, because a `&text` points into the CALLER's frame and only the
+                    // caller can supply one (loft#1116).  Every site that builds a
+                    // text-returning `CallRef` must read the SAME count: `fn_call_ref`
+                    // trims the frame against it, so a site one buffer short has a real
+                    // buffer trimmed away and the callee reads `__closure` from the wrong
+                    // offset.
+                    let work_vars =
+                        self.fnref_text_buffer_vars(param_types.len(), ret_type.as_ref());
                     // Parse arguments (both passes).
                     let mut list: Vec<Value> = Vec::new();
                     let mut types: Vec<Type> = Vec::new();
@@ -1632,17 +1633,7 @@ impl Parser {
                                 self.convert(&mut converted[i], &types[i], expected);
                             }
                         }
-                        let ref_def = self.data.def_nr("reference");
-                        for &wv in &work_vars {
-                            converted.push(v_block(
-                                vec![
-                                    v_set(wv, Value::Text(String::new())),
-                                    self.cl("OpCreateStack", &[Value::Var(wv)]),
-                                ],
-                                Type::Reference(ref_def, crate::data::Deps::frame1(wv)),
-                                "cref_work_buf",
-                            ));
-                        }
+                        self.push_fnref_text_buffers(&mut converted, &work_vars);
                         let orig = std::mem::replace(code, Value::Null);
                         *code = v_block(
                             vec![v_set(fn_work, orig), Value::CallRef(fn_work, converted)],

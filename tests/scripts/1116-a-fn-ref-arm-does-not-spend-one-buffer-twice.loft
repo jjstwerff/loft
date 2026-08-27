@@ -24,10 +24,10 @@
 // this backend: `--native` returns text OWNED and never threads the value back through the
 // buffer, so the buffers are parameters that must type-check rather than the delivery.
 //
-// NOT covered here, deliberately: taking an ACTUAL fn-ref to `nb_two` and calling through it
-// (`g = nb_two; g()`).  `--native` answers correctly now, but the interpreter threads its
-// result through the single injected buffer and still faults, so the shape cannot go in a
-// both-backend file.  It is the open half of loft#1116.
+// Taking an ACTUAL fn-ref to `nb_two` and calling through it (`g = nb_two; g()`) is the
+// other half, and it lives in `1116b-a-fn-ref-call-carries-every-text-buffer-its-target-wants`:
+// there the buffer IS the delivery, so it needed the COUNT to travel out to the call site
+// rather than an extra temporary here.
 //
 // @falsified-at: c25f1f02 — native exit 1 -> 0 (`E0499: cannot borrow *_farg_0 as mutable
 //   more than once at a time` from the generated dispatch arm).  The interpret half is INERT

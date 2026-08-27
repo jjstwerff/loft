@@ -3792,6 +3792,26 @@ impl Definition {
         &self.returned
     }
 
+    /// How many hidden `&text` work buffers this function's ABI expects.
+    ///
+    /// `text_return` promotes a text local the return value depends on into a hidden
+    /// `RefVar(Text)` out-parameter, and a body can ask more than once — a text local at
+    /// the `return` and a `??` / `?` / `if` accumulator at the block tail each take one.
+    /// A DIRECT call site knows the callee and mints exactly this many; a fn-ref call site
+    /// cannot know which function the slot holds, so it mints the most any candidate could
+    /// want ([`Data::fnref_text_buffers`]) and the excess is popped where the target IS
+    /// known (`State::fn_call_ref`).  One home for the count, so the two sides of that ABI
+    /// cannot disagree about what a buffer is.
+    #[must_use]
+    pub fn text_work_buffers(&self) -> usize {
+        self.attributes
+            .iter()
+            .filter(|a| {
+                a.hidden && matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+            })
+            .count()
+    }
+
     /// Cluster-A (return/bind ownership) — THE one return-ownership query,
     /// shared by both backends.  Answers: *does this function's heap return
     /// BORROW a visible parameter's store (caller must copy / must not free
@@ -5355,6 +5375,48 @@ impl Data {
     #[must_use]
     pub fn definitions(&self) -> u32 {
         self.definitions.len() as u32
+    }
+
+    /// How many hidden `&text` work buffers a FN-REF call of this signature must push.
+    ///
+    /// A call through a fn-typed slot cannot know which function the slot holds, so it
+    /// pushes the most any function of that signature could want and `State::fn_call_ref`
+    /// pops what the actual target does not take.  Over-counting costs caller frame space;
+    /// under-counting enters the callee one buffer short, which is the corrupt-frame crash
+    /// this exists to prevent (loft#1116).
+    ///
+    /// The candidate test is deliberately LOOSE — a text return and a matching visible
+    /// parameter COUNT.  Being loose can only mint a buffer nothing uses, which the pop
+    /// removes; being tight risks missing the very candidate the slot holds, and there is
+    /// no signal when that happens.  Never less than one, which is the shape every
+    /// text-returning fn-ref call had before.
+    #[must_use]
+    pub fn fnref_text_buffers(&self, params: usize, ret: &Type) -> usize {
+        if !matches!(ret.base(), Type::Text(_)) {
+            return 0;
+        }
+        let mut most = 1;
+        for d in 0..self.definitions() {
+            let def = self.def(d);
+            if !matches!(def.def_type(), DefType::Function)
+                || !matches!(def.returned().base(), Type::Text(_))
+            {
+                continue;
+            }
+            let visible = def
+                .attributes()
+                .iter()
+                .filter(|a| {
+                    !a.hidden
+                        && a.name != "__closure"
+                        && !matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+                })
+                .count();
+            if visible == params {
+                most = most.max(def.text_work_buffers());
+            }
+        }
+        most
     }
 
     #[must_use]
