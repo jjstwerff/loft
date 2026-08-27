@@ -48,10 +48,11 @@ fn test_a_nullable_branch_return_answers_each_arm() {
 }
 
 fn test_an_arm_that_borrows_and_an_arm_that_mints() {
-  // ⚠ BOUND on purpose.  Written inline — `assert(opt_borrow_or_mint(p, false)?.x == 9, …)` —
-  // the minted record leaks, one per evaluation and unbounded in a loop: loft#1118, which this
-  // file found by being the first corpus program to hand a variable to a nullable parameter and
-  // use the result without binding it.  The bound spelling is the clean one on both arms.
+  // BOUND on purpose, and now for one reason rather than two.  Written inline, this cell leaked
+  // one record per evaluation when the file was added — loft#1118, which it found by being the
+  // first corpus program to hand a variable to a nullable parameter and use the result without
+  // binding it.  That is fixed (the inline spelling is covered by `1118-…` and `1118b-…`); the
+  // bound form stays here because this file is about the branch JOIN, not the lift.
   p = SNRet { x: 7 };
   b = opt_borrow_or_mint(p, true);
   assert(b?.x == 7, "the borrow arm answers the argument, got {b?.x}");

@@ -2245,16 +2245,17 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 637 | 266 | 4 | **367** |
+| 640 | 266 | 4 | **370** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
-and `spellings` tables have.)  It reproduces **15 of 15** hand answers written down before it was
+and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
+picked in, which added three opaque sites; re-run the tool rather than reading a number here.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
 `is_scalar` / `heap_def_nr` / `is_unknown` are opaque; `contains_def` descends; `is_heap_owned`
 is not in the population at all, because it delegates rather than matching.
 
-**367 is a list, not a queue — so the second measurement is the one that ranks it.**  The four
+**370 is a list, not a queue — so the second measurement is the one that ranks it.**  The four
 heap-shape verbs the caller table puts at the top (`heap_dep`, `is_dbref`, `heap_def_nr`,
 `is_scalar` — 43 bare call sites between them) were instrumented INSIDE the verb: fire when the
 argument is an `Optional` *and peeling would change the answer*, and name the caller off the
@@ -2308,6 +2309,20 @@ two work-refs → one, two `OpFreeRefIfDistinct` → one.  Values were right bot
 backends, so this is a slot, not an answer.  **The finding under the finding is that zero**, and
 `tests/scripts/a-nullable-return-joins-its-branch-arms.loft` now pins the shape.
 
+**Both filings came back FIXED in the sibling checkout the same day, and re-measuring the pick
+here is what mattered — loft#1118 arrived half-cured.**  Their four commits are on this branch
+(`12fc2454`…`2df4a99a`); #1117 answers correctly on all four of my repros, and #1118's loop cell
+went clean.  But the single-evaluation cell did not, and eleven more contexts with it: the lift's
+admission predicate reads the `ncc` block's FIRST statement, and a REUSED `__ncc_N` opens its
+block with its own overwrite `OpFreeRef`, which shifts the `Set` to second.  So the lift fired
+only where the temp was fresh — a `for` body — and leaked one record per evaluation everywhere
+else.  Skipping a leading FREE (not any statement: that would re-admit the `t[p] ?? dflt()` cell
+their narrowing was measured to exclude) takes the matrix from 1 of 13 clean to 12 of 13, values
+unchanged, and the release fuzz sweep — the 54-cell both-backends replay that falsified three of
+their candidate narrowings — passes.  The thirteenth is **loft#1119**: a DISCARDED call statement
+inside a loop body, where the argument hoist does not reach the nested block.
+`tests/scripts/1118b-…` pins the twelve and names the thirteenth in its header.
+
 **And the lock earned its place on its first run — loft#1118.**  `make ci` failed on it: one
 `SNRet` record leaked.  Not from anything in this thread — the same cell leaks identically on the
 control at `81b42f3a` — but because the file is the first corpus program to hand a VARIABLE to a
@@ -2336,8 +2351,11 @@ which is a decision about every library's `loft test`, not a tweak.
 all: `if c { E::A { … } } else { E::B { … } }` is refused with *"expected A, got B on else"*, while
 `match k { 0 => E::A { … }, _ => E::B { … } }` — which lowers to nested `Value::If` — accepts it,
 and so does an early `return` plus a tail.  `formal/types.md` `(C-Var)` settles which is right
-(`Reference(S) ⤳ Enum(E) ⟸ S ∈ variants(E)`), so the refusal is the deviation.  Filed rather than
-fixed: the else arm is checked against the THEN arm's type, and pushing the expected type into the
+(`Reference(S) ⤳ Enum(E) ⟸ S ∈ variants(E)`), so the refusal is the deviation.  **Fixed in the
+sibling checkout and picked in here (`1cc265fe`), as a JOIN rather than a conversion** — and the
+half worth knowing is the second one: without it `v: A = if c { E::A { … } } else { E::B { … } }`
+is *accepted* and a slot declared as one variant holds another, loft#980's class.  Filed rather
+than fixed at the time: the else arm is checked against the THEN arm's type, and pushing the expected type into the
 arms is a bidirectional-checking change in the typing core.  Nothing to do with `Optional` — the
 non-null twin fails identically.
 
@@ -2352,7 +2370,7 @@ mistake is a use-after-free rather than a leak.  Left alone, with the map writte
 seeing, even where a second match in it stays bare (B6f's caveat, one type former over);
 `.base()` is also `use_analysis::Class::base`, a different method sharing the spelling; and the
 corpus ranking is only as wide as the four verbs instrumented — `is_equal`, `content`, `show` and
-`unrewritten` have 126 bare call sites between them and were not measured.  So **367 is a floor
+`unrewritten` have 126 bare call sites between them and were not measured.  So **370 is a floor
 and four is a floor**.
 
 #### C — process / skills
