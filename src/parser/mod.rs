@@ -10523,16 +10523,17 @@ impl Parser {
             if *ar as usize >= types.len() {
                 continue;
             }
-            if let Type::Text(ad)
-            | Type::Vector(_, ad)
-            | Type::Sorted(_, _, ad)
-            | Type::Hash(_, _, ad)
-            | Type::Index(_, _, ad)
-            | Type::Radix(_, _, ad)
-            | Type::Trie(_, _, ad)
-            | Type::Reference(_, ad)
-            | Type::Enum(_, true, ad) = &types[*ar as usize]
-            {
+            // Asked through [`Type::deps_ref`], which is where "what does this type
+            // borrow?" is answered, rather than re-listing the kinds that carry deps.  The
+            // hand-written list this replaces was missing `Optional`, so a `τ?` argument
+            // contributed nothing: a function delegating to one that borrows its argument
+            // (`fn outer(a: S?, c) -> S? { inner(a, c) }`) declared an EMPTY return dep and
+            // so read as returning an OWNED store.  The caller then lifted that return and
+            // freed it — releasing its own record while the variable holding it was still
+            // live, and answering whatever the next allocation reused (loft#1114's class,
+            // and its dense twin was correct throughout).  `deps_ref` documents `Optional`
+            // as dep-transparent; a second list could only agree with it by accident.
+            if let Some(ad) = types[*ar as usize].deps_ref() {
                 for a in ad {
                     dp.insert(*a);
                 }
