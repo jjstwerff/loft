@@ -1592,9 +1592,11 @@ impl State {
                 Type::Character => stack.add_op("OpPutCharacter", self),
                 Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
                 Type::Text(_) => stack.add_op("OpPutText", self),
-                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
-                    stack.add_op("OpPutRef", self);
-                }
+                // Every DbRef-shaped element travels as one handle, so the membership
+                // question is [`is_dbref`](crate::data::is_dbref)'s and is asked there —
+                // spelled inline it drifts short by exactly the five keyed collections,
+                // which is what a `hash<S[k]>` tuple element hit here.
+                t if crate::data::is_dbref(t) => stack.add_op("OpPutRef", self),
                 other => panic!("Tuple set: unsupported element type {other:?}"),
             }
             self.code_add(pos);
@@ -1629,11 +1631,12 @@ impl State {
                     stack.add_op("OpConstFloat", self);
                     self.code_add(0.0f64);
                 }
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _) => {
+                t if crate::data::is_dbref(t) => {
                     // T1.8c: use NullRefSentinel (no store allocation) for tuple
                     // reference elements.  The element will be overwritten by PutRef
                     // or CopyRecord during destructuring; a real store is not needed
-                    // at null-init time.
+                    // at null-init time.  Membership is `is_dbref`'s question — see the
+                    // sibling note in `emit_tuple_var_pop_put`.
                     self.emit_push_sentinel(stack);
                 }
                 Type::Text(_) => {
@@ -1659,12 +1662,10 @@ impl State {
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Single => stack.add_op("OpPutSingle", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _) => {
-                    stack.add_op("OpPutRef", self);
-                }
                 Type::Text(_) => stack.add_op("OpPutText", self),
                 Type::Character => stack.add_op("OpPutCharacter", self),
                 Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                t if crate::data::is_dbref(t) => stack.add_op("OpPutRef", self),
                 _ => unreachable!(),
             }
             self.code_add(pos);
@@ -2563,9 +2564,9 @@ impl State {
                 Type::Character => stack.add_op("OpPutCharacter", self),
                 Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
                 Type::Text(_) => stack.add_op("OpPutText", self),
-                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
-                    stack.add_op("OpPutRef", self)
-                }
+                // See the sibling note in `emit_tuple_var_pop_put`: the DbRef-shaped set
+                // is [`is_dbref`](crate::data::is_dbref)'s to answer.
+                t if crate::data::is_dbref(t) => stack.add_op("OpPutRef", self),
                 Type::Tuple(_) => unreachable!("handled above"),
                 other => panic!("emit_tuple_put_ops: unsupported elem {other:?}"),
             }
@@ -2644,6 +2645,26 @@ impl State {
             // now aliases on BOTH backends, exactly as the undestructured read `ca = t.0`
             // already did on both.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
+        } else if let Some((join_d_nr, base)) = crate::use_analysis::nullable_join_first_bind(
+            stack.data,
+            stack.def_nr,
+            stack.function.tp(v),
+            value,
+        ) {
+            // loft#1106 — a NULLABLE heap local (`r: S?`) first-bound from a call whose
+            // return may borrow one of its arguments.  `S?` is `Optional(Reference(S))`,
+            // and every arm of this dispatch asks its shape question against the bare
+            // type, so the nullable spelling of the same storage reached none of them:
+            // the bind stayed a plain `OpPutRef` alias.  A write through the result then
+            // reached the caller's own variable — which `(B-Copy)` says a bind cannot do —
+            // and the arm where the callee MINTED its store left it with no owner.
+            //
+            // The `-> S` twin of the same call already resolves this per execution, and
+            // this is that bind: `OpBindOrCopy` copies when the returned store is the
+            // witness's and adopts when it is not, so the scope-exit free is right on
+            // both arms.  It is also what makes a `null` answer safe — a null `src` has
+            // no store to alias, so the guard adopts it and the local stays null.
+            self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
         } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
             stack.function.tp(v).clone()
             && let Value::Call(fn_nr, _) = value.unspan()
@@ -3101,18 +3122,28 @@ impl State {
             self.code_add(bump);
             stack.position += bump;
         }
-        let slot_offset = stack.var_pos(v);
-        stack.add_op("OpInitRefSentinel", self);
-        self.code_add(slot_offset);
         // The call result (`src`) FIRST, then the witness on top — so the witness's
         // frame-relative `var_pos` accounts for `src` already sitting on the eval stack.
         // `OpBindOrCopy` pops witness, then src.  A PUSH op reads at the PRE-push
         // position, so `var_pos(base)` is taken BEFORE `add_op`; the POP op's
         // `var_pos(v)` is taken AFTER it.  (Mirrors the reassignment site exactly.)
         self.generate(value, stack, false);
+        // The sentinel goes in AFTER the call is evaluated, which is the @P290 rule the
+        // reassignment path states: touch the destination only once the call no longer
+        // needs what is there.  `v` is a FIRST bind, so the call cannot name it — but it
+        // can name a variable the slot allocator gave `v`'s slot to, and that is not the
+        // same question.  A lifted argument is exactly that neighbour: it dies at the call
+        // and its slot is reused for the very local the call is bound to, so a sentinel
+        // written first replaced the argument with `null` between its write and its read.
+        // Writing it here still satisfies `OpBindOrCopy`'s precondition — the slot holds a
+        // sentinel before the guard writes it, which is all the borrow arm's
+        // `alloc_record_at` needs.
         let witness_pos = stack.var_pos(base);
         stack.add_op("OpVarRef", self);
         self.code_add(witness_pos);
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRefSentinel", self);
+        self.code_add(slot_offset);
         stack.add_op("OpBindOrCopy", self);
         self.code_add(stack.var_pos(v));
         self.code_add(tp_nr);

@@ -186,10 +186,7 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
         let Value::Call(d, args) = cur.unspan() else {
             return None;
         };
-        if !matches!(
-            data.def(*d).name(),
-            "OpGetVector" | "OpVectorRef" | "OpGetField" | "OpGetRecord"
-        ) {
+        if !crate::use_analysis::is_projection_op(data, *d) {
             return None;
         }
         match args.first().map(Value::unspan) {
@@ -197,6 +194,51 @@ fn base_container_var(value: &Value, data: &Data) -> Option<u16> {
             Some(inner) => cur = inner,
             None => return None,
         }
+    }
+}
+
+/// What an argument LIFTED into a `__lift_N` temp borrows — the deps its type must carry.
+///
+/// A lift temp holds a value the caller reads out of something it does not own: an element
+/// of a container, a field of a record, the surviving arm of a `??`.  Typed without deps it
+/// reads as the OWNER of that store and `get_free_vars` emits a scope-exit `OpFreeRef` for
+/// it — releasing a container the caller still names.  Where the container is a local of the
+/// same frame the bogus free lands on a store that was dying anyway and nothing reports it;
+/// where it OUTLIVES the frame (a parameter, a global) the next allocation recycles the
+/// record and the container reads back as another type's bytes.
+///
+/// So the temp borrows what the value borrows.  The walk bottoms out at:
+/// * a plain `Var` — the chain reads out of that local's store;
+/// * a `TupleGet` — out of the tuple's;
+/// * a BLOCK, whose `result` type already carries the deps the parser derived for it (a
+///   `??` lowers to one, and its type names the container the surviving arm reads);
+/// * an `If`, where either arm can be the value, so the deps are the union.
+///
+/// `None` where none of those is reached — a value whose source cannot be named must not be
+/// bound at all.  The caller then leaves the argument as it was, which costs the leak that
+/// is already there; a temp typed as an owner of somebody else's store costs a
+/// use-after-free, and a leak is the better of those two.
+fn lift_view_deps(arg: &Value, data: &Data) -> Option<Vec<u16>> {
+    match arg.unspan() {
+        Value::Var(v) => Some(vec![*v]),
+        Value::TupleGet(base, _) => Some(vec![*base]),
+        Value::Block(bl) => {
+            let d = bl.result.depend();
+            if d.is_empty() { None } else { Some(d) }
+        }
+        Value::If(_, then_v, else_v) => {
+            let mut d = lift_view_deps(then_v, data)?;
+            for x in lift_view_deps(else_v, data)? {
+                if !d.contains(&x) {
+                    d.push(x);
+                }
+            }
+            Some(d)
+        }
+        Value::Call(d_nr, cargs) if crate::use_analysis::is_projection_op(data, *d_nr) => {
+            lift_view_deps(cargs.first()?, data)
+        }
+        _ => None,
     }
 }
 
@@ -4571,6 +4613,35 @@ impl Scopes {
         } else {
             (Vec::new(), scanned)
         };
+        // loft#1106 — a NULLABLE heap local first-bound from a call whose return may
+        // borrow an argument.  `S?` is `Optional(Reference(S))`, and the shape questions the
+        // heap first-bind dispatch asks are asked against the BARE type, so the nullable
+        // spelling of the same storage never reached the deps strip: the local kept the
+        // argument's dep, read as a permanent borrow, and nothing freed the store the callee
+        // minted on its other arm.  Both backends bind it through the runtime join guard,
+        // which leaves the local owning a store either way — so the deps have to go, or the
+        // free that guard exists to make correct is never emitted.
+        //
+        // Asked against `set_value`, the SCANNED right-hand side, not the raw one: `scan`
+        // has just LIFTED any argument the @P290 bracket could not name into a temp, and the
+        // witness the join resolves is that temp.  Read before the lift the same call answers
+        // "no nameable witness" and the strip declines, while codegen — which only ever sees
+        // the scanned form — emits the guard anyway.  Then the local owns a store with no
+        // free: one leaked record per call on the minting arm, from the two readers of ONE
+        // predicate disagreeing about which value they were reading.
+        if crate::use_analysis::nullable_join_first_bind(
+            data,
+            self.d_nr,
+            function.tp(v),
+            &set_value,
+        )
+        .is_some()
+        {
+            let deps: Vec<u16> = function.tp(v).depend().clone();
+            for d in deps {
+                function.make_independent(v, d);
+            }
+        }
         // Prepend dependency initializations.
         let mut prefix = Vec::new();
         // #316 — the ownership-transition free runs FIRST: before the dep
@@ -5030,6 +5101,26 @@ impl Scopes {
             // local's name but leaves `hidden` set, and a user-declared parameter
             // is never hidden.  The un-renamed `__retbuf` placeholder is left alone
             // — no local was promoted onto it, so it holds no store of ours.
+            //
+            // loft#1096 — and a COLLECTION return's promoted buffer is left alone too,
+            // because the premise above ("a buffer not yet minted on this path is the
+            // null sentinel, which `free` ignores") is false for it.  The leg reads the
+            // buffer as a local THIS function mints; that is true where the caller's
+            // work-ref reaches the call as a bare `OpInitRef` sentinel, which is what a
+            // record work-ref does.  A collection work-ref does not:
+            // `codegen::gen_set_first_vector_null` gives an owned vector local
+            // `OpInitRef` + `OpDatabase`, so the buffer arrives ALIVE, and the callee's
+            // own `OpDatabase` then only clears it in place (`alloc_record_at` reuses a
+            // live slot rather than minting beside it).  So there is never a distinct
+            // callee-minted store to reclaim here, and the store this free reached was
+            // always the CALLER's — which the caller still names and still frees at its
+            // own scope exit.  A `-> vector<T>` function with a `null` arm therefore
+            // handed the next call a freed record to `OpClearVector`, and a loop faulted
+            // on its second iteration on both backends (`@FR-O-Owner`: a free is for a
+            // store the value OWNS).
+            let collection_return = crate::parser::vectors::is_collection(
+                data.def(self.d_nr).returned.ret_promo_base(),
+            );
             for v in 0..function.count() {
                 if function.is_argument(v)
                     && !sources.contains(&v)
@@ -5041,6 +5132,7 @@ impl Scopes {
                 {
                     let n = function.name(v);
                     if n != "__retbuf"
+                        && !collection_return
                         && let Some(&a) = data.def(self.d_nr).attr_names.get(n)
                         && data.def(self.d_nr).attributes()[a].hidden
                     {
@@ -5566,7 +5658,42 @@ impl Scopes {
                 // statement leaves all writes in place; native
                 // `return var___ref_N` then returns the active
                 // branch's value correctly.
-                if ret_var != u16::MAX {
+                // loft#1097 — `ret_var` cannot carry the sentinel when the tail has a
+                // NULL arm and the var it unified onto is a COLLECTION.
+                // `returned_var_null_unified` folds a null arm into its sibling's var
+                // on the premise it states itself: *"the work-ref null-inits at
+                // function entry and a null arm never allocates into it, so
+                // `Return(Var(v))` yields the same null the sentinel did"*.  That holds
+                // for a RECORD work-ref, which `gen_set_first_ref_null` sentinel-inits.
+                // It is false for a collection: `gen_set_first_vector_null` gives an
+                // owned vector local `OpInitRef` + `OpDatabase`, and a PROMOTED buffer
+                // arrives alive from the caller — so on the null path `Var(v)` is a
+                // live, populated vector.  `f(-1) == null` answered FALSE while
+                // `len(f(-1))` answered 2, with no diagnostic: @FR-E-Null says the
+                // sentinel is a real observable value, and calls.md's `(F-Return)` says
+                // a body ending in an expression returns THAT expression — here the
+                // expression was demoted to a statement and its value dropped.
+                //
+                // Hoist the tail's value to a temp instead — the shape the null-arm
+                // RECORD join above already uses — so the frees still run between the
+                // value and the return while the arm's own answer, sentinel included,
+                // is what comes back.  Like loft#957's temp below it is deliberately
+                // NOT registered in `var_scope`: it holds the value being transferred
+                // to the caller, and a scope-exit free of it would free what the caller
+                // adopts.
+                let null_arm_needs_the_value = ret_var != u16::MAX
+                    && frees_follow
+                    && !expr_is_terminal
+                    && (ret_var as usize) < function.count() as usize
+                    && crate::parser::vectors::is_collection(function.tp(ret_var))
+                    && return_has_null_arm(expr, data.def_nr("OpNullRefSentinel"));
+                if null_arm_needs_the_value {
+                    self.ret_temp_counter += 1;
+                    let name = format!("__ret_tail_{}", self.ret_temp_counter);
+                    let tmp = function.add_temp_var(&name, tp);
+                    ls[0] = v_set(tmp, expr.clone());
+                    ls.push(Value::Return(Box::new(Value::Var(tmp))));
+                } else if ret_var != u16::MAX {
                     ls.push(Value::Return(Box::new(Value::Var(ret_var))));
                 } else if frees_follow
                     && *tp != Type::Void
@@ -6417,11 +6544,110 @@ impl Scopes {
                 ops.pop();
                 preamble.extend(ops);
                 ls.push(Value::Var(w));
+            } else if let Some(tp) =
+                Self::unnameable_borrow_source(&scanned, outer_call, arg_idx, data)
+            {
+                // loft#1105 — an argument the @P290 bracket cannot NAME, at a call whose return
+                // may borrow it.  The bracket protects a store through a variable holding a
+                // `DbRef`, and `view_root_slots` walks a bare `Var`, a projection chain and a
+                // JOIN to find one.  A `??` in argument position lowers to an `ncc` BLOCK whose
+                // tail is a join with a CALL arm, and neither the multi-statement block nor the
+                // call is nameable — so the witness set read incomplete and the caller copied
+                // the returned store, orphaning the one the callee minted.
+                //
+                // Binding it to a temp is the same cure the cases above take, generalised to the
+                // question itself: if the bracket cannot name the value, give it a name.  The
+                // preamble runs BEFORE the bracket is emitted, so the temp holds the real
+                // `DbRef` by then — which is why the hand-written `e = v[0] ?? mk(); pick(e, …)`
+                // was always clean and this now emits the same thing.  And because the name is
+                // taken at RUNTIME, the bracket protects whichever store the value turned out to
+                // be, which is what makes one temp serve a join whose arms disagree about it.
+                //
+                // ⚠ LAST in the chain, and that is load-bearing rather than tidy.  The temp
+                // takes the CALLEE'S PARAMETER type — the one type available for a value with no
+                // variable behind it — and a parameter declaration carries NO DEPS, so the temp
+                // reads as an OWNER of whatever it holds.  For every shape the arms above claim
+                // that is wrong: a tuple element and a projection chain are VIEWS of a store the
+                // caller owns, and an owner's scope-exit free would release a record the caller
+                // still reaches.  Ordered after them, this arm only ever sees values no earlier
+                // arm could type.
+                //
+                // …and the temp BORROWS what the value borrows, which is the type
+                // `unnameable_borrow_source` answers: the callee's parameter SHAPE carrying
+                // `lift_view_deps`'s answer for the argument.  A `skip_free` temp would also
+                // stop the over-free, and it says less — "do not free me" rather than "whose
+                // store is this", which is the question `Type::depend`'s other readers ask.
+                // Where the walk can name no source the argument is NOT bound at all, so a
+                // value with no provenance costs the leak it already had rather than a name
+                // that cannot say why it is safe.
+                let tmp = self.new_lift_var(function, &tp);
+                preamble.push(v_set(tmp, scanned));
+                ls.push(Value::Var(tmp));
             } else {
                 ls.push(scanned);
             }
         }
         (preamble, ls, postamble)
+    }
+
+    /// loft#1105 — the TYPE to bind an argument to when the @P290 bracket cannot NAME the store
+    /// its value will lie in, at a call whose return may borrow it.
+    ///
+    /// `Some(tp)` is the callee's PARAMETER shape — the type the argument is converted to
+    /// regardless — carrying the DEPS the value itself borrows ([`lift_view_deps`]).
+    ///
+    /// The deps are the load-bearing half.  The parameter's declared type has none, and a
+    /// temp typed that way reads as the OWNER of a store it only VIEWS: `get_free_vars`
+    /// emits a scope-exit free that releases the caller's container.  It is silent while the
+    /// container is a local of the same frame — the store was dying at that scope exit
+    /// anyway — and a use-after-free the moment the container OUTLIVES the call, which is
+    /// why `pick(h[k], …)` corrupted a `hash` passed in as a parameter.
+    ///
+    /// So a value whose source cannot be named is NOT bound (`lift_view_deps` answers
+    /// `None`), and the argument stays exactly as it was — the leak that is already there,
+    /// which is the better of the two.
+    ///
+    /// Gated as its two siblings are, plus one exclusion of its own: a bare `Var` is already
+    /// nameable and must not be re-bound, and an argument the bracket CAN name needs nothing.
+    /// The inline-construction and tuple-element cases are tried first and handle their shapes
+    /// more precisely — a construction is HOISTED rather than bound, because binding a work-ref
+    /// that still holds null at bracket-emit time would read as covered while protecting
+    /// nothing (loft#981).
+    fn unnameable_borrow_source(
+        arg: &Value,
+        outer_call: u32,
+        arg_idx: usize,
+        data: &Data,
+    ) -> Option<Type> {
+        if outer_call == u32::MAX {
+            return None;
+        }
+        let callee = data.def(outer_call);
+        if !callee.is_loft_defined() {
+            return None;
+        }
+        if matches!(callee.returned().base(), Type::Function(_, _, _)) {
+            return None;
+        }
+        if !callee.returns_borrowed_view() {
+            return None;
+        }
+        if matches!(arg.unspan(), Value::Var(_)) {
+            return None;
+        }
+        if crate::use_analysis::bracket_can_name(data, arg) {
+            return None;
+        }
+        let tp = callee.attributes().get(arg_idx)?.typedef.clone();
+        // Only an argument that CARRIES a store needs a witness at all — asked through
+        // `base`, because a NULLABLE parameter (`s: S?`) is `Optional(Reference(S))` and
+        // carries exactly the store its non-null twin does.  Asked on the raw type this
+        // declined every nullable parameter, so a `??` argument at one was never lifted and
+        // kept leaking the callee's minted store while the dense twin was cured.
+        if !crate::data::is_dbref(tp.base()) {
+            return None;
+        }
+        Some(tp.with_deps(&Deps::frame(lift_view_deps(arg, data)?)))
     }
 
     /// loft#1029 — the work-ref an INLINE-built argument yields, when the callee's return
@@ -7685,6 +7911,18 @@ impl Scopes {
     }
 }
 
+/// Does this return expression's terminal value reduce to `null` — a bare `Value::Null`
+/// or the reference sentinel `null_nr` names?
+///
+/// Descends `Block`/`Insert`/`Span` to the tail.  A nested `if` is NOT descended: an arm
+/// that IS null and a branch that merely CONTAINS one are different answers, and only the
+/// first belongs to a terminal — `return_has_null_arm` is the walker that asks the second.
+///
+/// A `Return`/`Drop` wrapper IS descended, because this is asked about a return
+/// EXPRESSION and the wrapper is the thing being examined.  The `parser::control`
+/// siblings (`branch_yields_null`, `arm_yields_direct_null`, `arm_is_null`) ask the same
+/// null question about what an ARM hands to a JOIN — where a `return` hands it nothing —
+/// and stop at the wrapper.
 fn is_null_terminal(expr: &Value, null_nr: u32) -> bool {
     match expr.unspan() {
         Value::Null => true,
@@ -7852,7 +8090,19 @@ fn return_has_non_source_arm(expr: &Value, sources: &[u16]) -> bool {
 ///
 /// `null_sentinel_nr` is `OpNullRefSentinel`'s def number (resolved by the
 /// caller, which holds `data`).
-fn return_has_null_arm(expr: &Value, null_sentinel_nr: u32) -> bool {
+///
+/// A `Return`/`Drop` wrapper IS descended, because this is asked about a return
+/// EXPRESSION and the wrapper is the thing being examined.  The `parser::control`
+/// siblings (`branch_yields_null`, `arm_yields_direct_null`, `arm_is_null`) ask the same
+/// null question about what an ARM hands to a JOIN — where a `return` hands it nothing —
+/// and stop at the wrapper.
+///
+/// One home, because the same fact decides two things at opposite ends of one return:
+/// whether scope analysis may suppress the work-ref's free (here), and whether the
+/// `Bind` leg may copy the tail into the return buffer WHOLE or has to deliver the arms
+/// one at a time (`ref_return`) — the whole-tail copy answers the buffer on every path,
+/// so with a null arm present it swallows the sentinel.
+pub(crate) fn return_has_null_arm(expr: &Value, null_sentinel_nr: u32) -> bool {
     match expr.unspan() {
         Value::Null => true,
         Value::Call(d, _) => *d == null_sentinel_nr,
@@ -8912,7 +9162,19 @@ pub fn worker_calls_parent_write_deep(data: &Data, worker_d_nr: u32) -> Option<S
     })
 }
 
-#[allow(dead_code)]
+/// Find a parent-state write reachable from `value`, following calls into user fns.
+///
+/// The recursive half of `worker_calls_parent_write_deep`: it answers with the chain
+/// `" → helper → bad_callee"` for the first write it reaches, and `None` when every path
+/// bottoms out in a pure, host-io or unannotated-native primitive.  `visited` stops a
+/// recursive call graph from looping.
+///
+/// This is PRODUCTION-WIRED — `parse_parallel` turns a `Some` into the C93 `Level::Error`
+/// that refuses the program — so a subtree it does not enter is a refusal that does not
+/// happen, and the write then runs in a worker thread against a read-only store.  That is
+/// why the fallback descends via the keystone instead of naming arms: the arm list below
+/// is shared with `walk_par_unsafe_reason_value`, and a wrapper missing from both is a
+/// verdict issued without looking.
 fn walk_deep_parent_write(
     value: &Value,
     data: &Data,
@@ -8980,11 +9242,9 @@ fn walk_deep_parent_write(
         }
         Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, current_fn, visited),
         Value::Span(b) => walk_deep_parent_write(&b.1, data, current_fn, visited),
-        // Descends via the keystone, for the reason its twin `walk_par_unsafe_reason_value`
-        // does: the arms above are the same list, and they do not include `Return`, so a
-        // worker whose body is `return helper(...)` was reported free of parent writes without
-        // that call ever being examined.  The two walkers are near-copies; fixing one and not
-        // the other is how they came to differ from `is_par_safe` in the first place.
+        // Every other shape descends through the keystone, so a wrapper the arms above do
+        // not name still has its subtree searched.  `walk_par_unsafe_reason_value` is a
+        // near-copy of this arm list and ends the same way for the same reason.
         other => {
             let mut found = None;
             other.for_each_child(&mut |c| {

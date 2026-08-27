@@ -157,8 +157,12 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24; its Face B CLOSED the same day, Face A NARROWED 2026-08-25
-to a single cell — an inline-minting `match` arm — with every other cell fixed) — D-own-7
+OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+`match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-13's second face
+closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 records the two
+witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
+D-own-11 opened and closed 2026-08-26, D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
@@ -167,6 +171,398 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-13 (second face) — CLOSED (2026-08-27, loft#1107): the ELEMENT position witnesses its ROOT
+
+`(O-Complete)` requires the ownership fact PER BINDING.  A nullable value in an ELEMENT position
+now has one: `caller_arg_base` maps a PROJECTION argument to the root container it reads out of,
+through the same `view_root_slots` walk the @P290 bracket protects through, so the join guard has
+a store to compare the return against and frees the minting arm.
+
+```loft
+fn pickn(s: Sn?, c: boolean) -> Sn? { if c { s } else { mkn() } }
+fn elem(c: boolean)  -> integer { v: vector<Sn?> = [Sn { a: 7 }]; r = pickn(v[0], c); r?.a }
+fn local(c: boolean) -> integer { q: Sn? = Sn { a: 7 }; r = pickn(q, c); r?.a }
+```
+
+Twenty records over ten rounds at `kt=__nullable<Sn>` on the control, clean on both backends
+after, values 180 throughout.
+
+⚠ **This entry read as an OWNERSHIP gap on the strength of one discriminator that was itself
+broken.**  It recorded *"binding `v[0]` to a local first does NOT cure it — a witness gap is
+cured by a name, an ownership gap is not"*, and that is a sound test whose input was wrong: on
+that build the hand-bound spelling did not merely fail to cure the leak, it CORRUPTED the
+caller's container, because the join bind read its witness out of a slot its own sentinel had
+just overwritten.  The name was being taken and then destroyed.  With the read ordered before
+the write the discriminator answers the other way and the gap is the witness gap it always was.
+
+**What generalises:** a discriminator is only as good as the build under it, exactly as a filed
+negative is.  This one was run on a tree carrying an unfixed defect in the very mechanism it was
+discriminating on, so it could not have answered anything else.
+
+### D-own-13 (first face) — CLOSED (2026-08-26, loft#1106): a nullable heap local carried no ownership fact
+
+`(O-Complete)` requires the ownership fact PER BINDING.  An `Optional(Reference)` local has
+none: `data::is_dbref` lists the eight store-carrying kinds and not the `Optional` wrapper, so
+`--show-ownership` renders a `P?` variable as `— (scalar)`, nothing frees it, and the @P290
+bracket cannot name it either.
+
+```loft
+struct P { x: integer = 3 }
+fn mk() -> P? { P { x: -1 } }
+fn pick(a: P?, c: boolean) -> P? { if c { a } else { mk() } }
+fn plain(c: boolean) -> integer { q = P { x: 7 }; r = pick(q, c); r?.x }   // leaks one per call
+fn declared(c: boolean) -> integer { q: P? = P { x: 7 }; r = pick(q, c); r?.x }  // clean
+```
+
+Both backends, values correct throughout.  The axis is the ARGUMENT'S OWN declared type: with
+`q` declared `P?` the result's deps come back empty and the caller frees it, and with `q`
+inferred `P` they name `q`, so the caller reads a borrow and the minted store is orphaned.
+
+⚠ **This is not D-own-11 with a different argument, and the test that separates them is the
+hand-bound spelling.** Every witness gap in D-own-11 is cured by binding the argument to a
+local first; this one is not — `e = q; pick(e, c)` leaks identically.  A witness gap is about
+what the bracket can NAME; this is about what the type system says anyone OWNS.
+
+The obvious cure was measured and rejected: peeling `is_protectable_store_type` to `.base()`
+(matching the `heap_dep` gate three lines above it, which peels for exactly this reason) leaves
+the leak untouched, because the missing free is not the bracket's to license.  Resolving it is
+a decision about which of `is_dbref`'s callers see through the `Optional` wrapper — and
+`is_dbref`'s own doc already records that this list drifts SHORT when restated, with
+`Parser::is_heap_handle` named as "the same question with a `.base()` peel".
+
+### D-own-12 — CLOSED (2026-08-26): the witness list was short by two OPS, and the count of homes for that list was wrong
+
+D-own-6 closed on the claim that *"the runtime Join witness now covers every argument it can
+name."*  Four spellings have been found since that it could not name, all on the same axis its
+own closing paragraph identifies as the one its oracle never varied.  Two of them are this
+entry's; the other two are D-own-11's, closed in the sibling checkout by the general
+`bracket_can_name` question rather than by a fifth shape.
+
+| spelling | what the walk answered | where it closed |
+|---|---|---|
+| `pick(t.0, …)` — a tuple ELEMENT | `None`: `Value::TupleGet` is not a call, so no op-name list can see it | loft#1104, bound at the call site like the construction family |
+| `pick(t.0.s, …)`, `pick(t.0[0], …)`, `pick(t.0.0, …)`, `pick(vt[0].0, …)` — a CHAIN over one | `None` for the same reason, one or two nodes down | loft#1104 — the ELEMENT is bound and the chain RE-BASED on it, so the temp carries the type the tuple declares |
+| `pick(h[k], …)` — a KEYED lookup at hash, sorted and index alike | `None`: `OpGetRecord` was absent from `is_projection_op` | **here** — the op list merged onto one home |
+| `pick(v[i] ?? mk(), …)` — a join whose arm MINTS | `None`: the arm is a call, and a call is deliberately not a projection | loft#1105, D-own-11 |
+
+**The list `view_root_slots` reads was short by two ops, and three other homes already had them.**
+`OpGetRecord` is declared `-> reference[data]`, so a keyed lookup answers a record living in the
+collection's own store and the root variable is exactly the witness the bracket wants.
+`is_projection_op`'s doc said *"One list, two readers … Two lists of the same two ops would
+drift."*  Measured: **seven sites spell that list by hand across six files, in four distinct
+memberships**, and the two that had the right answer (`scopes::base_container_var`,
+`generation::container_element_base`) are byte-identical copies of each other.  Merged onto the
+one home rather than adding the op a fourth time; the doc now also states the criterion it is NOT
+(*"the return deps on parameter 0"*, which `OpNewRecord` and `OpInsertVector` also satisfy — they
+GROW the store rather than read it).
+
+⚠ **The chain rows are why binding is not always the answer.**  A chain's temp must carry the
+projection's RESULT type, which this pass cannot compute; binding its BASE needs only the type the
+tuple already declares.  A temp typed off the CALLEE'S PARAMETER instead carries no deps and so
+reads as an OWNER — and a free emitted for a store the tuple base still owns is a use-after-free,
+not a leak.  That is the one direction this machinery's own comments warn about, and it is why the
+element is bound and the chain re-based rather than the whole argument being bound.
+
+**What generalises past this entry:** D-own-6 named the argument spelling as the axis its oracle
+pinned, and then closed on a fix that enumerated the spellings *it had thought of*.  An axis named
+in a closure is not an axis measured by it.  Each found since was reached by moving one more thing
+— a tuple base, a projection above it, a keyed container, a `??` — and each took one probe.
+D-own-11's closing sentence is the generalisation both halves arrived at from opposite ends:
+**a predicate that enumerates SHAPES will keep being one shape short.**
+
+### D-own-11 — CLOSED (2026-08-26, loft#1105): an argument the borrow bracket could not NAME leaked the callee's minted store
+
+The model claims **no leak**.  A call whose return may BORROW an argument decides borrow-vs-owned
+at runtime with the @P290 bracket, and the bracket protects a store by naming it through a
+variable whose VALUE is a `DbRef`.  Where it cannot name one the witness set reads incomplete and
+the caller keeps the conservative never-free answer — which is SOUND but copies the returned store
+and orphans the one the callee minted, one record per call on both backends:
+
+```loft
+fn pick(s: S, c: boolean) -> S { if c { s } else { mk() } }
+fn f(c: boolean) -> integer { v: vector<S?> = [S { a: 7 }]; r = pick(v[0] ?? mk(), c); r.a }
+```
+
+A `??` in argument position lowers to an `ncc` BLOCK whose tail is a join with a CALL arm.
+`view_root_slots` walks a bare `Var`, a projection chain and a join, and neither a
+multi-statement block nor a call is nameable — the call deliberately so, since its returned store
+may be the argument's or one it minted, which is the very split the bracket exists to decide.
+
+Closed by binding the argument to a temp before the call (`Scopes::scan_args`,
+`unnameable_borrow_source`), which is the hand-written spelling that was always clean
+(`e = v[0] ?? mk(); pick(e, …)`).  **The preamble runs BEFORE the bracket is emitted**, so the
+temp holds a real `DbRef` by then — which is exactly why a WIDER WITNESS is the wrong cure and a
+bind is the right one: marking the block's own work-ref would read as covered while it still held
+its null, and the source-free that licenses would release a store the caller still reaches.  That
+trades a leak for a use-after-free (loft#981).  A bind cannot make that mistake, because the value
+is already computed when the name is taken.
+
+⚠ **This is the THIRD cell of one class, and the fix is finally the class rather than the cell.**
+loft#1029 hoisted an inline CONSTRUCTION, `tuples.md` D-tup-3 bound a TUPLE ELEMENT, and this
+binds anything else the walk cannot name — asking `bracket_can_name` instead of enumerating a
+fourth shape.  **A predicate that enumerates SHAPES will keep being one shape short; the question
+it stands for does not run out.**
+
+⚠ **AND IT SUBSUMED ONE OF THEM, WHICH IS THE CLAIM THIS ENTRY ORIGINALLY GOT WRONG.**  Only the
+CONSTRUCTION case stays ahead in the chain, and it has a reason: a construction is HOISTED rather
+than bound, for the loft#981 reason above.  The tuple arm was ahead of nothing — this general arm
+precedes it, a `TupleGet` is not a `Var` and `bracket_can_name` refuses it, so the tuple arm was
+unreachable from the moment this landed: **0 reaches across the 875-file corpus, and deleting it
+leaves the IR byte-identical over all 875.**  Forced ahead it disagrees with the hand-written
+oracle (`tuples.md` D-tup-3 has the measurement), so it is removed rather than reordered.  Neither
+guard could tell: both pass with it live, dead, or gone.  **A shape arm behind a question arm is
+dead code that still reads like a safety net.**
+
+⚠ **A bind is not free of consequences, and this entry's first form paid both.** The temp takes
+the CALLEE'S PARAMETER type, and a parameter declaration carries NO DEPS — so a temp holding a
+VIEW read as an OWNER and the frame freed a record the CALLER still reached. `use_hash(h, true)`
+then `h[7].tag` answered null; the tuple spelling answered `12884901900`; `LOFT_POISON=1` panicked
+on a corrupt reference. And the arm as first placed came BEFORE the tuple-element one, so a tuple
+element — not a `Var`, not nameable — never reached the arm that types its temp off the TUPLE's
+own declared element type. Both are fixed here: the arm is ORDERED LAST, and its temp is
+`skip_free`, because **a witness OWNS NOTHING** — something else already owns whatever it holds
+(the `??`'s own work-ref on the minting arm, the container on the view arm).
+
+⚠ **Neither checkout's matrix could see it, and the axis both pinned is worth the sentence:
+every cell built its container INSIDE the function that called.** A free that should not happen
+then lands on a store dying at the same scope exit, `H-FreeTwice` absorbs it as a silent no-op,
+and neither the value channel nor the leak channel says anything. The general form —
+**a leak channel cannot score an over-free**, because the gate is monotone and freeing MORE always
+reads as an improvement — is QUALITY.md § B6k. Cells:
+`kb_outlives_*` and `tb_outlives*` in the two `…-can-witness-the-bracket` guards.
+
+**Measured.** Six cells, both backends, values IDENTICAL before and after — a pure leak, so
+`LOFT_STRICT_STORES=1` is the instrument and the assertions score nothing.  A control at
+`9c1a0e4e` reports `kt=79 S1105g×12` over 12 rounds; after, clean, and clean under `LOFT_POISON=1`.
+Controls: the hand-written binding, a bare `Var` argument (already nameable — most calls in the
+language, and re-binding it would reorder an argument for nothing), a projection the walk already
+resolves, and a callee whose return does not borrow.  Guard:
+`tests/scripts/1105-an-unnameable-argument-borrow-witness.loft`, scored by the wrap harness's leak
+gate.
+
+⚠ **THE TEMP TAKES THE DEPS OF THE VALUE IT HOLDS, AND THAT HALF IS LOAD-BEARING.** The bind's
+type is the callee's parameter SHAPE carrying `lift_view_deps(arg)` — what the argument itself
+borrows.  The parameter's DECLARED type has no deps, and a temp typed that way reads as the OWNER
+of a store it only VIEWS: `get_free_vars` gives it a scope-exit free that releases the caller's
+container.  `pick(h[k], …)` over a `hash` passed in as a PARAMETER then read back as `null`, and
+`pick(t.0.s, …)` as another type's bytes, on both backends and under `LOFT_POISON=1` as a corrupt
+dereference.  A value whose source `lift_view_deps` cannot name is NOT bound at all: a leak is the
+better of the two, and it is the one that was already there.
+
+⚠ **AND TAKING A FREE AWAY MOVES A SLOT.** The deps that stop the temp being freed also SHORTEN
+its live interval — a variable with no scope-exit free is dead earlier — and the slot allocator
+then hands its slot to the local the call's result is bound to. That is legal only while nothing
+writes the shared slot between the temp's last write and its read as the ARGUMENT, and the join
+bind wrote it first: `gen_set_first_ref_join` sentinelled its destination BEFORE evaluating the
+call, so the argument arrived `null` and the borrowing arm answered the field DEFAULT
+(interpreter only; `--native` gives each local its own Rust binding and never noticed).
+
+The rule broken is the one `generate_set` already states for @P290 — *evaluate the call before
+touching the destination* — and it reads as inapplicable here for a real reason: it is gated on
+the RHS naming `v`, and a FIRST bind cannot name its own destination. **But the call can name a
+NEIGHBOUR the allocator gave that slot to, and that is not the same question.** The sentinel is
+written after the value now; `OpBindOrCopy`'s precondition is unchanged, since the slot still
+holds a sentinel before the guard writes it. Guard:
+`test_the_lifted_argument_survives_the_binds_own_slot`, which needs a NULLABLE-return callee to
+reach the join bind at all — with a non-null return the local takes another path and the cell is
+inert. It is also the only cell in that file the VALUES score: everything else there is a pure
+leak.
+
+⚠ **AND A SHARED PREDICATE IS ONLY SHARED IF ITS CALLERS AGREE ON THE ARGUMENT.** The strip and
+the two emitters read ONE question (`nullable_join_first_bind`) so a strip always has a guard
+under it — and they still disagreed, because `scan_set` asked it against the RAW right-hand side
+while codegen only ever sees the SCANNED one. Between them sits the very rewrite this entry is
+about: `scan_args` LIFTS an argument the bracket cannot name into a temp, and that temp IS the
+witness the join resolves. Read before the lift the call answers *"no nameable witness"* and the
+strip declines; read after it the guard goes in. The local then owned a store with no free — one
+leaked record per call on the minting arm, from two readers of one predicate. It asks about
+`set_value` now. **One home secures the QUESTION and says nothing about WHICH VALUE each caller
+hands it; a pass that rewrites the IR sits between two readers of the same fact, and the one
+upstream of the rewrite is asking about a program that will not exist.**
+
+⚠ **AND THE AXIS THAT HID IT IS GENERAL: A LEAK CHANNEL CANNOT SCORE AN OVER-FREE.** Every cell of
+the six above builds its container INSIDE the calling function, so a free that should not happen
+lands on a store dying at the same scope exit — `H-FreeTwice` absorbs it and neither the values nor
+the leak gate says anything.  That gate is monotone the wrong way: freeing MORE than you should
+always reads as an improvement.  **So a fix that ADDS a free needs at least one cell where the
+freed store OUTLIVES the frame that freed it** — the container arriving as a parameter, read back
+after enough allocation to recycle a released record.  Those cells are in the guard now
+(`test_a_coalesced_argument_leaves_the_callers_vector_intact`,
+`test_a_keyed_argument_leaves_the_callers_hash_intact`), and they fail outright on a binary built
+at `15be379a`.
+
+### D-own-10 — CLOSED (2026-08-26, loft#1101): a BOUND projection was renamed onto the caller's buffer, and it owned nothing to rename
+
+`(O-Move)` says a returned heap value's ownership TRANSFERS, and that a return which merely
+BORROWS is copied instead.  A collection return that views another local did neither — it was
+renamed onto the caller's buffer, which is the promotion ladder saying *this local IS the
+buffer*:
+
+```loft
+fn f() -> vector<integer> { vv = [[11, 22, 33], [44, 55]]; e = vv[0]; e }   // answers []
+fn g() -> vector<integer> { v = [11, 22, 33]; t = (v, 7); e = t.0; e }      // answers churn's bytes
+```
+
+Writing the same projection AS the tail was always correct: the gates on that path
+(`return_projects_into_local`, the H12 predicate) read the tail's SHAPE, and `returns_own_field`
+suppresses the rename for `return d.value`.  Its own comment names the hole — *"a local-bind
+(`v = d.value; return v`) returns `v` itself (not a projection)"* — and once the projection
+happens at a binding the tail IS a bare `Var`, so no shape gate can see it.
+
+**This is `O-Proxy` read as an ownership answer.**  `fresh_owned_vector_deps` accepts a local
+whose dep list is non-empty as *"a named non-argument local vector with a backing store"*, and
+a view reads non-empty too.  `O-Oracle` is the fact both sites want and it is STRUCTURALLY
+UNAVAILABLE here for the reason this file already records for `vector_needs_db`: the oracle
+classifies a finished body from `data.def(d_nr).code`, and the parser has no def handle.  What
+IS available is the sharpened reading of the proxy this file states three sections up — the
+dep list carries THREE meanings, not two: empty (no store yet), a dep on the binding's OWN
+mint (`__vdb_N`, which says *I own one*), and a dep on ANOTHER LOCAL (*I borrow that one*).
+Closed by reading the third case as the borrow it is, citing `@FR-O-Move` / `@FR-O-Borrow`
+(`Parser::var_views_local`, `src/parser/control.rs`), which leaves the candidate on `Bind` —
+the copy-into-a-separate-`__retbuf` leg an owning local already takes.
+
+⚠ **Skipping the mint is not a refinement of that reading, it is what makes it USABLE**, and
+that is the entry's transferable half.  This verdict decides whether the function takes a
+hidden buffer argument, so it must agree on both parser passes — the obligation
+`var_bound_to_branch` states, and the one loft#1099 had just cost.  Measured: `vector_db` adds
+the mint dep on pass 2 ONLY, while a borrow dep comes from the projection and is present on
+both, so an owning `o` reads `[]` then `["__vdb_1"]` and a viewing `e` reads `["vv"]` twice.
+Bare non-emptiness would therefore answer *owns* on pass 1 and *borrows* on pass 2 for one
+body, moving the ABI between the passes.  The mint test is what collapses that to one answer.
+
+**Two facts, because neither covers the other.**  A read out of an inline call's result
+(`e = mk().items; e`) carries an EMPTY dep list: loft#882/#889 record the container dep at the
+SUBSCRIPT only, leaving a bare field read to *"the delivery machinery already copies out"* —
+true of the tail `mk().items`, false the moment it is BOUND.  So the second leg reads the
+DEFINING STATEMENT (`var_defined_by_projection`), and it carries the same mint test, because
+the vector backing rewrites an owned literal into `OpGetField(__vdb_N, 0)` on pass 2 and a
+verbatim shape read called that a view on one pass and not the other.
+
+**Measured, not reasoned.**  The filed scope was two cells; the boundary matrix found six.
+Beyond the two reported: a `-> vector<T>?` return, which additionally raised an internal
+`BUG (#306): refused to free the stack store`; an `if` ARM that binds the view; the explicit
+`return e` spelling, which answered the RIGHT length while leaking one store per call, because
+its classifier handed the promotion the local's BORROW SOURCE — `vv`, a `vector<vector<T>>`,
+renamed onto a `vector<T>`-shaped buffer; and the inline-call read, which diverged, answering
+stale-but-right interpreted and EMPTY on `--native`.
+
+The IR sweep bounds the cut from the other side: **1 of 967 corpus programs emits different
+bytecode, and it is this fix's own guard file** — no existing program's code moves, so the
+rungs fire only on the shapes that were broken, and the corpus had no coverage of them at
+all, which is why they survived.  Normalise the stdlib paths before believing a sweep: the
+control worktree resolves `default/` through its own prefix, which reads as a diff in every
+program and reported 29 false changes before it was normalised away.
+
+Guard: `tests/scripts/1101-a-projection-bound-to-a-local-then-returned.loft` — fifteen cells,
+five of them falsified on a HEAD-built control binary, and the file is scored on both backends
+plus the wrap leak gate (the explicit-return cell is the one only the leak gate can fail).
+Controls: the tail projection, an owned literal and an owned build (which must KEEP the
+rename — refusing it is the over-fire a bare-emptiness reading produces), the issue's
+copy-out workaround, an ARGUMENT-rooted projection (the caller owns that store, so the view
+outlives the call), a copied rebinding, and the RECORD twin, which reaches its own view repair
+through `classify_reference_delivery`.
+
+⚠ **The structural leg resolves a projection by OP NAME, so it cannot see a `TupleGet`
+spelling.**  `expr_borrows_local` matches `OpGetField` / `OpGetVector`; a tuple element read
+that lowers to `Value::TupleGet` reaches none of them.  It is latent rather than live — five
+tuple spellings (`t = (v,7); e = t.0`, `e = mk_tup().0`, `t = mk_tup(); e = t.0`, the explicit
+return and the tail) all answer correctly on both backends, because the DEPS leg covers each of
+them — but the two legs are not interchangeable, and a future tuple shape carrying no dep would
+fall between them exactly as `e = mk().items` did.  `scripts/ir_walker_audit.py spellings`
+counts this class repo-wide: 18 functions resolve a projection by op name and 2 handle the
+tuple spelling.
+
+⚠ **A stale `target/release/loft` is not a control.**  It answered the guard file GREEN — not
+because the shapes were fixed there, but because it predates the code under test; a
+freed-then-reused store also depends on the build's own allocation pattern, so a binary that
+merely *looks* older can report either verdict.  The control has to be BUILT from the commit
+under test (`git worktree add` + a separate `CARGO_TARGET_DIR`).
+
+### D-own-9 — CLOSED (2026-08-26, loft#1096): a COLLECTION return's promoted buffer is the CALLER's store, and the callee freed it
+
+`(O-Owner)` says a free is for a store the value OWNS.  A `-> vector<T>` function whose tail
+may deliver `null` freed one it did not:
+
+```loft
+fn f(n: integer) -> vector<integer> { if n == 0 { null } else { [n] } }
+fn main() { t = 0; for i in 0..2 { r = f(i); t += len(r); } }
+```
+
+`ref_return` renames the value arm's backing ref `__vdb_1` onto the hidden `__retbuf`, and
+`scopes::free_vars`' loft#688 leg then enrols that renamed argument as *a local this function
+minted* and emits `OpFreeRefIfDistinct(__vdb_1, __ret_1)`.  On the null arm the witness is
+the sentinel, the store numbers differ, and the free fires — on the CALLER's store.  The
+caller still names it (`__ref_1`, freed at its own scope exit) and still passes it to the
+next call, whose entry `OpClearVector` then reads a freed record: `rec=0xDEADBEEF` under
+`LOFT_POISON`, on BOTH backends, from the second iteration on.  One call is clean, which is
+why it took a loop in the poison corpus to surface it — a newly-armed guard reporting old UB.
+
+**The premise that failed is written in the leg's own comment**: *"a buffer not yet minted on
+this path is the null sentinel, which `free` ignores."*  That is true of a RECORD return,
+whose caller-side work-ref reaches the call as a bare `OpInitRef` sentinel.  It is false of a
+collection: `codegen::gen_set_first_vector_null` gives an owned vector work-ref `OpInitRef` +
+`OpDatabase`, so the buffer arrives ALIVE — and the callee's own `OpDatabase` then reuses that
+store in place (`alloc_record_at` clears and re-claims a live slot rather than minting beside
+it), so there is never a distinct callee-minted store for this free to reclaim.  Closed by
+excluding a collection return from that leg, citing `@FR-O-Owner` (`src/scopes.rs`).
+
+**Measured, not reasoned:** the free was emitted in **44 of ~1000** corpus programs and
+FIRED 375 times across 20 of them, so removing it is live rather than theoretical; every one
+of those 44 is green under `LOFT_POISON=1` + `LOFT_STRICT_STORES=1` with no leak, which is
+what says the store it reached was always the caller's.  Emitted IR is otherwise identical:
+the whole diff is the `__ret_N` hoist and the free it existed to carry.
+
+⚠ **The fix is NOT at the promotion, and that corrects an extrapolation this file invited.**
+D-own-8's Face B (loft#1081) closed *"at the promotion, which is where the unsound step is"*,
+and the loft-codegen skill's loft#1096 note reads that line as naming where THIS fix belongs.
+Refusing the rename was built and measured, and it is the wrong cut twice over:
+
+* it **over-fires**.  The gate has to be *"the tail may deliver the sentinel"*, and a `match`
+  with no catch-all lowers its fallthrough to exactly that sentinel — so an ordinary
+  `match e { A { xs } => { xs }, B { ys } => { ys } }` loses its NRVO and copies each arm
+  through a second store (`tests/use_analysis.rs::ownership_pins_match_return_resisting_cases`
+  is what caught it).
+* it needs a **second half** to stay correct.  Dropping to `Bind` copies the WHOLE tail into
+  the buffer and answers the buffer on every path, so the null arm delivered an EMPTY vector
+  instead of the sentinel and `f(0) == null` read false — loft#936's contract, broken by the
+  repair for loft#1096.
+
+The rename is sound here: building into the caller's buffer is the NRVO the design wants, and
+it produces correct values with no leak.  What was unsound is the free that read the rename as
+*minted here*.  **A closure names where ITS unsound step was; the next defect in the same
+machinery has to be measured, not inherited.**
+
+Guard: `tests/scripts/1096-a-null-return-must-not-free-the-callers-buffer.loft` — twelve
+cells, five of them falsified on the pre-fix binary under `LOFT_POISON=1` (and none without
+it: the freed bytes are still usable, so the poison job is what scores this file).  Both
+halves are pinned, because neither implies the other — a fix that only refuses the rename
+passes every use-after-free cell and fails `the_null_arm_still_answers_null`, and a fix that
+only changes the delivery still faults on cell one.  Controls: the `[]` arm (the issue's
+workaround, which keeps its rename), the RECORD family (which keeps rename AND free), and a
+join with no null arm at all.
+
+⚠ **A second defect found by the same probes — and the SAME dead premise, one site over.
+Closed as `calls.md` D-call-3 (loft#1097).**
+`fn g(k) -> vector<integer> { a = [1,2]; if k < 0 { null } else if k == 0 { a } else { [k] } }`
+answered `g(0) == []`; dropping the null arm answered `[1,2]`.  The null arm makes `__vdb_1` a
+second promotion candidate, which takes `Bind`'s whole-tail copy —
+`OpClearVector(a); OpAppendVector(a, <the join>, 0)` — and `a` IS the promoted buffer, so the
+clear runs before the join is evaluated and the `k == 0` arm answers the buffer it just
+emptied.  That is loft#1078's *"the re-mint destroys the store the copy is about to read"*
+with a CLEAR in place of the re-mint, and `classify_ret_promotion`'s `tail_reads_buffer`
+guard against exactly that shape is RECORD-only.  Both backends agree, so backend agreement
+is again not an oracle.
+
+**And the null arm of that same tail never reached the caller.**
+`returned_var_null_unified` folds a null arm onto its sibling's var on the belief that the
+var holds the sentinel on the null path — *the same belief this entry's free leg holds, at a
+different site*.  For a RECORD it is true; for a collection buffer it is false in both
+places, and it cost a use-after-free here and a wrong value there.  **One wrong belief, two
+defects, one day apart** — so grep the belief, not the symptom: any site reasoning that a
+collection slot holds the sentinel on a path that did not write it is suspect.  Both are
+fixed; `calls.md` D-call-3 carries the return half.  What is left is loft#1098, a per-call
+leak on a `match` tail that needs a null arm, a local arm and a literal arm all three.
 
 ### D-own-8 — OPEN (2026-08-24, loft#1082 / loft#1081): a Join's ownership fact is true on one path only
 
@@ -375,6 +771,65 @@ removing it trades this deviation for that one.  It is the entry's *"one derived
 homes"* hazard in its sharpest form: the strip is RIGHT for the delivery question and WRONG
 for the ownership question, and one dep list answers both.  **Face A stays OPEN for the
 inline-mint `match` arm only**, pending a way to separate those two readings.
+
+**2026-08-26 (loft#1098): the surviving cell's SYMPTOM is closed; the FACT is not, and the
+two are worth keeping apart.**  The cell had a consequence after all, at the RETURN position:
+because the stripped mint never reaches `ls`, the arm that minted it is never a promotion
+candidate, so nothing ever DELIVERS it into the caller's return buffer.  It is returned
+instead, the callee's `OpFreeRefIfDistinct` sees the store it is about to return and keeps it,
+the caller's binding is typed as a borrow of ITS buffer and frees that, and one store orphans
+per call — the 65,535-entry exhaustion class.
+
+⚠ The dep list still reads `line def deps=[cp]` for an inline-mint `match` arm where the `if`
+spelling reads `[__vdb_1, cp]` (re-measured with `LOFT_VAR_TABLE` after the fix), so
+`(O-Complete)` is still not satisfied for it and **Face A stays OPEN**.  What changed is that
+its one known symptom is gone, which puts the cell back in the position the entry describes
+above: a false fact looking for a symptom.  The BOUND-local shape the register reduces it to
+(`line = match … { 0 => cp, _ => [for v in cp {…}] }`) was probed at 200 rounds under
+`LOFT_POISON=1` + `LOFT_STRICT_STORES=1` on both backends and is correct with no leak, so the
+next symptom, if there is one, is not there.
+
+**The cure does not need the two readings separated after all, and that is the finding.**  The
+strip's harm is that ONE arm's store goes undelivered; delivering every arm removes the
+question rather than answering it.  `block_result`'s #416 per-arm materialiser already does
+exactly that, and was excluded for a tail with a direct `null` arm — an exclusion written for
+the return TYPE (64bd0984: *"materializing would set `returned = Vector[__retbuf]` on a path
+that yields null, which native cannot represent"*), which @PLN25 had already relaxed for a
+DECLARED-nullable return.  The rule that replaces it is the one the promotion itself states:
+**at most ONE arm can BE the buffer**, so a tail with two or more value arms must materialise
+the rest.  One value arm keeps its rename and its NRVO; two or more take the per-arm delivery.
+
+**The fix is at the DELIVERY, not at the fact, and that is what makes it small.**
+
+**Measured, and the filed scope was a third of it.**  The report needed a null arm, a LOCAL
+arm and a LITERAL arm together.  Sweeping the arm KINDS against the arm COUNT over `-1 =>
+null` tails says the local arm is not required and the count is:
+
+| tail | before |
+|---|---|
+| `-1 => null, _ => [k]` | clean — the rename covers the one value arm |
+| `-1 => null, 0 => [7], _ => [k]` | **one store per call** |
+| `-1 => null, 0 => a, _ => [k]` | **one store per call** (the filed cell) |
+| `-1 => null, 0 => [7], 1 => [8], _ => [k]` | **one store per call** |
+| `-1 => null, 0 => a, _ => b` | clean |
+| `-1 => null, 0 => [7], _ => a` | clean |
+
+The two clean multi-arm cells are clean by other routes, not by the rule, so they are controls
+rather than evidence — they now take the per-arm delivery like the rest.  The `if`-chain
+spelling of every cell was clean throughout, because `if` and `match` reach this tail through
+different legs; a sweep of one spelling would have found nothing.
+
+Emitted IR over the corpus: **1 of 898** programs changes, and the change is one duplicated
+entry `OpClearVector` removed.  So the gate was live for exactly the shape it was written for
+and nothing else, and the NRVO on the single-value-arm shape — loft#1096's own — is untouched.
+Guard: `tests/scripts/1098-a-null-arm-tail-with-two-value-arms.loft`, falsified on a pristine
+tree at `0df2ca45` by the wrap leak gate (1198 stores).  ⚠ `loft --tests` on that file alone
+does NOT falsify it: the leak gate lives in `tests/wrap.rs::run_test`, so `cargo test --test
+wrap loft_suite` is what scores it.
+
+A residue and a sibling, both filed: the **`text`** family aborts before it can be measured at
+all (loft#1099, an H5 two-pass ICE on `-> text` + `match` + a null arm + a local arm), and the
+`-> vector<T>?` spelling still leaks one store on `--native` (loft#948).
 
 **Face A — the allocation answer (the original statement).**  A borrow-typed slot owns no store, so a
 whole-value assignment into it has nowhere to land.  The false fact reduces to ~55 lines — a
@@ -600,6 +1055,12 @@ Both answered wrong IDENTICALLY on the two backends, so `(O-NoDiverge)` held whi
 worktree at `f7a57124` (the value cells by assertion, the leak cell by the wrap leak gate).
 
 ### D-own-6 — CLOSED (2026-08-20, loft#1029): the runtime Join witness now covers every argument it can name
+
+> ⚠ **Read D-own-11 and D-own-12 with this.**  The heading's claim did not hold: four further
+> argument spellings have been found that the witness could not name, on the very axis the closing
+> paragraph below identifies as the one its oracle never varied.  All four are now closed, and
+> D-own-11 records why the cure had to become a QUESTION rather than a fifth shape.
+
 
 `(O-Complete)` accepts the Join as *inherently runtime*: a callee whose return may borrow a
 parameter is completed per-path by the @P290 bracket — `protect_store_frees` marks each ref

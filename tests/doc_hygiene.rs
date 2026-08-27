@@ -17,6 +17,95 @@ const PROBLEMS: &str = "doc/claude/PROBLEMS.md";
 const CAVEATS: &str = "doc/claude/CAVEATS.md";
 const QUALITY: &str = "doc/claude/QUALITY.md";
 
+/// Every guard added under `tests/scripts/` must record the control it was falsified
+/// against, or say why it cannot have one.
+///
+/// A guard that passes on the build it was written for proves nothing, and the ways that
+/// happens are not exotic — four turned up in one afternoon (QUALITY.md § B6m): the wrong
+/// ENTRY POINT (`tests/wrap.rs::run_test` runs `main` when the file has one and every
+/// zero-parameter function otherwise, so `--interpret` on a `main`-less guard runs no
+/// assertion at all), a success marker the error report ECHOES, a leak gate that is monotone
+/// so an over-free reads as an improvement, and a cell whose shape never reaches the code
+/// path it was written for.  Two defects passed a full green gate the same day and were
+/// caught only by a second reader.
+///
+/// So the requirement is the RECORD, and the tool that produces it is
+/// `scripts/falsify.sh <guard.loft> <control-ref>` — it builds the control, runs the guard
+/// on both trees through the entry point the corpus runner would pick, and compares four
+/// channels apart (exit code, assertion failures, leaked stores, panic) so the line names
+/// WHICH one moved:
+///
+/// ```text
+/// // @falsified-at: 3ca5ec79 — interpret leaked kt=78 Sk×156 -> clean, native leaked … -> clean
+/// ```
+///
+/// `// @falsified-at: none — <reason>` is the honest opt-out for a file that genuinely
+/// cannot fail on any earlier build (a corpus that predates what it exercises, a
+/// refusal-only file).  Stating the reason is the point: the failure this gate exists to
+/// stop is a guard nobody ever watched fail, not a missing string.
+///
+/// `tests/falsified.baseline` carries the files that predate the requirement.  It is a
+/// RATCHET — it only ever shrinks, and a new file must not be added to it.
+#[test]
+fn every_new_guard_records_its_control() {
+    let baseline_src = fs::read_to_string("tests/falsified.baseline")
+        .expect("cannot read tests/falsified.baseline");
+    let baseline: std::collections::HashSet<&str> = baseline_src
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+
+    let mut missing: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in fs::read_dir("tests/scripts").expect("cannot read tests/scripts") {
+        let path = entry.expect("bad dir entry").path();
+        if path
+            .extension()
+            .is_none_or(|e| !e.eq_ignore_ascii_case("loft"))
+        {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("non-utf8 script name")
+            .to_string();
+        let src = fs::read_to_string(&path).unwrap_or_default();
+        let records = src.contains("@falsified-at:");
+        if records && baseline.contains(name.as_str()) {
+            // Retrofitted: the baseline line is now the stale half.
+            missing.push(format!(
+                "  {name} records a control AND is still in tests/falsified.baseline —                  delete its baseline line (the ratchet only shrinks)"
+            ));
+        } else if !records && !baseline.contains(name.as_str()) {
+            missing.push(format!(
+                "  {name} has no `// @falsified-at:` line — run                  `scripts/falsify.sh tests/scripts/{name} <control-ref>` and paste what it                  prints, or record `// @falsified-at: none — <reason>`"
+            ));
+        }
+        seen.insert(name);
+    }
+    let vanished: Vec<&str> = baseline
+        .iter()
+        .filter(|b| !seen.contains(**b))
+        .copied()
+        .collect();
+
+    assert!(
+        missing.is_empty() && vanished.is_empty(),
+        "the falsification ratchet slipped:\n{}{}",
+        missing.join("\n"),
+        if vanished.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n  these are in tests/falsified.baseline but no longer exist: {}",
+                vanished.join(", ")
+            )
+        }
+    );
+}
+
 /// The set of `#[ignore = "..."]` entries in `tests/issues.rs` must
 /// match the committed baseline at `tests/ignored_tests.baseline`.
 /// A drift typically means one of three things worth the author's
@@ -1777,6 +1866,60 @@ fn quality_unspan_table_matches_the_audit() {
     assert_eq!(
         cells, nums,
         "QUALITY.md's unspan row says {cells:?} and `ir_walker_audit.py unspan` reports \
+         {nums:?} — re-run the audit and update the row"
+    );
+}
+
+/// The `spellings` table in QUALITY.md must match what the audit actually reports.
+///
+/// The sibling of [`quality_unspan_table_matches_the_audit`], for the same reason: the row is
+/// a count offered as open work, and a hand-maintained figure describing a mechanically
+/// derivable fact is a promise to remember. This is the check that replaces remembering.
+///
+/// Skips rather than fails when the script cannot run, so a machine without python3 does not
+/// turn a doc gate into a red build.
+#[test]
+fn quality_spellings_table_matches_the_audit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new("python3")
+        .arg(root.join("scripts/ir_walker_audit.py"))
+        .arg("spellings")
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            eprintln!("SKIP quality_spellings_table_matches_the_audit: cannot run the audit");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let nums: Vec<u32> = stdout
+        .lines()
+        .filter_map(|l| l.rsplit(':').next())
+        .filter_map(|t| t.trim().parse::<u32>().ok())
+        .take(3)
+        .collect();
+    assert_eq!(nums.len(), 3, "audit header changed shape; got: {stdout}");
+
+    // Anchored on the table's own header, like the unspan gate: another numeric table added
+    // above it must not silently become the subject of this check.
+    let doc = std::fs::read_to_string(root.join("doc/claude/QUALITY.md")).expect("QUALITY.md");
+    let lines: Vec<&str> = doc.lines().collect();
+    let header = lines
+        .iter()
+        .position(|l| l.starts_with("| functions resolving a projection by OP NAME"))
+        .expect("the spellings table header is gone from QUALITY.md — update this gate with it");
+    let row = lines
+        .get(header + 2)
+        .expect("the spellings table is truncated after its header");
+    let cells: Vec<u32> = row
+        .split('|')
+        .filter_map(|c| c.trim().trim_matches('*').parse::<u32>().ok())
+        .collect();
+    assert_eq!(
+        cells, nums,
+        "QUALITY.md's spellings row says {cells:?} and `ir_walker_audit.py spellings` reports \
          {nums:?} — re-run the audit and update the row"
     );
 }

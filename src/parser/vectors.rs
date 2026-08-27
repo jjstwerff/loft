@@ -535,7 +535,26 @@ impl Parser {
             {
                 self.expected = tuple_members[0].base().clone();
             }
-            let t = self.expression(val);
+            // An assignment's destination variable is the accumulator a heap-building RHS
+            // adopts (#501's watermark reuse, and `parse_append_vector`'s `orig_var`).  A
+            // parenthesised expression IS that whole value, so adopting is right there —
+            // but a tuple MEMBER is not, and member 0 is the one parsed before the `,` can
+            // say which this is.  Adopting it typed the destination as the MEMBER
+            // (`t = ([10, 20], 9)` → "Variable 't' cannot change type from vector<integer>
+            // to (vector<integer>, integer)", refusing a legal program) and, where the
+            // member built through the append path instead, left the tuple element reading
+            // null with no diagnostic at all (`t = (x + y, 9)`).  Ask the lexer first and
+            // give a member its own temp; the built value returns on the normal channel, so
+            // everything downstream is unchanged.
+            let divert = matches!(val, Value::Var(_)) && self.lexer.peek_tuple_literal();
+            let mut member0 = Value::Null;
+            let t = if divert {
+                let t = self.expression(&mut member0);
+                *val = member0;
+                t
+            } else {
+                self.expression(val)
+            };
             if seeding {
                 self.expected = Type::Unknown(0);
             }
@@ -585,6 +604,27 @@ impl Parser {
                         Level::Error,
                         "Tuple literals require at least 2 elements"
                     );
+                }
+                // loft#1102 — a heap member is COPIED into the tuple, like the two sibling
+                // constructors.  `@FR-T-Cons` said nothing about ownership, and the code
+                // stored the local's handle, so `t = (vl, 9); vl[0] = 41` changed `t.0` —
+                // while `S { v: vl }` and `[vl]` both answered the original.  `@FR-B-Copy`
+                // is the contract a plain bind already has (*"the bound variable is
+                // INDEPENDENT, and mutating it does NOT reach the source"*), and a
+                // constructor handing a value to a new name is that same step.
+                //
+                // NOT when this tuple is an assignment TARGET.  A destructure's left side
+                // (`(ca, cb) = t`) and a tuple-place write (`(s.a, s.b) = t`) are parsed by
+                // this same branch and are then read back as a list of bare `Var`s; rewriting
+                // a target into a copy block leaves that list EMPTY, which surfaces as
+                // "Tuple arity mismatch: left has 0 names".  Only a tuple being CONSTRUCTED
+                // as a value is a construction.
+                if !self.lexer.peek_token("=") {
+                    for (i, v) in values.iter_mut().enumerate() {
+                        if let Some(owned) = self.tuple_member_owned_copy(v, &types[i]) {
+                            types[i] = owned;
+                        }
+                    }
                 }
                 *val = Value::Tuple(values);
                 Type::Tuple(types)
@@ -3758,6 +3798,95 @@ impl Parser {
         crate::typedef::fill_database(&mut self.data, &mut self.database, vec_def);
         self.database.finish();
         self.data.def(vec_def).known_type()
+    }
+
+    /// loft#1102 — rewrite a tuple member that names a heap LOCAL into an owned copy of it,
+    /// answering the copy's type.
+    ///
+    /// A struct literal deep-copies a vector member into the field's own storage
+    /// (`OpAppendVector(OpGetField(s, …), vl)`) and a vector literal copies its elements.  A
+    /// tuple had no such storage to copy INTO — its element slot holds a `DbRef` — so it stored
+    /// the source's handle and the tuple element and the local became two names for one store.
+    /// Nothing at the construction said so, and `@FR-T-Cons` did not cover it.
+    ///
+    /// The store the copy needs does not have to belong to the TUPLE: a frame-local backing owns
+    /// it and frees it at scope exit, exactly as a user-written `o: vector<T> = []; o += vl; o`
+    /// does.  That is the shape emitted here, and it is the same one
+    /// [`jo_copy_borrowed_arm_yield`](Self::jo_copy_borrowed_arm_yield) uses for a borrowed match
+    /// arm.  Built at PARSE time and re-parsed each pass, so `create_unique` and `vector_db` stay
+    /// pass-consistent.
+    ///
+    /// Only a NAMED non-argument local is copied.  A vector ARGUMENT aliases the caller by design
+    /// (`@FR-B-Ref-Alias` — a parameter reaches the source), so copying it here would change what
+    /// the caller sees; and a member that is already a fresh value has no source to diverge from.
+    fn tuple_member_owned_copy(&mut self, val: &mut Value, tp: &Type) -> Option<Type> {
+        if self.first_pass {
+            return None;
+        }
+        let v = match val.unspan() {
+            Value::Var(v) => *v,
+            _ => return None,
+        };
+        if v >= self.vars.count() || self.vars.is_argument(v) || self.keyed_local(v) {
+            return None;
+        }
+        let Type::Vector(b, _) = tp else {
+            return None;
+        };
+        let elm = (**b).clone();
+        let owned_create = Type::Vector(Box::new(elm.clone()), Deps::none());
+        let o = self.create_unique("tupcopy", &owned_create);
+        if o == u16::MAX {
+            return None;
+        }
+        self.vars.defined(o);
+        let mut ops = self.vector_db(tp, o);
+        // The clear says once, where the replace is: a no-op on a fresh store and correct on a
+        // reused one — the same reason the match-arm copy beside this one clears.
+        ops.push(self.cl("OpClearVector", &[Value::Var(o)]));
+        let elem_tp = self.append_elem_tp(&elm);
+        ops.push(self.cl(
+            "OpAppendVector",
+            &[Value::Var(o), Value::Var(v), Value::Int(elem_tp)],
+        ));
+        ops.push(Value::Var(o));
+        let owned_tp = Type::Vector(Box::new(elm), Deps::frame1(o));
+        *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
+        Some(owned_tp)
+    }
+
+    /// The heap local a [`Self::tuple_member_owned_copy`] block was built from — `None` for
+    /// any other value.
+    ///
+    /// That copy exists so a tuple ELEMENT does not become a second name for the member's
+    /// store.  A tuple written as a function's RETURN tail is rewritten to a synthetic
+    /// `__tuple<…>` record whose vector field is filled by `set_field_no_check`, and THAT
+    /// copies into the record's own storage — so on the return path the member is copied into
+    /// a frame-local backing and then copied again out of it.  The rewrite unwraps back to
+    /// this source and lets the record's copy be the only one (loft#1109); the element is
+    /// still copied, so `@FR-T-Cons` holds and the local cannot alias the tuple.
+    ///
+    /// Only the RETURN path may unwrap.  A tuple literal bound to a LOCAL has no second copy
+    /// to fall back on, and dropping the backing there is exactly the aliasing loft#1102
+    /// closed.
+    ///
+    /// One home, two readers, kept adjacent on purpose: the block is BUILT directly above and
+    /// MATCHED here, so its shape and the matcher cannot drift into different files.
+    pub(crate) fn tuple_member_copy_source(&self, val: &Value) -> Option<Value> {
+        let Value::Block(b) = val.unspan() else {
+            return None;
+        };
+        if b.name != "tuple_member_copy" {
+            return None;
+        }
+        // The block ends `OpAppendVector(backing, source, elem_tp); backing`, and the SOURCE is
+        // the only part of it the record's own copy still needs.
+        b.operators.iter().rev().find_map(|op| match op.unspan() {
+            Value::Call(d, args) if self.data.def(*d).name() == "OpAppendVector" => {
+                args.get(1).cloned()
+            }
+            _ => None,
+        })
     }
 
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {

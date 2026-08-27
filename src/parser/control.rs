@@ -1193,36 +1193,100 @@ impl Parser {
         // Gated on BOTH arms YIELDING a text value (not a guard `if c { return
         // … }` — that would suppress the missing-return diagnostic).
         //
-        // loft#741 — the nullability condition is about the store this rewrite
-        // PERFORMS, so it reads the DECLARED RETURN, not the tail.
+        // NULLABILITY DOES NOT GATE THIS PROMOTION — it is reported instead.
         //
-        // The accumulator writes each arm into the caller's text buffer. When
-        // the function declares `-> text?` that is a nullable value reaching a
-        // nullable destination: legitimate, and a null survives it because loft
-        // carries one as a content sentinel. When it declares `-> text` and the
-        // tail is nullable, the SAME rewrite is a nullable-into-non-null store
-        // — exactly what the `(N-Store)` teeth exist to catch — and performing
-        // it silently swallows the diagnostic.
+        // The accumulator writes each arm into the caller's text buffer, and it retypes the
+        // tail as the accumulator, so a `(N-Store)` check downstream then compares two
+        // non-null types and stays silent.  Declining to promote is what used to keep that
+        // diagnostic for a nullable tail in a `-> text` function, and it cost the program its
+        // `--native` build: with no accumulator each arm stays `&*(callee(…))`, a borrow of
+        // the `Str` temporary its callee returned and dead at the arm's `}` (E0716 — E0308
+        // once the arms' Rust representations also disagree), while the interpreter ran it.
         //
-        // Keying on the TAIL conflated the two and excluded both. That cost
-        // every `-> text?` branch tail its per-arm delivery, so the whole
-        // `match` compiled as ONE Rust expression whose arms must unify — a
-        // buffered call yields `Str` where a formatted string yields `&String`,
-        // E0308, while the interpreter was correct. Keying on the declared
-        // return keeps `read_off() -> text { … self.w[i] … }` reporting its
-        // N-Store (the tail is nullable, the destination is not) and lets a
-        // `-> text?` tail deliver per arm.
+        // `@FR-N-Store` does not leave that open: storing `e:τ?` into a non-null `τ` slot is a
+        // WARNING that "compiles + runs, the slot holds null" wherever the null is
+        // representable-and-distinct, which `text` is (types.md's per-type table); only the
+        // narrow integer widths error, where the sentinel collides with a real value.  So the
+        // store is reported below from the tail's OWN type, BEFORE the rewrite erases it, and
+        // the promotion proceeds — a diagnostic describes the SOURCE program, and which
+        // lowering the compiler picks for it cannot decide whether the program is diagnosed
+        // (loft#1100, `calls.md` D-call-5).
+        //
+        // Both earlier keyings failed for the same reason: one tail type was answering two
+        // questions.  Keying on the TAIL excluded a `-> text?` tail from per-arm delivery too,
+        // so the whole `match` compiled as ONE Rust expression whose arms must unify — a
+        // buffered call yields `Str` where a formatted string yields `&String` (loft#741,
+        // E0308).  Keying on the DECLARED RETURN restored that and left this case refused.
+        // Neither is needed once the report no longer rides on the gate.
+        let nullable_into_nonnull =
+            !matches!(result, Type::Optional(_)) && matches!(t, Type::Optional(_));
         let do_if_acc = !do_tret_bind
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
-            && (matches!(result, Type::Optional(_)) || !matches!(t, Type::Optional(_)))
             && !self
                 .data
                 .def(self.context)
                 .original_name()
                 .starts_with("replmain_")
-            && l.last().is_some_and(Self::if_tail_yields_text);
+            && l.last().is_some_and(Self::if_tail_yields_text)
+            // Pass-stability gate — the same one `do_tret_bind` carries above, for the same
+            // reason and by the same means.  This promotion grows a hidden `&text`
+            // SIGNATURE parameter (`text_return` promotes `__acc`), so a pass-2-only
+            // verdict moves the ABI after pass 1 fixed it: `ownership.md`'s *"a verdict
+            // that differed across passes would move the hidden buffer argument between
+            // them"*, which the H5 two-pass contract turns into a fatal abort.
+            //
+            // The unstable term is the tail's INFERRED type just above.  Measured
+            // (loft#1099): `fn f(k) -> text { a = "ab"; match k { -1 => null, _ => a } }`
+            // reads `t = Optional(Text)` on pass 1 and `Text` on pass 2 from IR that is
+            // byte-identical on both, so the accumulator was minted on pass 2 alone and
+            // every such program aborted the compiler.  Rather than enumerate which tails
+            // infer stably, make pass 2 FOLLOW pass 1: promote on pass 2 only where pass 1
+            // already minted the `__acc` attribute.  Pass 1 evaluates the verdict directly
+            // and the attribute it mints persists, so a stable tail still promotes twice.
+            && (self.first_pass || self.def_has_acc_attr());
+        // `LOFT_DBG_ACC=1` — one line per pass per text-returning function, printing every
+        // term of the gate above.  It is what located loft#1099: the two lines for one
+        // function differ in `optOk` alone, which is how a non-pass-stable term shows
+        // itself.  Read them in PAIRS; a single line says nothing about stability.
+        if std::env::var_os("LOFT_DBG_ACC").is_some()
+            && matches!(result.base(), Type::Text(_))
+            && context == "return from block"
+        {
+            eprintln!(
+                "[acc] fn={} pass1={} tret={} nstore={} yields={} acc_attr={} t={t:?} \
+                 => {do_if_acc}",
+                self.data.def(self.context).name(),
+                self.first_pass,
+                do_tret_bind,
+                nullable_into_nonnull,
+                l.last().is_some_and(Self::if_tail_yields_text),
+                self.def_has_acc_attr(),
+            );
+        }
         if do_if_acc {
+            // loft#1100 — report the nullable-into-non-null store from the tail's OWN type,
+            // here, because the rewrite below retypes the tail as the accumulator (non-null
+            // `Text`) and `block_result`'s `(N-Store)` check would then see two non-null
+            // types and stay silent.
+            //
+            // Refusing the promotion is what USED to keep this diagnostic, and it cost the
+            // program its `--native` build: each arm stayed a borrow of the `Str` temporary
+            // its callee returned, which dies at the arm's `}` (E0716 — E0308 once the arms'
+            // Rust types also disagree), while the interpreter ran it.  @FR-N-Store does not
+            // leave that open: for a type whose null is representable-and-distinct it is a
+            // WARNING that compiles and runs, so a backend REFUSING it is a deviation and
+            // not the other half of a design choice.  A diagnostic describes the SOURCE
+            // program; which lowering the compiler picks for it cannot decide whether the
+            // program is diagnosed.
+            if nullable_into_nonnull {
+                let at = l
+                    .last()
+                    .and_then(Value::span_pos)
+                    .cloned()
+                    .or_else(|| Some(self.data.def(self.context).position().clone()));
+                self.n_store_violation(&t, result, "the return value", at.as_ref());
+            }
             // The accumulator IS the return value, so it carries the declared
             // return's nullability. Typing it non-null while a `-> text?` tail
             // writes nullable arms through it would leave the destination
@@ -1546,10 +1610,25 @@ impl Parser {
                     Type::Never | Type::Void | Type::Vector(_, _)
                 )
                 && Self::tail_terminal_is_branch(&l[last])
-                && (result.ret_promo_peels() || !self.tail_if_has_null_arm(&l[last]));
+                // A DIRECT `null` arm was excluded outright (64bd0984, 2026-06-21) because
+                // materialising set `returned = Vector[__retbuf]` on a path that yields
+                // null; @PLN25 then let a DECLARED-nullable return through
+                // (`ret_promo_peels`, which keeps the `?` around the buffer-dep'd base).
+                // The remaining exclusion also suppressed the DELIVERY, and that is
+                // loft#1098: at most ONE arm can BE the buffer (the promotion renames it),
+                // so with TWO OR MORE non-null arms the rest are stores nobody delivers —
+                // the callee's `OpFreeRefIfDistinct` sees the returned store and keeps it,
+                // the caller's binding is typed as a borrow of ITS buffer and frees that
+                // instead, and one store orphans per call. Measured over `-1 => null`
+                // tails: one non-null arm is clean (the rename covers it), and two, three
+                // or a local-plus-literal pair each leaked one per call.
+                && (result.ret_promo_peels()
+                    || !self.tail_if_has_null_arm(&l[last])
+                    || self.tail_nonnull_arm_count(&l[last]) >= 2);
             if std::env::var_os("LOFT_DBG_VMC").is_some() && matches!(result, Type::Vector(_, _)) {
                 eprintln!(
-                    "[vmc] fn={} !tup={} !ifu={} !p1={} ctx={context:?} resV={} tOk={} branch={} !null={} => {vec_match_candidate}",
+                    "[vmc] fn={} !tup={} !ifu={} !p1={} ctx={context:?} resV={} tOk={} \
+                     branch={} !null={} peels={} nonnull={} => {vec_match_candidate}",
                     self.vars.name,
                     !tuple_rewritten,
                     !if_unified,
@@ -1558,6 +1637,8 @@ impl Parser {
                     matches!(t, Type::Never | Type::Void | Type::Vector(_, _)),
                     Self::tail_terminal_is_branch(&l[last]),
                     !self.tail_if_has_null_arm(&l[last]),
+                    result.ret_promo_peels(),
+                    self.tail_nonnull_arm_count(&l[last]),
                 );
             }
             if vec_match_candidate && let Type::Vector(elm, _) = result.ret_promo_base() {
@@ -1651,7 +1732,26 @@ impl Parser {
             // cross-space read loft#666 was made of, so the shape alone is taken there,
             // exactly as before.
             tp = if context == "else" {
-                result.with_deps_of(t)
+                // loft#1103 — the SHAPE comes from the expected type, but the arm's own
+                // NULLABILITY does not: `(N-Join)` says a join is optional iff some arm is,
+                // and this is the arm whose answer was being dropped.  `x: integer = if c
+                // { 1 } else { maybe(k) }` took the then-arm's `integer` whole, so the join
+                // typed non-null, the destination's `(N-Store)` teeth had nothing to bite,
+                // and a declared `integer` held null with no diagnostic on either backend.
+                //
+                // The `null` LITERAL in the same position was always caught — by the DN1
+                // walkers in `parse_if`, which match the `OpConv*FromNull` spelling.  One
+                // notion with two spellings and only one of them asked about; this is the
+                // other spelling, asked about here where the arm's own type is still in hand.
+                let honest = result.with_deps_of(t);
+                if crate::keys::pln25_dn1_enabled()
+                    && matches!(t, Type::Optional(_))
+                    && !matches!(honest, Type::Optional(_))
+                {
+                    Type::optional(honest)
+                } else {
+                    honest
+                }
             } else {
                 result.clone()
             };
@@ -1739,7 +1839,10 @@ impl Parser {
                 && matches!(result.ret_promo_base(), Type::Vector(_, _))
                 && let Some(Value::Return(inner)) = l.last().map(Value::unspan)
             {
+                // loft#1101 — a viewing local is not fresh-owned, but it still has to be
+                // DELIVERED; `tail_ret_view_local` supplies the candidate that copies.
                 self.fresh_owned_vector_deps(inner)
+                    .or_else(|| self.tail_ret_view_local(l, inner))
             } else {
                 None
             };
@@ -2974,6 +3077,15 @@ impl Parser {
             } else {
                 elem
             };
+            // loft#1109 — `set_field_no_check` copies a heap member INTO the record's own
+            // storage, so the frame-local backing a tuple literal wraps the member in
+            // (`tuple_member_copy`, loft#1102) is a copy this path immediately copies again.
+            // Unwrapping to the source leaves exactly one copy and the same semantics: the
+            // record still owns its member and the local still cannot alias it.
+            let elem = match self.tuple_member_copy_source(&elem) {
+                Some(src) => src,
+                None => elem,
+            };
             ops.push(self.set_field_no_check(synthetic_d_nr, i, 0, Value::Var(w), elem));
         }
         ops.push(Value::Var(w));
@@ -2999,6 +3111,12 @@ impl Parser {
     /// typed-null sentinel a bare `null` lowers to when coerced to a scalar (`OpConv*FromNull`).
     /// Descends `Block`/`Insert`/`Span` to the tail. Used so an `if`/`match` whose branch is a
     /// bare null widens the result to `Optional(τ)` under DN1 (the absorbed-branch-null fix).
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn branch_yields_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -3029,6 +3147,12 @@ impl Parser {
     /// its own nullability in `a.tp` (folded into `result_type` by the arm-join), and
     /// descending into its lowered chain would hit its synthesised unreachable
     /// `OpConv*FromNull` default and falsely widen (p54).
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn arm_yields_direct_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -3296,6 +3420,40 @@ impl Parser {
         let mut result_tp = merge_dependencies(&true_type, &false_type);
         if let Some(chain) = &chain_borrow {
             result_tp = result_tp.joined_deps(chain);
+        }
+        // loft#1103 — `(N-Join)`: the join is OPTIONAL iff SOME arm is.  `merge_dependencies`
+        // takes the THEN arm's shape and merges only the deps, so a nullable arm on the other
+        // side was joined away: `x: integer = if c { 1 } else { maybe(k) }` typed the join
+        // `integer`, the destination's `(N-Store)` teeth had nothing to bite, and a declared
+        // non-null slot held null with no diagnostic on either backend — including `u8`, where
+        // `(N-Store)` is a hard ERROR precisely because the null collides with a real value.
+        //
+        // The `null` LITERAL in the same position was always caught, by the DN1 walkers just
+        // below: they match the `OpConv*FromNull` node the literal lowers to.  A nullable-TYPED
+        // value produces no null-shaped node at all, so nothing asked about it — one notion, two
+        // spellings, one of them looked for.  This asks the TYPE, which is the spelling-free
+        // form of the same question, and it runs BEFORE the DN1 block so neither double-wraps.
+        //
+        // Widening here rather than at the arm keeps `(N-Decl)` / `(N-Store)` as the things that
+        // REPORT: the destination compares its declaration against an honest join and speaks for
+        // itself, so every store site — a declared local, a field, a return — is covered by the
+        // teeth it already had, and a `τ?` destination stays legal and silent.
+        //
+        // An `else if` CHAIN counts as an arm here, because it IS one — loft#936's words, and
+        // its type reaches this point in `chain_borrow` rather than in `false_type` (the chain
+        // deliberately keeps its SHAPE out of the join; only what it borrows was being read).
+        // Left out, `if a { 1 } else if b { 2 } else { maybe(k) }` and every `match` with more
+        // than two arms stayed silent, since a `match` lowers to exactly this nesting.
+        if had_else
+            && crate::keys::pln25_dn1_enabled()
+            && !matches!(result_tp, Type::Optional(_))
+            && (matches!(true_type, Type::Optional(_))
+                || matches!(false_type, Type::Optional(_))
+                || chain_borrow
+                    .as_ref()
+                    .is_some_and(|c| matches!(c, Type::Optional(_))))
+        {
+            result_tp = Type::optional(result_tp);
         }
         if had_else && crate::keys::pln25_dn1_enabled() && !matches!(result_tp, Type::Optional(_)) {
             let t_null = self.branch_yields_null(&true_code);
@@ -3592,7 +3750,7 @@ impl Parser {
                 // loft#978 — every arm can deliver this match's value, so the result carries
                 // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
                 // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-                result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
+                result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
                 if result_type == Type::Void || result_type == Type::Null {
                     result_type = arm_type.clone();
                 } else if !self.first_pass
@@ -4066,7 +4224,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             } else if !self.first_pass
@@ -4320,7 +4478,7 @@ impl Parser {
             self.expression(&mut arm_code)
         };
         // loft#978 — see the arm sites above: the wildcard is an arm like any other.
-        let joined = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
+        let joined = self.join_arm_into(result_type, &arm_code, &arm_type);
         *result_type = joined;
         if *result_type == Type::Void {
             *result_type = arm_type.clone();
@@ -7061,7 +7219,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
             if result_type == Type::Void || result_type == Type::Null {
                 result_type = arm_type.clone();
             }
@@ -8070,7 +8228,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_code, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_code, &arm_type);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -8387,7 +8545,7 @@ impl Parser {
             // loft#978 — every arm can deliver this match's value, so the result carries
             // what ANY of them borrows.  A no-op on the first arm (nothing to join with);
             // on the later ones it stops an owned arm from erasing a borrowed sibling's dep.
-            result_type = result_type.joined_deps(&self.arm_join_type(&arm_body, &arm_type));
+            result_type = self.join_arm_into(&result_type, &arm_body, &arm_type);
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
@@ -9802,6 +9960,42 @@ impl Parser {
         tp.rewrap_deps(&kept)
     }
 
+    /// Fold one `match`/`if` arm into the branch JOIN — the deps it contributes
+    /// ([`arm_join_type`](Self::arm_join_type)) and its NULLABILITY.
+    ///
+    /// `joined_deps` keeps the shape of the type it is called on, which is the FIRST arm's, and
+    /// merges only the borrow set. That is right for the shape and wrong for the `?`:
+    /// `(N-Join)` says a join has type `⨆ᵢ τᵢ`, *made OPTIONAL iff some `τᵢ` is optional*, and
+    /// a later arm's `Optional` was being dropped rather than joined. `x: integer = match k
+    /// { 9 => { 1 }, _ => { maybe(k) } }` typed the join `integer`, so the destination's
+    /// `(N-Store)` teeth had nothing to bite and a declared non-null slot held null with no
+    /// diagnostic on either backend (loft#1103, `types.md` D-Null-Join).
+    ///
+    /// A `null` LITERAL in the same arm was always caught, by the DN1 walkers that match the
+    /// `OpConv*FromNull` node it lowers to. A nullable-TYPED value produces no null-shaped node
+    /// at all, so nothing asked about it. Asking the TYPE is the spelling-free form of that
+    /// question, which is why it belongs here rather than beside another walker.
+    ///
+    /// One home for the fact because there are SIX arm sites — the ordinary arm, the wildcard,
+    /// the struct and enum arms, the vector-match arm — and a per-site fix would answer the
+    /// same question six times and drift at the first one anybody forgets. `Void` / `Null` arms
+    /// are left alone: they carry no type of their own to contribute, and the DN1 walkers own
+    /// the bare-`null` arm.
+    fn join_arm_into(&self, so_far: &Type, arm: &Value, tp: &Type) -> Type {
+        let joined = so_far.joined_deps(&self.arm_join_type(arm, tp));
+        if crate::keys::pln25_dn1_enabled()
+            && matches!(tp, Type::Optional(_))
+            && !matches!(joined, Type::Optional(_))
+            && !matches!(
+                joined,
+                Type::Void | Type::Null | Type::Never | Type::Unknown(_)
+            )
+        {
+            return Type::optional(joined);
+        }
+        joined
+    }
+
     /// loft#918 — the variable a block hands back, when its tail is nothing but a
     /// name: `… ; w_t }` and `… ; return w_t; }` both answer `w_t`.
     ///
@@ -9845,6 +10039,146 @@ impl Parser {
                     }
                     work.push(d);
                 }
+            }
+        }
+        false
+    }
+
+    /// Is `d` a MINT — a compiler-generated slot that OWNS the store it points at,
+    /// minted to back one binding (`__vdb_N`, a return work-ref)?
+    ///
+    /// The middle of @FR-O-Proxy's three readings, and the one that makes the other two
+    /// separable: a dep on a mint says *I own a store*, a dep on anything else that is
+    /// not a parameter says *I borrow that one*.  Both facts are read, because neither
+    /// alone answers it — `_elm_N` and `__lift_N` are compiler-generated too and are
+    /// borrows (`inline_ref`, so they own nothing), while a user local that owns a store
+    /// is still somebody else's owner as far as this binding is concerned.
+    fn var_is_mint(&self, d: u16) -> bool {
+        self.vars.is_compiler_generated(d) && self.vars.owns_store(d)
+    }
+
+    /// Does expression `e` READ OUT OF a store this function frees — an element or field
+    /// of a local, or of an inline call's temporary?
+    ///
+    /// The same shape `return_projects_into_local` recognises at a tail, with one
+    /// difference that matters at a BINDING: a projection rooted at a MINT is not a
+    /// borrow.  The vector backing rewrites an owned literal into `OpGetField(__vdb_N, 0)`
+    /// on pass 2, so reading the tail predicate here verbatim called `vv = [[…]]` a view
+    /// of something on pass 2 and not on pass 1 — a verdict that moves between the
+    /// passes, which at this site moves the ABI with it.  @FR-O-Proxy via
+    /// [`var_is_mint`](Self::var_is_mint) is what keeps the two passes saying the same
+    /// thing.
+    fn expr_borrows_local(&self, e: &Value) -> bool {
+        let (get_field, get_vector) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+        );
+        match e.unspan() {
+            Value::Call(d, args) if *d == get_field || *d == get_vector => {
+                match args.first().map(Self::projection_base) {
+                    Some(Value::Var(base)) => {
+                        !self.vars.is_argument(*base) && !self.var_is_mint(*base)
+                    }
+                    Some(inner @ Value::Call(bd, _)) if *bd == get_field || *bd == get_vector => {
+                        self.expr_borrows_local(inner)
+                    }
+                    // An inline call's result is an owned temporary (`__lift_N`), freed
+                    // on the way out — the H9 case.
+                    Some(Value::Call(_, _)) => true,
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// The expression `body` most recently ASSIGNS to `v`, seen through the statement
+    /// wrappers a body carries.  Walked in reverse so a rebound variable answers with the
+    /// assignment that survives to the tail, not the first one.
+    fn var_defining_expr(body: &[Value], v: u16) -> Option<&Value> {
+        fn walk(node: &Value, v: u16) -> Option<&Value> {
+            match node.unspan() {
+                Value::Set(w, rhs) if *w == v => Some(rhs),
+                Value::Insert(ops) => ops.iter().rev().find_map(|o| walk(o, v)),
+                Value::Block(bl) => bl.operators.iter().rev().find_map(|o| walk(o, v)),
+                _ => None,
+            }
+        }
+        body.iter().rev().find_map(|s| walk(s, v))
+    }
+
+    /// Is `v` DEFINED by a projection into something this function frees?  The same
+    /// question `return_projects_into_local` asks of a tail, asked of the statement that
+    /// produced the tail's variable.
+    ///
+    /// It exists because one projection shape cannot answer through `deps`.  A read out
+    /// of an inline call's result (`e = mk().items; e`) borrows a `__lift_N` temp, and
+    /// loft#882/#889 record the container dep at the SUBSCRIPT only — a bare field read
+    /// is left to "the delivery machinery already copies out", which is true of the tail
+    /// `mk().items` and false the moment the read is BOUND: the tail is then a bare
+    /// `Var` with an empty dep list, so the rename fires, `e` becomes `__retbuf`, and
+    /// `OpFreeRef(__lift_1)` two statements later frees what it now points at.
+    /// @FR-O-Borrow — the borrow is real whether or not a dep records it.
+    fn var_defined_by_projection(&self, body: &[Value], v: u16) -> bool {
+        Self::var_defining_expr(body, v).is_some_and(|rhs| self.expr_borrows_local(rhs))
+    }
+
+    /// Does `v` BORROW another local's store?  The BINDING form of the view a tail
+    /// spells inline — `e = vv[0]; e` beside the bare `vv[0]`, `e = t.0; e` beside `t.0`.
+    ///
+    /// Ask before renaming a local onto the caller's return buffer.  The rename says
+    /// *this local IS the buffer*, which is an ownership claim; for a view the owner is
+    /// the base local, the callee frees it at scope exit, and the caller is handed a
+    /// store that has been freed and recycled.  Enforces @FR-O-Move / @FR-O-Borrow: a
+    /// value that aliases another must not be transferred out as owned — the caller
+    /// COPIES instead, which is what refusing the rename leaves, on `Bind`.
+    ///
+    /// @FR-O-Oracle is the fact this wants, and it is structurally unavailable at a
+    /// PARSER site: the oracle classifies a finished body from `data.def(d_nr).code`
+    /// and the parser has no def handle (`formal/ownership.md` measured this for
+    /// `vector_needs_db`).  So it reads the sharpened @FR-O-Proxy fact the same
+    /// register writes down — a dep list carries THREE meanings, not two: EMPTY (no
+    /// store yet), a dep on the binding's OWN mint (`__vdb_N`, which says *I own a
+    /// store*), and a dep on ANOTHER LOCAL (*I borrow that one*).  Only the third is a
+    /// borrow, so bare non-emptiness is the wrong reading.
+    ///
+    /// Skipping the mint is what makes the verdict agree on BOTH PARSER PASSES, and
+    /// that is a correctness requirement rather than a refinement.  `vector_db` adds
+    /// the mint dep on pass 2 only, while a borrow dep comes from the projection and
+    /// is present on both: an owning `o` reads `[]` then `["__vdb_1"]`, a viewing `e`
+    /// reads `["vv"]` on both.  Bare non-emptiness would therefore answer *owns* on
+    /// pass 1 and *borrows* on pass 2 for one body — and this verdict decides whether
+    /// the function takes a hidden buffer argument, so the ABI would move between the
+    /// passes (the shape loft#1099 cost).  `var_bound_to_branch` states the same
+    /// two-pass obligation and answers it structurally, for the same reason.
+    ///
+    /// An ARGUMENT dep is deliberately not a borrow here: the CALLER owns that store,
+    /// so it outlives the call, and `classify_vector_delivery`'s `CopyBorrow` leg
+    /// already gives that shape value semantics.
+    fn var_views_local(&self, v: u16) -> bool {
+        let mut work: Vec<u16> = vec![v];
+        let mut seen: std::collections::HashSet<u16> = work.iter().copied().collect();
+        let mut i = 0;
+        while i < work.len() {
+            let cur = work[i];
+            i += 1;
+            if cur >= self.vars.count() {
+                continue;
+            }
+            for d in self.vars.tp(cur).depend() {
+                if d >= self.vars.count() || !seen.insert(d) {
+                    continue;
+                }
+                if self.vars.is_argument(d) {
+                    continue;
+                }
+                if self.var_is_mint(d) {
+                    // Its own mint: owns a store and borrows nothing.  Walk through it
+                    // rather than stopping, so a mint that itself views a local counts.
+                    work.push(d);
+                    continue;
+                }
+                return true;
             }
         }
         false
@@ -9989,11 +10323,39 @@ impl Parser {
         }
     }
 
+    /// How many LEAF arms of this branch tail deliver a value rather than the null
+    /// sentinel?  The promotion can rename exactly ONE local onto the caller's return
+    /// buffer, so a tail with two or more of these has arms that must MATERIALISE into
+    /// the buffer instead — the alternative is a store the callee returns and neither
+    /// side frees (loft#1098).  Counts through nested `If`s, which is how a `match`
+    /// lowers, so an else-if chain and a `match` answer alike.
+    fn tail_nonnull_arm_count(&self, v: &Value) -> usize {
+        if self.arm_is_null(v) {
+            return 0;
+        }
+        match v.unspan() {
+            Value::Return(i) | Value::Drop(i) => self.tail_nonnull_arm_count(i),
+            Value::Block(bl) => bl
+                .operators
+                .last()
+                .map_or(0, |x| self.tail_nonnull_arm_count(x)),
+            Value::Insert(ops) => ops.last().map_or(0, |x| self.tail_nonnull_arm_count(x)),
+            Value::If(_, t, f) => self.tail_nonnull_arm_count(t) + self.tail_nonnull_arm_count(f),
+            _ => 1,
+        }
+    }
+
     /// Does this branch arm reduce to a `null` value (descending through the arm's
     /// block/insert tail)? A `null` vector arm lowers to `{ OpNullRefSentinel() }`,
     /// not a bare `Value::Null`, so both forms count. A nested `if` arm is NOT null
     /// — that's how enc's nested match-default is distinguished from maybe's direct
     /// `else null`.
+    ///
+    /// A `Return`/`Drop` wrapper is deliberately NOT descended: the question is what this
+    /// value hands to the JOIN, and a `return` hands it nothing — it leaves the function.
+    /// The `scopes`-side siblings (`is_null_terminal`, `return_has_null_arm`) ask the same
+    /// null question about a return EXPRESSION, where that wrapper is the subject rather
+    /// than an escape, and pass through it.
     fn arm_is_null(&self, v: &Value) -> bool {
         match v.unspan() {
             Value::Null => true,
@@ -10047,14 +10409,20 @@ impl Parser {
         }
     }
 
-    /// #425 — if the return tail is a struct/enum FIELD projection
-    /// (`OpGetField(Var(base), …)`, possibly wrapped in `Return`/`Block`),
-    /// return the base var being projected. Used to decide whether the
-    /// projected field's record is locally owned (and freed at scope exit) or
-    /// caller-owned (a parameter).
+    /// #425 — if the return tail is a projection of a container held by a variable
+    /// (a struct/enum FIELD `OpGetField(Var(base), …)`, or a TUPLE element
+    /// `TupleGet(base, i)`, possibly wrapped in `Return`/`Block`), return the base var
+    /// being projected. Used to decide whether the projected value's record is locally
+    /// owned (and freed at scope exit) or caller-owned (a parameter).
+    ///
+    /// A tuple element is the same question in a different spelling: the read is a
+    /// `Value` VARIANT rather than an op call, so it carries its base as a var NUMBER
+    /// and never appears as `Call(OpGetField, [Var(base), …])`. Both spellings must
+    /// answer, because the caller acts on the projection, not on how it is written.
     fn return_field_base_var(&self, tail: &Value) -> Option<u16> {
         match tail.unspan() {
             Value::Return(inner) | Value::Drop(inner) => self.return_field_base_var(inner),
+            Value::TupleGet(base, _) => Some(*base),
             Value::Block(bl) => bl
                 .operators
                 .last()
@@ -10328,6 +10696,18 @@ impl Parser {
             .attr_names
             .keys()
             .any(|k| k.starts_with("___tret"))
+    }
+
+    /// The `__acc` twin of [`Self::def_has_tret_attr`] — did PASS 1 promote this function's
+    /// text accumulator to a hidden `&text` parameter?  It is the whole pass-2 verdict
+    /// (loft#1099): the accumulator changes the signature, so pass 2 must not reach a
+    /// different answer than the one pass 1 already published to every caller.
+    fn def_has_acc_attr(&self) -> bool {
+        self.data
+            .def(self.context)
+            .attr_names
+            .keys()
+            .any(|k| k.starts_with("___acc"))
     }
 
     fn tret_bind_ok(&self, tail: &Value, block: &[Value]) -> bool {
@@ -10646,10 +11026,16 @@ impl Parser {
             Value::Insert(ops) => ops
                 .last()
                 .is_some_and(|t| self.return_projects_into_local(t)),
+            // A TUPLE element read is a projection like the two op calls below, spelled as
+            // a `Value` variant: it carries its base as a var NUMBER, so no call pattern
+            // can see it. Rooted at a local, its store dies at scope exit like any other.
+            Value::TupleGet(base, _) => !self.vars.is_argument(*base),
             Value::Call(d, args) if *d == get_field || *d == get_vector => {
                 match args.first().map(Self::projection_base) {
                     // Rooted at a local: freed at scope exit, so the projection dangles.
                     Some(Value::Var(base)) => !self.vars.is_argument(*base),
+                    // A field of a tuple element (`t.0.items`) roots at the tuple local.
+                    Some(Value::TupleGet(base, _)) => !self.vars.is_argument(*base),
                     // A chained projection — recurse to find the root.
                     Some(inner @ Value::Call(bd, _)) if *bd == get_field || *bd == get_vector => {
                         self.return_projects_into_local(inner)
@@ -10733,9 +11119,18 @@ impl Parser {
             // already been peeled (six of them); this one is on the RETURNED VALUE rather
             // than on the return TYPE, which is why it outlived the sweep that fixed them.
             // Identity while `LOFT_NULLABLE_RETBUF` is off.
+            // loft#1101 — `!d.is_empty()` reads @FR-O-Proxy as "has a backing store", and a
+            // VIEW of another local reads non-empty too (`e = vv[0]; return e;` deps on
+            // `vv`).  This arm answers with the local's DEPS, which for an owner is its
+            // own mint — the store to rename — and for a view is somebody else's store:
+            // `vv`, a `vector<vector<T>>` container, was renamed onto the `vector<T>`
+            // -shaped `__retbuf` and the store it abandoned leaked one per call.  A view
+            // owns nothing to rename (@FR-O-Move), so it is not this arm's answer; it is
+            // `tail_ret_view_local`'s, which delivers it by COPY instead.
             Value::Var(o)
                 if self.vars.exists(*o)
                     && !self.vars.is_argument(*o)
+                    && !self.var_views_local(*o)
                     && matches!(self.vars.tp(*o).ret_promo_base(), Type::Vector(_, d) if !d.is_empty()) =>
             {
                 let Type::Vector(_, d) = self.vars.tp(*o).ret_promo_base() else {
@@ -10757,6 +11152,40 @@ impl Parser {
                 }
                 _ => None,
             },
+            _ => None,
+        }
+    }
+
+    /// loft#1101 — the VIEW counterpart of [`fresh_owned_vector_deps`](Self::fresh_owned_vector_deps)
+    /// for an explicit `return <local>` tail: a named non-argument local that BORROWS
+    /// another local's store (`vv = […]; e = vv[0]; return e;`).  Reads the same two
+    /// facts the promotion ladder's rung does — the dep list, and the statement that
+    /// defined the local — so the explicit and implicit spellings cannot disagree.
+    ///
+    /// It answers the LOCAL ITSELF rather than that local's deps, and the difference is
+    /// the whole point.  An owner's deps ARE the store to rename onto `__retbuf`; a
+    /// view's deps are the store somebody else owns, so handing them over renames a
+    /// container onto an element-shaped buffer and orphans what it abandoned.  Naming
+    /// the local instead puts the explicit-return spelling on exactly the candidate the
+    /// IMPLICIT tail already uses (`ls = ["e"]`), where the promotion ladder's
+    /// `var_views_local` rung declines the rename and `Bind` copies the view into the
+    /// buffer — value semantics, @FR-O-Move.
+    ///
+    /// Answering `None` here instead is not the same thing and was measured: with no
+    /// candidate the `return` is never stripped, the vector arm below never delivers it,
+    /// and the signature stays a BARE vector — the pre-#437 shape whose NRVO caller
+    /// chains into a buffer the callee never writes, so `--native` answered an empty
+    /// vector while the interpreter looked clean.
+    fn tail_ret_view_local(&self, body: &[Value], v: &Value) -> Option<Vec<u16>> {
+        match v.unspan() {
+            Value::Var(o)
+                if self.vars.exists(*o)
+                    && !self.vars.is_argument(*o)
+                    && (self.var_views_local(*o) || self.var_defined_by_projection(body, *o))
+                    && matches!(self.vars.tp(*o).ret_promo_base(), Type::Vector(_, _)) =>
+            {
+                Some(vec![*o])
+            }
             _ => None,
         }
     }
@@ -10886,7 +11315,17 @@ impl Parser {
             Value::Insert(ops) => ops
                 .last_mut()
                 .is_some_and(|last| self.materialize_vector_arms_collect(elm, last, w, consumed)),
-            Value::Var(v) if *v != w && matches!(self.vars.tp(*v), Type::Vector(_, _)) => {
+            // A local whose value is a VIEW OF `w` — `_vec_N: vector<T>["__vdb_1"]` where
+            // `__vdb_1` IS the buffer — already holds its answer in the buffer, so it is
+            // `w` one indirection down and the `*v != w` guard above does not see it.
+            // Delivering it emits `OpClearVector(w); OpAppendVector(w, v)`, which empties
+            // the buffer before appending it to itself (the arm answered `[]`), and the
+            // dep-free leg below then frees `w` — the CALLER's store.  Leave it alone.
+            Value::Var(v)
+                if *v != w
+                    && !self.vars.tp(*v).depend().contains(&w)
+                    && matches!(self.vars.tp(*v), Type::Vector(_, _)) =>
+            {
                 let local = *v;
                 let deps = self.vars.tp(local).depend();
                 let rec_tp = self.append_elem_tp(elm);
@@ -11419,6 +11858,15 @@ impl Parser {
     /// — it prints the candidate AND the VERDICT, because those are two different questions.
     /// No line at all for a function means a gate UPSTREAM of the classifier; a line whose
     /// verdict is a `Skip*` means the classifier was asked and said no.
+    ///
+    /// It also prints the FACTS the verdict is read from — the parser pass, the candidate's
+    /// dep NAMES, and the two borrow answers as `vl=<deps>/<statement>` — so a wrong verdict
+    /// can be attributed without a second run.  Read the two passes in PAIRS: pass 1 is where
+    /// a rename is decided and pass 2 normally answers `MergeAttr` for the same candidate
+    /// (it IS the attribute by then).  A fact that differs between the pair is the bug to
+    /// chase, because this verdict decides whether the function takes a hidden buffer
+    /// argument — the deps alone do differ, since a mint dep is added on pass 2 only, which
+    /// is why the borrow answers and not the raw list are what the rungs read.
     fn classify_ret_promotion(
         &self,
         v: u16,
@@ -11430,10 +11878,19 @@ impl Parser {
         let verdict = self.classify_ret_promotion_inner(v, transitive, body, dep, ctx);
         if crate::keys::trace_ret_promotion() {
             eprintln!(
-                "[retpromo] fn={} v={} name={} site={:?} ret={:?} plain={} buf={:?} => {verdict:?}",
+                "[retpromo] fn={} v={} name={} pass={} vl={}/{} deps={:?} site={:?} ret={:?} plain={} buf={:?} => {verdict:?}",
                 self.data.def(self.context).name(),
                 v,
                 self.vars.name(v),
+                if self.first_pass { 1 } else { 2 },
+                self.var_views_local(v),
+                self.var_defined_by_projection(body, v),
+                self.vars
+                    .tp(v)
+                    .depend()
+                    .iter()
+                    .map(|&d| self.vars.name(d).to_string())
+                    .collect::<Vec<_>>(),
                 ctx.site,
                 ctx.ret,
                 ctx.is_plain_fn,
@@ -11564,10 +12021,21 @@ impl Parser {
         // has nothing to abandon there.
         let bound_to_vector_join = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
             && Self::var_bound_to_branch(body, v);
+        // loft#1101 — the candidate is a VIEW of another local (`e = vv[0]; e`), the
+        // binding twin of the tail projection `returns_own_field` above suppresses.
+        // That rung reads the tail SHAPE, so it only sees a projection written at the
+        // return; once the projection happens at a binding the tail is a bare `Var` and
+        // the fact lives in that binding's DEPS instead.  `var_views_local` reads it
+        // there (@FR-O-Move / @FR-O-Borrow).  Vector only: the record return reaches
+        // its own view repair earlier, through `classify_reference_delivery`'s
+        // `return_views_local` leg (#306).
+        let views_local = matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))
+            && (self.var_views_local(v) || self.var_defined_by_projection(body, v));
         let allow_rename = !(bound_already
             || reassigned
             || returns_own_field
             || bound_to_vector_join
+            || views_local
             // A1b — the site-value (g's buffer) must NOT rename onto __retbuf (that
             // aliases the borrowed subject into the return); fall through to Bind so
             // the return materialises an owned copy into a distinct __retbuf.
@@ -11696,6 +12164,7 @@ impl Parser {
             );
         }
         let newrecord_nr = self.data.def_nr("OpNewRecord");
+        let null_sentinel_nr = self.data.def_nr("OpNullRefSentinel");
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
@@ -11931,6 +12400,44 @@ impl Parser {
                             match ret.clone() {
                                 Type::Reference(td, _) | Type::Enum(td, true, _) => {
                                     self.materialize_return_into(td, tail, buf_var);
+                                }
+                                // The CONDITIONAL delivery the note above names as what
+                                // would close it.  A tail that is a branch with a `null` arm
+                                // must not be copied WHOLE into the buffer: the wrap is
+                                // `OpClearVector(buf); OpAppendVector(buf, <join>)`, which
+                                // answers the buffer on EVERY path and evaluates the join
+                                // AFTER the clear.  Three faults at once, all of them silent
+                                // — the null arm delivered an EMPTY vector instead of the
+                                // sentinel; an arm naming the buffer answered the buffer the
+                                // clear had just emptied (`a = [1,2]; if k<0 { null } else if
+                                // k==0 { a } else { [k] }` gave `[]`); and an arm that had
+                                // already delivered into the buffer was appended to itself
+                                // and came back DOUBLED (`[3,4,5,3,4,5]`).
+                                // `materialize_vector_arms_into` delivers ONE ARM AT A TIME
+                                // and leaves the buffer var and its views alone, so all
+                                // three answer correctly.  It is the same per-arm machinery
+                                // the join pre-pass above already uses.
+                                //
+                                // Found by loft#1096's boundary probes; loft#1097 with the
+                                // matching half in `scopes::free_vars`, which keeps the
+                                // sentinel reachable when frees force the tail into
+                                // statement position.  Per-arm DELIVERY here, conditional
+                                // RETURN there — two changes, one shape.
+                                Type::Vector(elm, _)
+                                    if crate::scopes::return_has_null_arm(
+                                        tail,
+                                        null_sentinel_nr,
+                                    ) =>
+                                {
+                                    // No fall-back to the whole-tail copy: with a null arm
+                                    // present it is wrong on every path, and "no arm to
+                                    // deliver" here means every arm ALREADY answers the
+                                    // buffer (each was delivered into it by its own leg) or
+                                    // is the sentinel — both of which want nothing added.
+                                    // Wrapping those was the doubling: a four-arm chain
+                                    // answered `[3,4,5,3,4,5]` because the outer append put
+                                    // the buffer into itself.
+                                    self.materialize_vector_arms_into(&elm, tail, buf_var);
                                 }
                                 Type::Vector(elm, _) => {
                                     self.materialize_vector_return_into(&elm, tail, buf_var);

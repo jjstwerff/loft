@@ -1665,6 +1665,20 @@ o-proxy-check:  ## @FR-O-Proxy: does every free on the empty-deps proxy consult 
 	@python3 scripts/o_proxy_check.py
 
 .PHONY: ir-schema-check ir-schema-regen
+falsify:  ## Run a guard against the build it was written to catch: GUARD=<file> REF=<commit>
+	@# A guard that passes on the build it was written for proves nothing, and the ways
+	@# that happens are not exotic — the wrong ENTRY POINT, a success marker the error
+	@# report echoes, a leak gate that is monotone, a cell that never reaches its code
+	@# path.  This builds REF, runs GUARD on both trees through the entry point the
+	@# corpus runner would pick, and compares four channels apart so the verdict names
+	@# WHICH one moved.  Paste its line into the guard; `doc_hygiene::
+	@# every_new_guard_records_its_control` requires one on every new file.
+	@if [ -z "$(GUARD)" ] || [ -z "$(REF)" ]; then \
+		echo "usage: make falsify GUARD=tests/scripts/<file>.loft REF=<commit-before-the-fix>"; \
+		exit 2; \
+	fi
+	@./scripts/falsify.sh "$(GUARD)" "$(REF)"
+
 ir-schema-check:  ## Is src/ir_schema_gen.rs still what tools/ir_schema/ir.loft generates?
 	@# The generated file IS the store layout (record sizes, field offsets, the Node
 	@# discriminants data_store.rs bakes into DISC_*).  It drifted once already — Key

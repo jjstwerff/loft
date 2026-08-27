@@ -46,6 +46,11 @@ make check-rlib                          # 1s pre-flight: is libloft.rlib curren
                                          #   builds no rlib either (`make ci` builds all
                                          #   three itself, so it needs no pre-flight)
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
+make falsify GUARD=<guard.loft> REF=<commit>   # does this guard FAIL on the build it was
+                                         #   written to catch?  Compares exit/asserts/leak/
+                                         #   panic apart and names the channel that moved.
+                                         #   Every new tests/scripts file records its answer
+                                         #   (`@falsified-at:`, gated) — TESTING.md
 make speed                               # what got slower/faster — a REPORT, never a gate
 make profile ARGS="--interpret p.loft"   # which loft FN/LINE/PATH burns the time; PROFILE_FLAGS=
                                          #   "--mem" heap by loft line at the PEAK, "--paths" the

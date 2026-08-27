@@ -1974,6 +1974,11 @@ impl<'a> Ownership<'a> {
     /// Map the callee's borrowed parameter `callee_base` (a var in the callee's
     /// space) to the CALLER's argument var at the same VISIBLE-parameter position.
     /// `u16::MAX` when it is not a visible param or the matching arg is not a var.
+    ///
+    /// A PROJECTION argument is mapped to its ROOT container through [`view_root_slots`] —
+    /// the same walk the @P290 bracket protects through, so the store the guard witnesses
+    /// against is the store the bracket marks.  `u16::MAX` when the argument is not a view
+    /// of one nameable container: a mint, or a join reaching two different roots.
     fn caller_arg_base(&self, callee_d: u32, callee_base: u16, caller_args: &[Value]) -> u16 {
         let attrs = self.data.def(callee_d).attributes();
         if callee_base == u16::MAX
@@ -1987,8 +1992,20 @@ impl<'a> Ownership<'a> {
             .iter()
             .filter(|a| !a.hidden)
             .count();
-        match caller_args.get(arg_index).map(Value::unspan) {
-            Some(Value::Var(cv)) => *cv,
+        let Some(arg) = caller_args.get(arg_index) else {
+            return u16::MAX;
+        };
+        // A PROJECTION argument is witnessed by its ROOT: `pick(v[0], …)`, `pick(w.s, …)`
+        // and `pick(h[k], …)` all answer a `DbRef` living in the root container's store, so
+        // comparing the returned store against the root decides borrow-vs-mint exactly as a
+        // bare `Var` does.  One walk, shared with the @P290 bracket, so the base the guard
+        // witnesses against and the slot the bracket protects cannot disagree.
+        //
+        // A walk reaching MORE than one root — a join whose arms name different containers —
+        // has no single store to compare against, and the caller keeps the conservative
+        // never-free answer rather than guessing one of them.
+        match view_root_slots(self.data, arg).as_deref() {
+            Some([root]) => *root,
             _ => u16::MAX,
         }
     }
@@ -2383,21 +2400,55 @@ fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
     }
 }
 
-/// Is `d_nr` a field/element PROJECTION — an op that answers a `DbRef` derived from
-/// its first argument and living in that argument's store?
+/// Can the @P290 bracket NAME the store this argument's value will lie in?
 ///
-/// `OpGetField` offsets within the record (`DbRef { store_nr, rec, pos: pos + off }`)
-/// and `OpGetVector` indexes within the vector's own store (its out-of-range sentinel
-/// preserves `store_nr` too), so for both the root variable's store IS the result's
-/// store. That makes a projection chain nameable by its root, which is what lets the
-/// @P290 bracket protect `pick(b.s, …)` and `pick(w[0], …)`.
+/// `false` means the witness set would read incomplete at this argument, and the caller then
+/// keeps the conservative never-free answer — correct, but it copies the returned store and
+/// orphans the one the callee minted, one record per call. The cure is to give the value a
+/// NAME (bind it to a temp before the call), which is what `Scopes::scan_args` does; this is
+/// the question it asks first.
 ///
-/// One list, two readers: the parser's `Parser::projection_root_mut` walks the same
-/// chain to decide which inline container needs a name, and this decides which store
-/// the bracket marks. Two lists of the same two ops would drift.
+/// One home for the question, because the answer must be the same one
+/// [`protectable_ref_args`] will reach later — a hoist decided on a different reading would
+/// either bind arguments nothing needed, or leave the leak it was meant to close.
+///
+/// Every op [`is_projection_op`] lists widens what this can name, so a precise witness and the
+/// bind below are not rivals: the bind is what catches whatever the witness still cannot reach.
+#[must_use]
+pub fn bracket_can_name(data: &Data, arg: &Value) -> bool {
+    view_root_slots(data, arg).is_some()
+}
+
+/// Is `d_nr` a field/element PROJECTION — an op that READS a `DbRef` out of its first
+/// argument and answers one living in that argument's store?
+///
+/// Each of the four offsets or indexes within a store somebody else owns and allocates
+/// nothing: `OpGetField` moves within the record (`DbRef { store_nr, rec, pos: pos + off }`),
+/// `OpGetVector` indexes within the vector's own store (its out-of-range sentinel preserves
+/// `store_nr` too), `OpVectorRef` dereferences a linked element's record pointer, and
+/// `OpGetRecord` looks a key up in a keyed collection.  For all four the root variable's
+/// store IS the result's store, which is what makes a projection chain nameable by its root
+/// and lets the @P290 bracket protect `pick(b.s, …)`, `pick(w[0], …)` and `pick(h[k], …)`.
+///
+/// **The criterion is not "the return deps on parameter 0"**, which several more ops also
+/// satisfy: `OpNewRecord` and `OpInsertVector` both answer a `DbRef` in argument 0's store
+/// and are excluded, because they GROW that store rather than read it — a chain rooted at one
+/// is a construction, and the readers below ask which container an existing view came out of.
+///
+/// One list, four readers, because the alternative is measured rather than hypothetical: a
+/// list SHORT by `OpGetRecord` left `pick(h[k], …)` without a witness, so the caller kept the
+/// conservative never-free answer and leaked one record per call at every keyed kind (hash /
+/// sorted / index, both backends).  The four readers are this bracket's
+/// [`view_root_slots`], the parser's `Parser::projection_root_mut` (which inline container
+/// needs a name), `scopes::base_container_var` and `generation::container_element_base` (@PLN130
+/// F2 — which container a view reads out of).  They ask different questions of the same shape;
+/// keeping the shape in one place is what stops the answers drifting apart.
 #[must_use]
 pub fn is_projection_op(data: &Data, d_nr: u32) -> bool {
-    d_nr == data.def_nr("OpGetField") || d_nr == data.def_nr("OpGetVector")
+    matches!(
+        data.def(d_nr).name(),
+        "OpGetField" | "OpGetVector" | "OpVectorRef" | "OpGetRecord"
+    )
 }
 
 /// loft#981 / loft#982 — may this call site set `OpCopyRecord`'s `0x8000` source-free
@@ -2413,6 +2464,62 @@ pub fn call_return_frees_source(data: &Data, call: &Value) -> bool {
         return false;
     };
     !data.def(*fn_nr).returns_borrowed_view() || protectable_ref_args(data, call).1
+}
+
+/// loft#1106 — does a FIRST bind of a NULLABLE heap local from this call have to go
+/// through the runtime join guard, the way its non-null twin already does?
+///
+/// `Some((record_def, base))` names the record type to allocate and the argument the
+/// callee's return may borrow.  `None` leaves the bind exactly as it was.
+///
+/// `S?` is `Optional(Reference(S))` — the same storage as `S` behind a nullability
+/// marker — and the heap first-bind dispatch on both backends asks its shape question
+/// against the BARE type, so a nullable local never reached it.  It therefore got
+/// neither of the two things that dispatch does: the (B-Copy) copy that keeps a bound
+/// call result INDEPENDENT of the argument it may alias, and the @P290 bracket that
+/// frees the callee's minted store on the arm where the return is not a borrow.  A
+/// write through the bound result reached the caller's own variable, and the minting
+/// arm leaked one record per call — the `-> S` twin of the same call did neither.
+///
+/// One home for the question, because three sites act on the answer and they must
+/// agree: `scopes::scan_set` strips the local's deps so a free is emitted at all, and
+/// the two backends emit the guard that makes that free correct.  A site that decided
+/// this differently would either free a store the caller still names, or strip the
+/// deps off a bind that stays a plain alias.
+///
+/// Narrow on purpose: only a JOIN with a nameable witness.  Every other nullable bind
+/// keeps today's plain adopt — which is what a call that borrows nothing, or one whose
+/// witness the bracket cannot name, already correctly does.
+#[must_use]
+pub fn nullable_join_first_bind(
+    data: &Data,
+    d_nr: u32,
+    tp: &Type,
+    value: &Value,
+) -> Option<(u32, u16)> {
+    if !crate::keys::join_own_enabled() {
+        return None;
+    }
+    if !matches!(tp, Type::Optional(_)) {
+        return None;
+    }
+    let (Type::Reference(rec, _) | Type::Enum(rec, true, _)) = tp.base() else {
+        return None;
+    };
+    let Value::Call(fn_nr, _) = value.unspan() else {
+        return None;
+    };
+    let callee = data.def(*fn_nr);
+    if !callee.is_loft_defined() || !callee.returns_borrowed_view() {
+        return None;
+    }
+    let Own::Join { base } = ownership_of(data, d_nr, value) else {
+        return None;
+    };
+    if base == u16::MAX {
+        return None;
+    }
+    Some((*rec, base))
 }
 
 /// See [`HeapDelivery`].

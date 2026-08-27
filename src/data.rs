@@ -1919,6 +1919,48 @@ impl Type {
         }
     }
 
+    /// The dep list this type carries, for a WRITE — reached through the dep-TRANSPARENT
+    /// wrappers.
+    ///
+    /// `Optional` and `RefVar` do not change what a value aliases, which is why
+    /// [`Type::depend`] reads through them and [`Type::with_deps`] writes through them.
+    /// This is the third face of that one fact, the one a caller needs to REMOVE a dep,
+    /// and it has to peel in lockstep with the other two: while it did not, a nullable
+    /// heap local's dep could be read and set but never cleared, so `Function::make_independent`
+    /// silently no-opped on `S?` and no `S?` could ever be made an owner — the store it
+    /// held at scope exit had nobody to free it (loft#1106).
+    ///
+    /// `None` for a type that carries no dep list of its own. `Text` is deliberately
+    /// absent: it is not in the set the remove side has ever acted on.
+    pub fn deps_mut(&mut self) -> Option<&mut Deps> {
+        match self {
+            Type::RefVar(inner) | Type::Optional(inner) => inner.deps_mut(),
+            // `Text` and `Function` are here because [`Self::depend`] READS a dep from both,
+            // and a face that can be read and not cleared is a silent no-op at whichever site
+            // asks the other question — the shape that cost loft#1106 an `Optional`.  No caller
+            // reaches them today: `Function::make_independent` was counted over the 881-file
+            // corpus at **13 926 calls, none of them on a `Text` or `Function` variable**, and
+            // twelve hand-written text / fn-ref shapes added none.  So the arms are inert now
+            // and correct when a caller does arrive, which is the only ordering that does not
+            // require someone to debug the no-op first.  `dep_faces_agree` is the gate.
+            Type::Text(to)
+            | Type::Function(_, _, to)
+            | Type::Reference(_, to)
+            | Type::Enum(_, _, to)
+            | Type::Vector(_, to)
+            // @P295 — keyed collections carry a lifetime dep list too (`Sorted`/`Hash`/
+            // `Index`/`Radix`'s last field). Without these arms `s = ns` left `s`
+            // depending on `ns`, so scope analysis suppressed `s`'s own `OpFreeRef`
+            // (treating it as a borrow) and deferred `ns`'s free.
+            | Type::Sorted(_, _, to)
+            | Type::Hash(_, _, to)
+            | Type::Index(_, _, to)
+            | Type::Radix(_, _, to)
+            | Type::Trie(_, _, to) => Some(to),
+            _ => None,
+        }
+    }
+
     /// True if this type owns a heap store (heap_dep is Some and dep is empty).
     #[must_use]
     pub fn is_heap_owned(&self) -> bool {
@@ -2815,6 +2857,84 @@ pub fn stored_tuple_offsets_for_def(
         out.push(f.position);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod dep_faces_agree {
+    //! A dep list has three verbs — READ ([`Type::depend`]), SET ([`Type::with_deps`]) and
+    //! CLEAR ([`Type::deps_mut`]) — and each one used to spell its own arm list.  They drifted
+    //! by an `Optional`, so a nullable heap local's dep could be read and set and never
+    //! removed, and no such local could be made an owner (loft#1106).
+    //!
+    //! This asserts they agree, variant by variant, so a variant added to one is a failing
+    //! test rather than a silent no-op at whichever site asks the other question.  `Tuple` is
+    //! the documented exception: its deps are the UNION of its elements', so there is no single
+    //! list to hand back and `deps_mut` cannot serve it.
+    use super::{Deps, Type};
+
+    /// Every single-dep-list variant, built carrying frame dep `7`.
+    fn one_of_each() -> Vec<(&'static str, Type)> {
+        let d = || Deps::frame(vec![7]);
+        vec![
+            ("Text", Type::Text(d())),
+            ("Reference", Type::Reference(1, d())),
+            (
+                "Vector",
+                Type::Vector(Box::new(Type::Integer(super::IntegerSpec::signed32())), d()),
+            ),
+            ("Enum", Type::Enum(1, true, d())),
+            ("Sorted", Type::Sorted(1, Vec::new(), d())),
+            ("Hash", Type::Hash(1, Vec::new(), d())),
+            ("Index", Type::Index(1, Vec::new(), d())),
+            ("Radix", Type::Radix(1, Vec::new(), d())),
+            ("Trie", Type::Trie(1, String::new(), d())),
+            (
+                "Function",
+                Type::Function(Vec::new(), Box::new(Type::Void), d()),
+            ),
+        ]
+    }
+
+    #[test]
+    fn read_and_clear_reach_the_same_variants() {
+        for (name, mut tp) in one_of_each() {
+            assert_eq!(tp.depend(), vec![7], "{name}: the READ face lost the dep");
+            let cleared = tp
+                .deps_mut()
+                .map(|to| {
+                    to.iter().position(|x| *x == 7).map(|pos| to.remove(pos));
+                })
+                .is_some();
+            assert!(
+                cleared,
+                "{name}: the READ face sees a dep the CLEAR face cannot reach"
+            );
+            assert!(
+                tp.depend().is_empty(),
+                "{name}: the CLEAR face did not remove what it reached"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dep_transparent_wrappers_peel_on_both_faces() {
+        for (name, inner) in one_of_each() {
+            for (wrap_name, mut wrapped) in [
+                ("Optional", Type::Optional(Box::new(inner.clone()))),
+                ("RefVar", Type::RefVar(Box::new(inner.clone()))),
+            ] {
+                assert_eq!(
+                    wrapped.depend(),
+                    vec![7],
+                    "{wrap_name}<{name}>: the READ face did not peel"
+                );
+                assert!(
+                    wrapped.deps_mut().is_some(),
+                    "{wrap_name}<{name}>: the CLEAR face did not peel"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6424,6 +6544,58 @@ impl Data {
                 size,
             });
         d
+    }
+
+    /// @PLN25 — is `syn` the synthetic `__nullable<S>` enum that
+    /// [`nullable_enum_for`](Self::nullable_enum_for) mints for struct `struct_d`?
+    ///
+    /// The two are ONE notion with two spellings: the source says `f: S?`, which reaches the
+    /// parser as `Optional(Reference(S))`, and `typedef::synth_nullable_struct_fields`
+    /// rewrites the declared FIELD type to `Enum(__nullable<S>, true)` so absence has a
+    /// discriminant to live in.  Anything comparing a nullable struct type against another
+    /// has to know they are the same type, and this is where that is decided.
+    ///
+    /// Asked the way the MINT keys its cache — the name AND the STRUCT's own source.  The
+    /// source half is not decoration: two libraries may each define a `Chunk`, the synth is
+    /// per-`(name, source)` for exactly that reason, and a name-only test would answer yes
+    /// for the other library's `Chunk` (@PLN22 p379).
+    #[must_use]
+    pub fn is_nullable_synth_of(&self, syn: u32, struct_d: u32) -> bool {
+        syn != u32::MAX
+            && struct_d != u32::MAX
+            && (syn as usize) < self.definitions.len()
+            && (struct_d as usize) < self.definitions.len()
+            && self.definitions[syn as usize].source == self.definitions[struct_d as usize].source
+            && self.definitions[syn as usize].name
+                == format!("__nullable<{}>", self.definitions[struct_d as usize].name)
+    }
+
+    /// The two spellings of a nullable STRUCT, compared as one type: `τ?` written by the
+    /// author (`Optional(Reference(S))`) against the synthetic enum the field rewrite
+    /// produces (`Enum(__nullable<S>, true)`).
+    ///
+    /// `None` when either side is not a nullable struct; `Some(struct_d)` naming the payload
+    /// when both denote the same one.  Deps are deliberately ignored — this asks which TYPE,
+    /// not which borrow.
+    #[must_use]
+    pub fn same_nullable_struct(&self, a: &Type, b: &Type) -> Option<u32> {
+        let payload = |t: &Type| -> Option<(u32, bool)> {
+            match t {
+                Type::Optional(inner) => match &**inner {
+                    Type::Reference(d, _) => Some((*d, false)),
+                    _ => None,
+                },
+                Type::Enum(syn, true, _) => Some((*syn, true)),
+                _ => None,
+            }
+        };
+        let (a_d, a_syn) = payload(a)?;
+        let (b_d, b_syn) = payload(b)?;
+        match (a_syn, b_syn) {
+            (false, true) if self.is_nullable_synth_of(b_d, a_d) => Some(a_d),
+            (true, false) if self.is_nullable_synth_of(a_d, b_d) => Some(b_d),
+            _ => None,
+        }
     }
 
     /// @PLN25 E2a.1 — synthesize (once per struct) the nullable-enum type that
