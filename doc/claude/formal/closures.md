@@ -93,19 +93,28 @@ with the closure's environment in scope.
 ## Deviations
 
 OPEN: **0**. Both lambda forms capture identically (D-clo-1), the stored-short-lambda
-combinator crash is now a clean diagnostic (D-clo-2) — both closed 2026-07-04 — and
-`L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22).
+combinator crash is now a clean diagnostic (D-clo-2) — both closed 2026-07-04 —
+`L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22), and a
+lambda now carries one text work buffer however many promotions ask for one (D-clo-4,
+opened and closed 2026-08-27).
 
-⚠ This zero is only as strong as the axes the corpus below varies, and D-clo-3 is what a
-re-measurement of the PREVIOUS zero found. The axis it was blind to was *first-Set vs
-re-Set* — every `L-Escape` cell wrote into a place being **initialised**. The axes now
-varied are destination (local, struct field, vector element, tuple member, return) ×
+⚠ This zero is only as strong as the axes the corpus below varies, and it has now been
+re-measured TWICE and broken both times. D-clo-3 found the *first-Set vs re-Set* axis;
+D-clo-4 found the axis inside the BODY — every `L-Apply` cell returned through a single
+delivery, so nothing varied *how many* promotions the body asks for. The axes now varied
+are destination (local, struct field, vector element, tuple member, return) ×
 first-Set/re-Set × source (bare name, non-capturing lambda, capturing lambda, local, call,
-`if`/`match` arm) × host (named local, `&` parameter, vector element, field chain). Two
-that remain HELD FIXED, and are therefore where a next re-measurement should look: the
-number of DISTINCT capturing lambdas per attribute (one, by a shipped rule), and the
-nesting of the holder itself (a struct that holds a capturing closure cannot go in a
-collection at all, by #318).
+`if`/`match` arm) × host (named local, `&` parameter, vector element, field chain) ×
+**buffer count asked for by the body (one, two)**. Two that remain HELD FIXED, and are
+therefore where a next re-measurement should look: the number of DISTINCT capturing
+lambdas per attribute (one, by a shipped rule), and the nesting of the holder itself (a
+struct that holds a capturing closure cannot go in a collection at all, by #318).
+
+⚠ A THIRD is held fixed and is a known live gap rather than an unexplored axis: a
+capturing lambda passed INLINE to a combinator (`xs.map(fn(n: integer) -> text { … })`)
+and returning text faults on `--interpret` while `--native` runs it. Every cell here binds
+the lambda to a variable first. It is filed, and it is not D-clo-4's residue — it
+reproduces unchanged on a release control built before that fix.
 
 > **The re-measurement, and what the corpus was holding fixed (2026-08-22).** The
 > Conformance section below verifies `L-Escape` at three destinations — a local, a struct
@@ -128,6 +137,41 @@ collection at all, by #318).
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-4 — CLOSED (2026-08-27).** `(L-Apply)` makes applying a closure a call, and
+> [calls.md](calls.md) `(F-Return)` says `return e` exits the call with `e` — the same
+> program as the tail spelling. A lambda whose body both `return`ed and discharged a null
+> (`fn(n: integer) -> text { return s ?? "fallback"; }`) instead SIGSEGV'd the interpreter
+> and failed to compile on `--native` (`E0499`), so the two spellings of one program
+> disagreed and the rules settled which one was wrong. loft#1113.
+>
+> Cause: a text-returning lambda is handed **exactly one** hidden `RefVar(Text)` work
+> buffer by the fn-ref call ABI — a call site holding a fn-typed slot cannot know which
+> lambda is in it, so it injects one and the callee either uses it or has it popped
+> (`State::fn_call_ref`). Two promotions can meet inside one body and neither consulted the
+> other: `parse_return` promotes at the `return`, and the block tail promotes the `??` / `?`
+> / `if` accumulator afterwards. The callee then carried TWO, the frame came up one DbRef
+> span short, and it read its `__closure` slot from the wrong offset — loft#717's fault
+> line, reached by a second route. Fixed where the buffers are minted (`text_return`, one
+> `holds_text_work_buf` predicate now shared with the P227 placeholder it always had):
+> the first promotion to ask takes the buffer, and a later text local stays a local,
+> delivered by copy exactly as `SkipOwnedLocal` already prescribes.
+>
+> **The filed scope was a third of the defect.** It named three conditions — a closure, the
+> `return` keyword, and a `??` yielding `text`. Only the closure is real: `?` reaches it
+> (the other discharge rule), the null branch reaches it, and two plain text locals with no
+> discharge anywhere reach it. What the shapes share is a SECOND buffer, not the spelling
+> that asked for one. Guarded by
+> `tests/scripts/1113-a-lambda-carries-one-text-work-buffer.loft` (falsified at `20e25e9a`:
+> interpret exit 139 → 0, native exit 1 → 0).
+>
+> **Measured and rejected:** applying the one-buffer rule to NAMED functions too. It is the
+> same ABI on paper — a named function whose signature matches a fn-ref's does reach the
+> generated dispatch arm, which forwards one buffer twice and does not compile — but it
+> moved five suite results, and `float=0.25` came back `0` through the sqlite bridges. A
+> named function's ordinary call sites lower against a known signature and carry as many
+> buffers as it declares. The named-function half is therefore still open, filed separately,
+> and older than this fix.
 
 > **D-clo-3 — CLOSED (2026-08-22).** `L-Escape` says a closure "may be stored in a
 > variable or struct field", and said nothing about the slot being fresh — so **assigning**

@@ -212,6 +212,10 @@ enum TextDep {
     /// A non-argument LOCAL (loft#771) — no hoist; promoting it would hand the
     /// free obligation to a caller that never receives the store.
     SkipOwnedLocal,
+    /// A text local in a function that already carries a work buffer (loft#1113)
+    /// — no hoist; the fn-ref call ABI passes exactly one, so a second is
+    /// unreachable through it.
+    SkipSecondTextBuf,
     /// A text local — promote to a hidden `RefVar(Text)` work-buffer param.
     PromoteHidden,
     /// Any other dep type — promote as a plain (visible) parameter.
@@ -9059,7 +9063,15 @@ impl Parser {
         // pushed a `null` placeholder into a frame laid out for a work buffer
         // (`realloc(): invalid next size` in the multiplayer/ws consumers).
         if matches!(tp.base(), Type::Text(_)) {
-            TextDep::PromoteHidden
+            // loft#1113 — one text work buffer per lambda, and the first asker
+            // takes it (`holds_text_work_buf`).  Two promotions can meet in one
+            // body: `parse_return` promotes at the `return`, and the block tail
+            // promotes the `??` / `?` / `if` accumulator afterwards.
+            if self.holds_text_work_buf() {
+                TextDep::SkipSecondTextBuf
+            } else {
+                TextDep::PromoteHidden
+            }
         } else if matches!(tp, Type::Tuple(_)) {
             // @P330: a tuple local must NOT hoist to a parameter — call sites
             // would push a 12-byte null DbRef where the slot is 16+ bytes per
@@ -9091,6 +9103,46 @@ impl Parser {
             // Any other dep type promotes as a plain (visible) parameter.
             TextDep::PromotePlain
         }
+    }
+
+    /// Does the LAMBDA being parsed already carry a hidden `RefVar(Text)` work
+    /// buffer?
+    ///
+    /// A lambda takes at most ONE, because that is what the fn-ref call ABI
+    /// passes.  A call site holding a fn-typed slot cannot know which lambda is
+    /// in it, so it injects exactly one buffer and the callee either uses it or
+    /// has it popped (`State::fn_call_ref`).  A callee carrying TWO leaves the
+    /// frame one DbRef span short, and the callee then reads its `__closure`
+    /// slot from the wrong offset — loft#717's fault line, reached by a second
+    /// route (loft#1113).
+    ///
+    /// So the FIRST promotion to ask for a buffer takes it, and every later text
+    /// local stays a local — its value is delivered by copy into the caller's
+    /// `&text` buffer, which is what `SkipOwnedLocal` already describes for a
+    /// local it declines to hoist.
+    ///
+    /// Scoped to lambdas, and the narrowness is measured rather than cautious: a
+    /// NAMED function's call sites lower against a known signature and carry as
+    /// many buffers as it declares, and applying the rule to them instead moved
+    /// five suite results (`float=0.25` came back `0` through the sqlite
+    /// bridges).  A named function that shares a fn-ref's signature does reach
+    /// the generated dispatch arm, which forwards one buffer twice and fails to
+    /// compile — that is a separate, older defect and is not cured here.
+    ///
+    /// The verdict is pass-stable: a var promoted on pass 1 is an attribute by
+    /// pass 2 and takes `classify_text_dep`'s `Attr` branch, so it re-acquires the
+    /// same buffer rather than asking for a new one.
+    fn holds_text_work_buf(&self) -> bool {
+        self.data
+            .def(self.context)
+            .name()
+            .starts_with("n___lambda_")
+            && self
+                .data
+                .def(self.context)
+                .attributes()
+                .iter()
+                .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
     }
 
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
@@ -9139,7 +9191,10 @@ impl Parser {
                                 .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                         }
                     }
-                    TextDep::SkipCaptured | TextDep::SkipTupleLocal | TextDep::SkipOwnedLocal => {
+                    TextDep::SkipCaptured
+                    | TextDep::SkipTupleLocal
+                    | TextDep::SkipOwnedLocal
+                    | TextDep::SkipSecondTextBuf => {
                         // SkipTupleLocal (@P330): the dep drops on purpose — the
                         // return type loses this local, which lets scopes'
                         // B5-L3 single-text branch deep-copy the tail into a
@@ -9204,11 +9259,7 @@ impl Parser {
                 .def(self.context)
                 .name()
                 .starts_with("n___lambda_");
-            let has_work_buf =
-                self.data.def(self.context).attributes().iter().any(
-                    |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
-                );
-            if self.first_pass && is_lambda && !has_work_buf {
+            if self.first_pass && is_lambda && !self.holds_text_work_buf() {
                 let work_tp = Type::RefVar(Box::new(Type::Text(Deps::none())));
                 let a = self.data.add_attribute(
                     &mut self.lexer,
