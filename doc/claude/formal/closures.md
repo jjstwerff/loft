@@ -94,9 +94,10 @@ with the closure's environment in scope.
 
 OPEN: **0**. Both lambda forms capture identically (D-clo-1), the stored-short-lambda
 combinator crash is now a clean diagnostic (D-clo-2) — both closed 2026-07-04 —
-`L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22), and a
-lambda now carries one text work buffer however many promotions ask for one (D-clo-4,
-opened and closed 2026-08-27).
+`L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22), a lambda
+now carries one text work buffer however many promotions ask for one (D-clo-4), and a
+combinator's inline callback is handed the buffer its ABI expects (D-clo-5) — both opened
+and closed 2026-08-27.
 
 ⚠ This zero is only as strong as the axes the corpus below varies, and it has now been
 re-measured TWICE and broken both times. D-clo-3 found the *first-Set vs re-Set* axis;
@@ -110,11 +111,10 @@ therefore where a next re-measurement should look: the number of DISTINCT captur
 lambdas per attribute (one, by a shipped rule), and the nesting of the holder itself (a
 struct that holds a capturing closure cannot go in a collection at all, by #318).
 
-⚠ A THIRD is held fixed and is a known live gap rather than an unexplored axis: a
-capturing lambda passed INLINE to a combinator (`xs.map(fn(n: integer) -> text { … })`)
-and returning text faults on `--interpret` while `--native` runs it. Every cell here binds
-the lambda to a variable first. It is filed, and it is not D-clo-4's residue — it
-reproduces unchanged on a release control built before that fix.
+A THIRD axis was held fixed and is now varied: WHERE the lambda is applied. Every
+`L-Apply` cell called the closure directly, and a combinator lowers its own call — so a
+capturing lambda passed INLINE to `map` and returning text faulted on `--interpret` while
+`--native` ran it. That is D-clo-5, closed the same day.
 
 > **The re-measurement, and what the corpus was holding fixed (2026-08-22).** The
 > Conformance section below verifies `L-Escape` at three destinations — a local, a struct
@@ -137,6 +137,26 @@ reproduces unchanged on a release control built before that fix.
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-5 — CLOSED (2026-08-27).** The third route to the same fault line, found by
+> varying where `(L-Apply)` happens. `xs.map(fn(n: integer) -> text { return s; })` on a
+> CAPTURING lambda panicked the interpreter with a corrupt `DbRef` while `--native`
+> answered — a backend split, so neither backend alone could see it. loft#1115.
+>
+> Cause: the caller allocates the one hidden `RefVar(Text)` work buffer a text-returning
+> fn-ref call hands its target, and `parse_operators` appends it for the ordinary `f(args)`
+> spelling. `map` lowers its own `CallRef` and never appended it, so the callee was entered
+> one DbRef span short and read its `__closure` from the wrong offset. The closure argument
+> itself is NOT part of that injection — `fn_call_ref` reads it back from the 20-byte fn-ref
+> slot — which is exactly why the same shape returning an integer, a struct or a boolean was
+> always correct, and why the fault looked like a capture problem when it was a buffer one.
+>
+> Fixed in `parse_map` through one `callback_call_ref` helper. The buffer is drawn from
+> `caller_text_buf`'s `__work_c<N>` sequence, not `work_text`'s `__work_<N>`: the map family
+> early-returns on pass 1, so this mint is pass-2-only, and a pass-2-only mint on the shared
+> counter shifts every later `__work_N` — loft#662's class. Guarded by
+> `tests/scripts/1115-an-inline-callback-gets-the-text-buffer-its-abi-expects.loft`, whose
+> native half is INERT by construction and says so.
 
 > **D-clo-4 — CLOSED (2026-08-27).** `(L-Apply)` makes applying a closure a call, and
 > [calls.md](calls.md) `(F-Return)` says `return e` exits the call with `e` — the same

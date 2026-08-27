@@ -4789,6 +4789,43 @@ use #count instead"
         (Value::Var(for_var), var_tp.clone())
     }
 
+    /// A `CallRef` to a callback, carrying the one hidden text work buffer that a
+    /// text-returning target expects (loft#1115).
+    ///
+    /// The fn-ref call ABI hands a text-returning callee exactly one `RefVar(Text)` work
+    /// buffer, allocated by the CALLER, because the call site cannot know which lambda a
+    /// fn-typed slot holds (`State::fn_call_ref`, and P227 on the callee side).  The
+    /// ordinary `f(args)` spelling appends it in `parse_operators`; a combinator that
+    /// lowers its own call had to append it too, and did not — so a capturing lambda
+    /// written inline in `map` and returning `text` was entered with its frame one DbRef
+    /// span short and read its `__closure` from the wrong offset.
+    ///
+    /// Only the buffer is appended here.  The closure argument is NOT: `fn_call_ref` reads
+    /// it back from the 20-byte fn-ref slot at run time, which is why the same shape
+    /// returning an integer, a struct, or a boolean was always correct.
+    ///
+    /// The buffer is drawn from `caller_text_buf`'s `__work_c<N>` sequence rather than
+    /// `work_text`'s `__work_<N>`, because this mint is **pass-2 only**: the map/filter
+    /// family early-returns on pass 1, where an unresolved callback type makes the
+    /// desugar impossible.  A pass-2-only mint drawing from the shared counter shifts
+    /// every later `__work_N`, and the variable tables persist across passes BY NAME —
+    /// so pass 2 would re-find pass 1's variables under the wrong roles (loft#662).
+    /// `caller_text_buf` is the sequence for exactly this: a buffer the CALLER allocates
+    /// for a callee's hidden `&text` out-param.
+    fn callback_call_ref(&mut self, fn_ref_var: u16, mut args: Vec<Value>, ret: &Type) -> Value {
+        if matches!(ret, Type::Text(_)) && !self.first_pass {
+            let wv = self.vars.caller_text_buf(&mut self.lexer);
+            let create = self.cl("OpCreateStack", &[Value::Var(wv)]);
+            let ref_def = self.data.def_nr("reference");
+            args.push(v_block(
+                vec![v_set(wv, Value::Text(String::new())), create],
+                Type::Reference(ref_def, crate::data::Deps::frame1(wv)),
+                "cref_work_buf",
+            ));
+        }
+        Value::CallRef(fn_ref_var, args)
+    }
+
     pub(crate) fn callback_call(
         &mut self,
         d_nr: u32,
@@ -4941,7 +4978,8 @@ use #count instead"
         let body = if let Some(d) = fn_d_nr {
             self.callback_call(d, vec![elem_arg], vec![elem_arg_tp])
         } else {
-            Value::CallRef(fn_ref_var.unwrap(), vec![elem_arg])
+            let rt = fn_ret_type.clone();
+            self.callback_call_ref(fn_ref_var.unwrap(), vec![elem_arg], &rt)
         };
 
         self.data.vector_def(&mut self.lexer, &out_elem);
