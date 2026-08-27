@@ -1198,6 +1198,7 @@ impl Output<'_> {
             let candidate_def = self.data.def(*d_nr);
             let mut synthetic: Vec<Value> = Vec::with_capacity(candidate_def.attributes.len());
             let mut user_idx = 0_usize;
+            let mut text_buf_used = false;
             for a in &candidate_def.attributes {
                 if a.hidden
                     && matches!(
@@ -1218,12 +1219,27 @@ impl Output<'_> {
                     synthetic.push(Value::RawExpr(heap_hbuf_expr.clone()));
                 } else if matches!(a.typedef, Type::RefVar(ref inner) if matches!(**inner, Type::Text(_)))
                 {
-                    if work_buf_expr.is_empty() {
-                        // Defensive — shouldn't happen for text-returning
-                        // candidate without parser-supplied buffer.
+                    // loft#1116 — the call site supplies exactly ONE text work buffer,
+                    // because it cannot know which function the fn-typed slot holds.  A
+                    // candidate declaring more than one used to receive that same
+                    // expression once per attribute, which borrows it mutably twice and
+                    // does not compile (`E0499`) — and candidates are chosen by SIGNATURE,
+                    // so a function nobody ever takes a reference to reddened the build
+                    // merely because some lambda shared its shape.
+                    //
+                    // Giving the extras their own temporaries is safe HERE and only here:
+                    // native returns text OWNED and never threads a value back through
+                    // this buffer (`State::fn_call_ref` says so — the threading is
+                    // interpreter-only).  The buffers are parameters that must type-check,
+                    // not the delivery, so a candidate whose two paths deliver through two
+                    // different buffers still answers correctly through a fn-ref.  Do NOT
+                    // carry this reasoning to the interpreter, where the buffer IS the
+                    // delivery and a scratch one would swallow the result.
+                    if text_buf_used || work_buf_expr.is_empty() {
                         synthetic.push(Value::RawExpr("&mut String::new()".to_string()));
                     } else {
                         synthetic.push(Value::RawExpr(work_buf_expr.clone()));
+                        text_buf_used = true;
                     }
                 } else if a.name == "__closure" {
                     synthetic.push(Value::RawExpr(closure_expr.clone()));

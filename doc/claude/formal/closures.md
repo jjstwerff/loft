@@ -92,8 +92,10 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **0**. Both lambda forms capture identically (D-clo-1), the stored-short-lambda
-combinator crash is now a clean diagnostic (D-clo-2) — both closed 2026-07-04 —
+OPEN: **1** — `L-FnRef` does not hold for a function carrying two text work buffers
+(D-clo-6, below). Closed: both lambda forms capture identically (D-clo-1), the
+stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
+2026-07-04 —
 `L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22), a lambda
 now carries one text work buffer however many promotions ask for one (D-clo-4), and a
 combinator's inline callback is handed the buffer its ABI expects (D-clo-5) — both opened
@@ -137,6 +139,33 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-6 — OPEN (2026-08-27).** `(L-FnRef)` says a bare function name is a first-class
+> value. It is not, for a function that carries TWO hidden `RefVar(Text)` work buffers:
+> `g = nb; g()` crashes the interpreter. loft#1116.
+>
+> A function acquires two the ordinary way — a text local AND a discharge accumulator, each
+> promoted to a hidden `&text` out-param. That is legal for a NAMED function, whose own call
+> sites lower against its known signature, and D-clo-4 records why forbidding it is not the
+> cure (it moved five suite results). But the fn-ref ABI passes exactly ONE buffer, because
+> a call site cannot know which function a fn-typed slot holds — so through a fn-ref the
+> callee is entered short.
+>
+> **The `--native` half is closed.** Its dispatch arms are chosen by SIGNATURE, so a function
+> nobody takes a reference to was reddening the build whenever some lambda shared its shape
+> — the arm spent one buffer argument on both parameters (`E0499`). Extra buffers now get
+> their own temporaries, which is sound on that backend and only there: native returns text
+> OWNED and never threads the value back through the buffer, so the buffers type-check
+> rather than deliver. Guarded by
+> `tests/scripts/1116-a-fn-ref-arm-does-not-spend-one-buffer-twice.loft`.
+>
+> **The interpreter half is open**, and is where the buffer IS the delivery, so the same
+> trick would swallow the result. The call site injects its single buffer as part of
+> `arg_size`, before `fn_call_ref` runs; `fn_call_ref`'s hidden-buffer loop pushes in the
+> right position to add more, but it cannot know how many without the callee's count
+> reaching the site. The admissible cures are recorded on the issue: give the call site that
+> count, or decline the fn-ref where the ABI cannot honour it (`B-Ref-Reshape`'s precedent —
+> nothing working is lost, since every such call faults today).
 
 > **D-clo-5 — CLOSED (2026-08-27).** The third route to the same fault line, found by
 > varying where `(L-Apply)` happens. `xs.map(fn(n: integer) -> text { return s; })` on a
