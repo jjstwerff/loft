@@ -2081,9 +2081,11 @@ blocks on, and not one of the 41 commits measured an op count except where someb
    reports INERT against a ref that already carries the fix, and the gate fails on all three of
    its shapes — a new file with no record, a retrofitted file still in the baseline, and a
    baseline line for a file that no longer exists.
-2. **A screen for `Optional` transparency.** `is_dbref`, `heap_dep` and `deps_mut` each decide
-   whether they peel the wrapper, three verbs disagreed this week, and there is no list of which
-   callers go through `.base()`. Same shape as the `spellings` screen, one type former over.
+2. ✅ **A screen for `Optional` transparency — DONE.** `ir_walker_audit.py optional`, both halves:
+   who discriminates on a `Type` variant without peeling, and — the list that did not exist — who
+   goes through `.base()` before asking each opaque verb. It reproduced 15 of 15 hand answers, and
+   the corpus ranking behind it says only four (verb, caller) pairs are ever REACHED by a `τ?`.
+   Three peels and one lock came out of it; see B6p.
 3. **Record the axes a matrix HELD FIXED, in the guard file.** Cheaper than an instrument and it
    is the thing five separate failures had in common.
 
@@ -2227,6 +2229,132 @@ here and caught both of this sweep's own errors, neither by reading the code:
 | **`.loft` is an extension AND a directory** | a run writes its cache to `.loft/` beside the script, so `find -name '*.loft'` matched 20 cache DIRECTORIES and scored every one as a failure.  The count said 877 where the tree holds 857 |
 | **a bound too TIGHT** | at 20s under six-way load, a 16s performance probe and a 28s parse were reported as crashes — five faults that were the harness.  This is B6n's *"a bound that is not a bound"* in mirror image, and the cure is not a bigger number: a run killed by either bound is now its own class, because the only honest verdict on one is *re-run it alone* |
 
+#### B6p — the screen one type former over: 43 opaque sites, 4 that a `τ?` ever reaches (2026-08-27)
+
+B6m's ranked list put a screen for `Optional` transparency second, and named why: *"`is_dbref`,
+`heap_dep` and `deps_mut` each decide whether they peel the wrapper, three verbs disagreed this
+week, and there is no list of which callers go through `.base()`."*  `Optional(τ)` is `τ` with a
+nullability bit and the SAME storage (@FR-L-Null: layout(τ) = layout(τ?)), so a site that resolves
+a shape by naming variants answers for `τ` and not for `τ?` — one notion, two spellings, which is
+`spellings` (B6g) with the type former swapped for the IR one.
+
+`./scripts/ir_walker_audit.py optional` asks it mechanically, in two halves.  The FUNCTION half
+classifies every body that discriminates on a `Type` variant; the CALLER half is the list the
+first half cannot give — for each opaque verb in `data.rs`, who peels the receiver before asking
+and who does not.
+
+| functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
+|---:|---:|---:|---:|
+| 637 | 266 | 4 | **367** |
+
+(gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
+and `spellings` tables have.)  It reproduces **15 of 15** hand answers written down before it was
+built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
+`for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
+`is_scalar` / `heap_def_nr` / `is_unknown` are opaque; `contains_def` descends; `is_heap_owned`
+is not in the population at all, because it delegates rather than matching.
+
+**367 is a list, not a queue — so the second measurement is the one that ranks it.**  The four
+heap-shape verbs the caller table puts at the top (`heap_dep`, `is_dbref`, `heap_def_nr`,
+`is_scalar` — 43 bare call sites between them) were instrumented INSIDE the verb: fire when the
+argument is an `Optional` *and peeling would change the answer*, and name the caller off the
+backtrace.  Over the 883-program `tests/scripts` corpus that is **four (verb, caller) pairs**:
+
+| pair | files | verdict |
+|---|---:|---|
+| `is_dbref` ← `Parser::block_result` | 883 | the P236 branch-join question, asked bare — **peeled** |
+| `heap_def_nr` ← `State::known_type` | 839 | the schema id an `OpReturn` records — **peeled** |
+| `heap_dep` ← `Ownership::reassign_sites_of` | 4 | the ownership oracle's heap filter — **peeled** |
+| `heap_dep` ← `protectable_ref_args` | 2 | already handled: that caller asks BOTH questions |
+
+⚠ **The fourth row is a false positive by construction, and it is worth keeping visible:** the
+probe measures the VERB, so a caller that asks `tp.heap_dep().is_none() && tp.base().heap_dep()
+.is_none()` — which is exactly what `protectable_ref_args` does, with the comment saying why —
+trips it on the first half.  A screen over a shared verb cannot see the caller's second question.
+
+**What the three fixes actually change, each measured rather than argued.**
+
+*The ownership oracle was blind to nullable locals.*  `reassign_sites_of` filters to heap-typed
+vars because "only HEAP-typed vars can carry the over-free leak"; asked bare, every `τ?` local
+fell out of that filter.  Two functions differing only by a nullability marker:
+
+```
+fn f_bare(c: boolean) -> integer { s = mk(1); s = mk(2); if c { s = mk(3); } s.x }
+fn f_opt(c: boolean)  -> integer { s: S? = mk(1); s = mk(2); if c { s = mk(3); } s?.x }
+
+before:  OWN fn=n_f_bare reassign v=1(s) prior=Owned rhs=Owned
+         OWN fn=n_f_opt   ← no reassign row at all
+after:   both report the same row
+```
+
+The over-free leak shape the oracle exists to name is `prior=Owned rhs=Join(...)`, so it could
+never have reported one on a nullable local — and loft#1106 was an ownership defect on exactly
+that shape.  An instrument blind to a class reports it green.
+
+*A nullable heap return recorded no type at its `OpReturn`.*  `known_type` resolves a heap type
+through `heap_def_nr` and otherwise falls back to a lookup BY NAME; nothing registers `"S?"`, so
+the fallback answered `u16::MAX` and the one consumer — the execution-trace renderer — had no type
+to decode the returned value with.  Visible in the corpus, which is better than the trace could
+show it: three programs' disassembly went from a bare `Return(...)` to `Return(...) type=Item 78`,
+`type=I877Cell 78`, `type=I882H2 78`.
+
+*The branch join skipped every nullable return, and the corpus could not have said so.*
+`block_result` asks `is_dbref(result)` to decide whether an `if`/`match` tail's arms share one
+return slot (P236, whose comment says native otherwise "drops the if/else's value and returns the
+typed null sentinel").  Peeling leaves the emitted IR of **all 883** corpus programs byte-identical
+— so no corpus program has a nullable heap return whose tail this join could unify — and it changes
+a hand-written `fn pick(c) -> S? { if c { S { x: 7 } } else { S { x: 9 } } }`: frame 40 → 24 bytes,
+two work-refs → one, two `OpFreeRefIfDistinct` → one.  Values were right both ways on both
+backends, so this is a slot, not an answer.  **The finding under the finding is that zero**, and
+`tests/scripts/a-nullable-return-joins-its-branch-arms.loft` now pins the shape.
+
+**And the lock earned its place on its first run — loft#1118.**  `make ci` failed on it: one
+`SNRet` record leaked.  Not from anything in this thread — the same cell leaks identically on the
+control at `81b42f3a` — but because the file is the first corpus program to hand a VARIABLE to a
+nullable parameter and use the result **without binding it**.  The cell isolates to three facts
+that must meet: the result is used inline, the parameter is nullable, and the callee mints on the
+taken arm.  One record per evaluation, `SN×6` in a six-iteration loop, values right on both
+backends.  The mechanism is loft#879's inline-`ncc` lift, whose `dep.is_empty()` guard refuses a
+`Join` return (it carries a dep on the parameter it may borrow) — and the carve-out is the map
+again: that comment already says an unlifted block "leaves the subject's store owned by nothing
+when the block is used INLINE — one leaked record per evaluation, unbounded in a loop".  Filed
+rather than fixed, because the cure is *lift, but bind through loft#1106's runtime guard*, and that
+guard requires an `Optional`-typed temp and a `Value::Call` — the lifted temp is declared
+`ref(SN)` and what it would lift is the `?.`'s BLOCK.  The lock keeps the bound spelling and names
+the issue for the inline one.
+
+⚠ **Two instruments were blind to it, in the same direction.**  `--tests` does not leak-check —
+only `tests/wrap.rs` does — so the guard passed six-for-six on both backends while leaking.  And
+`falsify.sh` reads its leak column off the run's stderr, which means **for a `main`-less guard (the
+corpus's standard shape) that column can never fire**: it scored `0|0|none|none` on both trees for
+the file `make ci` then failed.  A leak guard written in the normal form is therefore recorded
+INERT — mislabelled a lock — and B6n's INERT residue is a quarter of the corpus.  The warning is
+now in `falsify.sh`'s header where the next reader hits it; the cure is a leak check on `--tests`,
+which is a decision about every library's `loft test`, not a tweak.
+
+**Found on the way — loft#1117.**  The enum cell of the branch-join matrix does not compile at
+all: `if c { E::A { … } } else { E::B { … } }` is refused with *"expected A, got B on else"*, while
+`match k { 0 => E::A { … }, _ => E::B { … } }` — which lowers to nested `Value::If` — accepts it,
+and so does an early `return` plus a tail.  `formal/types.md` `(C-Var)` settles which is right
+(`Reference(S) ⤳ Enum(E) ⟸ S ∈ variants(E)`), so the refusal is the deviation.  Filed rather than
+fixed: the else arm is checked against the THEN arm's type, and pushing the expected type into the
+arms is a bidirectional-checking change in the typing core.  Nothing to do with `Optional` — the
+non-null twin fails identically.
+
+**One peel deliberately did NOT go in.**  `is_protectable_store_type` is bare `is_dbref` while the
+caller two lines up asks the peeled question, and that function's own doc says to keep the two in
+step — so peeling looks like the obvious fourth fix.  It cures nothing measured (loft#1118's
+mechanism is elsewhere) and it is **not inert**: it changes emitted code in six corpus programs,
+every one a guard for this machinery (1021, 1029, 1105, 1106, 1107, 882), in the direction where a
+mistake is a use-after-free rather than a leak.  Left alone, with the map written at the site.
+
+⚠ **Three limits, all lower-bound in the same direction.**  A body that peels ANYWHERE reads as
+seeing, even where a second match in it stays bare (B6f's caveat, one type former over);
+`.base()` is also `use_analysis::Class::base`, a different method sharing the spelling; and the
+corpus ranking is only as wide as the four verbs instrumented — `is_equal`, `content`, `show` and
+`unrewritten` have 126 bare call sites between them and were not measured.  So **367 is a floor
+and four is a floor**.
+
 #### C — process / skills
 
 | item | state |
@@ -2234,8 +2362,9 @@ here and caught both of this sweep's own errors, neither by reading the code:
 | a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
-| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, six modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
+| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, seven modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g); `optional` asks the same question over the TYPE former — who resolves a shape without peeling `τ?`, plus the caller-side `.base()` list (B6p). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
 | a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
+| the negative-control gate's LEAK channel | ⚠ **blind for the corpus's standard guard shape** — `falsify.sh` reads "stores not freed" off stderr, which only a `main`-ful `--interpret` run prints; `--tests` does not leak-check at all (that gate lives in `tests/wrap.rs`). So a leak guard written `main`-less scores INERT on both trees and is recorded as a LOCK. Measured on `a-nullable-return-joins-its-branch-arms.loft`, which `make ci` failed while falsify read `0|0|none|none` (B6p). Warning written into the tool's header; the cure — a leak check on `--tests` — is a decision about every library's `loft test` |
 
 #### B2 — open, and the owner's call
 

@@ -2042,11 +2042,17 @@ impl<'a> Ownership<'a> {
         // Only HEAP-typed vars can carry the over-free leak: a reassigned scalar
         // loop counter has no store to displace (the class is record-specific —
         // "scalar never fires" per the boundary map). Filter them out.
+        //
+        // Through `base`, because `S?` is `S` behind a nullability marker and holds the
+        // same store (@FR-L-Null: layout(τ) = layout(τ?)). Asked bare, every nullable heap
+        // local fell out of this filter, so the oracle had no reassignment row for the
+        // shape loft#1106 turned out to be — an ownership defect on a `τ?` local. An
+        // instrument blind to a class reports it green.
         let mut vars: Vec<u16> = defs
             .rhs
             .keys()
             .copied()
-            .filter(|v| defs.rhs[v].len() > 1 && func.tp(*v).heap_dep().is_some())
+            .filter(|v| defs.rhs[v].len() > 1 && func.tp(*v).base().heap_dep().is_some())
             .collect();
         vars.sort_unstable();
         vars.into_iter()
@@ -2352,6 +2358,17 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
 /// that is here without carrying a store would be worse: the set would read complete while
 /// protecting nothing, which is the loft#981 use-after-free.
 fn is_protectable_store_type(tp: &Type) -> bool {
+    // ⚠ Out of step with that `heap_dep` question on ONE shape, deliberately and for now:
+    // the caller peels (`tp.heap_dep().is_none() && tp.base().heap_dep().is_none()`) and
+    // this does not, so an `S?` parameter passes the filter and then fails here, leaving
+    // the witness set incomplete — the conservative never-free the comment above calls
+    // correct-but-leaking.  Peeling here is the rule-true reading (@FR-L-Null: a `τ?`
+    // value IS the same `DbRef`), and it is NOT inert: it changes emitted code in six
+    // corpus programs, every one of them a guard for this machinery (1021, 1029, 1105,
+    // 1106, 1107, 882).  It also does not cure the leak that raised the question
+    // (loft#1118, whose mechanism is the inline `ncc` lift in `scopes.rs`), so the change
+    // has no measurement asking for it and moves in the direction where a mistake is a
+    // use-after-free rather than a leak.  Left as it stands, with the map written down.
     crate::data::is_dbref(tp)
 }
 

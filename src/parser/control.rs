@@ -1573,9 +1573,13 @@ impl Parser {
             // the existing `Return(If(...))` native codegen at
             // `src/generation/emit.rs:166-182` emits
             // `return if cond { ... } else { ... }` correctly.
+            // `base`, because the question is whether the RETURN is heap-shaped, and a
+            // nullable one is: `S?` holds the same record as `S` (@FR-L-Null, layout(τ) =
+            // layout(τ?)).  Asked bare, every `τ?` tail kept a work-ref per arm plus a
+            // separate result slot where its non-null twin shares one.
             let if_unified = !self.first_pass
                 && context == "return from block"
-                && crate::data::is_dbref(result)
+                && crate::data::is_dbref(result.base())
                 && matches!(l[last].unspan(), Value::If(_, _, _))
                 && self.unify_if_branches_work_refs(&mut l[last]).is_some();
             if if_unified {

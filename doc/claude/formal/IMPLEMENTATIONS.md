@@ -538,8 +538,15 @@ search for.
 | a **borrow** | a value with a non-empty DEP list | a borrow with NO dep — `e = mk().items` views a `__lift_N` whose container dep loft#882/#889 record at the SUBSCRIPT only | the return promotion had to grow a leg that reads the DEFINING STATEMENT instead of the deps (loft#1101, [ownership.md](ownership.md) D-own-10) |
 | a **projection**, again, one level out | the op NAMES a matcher happens to list — `OpGetField`, `OpGetVector` | `OpGetRecord` (a keyed lookup) and `OpVectorRef` (a linked element), which answer a `DbRef` in the same store by the same declaration `-> reference[data]` | `pick(h[k], …)` had no @P290 witness at hash, sorted and index alike, so every call orphaned the record the callee minted — one per call, both backends ([ownership.md](ownership.md) D-own-11) |
 | a **nullable struct**, as a TYPE | `Optional(Reference(S))` — what `f: S?` parses to | `Enum(__nullable<S>, true)` — what `typedef::synth_nullable_struct_fields` rewrites the declared FIELD type to, in `fill_all`, BETWEEN the two parser passes | four failures from one root: `s = o.f` refused as a type change between one type and itself; `s = o.f ?? S { … }` reading the default at the payload's OFFSET; a VALUE default doing the same with no hint able to cure it; and `v[i] ?? S { … }` refused because the pass-1 `Some` build leaves its operand `Value::Null`, which the `?? null` check reads as a nullable fallback (QUALITY.md § B6j) |
+| a **heap SHAPE**, as a TYPE | the variant itself — `Reference`, `Vector`, a keyed collection, `Enum(_, true, _)` — which is what `is_dbref` / `heap_dep` / `heap_def_nr` / `is_scalar` spell | the same variant under `Optional` — `S?` is `S` behind a nullability bit and holds the SAME record (@FR-L-Null) | three sites, each reached by a `τ?` on the corpus and each answering as if the shape were not heap at all: the ownership ORACLE had no reassignment row for a nullable local (the class loft#1106 was), an `OpReturn` of a nullable heap value recorded no schema type, and a nullable branch tail kept a work-ref per arm where its non-null twin shares one (QUALITY.md § B6p) |
 
-**The instrument is per-notion and cheap.**  `scripts/ir_walker_audit.py spellings` asks it for
+**The instrument is per-notion and cheap, and there are two of them now.**
+`scripts/ir_walker_audit.py optional` asks the sixth row's question over the TYPE former — who
+discriminates on a `Type` variant without peeling `τ?`, and which callers go through `.base()`
+before asking each opaque verb: **637 discriminating functions, 367 of them opaque**, of which
+only **four (verb, caller) pairs** are ever reached by a `τ?` across the 883-program corpus.  That
+ratio is the point — the static list is a floor on the QUESTION, and the corpus run is what ranks
+it.  `scripts/ir_walker_audit.py spellings` asks it for
 the projection notion: who resolves a projection by op name, and do they also carry a `TupleGet`
 arm — **38 functions, 5 of them do**.  The mode is about thirty lines; the shape generalises to
 any notion whose two spellings can be named.  Its first outside use found a latent blindness in

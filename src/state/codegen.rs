@@ -4207,8 +4207,15 @@ impl State {
         }
     }
 
+    /// The schema type id an `OpReturn` records for a returned value.
+    ///
+    /// Through `base`, because a nullable heap return holds the SAME record as its non-null
+    /// twin (@FR-L-Null: layout(τ) = layout(τ?)).  Asked bare, an `S?` fell to the name
+    /// lookup, which has no `"S?"` to find and answers `u16::MAX` — so the one consumer, the
+    /// execution-trace renderer, had no type to decode the returned value with on exactly the
+    /// shapes nullable-return bugs live on.
     pub(super) fn known_type(&self, tp: &Type, stack: &Stack) -> u16 {
-        if let Some(c) = tp.heap_def_nr() {
+        if let Some(c) = tp.base().heap_def_nr() {
             stack.data.def(c).known_type()
         } else {
             self.database.name(&tp.name(stack.data))

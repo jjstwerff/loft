@@ -21,6 +21,16 @@
 #
 # The control build is cached per ref under the scratch root, so a second guard against the
 # same ref costs nothing.
+#
+# ⚠ ONE CHANNEL IS BLIND, and it is blind for the corpus's usual guard shape.  The leak column
+# is read off the run's stderr ("stores not freed at program exit"), which only a `main`-ful
+# run under `--interpret` prints: `--tests` does not leak-check at all (the corpus leak gate
+# lives in `tests/wrap.rs`, which this does not run).  So a `main`-less guard — the standard
+# form — reports `leak none` on BOTH trees whatever it leaks, and a guard written to catch a
+# LEAK is therefore recorded INERT, i.e. mislabelled a lock.  Measured 2026-08-27 on
+# `a-nullable-return-joins-its-branch-arms.loft`, whose leaking cell `make ci` failed on while
+# this reported `0|0|none|none` for both trees (QUALITY.md B6p).  Until `--tests` grows a leak
+# check, score a leak guard by giving it a `main` and running it under `--interpret`.
 set -uo pipefail
 
 usage() {
