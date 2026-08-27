@@ -2252,12 +2252,14 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 641 | 267 | 4 | **370** |
+| 642 | 270 | 4 | **368** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
-picked in, which added three opaque sites, and 640 · 266 until B6q's `parse_stored_default`
-added one that asks through `.base()`; re-run the tool rather than reading a number here.)  It reproduces **15 of 15** hand answers written down before it was
+picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
+added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
+again — every count here is a snapshot of two moving checkouts, so re-run the tool rather than
+reading a number.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
 `is_scalar` / `heap_def_nr` / `is_unknown` are opaque; `contains_def` descends; `is_heap_owned`
@@ -2550,6 +2552,50 @@ reached through a `use`d library is invisible, and a file that reaches a value o
 commented-out cell reads as never having considered it. The cross is co-occurrence, not
 interaction. And the instrument found this defect the way B6m § 3 predicts instruments work — it
 ranked the cells, and the defect came from a person reading one.
+
+#### B6r — a text auto-merge produced a document asserting both a claim and its retraction (2026-08-27)
+
+Four commits picked from the sibling checkout (`64b95b68`, `85bb936b`, `00e0e491`, `2542c527`).
+Two needed a decision, and the second is a hazard worth naming because nothing in the gate can
+see it.
+
+**Which commits were missing was not answerable by `git cherry`.** It compares patch-ids, and a
+pick that needed conflict resolution gets a new one, so it reported 12 missing when 4 were —
+including commits whose added guard files were already sitting in the tree. Ancestry lies the
+same way (§ *Validate branches by content, not ancestry*). What answered it was file-level
+arithmetic on the tree diff: `src/data.rs` differed by 106 lines and the two candidate commits
+added 62 and 44; `src/scopes.rs` by 114 against 36 + 76. The four newest accounted for every
+differing file exactly, and nothing older did.
+
+⚠ **`2542c527` rewrites a formal-register entry to RETRACT a claim, and the auto-merge kept
+both halves.** D-own-13's second face had recorded *"binding `v[0]` to a local first does NOT
+cure it — a witness gap is cured by a name, an ownership gap is not"* as its discriminator, and
+that commit exists to say the discriminator was itself broken. Git merged the deletion of the
+old paragraph and the insertion of the new one as independent hunks, leaving the retracted
+claim standing beside its retraction and a `fn local` line orphaned outside its code fence.
+It merged **cleanly** — no marker, no conflict, no failing gate. `check_doc_drift.sh` and
+`doc_hygiene` both pass on a `formal/` entry that asserts a thing and its negation, because
+neither reads for coherence.
+
+**The general shape: a findings document is not mergeable the way code is.** Code has a
+compiler that rejects two contradictory definitions; prose has nothing. A `formal/` entry that
+supersedes an earlier reading is exactly the shape auto-merge mishandles, because a retraction
+is a DELETION whose meaning depends on the text it deletes. So a pick that touches `formal/`
+wants its region read, not its exit code checked — and this one was caught only by diffing the
+result against the source branch afterwards and finding one hunk that should not have been
+there.
+
+**`00e0e491` conflicted only in a comment**, and the code below the markers was identical:
+both checkouts derived the same leading-`OpFreeRef` skip independently. The two prose accounts
+disagree about WHICH spellings the unskipped free hid, and each is right about the tree it was
+measured on — whether a spelling reuses `__ncc_N` is a numbering property, which is the same
+reason loft#1119's symptom looked like *"loops"* (B6p). Naming a set that does not hold still
+is what both comments were doing, so the resolved comment states the rule and points at
+`1118b`, which is the measurement.
+
+All six guards — four ours, three theirs — pass on the merged tree, and the remaining
+difference against their branch is exactly our own work: the `parse_field` extraction, B6p's
+three `.base()` peels, and four guard files.
 
 #### C — process / skills
 
