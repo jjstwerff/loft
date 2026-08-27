@@ -2150,6 +2150,67 @@ closure shape that has been in the tree for months, reachable only because the t
 probe under `doc/claude/plans/**/probes/` **that no suite runs** — which is a second finding
 again: a whole directory of executable `.loft` files no gate reaches.
 
+#### B6o — the directory no gate reaches, measured: 857 files, two faults, both already filed (2026-08-27)
+
+B6n ended on a finding it did not work: `doc/claude/plans/**/probes/` holds executable `.loft`
+files that no suite runs, and loft#1113 was reachable only because an unrelated change happened
+to walk one.  That is now a measurement rather than an anecdote.
+
+**857 checked-in `.loft` files under `doc/`; 25 of them are named by a test.** The rest are the
+residue of finished investigations — they kept parsing and running long after their plan closed,
+and nothing would have said if one stopped.  `make doc-probes`
+(`scripts/doc_probe_sweep.sh`) runs each on the current build and reports the channel:
+
+| | count | reading |
+|---|---:|---|
+| clean exit | **798** | ran to completion; says nothing about the ANSWER (see the caveat below) |
+| refused (exit 1) | **55** | read: all legitimate — the `40-reshape-refusal/X*` probes assert exactly the diagnostic they get, four more are stale against the `spacial`→`spatial` rename (@PLN48), and `80-nested-closure` is refused by the restriction its own header documents |
+| hard fault | **4** | two environmental, two real |
+
+**The two real ones are loft#1113, and the second file is new to it.** Both
+`52-value-block-borrow-cleanup/probes/85-closure-returns-coalesce.loft` (the file the issue was
+filed from) and its sibling `86-prebind-closure.loft` SIGSEGV at `OpAppendText`.  86 is the
+WORKAROUND 85's header prescribes — it binds the element before the lambda instead of capturing
+the vector — so the two files together already showed that capture is not the axis, which is what
+the issue's matrix later established by moving it.  The other two faults are this box, not the
+language: a graphics fixture cdylib that registers no marshal bridge for two of its `#native`
+functions, and a path dependency on a `loft-ffi` directory that does not exist here.
+
+**The root cause, which the issue does not yet carry.** The fn-ref call ABI passes **exactly one**
+text work buffer for a text-returning target, and three sites say so — the injection in
+`parse_call_ref` (*"one work_text matches the canonical one return buffer per text fn ABI"*), the
+P227 ensure in `text_return` (*"callers always allocate exactly one buffer per text-returning
+fn-ref call"*), and the runtime reconciliation in `State::fn_call_ref`, whose two arms are
+0 buffers (pop the spurious one) and 1 (keep it).  But `TextDep::PromoteHidden` promotes one
+buffer per promotable text LOCAL, and a `return e ?? "fb"` body has two of them — the local and
+the `??` accumulator.  The callee then declares two hidden `RefVar(Text)` attributes where the
+caller supplied one.  Native makes this visible rather than fatal: it aliases the single binding
+into both parameters, `n___lambda_0(cell, _farg_0, _farg_0)`, which is the E0499.  The emitted
+lambda BODY is byte-identical to the working named-function twin, so the callee side was never
+wrong — only the call.
+
+⚠ **Not fixed here, because the sibling checkout is fixing it as this was written** — their tree
+carries `TextDep::SkipSecondLambdaBuf` plus a shared `lambda_holds_work_buf` predicate that also
+absorbs the duplicated inline check, edited minutes before this entry.  Same enforcement point
+this analysis reached independently: cap the lambda at one buffer, first asker takes it.
+
+##### What the sweep cannot say, and the two ways it said something wrong first
+
+⚠ **Crash channels only.** These files carry no expected values — that is what
+`scripts/probe-matrix` requires and what they do not have — so a clean run means *nothing
+faulted*, never *everything is correct*.  798 exits of 0 are 798 programs that finished, and the
+sweep is blind to every one that finished with the wrong answer.  It is a REPORT for the same
+reason: some checked-in probes fault ON PURPOSE (`parallel_read_parentvar_SIGSEGV.loft` is named
+for it), so a verdict would need a baseline this does not keep.
+
+B6n's rule — *a batch instrument needs a count you can sanity-check at a glance* — was applied
+here and caught both of this sweep's own errors, neither by reading the code:
+
+| | what reported wrong |
+|---|---|
+| **`.loft` is an extension AND a directory** | a run writes its cache to `.loft/` beside the script, so `find -name '*.loft'` matched 20 cache DIRECTORIES and scored every one as a failure.  The count said 877 where the tree holds 857 |
+| **a bound too TIGHT** | at 20s under six-way load, a 16s performance probe and a 28s parse were reported as crashes — five faults that were the harness.  This is B6n's *"a bound that is not a bound"* in mirror image, and the cure is not a bigger number: a run killed by either bound is now its own class, because the only honest verdict on one is *re-run it alone* |
+
 #### C — process / skills
 
 | item | state |
@@ -2158,6 +2219,7 @@ again: a whole directory of executable `.loft` files no gate reaches.
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
 | a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, six modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
+| a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
 
 #### B2 — open, and the owner's call
 

@@ -869,6 +869,19 @@ libraries-review:  ## Library review aid: which libraries owe a review + which o
 bug-review:  ## Monthly bug-review aid: which mechanism classes are still producing bugs
 	@python3 scripts/bug-review.py $(ARGS)
 
+# `doc/claude/plans/**/probes/` holds ~860 executable `.loft` files that no suite
+# reaches — the residue of finished investigations, still compiling and running
+# long after their plan closed.  loft#1113 (a months-old SIGSEGV) surfaced only
+# because an unrelated change happened to walk that directory and run one.
+# A REPORT, never a gate: some of these probes fault ON PURPOSE, and the sweep
+# scores crash channels only — it cannot say whether a probe computed the right
+# answer, because these files carry no expected values.
+#   make doc-probes                       # sweep doc/ on the release binary
+#   make doc-probes ARGS="--jobs 12"      # or --dir <subdir>, --tsv <out>
+doc-probes:  ## Run every checked-in .loft under doc/ and report the hard faults
+	@cargo build --release --bin loft
+	@./scripts/doc_probe_sweep.sh $(ARGS)
+
 api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop-in (CI: red, non-blocking)
 	@cargo build --release --bin loft
 	@rc=0; for base in tests/fixtures/api_compat/*.api-baseline; do \
