@@ -113,6 +113,11 @@ struct ManifestState {
     /// warm `--native` build P269s a reachable `#native` fn as "no implementation
     /// in any registered native crate" (the ssh-lib regression).
     native_crate_regs: Vec<(String, String)>,
+    /// Diagnostics the COLD parse produced, replayed on a warm load so a cached run says
+    /// exactly what an uncached one says.  Without this the parser does not run, so nothing
+    /// warns — the same program reports differently on its second run, and a library's CI
+    /// (`LOFT_DENY_WARNINGS`) turns on whether anyone had run the build before.
+    diagnostics: Vec<crate::diagnostics::DiagEntry>,
     /// Def-table index where USER definitions start (the stdlib def count when
     /// the user-file parse began).  A warm load restores stdlib + user defs in
     /// one table, so without this boundary the no-`main` test-fn fallback sees
@@ -183,6 +188,15 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
         native_crate_regs.push((krate.to_string(), pkg_dir.to_string()));
         next = lines.next();
     }
+    // Optional `diag <encoded>` headers: the diagnostics the cold parse emitted, one per
+    // line (see `DiagEntry::encode_for_cache`).  A line that will not decode fails the whole
+    // manifest — a bundle that cannot reproduce what the parse SAID must not be served,
+    // because the failure mode is silence and silence reads as "no problem".
+    let mut diagnostics = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("diag ")) {
+        diagnostics.push(crate::diagnostics::DiagEntry::decode_from_cache(rest)?);
+        next = lines.next();
+    }
     // #444 — optional `wbroute <loft_sym> <crate> <bridge_fn>` headers: the
     // `[wasm.bridge].routes` map.  The three tokens are a `#native` symbol, a
     // crate name, and a bridge fn — none contains a space — so `splitn(3)` is
@@ -222,6 +236,7 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
     // An empty source list is not a valid hit.
     any.then_some(ManifestState {
         program_relative,
+        diagnostics,
         native_lib_regs,
         native_crate_regs,
         user_def_start,
@@ -312,6 +327,12 @@ pub fn warm_load_program(
     // `extensions::load_all` gets an empty list on warm runs and every
     // `#native` call hits the "native function not loaded" stub.
     p.pending_native_libs = native_libs;
+    // Replay what the cold parse said.  The parser did not run, so these are the only
+    // diagnostics this run will have; `main` renders them through the same path a cold run
+    // uses, so `LOFT_ERRORS`, colour and the warnings-off filter all still apply.
+    for e in state.diagnostics {
+        p.diagnostics.restore_from_cache(e);
+    }
     p.native_lib_regs = state.native_lib_regs;
     // #444 — restore the `[wasm.bridge]` state the IR bundle does not carry.
     // `--html` codegen keys the host-import-extern skip AND the routed-call on
@@ -360,6 +381,12 @@ pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
     // `#native` fn as "no implementation in any registered native crate".
     for (krate, pkg_dir) in &p.data.native_packages {
         let _ = writeln!(lines, "ncrate {krate} {pkg_dir}");
+    }
+    // The diagnostics this parse produced, so a warm load can say what the cold run said.
+    // Order is preserved: the renderer's warning-cascade dedup and the caller's
+    // errors-only filter both depend on it.
+    for e in p.diagnostics.entries() {
+        let _ = writeln!(lines, "diag {}", e.encode_for_cache());
     }
     // #444 — persist the `[wasm.bridge]` state so a warm load reconstructs the
     // route table `--html` codegen reads (the IR bundle stores only the def

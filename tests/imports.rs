@@ -218,6 +218,12 @@ fn issue940_the_shadow_boundary_holds_on_both_backends() {
             .arg(&libs)
             .arg(&main)
             .env("LOFT_ERRORS", "compact")
+            // This asserts on WARNINGS, which the parser produces.  The whole-program cache
+            // is default-on and a warm bundle replays the diagnostics it recorded — correct,
+            // but this test writes both source files fresh each run and then runs the same
+            // program twice (once per backend), so the second invocation must re-derive the
+            // warnings from THIS source rather than serve any earlier bundle.
+            .env("LOFT_NO_CACHE", "1")
             .env("LOFT_TIMEOUT", "180")
             .output()
             .expect("failed to invoke the loft binary");

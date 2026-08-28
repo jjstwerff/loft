@@ -132,6 +132,99 @@ pub struct DiagEntry {
 impl DiagEntry {
     /// Format as a single-line string: `Level: message at file:line:col`
     #[must_use]
+    /// Encode the DISPLAY fields as one escaped line, for the whole-program cache manifest.
+    ///
+    /// A warm bundle load skips the parser, and diagnostics are a parser product — so
+    /// without carrying them a cached run is SILENT where the cold run warned, and the same
+    /// program run twice reports differently.  That is not a caching detail: a `warning`
+    /// gates a library's CI (`LOFT_DENY_WARNINGS`), so the verdict would depend on whether
+    /// anyone had run the build before.
+    ///
+    /// The STRUCTURED fields travel, not the rendered text, so a warm run re-renders through
+    /// the same path a cold one does — `LOFT_ERRORS=pretty|compact`, colour and the
+    /// warnings-off filter are all read at replay time and keep working.
+    ///
+    /// `fixes` is deliberately NOT carried: it feeds `loft fix`, which is its own subcommand
+    /// and re-parses, and `--explain` forces a cold parse for the same reason.  Everything a
+    /// normal run PRINTS is here.
+    #[must_use]
+    pub fn encode_for_cache(&self) -> String {
+        fn esc(s: &str) -> String {
+            s.replace('\\', "\\\\")
+                .replace('\n', "\\n")
+                .replace('\t', "\\t")
+        }
+        let lvl = match self.level {
+            Level::Debug => "D",
+            Level::Advice => "A",
+            Level::Warning => "W",
+            Level::Error => "E",
+            Level::Fatal => "F",
+        };
+        format!(
+            "{lvl}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.line,
+            self.col,
+            esc(self.code.unwrap_or("")),
+            esc(&self.file),
+            esc(self.suggestion.as_deref().unwrap_or("")),
+            esc(&self.message),
+        )
+    }
+
+    /// Rebuild an entry from [`encode_for_cache`].  `None` on any malformed line, which the
+    /// caller treats as a cache MISS rather than as an absent diagnostic — a bundle that
+    /// cannot reproduce what the parse said must not be served.
+    #[must_use]
+    pub fn decode_from_cache(line: &str) -> Option<Self> {
+        fn unesc(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut it = s.chars();
+            while let Some(c) = it.next() {
+                if c != '\\' {
+                    out.push(c);
+                    continue;
+                }
+                match it.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(other) => out.push(other),
+                    None => {}
+                }
+            }
+            out
+        }
+        let mut f = line.split('\t');
+        let level = match f.next()? {
+            "D" => Level::Debug,
+            "A" => Level::Advice,
+            "W" => Level::Warning,
+            "E" => Level::Error,
+            "F" => Level::Fatal,
+            _ => return None,
+        };
+        let line_no = f.next()?.parse::<u32>().ok()?;
+        let col = f.next()?.parse::<u32>().ok()?;
+        let code_s = unesc(f.next()?);
+        let file = unesc(f.next()?);
+        let sugg = unesc(f.next()?);
+        let message = unesc(f.next()?);
+        Some(Self {
+            level,
+            message,
+            file,
+            line: line_no,
+            col,
+            // `code` is `&'static str` because every producing site is a literal.  A decoded
+            // one has to become static somehow; leaking is bounded and correct here — the
+            // codes are a small frozen set and a warm load decodes each at most once per
+            // process, so this cannot grow with runtime.
+            code: (!code_s.is_empty()).then(|| &*Box::leak(code_s.into_boxed_str())),
+            suggestion: (!sugg.is_empty()).then_some(sugg),
+            fixes: Vec::new(),
+        })
+    }
+
     pub fn to_string_compact(&self) -> String {
         // @PLN102 arc-E E1 — `[code]` after the level names the precise,
         // frozen-identity diagnostic (rustc's `error[E0308]` shape); absent
@@ -298,6 +391,19 @@ impl Diagnostics {
         if level > self.level {
             self.level = level;
         }
+    }
+
+    /// Re-add an entry decoded from the whole-program cache, preserving the level
+    /// bookkeeping `add_at_coded` does — so a warm run's exit code and errors-only
+    /// filtering behave exactly as the cold run's did.
+    ///
+    /// Separate from `add_at_coded` because this is a REPLAY, not a new finding: the
+    /// entry is already complete (suggestion included) and must not be re-derived.
+    pub fn restore_from_cache(&mut self, entry: DiagEntry) {
+        if entry.level > self.level {
+            self.level = entry.level;
+        }
+        self.entries.push(entry);
     }
 
     /// Attach a machine-readable `suggestion` (a replacement token) to the

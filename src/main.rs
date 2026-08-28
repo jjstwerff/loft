@@ -8434,11 +8434,15 @@ fn main() {
     // @PLN11 arc E / D2b / track 1 — the whole-program startup cache mmaps the
     // ENTIRE parsed program (stdlib + lazily-loaded libs + user file) on a
     // repeated unchanged run, skipping all parsing (~3–3.6× faster).  It is now
-    // **default-on** (`cache::program_cache_enabled`): off only under
-    // `LOFT_NO_CACHE`, or automatically when running inside Cargo (`cargo run` /
-    // the test suite — the dev-safety + test-isolation default).  The narrower
-    // stdlib cache (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages
-    // just when the program cache is off.
+    // **default-on everywhere** (`cache::program_cache_enabled`): off only under
+    // `LOFT_NO_CACHE`, the explicit slow path.  It used to switch itself off inside
+    // Cargo and for any `target/` binary — which covered the whole test suite and every
+    // compiler-development run — as a proxy for invalidation that was incomplete: the
+    // program bundle folded in the binary's mtime and the STDLIB key did not.  Both do
+    // now, so a rebuild invalidates on the fact itself (measured: `touch target/debug/loft`
+    // makes the next run cold) and the proxy is gone.  The narrower stdlib cache
+    // (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages just when the program
+    // cache is off.
     // @PLN13 step 3 — AUTO-DETECT a beginner script (loose top-level statements, no
     // `fn main`) and desugar it to one run-once `fn main`, once, here; the parse below
     // uses this transformed source. `is_script` classifies every file the compiler

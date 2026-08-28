@@ -145,12 +145,7 @@ pub fn program_cache_enabled() -> bool {
     fn is_set(name: &str) -> bool {
         std::env::var_os(name).is_some_and(|v| !v.is_empty())
     }
-    cache_decision(
-        is_set("LOFT_NO_CACHE"),
-        is_set("LOFT_PROGRAM_CACHE"),
-        std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
-        running_a_dev_build(),
-    )
+    cache_decision(is_set("LOFT_NO_CACHE"))
 }
 
 /// Whether THIS binary is a development build — one living inside a Cargo
@@ -194,37 +189,29 @@ pub fn diagnostics_armed() -> bool {
         .any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()))
 }
 
-/// The cache-enable policy as a pure function of its three signals (so it is
-/// unit-testable without mutating process-global env).  Precedence, first match
-/// wins:
-/// 1. `no_cache` (`LOFT_NO_CACHE` set) → **off** — the explicit kill switch.
-/// 2. `program_cache` (`LOFT_PROGRAM_CACHE` set) → **on** — explicit force,
-///    overriding the cargo-context default below (the cache's own tests use it).
-/// 3. `under_cargo` (`CARGO_MANIFEST_DIR` present) → **off** — running inside a
-///    Cargo build / `cargo run` / `cargo test`.  This keeps the compiler-debug
-///    loop (dev-safety caveat) and the whole integration-test suite from
-///    writing/reading bundles, with no per-test wiring.
-/// 4. `dev_build` (this binary lives in a `target/{debug,release}/` tree) → **off** —
-///    the OTHER half of the same compiler-debug loop.  Rule 3 only catches an
-///    invocation Cargo made; running `target/debug/loft` by hand sets no variable, and
-///    that is what a developer iterating on the parser actually does.  Keying on the
-///    binary closes the gap the environment could not see
-///    ([`running_a_dev_build`]).
-/// 5. otherwise → **on** — the default-on win for installed / real invocations.
-// Four independent SIGNALS, not a state machine: each is a separate fact about the
-// invocation, and the precedence between them is the policy.  A struct of four bools
-// would only rename them; the truth table above is the readable form, and keeping it a
-// pure function is what makes it unit-testable without mutating process env.
-#[allow(clippy::fn_params_excessive_bools)]
+/// The cache-enable policy: **on unless `no_cache` (`LOFT_NO_CACHE`) asks for the slow
+/// path.**
+///
+/// `LOFT_PROGRAM_CACHE` no longer appears here and is accepted-and-ignored by callers:
+/// it existed to force the cache ON in the contexts that switched it off, and there are
+/// none left, so honouring it would be `program_cache || true` — which is what clippy
+/// called a logic bug, correctly.
+///
+/// **The quick path is the default and the slow path is reached for deliberately.**  It
+/// used to be the other way round for two contexts — a Cargo invocation and any binary
+/// living in a `target/` tree — which between them covered the entire test suite and
+/// every compiler-development run, so the 6× warm start (measured 0.06 s → 0.01 s) was
+/// off for exactly the people who run loft most.
+///
+/// Those two rules existed to stop a bundle written by one compiler being warm-loaded by
+/// the next, and that is now answered where it belongs: both cache keys fold in
+/// [`binary_signature_tag`], the running executable's mtime, so ANY rebuild — committed
+/// or not — invalidates. Disabling by context was a proxy for the invalidation being
+/// incomplete; with the fact itself checked, the proxy costs speed and buys nothing.
+/// `LOFT_NO_CACHE` remains for the case where you want the parse itself observed.
 #[must_use]
-fn cache_decision(no_cache: bool, program_cache: bool, under_cargo: bool, dev_build: bool) -> bool {
-    if no_cache {
-        return false;
-    }
-    if program_cache {
-        return true;
-    }
-    !under_cargo && !dev_build
+fn cache_decision(no_cache: bool) -> bool {
+    !no_cache
 }
 
 /// Compute the stdlib cache key: a SHA-256 over every input that can
@@ -254,6 +241,15 @@ pub fn stdlib_cache_key(stdlib_sources: &[(String, String)]) -> [u8; 32] {
     put(&[CACHE_FORMAT_VERSION]);
     put(LOFT_VERSION.as_bytes());
     put(BUILD_ID.as_bytes());
+    // The running binary's own build, exactly as [`build_signature`] folds it into a PROGRAM
+    // bundle.  `BUILD_ID` is the git HEAD hash and does not move across uncommitted edits, so
+    // without this a stdlib snapshot written by one compiler is warm-loaded by the next — which
+    // is not hypothetical: `CACHE_FORMAT_VERSION`'s own history records a `DbField` stride
+    // change (28 → 29) read back at the wrong stride and panicking in `ir_read`, caught only
+    // because someone remembered to bump the format byte by hand.  The two caches answer ONE
+    // question — *may a bundle written by another build be read by this one?* — so they fold in
+    // the same facts; the format byte goes back to being a second line of defence.
+    put(binary_signature_tag().as_bytes());
     put(target_triple().as_bytes());
     put(feature_signature().as_bytes());
     put(semantic_gate_signature().as_bytes());
@@ -1204,25 +1200,15 @@ mod tests {
 
     #[test]
     fn cache_decision_precedence() {
-        // (no_cache, program_cache, under_cargo, dev_build) → enabled?
-        // 1. kill switch wins over everything.
-        assert!(!cache_decision(true, true, false, false));
-        assert!(!cache_decision(true, false, true, false));
-        assert!(!cache_decision(true, false, false, true));
-        // 2. explicit force-on overrides both context defaults below (the cache's
-        //    own tests rely on this, and a dev build must still be able to exercise
-        //    the cache deliberately).
-        assert!(cache_decision(false, true, true, false));
-        assert!(cache_decision(false, true, false, true));
-        // 3. cargo context disables by default (test suite / cargo run).
-        assert!(!cache_decision(false, false, true, false));
-        // 4. a dev-tree binary disables too — the half rule 3 could not see, because
-        //    running `target/debug/loft` by hand sets no environment variable.  This
-        //    is the row whose absence let a cached bundle answer for a parser that had
-        //    just been edited.
-        assert!(!cache_decision(false, false, false, true));
-        // 5. plain installed invocation → default on.
-        assert!(cache_decision(false, false, false, false));
+        // 1. the explicit slow path.
+        assert!(!cache_decision(true));
+        // 2. THE QUICK PATH IS THE DEFAULT.  This row used to be two rows reading the
+        //    other way — a Cargo invocation and a `target/` binary each disabled the
+        //    cache — which between them covered the whole test suite and every
+        //    compiler-development run.  They were a proxy for incomplete invalidation;
+        //    `stdlib_cache_key` now folds in `binary_signature_tag`, so a rebuild
+        //    invalidates on the fact itself and the proxy is not needed.
+        assert!(cache_decision(false));
     }
 
     /// The dev-build probe must recognise a cargo build and NOT an installed one — the
