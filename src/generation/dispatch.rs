@@ -1350,7 +1350,13 @@ impl Output<'_> {
         // element whose container is a field DbRef (loft#664).
         if variables.owns_store(var) {
             let ref_buf_type_id = {
-                let var_tp = variables.tp(var).clone();
+                // @FR-L-Null — `base()`, because a nullable collection local owns the SAME
+                // store its dense twin owns (layout(τ) = layout(τ?)).  Asked bare, a
+                // `hash<S[k]>?` fell to the catch-all, got no `OpDatabase`, and the slot kept a
+                // NULL DbRef — which `keys.rs` then refused as *"a NULL DbRef reached a store
+                // accessor … the producer published an absent value where a real store was
+                // required"* the moment an element was written.
+                let var_tp = variables.tp(var).base().clone();
                 match &var_tp {
                     Type::Vector(elm_tp, _) => {
                         let elm_name = elm_tp.name(self.data);

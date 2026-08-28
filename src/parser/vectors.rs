@@ -4210,7 +4210,7 @@ impl Parser {
 /// (loft#909).
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
-        tp,
+        tp.base(),
         Type::Hash(_, _, _)
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)

@@ -1801,7 +1801,10 @@ impl State {
         // it returns the existing registered type id when the (content, key)
         // pair has been registered (every struct field of the same shape
         // does so via `fill_database`), otherwise registers a new one.
-        let tp = stack.function.tp(v).clone();
+        // @FR-L-Null — `base()`, because a nullable keyed local holds the SAME store as its
+        // dense twin (layout(τ) = layout(τ?)).  Asked bare, a `hash<S[k]>?` fell to the
+        // catch-all below and ICE'd.
+        let tp = stack.function.tp(v).base().clone();
         let tp_nr = match &tp {
             Type::Sorted(td, key, _) => {
                 let c = stack.data.def(*td).known_type();
