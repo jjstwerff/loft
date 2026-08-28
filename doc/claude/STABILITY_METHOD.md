@@ -309,6 +309,15 @@ in years, and the practice has to survive being picked up and put down.
    (the peel) and *"what value means absent in it?"* (the sentinel). Merging those would have
    been the early-abstraction failure; the split is the first product of the walk, and
    recording it is what stops the next reader re-deriving it.
+   ⚠ **The split can run INSIDE a shared helper, not only across sites.** A predicate every
+   site calls may itself be answering two questions, and then widening it is the wrong move —
+   it breaks the callers it currently serves. `data::is_dbref` answers *"does this occupy a
+   DbRef slot?"* (LAYOUT) for seventeen of its eighteen callers, where a `Type::Tuple`
+   correctly answers **no**; the eighteenth asked *"can this binding reach a store?"*
+   (BORROW), where a tuple answers **yes** through its elements. The cure was a sibling
+   predicate, not a ninth variant on the list. So before adding to a list, read what each
+   caller DOES with the answer.
+
 3. **Per question, find the ROOT — the one home.** Usually it already exists and the callers do
    not ask it. `vectors::is_collection` was already the declared home for *"which collections
    are store-backed?"*, and the broken site spelled its own `matches!(should, Type::Vector(…))`
@@ -381,6 +390,16 @@ in years, and the practice has to survive being picked up and put down.
 - **A/B every causal claim against a reverted build.** *"My change caused this"* and *"this was
   already broken"* look identical from one run. loft#1125 was called pre-existing only after the
   hunk was reverted and the errors came back byte-identical.
+- **A rule's own CHECKER can have a classifier hole, and it reports that as compliance.**
+  `scripts/o_proxy_check.py` gates @FR-O-Proxy's obligation and reported the set clean while
+  a site freed on the proxy with no override — because it classified by whether the test was
+  NEGATED, and `if !…is_empty() { continue; }` puts the conclusion on the fall-through. A
+  clean gate is a claim about the classifier as much as about the code, so verify BOTH
+  directions on each syntactic form it claims to cover: remove a known-good guard and confirm
+  it fires. Fixing the classifier also needs its own control — the first widening ("the rest
+  of the function") produced a false positive on a loop that only pushes to a list, and the
+  right region is what the keyword actually exits.
+
 - **Do not optimise the citation count.** `76 → 255` over unchanged duplication would read as
   progress while nothing had changed. The count is a position marker, not a target; what moves
   is the number of questions with one home. `doc_hygiene::every_rule_citation_resolves` keeps

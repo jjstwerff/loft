@@ -2265,15 +2265,16 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 643 | 288 | 4 | **351** |
+| 644 | 289 | 4 | **351** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
 picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
 added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
 again, then 642 · 270 until B6s peeled seven and merged one body away, then 644 · 281 until
-loft#1125 peeled the three sites that decided a nullable collection's LAYOUT — every count here
-is a snapshot of two moving checkouts, so re-run the tool rather than
+loft#1125 peeled the three sites that decided a nullable collection's LAYOUT, and 643 · 284 until
+B6v added `data::holds_dbref`, which asks through `.base()` and so lands on the seeing-through
+side — every count here is a snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
@@ -2925,6 +2926,143 @@ present-nullable controls so the sentinel write is not scored alone.
   harness that shows the keyed `BUG (#306)`, so the shape is covered elsewhere and the missing
   peel is LATENT.  Left alone deliberately: changing it would alter code with nothing to measure
   the change against, which is the trap the `is_keyed` lock below already documents.
+
+#### B6v — `@FR-O-Proxy` walked: one predicate, two questions, and the spelling that belongs to only one (2026-08-28)
+
+Next rule by `rule_tags.py dups` after `@FR-L-Null`, and the one with a **checkable
+obligation already written into it** — *"a site that FREES on the proxy MUST also consult
+@FR-O-Override"*.  Thirty-one sites read `tp.depend().is_empty()`.
+
+**The split (step 2 of the walk).**  The sites ask two questions, and the whole result turns
+on which:
+
+* **LAYOUT** — *"does this value occupy a DbRef slot?"*  `data::is_dbref`.  A tuple correctly
+  answers **no**: it is multi-slot and every transport path gives it its own channel — native's
+  `next_into` rather than `next_dbref`, tuple ops rather than `OpPutRef`, per-element frees
+  rather than one.  **Seventeen of the eighteen remaining `is_dbref` callers ask this**, read
+  one by one, and all seventeen are right — including two that look like exceptions and are
+  not: `scopes`'s return-source suppression excludes `Tuple` deliberately (*"TEXT and TUPLE
+  returns keep their own, mature free paths"*), and `data::owned_elements` is already inside
+  the tuple's decomposition, asking per element.
+* **BORROW** — *"can this binding REACH a store someone else owns?"*  A tuple answers **yes**,
+  through its elements.  `data::holds_dbref` is now the home.
+
+**The defect is one site asking the borrow question with the layout predicate.**
+`collections.rs`'s coroutine loop-variable arm binds the loop var as a borrow of the generator
+so the consumer never emits a per-iteration free — its own comment says *"⚠ A short list here
+does not skip a nicety — it inverts this arm"* — and it gated on `is_dbref`, which rejects
+`Type::Tuple`.  Measured on a four-pull generator over `iterator<(integer, S)>`: the
+generator's extensible **frame store took a whole-store free on every iteration**, four frees
+of one live store, the values surviving only because the allocator handed the slot straight
+back.  Only the exhaustion pull's free landed on a stale ref and raised `BUG (#306)`, which is
+the channel `tests/wrap.rs` Part A2 gates on and the only one that moves — values and exit
+status are identical either way.
+
+**Two homes retired, in one `if` block.**  Under the gate sat a `match` rebuilding each of the
+eight DbRef variants with the dep — a THIRD copy of a list the gate above had just been
+de-duplicated onto, with an `other => other` fall-through that binds the unspellable type
+unchanged while the arm reads as taken.  `Type::with_deps` is the declared home and its doc
+already states how a tuple holds a dep (no list of its own; the deps spread to the elements
+and `Type::depend` unions them back), so one call replaces the match and reaches nested tuples
+without naming them.
+
+⚠ **A short list is not the only way this hides — a NEGATED one is, and it defeated the
+rule's own checker.**  `scripts/o_proxy_check.py` reported the obligation set clean while
+`scopes::tuple_owned_elem_frees` freed a tuple element on empty element deps with no override
+consult.  Its discrimination 1 reads `!tp.depend().is_empty()` as *"this asks whether it is a
+borrow"* — true of a condition, false of an early-exit GUARD, where `if !…is_empty() {
+continue; }` puts the free on the FALL-THROUGH and the site concludes ownership exactly as a
+positive test would.  The check now classifies by what the guard falls through to, and bounds
+the region by what the keyword actually exits (`continue` leaves the enclosing loop body,
+`return` the function) — taking the rest of the function for both accused a loop that only
+pushes to a list.  It fires on both forms and is clean with both vetoes present, proven by
+removing each in turn.
+
+**What the walk reports, not the verdict.**  It **converged**: every cell the fix moved was a
+tuple spelling of one question, the controls (bare `S`, bare `vector`, a scalar tuple, plain
+and captured collection iteration) never moved, and the sibling that asks the borrow question
+with the layout predicate — `scopes.rs`'s loft#1029 argument-witness lift — was **probed and
+held** on both backends.  One root, three homes retired (gate, attach, free site).  The rules
+covered every cell: `@FR-O-Proxy` says the proxy needs the override, `@FR-Col-Store` says
+which types reach a store, so nothing here was a design call.
+
+**Three findings FILED rather than folded in** — each a different root, each reproducing
+byte-identically on a build with this fix reverted:
+
+* **loft#1130** — `yield [<keyed-collection literal>]` hands back a corrupted collection:
+  `hash` counts words instead of records (`5n − 3` for a 5-field element) and loses every key
+  lookup; `index` / `trie` / `spatial` report `len == 1` for three elements; `sorted` and
+  `vector` survive.  Binding the identical literal to a local and yielding the name is correct
+  in all twelve cells, which is what isolates the route.  It also revises a claim in
+  `formal/IMPLEMENTATIONS.md` § The DbRef set — *"a `spatial` yield is correct anyway"* holds
+  for the bound route that was probed, and `coroutine-yields-a-dbref-value.loft` passes for
+  exactly that reason: every one of its generators binds first.
+* **loft#1131** — iterating a captured `vector<(…)>` inside a closure reads no elements
+  (silently `0`; SIGSEGV when the tuple holds a struct; `--native` cannot compile it).  The
+  adjacent @PLN93 capture arm spells its own three-variant list, so this looked like the same
+  root — until the control separated them: **a tuple of SCALARS fails too**, and it reaches no
+  store, so no ownership story covers it.
+* **loft#1132** — `--native` emits invalid Rust rather than refusing for a yield type with no
+  transport channel (a tuple with a `text` or nested-tuple element, or a tuple yield in a loop
+  body): `tuple_kinds` answers `None` and the selection falls into an `as i64` catch-all.  The
+  clear `compile_error!` the struct/vector-in-loop case already gets is the fix shape.
+
+* **loft#1134** — a tuple with a NULLABLE struct element, read by iterating a collection,
+  comes back one field high: the first field answers with the second's value and the last
+  reads uninitialised bytes (`n=111 tag=4294967200` where `n=11 tag=111` was stored).  The
+  same element by INDEX is correct, and so is the same tuple as a LOCAL — which is the axis
+  `a-nullable-tuple-element-owns-like-its-dense-twin.loft` never moves: it covers both
+  positions, the absent case and four element types, and every one of its tuples is a local.
+  Found while checking whether this walk's `Optional` peel changed behaviour for a nullable
+  yield element.  It did not; the defect is older and has no generator in it.
+
+**Four reds cleared that were not findings, all from the previous commit on this branch.**
+`cargo fmt` and `cargo clippy` were both failing — an inserted function had landed BETWEEN
+`to_string_compact`'s doc-comment and its `#[must_use]`, silently moving both onto the new
+function, which the compiler warned about and nothing read.
+
+The third was the gate's own subject: **`error_messages::baselines_are_locked_in` had been
+failing since the diagnostics-in-cache commit**, whose whole claim is *"a cached run says what
+an uncached one says"*.  Two things a normal run PRINTS did not travel, and both come off a
+diagnostic's `fixes`, which that commit deliberately dropped:
+
+* the once-per-run *"N diagnostics above suggest what to write instead"* note counts entries
+  with non-empty `fixes`, so a warm run dropped the line;
+* **every `fix` line under `--explain`** — two cold, none warm.  The justification for
+  dropping them was *"`--explain` forces a cold parse"*, and `startup_cache.rs` has no
+  `explain` awareness at all.  The claim was never true; nothing had measured it.
+
+`fixes` now travel — kind, title, condition, edit and both catalogue handles.  An `Edit` is a
+position into source and the bundle is invalidated whenever a source changes, so a replayed
+edit points where it pointed.  Guarded by
+`arc_e_program_cache::a_warm_run_renders_the_same_diagnostics_including_their_fixes`, which
+compares the two runs' stderr as EQUALITY and separately asserts the cold run produced the
+thing being compared — two empty stderrs are equal too.  Falsified by re-encoding zero fixes:
+it fails naming the missing note line.
+
+**The fourth red is the same commit's other half, and it is put back rather than fixed.**
+That commit also made the program cache default-on EVERYWHERE, removing the two exemptions
+(a Cargo invocation, a `target/` binary) on the argument that they were a proxy for
+incomplete invalidation now that both keys fold in `binary_signature_tag`.  The argument is
+right about rebuilds and incomplete about everything else: a warm load skips the PARSE, so
+every parse-time effect has to be carried, and the placement decision for a
+`placement = "remote"` library is not.  Measured cold-then-warm on one unchanged tree —
+correct refusal, then *"native function not loaded"* — and the flip is what put the whole
+test suite on that path, so `placement_remote::a_server_that_stops_answering_is_an_error_
+not_a_hang` failed.
+
+⚠ **The sibling checkout reached the same conclusion independently and got there first**:
+`main` carries the exemptions, its head is *"…and the cache flip deferred"*, and **loft#1129**
+is the open issue — *"the program-cache default cannot flip on until the warm path reproduces
+every parse-time effect"*.  So this branch was carrying a decision main had already reversed,
+and the fix is to match main.  The `binary_signature_tag` half is orthogonal and stays.
+
+Two method notes from how long that took to see.  It presented as *"the native cdylib is
+missing or stale"*, which reads as a build problem and sent me through a `cargo clean -p loft
+--release` first — that DID fix a separate stale-artifact fault, which is the trap: a real
+cure for the wrong cause.  What actually separated them was running the SAME tree twice and
+watching cold pass and warm fail; and the reference build (this branch's own HEAD) showed the
+identical cold/warm split, which is what said the defect was older than today's edits.
 
 #### C — process / skills
 

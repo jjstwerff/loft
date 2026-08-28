@@ -17,15 +17,26 @@
 # WHAT IS AND IS NOT A VIOLATION — the three discriminations this check makes, each of
 # which was a false positive before it made them:
 #
-#   1. `!tp.depend().is_empty()` is a DIFFERENT QUESTION — "is this a borrow?" — and needs
-#      no veto, because a borrow is not freed either way.  Only the positive form concludes
-#      ownership.  (8 of the 28 sites are this form.)
+#   1. `!tp.depend().is_empty()` is USUALLY a DIFFERENT QUESTION — "is this a borrow?" —
+#      and needs no veto, because a borrow is not freed either way.  But the SYNTAX does
+#      not settle it: when the negated test guards an early exit (`continue` / `return`),
+#      the free is on the FALL-THROUGH and the site concludes ownership exactly as a
+#      positive test would.  Reading the `!` alone is what hid `scopes.rs`'s
+#      `tuple_owned_elem_frees`, which frees a tuple element on empty element deps and
+#      consulted no override — the coroutine loop variable it fired on was a borrow of the
+#      generator's frame.  So: negated AND early-exit is a positive site.
 #   2. The free must be in the region the condition GATES — the block an `if` opens, or the
 #      uses of a `let` it binds — not merely nearby.  A 20-line window bled across function
 #      boundaries and accused `dispatch::materialises_element`, a classifier that frees
 #      nothing.
 #   3. Comments are not code.  Matching `OpFreeRef` in prose accused
 #      `codegen.rs`'s element-materialise arm, whose comment DISCUSSES a pre-Set free.
+#   4. An early-exit guard INVERTS the sense of its test (discrimination 1), so its region is
+#      what it FALLS THROUGH to, not the block it opens — and only as far as the keyword
+#      actually reaches: `continue` leaves the enclosing loop body, `return` the function.
+#      Taking the rest of the function for both accused `scopes.rs`'s
+#      `null_arm_record_sources` loop, whose body only pushes to a list while the frees sit
+#      far below in the same very long function.
 #
 # A REPORT that exits 1 on a violation, so it can gate.  Verdicts and the rule map live in
 # doc/claude/formal/IMPLEMENTATIONS.md § The variable-lifetime map.
@@ -56,6 +67,42 @@ def negated(line, pos):
     while i > 0 and (line[i - 1].isalnum() or line[i - 1] in "_.()[]*&:"):
         i -= 1
     return i > 0 and line[i - 1] == "!"
+
+
+EARLY_EXIT = re.compile(r"^\s*(continue|return\b)")
+
+
+def early_exit_guard(region):
+    """Discrimination 4: does this gated block do nothing but leave?
+
+    A `if !…is_empty() { continue; }` concludes ownership on the FALL-THROUGH, so the
+    negated spelling is a positive site and its region is what comes after, not the block.
+    Returns the keyword, which decides HOW FAR the fall-through reaches, or None.
+    """
+    body = [l for l in code_only(region).split("\n")[1:] if l.strip() not in ("", "}", "{")]
+    if not body:
+        return None
+    kinds = {m.group(1) for l in body for m in [EARLY_EXIT.match(l)] if m}
+    return kinds.pop() if len(kinds) == 1 and len(kinds) == len(body) else None
+
+
+def fallthrough_region(lines, n, fn_end, kind):
+    """What an early-exit guard at line `n` gates by falling through.
+
+    A `continue` leaves the enclosing LOOP BODY, so the free it would authorise has to be
+    in that body; a `return` leaves the function.  Taking the rest of the function for both
+    accused `scopes.rs`'s `null_arm_record_sources` loop, whose body only pushes to a list
+    while the frees sit far below in the same (very long) function.
+    """
+    if kind == "return":
+        return "\n".join(lines[n:fn_end])
+    depth, j = 0, n
+    while j < fn_end:
+        depth += lines[j].count("{") - lines[j].count("}")
+        j += 1
+        if depth < 0:
+            break
+    return "\n".join(lines[n:j])
 
 
 def gated_region(lines, n, fn_end):
@@ -113,12 +160,17 @@ for path in sorted(glob.glob(os.path.join(ROOT, "src", "**", "*.rs"), recursive=
         if line.lstrip().startswith(("//", "///")):
             continue
         for m in PROXY.finditer(code_only(line)):
-            if negated(line, m.start()):
-                neg += 1
-                continue
-            pos += 1
             fn_end = next((s for s in starts if s > n), len(lines))
             stmt, region = gated_region(lines, n, fn_end)
+            if negated(line, m.start()):
+                # Discrimination 4: an early-exit guard inverts the sense, so the site
+                # concludes ownership on what it FALLS THROUGH to.
+                kind = early_exit_guard(region)
+                if kind is None:
+                    neg += 1
+                    continue
+                region = fallthrough_region(lines, n, fn_end, kind)
+            pos += 1
             if FREE.search(code_only(region)) and "skip_free" not in code_only(stmt):
                 viol.append((f"{rel}:{n + 1}", line.strip()[:74]))
             elif verbose:

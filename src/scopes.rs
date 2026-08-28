@@ -1304,10 +1304,28 @@ fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32>
 /// underflows (loft#1004's corpus script panics with "attempt to subtract with
 /// overflow").  Text elements are released with the frame and are not the leak
 /// this exists for.
-fn tuple_owned_elem_frees(elems: &[Type], v: u16, data: &Data) -> Vec<Value> {
+fn tuple_owned_elem_frees(
+    elems: &[Type],
+    v: u16,
+    data: &Data,
+    function: &crate::variables::Function,
+) -> Vec<Value> {
     let mut out = Vec::new();
     for &(_offset, idx) in crate::data::owned_elements(elems).iter().rev() {
-        if !elems[idx].depend().is_empty() || matches!(elems[idx].base(), Type::Text(_)) {
+        // @FR-O-Override vetoes the proxy at every site that frees on it, and this is one:
+        // the element test concludes "this element owns its store" from an empty dep list,
+        // which is @FR-O-Proxy and unsound alone.  `OpFreeRef(TupleGet(v, i))` releases
+        // storage reached through `v`, so a binding the parser marked never-free is
+        // never-free here too — and a tuple has no dep list of its own to say it through.
+        //
+        // The test reads NEGATED, guarding a `continue`, so the free is on the FALL-THROUGH
+        // and the site concludes ownership exactly as a positive test would.  Reading the
+        // `!` as "this asks whether it is a borrow" is what kept this site out of
+        // `scripts/o_proxy_check.py`'s obligation set entirely.
+        if function.is_skip_free(v)
+            || !elems[idx].depend().is_empty()
+            || matches!(elems[idx].base(), Type::Text(_))
+        {
             continue;
         }
         out.push(Value::Call(
@@ -4259,7 +4277,7 @@ impl Scopes {
             && !value.reads_var(ov)
         {
             let elems = elems.clone();
-            let frees = tuple_owned_elem_frees(&elems, v, data);
+            let frees = tuple_owned_elem_frees(&elems, v, data, function);
             if !frees.is_empty() {
                 transition_free = Some(Value::Insert(frees));
             }
@@ -5951,7 +5969,7 @@ impl Scopes {
             // T1.3: tuple scope exit — free owned elements in reverse index order.
             if let Type::Tuple(elems) = function.tp(v) {
                 let elems = elems.clone();
-                ls.extend(tuple_owned_elem_frees(&elems, v, data));
+                ls.extend(tuple_owned_elem_frees(&elems, v, data, function));
                 continue;
             }
             if matches!(function.tp(v).base(), Type::Text(_)) {
