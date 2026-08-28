@@ -3920,6 +3920,31 @@ impl Parser {
                 self.dn4_checked_cast(code, &dst_base, &src_base);
                 return true;
             }
+            // `@FR-L-Null-Tag` — a tagged `__nullable<S>` flowing into a NULLABLE target has to
+            // keep its absence.  The dense unwrap this would otherwise recurse into projects
+            // the `Some` payload without consulting the discriminant, and a sub-ref into an
+            // absent slot is a perfectly valid `DbRef` — so `null` arrived as a record of
+            // zeroes at every function boundary, in the argument position and the return
+            // position alike (loft#1138).  Read through the tag, which answers the reference
+            // null sentinel: what `S?` means once it is out of the slot.
+            //
+            // Only the NULLABLE target takes this route.  A DENSE `S` target keeps the bare
+            // payload sub-ref, because `(N-Store)` has already told it that it cannot hold
+            // absence and because several sites downstream recognise that unwrap by its SHAPE —
+            // `control.rs::tail_is_nullable_unwrap` (the #306 view-return materialise) and
+            // `vectors.rs::new_record_field_op` both match `Value::Call(OpGetField, …)`, and an
+            // `If` is not that.  Splitting on the target keeps one spelling per question.
+            if !self.first_pass
+                && let Type::Enum(syn, true, _) = is_type
+                && let Type::Reference(struct_d, _) = inner.base()
+                && self.data.def(*syn).name
+                    == format!("__nullable<{}>", self.data.def(*struct_d).name())
+            {
+                let syn = *syn;
+                let src = is_type.clone();
+                *code = self.emit_nullable_slot_read(syn, code.clone(), &src);
+                return true;
+            }
             return self.convert(code, is_type, inner);
         }
         if let Type::Optional(inner) = is_type {
@@ -9090,7 +9115,8 @@ impl Parser {
                 Value::Int(enum_kt),
             ],
         );
-        Some(self.emit_nullable_slot_read(syn, slot))
+        let stored = self.data.attr_type(tuple_d_nr, i);
+        Some(self.emit_nullable_slot_read(syn, slot, &stored))
     }
 
     /// The tagged write for tuple element `i`, or `None` when that element is not a tagged
@@ -9363,7 +9389,12 @@ impl Parser {
     /// The discriminant test is spelled exactly as the inline null test is
     /// (`operators.rs::enum_null`), so a slot written by one and read by the other cannot
     /// disagree about which values are present.
-    pub(crate) fn emit_nullable_slot_read(&mut self, syn: u32, slot_ref: Value) -> Value {
+    pub(crate) fn emit_nullable_slot_read(
+        &mut self,
+        syn: u32,
+        slot_ref: Value,
+        src_tp: &Type,
+    ) -> Value {
         let Some(struct_d) = self.nullable_payload_struct(syn) else {
             return slot_ref;
         };
@@ -9376,20 +9407,89 @@ impl Parser {
             return slot_ref;
         }
         let payload_pos = i32::from(self.database.position(some_kt, "payload"));
-        let disc = self.cl("OpGetEnum", &[slot_ref.clone(), Value::Int(0)]);
+        // The result is a VIEW into whatever store the slot lives in, so it inherits that
+        // store's deps.  Building it with `Deps::none()` instead said the argument borrows
+        // nothing, the @P290 bracket then saw no store to protect, `scan_args` stopped lifting
+        // the argument to a name, and the caller kept the callee's minted return without ever
+        // freeing it — one record per call (loft#1105's leak gate is the only channel that
+        // scores that; every value was identical either way).
+        let dense = Type::Reference(struct_d, crate::data::Deps::none()).with_deps_of(src_tp);
+        let result_tp = Type::Optional(Box::new(dense));
+        // The slot is read TWICE — once for the discriminant, once for the payload — so an
+        // expression that is not free to repeat is named first.  A projection chain
+        // (`OpGetField(v, …)`, the tuple-element route) IS free to repeat: it is address
+        // arithmetic with no store in it.  Anything else can be a whole `??` block, whose
+        // default arm BUILDS a value, and evaluating that twice mints two stores and orphans
+        // one.
+        if Self::is_repeatable_place(&self.data, &slot_ref) {
+            let pick = self.nullable_pick(slot_ref.clone(), slot_ref, payload_pos, struct_kt);
+            return pick;
+        }
+        let named = self.vars.work_refs(src_tp, &mut self.lexer);
+        if named == u16::MAX {
+            return slot_ref;
+        }
+        // The name BORROWS — it holds a `DbRef` into a store the container owns — so the
+        // scope-exit sweep must not free it, and it allocates nothing of its own.
+        self.vars.set_skip_free(named);
+        self.vars.mark_inline_ref(named);
+        let pick = self.nullable_pick(Value::Var(named), Value::Var(named), payload_pos, struct_kt);
+        v_block(
+            vec![v_set(named, slot_ref), pick],
+            result_tp,
+            "nullable_slot_read",
+        )
+    }
+
+    /// `if <discriminant is set> { <payload> } else { <the reference null sentinel> }` — the
+    /// body of [`Self::emit_nullable_slot_read`], with the slot's address supplied twice
+    /// because the tag and the payload are two reads of it.
+    fn nullable_pick(
+        &mut self,
+        for_tag: Value,
+        for_payload: Value,
+        payload_pos: i32,
+        struct_kt: u16,
+    ) -> Value {
+        let disc = self.cl("OpGetEnum", &[for_tag, Value::Int(0)]);
         let as_int = self.cl("OpConvIntFromEnum", &[disc]);
         let is_absent = self.cl("OpEqInt", &[as_int, Value::Int(0)]);
         let present = self.cl("OpNot", &[is_absent]);
         let payload = self.cl(
             "OpGetField",
             &[
-                slot_ref,
+                for_payload,
                 Value::Int(payload_pos),
                 Value::Int(i32::from(struct_kt)),
             ],
         );
         let absent = self.cl("OpNullRefSentinel", &[]);
         v_if(present, payload, absent)
+    }
+
+    /// Is this value free to evaluate TWICE — a variable, or a projection chain rooted at one?
+    ///
+    /// A projection is address arithmetic: it reads a `DbRef` out of a place and allocates
+    /// nothing, so repeating it costs a few instructions.  Everything else is assumed to have
+    /// an effect worth keeping to one evaluation — a block that BUILDS a value is the case
+    /// that matters, since repeating it mints a second store nothing then frees.
+    fn is_repeatable_place(data: &crate::data::Data, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Var(_) => true,
+            // A projection has two IR spellings and both are address arithmetic: the CALL
+            // (`OpGetField`, `OpGetVector`, …) and `TupleGet`, which reads one element off a
+            // stack tuple.  Answering only the first would stash a value that was free to
+            // repeat — harmless, but it is the same half-answer the `spellings` screen exists
+            // to find, so both are here.
+            Value::TupleGet(_, _) => true,
+            Value::Call(d, args) => {
+                crate::use_analysis::is_projection_op(data, *d)
+                    && args
+                        .first()
+                        .is_some_and(|a| Self::is_repeatable_place(data, a))
+            }
+            _ => false,
+        }
     }
 
     /// Is this element type the DENSE spelling of `syn`'s payload — i.e. a value parsed

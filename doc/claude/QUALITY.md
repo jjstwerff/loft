@@ -469,7 +469,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 325 | 308 | **17** |
+| 326 | 309 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -1383,7 +1383,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 38 | **5** | 33 |
+| 39 | **6** | 33 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -3176,6 +3176,64 @@ variants before `make ci` rather than after — but the durable fix is the one a
 [[make-ci-not-find-problems-before-push]]: **anchor an insertion on the doc block, never on the
 `fn` line**.  Repeating a recorded lesson the day after recording it says the note was filed
 where it is read after the fact, not where the decision is made.
+
+#### B6x — loft#1138: the tag was built on the way in and dropped on the way out (2026-08-28)
+
+B6w gave a tagged slot a writer.  This is the other half, and it was filed as a separate root
+for a reason that held up: it reproduces with no tuple in sight.
+
+An ABSENT `S?` arrived at a callee, and came back from a `-> S?`, as a PRESENT record of zeroes.
+`convert`'s `Enum(__nullable<S>) → Reference(S)` arm unwraps by sub-referencing the `Some`
+payload and never reads the discriminant — and a sub-ref into an absent slot is a perfectly
+valid `DbRef`, so absence had nowhere to go.  Every in-function position was already right
+(tested in place, bound to a local, assigned to a declared `S?`, discharged with `??`), which is
+exactly why it survived: the obvious cells all pass.
+
+**The fix is one arm, and its narrowness is the whole design.**  It sits at `convert`'s
+`Optional` peel, so only a NULLABLE target reads through the tag.  A DENSE `S` target keeps the
+bare payload sub-ref, because two sites downstream recognise that unwrap BY SHAPE —
+`tail_is_nullable_unwrap` (the #306 view-return materialise) and `new_record_field_op` — and an
+`If` is not a `Value::Call`.  Splitting on the target keeps one spelling per question instead of
+minting a third that both would have to learn.
+
+⚠ **Two wrong causes before the right one, and the IR had said it in one line the whole time.**
+The change broke loft#1105's leak gate (12 records, every value correct), and I explained it
+twice from the mechanism instead of reading the diff:
+
+1. *"The slot is read twice, so a `??` default builds twice."* REAL — `emit_nullable_slot_read`
+   used its `slot_ref` for both the tag and the payload — and fixed, and **not the cause**: the
+   leak was identical afterwards.
+2. *"`view_root_slots` cannot walk the new shape."* Also wrong; it already walks `If`,
+   `OpNullRefSentinel` and projection chains, and a `None` answer is FINE — it is what makes
+   `scan_args` LIFT the argument, which is loft#1105's own cure.
+3. The actual cause, visible in `diff` of the two IRs: `r(1):ref(S1105g)?` became
+   `r(1):ref(S1105g)["v"]?` and `OpFreeRef(r(1))` vanished.  I had built the result type with
+   `Deps::none()`.  The value is a VIEW into the container's store, so with no deps the @P290
+   bracket saw nothing to protect, the argument was never lifted to a name, and the caller kept
+   the callee's minted return unfreed.  `with_deps_of(src_tp)` is the fix.
+
+The rule that would have saved two rounds: **a new IR shape in argument position inherits its
+source's deps**, and the check is whether the `__lift_1` bind is still emitted.  Both wrong
+causes were mechanism stories told from the code; the diff was one command away and decided it.
+
+⚠ **And the guard reports nothing under either obvious invocation.**
+`1105-an-unnameable-argument-borrow-witness.loft` has no `main`, so `--interpret` runs nothing,
+and `--tests` does not leak-check at all — only `tests/wrap.rs` does.  Reproducing it standalone
+meant appending a `main` that calls all eleven `test_*` functions.  That is
+[[loft-tests-flag-skips-leak-gate]] and [[guard-entry-point-decides-what-runs]] meeting in one
+file, and it is worth knowing before hunting a leak the suite reports and no hand-run does.
+
+**A screen caught a real half-answer in the new code, which is what they are for.**
+`is_repeatable_place` asks *"is this free to evaluate twice?"* and answered it for the CALL
+spelling of a projection only, so `ir_walker_audit.py spellings` moved 38 · 5 → 39 · 5.  A
+`TupleGet` is a projection too and is equally free to repeat; the arm is one line and the count
+now reads 39 · 6 · 33.  The cost of the omission was only a needless stash, but it is the same
+shape as B6g's finding and it was found by running the screen rather than by reasoning.
+
+Guard: `tests/scripts/1138-an-absent-nullable-struct-stays-absent-across-a-call.loft`, falsified
+`1|1|none|none` → `0|0|none|none` on both backends.  It carries the four in-function controls
+and a PRESENT half in every position, because a fix that answered "absent" everywhere would pass
+an absent-only cell list.
 
 #### C — process / skills
 

@@ -194,11 +194,20 @@ reassignment, and a nested tuple.**  `Parser::emit_nullable_slot_write` and
 `operators.rs::enum_null` does so a slot cannot be written by one and read by the other.  Guard:
 `tests/scripts/1134-a-nullable-tuple-element-is-stored-behind-its-tag.loft`.
 
-One position still drops the tag and is filed rather than fixed: crossing a FUNCTION BOUNDARY.
-`convert`'s `Enum(__nullable<S>) → Reference(S)` arm projects the payload without consulting the
-discriminant, so an absent value arrives — and returns — present (**loft#1138**).  It is not a
-tuple question at all: a `vector<S?>` element and a plain struct field reproduce it, which is
-why it sits with the null model rather than here.
+One position dropped the tag on the way OUT and was fixed straight after (**loft#1138**):
+crossing a FUNCTION BOUNDARY.  `convert` unwrapped a `__nullable<S>` by sub-referencing the
+`Some` payload without consulting the discriminant, and a sub-ref into an absent slot is a valid
+`DbRef` — so an absent value arrived at a callee, and returned from a `-> S?`, as a present
+record of zeroes.  Not a tuple question at all: a `vector<S?>` element and a plain struct field
+reproduce it identically, so the axis is the boundary and the fix sits in `convert`.
+
+The split there is worth keeping in mind when reading the unwrap: only a NULLABLE target reads
+through the tag.  A DENSE `S` target keeps the bare payload sub-ref, because `(N-Store)` has
+already ruled that it cannot hold absence, and because two sites downstream recognise that
+unwrap by its SHAPE — `tail_is_nullable_unwrap` (the #306 view-return materialise) and
+`new_record_field_op` both match `Value::Call(OpGetField, …)`.  One spelling per question, rather
+than a third spelling both would have to learn.  Guard:
+`tests/scripts/1138-an-absent-nullable-struct-stays-absent-across-a-call.loft`.
 
 > **D-tup-4 — OPENED 2026-08-26 (loft#1102); the VECTOR half CLOSED the same day, the KEYED
 > half OPEN — a tuple literal ALIASED a heap local while both sibling constructors copied it.**
