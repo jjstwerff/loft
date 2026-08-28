@@ -8320,24 +8320,24 @@ fn collect_adopted_block_results(ir: &Value, freed: &HashSet<u16>, result: &mut 
     });
 }
 
-/// After scope analysis, assert that every Reference variable that should be
-/// freed has a corresponding `OpFreeRef` somewhere in `ir`.
+/// Debug-only check: refuse to compile a text-returning function that frees a
+/// local text on a path that REACHES a `Return` handing that same local back.
+/// The returned Str would dangle into freed `String` memory — the interpreter
+/// occasionally gets away with it (if the underlying allocator hasn't reused
+/// the slot), but native codegen materialises this as
+/// `let _v = String::new(); … free(_v); return &_v;` and trips Rust's UB check.
 ///
-/// A variable "should be freed" when:
-/// - Its type is `Reference(_, dep)` with `dep.is_empty()`
-/// - It is not a function parameter (scope > 0)
-/// - It is not marked `skip_free`
-/// - It is not in the function's return-type dependencies
+/// The judgement is per-`Return` and path-sensitive, and it has to be both.
+/// A function with more than one `return` legitimately frees the locals it is
+/// NOT handing back, and that free sits inside the branch returning something
+/// else: `if n > 0 { free(ta); return tb; } return ta;` is correct code, and
+/// the free of `ta` never runs on the path that returns `ta`.  Asking instead
+/// "is this var freed anywhere in the body?" answers that shape as a dangling
+/// return.  A branch that always returns cannot fall through, so its frees are
+/// carried on its own path only and are dropped at the join.
 ///
-/// Only compiled in debug builds; the check panics rather than emitting a
-/// diagnostic so that the failure is visible immediately during development.
-/// Debug-only check: when a text-returning function's `Return` source Str
-/// is backed by a local text variable `v`, refuse to compile if any
-/// `OpFreeText(v)` appears before that `Return`.  The returned Str would
-/// dangle into freed `String` memory — the interpreter occasionally gets
-/// away with it (if the underlying allocator hasn't reused the slot), but
-/// native codegen materialises this as `let _v = String::new(); … free(_v);
-/// return &_v;` and trips Rust's UB check.
+/// Every `Return` is judged, not only the body's tail — an early return is
+/// exactly where a second text buffer puts its free.
 ///
 /// Companion to `check_ref_leaks` above — that check catches owned-ref leaks
 /// at compile time; this one catches use-after-free on return.
@@ -8350,38 +8350,236 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
     if free_text_nr == u32::MAX {
         return;
     }
-
-    // Collect every text var freed anywhere in the body (order-agnostic —
-    // we only care whether the var *is* freed, not when).  If the var is
-    // both the Return source and freed locally, codegen emits the free
-    // before the return value lands at the caller, leaving a dangling
-    // Str.  False negatives are fine (later walker will be stricter);
-    // false positives would misfire on valid patterns, so keep the
-    // criteria narrow.
     let mut freed: HashSet<u16> = HashSet::new();
-    collect_freed_vars(ir, &[free_text_nr], &mut freed);
-    if freed.is_empty() {
-        return;
-    }
-
-    let ret_var = returned_var_null_unified(ir, data.def_nr("OpNullRefSentinel"));
-    if ret_var == u16::MAX {
-        return;
-    }
-    if !matches!(function.tp(ret_var), Type::Text(_)) {
-        return;
-    }
-    assert!(
-        !freed.contains(&ret_var),
-        "[check_text_return] fn '{}' frees local text '{}' (var_nr={ret_var}) \
-         before its Return — the returned Str would dangle into freed \
-         String memory.  scopes.rs must leave '{}' for the caller to free.",
+    check_text_return_path(
+        ir,
+        &mut freed,
+        free_text_nr,
+        data.def_nr("OpNullRefSentinel"),
+        function,
         fn_name,
-        function.name(ret_var),
-        function.name(ret_var),
     );
 }
 
+/// True when control cannot fall out of `node` — every path through it returns.
+/// A free inside such a node is released on that path only, so it can never
+/// reach a `Return` that follows the node.
+///
+/// Answers `false` for anything it cannot prove, including `Loop` (which
+/// normally leaves via `Break`).  That is the safe direction: an unproven
+/// terminator keeps its frees in the continuation set, which can only make the
+/// check stricter, never blinder.
+#[cfg(debug_assertions)]
+fn always_returns(node: &Value) -> bool {
+    match node.unspan() {
+        Value::Return(_) => true,
+        // Anything after a `Return` in the same block is dead, so one
+        // top-level `Return` terminates the whole block.
+        Value::Block(bl) => bl.operators.iter().any(always_returns),
+        Value::Insert(ops) => ops.iter().any(always_returns),
+        Value::If(_, t, f) => always_returns(t) && always_returns(f),
+        _ => false,
+    }
+}
+
+/// Walk `node` in execution order carrying `freed` — the text vars already
+/// released on the path reaching it — and assert each `Return` hands back a
+/// var this path has not freed.  See `check_text_return` for the rule.
+#[cfg(debug_assertions)]
+fn check_text_return_path(
+    node: &Value,
+    freed: &mut HashSet<u16>,
+    free_text_nr: u32,
+    null_nr: u32,
+    function: &Function,
+    fn_name: &str,
+) {
+    let walk = |n: &Value, set: &mut HashSet<u16>| {
+        check_text_return_path(n, set, free_text_nr, null_nr, function, fn_name);
+    };
+    match node.unspan() {
+        Value::Call(d_nr, args) if *d_nr == free_text_nr => {
+            if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
+                freed.insert(*v);
+            }
+        }
+        Value::Return(inner) => {
+            // The return expression runs BEFORE the return itself, so a free
+            // inside it counts against this very return.
+            walk(inner, freed);
+            let ret_var = returned_var_null_unified(inner, null_nr);
+            if ret_var != u16::MAX && matches!(function.tp(ret_var), Type::Text(_)) {
+                assert!(
+                    !freed.contains(&ret_var),
+                    "[check_text_return] fn '{}' frees local text '{}' (var_nr={ret_var}) \
+                     on the path reaching its Return — the returned Str would dangle into \
+                     freed String memory.  scopes.rs must leave '{}' for the caller to free.",
+                    fn_name,
+                    function.name(ret_var),
+                    function.name(ret_var),
+                );
+            }
+        }
+        Value::If(cond, t, f) => {
+            // The condition runs on both paths; each arm gets its own.
+            walk(cond, freed);
+            let mut then_freed = freed.clone();
+            walk(t, &mut then_freed);
+            let mut else_freed = freed.clone();
+            walk(f, &mut else_freed);
+            // Only an arm that can fall through hands its frees to what follows.
+            if !always_returns(t) {
+                freed.extend(then_freed);
+            }
+            if !always_returns(f) {
+                freed.extend(else_freed);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                walk(op, freed);
+            }
+        }
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            for op in ops {
+                walk(op, freed);
+            }
+        }
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            for a in args {
+                walk(a, freed);
+            }
+        }
+        Value::Iter(_, create, next, extra_init) => {
+            walk(create, freed);
+            walk(next, freed);
+            walk(extra_init, freed);
+        }
+        Value::Set(_, inner)
+        | Value::TuplePut(_, _, inner)
+        | Value::Drop(inner)
+        | Value::Yield(inner) => walk(inner, freed),
+        _ => {}
+    }
+}
+
+/// The `check_text_return` walker's own gate.  Every cell is one step from
+/// another, and the pair that matters is `free_then_return_same_var_in_arm`
+/// (must fire) against `free_in_arm_that_returns_another_var` (must not) —
+/// they differ only in WHICH var the arm hands back, which is exactly the
+/// distinction the path rule exists to draw.
+///
+/// Compiled only where the check itself is: `[profile.dev.package.loft]`
+/// strips debug assertions from ordinary builds, so these run in the
+/// `-C debug-assertions=on` CI gate that runs the check.
+#[cfg(all(test, debug_assertions))]
+mod text_return_path_tests {
+    use super::check_text_return_path;
+    use crate::data::{Deps, Type, Value, v_block, v_if};
+    use crate::variables::Function;
+    use std::collections::HashSet;
+
+    const FREE_TEXT: u32 = 7;
+    const NULL_SENTINEL: u32 = 8;
+    const TA: u16 = 0;
+    const TB: u16 = 1;
+
+    fn vars() -> Function {
+        let mut f = Function::new("f", "t.loft");
+        f.add_temp_var("ta", &Type::Text(Deps::none()));
+        f.add_temp_var("tb", &Type::Text(Deps::none()));
+        f
+    }
+
+    fn free(v: u16) -> Value {
+        Value::Call(FREE_TEXT, vec![Value::Var(v)])
+    }
+    fn ret(v: u16) -> Value {
+        Value::Return(Box::new(Value::Var(v)))
+    }
+
+    /// Run the walker over a function body; panics exactly as the check does.
+    fn check(body: Vec<Value>) {
+        let ir = v_block(body, Type::Text(Deps::none()), "body");
+        let mut freed = HashSet::new();
+        check_text_return_path(&ir, &mut freed, FREE_TEXT, NULL_SENTINEL, &vars(), "probe");
+    }
+
+    /// Straight-line use-after-free: the plainest shape the check exists for.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_then_return_same_var() {
+        check(vec![free(TA), ret(TA)]);
+    }
+
+    /// The free and the `return` of the same var sit in ONE arm.  Skipping a
+    /// returning arm wholesale would blind the check here, so this is the cell
+    /// that keeps the fall-through rule honest.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_then_return_same_var_in_arm() {
+        check(vec![
+            v_if(
+                Value::Var(TB),
+                v_block(vec![free(TA), ret(TA)], Type::Never, "then"),
+                Value::Null,
+            ),
+            ret(TB),
+        ]);
+    }
+
+    /// A free on an arm that FALLS THROUGH still reaches the tail return —
+    /// the arm not returning is the whole difference from the cell below.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_in_arm_that_falls_through() {
+        check(vec![
+            v_if(
+                Value::Var(TB),
+                v_block(vec![free(TA)], Type::Void, "then"),
+                Value::Null,
+            ),
+            ret(TA),
+        ]);
+    }
+
+    /// The shape the path rule was written for: the arm frees `ta` and returns
+    /// `tb`, so the free never runs on the path that returns `ta`.  Correct
+    /// code — the check must stay silent (loft#1113's two-text-local lambda).
+    #[test]
+    fn free_in_arm_that_returns_another_var() {
+        check(vec![
+            v_if(
+                Value::Var(TB),
+                v_block(vec![free(TA), ret(TB)], Type::Never, "then"),
+                Value::Null,
+            ),
+            ret(TA),
+        ]);
+    }
+
+    /// Both arms return, each freeing the local it does not hand back.
+    #[test]
+    fn each_arm_frees_what_it_does_not_return() {
+        check(vec![v_if(
+            Value::Var(TB),
+            v_block(vec![free(TA), ret(TB)], Type::Never, "then"),
+            v_block(vec![free(TB), ret(TA)], Type::Never, "else"),
+        )]);
+    }
+}
+
+/// After scope analysis, assert that every Reference variable that should be
+/// freed has a corresponding `OpFreeRef` somewhere in `ir`.
+///
+/// A variable "should be freed" when:
+/// - Its type is `Reference(_, dep)` with `dep.is_empty()`
+/// - It is not a function parameter (scope > 0)
+/// - It is not marked `skip_free`
+/// - It is not in the function's return-type dependencies
+///
+/// Only compiled in debug builds; the check panics rather than emitting a
+/// diagnostic so that the failure is visible immediately during development.
 #[cfg(debug_assertions)]
 fn check_ref_leaks(
     ir: &Value,

@@ -256,6 +256,7 @@ does not belong on a PR, however cheap it is.**
 | **daily 05:45** | `lib-main-health` — published libs against their own `main` | `schedule` |
 | **Mondays 06:00** | `repro-build` — reproducible-build check (weekly, not nightly) | `schedule` |
 | **library repos** | one `library-ci` per repo, all callers of `library-ci-reusable.yml` | `push: main`, `pull_request` |
+| **on demand only** | `ci-probe` (where CI time goes) and `gate-probe` (re-runs the debug-assertions sweep and the browser UI gate on a real 4-vCPU runner, each beside a cell proving it can still FAIL). Measurement, never gates, never on a PR | `workflow_dispatch`, or push to the `ci-probe` / `gate-probe` branch |
 
 ## Where the time goes — measured
 

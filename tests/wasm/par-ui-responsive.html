@@ -3,10 +3,17 @@
 <!-- @PLN117 E1 — off-main-thread UI responsiveness.  A requestAnimationFrame
      loop advances an animation and runs one heavy par() per frame for a fixed
      window.  With the Web Worker pool each frame's par finishes ~N x faster, so
-     the rAF loop delivers many more frames (the UI stays responsive) than the
-     sequential fallback, whose long per-frame par starves the frame loop.
-     Reports frames delivered + worst inter-frame gap.  ?threads=P (0 =
-     sequential), ?work, ?elems, ?window (ms). -->
+     the main thread is BLOCKED for less of every frame — that shorter block is
+     what "the UI stays responsive" means, and it is what this page measures.
+
+     It reports both halves.  `block` is the time spent inside compile_and_run,
+     i.e. the span the main thread cannot service input or paint: it is decided
+     by the work, so it measures par and nothing else.  `frames` and `gap` are
+     how often rAF actually fired, which the BROWSER decides — a page it treats
+     as hidden gets rAF at ~1 Hz however fast the work underneath is, so a frame
+     count reads that throttle rather than the compute.  Both are reported;
+     only `block` is safe to gate on.  ?threads=P (0 = sequential), ?work,
+     ?elems, ?window (ms). -->
 <meta charset=utf-8><title>loft par UI responsiveness</title>
 <style>#box{width:24px;height:24px;background:#3a7;position:absolute}</style>
 <pre id=out>running…</pre><div id=box></div>
@@ -33,6 +40,7 @@ fn main() { data = [0]; for i in 1..${elems} { data += [i]; } total = 0; for a i
     if (!self.crossOriginIsolated) return report('FAIL coi=false');
     if (P > 0) await startLoftWorkers(wasm, P, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });
     let frames = 0, last = performance.now(), maxGap = 0, value = '?';
+    let workMs = 0, maxBlock = 0;
     const start = last;
     const frame = () => {
       const now = performance.now();
@@ -40,10 +48,18 @@ fn main() { data = [0]; for i in 1..${elems} { data += [i]; } total = 0; for a i
       if (frames > 0 && gap > maxGap) maxGap = gap;  // skip the first (init) gap
       frames++;
       box.style.left = (frames % 40) * 6 + 'px';     // advance the animation
+      // The main thread is blocked for exactly this span — the measurement the
+      // gate reads, and the only one the browser's frame scheduling cannot move.
+      const b0 = performance.now();
       const res = JSON.parse(compile_and_run(JSON.stringify([{name:'main.loft', content: SRC}])));
+      const block = performance.now() - b0;
+      workMs += block;
+      if (block > maxBlock) maxBlock = block;
       value = (res.output||'').match(/total=(\d+)/)?.[1] || value;
       if (performance.now() - start < WINDOW) requestAnimationFrame(frame);
-      else report(`E1 threads=${P} window=${WINDOW} frames=${frames} fps=${(frames/(WINDOW/1000)).toFixed(1)} max_gap_ms=${maxGap.toFixed(0)} value=${value}`);
+      else report(`E1 threads=${P} window=${WINDOW} frames=${frames} fps=${(frames/(WINDOW/1000)).toFixed(1)}`
+        + ` max_gap_ms=${maxGap.toFixed(0)} avg_block_ms=${(workMs/frames).toFixed(1)}`
+        + ` max_block_ms=${maxBlock.toFixed(0)} work_ms=${workMs.toFixed(0)} value=${value}`);
     };
     requestAnimationFrame(frame);
   } catch (e) { report('caught=' + ((e && e.message) || String(e))); }
