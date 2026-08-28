@@ -348,6 +348,24 @@ in years, and the practice has to survive being picked up and put down.
   doc *claimed* they agree. Tested: 9 types × 3 routes, 27 cells, all agreeing. That claim is
   now measured, and no one has to re-derive it. A walk that finds nothing has still converted a
   claim into a fact.
+- **Do NOT file the de-duplication itself.** The fix a walk exists to make — one home adopted,
+  a hand-spelled list retired, and whatever that list's disagreement was causing — is the WORK,
+  not a report about the work. Filing it floods the tracker with items whose only reader is the
+  person already fixing them, and buries the issues that need someone else. The two streams
+  split on exactly this line: this one walks rules and de-duplicates, the sibling checkout keeps
+  the issue list short and lands fixes as PRs, so an issue is a HANDOFF and costs someone's
+  attention. If nobody but you will act on it, it is a commit message, not an issue.
+
+  ⚠ **That obligates a MERGE CADENCE, and the obligation is on this stream.** Not filing the
+  de-duplication only works if the de-duplication is on `main` where the other stream can build
+  on it. Held on an unmerged branch it is worse than an issue: every ticket in the area then
+  needs this branch as its base, so their work becomes stacking rather than shipping, and their
+  throughput drops to this branch's merge clock. **Land a walk when the walk finishes** — one
+  rule, one PR — rather than accumulating a tranche. The counter-pressure is real (a PR that
+  keeps receiving commits never goes green), which is the argument for small walks, not for
+  long branches.
+  ⚠ And it does NOT mean file less overall: everything a walk turns up that needs a different
+  pair of hands is their SUPPLY, and a walk typically produces more of those than it fixes.
 - **Findings that are not this defect get FILED, not folded in.** The `@FR-L-Null` walk turned
   up a nullable `index<T[k]>?` that fails layout outright (loft#1125) and a latent unpeeled arm
   in the generic `FromNull` loop. Neither belongs in the fix; both belong on the record. Folding
