@@ -107,6 +107,74 @@ fn main() {
     );
 }
 
+/// loft#1147 — a failed `assert_eq` reports BOTH sides, HALTS the run, and names the CALL
+/// SITE.  All three are invisible in a passing cell, and all three are the properties that
+/// make it usable as a test assertion at all:
+///
+/// * both sides, because the whole reason it exists is that `assert(got == want, …)` says
+///   only what was got;
+/// * halting with a non-zero exit, because a version that printed would turn every converted
+///   assertion into a silent pass;
+/// * the caller's position, because `assert_eq` is a stdlib function that forwards to
+///   `assert` — without the injection every failure would name `01_code.loft`, the forwarder
+///   rather than the test that broke.
+#[test]
+fn assert_eq_reports_both_sides_and_halts_at_the_call_site() {
+    let source = "\
+fn main() {
+  print(\"before\\n\");
+  assert_eq(2 + 2, 5, \"math is broken\");
+  print(\"after\\n\");
+}
+";
+    let (stdout, stderr, code) = run_loft_snippet("rt_assert_eq", source);
+    assert_eq!(
+        code,
+        Some(1),
+        "a failed assert_eq must exit 1, not pass quietly"
+    );
+    assert!(
+        stdout.contains("before") && !stdout.contains("after"),
+        "execution must halt AT the failing assert_eq; got stdout: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("assertion failed: math is broken: got 4, want 5"),
+        "stderr must name BOTH sides; got: {stderr:?}"
+    );
+    // Line 3 of the snippet — NOT a position inside `default/01_code.loft`.
+    assert!(
+        stderr.contains("--> ") && stderr.contains(":3:") && !stderr.contains("01_code.loft"),
+        "the position must be the CALL SITE, not the stdlib forwarder; got: {stderr:?}"
+    );
+}
+
+/// loft#1147 — the label is optional, and dropping it leaves the two values as the whole
+/// message.  A source position already qualifies them, so the bare form is the one worth
+/// having; this pins that it does not degrade to an empty or colon-prefixed message.
+#[test]
+fn assert_eq_without_a_label_reports_the_two_values_alone() {
+    let source = "fn main() {\n  assert_eq(7, 9);\n}\n";
+    let (_stdout, stderr, code) = run_loft_snippet("rt_assert_eq_bare", source);
+    assert_eq!(code, Some(1), "a failed assert_eq must exit 1");
+    assert!(
+        stderr.contains("assertion failed: got 7, want 9"),
+        "the bare form must read as the two values alone; got: {stderr:?}"
+    );
+}
+
+/// loft#1147 — `assert_ne` is the mirror, and names the value the two sides SHARE (naming
+/// both would print it twice).
+#[test]
+fn assert_ne_names_the_shared_value() {
+    let source = "fn main() {\n  assert_ne(5, 5, \"must differ\");\n}\n";
+    let (_stdout, stderr, code) = run_loft_snippet("rt_assert_ne", source);
+    assert_eq!(code, Some(1), "a failed assert_ne must exit 1");
+    assert!(
+        stderr.contains("assertion failed: must differ: both sides are 5"),
+        "assert_ne must name the shared value; got: {stderr:?}"
+    );
+}
+
 /// Phase 4 step 4.13 — failed `assert(test, "msg")` produces an
 /// `AssertionFailed` typed error rendered through the same renderer.
 /// Successful prints from earlier in the program still reach stdout

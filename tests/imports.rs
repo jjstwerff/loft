@@ -724,3 +724,51 @@ fn issue1094_import_form_decides_a_name_clash_and_a_clash_names_both_sites() {
          `expected Frame, got Frame` unreadable: {clash}"
     );
 }
+
+/// loft#1147 — a LIBRARY's bounded generic must not swallow the consumer's own struct.
+///
+/// A type variable's bound stubs are keyed by its NAME (`t_1T_to_text`), and that is the same
+/// string a user `struct T` mangles to.  A library declaring `fn render<T: Printable>(v: T)`
+/// therefore minted a stub that the consumer's `"{T { … }}"` interpolation resolved by name —
+/// and monomorphisation could not resolve it for a struct that is not the type variable, so
+/// every such value rendered as EMPTY, on both backends, with no diagnostic.
+///
+/// This is the RUNTIME half, so it runs the binary rather than reading diagnostics: the
+/// defect renders `[]` where `[{z:9}]` is correct, and neither is an error.  The library call
+/// beside it is the control — it must keep working, since the fix distinguishes the stub's
+/// owner rather than disabling the stub.
+#[test]
+fn a_library_s_bounded_generic_does_not_swallow_a_same_named_struct() {
+    let dir = std::env::temp_dir().join("loft_tv_bound_collision");
+    let libdir = dir.join("lib");
+    std::fs::create_dir_all(&libdir).expect("create temp lib dir");
+    std::fs::write(
+        libdir.join("tvboundlib.loft"),
+        "pub fn render<T: Printable>(v: T) -> text { \"<{v}>\" }\n",
+    )
+    .expect("write lib");
+    let main = dir.join("main.loft");
+    std::fs::write(
+        &main,
+        "use tvboundlib;\nstruct T { z: integer }\nfn main() { println(\"[{T{z:9}}] {render(4)}\"); }\n",
+    )
+    .expect("write main");
+    let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+        .arg("--interpret")
+        .arg("--lib")
+        .arg(libdir.as_os_str())
+        .arg(main.as_os_str())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        stdout.contains("[{z:9}]"),
+        "the consumer's own `struct T` must render its fields, not empty; got stdout {stdout:?} stderr {stderr:?}"
+    );
+    assert!(
+        stdout.contains("<4>"),
+        "CONTROL: the library's bounded generic must keep working; got stdout {stdout:?}"
+    );
+}

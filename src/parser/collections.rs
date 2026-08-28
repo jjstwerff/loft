@@ -1853,6 +1853,21 @@ use #count instead"
         if self.data.def_type(d_nr) != DefType::Struct {
             return None;
         }
+        // loft#1147 — a TYPE VARIABLE's stub existing is not evidence that THIS function may
+        // call it.  Type-variable bounds are keyed by NAME, so every generic in the program
+        // spelling its variable `T` shares one `T` definition, and one bounded generic
+        // anywhere mints the stub for all of them.  `call_op` asks `has_bound_for_method` for
+        // exactly this reason — its comment names the leak — while this site, whose own doc
+        // says *"AND that variable's bound supplies a `to_text` method"*, only checked that
+        // the stub existed.  Adding an `Equatable + Printable` generic to the stdlib is what
+        // made that observable: `fn show<T>(v: T) -> text { "{v}" }` went from refused to
+        // accepted with nothing in the user's file changed.
+        //
+        // A CONCRETE struct keeps @PLN99 Arc B's widened behaviour untouched — its `to_text`
+        // is its own and there is no bound to consult.
+        if self.data.is_type_var_placeholder(d_nr) && !self.has_bound_for_method("to_text", d_nr) {
+            return None;
+        }
         let tv_name = self.data.def(d_nr).name().to_string();
         if tv_name.is_empty() {
             return None;
@@ -1860,6 +1875,20 @@ use #count instead"
         let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, "to_text");
         let stub_nr = self.data.def_nr(&stub_name);
         if stub_nr == u32::MAX {
+            return None;
+        }
+        // loft#1147 — the mangled key spells a NAME, not a type.  `t_1T_to_text` is minted
+        // for the stdlib's type VARIABLE `T` and is the same string a user `struct T` mangles
+        // to, so a name-only lookup hands one the other's method.  Adding the stdlib's first
+        // `Printable`-bounded generic is what made that reachable: every user struct named `T`
+        // began formatting as EMPTY, because `{t}` routed through a bound stub that
+        // monomorphisation could not resolve for it.
+        //
+        // The stub's own `self` parameter carries the answer — `set_bound_stub_signature`
+        // substitutes `Self` with the holder — so require it to name THIS definition.  A
+        // struct's genuine `t_<LEN><Type>_to_text` names itself and still routes; a stub
+        // belonging to a same-named type variable does not.
+        if !matches!(self.data.attr_type(stub_nr, 0), Type::Reference(r, _) if r == d_nr) {
             return None;
         }
         // Classify the stub's params by TYPE, not arity.  A `to_text` may or may

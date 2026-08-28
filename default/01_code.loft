@@ -1754,6 +1754,48 @@ pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T> {
 }
 #pure
 
+// --- Assertions that report both sides ---
+// Assert that two values are equal, naming BOTH of them when they are not.
+//
+// `assert(got == want, "…")` puts the expected value in the CONDITION, so a failure says
+// what was got and leaves the reader to recover what was wanted by reading the expression.
+// This says both.  Works on any type that is `Equatable` (op ==) and `Printable`
+// (to_text) — every built-in scalar, and a user type defining both.
+//
+// Failure behaves exactly as `assert` does, because it IS `assert`: the run aborts (and in
+// `--production` logs an error instead), and the reported position is the CALLER's, not
+// this function's.  The file and line are injected by the compiler; do not pass them
+// manually.
+//
+// The type variable is spelled `AssertValue` and NOT `T` on purpose.  A type variable's
+// bound stubs are keyed by its NAME (`t_1T_to_text`), so every generic in the program
+// spelling its variable `T` shares one namespace with a user `struct T` — and a bound
+// declaring a method as common as `to_text` or `op ==` then blocks that struct from
+// defining its own.  Measured: with these bounds on `T`, every user struct named `T`
+// formatted as EMPTY and could not declare `to_text` at all.  loft#1153 tracks the
+// collision itself; until it closes, a stdlib generic bound to a common method needs a
+// name no one would write.
+pub fn assert_eq < AssertValue: Equatable + Printable > (got: AssertValue, want: AssertValue, what: text, file: text, line: integer) {
+  if got != want {
+    if what == "" {
+      assert(false, "got {got.to_text()}, want {want.to_text()}", file, line);
+    } else {
+      assert(false, "{what}: got {got.to_text()}, want {want.to_text()}", file, line);
+    }
+  }
+}
+// Assert that two values DIFFER, naming the value both sides share when they do not.
+// The mirror of assert_eq; same bounds, same failure behaviour, same position injection.
+pub fn assert_ne < AssertValue: Equatable + Printable > (got: AssertValue, want: AssertValue, what: text, file: text, line: integer) {
+  if got == want {
+    if what == "" {
+      assert(false, "both sides are {got.to_text()}", file, line);
+    } else {
+      assert(false, "{what}: both sides are {got.to_text()}", file, line);
+    }
+  }
+}
+
 // --- Field iteration support types ---
 
 // Wraps a field value in a type-discriminated enum for compile-time field iteration.

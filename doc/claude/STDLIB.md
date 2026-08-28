@@ -475,7 +475,26 @@ implementation.
 | `print(v: text)` | Writes `v` to standard output without a newline. |
 | `println(v: text)` | Writes `v` followed by a newline. |
 | `assert(test: boolean, message: text)` | Panics with `message` if `test` is false. In production mode (`--production` CLI flag), writes an `error` log entry instead of aborting. |
+| `assert_eq<T: Equatable + Printable>(got: T, want: T, what: text = "")` | Panics if the two differ, naming **both** sides: `what: got 4, want 5`. The label is optional. |
+| `assert_ne<T: Equatable + Printable>(got: T, want: T, what: text = "")` | Panics if the two are equal, naming the value they share: `what: both sides are 5`. |
 | `panic(message: text)` | Immediately terminates execution with `message`. In production mode, writes a `fatal` log entry instead of aborting. |
+
+**`assert_eq` says what `assert` cannot.** `assert(got == want, "…")` puts the expected value
+in the CONDITION, so a failure reports what was got and leaves the reader to recover what was
+wanted by reading the expression back. `assert_eq` reports both, on any type that is
+`Equatable` (defines `op ==`) and `Printable` (defines `to_text`) — every built-in scalar, and
+a user type defining the two:
+
+```loft
+assert_eq(total, 42, "the running total");
+// error: assertion failed: the running total: got 41, want 42
+//   --> game.loft:12:3
+```
+
+It IS `assert` underneath, so the halt behaves identically — same rendering, same
+`--production` demotion to an `error` log entry, same non-zero exit — and the position
+reported is the CALL SITE's, not the stdlib's. Drop the label where the two values and the
+source position already say enough: `assert_eq(total, 42)` reports `got 41, want 42`.
 
 **What a halt looks like.** `assert` and `panic` are the two explicit halt statements, and
 they render the same way as each other on every backend: the message and the program's own
