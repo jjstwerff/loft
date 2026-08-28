@@ -3365,6 +3365,72 @@ calls the rest clean.  The first matrix built for this read `hash` broken and th
 correct; each kind in its own file read all five broken.  Every loop in the guard now
 allocates and drops a collection between the call and the assertion.
 
+#### B7a — `@FR-Col-Store` walked: the residual a previous walk measured as harmless, and the shape its probe could not reach (2026-08-29)
+
+Fourth rule walked, and the first where the walk started from **another walk's own record**
+rather than from `dups`.  `IMPLEMENTATIONS.md` checklist #2 already carried the finding —
+`Reference | Vector | Enum(_, true, _)` at 43 sites, *"⚠ the short list is a BUG source"* — and
+its § The DbRef set closed 2 of them, cleared 34 by sentinel, and left one residual written
+down:
+
+> ⚠ `coroutine_layout::next_operands` is still short — six of the eight, no `Radix`/`Trie`.
+> Probed: a `spatial` yield is correct anyway, so it does not bite.  The guard now carries a
+> spatial cell to keep it that way.
+
+**That record is accurate and the residual bit anyway**, which is the transferable half.  The
+short list lives in `YieldSlot::classify`, which runs only on the MEMBERS of a yielded tuple.
+A **bare** `spatial` yield never reaches it — so the probe and the hole never overlapped, and
+the cell added to keep it honest could not have moved.  `yield (a_spatial, 7)` and
+`yield (a_trie, 7)` were refused by `--native` for programs `--interpret` ran correctly.
+
+> **"Probed and it does not bite" is a claim about the SHAPE probed.**  Recording a residual
+> as harmless is worth doing; recording *which shape was probed* is what makes the record
+> re-checkable, and is the line the guard header now carries.
+
+Cured by asking `data::is_dbref` — the declared home, whose own doc had already predicted this
+exact failure (*"a short list is not a compile error anywhere — it routes a handle down the
+scalar path — so call this function rather than restating it"*).  Third site of one list: two
+were folded on when the original bug was fixed, and `classify` is the residual they left.
+
+**The guard carries all five keyed kinds, not the two that failed**, because the member set and
+the bare-yield set are the same set — naming two would leave the next kind to be found the same
+way.
+
+⚠ **`make falsify` cannot score this guard, and the tool says so misleadingly.**  It runs the
+file without `--tests`, and the file has no `main`, so its interpret row executes nothing and
+reads `0 asserts` on BOTH trees — which the summary renders as *"INERT — the control and this
+tree answer the same"* and then *"NOT falsified"*, while the native row says `falsified`.  That
+interpret row is **vacuous, not agreement**.  Measured by hand against a real `d1220a1b`
+worktree instead: `loft test --native` 12 passed → 12 FAILED.  A cached falsify control also
+failed to load its `default/` library, producing a `1 failed` line that looked like a
+measurement and was not — both traps are recorded in the guard's annotation.
+
+**Two findings filed rather than folded in**, both pre-existing on `d1220a1b`:
+
+* **loft#1148** — a `vector`-member and a keyed-member tuple yield in ONE program make
+  `--native` emit invalid Rust for the WHOLE file (`E0425`).  Order-independent, two generators
+  is enough, from a plain `main` as well as under `--tests`; six keyed generators are fine.
+  This is why the guard has **no `vector` tuple-member cell** despite it being the natural
+  control — it would lock that failure here.  Reading (not yet measured) says the cause is a
+  **type-id mint**, not a channel: `t{N}` is `type_id_ref`'s rendering of a `known_type`, and
+  those bindings are emitted by `output_init`, so `E0425` is a store-type variable referenced
+  without its declaration.  That fits the whole-FILE blast radius, which a per-call-site cast
+  fault would not have.
+* **loft#1149** — a `--native` yield refusal naming a `Vec`-keyed collection emits a malformed
+  `compile_error!`: the rendered name embeds quoted key names (`spatial<P,["x", "y"]>`), so the
+  quote ends the literal and the comma becomes a second macro argument.  `trie` escaped it only
+  because its type carries ONE `String` key.  `refusal_text`'s doc states the false premise
+  (*"contains no quote or backslash"*) — true of the template, false of the name spliced into
+  it.  Fixed by the sibling checkout.
+
+**A drift found by reading and not yet measured**, recorded so it is not lost: `output_init`'s
+`field_keyed` set detects a field-referenced keyed type with `Parts::Sorted | Hash | Index` —
+three of the five — while the `bare_io` arms directly below handle all five.  A `spatial` or
+`trie` FIELD would therefore be emitted both inline and in the bare stream, which the comment
+there says swaps the container's field source-order.  Whether it bites is unmeasured; the
+asymmetry is real either way and is the same rule drifting at the `Parts` level rather than the
+`Type` level.
+
 #### C — process / skills
 
 | item | state |
