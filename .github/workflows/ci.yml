@@ -520,15 +520,40 @@ jobs:
       # the suite — no concurrent re-resolution.  Same command + manifest
       # `auto_build_native` uses, so the artefacts match.
       - name: Pre-build native lib packages (avoid concurrent auto_build — G3)
-        # All four monorepo native libs (web, server, graphics, imaging)
-        # have been extracted to their respective chunk repos as of
-        # @PLAN12 5b — no monorepo lib/<pkg>/native/ paths remain.
-        # Native pre-build now happens via `auto_build_native` when the
-        # tests pull in registry-installed cdylibs (which build into
-        # ~/.loft/build-cache/<pkg>-<ver>/ per the 6b redirect).
-        # Step kept as a stub for future use.
+        # RESTORED 2026-08-28 at the new location.  The monorepo native libs moved to
+        # their chunk repos (@PLAN12 5b) and this step became a stub — but the thing it
+        # prevented came back with them.  A test that `use`s a native-backed package calls
+        # `auto_build_native`, which takes ONE global exclusive lock around its cargo
+        # build, so under parallel nextest many processes queue on it WHILE HOLDING a
+        # runner slot.  Measured on `tuxedo-work-2026-08-28`: 13 cdylibs rebuilding
+        # mid-suite and 85.1s of lock wait, worst single wait 26.9s — and a fresh loft
+        # binary stamps every cdylib stale, so this happens on every run, not rarely.
+        #
+        # Two halves, because the packages now live in two places:
+        #   in-tree  `tests/lib/*/native` — still here, still needed by the loader tests;
+        #   installed `~/.loft/registry/<pkg>-<ver>/native` — the new location, built into
+        #            `~/.loft/build-cache/<pkg>-<ver>/` by the 6b redirect.
+        #
+        # The second half goes through `loft --prebuild-natives` rather than a shell loop
+        # ON PURPOSE: the redirect (`native_target_root`) and the `[library] native` stem
+        # would both have to be re-derived here, and a second spelling of where a cdylib
+        # lands is exactly how this step would silently stop matching what the tests
+        # resolve.  The flag calls the same `resolve_native_lib` they do.
+        #
+        # Best-effort: a package that fails to build here is not fatal — the test that
+        # needs it retries and reports properly.  `|| true` keeps a warm-up from turning a
+        # green suite red.
         run: |
-          echo "No monorepo native lib pre-builds — all libs extracted to chunk repos."
+          set -u
+          # Half 1 — the in-tree native test packages, sequentially.
+          for d in tests/lib/*/native; do
+            [ -f "$d/Cargo.toml" ] || continue
+            echo "prebuild (in-tree): $d"
+            ( cd "$d" && cargo build --release -q ) || echo "  warn: $d failed — tests will retry"
+          done
+          # Half 2 — every installed registry package's cdylib, through the same
+          # resolver the tests reach (so the artefact and its freshness stamp match).
+          ./target/release/loft --prebuild-natives || true
 
       # no-default-features check only needs to run on one OS — ubuntu
       # covers it at a fraction of the Windows job's time.  Use `cargo

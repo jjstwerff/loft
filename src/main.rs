@@ -7289,6 +7289,20 @@ fn main() {
             if !native_requested {
                 native_mode = false;
             }
+        // @P229 G3, restored at the new location — pre-build every installed registry
+        // package's native cdylib SEQUENTIALLY, so a parallel test runner does not have
+        // many processes queueing on the one global build lock while holding its slots.
+        // Not a user-facing verb: it is a CI warm-up, and it says what it did so a run
+        // that pre-builds nothing is distinguishable from one that had nothing to do.
+        } else if a == "--prebuild-natives" {
+            #[cfg(feature = "registry")]
+            {
+                let (attempted, built) = loft::extensions::prebuild_installed_natives();
+                println!("loft: pre-built {built} of {attempted} installed native package(s)");
+            }
+            #[cfg(not(feature = "registry"))]
+            println!("loft: built without the registry feature — nothing to pre-build");
+            return;
         // @F55 — package management (loft install, loft.toml, lockfile)
         } else if a == "install" {
             // Collect flags + positional in any order.
