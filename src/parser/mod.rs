@@ -8796,6 +8796,14 @@ impl Parser {
                 let mut tuple_elems = Vec::with_capacity(elems_vec.len());
                 for (i, et) in elems_vec.iter().enumerate() {
                     let elem_pos = pos + u32::from(offsets[i]);
+                    // @PLN25 — a member declared `S?` is stored behind its tag, so its bytes
+                    // here are the discriminant followed by the payload.
+                    if let Some(tagged) =
+                        self.tuple_elem_tag_read(tuple_d_nr, i, &code, elem_pos, et)
+                    {
+                        tuple_elems.push(tagged);
+                        continue;
+                    }
                     let elem_val = self.get_val(et, false, elem_pos, code.clone(), u32::MAX);
                     tuple_elems.push(elem_val);
                 }
@@ -8979,6 +8987,12 @@ impl Parser {
                 // so a saturating placeholder is safe and keeps the
                 // arithmetic well-defined across both profiles.
                 let elem_pos = base_pos.saturating_add(offsets[i]);
+                if let Some(tagged) =
+                    self.tuple_elem_tag_write(tuple_d_nr, i, ref_code, elem_pos, elem_tp, &value_i)
+                {
+                    ops.extend(tagged);
+                    continue;
+                }
                 ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, value_i));
             }
             return ops;
@@ -9034,9 +9048,86 @@ impl Parser {
         for (i, elem_tp) in elems_vec.iter().enumerate() {
             let elem_pos = base_pos.saturating_add(offsets[i]);
             let elem_val = Value::TupleGet(tmp, i as u16);
+            if let Some(tagged) =
+                self.tuple_elem_tag_write(tuple_d_nr, i, ref_code, elem_pos, elem_tp, &elem_val)
+            {
+                ops.extend(tagged);
+                continue;
+            }
             ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, elem_val));
         }
         ops
+    }
+
+    /// The tagged READ for tuple element `i`, or `None` when that element is not a tagged
+    /// slot — the mirror of [`Self::tuple_elem_tag_write`], and every stored-tuple reader
+    /// goes through it so a slot cannot be written by one spelling and read by the other.
+    ///
+    /// `elem_pos` is the slot's byte offset within `ref_code`'s record.
+    pub(crate) fn tuple_elem_tag_read(
+        &mut self,
+        tuple_d_nr: u32,
+        i: usize,
+        ref_code: &Value,
+        elem_pos: u32,
+        elem_tp: &Type,
+    ) -> Option<Value> {
+        if self.first_pass {
+            return None;
+        }
+        let Type::Enum(syn, true, _) = self.data.attr_type(tuple_d_nr, i) else {
+            return None;
+        };
+        if !self.needs_nullable_wrap(syn, elem_tp) {
+            return None;
+        }
+        let enum_kt = i32::from(self.data.def(syn).known_type());
+        let slot = self.cl(
+            "OpGetField",
+            &[
+                ref_code.clone(),
+                Value::Int(elem_pos as i32),
+                Value::Int(enum_kt),
+            ],
+        );
+        Some(self.emit_nullable_slot_read(syn, slot))
+    }
+
+    /// The tagged write for tuple element `i`, or `None` when that element is not a tagged
+    /// slot (every non-nullable member, and a source already in the slot's own form).
+    ///
+    /// The member's SOURCE type is the spelling the author writes (`S?`) while the element's
+    /// STORED type is the tagged `__nullable<S>` the layout uses; both are needed to decide,
+    /// and this is the one place in the tuple writer that holds both.  See
+    /// [`Self::emit_nullable_slot_write`] for what the tag buys.
+    fn tuple_elem_tag_write(
+        &mut self,
+        tuple_d_nr: u32,
+        i: usize,
+        ref_code: &Value,
+        elem_pos: u16,
+        elem_tp: &Type,
+        value: &Value,
+    ) -> Option<Vec<Value>> {
+        if self.first_pass {
+            return None;
+        }
+        let Type::Enum(syn, true, _) = self.data.attr_type(tuple_d_nr, i) else {
+            return None;
+        };
+        if !self.needs_nullable_wrap(syn, elem_tp) {
+            return None;
+        }
+        let enum_kt = i32::from(self.data.def(syn).known_type());
+        let slot = self.cl(
+            "OpGetField",
+            &[
+                ref_code.clone(),
+                Value::Int(i32::from(elem_pos)),
+                Value::Int(enum_kt),
+            ],
+        );
+        Some(self.emit_nullable_slot_write(syn, &slot, value.clone()))
     }
 
     /// Emit the OpSet* (or recursive flatten) for a single tuple
@@ -9187,6 +9278,135 @@ impl Parser {
             ),
             self.set_field_no_check(some_d, payload_attr, 0, some_ref, src),
         ]
+    }
+
+    /// The dense struct a synthetic `__nullable<S>` wraps, or `None` for any other type.
+    ///
+    /// Reads it off the `Some` variant's `payload` field rather than parsing the enum's
+    /// NAME, so it answers with the def the layout actually uses.
+    pub(crate) fn nullable_payload_struct(&self, syn: u32) -> Option<u32> {
+        if !self.data.def(syn).name.starts_with("__nullable<") {
+            return None;
+        }
+        let some_d = self.data.variant_of(syn, "Some");
+        if some_d == u32::MAX {
+            return None;
+        }
+        let payload_attr = self.data.attr(some_d, "payload");
+        if payload_attr == usize::MAX {
+            return None;
+        }
+        match self.data.attr_type(some_d, payload_attr) {
+            Type::Reference(struct_d, _) => Some(struct_d),
+            _ => None,
+        }
+    }
+
+    /// Write a value that is spelled `S?` into a slot that is STORED as the tagged
+    /// `__nullable<S>` — one home for the three positions that hold such a slot inline: a
+    /// struct field, a collection element, and a tuple member.
+    ///
+    /// Enforces `@FR-L-Null-Tag`: an inline struct slot has no out-of-band absent value the way
+    /// a `DbRef` field does — it spends its whole width on real values — so `S?` is the tagged
+    /// `__nullable<S>` (discriminant, then the payload) rather than `@FR-L-Null`'s sentinel in
+    /// the same bytes.  A PRESENT value therefore has
+    /// to say it is present. Copying the dense `S` in raw leaves the discriminant aliased with
+    /// the payload's first byte, and then presence is decided by whatever that byte holds: a
+    /// legitimate `S { a: 0, … }` reads back ABSENT, and a `float` first member reads absent
+    /// for every value whose low byte is zero.
+    ///
+    /// The source arrives DENSE because it is parsed against the spelling the author writes
+    /// (`S?`), which is `Optional(Reference(S))` — the enum is the STORAGE spelling and exists
+    /// only in the layout. So the write is: stash the source once, set the discriminant
+    /// present and copy the dense payload when it is non-null, and otherwise leave the slot
+    /// absent. `build_nullable_set_null` is what the absent arm uses, so a slot being
+    /// REASSIGNED releases the payload it held instead of leaking it.
+    ///
+    /// `slot_ref` addresses the slot itself — an `OpGetField` at the enum's own type.
+    /// Answers the statements to emit; the caller decides where they go.
+    pub(crate) fn emit_nullable_slot_write(
+        &mut self,
+        syn: u32,
+        slot_ref: &Value,
+        value: Value,
+    ) -> Vec<Value> {
+        let Some(struct_d) = self.nullable_payload_struct(syn) else {
+            return Vec::new();
+        };
+        let some_d = self.data.variant_of(syn, "Some");
+        // The stash is typed by the PAYLOAD struct, not by the source expression: a bare
+        // `null` member has type `Type::Null`, which names no storage to stash into.
+        let src_tp = Type::Reference(struct_d, crate::data::Deps::none());
+        let src_var = self.vars.work_refs(&src_tp, &mut self.lexer);
+        if src_var == u16::MAX {
+            return Vec::new();
+        }
+        let mut list = vec![v_set(src_var, value)];
+        let present = self.build_some_present(some_d, slot_ref.clone(), Value::Var(src_var));
+        let absent = self.build_nullable_set_null(syn, slot_ref.clone());
+        let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
+        let not_null = self.cl("OpNot", &[is_null]);
+        list.push(v_if(not_null, Value::Insert(present), absent));
+        list
+    }
+
+    /// Read a tagged `__nullable<S>` slot back as the dense-or-absent value its declared
+    /// type `S?` promises — the mirror of [`emit_nullable_slot_write`].
+    ///
+    /// The read half of `@FR-L-Null-Tag`.  A reader that takes the slot's address as if it were
+    /// a dense `S` is wrong twice: it
+    /// starts at the DISCRIMINANT rather than at the payload, so every field answers with its
+    /// predecessor's value, and it has no way to say "absent" at all, so a cleared slot reads
+    /// as a present record of zeroes. Consult the discriminant and project the payload, or
+    /// answer the reference null sentinel — which is what `S?` means outside the slot.
+    ///
+    /// The discriminant test is spelled exactly as the inline null test is
+    /// (`operators.rs::enum_null`), so a slot written by one and read by the other cannot
+    /// disagree about which values are present.
+    pub(crate) fn emit_nullable_slot_read(&mut self, syn: u32, slot_ref: Value) -> Value {
+        let Some(struct_d) = self.nullable_payload_struct(syn) else {
+            return slot_ref;
+        };
+        let some_kt = {
+            let some_d = self.data.variant_of(syn, "Some");
+            self.data.def(some_d).known_type()
+        };
+        let struct_kt = self.data.def(struct_d).known_type();
+        if some_kt == u16::MAX || struct_kt == u16::MAX {
+            return slot_ref;
+        }
+        let payload_pos = i32::from(self.database.position(some_kt, "payload"));
+        let disc = self.cl("OpGetEnum", &[slot_ref.clone(), Value::Int(0)]);
+        let as_int = self.cl("OpConvIntFromEnum", &[disc]);
+        let is_absent = self.cl("OpEqInt", &[as_int, Value::Int(0)]);
+        let present = self.cl("OpNot", &[is_absent]);
+        let payload = self.cl(
+            "OpGetField",
+            &[
+                slot_ref,
+                Value::Int(payload_pos),
+                Value::Int(i32::from(struct_kt)),
+            ],
+        );
+        let absent = self.cl("OpNullRefSentinel", &[]);
+        v_if(present, payload, absent)
+    }
+
+    /// Is this element type the DENSE spelling of `syn`'s payload — i.e. a value parsed
+    /// against it arrives needing [`emit_nullable_slot_write`]?
+    ///
+    /// `S?` (`Optional(Reference(S))`), a bare `S` and a bare `null` all answer yes; the
+    /// tagged enum itself answers NO, because such a value is already in the slot's own form
+    /// and wrapping it a second time would bury the real discriminant one payload deep.
+    pub(crate) fn needs_nullable_wrap(&self, syn: u32, src_tp: &Type) -> bool {
+        let Some(struct_d) = self.nullable_payload_struct(syn) else {
+            return false;
+        };
+        match src_tp.base() {
+            Type::Reference(src_d, _) => *src_d == struct_d,
+            Type::Null => true,
+            _ => false,
+        }
     }
 
     /// @PLN25 E2a.5 / loft#896 — emit "this `__nullable<S>` slot is ABSENT" against `to`, the

@@ -3735,7 +3735,34 @@ impl Parser {
                 // and `set_field` with an explicit attribute index
                 // routes through the standard per-field layout
                 // dispatch (Integer/Text/Reference/etc.).
+                // @PLN25 — a member declared `S?` is STORED as the tagged `__nullable<S>`
+                // (`formal/types.md`: an inline struct slot has no out-of-band absent value),
+                // while the value was parsed against the spelling the author writes and so
+                // arrives DENSE.  Build the tag here or presence is decided by the payload's
+                // first byte — `S { a: 0, … }` reads back absent, and `null` reads present.
+                // `emit_nullable_slot_write` is the shared home; a struct field holding the
+                // same slot goes through it too.
+                let src_elems = self.tuple_elements(in_t).unwrap_or_default();
                 for (i, val) in values.iter().enumerate() {
+                    if !self.first_pass
+                        && let Type::Enum(syn, true, _) = self.data.attr_type(ed_nr, i)
+                        && let Some(src_tp) = src_elems.get(i)
+                        && self.needs_nullable_wrap(syn, src_tp)
+                    {
+                        let enum_kt = i32::from(self.data.def(syn).known_type());
+                        let name = self.data.def(ed_nr).attributes[i].name.clone();
+                        let pos = i32::from(
+                            self.database
+                                .position(self.data.def(ed_nr).known_type(), &name),
+                        );
+                        let slot = self.cl(
+                            "OpGetField",
+                            &[Value::Var(elm), Value::Int(pos), Value::Int(enum_kt)],
+                        );
+                        let write = self.emit_nullable_slot_write(syn, &slot, val.clone());
+                        ls.extend(write);
+                        continue;
+                    }
                     ls.push(self.set_field(ed_nr, i, 0, Value::Var(elm), val.clone()));
                 }
             } else if let Value::Insert(steps) = p {

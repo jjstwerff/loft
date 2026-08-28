@@ -176,6 +176,30 @@ spelling now has a home (`Data::is_nullable_wrapper`), and the doc there names t
 sites that still test it by hand.  Guard:
 `tests/scripts/1123-a-nullable-tuple-member-returns-like-its-dense-twin.loft`.
 
+⚠ **That ⚠ was a map, and the sites it pointed at were not swept (loft#1134, closed
+2026-08-28).**  Giving the element a `__nullable<S>` slot changed the LAYOUT; nothing taught the
+writers, so a member was copied in as a dense `S` — landing field `a` on top of the discriminant
+at offset 0 and never setting it.  `(E-Null)`'s guarantee for this representation is *no
+collision*, and the collision came straight back: a PRESENT `S { a: 0, … }` read absent, a
+`float` first member read absent whenever its low byte was zero, and a member written `null`
+read present.  The reason it survived a day is that the mistake was symmetric — the indexed read
+projected offset 0 too, so write and read cancelled and the tag-consulting `for` loop was the
+only route that looked wrong.
+
+The rule the sweep owes, stated so the next layout change can be checked against it: **a tuple
+element whose declared type is `τ?` and whose storage is the tagged `__nullable<τ>` is written
+and read through the tag at EVERY position — a collection element, a struct field, a
+reassignment, and a nested tuple.**  `Parser::emit_nullable_slot_write` and
+`emit_nullable_slot_read` are the pair that hold it, and they spell the discriminant exactly as
+`operators.rs::enum_null` does so a slot cannot be written by one and read by the other.  Guard:
+`tests/scripts/1134-a-nullable-tuple-element-is-stored-behind-its-tag.loft`.
+
+One position still drops the tag and is filed rather than fixed: crossing a FUNCTION BOUNDARY.
+`convert`'s `Enum(__nullable<S>) → Reference(S)` arm projects the payload without consulting the
+discriminant, so an absent value arrives — and returns — present (**loft#1138**).  It is not a
+tuple question at all: a `vector<S?>` element and a plain struct field reproduce it, which is
+why it sits with the null model rather than here.
+
 > **D-tup-4 — OPENED 2026-08-26 (loft#1102); the VECTOR half CLOSED the same day, the KEYED
 > half OPEN — a tuple literal ALIASED a heap local while both sibling constructors copied it.**
 >

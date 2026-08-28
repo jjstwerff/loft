@@ -1823,6 +1823,16 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         let mut tuple_elems = Vec::new();
         for (i, et) in elems_vec.iter().enumerate() {
             let off = u32::from(offsets[i]);
+            // @PLN25 — a member declared `S?` is STORED as the tagged `__nullable<S>`, so its
+            // bytes at `off` are the discriminant followed by the payload.  Reading them as a
+            // dense `S` starts one field early AND cannot spell absence, which is why an
+            // indexed read answered the discriminant as the first field and a cleared element
+            // came back as a record of zeroes.  Project through the tag instead.
+            if let Some(tagged) = self.tuple_elem_tag_read(tuple_d_nr, i, &Value::Var(tmp), off, et)
+            {
+                tuple_elems.push(tagged);
+                continue;
+            }
             tuple_elems.push(self.get_val(et, false, off, Value::Var(tmp), u32::MAX));
         }
         v_block(

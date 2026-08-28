@@ -434,6 +434,39 @@ What IS the walk's to report, because it is measurable from inside:
   deviation being closed. A shape the rules cannot express is a gap in the definition, and that
   is a design question rather than a quality one.
 
+### When a filed issue names which route is broken, re-derive it from the layout
+
+An issue reporting *"route A is wrong, routes B and C are correct"* has already done a
+comparison, and a comparison over routes elects the MAJORITY, not the truth. Two routes agreeing
+is exactly as weak as two backends agreeing ([[agreement-is-not-correctness]]) whenever both
+share the mistake — and a write and a read that make the SAME offset error always do, because
+the write's error is what the read's error is compensating for.
+
+The oracle is the declared layout, not the programs. In loft that is one command:
+
+```
+LOFT_DUMP_TYPES=1 loft --interpret p.loft      # every type, its size, and every field's offset
+```
+
+loft#1134 was filed as *"one field high through a `for` loop; correct as a local and correct by
+index"*. The dump said `__tuple<integer,S?>` holds `_1:__nullable<S>[8]` and
+`__nullable<S>::Some` holds `enum:byte[0], payload:S[8]` — so the payload is at 16, the loop was
+the ONLY reader that went there, and the write and the indexed read were a matched pair of
+mistakes. Fixing what the report named would have broken the one correct route.
+
+Reading the layout first also **re-scopes** the defect, which is the larger half. Once the dump
+says a discriminant sits at offset 8, the question stops being *"which field does it answer
+with?"* and becomes *"what happens to the byte the tag should be in?"* — and the cell that asks
+it is a PRESENT value whose first field is zero. That cell was not in the filed matrix, it is
+not suggested by any route comparison, and it is the one that showed presence had become a data
+byte: `S { a: 0, … }` read absent, and a `float` first member read absent for every value whose
+low byte was zero. Same defect, two orders of magnitude more program surface.
+
+Corollary for the fix: when the write is corrected first, **expect passing cells to fail**. A
+cell that was right by cancellation goes wrong the moment one half is repaired, and that is the
+second site announcing itself rather than a regression to back out. Fix the write, re-run the
+whole route table, and treat every newly-red cell as a reader to visit.
+
 ### Why this is not the same as the screens
 
 `ir_walker_audit.py`, `matrix_axes.py` and the rest rank SITES: they answer *"who might have

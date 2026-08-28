@@ -149,6 +149,14 @@ real product: the `⇐` expected-type channel has **ten push sites carrying six 
 admission lists**, and `Type::Tuple` is in none of them — which is why the same shapes still
 fail in a `return` and in an argument, filed as **loft#1122**.  A `--native`-only silent wrong
 answer found beside it is **loft#1123**.
+**B6w walked the issue B6v had FILED (loft#1134) and found the report inverted**: the route it
+called broken was the only correct one, and the two it called correct were two mistakes
+cancelling.  The declared layout is what settles such a question — a `LOFT_DUMP_TYPES=1` dump,
+not a comparison of the two programs — and it also promotes the defect: *"one field high"* was
+the milder half, because the discriminant was aliased onto the payload's first byte and a
+PRESENT `S { a: 0, … }` therefore read absent.  Three write sites and two read sites, two shared
+homes; the two side findings are **loft#1138** (not tuple-specific — the tag is dropped at every
+function boundary) and **loft#1139** (a legal program refused).
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -2265,16 +2273,22 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 644 | 289 | 4 | **351** |
+| 648 | 290 | 4 | **354** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
 picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
 added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
 again, then 642 · 270 until B6s peeled seven and merged one body away, then 644 · 281 until
-loft#1125 peeled the three sites that decided a nullable collection's LAYOUT, and 643 · 284 until
+loft#1125 peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 284 until
 B6v added `data::holds_dbref`, which asks through `.base()` and so lands on the seeing-through
-side — every count here is a snapshot of two moving checkouts, so re-run the tool rather than
+side, then 644 · 285 until B6w added four: `needs_nullable_wrap` asks through `.base()` and sees
+through, while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are
+opaque ON PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored
+tuple attribute, or of the `Some` variant's `payload`), and a stored attribute is already the
+storage spelling, so an `Optional` cannot reach them.  That is the distinction the opaque column
+is for: a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
+every count here is a snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
@@ -3063,6 +3077,105 @@ missing or stale"*, which reads as a build problem and sent me through a `cargo 
 cure for the wrong cause.  What actually separated them was running the SAME tree twice and
 watching cold pass and warm fail; and the reference build (this branch's own HEAD) showed the
 identical cold/warm split, which is what said the defect was older than today's edits.
+
+#### B6w — loft#1134: the route the report called broken was the only correct one (2026-08-28)
+
+Filed off B6v as *"a nullable tuple element read by ITERATING a collection is one field high;
+correct as a local and correct by index"*.  Every clause of that is true as an observation and
+the conclusion drawn from it was backwards.
+
+**The declared layout settles it, and it takes one command to ask.**  `LOFT_DUMP_TYPES=1`:
+
+```
+82:__tuple<integer,S?>[32/1]      _0:integer[0]   _1:__nullable<S>[8]
+81:__nullable<S>::Some[24/8]      enum:byte[0]    payload:S[8]
+79:S[16/8]                        a:integer[0]    b:integer[8]
+```
+
+So `S`'s fields live at tuple offset **16**, behind a discriminant at 8.  The `for` loop was
+the ONE reader that went there — `OpGetField(t, 8, 78)`, then the tag, then
+`OpGetField(x, 8, 79)`.  The write copied a dense `S` straight into offset 8, and the INDEXED
+read projected offset 8 as a dense `S` as well: **two mistakes that cancel**, which is the
+entire reason the index route looked right and the loop route looked broken.  Scoring the
+routes against each other could only ever elect the majority — [[agreement-is-not-correctness]]
+one level up, where the thing agreeing is not two backends but two routes through one program.
+
+**And "one field high" was the milder half.**  With the discriminant aliased onto field `a`,
+presence stopped being a fact and became a data byte:
+
+| cell | before |
+|---|---|
+| `S { a: 0, b: 22 }`, PRESENT, read in the loop | **ABSENT** |
+| a `float` first member (`1.5`) | **ABSENT** — the low byte of the payload is the tag |
+| element written `null`, read across a call | **present**, a record of zeroes |
+| `S { a: 11, b: 111 }` | `a=111`, `b=4294967200` (the filed cell) |
+
+The zero-valued first field is the cell the whole fix turns on, and no route-vs-route
+comparison proposes it: it only looks interesting once you know a TAG is supposed to be there.
+`formal/types.md` names the property being lost — *a struct `S` as a `vector` element is the
+tagged `__nullable<S>` (discriminant + payload; **no collision**)* — so this was a deviation
+from a written rule, not a design call.
+
+**Root: one notion, two spellings, and the tuple never bridged them.**  A member is PARSED
+against the spelling the author writes (`S?` = `Optional(Reference(S))`) and STORED against the
+layout spelling (`Enum(__nullable<S>)`).  `synth_nullable_struct_fields` rewrites a struct
+FIELD's typedef from one to the other and skips synthetic hosts — *"tuples, fn-ref, and our own
+`__nullable<T>` variants … so the rewrite never recurses into generated layouts"* — while
+D-tup-6 (loft#1123, closed the day before) gave the tuple ELEMENT the tagged slot anyway.  The
+layout moved and the writers did not.  That is [[audit-the-siblings-of-a-fixed-rewrite]]: the
+sibling had the precondition written into its own ⚠ note (*"that makes a tuple ELEMENT a
+`__nullable<S>` slot"*) and nothing swept the sites that write one.
+
+**Five sites, two homes.**  `emit_nullable_slot_write` / `emit_nullable_slot_read` are the pair
+— tag on the way in, tag on the way out, the discriminant spelled exactly as
+`operators.rs::enum_null` spells it so a slot cannot be written by one and read by the other.
+`tuple_elem_tag_write` / `tuple_elem_tag_read` select for the tuple positions, and they are the
+only place holding BOTH the member's source type and the slot's stored type, which is what the
+decision needs.  The three writers were the vector-element literal (`new_record`), the tuple
+field/assignment writer (`emit_tuple_set_ops`) and reassignment through an index; the two
+readers were the unbox (`v[i]`) and the tuple struct-field read.
+
+⚠ **Fixing the write alone made two passing cells fail**, and that is the shape rather than a
+setback: a keyed-collection element and a nested tuple were both dense-write + dense-read, so
+correcting one half exposed the other.  A fix that moves a cell from *right by cancellation* to
+*wrong* is not a regression to back out — it is the second site announcing itself.
+
+**Three findings filed rather than folded in**, each A/B'd against the control build `make
+falsify` had already produced at `2b3691a4`:
+
+* **loft#1138** — an ABSENT nullable struct reads as PRESENT across a function boundary
+  (argument or return).  `convert`'s `Enum(__nullable<S>) → Reference(S)` arm projects the
+  payload sub-ref without consulting the discriminant, and a sub-ref into an absent slot is a
+  valid `DbRef`.  **Not tuple-specific** — it reproduces for a `vector<S?>` element and a plain
+  struct field, which is what makes it a separate root; in-place tests, local binds, declared
+  `S?` locals and `??` are all correct.  Filed rather than folded because the cure changes the
+  unwrap's IR spelling from a bare `OpGetField` to an `If`, and `tail_is_nullable_unwrap` keys
+  on the bare shape while `unwrap_source_is_nullable` beside it already peels `Value::If` — the
+  two have to move together, which is its own verification.
+* **loft#1139** — `v += [f()]` is refused for a tuple with a nullable member while the dense
+  twin is accepted, reporting a precision loss between `__tuple<integer,S?>` and
+  `(integer, S?)` — two spellings of one type.  A legal program refused.
+* the guard reads `1|1|none|none` -> `0|0|none|none` on BOTH backends, so the defect was shared
+  semantics rather than a parity bug.
+
+**Two process notes, both of them repeats.**
+
+*A workaround written from plausibility is a wrong workaround.*  I filed #1139 saying *"bind
+the call to a local first"* without running it; `t = mk(); v += [t];` is refused identically.
+`.github/LABELS.md` says it outright — *"a wrong workaround is worse than `wa:none`"* — and the
+`wa:` label is the one field a consumer triages on.  Both issues were re-measured and both
+dropped to `wa:partial`; #1139's real workaround additionally answers WRONG on `main` until
+this fix lands, which is worth saying in the issue rather than discovering downstream.
+
+*The doc-comment insertion hazard bit again, one commit after it was cleared.*  B6v's own
+"four reds" were `cargo fmt` and `cargo clippy` failing because an inserted function had landed
+BETWEEN a doc-comment and its `#[must_use]`; anchoring this walk's helpers on
+`pub(crate) fn emit_tuple_set_ops(` put them between that function's doc block and the function.
+Clippy caught it (`doc_lazy_continuation`), which is the argument for running the two clippy
+variants before `make ci` rather than after — but the durable fix is the one already recorded in
+[[make-ci-not-find-problems-before-push]]: **anchor an insertion on the doc block, never on the
+`fn` line**.  Repeating a recorded lesson the day after recording it says the note was filed
+where it is read after the fact, not where the decision is made.
 
 #### C — process / skills
 
