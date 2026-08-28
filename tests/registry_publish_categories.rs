@@ -206,10 +206,18 @@ fn registry_fixture(tag: &str, validator: Option<&str>) -> PathBuf {
 }
 
 fn run_gate(dir: &Path) -> (i32, String) {
-    let out = Command::new(repo_root().join("scripts/registry_schema_gate.sh"))
-        .arg(dir)
-        .output()
-        .expect("run registry_schema_gate.sh");
+    let script = repo_root().join("scripts/registry_schema_gate.sh");
+    // Windows `CreateProcess` has no shebang handling, so handing it a `.sh` fails outright
+    // with `%1 is not a valid Win32 application` — not a gate that refused, a gate that never
+    // ran.  The interpreter has to be named there; on unix the shebang still picks it.
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("bash");
+        c.arg(&script);
+        c
+    } else {
+        Command::new(&script)
+    };
+    let out = cmd.arg(dir).output().expect("run registry_schema_gate.sh");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
