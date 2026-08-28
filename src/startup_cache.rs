@@ -464,11 +464,20 @@ pub fn save_program(
     {
         return;
     }
-    // Manifest last + atomically — a stale/partial manifest would just be a miss.
-    let tmp = manifest.with_extension("manifest.tmp");
+    // Manifest last + atomically, through a tmp name of THIS PROCESS's own — the same shape
+    // `ir_store::save_bundle` uses for the bundle beside it, and for the same reason.  A fixed
+    // `.manifest.tmp` is shared by every loft writing the same program, so two of them
+    // interleave their bytes into one file and both rename it: the reader then validates a
+    // manifest that is a MIX of two writes.  Its `diag` lines are the visible half — a warm
+    // load replays fewer diagnostics than the cold run produced, so one side of a
+    // parity comparison reports a warning the other does not (loft#1129).  Concurrent loft
+    // processes over one bundle are not a test artefact: two builds at once is an ordinary
+    // thing for a user to do.
+    let tmp = manifest.with_extension(format!("manifest.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, lines.as_bytes()).is_ok() {
         let _ = std::fs::rename(&tmp, &manifest);
     }
+    let _ = std::fs::remove_file(&tmp);
     // @PLN11 G2 / track 1 — with the cache default-on, bound the directory size
     // by evicting the oldest bundles after each cold save.
     crate::cache::prune_program_cache();

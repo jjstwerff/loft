@@ -212,13 +212,19 @@ pub fn diagnostics_armed() -> bool {
 ///     (`startup_cache`'s `plib` headers), which is what makes the flip reachable;
 ///   * `placement_parity`'s in-process-vs-placed comparisons became ORDER-DEPENDENT: four of
 ///     them pass alone and fail inside their own test binary, because the second of the two
-///     runs they compare is warm and the first is cold.
+///     runs they compare is warm and the first is cold. **CLOSED (loft#1129):** the warm
+///     load replayed each diagnostic's ENTRY but not its `fixes`, and `fixable` is what puts
+///     the once-per-run *"N diagnostics above suggest what to write instead — re-run with
+///     `--explain`"* line under the report. So a warm run said strictly less than the cold
+///     one it stood in for — deterministic, not a race; the thread count only decided
+///     whether a given comparison straddled the two. The fixes now ride the manifest line.
 ///
-/// So the context rules stay until that second class is understood, and they are a proxy for
-/// exactly one thing now — not incomplete invalidation, but a warm path that does not yet
-/// reproduce every parse-time effect. `LOFT_PROGRAM_CACHE` is honoured again for the same
-/// reason it existed: it is how the cache's own tests, and anyone measuring the warm start,
-/// reach the quick path from a dev build.
+/// Both measured classes are closed and `LOFT_PROGRAM_CACHE=1 cargo test --release --test
+/// placement_parity` is green in PARALLEL, so nothing known blocks the flip. The context
+/// rules stay until the flip is taken deliberately, with a full gate run behind it —
+/// flipping a default is the owner's call, not a side effect of closing its blocker.
+/// `LOFT_PROGRAM_CACHE` is honoured for the same reason it existed: it is how the cache's own
+/// tests, and anyone measuring the warm start, reach the quick path from a dev build.
 // Four independent SIGNALS, not a state machine: each is a separate fact about the
 // invocation, and the precedence between them is the policy.  A struct of four bools would
 // only rename them, and keeping it a pure function is what makes it unit-testable without
