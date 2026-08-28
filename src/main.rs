@@ -8947,7 +8947,7 @@ fn main() {
     // the interpreted image would pin it, so the "rebuild once editing settles" check
     // would never run on a warm load.
     if program_cache_on && !program_warm && !has_auto_native && !any_dev_interpret {
-        loft::startup_cache::save_program(&p, &abs_file, start_def);
+        loft::startup_cache::save_program(&p, &abs_file, start_def, &placed_libs);
     }
     // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
     // write the parsed `Data` as the startup-cache JSON snapshot and exit.

@@ -25,13 +25,23 @@
 //                         null / from a dense local / from a call), keyed kind (hash / sorted /
 //                         spatial / trie), element count (0 / 1 / 2), and post-construction
 //                         append.  Backend is moved by the harness.
-// Axes it HOLDS FIXED:    `index<T[k]>?` is deliberately ABSENT — it is refused for an unrelated
-//                         reason (its tree bookkeeping lands at offset 0, loft#1125, measured
-//                         pre-existing by A/B against a build with these peels reverted), so a
-//                         cell here would lock that defect rather than guard this one.
-//                         Element type is one struct per kind: sharing one struct across two
+// Axes it HOLDS FIXED:    Element type is one struct per kind: sharing one struct across two
 //                         keyed kinds gives it conflicting hidden index fields, a different
 //                         fault that masks this one.
+//
+// `index<T[k]>?` was deliberately ABSENT when this landed — it was refused for an unrelated
+// reason (its tree bookkeeping all at offset 0, loft#1125) and a cell would have locked that
+// defect rather than guarded this one.  #1125 is fixed, so the exclusion has expired and the
+// kind is here: an exclusion's justification is a claim about the state it was written in, and
+// the five construction routes are exactly what has to be re-asked once the layout works.
+//
+// Once a nullable keyed local COULD hold a value, a second fault became reachable and is
+// guarded here too: `c = null` on one that holds a store lowers to `OpNullRefSentinel`, NOT to
+// the in-place `= []` clear, so the store it displaces needs a free — and the owned-reassign
+// type list that places that free named `Reference` / struct-`Enum` / `Vector` and not the five
+// KEYED kinds, on BOTH backends.  One orphan per evaluation, values right throughout, so only
+// the leak channel speaks.  Both directions leak from the same hole: a literal then `null`
+// displaces the literal's store, and `null` then a literal displaces the declaration's.
 //
 // @falsified-at: e3f78c47 — the EXIT channel, and it moves for a different reason per route:
 // `= []` is an ICE (`Incorrect var c[65535]`, the unregistered store type), `= [rec]` is refused
@@ -45,6 +55,7 @@ struct NkH { k: integer = 0, v: integer = 0 }
 struct NkO { k: integer = 0, v: integer = 0 }
 struct NkP { x: integer = 0, y: integer = 0, v: integer = 0 }
 struct NkT { name: text = "", v: integer = 0 }
+struct NkI { k: integer = 0, v: integer = 0 }
 
 fn nk_mk() -> hash<NkH[k]> { [NkH { k: 1, v: 11 }] }
 
@@ -59,10 +70,33 @@ fn nk_from_call()   -> integer { c: hash<NkH[k]>? = nk_mk(); len(c ?? []) }
 fn nk_sorted()  -> integer { c: sorted<NkO[k]>? = [NkO { k: 4, v: 44 }]; (c[4] ?? NkO {}).v }
 fn nk_spatial() -> integer { c: spatial<NkP[x,y]>? = [NkP { x: 1, y: 1, v: 9 }]; len(c ?? []) }
 fn nk_trie()    -> integer { c: trie<NkT[name]>? = [NkT { name: "a", v: 55 }]; (c["a"] ?? NkT {}).v }
+fn nk_index()   -> integer { c: index<NkI[k]>? = [NkI { k: 6, v: 66 }]; (c[6] ?? NkI {}).v }
+
+// the five routes again on `index`, the kind whose layout was the reason it could not be here
+fn nk_i_mk()      -> index<NkI[k]> { [NkI { k: 1, v: 11 }] }
+fn nk_i_empty()   -> integer { c: index<NkI[k]>? = []; len(c ?? []) }
+fn nk_i_after()   -> integer { c: index<NkI[k]>? = null; c = [NkI { k: 2, v: 22 }]; (c[2] ?? NkI {}).v }
+fn nk_i_local()   -> integer { d: index<NkI[k]> = [NkI { k: 3, v: 33 }]; c: index<NkI[k]>? = d; (c[3] ?? NkI {}).v }
+fn nk_i_call()    -> integer { c: index<NkI[k]>? = nk_i_mk(); (c[1] ?? NkI {}).v }
+fn nk_i_append()  -> integer { c: index<NkI[k]>? = [NkI { k: 1, v: 1 }]; c += [NkI { k: 4, v: 4 }]; len(c ?? []) }
+fn nk_i_null()    -> boolean { c: index<NkI[k]>? = null; c == null }
+fn nk_i_dense()   -> integer { c: index<NkI[k]> = [NkI { k: 5, v: 55 }]; c[5].v }
 
 // still a collection afterwards
 fn nk_append()  -> integer { c: hash<NkH[k]>? = [NkH { k: 1, v: 1 }]; c += [NkH { k: 2, v: 2 }]; len(c ?? []) }
 fn nk_append0() -> integer { c: sorted<NkO[k]>? = []; c += [NkO { k: 7, v: 7 }]; len(c ?? []) }
+
+// `null` over a store, and a store over `null` — the two directions of the displaced-store
+// free.  Scored by the LEAK channel: every value below is already right without it.
+fn nk_lit_then_null()  -> boolean { c: hash<NkH[k]>? = [NkH { k: 1, v: 11 }]; c = null; c == null }
+fn nk_srt_then_null()  -> boolean { c: sorted<NkO[k]>? = [NkO { k: 1, v: 11 }]; c = null; c == null }
+fn nk_trie_then_null() -> boolean { c: trie<NkT[name]>? = [NkT { name: "a", v: 1 }]; c = null; c == null }
+fn nk_idx_then_null()  -> boolean { c: index<NkI[k]>? = [NkI { k: 1, v: 11 }]; c = null; c == null }
+fn nk_null_then_lit()  -> integer { c: hash<NkH[k]>? = null; c = [NkH { k: 2, v: 22 }]; (c[2] ?? NkH {}).v }
+// Controls: the `[]` spelling reuses the store in place and must not grow a second free, and a
+// nullable VECTOR already released through its own path — widening that one would free twice.
+fn nk_empty_then_null()-> boolean { c: hash<NkH[k]>? = []; c = null; c == null }
+fn nk_vec_then_null()  -> boolean { c: vector<NkH>? = [NkH { k: 1, v: 11 }]; c = null; c == null }
 
 // absence still works — the peels must not have cost the null the type is declared for
 fn nk_null()    -> boolean { c: hash<NkH[k]>? = null; c == null }
@@ -82,9 +116,26 @@ fn main() {
   assert(nk_sorted() == 44, "a nullable sorted holding an element, got {nk_sorted()}");
   assert(nk_spatial() == 1, "a nullable spatial holding an element, got {nk_spatial()}");
   assert(nk_trie() == 55, "a nullable trie holding an element, got {nk_trie()}");
+  assert(nk_index() == 66, "a nullable index holding an element, got {nk_index()}");
+
+  assert(nk_i_empty() == 0, "an empty literal into a nullable index, got {nk_i_empty()}");
+  assert(nk_i_after() == 22, "a nullable index assigned after null, got {nk_i_after()}");
+  assert(nk_i_local() == 33, "a nullable index from a dense local, got {nk_i_local()}");
+  assert(nk_i_call() == 11, "a nullable index from a call, got {nk_i_call()}");
+  assert(nk_i_append() == 2, "append onto a constructed nullable index, got {nk_i_append()}");
+  assert(nk_i_null(), "a nullable index set to null is still null");
+  assert(nk_i_dense() == 55, "the dense index twin is unchanged, got {nk_i_dense()}");
 
   assert(nk_append() == 2, "append onto a constructed nullable hash, got {nk_append()}");
   assert(nk_append0() == 1, "append onto an empty nullable sorted, got {nk_append0()}");
+
+  assert(nk_lit_then_null(), "null over a hash that holds a store");
+  assert(nk_srt_then_null(), "null over a sorted that holds a store");
+  assert(nk_trie_then_null(), "null over a trie that holds a store");
+  assert(nk_idx_then_null(), "null over an index that holds a store");
+  assert(nk_null_then_lit() == 22, "a store over null, got {nk_null_then_lit()}");
+  assert(nk_empty_then_null(), "null over an empty hash — the in-place spelling");
+  assert(nk_vec_then_null(), "null over a vector that holds a store — the kind already covered");
 
   assert(nk_null(), "a nullable hash set to null is still null");
   assert(nk_null_tr(), "a nullable trie set to null is still null");

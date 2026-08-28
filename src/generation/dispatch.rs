@@ -191,10 +191,17 @@ impl Output<'_> {
             // reassignment must free the orphaned fn-owned intermediate — guarded
             // (below) against the witness so the caller's buffer is never freed.
             let owned_ref_reassign = self.declared.contains(&var)
-                && matches!(
+                // The five KEYED kinds are here for the reason the interpreter's twin
+                // (`state/codegen.rs`'s `owned_ref`) carries: a keyed local's handle is the same
+                // store-backed slot, so `c = null` — which lowers to `OpNullRefSentinel`, not to
+                // the in-place clear — displaced its store with nothing naming it.  Read through
+                // `base()`, because a dense keyed local cannot be assigned the sentinel at all.
+                // Both backends leaked identically here, which is @FR-O-NoDiverge holding: they
+                // read the same fact and it was short by the same kinds.
+                && (matches!(
                     variables.tp(var),
                     Type::Reference(_, _) | Type::Enum(_, true, _)
-                )
+                ) || crate::parser::vectors::is_keyed(variables.tp(var).base()))
                 && variables.tp(var).depend().is_empty()
                 // @FR-O-Proxy — the empty dep list is only a PROXY for ownership, so a
                 // free taken on it must consult @FR-O-Override.  The interpreter's twin

@@ -130,8 +130,6 @@ pub struct DiagEntry {
 }
 
 impl DiagEntry {
-    /// Format as a single-line string: `Level: message at file:line:col`
-    #[must_use]
     /// Encode the DISPLAY fields as one escaped line, for the whole-program cache manifest.
     ///
     /// A warm bundle load skips the parser, and diagnostics are a parser product — so

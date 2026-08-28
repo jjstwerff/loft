@@ -23,18 +23,18 @@
 // sibling was left listing `Vector` alone: the carve-out comment was a map to where the
 // hole still was.
 //
-// Axes this file MOVES:   collection kind (hash / sorted / spatial / trie / vector — the
-//                         `is_collection` set), presence (absent vs a real store), and
+// Axes this file MOVES:   collection kind (hash / sorted / index / spatial / trie / vector —
+//                         the `is_collection` set), presence (absent vs a real store), and
 //                         DENSE vs nullable declaration.  Backend is moved by the harness.
-// Axes it HOLDS FIXED:    `index<T[k]>?` is deliberately ABSENT — a nullable index fails
-//                         layout outright (`#left_1`/`#right_1`/`#color_1` all at offset 0)
-//                         on the pre-fix build too, so a cell here would lock a separate
-//                         defect rather than this one.  Filed as loft#1125, and A/B'd
-//                         against a build with this fix reverted: the layout errors are
-//                         byte-identical there, so it is independent and pre-existing.
-//                         Element type is one shape per kind, because sharing ONE struct
+// Axes it HOLDS FIXED:    Element type is one shape per kind, because sharing ONE struct
 //                         across two keyed kinds gives it conflicting hidden index fields —
 //                         a different fault that masks this one.
+//
+// `index<T[k]>?` was deliberately ABSENT when this landed: a nullable index failed layout
+// outright (`#left_1`/`#right_1`/`#color_1` all at offset 0), so a cell would have locked that
+// defect rather than this one.  It was filed as loft#1125 and is now fixed, so the exclusion has
+// expired and the kind is here — an exclusion's justification is a claim about the state it was
+// written in, and it has to be re-asked once that state changes.
 //
 // @falsified-at: c1d5e417 — the FREE channel, not exit and not asserts: every value below is
 // already correct pre-fix, and `--interpret` prints one `BUG (#306)` stack-store free
@@ -46,12 +46,14 @@ struct NcOS { k: integer = 0, v: integer = 0 }
 struct NcVS { k: integer = 0, v: integer = 0 }
 struct NcSP { x: integer = 0, y: integer = 0, v: integer = 0 }
 struct NcTS { name: text = "", v: integer = 0 }
+struct NcIX { k: integer = 0, v: integer = 0 }
 
 fn nc_hash()   -> boolean { a: hash<NcHS[k]>?     = null; a == null }
 fn nc_sorted() -> boolean { b: sorted<NcOS[k]>?   = null; b == null }
 fn nc_spatial()-> boolean { d: spatial<NcSP[x,y]>?= null; d == null }
 fn nc_trie()   -> boolean { e: trie<NcTS[name]>?  = null; e == null }
 fn nc_vector() -> boolean { f: vector<NcVS>?      = null; f == null }
+fn nc_index()  -> boolean { h: index<NcIX[k]>?    = null; h == null }
 
 fn main() {
   // absent: the slot must hold the type's null sentinel, and the scope-exit free must read
@@ -61,6 +63,7 @@ fn main() {
   assert(nc_spatial(), "a null spatial local reads back null");
   assert(nc_trie(), "a null trie local reads back null");
   assert(nc_vector(), "a null vector local reads back null — the kind that always worked");
+  assert(nc_index(), "a null index local reads back null — the kind loft#1125 kept out");
 
   // present: writing the sentinel for absence must not have disturbed allocation
   g: hash<NcHS[k]> = [NcHS { k: 4, v: 44 }];
@@ -69,4 +72,6 @@ fn main() {
   assert(s[5].v == 55, "a dense sorted literal still allocates, got {s[5].v}");
   f: vector<NcVS>? = [NcVS { k: 3, v: 33 }];
   assert(len(f ?? []) == 1, "a present nullable vector still allocates, got {len(f ?? [])}");
+  i: index<NcIX[k]> = [NcIX { k: 6, v: 66 }];
+  assert(i[6].v == 66, "a dense index literal still allocates, got {i[6].v}");
 }

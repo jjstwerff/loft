@@ -53,8 +53,7 @@ fn cpu(who: i32) -> Duration {
         return Duration::ZERO;
     }
     let secs = |t: libc::timeval| {
-        Duration::from_secs(t.tv_sec.max(0) as u64)
-            + Duration::from_micros(t.tv_usec.max(0) as u64)
+        Duration::from_secs(t.tv_sec.max(0) as u64) + Duration::from_micros(t.tv_usec.max(0) as u64)
     };
     secs(ru.ru_utime) + secs(ru.ru_stime)
 }
@@ -92,9 +91,16 @@ impl Unit {
         let kids = ms(cpu(libc::RUSAGE_CHILDREN).saturating_sub(self.kids));
         // Tabs, and the label last, so a label containing a tab cannot shift a number
         // into the wrong column — the failure would be silent and the numbers plausible.
-        let row = format!("{wall:.1}\t{own:.1}\t{kids:.1}\t{:.1}\t{label}\n", own + kids);
+        let row = format!(
+            "{wall:.1}\t{own:.1}\t{kids:.1}\t{:.1}\t{label}\n",
+            own + kids
+        );
         use std::io::Write as _;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = f.write_all(row.as_bytes());
         }
     }
