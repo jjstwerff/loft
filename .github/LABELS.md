@@ -202,10 +202,26 @@ statically-typed language.  Source flows: **text → parser → IR → codegen �
 One per issue: a **direct pointer to the project that ran into it**.  loft is one of those
 projects, so a find of our own is `hit-by:loft` — not a blank.
 
-| Label | Meaning |
-|---|---|
-| `hit-by:moros` / `:routing` / `:dryopea` / `:crawler` / `:zerotrust` | that dogfood consumer ran into it |
-| `hit-by:loft` | loft itself ran into it — a nightly gate, a sanitizer, a sweep, a follow-on investigation |
+| Label | Project | What it is | What it puts the language under |
+|---|---|---|---|
+| `hit-by:moros` | [jjstwerff/moros](https://github.com/jjstwerff/moros) | role-playing game + blueprint editor | the heaviest consumer by volume — long-lived stores, editor sessions, placed geometry, `--html` |
+| `hit-by:dryopea` | [jjstwerff/dryopea](https://github.com/jjstwerff/dryopea) | sci-fi free-build / tower defence | per-frame allocation, palettes, struct-heavy state |
+| `hit-by:crawler` | [jjstwerff/crawler](https://github.com/jjstwerff/crawler) | clean-room hex roguelike | the hex library family end to end, renderer-agnostic kernel |
+| `hit-by:routing` | [jjstwerff/routing](https://github.com/jjstwerff/routing) | phone-first route planner | the NON-game axis — big read-only stores, `--native-wasm`, remote/paged stores |
+| `hit-by:zerotrust` | [jjstwerff/zero-trust-shared-files](https://github.com/jjstwerff/zero-trust-shared-files) | federated shared-file system | crypto, recursive enums, text-returning `cdylib` boundaries |
+| `hit-by:planets` | (no public repo) | small consumer | module + `--lib` resolution, package layout |
+| `hit-by:loft` | [loft-lang/loft](https://github.com/loft-lang/loft) | the language itself | a nightly gate, a sanitizer, a sweep, a follow-on investigation |
+
+The libraries those consumers import are `loft-lang/loft-libs-*` (world, net, graphics,
+game, assets, core, plugins, docs) plus the registry — a defect surfaced there is still
+labelled by the APPLICATION that ran into it, because that is the project that can
+reproduce it.
+
+**This table is the index for ecosystem analysis, not only a label glossary.**  Asking
+*"is loft usable?"* means asking what its consumers hit, and the answer is only readable
+if the consumer set is written down: a label with no project behind it cannot be checked,
+and a consumer with no label cannot be counted.  Keep a row per project, and add the row
+when the label is minted rather than after.
 
 It says who HIT it, nothing more.  A follow-on we filed while fixing something else is
 `hit-by:loft` even when a consumer's report is what sent us into that subsystem: we hit it.
