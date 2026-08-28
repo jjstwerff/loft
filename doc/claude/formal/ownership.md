@@ -157,9 +157,13 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **1** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098) — D-own-13's second face
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+D-own-17 and D-own-18 both opened and closed 2026-08-28;
+D-own-15 opened and
+closed 2026-08-27 with loft#1119; D-own-14 opened and
+closed 2026-08-27 with loft#1118; D-own-13's second face
 closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 records the two
 witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
 D-own-11 opened and closed 2026-08-26, D-own-7
@@ -171,6 +175,166 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-17 — OPENED AND CLOSED (2026-08-28): a mint carried the DESTINATION's deps
+
+`(O-Deps)` reads a value's deps to place its free, so what a value's deps SAY is the whole of
+what the sweep knows.  A keyed collection literal in value position (`[K { … }]` as a return,
+a call argument, a `??` default) builds into a function-scoped `__kvb_N` accumulator whose
+store is its own — a keyed collection has no wrapper record — and the accumulator was minted
+at the DESTINATION's type, deps and all.  `??` is the position where that destination is a
+BORROW: the subject of `b.c ?? []` is a field read typed `["b"]`, so the mint inherited `["b"]`
+and `get_free_vars`' `dep.is_empty()` ownership test read someone else's store.  Nothing freed
+it, and the mint sits inside the arm — one store per EVALUATION, unbounded in a loop, on BOTH
+backends, with every value right.
+
+Closed by minting at `var_tp.without_deps()`: a deps list describes where THIS value's storage
+comes from, and a freshly minted store's comes from the mint.  The `vector` twin three lines
+away has always minted dep-free, which is why the defect was keyed-only.  Guard:
+`tests/scripts/a-keyed-literal-default-owns-the-store-it-mints.loft`.
+
+### D-own-18 — OPENED AND CLOSED (2026-08-28, loft#1121): a store allocated for a value that overwrites it
+
+`(O-Deps)` places a free from the deps a value carries, and the deps are also what decides
+whether a slot gets a store at all.  A `??` vector-literal default has two shapes: one where
+`_vec_N` owns its store and the literal fills it in place, and one where `vector_db` mints a
+wrapper record and writes `_vec_N = OpGetField(__vdb_N, 0)` — a VIEW.  Both took the owning
+preamble, so the second overwrote a live store the moment the null arm ran: one orphan per
+EVALUATION, unbounded in a loop, `--native` only, values right throughout.
+
+`--interpret` was clean for a reason that is not this rule: its assign path frees the displaced
+store before it rebinds an owning local (`src/state/codegen.rs`, the `owned_ref &&
+!s1_substituted` arm).  So the backends agreed on the answer and disagreed on the heap, which is
+the same shape as D-own-16 above and the reason only the native leak channel could see it.
+
+Closed by giving the backed shape `inline_ref` rather than `skip_free`.  Those two bits were
+conflated: `skip_free` says *do not allocate* AND *never free*, and only the first half is
+wanted here — a borrowed subject's `??` in return-tail position hands `_vec_N` to the
+return-delivery materializer, which owns its free.  The site already applied `skip_free` for an
+OWNED subject and withheld it entirely for a borrowed one; `inline_ref` is what the borrowed
+case could always have had.
+
+⚠ **Which shape a site is cannot be read from the deps.** The same line strips them for BOTH,
+so by the time anything asks, the two agree — gating on the dep list left the owning shape
+building into a null sentinel and every in-place `?? [lit]` answering length 0.  It is read off
+the emitted block instead, which says so: the wrapper shape contains the `OpGetField` assignment
+and the owning shape does not.  Guard:
+`tests/scripts/1121-a-backed-default-does-not-allocate-a-store-it-overwrites.loft`, which scores
+that 0 beside the leak.
+
+### D-own-16 — OPEN (2026-08-27): a SELF-referential join never frees the store it displaces
+
+`(O-Deps)` places a free from the deps a value carries.  A local reassigned from a join over
+ITSELF gets none placed: `c = mk(i) ?? c` retains every displaced store, nine of ten over ten
+rounds, both backends, values right throughout — so only the leak channel speaks.
+
+```loft
+c: SN? = SN { x: 5 };
+for i in 0..10 { c = mk(i) ?? c; }   // kt=78 SN×9 at exit
+```
+
+It is genuinely the hard shape rather than an oversight: the borrow arm IS the variable being
+assigned, so freeing the displaced store before the assignment is a use-after-free on the arm
+that takes it, and only a per-execution comparison can tell the two apart.  That is what
+`OpBindOrCopy` exists for, and the reassignment does not reach it.
+
+**Measured and REVERTED — do not re-run this.**  `Ownership::classify`'s var-cycle back-edge
+answers `Borrowed { base: u16::MAX }`, which reads as *"no nameable witness"*, and the obvious
+reading is that the cycle arm's base is the variable itself, so naming it would make the join
+witnessed.  It changes nothing: the leak is identical on both backends with `base: *v`.  The
+missing free is therefore not the witness's to license, and the next place to look is the
+reassign-site machinery that excludes it — `owned_slot_reassignments` skips a var that is an
+ARGUMENT, and its comment records that param-slot displaced frees *"stay with the witness
+mechanism"*, which is the sentence this measurement falsifies for the self-referential case.
+
+Found while building loft#1119's boundary matrix; distinct from D-own-15, which was the
+oracle answering differently per caller rather than a free that is absent for everyone.
+
+### D-own-15 — CLOSED (2026-08-27, loft#1119): the ORACLE answered differently depending on who asked
+
+`@FR-O-Oracle` is the claim that there is ONE own-vs-borrow derivation. That claim needs the
+answer to be a function of the value alone; here it was a function of the value AND of which
+caller happened to be asking.
+
+`Ownership` carries a set of variable slots that are already in flight, so a self-referential
+chain (`c = t[k] ?? c`) yields a conservative answer instead of recursing for ever. A slot
+number only names a variable within ONE function's variable space, and `return_ownership`
+walks the CALLEE's body — with the caller's set still in hand. The caller's `__ncc_3` and the
+callee's `__ret_1` are both var 3, so the walk read the callee's own temp as self-referential
+and answered `Borrowed { base: MAX }` for an arm that borrows nothing. The callee's return
+then read `Join { base: MAX }` — "no nameable witness" — where the identical call in a
+different statement context answered `Join { base: 0 }`.
+
+Everything downstream reads that one fact, so everything downstream declined: D-own-14's lift
+(`scopes::inline_struct_return` via `ncc_join_is_witnessed`) left the block inline and the
+store the callee minted was owned by nothing, one record per EVALUATION on both backends. The
+filed symptom was a discarded call statement inside a loop; the loop and the discard were
+neither of them the condition. What decided it was which SLOT NUMBER the caller's temp got.
+
+```loft
+fn pick(a: SN?, c: boolean) -> SN? { if c { a } else { SN { x: 9 } } }
+fn main() { p = SN { x: 7 }; for i in 0..4 { use_it(pick(p, false)?.x); } }
+```
+
+Closed by scoping the in-flight set to the function whose body is being walked — the callee
+gets a fresh one and the caller's is restored after. The FUNCTION-level guard (`visiting`)
+is untouched and still stops genuine recursion.
+
+**What generalises past this entry, and it is the same lesson D-own-12 closed on from the
+other end:** an oracle whose answer depends on the ORDER it was asked in is not one
+derivation, whatever its doc says. The give-away was in the issue before the cause was — the
+same call site, the same arguments, the same callee, two different answers — and that shape
+is a statement about the ANALYSER's state, never about the program. Reading it as a gap in
+the gate cost a day; the gate was doing exactly what it said.
+
+⚠ **The guard for this is a numbering SWEEP, and it has to be.** The collision needs the
+caller's in-flight slot to equal a slot the callee's tail walk reaches, and the callee reaches
+exactly one — measured, and measured again with a seven-armed callee, which widened nothing.
+So which caller hits it is a coincidence of how many locals that caller declares first: one
+extra compiler temp anywhere moves every number by one and a single hand-written cell goes
+quiet without saying so. `tests/scripts/1119-a-callees-var-slots-are-its-own.loft` is twelve
+callers over two callees for that reason, and its header says what to do if every cell ever
+goes quiet at once (widen the sweep — do not delete the file).
+
+### D-own-14 — CLOSED (2026-08-27, loft#1118): a JOIN return used INLINE had no owner
+
+`(O-Deps)` places a free from the deps a value carries. A callee whose return may be its
+ARGUMENT or a store it MINTED answers `Own::Join`, and which one it is cannot be settled
+statically — only per execution. Bound to a local that already works: the bind goes through
+`OpBindOrCopy`, which adopts the minted arm (so the scope-exit free is right) and
+materialises the borrowed arm (so the caller's argument is intact).
+
+Used INLINE it did not. The `??` / `?` discharge lowers to an `ncc` value-block whose temp is
+`skip_free` — the block's result ALIASES it — so the minted store was owned by nothing: one
+leaked record per EVALUATION, unbounded in a loop, and the values right throughout, so only
+the leak channel spoke. `scopes::inline_struct_return` is the lift that cures exactly this
+(loft#879), and its `dep.is_empty()` guard refused the shape, because a `Join` return carries
+a dep on the argument it may borrow.
+
+The guard was not careless: lifting a value that really IS a borrow and freeing the temp is a
+use-after-free, the direction that cannot be recovered from. What makes the lift admissible
+is that the bind which follows is the runtime guard and not a static bet — a lifted temp is a
+DENSE `Reference`, so the heap first-bind dispatch reaches it and emits `OpBindOrCopy`. The
+lift therefore asks the same `Own::Join`-with-a-nameable-witness question that decides
+whether the guard is emitted at all, so it cannot fire where the guard would not.
+
+**The narrowing is the load-bearing half, and it was measured rather than reasoned.** loft's
+IR spells every operator as a `Value::Call`, so "the subject is a call" also matches an
+ELEMENT READ — `t[p] ?? d` is an `OpGetVector` — which is a view into a container the caller
+still owns. Admitting it made the ownership fuzz gate's `local_source` cell answer WRONG on
+`--native` with the two backends diverging. Only a call to a LOFT-DEFINED function is lifted,
+and only the block's FIRST statement is read: a default arm is frequently a call of its own
+(`t[p] ?? dflt()`), and searching the block for ANY call re-admits the cell just excluded.
+
+Three narrowings were tried against that gate before this one held, which is the record worth
+keeping — the gate falsified each in turn, and none of the hand-built cells could.
+
+Guarded by `tests/scripts/1118-an-inline-join-return-is-lifted-and-guarded.loft`, whose
+borrow-arm cells are scored by the caller's variable AFTER the loop rather than by the leak
+channel: a leak channel cannot see an over-free, because freeing more always reads as an
+improvement. Falsified at `aed98943` — interpret leaked `SN×750` → clean, native `SN×3` →
+clean. That native count is the second thing worth keeping: a small repro is clean on
+`--native`, which reads as "interpreter-only" until the loop counts show otherwise.
 
 ### D-own-13 (second face) — CLOSED (2026-08-27, loft#1107): the ELEMENT position witnesses its ROOT
 

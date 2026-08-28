@@ -136,6 +136,19 @@ class ONE LEVEL DOWN — a notion with two TYPE spellings — where a nullable s
 rewrite that produces the second runs BETWEEN the passes.  Four failures from that one root, two
 of them silent wrong answers and two of them legal programs refused; all fixed (B6j), with the
 predicate given one home and the 56 hand-spelled recognitions of it left as a ranked queue.
+**B6s then measured the floor B6p had left**: ten more opaque verbs over 198 bare call sites,
+**eight** `(verb, caller)` pairs — five of which only a second ENTRY POINT can see, because the
+dump renderers are on the diagnostic path a passing program never takes — three defects fixed,
+two duplications merged, and one one-home peel built, measured to diverge on `--native`, and
+BACKED OUT with the measurement written at the site.
+**B6t read the first of `spellings`' 17 never-read sites** and the yield came from one former
+UP: a tuple MEMBER is not parsed against its declared type, so six shapes the return and
+argument positions accept are refused — or ICE — in a declared local.  Two independent causes,
+each of which alone reads as the whole cure; both fixed.  The census under it is the entry's
+real product: the `⇐` expected-type channel has **ten push sites carrying six different
+admission lists**, and `Type::Tuple` is in none of them — which is why the same shapes still
+fail in a `return` and in an argument, filed as **loft#1122**.  A `--native`-only silent wrong
+answer found beside it is **loft#1123**.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -448,7 +461,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 322 | 305 | **17** |
+| 323 | 306 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2081,11 +2094,770 @@ blocks on, and not one of the 41 commits measured an op count except where someb
    reports INERT against a ref that already carries the fix, and the gate fails on all three of
    its shapes — a new file with no record, a retrofitted file still in the baseline, and a
    baseline line for a file that no longer exists.
-2. **A screen for `Optional` transparency.** `is_dbref`, `heap_dep` and `deps_mut` each decide
-   whether they peel the wrapper, three verbs disagreed this week, and there is no list of which
-   callers go through `.base()`. Same shape as the `spellings` screen, one type former over.
-3. **Record the axes a matrix HELD FIXED, in the guard file.** Cheaper than an instrument and it
-   is the thing five separate failures had in common.
+2. ✅ **A screen for `Optional` transparency — DONE.** `ir_walker_audit.py optional`, both halves:
+   who discriminates on a `Type` variant without peeling, and — the list that did not exist — who
+   goes through `.base()` before asking each opaque verb. It reproduced 15 of 15 hand answers, and
+   the corpus ranking behind it says only four (verb, caller) pairs are ever REACHED by a `τ?`.
+   Three peels and one lock came out of it; see B6p.
+3. ⚠ **Record the axes a matrix HELD FIXED — DONE, but not in the form proposed.** The DECLARED
+   form is falsified by this repo's own register: D-own-6 wrote its pinned axis into its closing
+   paragraph and four more defects still came from moving it (*"an axis named in a closure is not
+   an axis measured by it"*). A declared list is only as good as the author's awareness, which is
+   the thing that failed. What shipped is DERIVED — `scripts/matrix_axes.py`, eight axes each
+   carrying the DOMAIN the language offers, so the tool can name an axis nobody considered.
+   Scored 6 of 6 against hand answers written first. Its own depth-RANKING was then falsified by
+   the same oracle, so there is no corpus queue; the products are a per-file census and a PAIR
+   cross. See B6q.
+
+#### B6n — retrofitting 878 guards, and five ways the retrofit reported success while doing less than it said (2026-08-27)
+
+The negative-control gate (B6m recommendation 1) shipped with a baseline of **878** guard files
+that predate it. Retrofitting them is mechanical in principle — the control for a guard is the
+PARENT of the commit that added it, `git log --diff-filter=A` answers that, and
+`falsify.sh --bulk` groups by ref so each control is built once. 187 distinct refs, one shared
+target dir so the dependency crates compile once: **61 s cold, 8.7 s warm**, which turns six
+hours of building into thirty minutes.
+
+**The verdicts split three ways, and the split is the deliverable.** A file that has FAILED on an
+earlier build can catch a regression; a file that never has is a LOCK on current behaviour. The
+retrofit says which in the line rather than writing one uniform string:
+
+| verdict | the line it writes |
+|---|---|
+| **falsified** | `@falsified-at: <ref> — <channel and numbers>` — e.g. `exit 139 -> 0` (the control SIGSEGVs), `leaked kt=64 M×150 -> clean` |
+| **INERT** | `none — LOCK, not a guard: measured inert against <ref> …, so it has never failed on any build` |
+| **annotation-scored** | `none — scored by @EXPECT_ERROR / @EXPECT_FAIL, where a REFUSAL is the passing answer` |
+| **not runnable alone** | `none — a plain single-file run cannot score this one` (the `850*` cross-package guards need `--lib` dirs) |
+
+⚠ **The INERT residue is real and its reading is not the obvious one.** Around a quarter of the
+corpus passes on its own control — and a large part of that is PROVENANCE, not rot: `@PLN25`'s
+finish-line commit added a batch of files for a model that landed behind a default-on gate, so
+the parent already answers the same. Those files are not broken; they are locks, and calling them
+guards was the inaccuracy. Four were hand-checked before any of it was written down
+(`372-field-elem-set-nested-vector-uaf` answers 4 passed on both trees).
+
+##### Five ways the retrofit itself reported success while measuring less than it claimed
+
+This is the part worth the section. The tool built to catch inert measurements produced five of
+them, in one sitting, and each was found by a different accident:
+
+| | what reported success |
+|---|---|
+| **`--path` with no separator** | `run_tests` builds the stdlib directory as `default_dir.to_string() + "default"`, so `--path /tree` looks for `/treedefault` and answers *"cannot load default library"*, exit 1 — which reads as a DIFFERENCE and scored every `main`-less guard as falsified by the tree. A quarter of the first sweep's verdicts. |
+| **a missing `--path` on the other side** | giving the HEAD build its own `--target-dir` (so it cannot take the main cargo lock during a gate) without the matching `--path` made HEAD exit 1 for want of a stdlib |
+| **stdin swallow** | `git worktree add` and `cargo build` read stdin; inside a `… \| while read` loop they ate the rest of the ref list. The sweep stopped after **51 of 186 refs, in order, with exit status 0** — a run that did 29 % of its work and reported success |
+| **no outer bound** | an OLD control running a NEW guard hung somewhere `LOFT_TIMEOUT` does not reach — measured at ten minutes against a 180 s bound — and the sweep stopped silently on that one file |
+| **a self-matching `pkill`** | `pkill -f "falsify.sh --bulk"` matched the shell running the `pkill`, so the command killed itself and reported the job as still running |
+
+Three of the five are the SAME shape as the four in B6m — a channel measuring the harness rather
+than the subject — and two are new: **a loop that silently processes a prefix**, and **a bound
+that is not a bound**. Both now have their cure written where the next reader hits it: the ref
+list is read on FD 3 with `</dev/null` on every command that reads stdin, and every run carries a
+`timeout` backstop so a run the outer bound kills scores `exit 124`, which is a difference like
+any other and says plainly which side could not finish.
+
+**The generalisation, which is not "test your tools":** every one of these five was found by
+noticing that a NUMBER was wrong — a quarter of a class sharing one verdict, 51 being suspiciously
+round, zero rows after fifteen minutes. None was found by reading the code. **A batch instrument
+needs a count you can sanity-check at a glance**, and the ratio between what it processed and what
+it was given is the cheapest one there is.
+
+⚠ **And the corollary, from the sibling checkout, which is the sharper half:** *a number that is
+wrong in an interesting way is a finding even when it is not the finding you were after.* Their
+`--tests` run reported **3255 files** where one was named, and it read as noise for an hour
+because they were hunting a leak; mine reported **51 of 186 refs** and read as a completed sweep
+because I was reading verdicts. Same failure in opposite directions — a count nobody was looking
+at, carrying the answer. What came out of theirs was loft#1113, a SIGSEGV in a three-condition
+closure shape that has been in the tree for months, reachable only because the tree walk ran a
+probe under `doc/claude/plans/**/probes/` **that no suite runs** — which is a second finding
+again: a whole directory of executable `.loft` files no gate reaches.
+
+#### B6o — the directory no gate reaches, measured: 857 files, two faults, both already filed (2026-08-27)
+
+B6n ended on a finding it did not work: `doc/claude/plans/**/probes/` holds executable `.loft`
+files that no suite runs, and loft#1113 was reachable only because an unrelated change happened
+to walk one.  That is now a measurement rather than an anecdote.
+
+**857 checked-in `.loft` files under `doc/`; 25 of them are named by a test.** The rest are the
+residue of finished investigations — they kept parsing and running long after their plan closed,
+and nothing would have said if one stopped.  `make doc-probes`
+(`scripts/doc_probe_sweep.sh`) runs each on the current build and reports the channel:
+
+| | count | reading |
+|---|---:|---|
+| clean exit | **798** | ran to completion; says nothing about the ANSWER (see the caveat below) |
+| refused (exit 1) | **55** | read: all legitimate — the `40-reshape-refusal/X*` probes assert exactly the diagnostic they get, four more are stale against the `spacial`→`spatial` rename (@PLN48), and `80-nested-closure` is refused by the restriction its own header documents |
+| hard fault | **4** | two environmental, two real — **2 after the fix below landed**, both environmental |
+
+**The two real ones are loft#1113, and the second file is new to it.** Both
+`52-value-block-borrow-cleanup/probes/85-closure-returns-coalesce.loft` (the file the issue was
+filed from) and its sibling `86-prebind-closure.loft` SIGSEGV at `OpAppendText`.  86 is the
+WORKAROUND 85's header prescribes — it binds the element before the lambda instead of capturing
+the vector — so the two files together already showed that capture is not the axis, which is what
+the issue's matrix later established by moving it.  The other two faults are this box, not the
+language: a graphics fixture cdylib that registers no marshal bridge for two of its `#native`
+functions, and a path dependency on a `loft-ffi` directory that does not exist here.
+
+**The root cause, which the issue does not yet carry.** The fn-ref call ABI passes **exactly one**
+text work buffer for a text-returning target, and three sites say so — the injection in
+`parse_call_ref` (*"one work_text matches the canonical one return buffer per text fn ABI"*), the
+P227 ensure in `text_return` (*"callers always allocate exactly one buffer per text-returning
+fn-ref call"*), and the runtime reconciliation in `State::fn_call_ref`, whose two arms are
+0 buffers (pop the spurious one) and 1 (keep it).  But `TextDep::PromoteHidden` promotes one
+buffer per promotable text LOCAL, and a `return e ?? "fb"` body has two of them — the local and
+the `??` accumulator.  The callee then declares two hidden `RefVar(Text)` attributes where the
+caller supplied one.  Native makes this visible rather than fatal: it aliases the single binding
+into both parameters, `n___lambda_0(cell, _farg_0, _farg_0)`, which is the E0499.  The emitted
+lambda BODY is byte-identical to the working named-function twin, so the callee side was never
+wrong — only the call.
+
+**Fixed in the sibling checkout and cherry-picked here** (`4458a9ec`, their `1d00a25f`) — the
+enforcement point this analysis reached independently: both minting sites read one
+`holds_text_work_buf` predicate, so the first promotion to ask takes the buffer and a later text
+local stays a local, delivered by copy exactly as `SkipOwnedLocal` already prescribes.  Verified
+after the pick rather than assumed: the two doc probes print their own `PASSED` again, the 20
+matrix cells above pass on BOTH backends, and the guard
+(`tests/scripts/1113-a-lambda-carries-one-text-work-buffer.loft`, 15 asserted cells) carries
+`@falsified-at: 20e25e9a — interpret exit 139 -> 0, native exit 1 -> 0` — a line re-measured here
+rather than taken on trust, and it reproduces exactly.  `make ci` 4473/4473, and the sweep that
+opened this entry now reports two hard faults where it reported four.
+
+⚠ **And their reading of the shape is wider than mine was** — worth recording because my matrix
+agreed with the filed scope and the filed scope was a third of the defect.  I moved backend,
+result type, capture, entry point and `return`-vs-tail, and concluded the crash needed a lambda +
+`return` + `??` + text.  Only the LAMBDA is real: `?` reaches it (the other discharge rule), so
+does the null branch, a zero-argument closure, and **two plain text locals with no discharge
+anywhere**.  What the shapes share is a SECOND buffer, not the spelling that asked for one — and
+`??` was simply the cheapest way to ask.  The axis I never moved was *how many promotions the body
+makes*, which is the axis the defect lives on; it is now `formal/closures.md` deviation D-clo-4,
+whose `OPEN: 0` has been re-measured twice and broken both times.
+
+##### What the sweep cannot say, and the two ways it said something wrong first
+
+⚠ **Crash channels only.** These files carry no expected values — that is what
+`scripts/probe-matrix` requires and what they do not have — so a clean run means *nothing
+faulted*, never *everything is correct*.  798 exits of 0 are 798 programs that finished, and the
+sweep is blind to every one that finished with the wrong answer.  It is a REPORT for the same
+reason: some checked-in probes fault ON PURPOSE (`parallel_read_parentvar_SIGSEGV.loft` is named
+for it), so a verdict would need a baseline this does not keep.
+
+B6n's rule — *a batch instrument needs a count you can sanity-check at a glance* — was applied
+here and caught both of this sweep's own errors, neither by reading the code:
+
+| | what reported wrong |
+|---|---|
+| **`.loft` is an extension AND a directory** | a run writes its cache to `.loft/` beside the script, so `find -name '*.loft'` matched 20 cache DIRECTORIES and scored every one as a failure.  The count said 877 where the tree holds 857 |
+| **a bound too TIGHT** | at 20s under six-way load, a 16s performance probe and a 28s parse were reported as crashes — five faults that were the harness.  This is B6n's *"a bound that is not a bound"* in mirror image, and the cure is not a bigger number: a run killed by either bound is now its own class, because the only honest verdict on one is *re-run it alone* |
+
+#### B6p — the screen one type former over: 43 opaque sites, 4 that a `τ?` ever reaches (2026-08-27)
+
+B6m's ranked list put a screen for `Optional` transparency second, and named why: *"`is_dbref`,
+`heap_dep` and `deps_mut` each decide whether they peel the wrapper, three verbs disagreed this
+week, and there is no list of which callers go through `.base()`."*  `Optional(τ)` is `τ` with a
+nullability bit and the SAME storage (@FR-L-Null: layout(τ) = layout(τ?)), so a site that resolves
+a shape by naming variants answers for `τ` and not for `τ?` — one notion, two spellings, which is
+`spellings` (B6g) with the type former swapped for the IR one.
+
+`./scripts/ir_walker_audit.py optional` asks it mechanically, in two halves.  The FUNCTION half
+classifies every body that discriminates on a `Type` variant; the CALLER half is the list the
+first half cannot give — for each opaque verb in `data.rs`, who peels the receiver before asking
+and who does not.
+
+| functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
+|---:|---:|---:|---:|
+| 643 | 281 | 4 | **358** |
+
+(gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
+and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
+picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
+added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
+again, then 642 · 270 until B6s peeled seven and merged one body away — every count here is a
+snapshot of two moving checkouts, so re-run the tool rather than
+reading a number.)  It reproduces **15 of 15** hand answers written down before it was
+built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
+`for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
+`is_scalar` / `heap_def_nr` / `is_unknown` are opaque; `contains_def` descends; `is_heap_owned`
+is not in the population at all, because it delegates rather than matching.
+
+**370 is a list, not a queue — so the second measurement is the one that ranks it.**  The four
+heap-shape verbs the caller table puts at the top (`heap_dep`, `is_dbref`, `heap_def_nr`,
+`is_scalar` — 43 bare call sites between them) were instrumented INSIDE the verb: fire when the
+argument is an `Optional` *and peeling would change the answer*, and name the caller off the
+backtrace.  Over the 883-program `tests/scripts` corpus that is **four (verb, caller) pairs**:
+
+| pair | files | verdict |
+|---|---:|---|
+| `is_dbref` ← `Parser::block_result` | 883 | the P236 branch-join question, asked bare — **peeled** |
+| `heap_def_nr` ← `State::known_type` | 839 | the schema id an `OpReturn` records — **peeled** |
+| `heap_dep` ← `Ownership::reassign_sites_of` | 4 | the ownership oracle's heap filter — **peeled** |
+| `heap_dep` ← `protectable_ref_args` | 2 | already handled: that caller asks BOTH questions |
+
+⚠ **The fourth row is a false positive by construction, and it is worth keeping visible:** the
+probe measures the VERB, so a caller that asks `tp.heap_dep().is_none() && tp.base().heap_dep()
+.is_none()` — which is exactly what `protectable_ref_args` does, with the comment saying why —
+trips it on the first half.  A screen over a shared verb cannot see the caller's second question.
+
+**What the three fixes actually change, each measured rather than argued.**
+
+*The ownership oracle was blind to nullable locals.*  `reassign_sites_of` filters to heap-typed
+vars because "only HEAP-typed vars can carry the over-free leak"; asked bare, every `τ?` local
+fell out of that filter.  Two functions differing only by a nullability marker:
+
+```
+fn f_bare(c: boolean) -> integer { s = mk(1); s = mk(2); if c { s = mk(3); } s.x }
+fn f_opt(c: boolean)  -> integer { s: S? = mk(1); s = mk(2); if c { s = mk(3); } s?.x }
+
+before:  OWN fn=n_f_bare reassign v=1(s) prior=Owned rhs=Owned
+         OWN fn=n_f_opt   ← no reassign row at all
+after:   both report the same row
+```
+
+The over-free leak shape the oracle exists to name is `prior=Owned rhs=Join(...)`, so it could
+never have reported one on a nullable local — and loft#1106 was an ownership defect on exactly
+that shape.  An instrument blind to a class reports it green.
+
+*A nullable heap return recorded no type at its `OpReturn`.*  `known_type` resolves a heap type
+through `heap_def_nr` and otherwise falls back to a lookup BY NAME; nothing registers `"S?"`, so
+the fallback answered `u16::MAX` and the one consumer — the execution-trace renderer — had no type
+to decode the returned value with.  Visible in the corpus, which is better than the trace could
+show it: three programs' disassembly went from a bare `Return(...)` to `Return(...) type=Item 78`,
+`type=I877Cell 78`, `type=I882H2 78`.
+
+*The branch join skipped every nullable return, and the corpus could not have said so.*
+`block_result` asks `is_dbref(result)` to decide whether an `if`/`match` tail's arms share one
+return slot (P236, whose comment says native otherwise "drops the if/else's value and returns the
+typed null sentinel").  Peeling leaves the emitted IR of **all 883** corpus programs byte-identical
+— so no corpus program has a nullable heap return whose tail this join could unify — and it changes
+a hand-written `fn pick(c) -> S? { if c { S { x: 7 } } else { S { x: 9 } } }`: frame 40 → 24 bytes,
+two work-refs → one, two `OpFreeRefIfDistinct` → one.  Values were right both ways on both
+backends, so this is a slot, not an answer.  **The finding under the finding is that zero**, and
+`tests/scripts/a-nullable-return-joins-its-branch-arms.loft` now pins the shape.
+
+**Both filings came back FIXED in the sibling checkout the same day, and re-measuring the pick
+here is what mattered — loft#1118 arrived half-cured.**  Their four commits are on this branch
+(`12fc2454`…`2df4a99a`); #1117 answers correctly on all four of my repros, and #1118's loop cell
+went clean.  But the single-evaluation cell did not, and eleven more contexts with it: the lift's
+admission predicate reads the `ncc` block's FIRST statement, and a REUSED `__ncc_N` opens its
+block with its own overwrite `OpFreeRef`, which shifts the `Set` to second.  So the lift fired
+only where the temp was fresh — a `for` body — and leaked one record per evaluation everywhere
+else.  Skipping a leading FREE (not any statement: that would re-admit the `t[p] ?? dflt()` cell
+their narrowing was measured to exclude) takes the matrix from 1 of 13 clean to 12 of 13, values
+unchanged, and the release fuzz sweep — the 54-cell both-backends replay that falsified three of
+their candidate narrowings — passes.  The thirteenth was filed as **loft#1119** — a DISCARDED call statement inside a
+loop body — and the sibling's fix for it says my filed diagnosis was wrong in an instructive
+way: neither the loop nor the discard decides it.  `Ownership`'s in-flight var set crossed the
+caller/callee boundary, where a slot number names a different variable, so a callee's own temp
+read as self-referential and the oracle answered `Join { base: MAX }` — no nameable witness —
+for a value that has one.  Which caller's temp collides is a numbering accident, which is why
+the symptom looked like "loops".
+
+⚠ **The two fixes are orthogonal, and the A/B is the reason both are here.**  With only their
+slot-scoping fix, ELEVEN of my eighteen cells still leak; with only my leading-free fix, the
+loop-discard cells leak; with both, all eighteen are clean.  So the leading-free half is not a
+symptom patch on their cause — it is a second, independent one, and either alone reads as a
+complete cure on the half of the matrix it covers.  `tests/scripts/1118b-…` carries the A/B in
+its header so the next reader does not have to redo it.
+
+**And the lock earned its place on its first run — loft#1118.**  `make ci` failed on it: one
+`SNRet` record leaked.  Not from anything in this thread — the same cell leaks identically on the
+control at `81b42f3a` — but because the file is the first corpus program to hand a VARIABLE to a
+nullable parameter and use the result **without binding it**.  The cell isolates to three facts
+that must meet: the result is used inline, the parameter is nullable, and the callee mints on the
+taken arm.  One record per evaluation, `SN×6` in a six-iteration loop, values right on both
+backends.  The mechanism is loft#879's inline-`ncc` lift, whose `dep.is_empty()` guard refuses a
+`Join` return (it carries a dep on the parameter it may borrow) — and the carve-out is the map
+again: that comment already says an unlifted block "leaves the subject's store owned by nothing
+when the block is used INLINE — one leaked record per evaluation, unbounded in a loop".  Filed
+rather than fixed, because the cure is *lift, but bind through loft#1106's runtime guard*, and that
+guard requires an `Optional`-typed temp and a `Value::Call` — the lifted temp is declared
+`ref(SN)` and what it would lift is the `?.`'s BLOCK.  The lock keeps the bound spelling and names
+the issue for the inline one.
+
+⚠ **Two instruments were blind to it, in the same direction.**  `--tests` does not leak-check —
+only `tests/wrap.rs` does — so the guard passed six-for-six on both backends while leaking.  And
+`falsify.sh` reads its leak column off the run's stderr, which means **for a `main`-less guard (the
+corpus's standard shape) that column can never fire**: it scored `0|0|none|none` on both trees for
+the file `make ci` then failed.  A leak guard written in the normal form is therefore recorded
+INERT — mislabelled a lock — and B6n's INERT residue is a quarter of the corpus.  The warning is
+now in `falsify.sh`'s header where the next reader hits it; the cure is a leak check on `--tests`,
+which is a decision about every library's `loft test`, not a tweak.
+
+**Found on the way — loft#1117.**  The enum cell of the branch-join matrix does not compile at
+all: `if c { E::A { … } } else { E::B { … } }` is refused with *"expected A, got B on else"*, while
+`match k { 0 => E::A { … }, _ => E::B { … } }` — which lowers to nested `Value::If` — accepts it,
+and so does an early `return` plus a tail.  `formal/types.md` `(C-Var)` settles which is right
+(`Reference(S) ⤳ Enum(E) ⟸ S ∈ variants(E)`), so the refusal is the deviation.  **Fixed in the
+sibling checkout and picked in here (`1cc265fe`), as a JOIN rather than a conversion** — and the
+half worth knowing is the second one: without it `v: A = if c { E::A { … } } else { E::B { … } }`
+is *accepted* and a slot declared as one variant holds another, loft#980's class.  Filed rather
+than fixed at the time: the else arm is checked against the THEN arm's type, and pushing the expected type into the
+arms is a bidirectional-checking change in the typing core.  Nothing to do with `Optional` — the
+non-null twin fails identically.
+
+**One peel deliberately did NOT go in.**  `is_protectable_store_type` is bare `is_dbref` while the
+caller two lines up asks the peeled question, and that function's own doc says to keep the two in
+step — so peeling looks like the obvious fourth fix.  It cures nothing measured (loft#1118's
+mechanism is elsewhere) and it is **not inert**: it changes emitted code in six corpus programs,
+every one a guard for this machinery (1021, 1029, 1105, 1106, 1107, 882), in the direction where a
+mistake is a use-after-free rather than a leak.  Left alone, with the map written at the site.
+
+⚠ **Three limits, all lower-bound in the same direction.**  A body that peels ANYWHERE reads as
+seeing, even where a second match in it stays bare (B6f's caveat, one type former over);
+`.base()` is also `use_analysis::Class::base`, a different method sharing the spelling; and the
+corpus ranking is only as wide as the four verbs instrumented — `is_equal`, `content`, `show` and
+`unrewritten` have 126 bare call sites between them and were not measured.  So **370 is a floor
+and four is a floor**.
+
+#### B6q — the axis a matrix pinned, derived instead of declared (2026-08-27)
+
+B6m's ranked list put *"record the axes a matrix HELD FIXED, in the guard file"* third, and
+called it cheaper than an instrument. The premise does not survive contact with the repo's own
+register. `formal/ownership.md` D-own-6 wrote its pinned axis into its closing paragraph and the
+next four defects still came from moving it, which is what that entry says in one line:
+
+> An axis named in a closure is not an axis measured by it.
+
+A DECLARED axis list is only as good as the author's awareness, and awareness is the thing that
+failed. So the form that can work is a DERIVED one: a fixed vocabulary of axes, each carrying the
+DOMAIN of values the language offers, applied to the guard file by a tool. The domain comes from
+the language rather than from the author's list, which is the only reason it can name an axis
+nobody considered.
+
+`./scripts/matrix_axes.py` is that tool. Eight axes, each with a citation to a defect that
+actually moved it — container kind (loft#1104), container provenance (loft#1105), argument
+spelling (D-own-6), statement context (loft#1118), nullability (loft#1106), `??` default shape,
+element type (`formal/tuples.md`'s all-`(integer, integer)` oracle), evaluation count. It is a
+vocabulary of things that have bitten, not a taxonomy invented up front.
+
+**It was scored against hand answers written before it existed, and the scoring is what found its
+bugs.** The oracle is guards later WIDENED: the axis added between a guard's first commit and
+today IS the answer. Six of six reproduced — 1104's `{hash, sorted, index, spatial}` (where B6i
+later found `pick(h[k], …)` leaking at every keyed kind), 1104's missing `coalesce-result` (which
+is loft#1105), 1105's provenance at one of four (the axis B6m names as the one that hid the
+over-free), and 1118b's missing `discarded` (which is loft#1119). Getting there took two detector
+fixes, both of the same kind — a shape the tool could not spell reading as a shape the file does
+not have. `t += (f(x))` has a GROUPING paren, and treating any preceding `(` as an argument list
+hid seven of loft#1118's eight statement contexts; and blanking string bodies erased the code
+inside an interpolation, so a call written there vanished. An eight-context sweep read as three.
+
+⚠ **The tool's own ranking claim was falsified by that oracle, and the tool now says so.** The
+first design ranked files by how many values of an axis they reach — a file reaching several and
+stopping short being an author who was enumerating and ran out of ideas, a file reaching one
+never having claimed to sweep. loft#1105's killer axis sits at ONE of four. Reaching one value is
+not a point test; it is exactly what a pinned axis looks like. There is therefore **no
+corpus-wide queue**, because nothing measured supports one — *every* file in the corpus leaves
+some axis short (892 of 892), which is a thermometer nobody reads (§ B4). Two measurements
+replace it: the per-file census, to run while writing a guard, and the PAIR cross, which is the
+sharper one because every failure B6m counted was a matrix that moved one axis and pinned
+another. A pair, not a value.
+
+`cross A1 A3` over the corpus reads (file-level co-occurrence, so an UPPER bound on real
+interaction — a small number can only be smaller in truth):
+
+```
+                literal   local   field element tuple-el coalesce call-res   chain
+vector              435     428     166      86       44       47       87      68
+hash                126     122      83      57       12       21       23      47
+sorted               60      53      41      22        9       11       12      18
+index                51      45      36      19        9        8       11      14
+spatial              14      12      10       8        4        3        5       7
+tuple               149     148      46      22       66       10       28      27
+```
+
+The thin row is `spatial`, which 20 of 892 guards reach at all, and its thinnest cells are 3–8
+files. Re-run the tool rather than reading these numbers.
+
+⚠ **This table is the tool's SECOND answer, and the first one was wrong in the direction that
+would have been quoted.** It originally reported `spatial × tuple-element` and `spatial × chain`
+at ZERO — never crossed — and a zero is exactly the finding one writes down. The cause was the
+screen's own predicate, which is B6e's lesson recurring: `_classify_arg` returned ONE label per
+argument, so `sp[x, y].t.0` — an element access AND a tuple projection AND a chain — was
+whichever test ran first. The corpus looked as though no guard ever reached a tuple element
+through a container. **What caught it was writing the guard for the zero and finding the tool
+still said zero**, which is a check available for free whenever an instrument reports an absence:
+construct the thing it says does not exist and ask again. The classifier now answers with the
+SET of spellings an argument contains, because a coverage question asks what is present; every
+one of the six hand answers is unchanged by the fix, which is what says the correction did not
+buy its zeros back somewhere else.
+
+**Probing the thinnest cells found a defect with no store-lifetime in it: a tuple-typed struct
+field cannot carry a default.** `t: (text, text) = ("a", "b")` is refused with *"Expect token
+}"* — punctuation, for a composition the language supports on both halves. The boundary is exact
+and it makes the case: integer, text, float, boolean, nullable, `vector<T>`, `hash<T[k]>`,
+`sorted<T[k]>` and a struct field all take a default; tuple is the only type former that does
+not, and the same tuple takes a default as a LOCAL and as a function PARAMETER.
+
+Neither half is in doubt. Tuple struct fields are supported — Plan-06 phase 4d lifted the
+restriction and TUPLES.md § Non-goals lists named tuple fields, single-element tuples, tuple
+iteration, whole-tuple formatting and variadic tuples, not this. Declared field defaults are
+advertised: loft#914's `omitted-field-zero` advice names them as the cure that already exists.
+Only the composition was missing.
+
+The cause is the shape this whole thread is about. `parse_field` reaches a field's type down two
+branches — one for a type written as an IDENTIFIER, one for a type written with a leading `(` —
+and the `= expr` shorthand lived in the first. Plan-06 4d added the second branch for the TYPE,
+beside a sibling carrying a capability, and did not inherit it. `parse_stored_default` is now the
+one home both call.
+
+**Asking what ELSE that branch could not reach found a second capability, which is the point of
+asking.** The identifier branch gets a field `assert(...)` by falling back into `parse_field`'s
+loop; the tuple branch ends the field with a `break` and never arrives. So `t: (integer, integer)
+assert(t.0 > 0)` was refused too, for the same structural reason and with the same message.
+`parse_field_assert` is its one home. Both now parse AND fire: a constraint that is accepted is
+not one that is enforced, so each was violated on purpose and each refuses with *"field
+constraint failed"*.
+
+**The gates, because a refactor's claim is byte-identity and a feature's claim is values.** The
+emitted IR + bytecode of **879** corpus programs is byte-identical between the control at
+`94bbd860` and here; of 880 compared the only one that moves is the tuple-default guard, which
+the control cannot parse. The coverage guard added alongside it does NOT move, which is the same
+fact its `INERT` control record states, arrived at by a different instrument.
+That comparison was falsified two ways before being trusted — it fires on the new shape (0 lines
+vs 2995) and on a one-character change to an ordinary field's default — and its first run was a
+FALSE 878-of-878 caused by an asymmetric path normalisation, each binary resolving `default/`
+beside itself.
+
+⚠ **That gate had a hole exactly where a parser change is most dangerous, and it is now
+closed.** `introspect` emits nothing for a program that does not compile, so the **45
+`@EXPECT_ERROR` fixtures** — the refusal corpus, which is precisely the population a parsing
+change moves — were counted as "no output" on both trees and compared for nothing. A byte
+comparison of their `--interpret` stderr says **45 compared, 0 moved**, and that comparison
+fires on a one-token edit to a fixture. So the corpus is covered twice over: 879 programs by
+emitted IR, 45 by the diagnostic they refuse with. **A file the instrument cannot read is not a
+file that agrees** — it was reported in the same "no-output" bucket as a genuinely empty run.
+
+`tests/scripts/a-tuple-field-takes-a-default.loft` carries the cells, which are the REPLAY axes
+rather than the filed shape: a default is lowered once in the struct's context, which has no
+frame, and replayed at every construction site, so what decides soundness is the element type,
+whether the default needs a TEMPORARY (routed into `__dflt_*` by loft#698), whether it reads `$`,
+and how many times it is replayed. Its `@falsified-at:` records `94bbd860 — interpret exit 1 ->
+0, native exit 1 -> 0`, and says plainly that the channel which moved is EXIT, because the control
+cannot parse the file at all. That says nothing about whether the VALUES are checked, so every
+assertion was mutated in turn and each fails on the assert channel. **A guard falsified only on
+exit is a guard whose values are unproven, and the record has to say which channel moved or it
+reads as more than it is.**
+
+**The thinnest pairs were then crossed, and they are clean.** 30 cells — five container kinds ×
+chain / tuple-element / `??`-result × two container provenances, each rooted in a keyed lookup
+and handed to a borrow-deciding call — pass on both backends with no leak, against a control
+cell that fails. **The third axis is there because the census asked for it.** The first draft
+read `A2 container provenance 1/4 — reaches local-literal`: every cell built its container in
+the function that indexed it, which is precisely the axis loft#1105's matrix pinned and precisely
+why an over-free hid there, a container dying with the frame being unable to witness a free that
+outlives it. That is the instrument doing the job B6m asked for — naming a pinned axis to the
+author who just pinned it, in a file written by someone who had spent the day reading about that
+exact failure.
+
+So the thin cells are a COVERAGE gap and not a defect, which is a result worth having rather
+than a null one: `spatial × chain` and `spatial × tuple-element`, 7 and 4 files across the whole
+corpus, now have a guard that states an expected value.
+`tests/scripts/a-keyed-projection-witnesses-every-kind.loft` graduates them, and its control
+record says `none — INERT`, measured rather than assumed (`make falsify` reports
+`0|0|none|none` on both trees). Naming a channel there would be a false claim of regression
+cover. Two things keep that verdict readable rather than the mislabelling B6p warns about: the
+file has a `main`, so the leak column is the live one and not the blind `main`-less shape; and
+six cells were mutated by moving their expected total by one, and all six fail on the assert
+channel. **Writing the cells also caught one vacuous by construction** — the `??` cells first
+reached a NON-null field, where the compiler elides the coalesce as redundant and says so, which
+would have left five cells claiming a spelling the program no longer contained.
+
+⚠ **What this does not establish.** The census reads SYNTAX, so every count is a floor: a value
+reached through a `use`d library is invisible, and a file that reaches a value only in a
+commented-out cell reads as never having considered it. The cross is co-occurrence, not
+interaction. And the instrument found this defect the way B6m § 3 predicts instruments work — it
+ranked the cells, and the defect came from a person reading one.
+
+#### B6r — a text auto-merge produced a document asserting both a claim and its retraction (2026-08-27)
+
+Four commits picked from the sibling checkout (`64b95b68`, `85bb936b`, `00e0e491`, `2542c527`).
+Two needed a decision, and the second is a hazard worth naming because nothing in the gate can
+see it.
+
+**Which commits were missing was not answerable by `git cherry`.** It compares patch-ids, and a
+pick that needed conflict resolution gets a new one, so it reported 12 missing when 4 were —
+including commits whose added guard files were already sitting in the tree. Ancestry lies the
+same way (§ *Validate branches by content, not ancestry*). What answered it was file-level
+arithmetic on the tree diff: `src/data.rs` differed by 106 lines and the two candidate commits
+added 62 and 44; `src/scopes.rs` by 114 against 36 + 76. The four newest accounted for every
+differing file exactly, and nothing older did.
+
+⚠ **`2542c527` rewrites a formal-register entry to RETRACT a claim, and the auto-merge kept
+both halves.** D-own-13's second face had recorded *"binding `v[0]` to a local first does NOT
+cure it — a witness gap is cured by a name, an ownership gap is not"* as its discriminator, and
+that commit exists to say the discriminator was itself broken. Git merged the deletion of the
+old paragraph and the insertion of the new one as independent hunks, leaving the retracted
+claim standing beside its retraction and a `fn local` line orphaned outside its code fence.
+It merged **cleanly** — no marker, no conflict, no failing gate. `check_doc_drift.sh` and
+`doc_hygiene` both pass on a `formal/` entry that asserts a thing and its negation, because
+neither reads for coherence.
+
+**The general shape: a findings document is not mergeable the way code is.** Code has a
+compiler that rejects two contradictory definitions; prose has nothing. A `formal/` entry that
+supersedes an earlier reading is exactly the shape auto-merge mishandles, because a retraction
+is a DELETION whose meaning depends on the text it deletes. So a pick that touches `formal/`
+wants its region read, not its exit code checked — and this one was caught only by diffing the
+result against the source branch afterwards and finding one hunk that should not have been
+there.
+
+**`00e0e491` conflicted only in a comment**, and the code below the markers was identical:
+both checkouts derived the same leading-`OpFreeRef` skip independently. The two prose accounts
+disagree about WHICH spellings the unskipped free hid, and each is right about the tree it was
+measured on — whether a spelling reuses `__ncc_N` is a numbering property, which is the same
+reason loft#1119's symptom looked like *"loops"* (B6p). Naming a set that does not hold still
+is what both comments were doing, so the resolved comment states the rule and points at
+`1118b`, which is the measurement.
+
+All six guards — four ours, three theirs — pass on the merged tree, and the remaining
+difference against their branch is exactly our own work: the `parse_field` extraction, B6p's
+three `.base()` peels, and four guard files.
+
+#### B6s — the floor B6p left, measured: 10 more verbs, 8 pairs, and 5 of them only a second entry point can see (2026-08-27)
+
+B6p ranked the `Optional`-opacity list by instrumenting four heap-shape verbs inside the verb
+and naming the caller off the corpus — four `(verb, caller)` pairs — and closed with the
+limit stated plainly: *"the corpus ranking is only as wide as the four verbs instrumented …
+so 370 is a floor and four is a floor."* This is that floor measured. The other **ten** opaque
+`data.rs` verbs the caller table lists — `is_unknown` (82 bare sites), `content` (44), `show`
+(38), `find_fn` (12), `unrewritten` (5), `borrow_deps` (5), `rewrap_deps` (4), `argument` (3),
+`owned_elements` (3), `fmt` (2), **198 bare call sites** — were instrumented the same way and
+swept over the 895-file corpus.
+
+**`#[track_caller]`, not a backtrace.** Each verb fires only when the receiver is `Optional`
+*and peeling would change the answer*, and `std::panic::Location::caller()` names the site
+directly. The predicate is written per verb, which is the honest form: *"would peeling change
+it"* is a different sentence for a verb returning a `Type` than for one returning a `String`.
+
+**Eight `(verb, caller)` pairs — and the entry point decides five of them.**
+
+| verb ← caller | corpus files | seen by |
+|---|---:|---|
+| `show` ← `Definition::header` (return type) | 53 | `LOFT_LOG=static` only |
+| `argument` ← `Definition::header` (return type) | 53 | `LOFT_LOG=static` only |
+| `show` ← `Function::show_code` (block result) | 51 | `LOFT_LOG=static` only |
+| `show` / `argument` ← `Definition::header` (parameters) | 15 | `LOFT_LOG=static` only |
+| `content` ← `Parser::parse_vector` | 12 | any run |
+| `show` ← `Type::show` (tuple element) | 5 | `LOFT_LOG=static` only |
+| `owned_elements` ← `scopes::tuple_owned_elem_frees` | 4 | any run |
+
+⚠ **The first sweep found two pairs. The second found six more, and the only difference was
+how the corpus was run** — `--tests` for the test functions a `main`-ful `--interpret` skips,
+and `LOFT_LOG=static` to make the dump renderers run at all. `show` and `argument` are reached
+on the DIAGNOSTIC path, which a passing program never takes, so a sweep that only runs
+programs reports zero for them. That is [a guard's entry point decides what
+runs](STABILITY_METHOD.md) applied to an instrument rather than to a guard, and it is the
+cheapest correction available: the same binary, the same corpus, one environment variable.
+
+**Three defects, and each was invisible in a different way.**
+
+*A tuple element declared `S?` was never freed* — one record per evaluation, unbounded in a
+loop, values correct throughout. `owned_elements` was a hand-spelled copy of `is_dbref`'s
+list, whose own doc says *"call this function rather than restating it"*; asked bare it did
+not recognise `Optional(Reference(S))`. **The corpus had four programs with a nullable tuple
+element and none could see it**: every one pins the element to `text?`, `integer?` or a type
+variable, and `text` is the one owning shape `tuple_owned_elem_frees` skips ON PURPOSE
+(loft#1004). The store-backed cell is the one nobody wrote — [a pinned channel is not an
+exercised one](STABILITY_METHOD.md), one axis over.
+
+*Every `τ?` in an IR dump rendered as its lowercased `Debug` spelling.* `fn n_takes(p:SD?,
+q:text?, r:vector<integer>?) -> SD["p"]?` read as `fn n_takes(p:optional(reference(710, deps
+{ items: [] })), …)` — the struct by def NUMBER and the dep list by INDEX, in the file
+CLAUDE.md's debugging policy sends you to read first. `Type::name`, the user-facing renderer,
+grew its `Optional` arm in Plan-07 phase 6.1 with a comment saying exactly why; `Type::show`,
+the dump renderer, did not. One notion, two renderers, one of them told.
+
+*The element variable of a nullable collection literal was typed as an unrelated struct.*
+`content()` answered `Unknown` for `Optional(Vector(τ))`, so `unique_elm_var`'s
+`type_def_nr(Unknown)` resolved to def 0 and three corpus programs declared
+`_elm_1: ref(i_parse_errors)` where the element is a `Nine09`, an `Inner`, an `Ent`. It is
+the loft#666 shape — a variable table naming something impossible — and it had been passing
+for as long as nullable collection literals have existed.
+
+**Two duplications merged, both onto a home that already declared itself one.**
+`Parser::keyed_type_id` and `Parser::keyed_known_type` are the same function, 40 lines apart
+in two files, each spelling the five keyed kinds itself — and they carried DIFFERENT
+nullability contracts, one saying *"peel the `?` before calling"* in its doc and the other
+peeling nowhere. `keyed_type_id` now delegates. `owned_elements` asks `is_dbref`. And the two
+`par` record walkers restated `owned_elements`' membership a third and fourth time, guarded by
+a `debug_assert` that says *"hitting it would indicate `owned_elements` and the match above
+are out of sync"* — absent from release builds and [absent from the ordinary debug build
+too](STABILITY_METHOD.md). They ask the one list now, so there is nothing left to assert.
+
+**A leak cured on the way, in `work_keyed`.** The accumulator a `??` builds for its default
+took the target type WHOLE — and in a `??` the target type is the JOIN's, whose deps name the
+holder the other arm reads. So the accumulator declared a borrow of something it does not
+borrow, no free leg claimed it, and every keyed `h ?? […]` retained one store per evaluation
+while the `vector` twin was clean. A hint's deps are not the value's: `Type::without_deps`
+exists for exactly this and says so.
+
+⚠ **One chain was BUILT, measured, and BACKED OUT, which is the finding worth keeping.**
+`is_keyed` is the declared one home for *"is this a keyed collection"* and **all 24 of its
+callers ask it bare**, so `h: hash<S[k]>? = [S { … }]` builds a `vector<S>` and is refused
+against its own declared type. Peeling there is the one-home fix; it took four more peels
+(`content`, `keyed_known_type`, `gen_keyed_null`) to get from the refusal through an
+`unreachable!` and a wrong schema id to a program that compiles and answers correctly — on
+`--interpret`. `--native` panics in `keys.rs` on a `u16::MAX` store number. **A refusal is
+better than a backend divergence**, so the peel is not in; what IS in is the measurement,
+written at `is_keyed` where the next reader meets the question. The three peels that stand on
+their own stayed.
+
+⚠ **And the probes for that chain found a defect pair with no `Optional` opacity in it at
+all** — **loft#1120**, filed rather than fixed here because curing it wants one representation
+decision.  **CLOSED since (2026-08-28), in the sibling checkout and now in this tree**: the
+cure is one lowering (`Parser::collection_is_null` → `OpVectorIsNull`, which `??` now asks
+instead of carrying a third list) plus widening `vector::is_absent_collection` so a DbRef
+reaching no slot — the missed-lookup encoding — answers absent.  That closes all four rows of
+the table below at once, including the `spatial` / `trie` omission and the `hash` / `index`
+panic.  `formal/collections.md` D-col-null; guard
+`tests/scripts/1120-one-null-question-for-a-collection.loft`.  The table stands as the
+diagnosis it was:
+
+| spelling | right about | wrong about |
+|---|---|---|
+| `??` — `OpConvBoolFromRef`, `rec != 0` | a collection LOOKUP miss (`vv[9]`) | a collection FIELD: the read yields a sub-reference whose `rec` is the HOLDER's record, so `b.c ?? d` on a null `vector<T>?` field answers the EMPTY FIELD and drops `d` |
+| `== null` — `null_test`, `OpVectorIsNull` | a collection FIELD | a LOOKUP miss: `vv[9] == null` answers `false` |
+
+`null_test`'s doc calls itself *"the ONE place that answers what is `τ`'s null"* and warns
+that answering it elsewhere mints another spelling; `??` is that other spelling. **Delegating
+is not the cure** — it trades one silent wrong answer for the other, which is how it was
+measured: the delegation fixed the field cells and broke `116-default-fallback-operator` and
+`85-ncc-literal-return-delivery`, both vector-lookup shapes. `??`'s list is also short by
+`Radix` and `Trie`, so `spatial?` / `trie?` answer **0** for a collection holding elements,
+and a null `hash?` / `index?` field PANICS. All measured on both backends; the whole matrix
+and the reason a third list is not the answer are written at the arm.  The workaround is
+`if b.c == null { d } else { … b.c? … }`, verified on both backends and both kinds; **binding
+the field to a local first does NOT work** (the sub-reference travels with the value), which
+is worth knowing because it is the natural first attempt.
+
+⚠ **`?? []` cannot witness any of it, and that is why a corpus testing nullable collection
+fields kept the bug**: an empty default is what the wrong answer looks like, so the cell
+agrees with itself. Every cell of the replacement matrix hands `??` a default whose length
+differs from the field's. My own first reading — *"the `vector` twin is the clean reference
+route"* — was wrong for exactly this reason, and only a NON-EMPTY default separated them.
+
+**Blast radius, measured rather than argued.** Emitted IR compared against a pristine
+`HEAD` worktree over all 895 corpus programs, with the renderer change applied to BOTH sides
+so the dump improvement could not mask a code change: **4 files differ**, and all four are the
+intended ones — `1028` gains the `OpFreeRef` for its nullable tuple element, and `909`,
+`909b`, `923` get their element variable's real type. Everything else is byte-identical.
+
+#### B6t — the `⇐` channel has ten push sites and six admission lists, and `Type::Tuple` is in none of them (2026-08-28)
+
+B6g's `spellings` screen left 33 sites resolving a projection by op name, and **17 of them had
+never been read**.  This is the first of the 17 read.  It did not produce the defect the screen
+predicted — it produced a different one, one TYPE FORMER up, which is B6m § 3 again: the
+instrument makes the queue tractable and the person walking it finds something else.
+
+⚠ **BEING ANSWERED ELSEWHERE — loft#1120 was NOT this branch's to take (2026-08-28).**  The
+obvious next item after B6s is the defect pair it filed, and the sibling checkout
+(`tuxedo-work-2026-08-25`) had an UNCOMMITTED fix for it — `src/parser/operators.rs`,
+`src/vector.rs`, `formal/collections.md` and a new
+`tests/scripts/1120-one-null-question-for-a-collection.loft`, all touched minutes before this
+session started.  Their cure is one lowering (`collection_is_null` → `OpVectorIsNull`) plus
+widening `is_absent_collection` so a MISSED lookup answers absent, which closes all four rows
+of the filed table at once.  Recorded because the register alone did not say so: the issue was
+open, unassigned, and reads as available work.  **`operators.rs` and `vector.rs` were left
+untouched by this session for the same reason** — B6m § 5's sequencing point, paid rather than
+restated.
+
+**The finding: a tuple MEMBER is not parsed against the type its declaration names.**  Six
+shapes fail in a DECLARED tuple local that the RETURN and ARGUMENT positions accept, and the
+position axis is what makes them visible — a matrix over member-type × member-expression alone
+would have read them as "tuples cannot do this".
+
+| declared local | before | channel |
+|---|---|---|
+| `t: (Shape, integer) = (Shape::Circle { r: 7 }, 9)` | refused *"cannot change type from (Shape, integer) to (Circle, integer)"* | contradicts `@FR-C-Var` |
+| `t: (Shape, integer) = (Dot, 9)` | refused *"bare variant 'Dot' has no type here"* | the target DID have an enum type |
+| `t: (Shape?, integer) = (Shape::Circle { r: 7 }, 9)` | refused | — |
+| `t: (float, integer) = (5, 9)` | refused | an ordinary numeric coercion |
+| `t: (vector<integer>, integer) = ([], 9)` | **ICE** — *"Incorrect var `__ret_1[32]` versus 24"* | — |
+| `t: (vector<integer>?, integer) = ([], 9)` | **ICE** | — |
+
+**Two independent causes, and either one alone reads as the whole cure.**  Both were A/B'd on
+one grid before either landed, which is the only reason the split is known:
+
+1. **The `⇐` channel carried `fn(…)` alone into a tuple member.**
+   `seeds_tuple_member_hint` admitted `Type::Function` and a `Type::Tuple` containing one,
+   because loft#1067 held the channel back until a `fn(…)` in a tuple could be called back out
+   of one.  Its doc named the bound and pointed at the wider question
+   (*"this does not thread member types in general — loft#942/#943"*).  Widening it to every
+   member with a KNOWN type cures the bare variant and BOTH ICEs, and nothing else.
+2. **The literal was converted AFTER `change_var` retyped the variable.**  loft#1034 routed a
+   declared tuple local through `convert` — the same function the return position uses — but
+   placed it ~830 lines below the `change_var` that decides acceptance.  Acceptance is
+   `decl_accepts`, which answers `(N-Decl)` (a `τ?` slot admits a `τ`) and nothing else, so a
+   member needing a real coercion was refused before the conversion that says yes ever ran.
+   Hoisting it directly above `change_var` cures the variant and float cells, and nothing else.
+
+⚠ **The `!first_pass` gate on that conversion made it permanently unreachable for exactly the
+programs it exists to accept.**  The site is reached in pass 1 only; a pass-1 refusal aborts
+before pass 2, so the guarded branch never ran for a refused program.  loft#1034's own guard
+passed regardless because `decl_accepts` already admitted `(text?, integer) ← (text, integer)`
+— the fix needed only the COERCION, never the acceptance, so the ordering fault was invisible
+to it.  Removing the gate ALONE changes nothing (measured); it only matters hoisted.
+
+⚠ **The seeding widening invalidates the justification written above it, and the cell that
+checks this was one the grid had PINNED.**  `seeding` clears the ambient expectation for the
+duration of the tuple-literal parse, and the comment justifying that for member 0 ends
+*"and only a `fn(…)`-typed member seeds"* — which is now false.  The hazard it guards against
+is real and recorded (`115-snapshot-roundtrip` went from a text build to *"No matching operator
+'&' on 'text' and 'integer'"* when the clear was made unconditional).  What still holds is the
+other half: the clear fires only when the destination IS a tuple type.  Measured rather than
+argued — a parenthesised WHOLE-tuple expression (`t: (integer, integer) = (mk())`), the same
+call unparenthesised, an operator-expression member and a nested tuple all answer correctly on
+both backends, and all four are in the guard.
+
+**Blast radius: `make ci` 4474/4474, 35 skipped.**  Guard
+`tests/scripts/a-tuple-member-is-parsed-against-its-declared-type.loft`, which keeps four
+already-working cells (`(Sm?, …) = (null, …)`, `(i8, …)`, `(integer?, …)`, `(text?, …)`) as
+controls so the widening is not scored on its own, and reads BOTH members of every cell —
+a broken first member takes the second down with it, and a cell checking only `t.0` cannot see
+half the defect.
+
+##### The census the fix stands on: one channel, ten push sites, six admission lists
+
+`seeds_lambda_hint`'s doc calls itself *"the one predicate behind every `⇐` push site that can
+carry a `fn(…)`"*, and for the `fn(…)` question that is true.  The CHANNEL is shared, though,
+and each site decides independently which OTHER types may use it:
+
+| push site | admits |
+|---|---|
+| `control.rs` block tail / `return` | `enum_context ∥ is_collection ∥ interpolation_target ∥ seeds_lambda_hint` |
+| `control.rs` call argument (×3 separate lists) | `seeds_collection_hint ∥ interpolation_target ∥ seeds_lambda_hint`; `matches!(Function)`; `enum_context` / `seeds_collection_hint` / `interpolation_target` as an if-chain |
+| `definitions.rs` field / param default shorthand | `enum_context ∥ seeds_lambda_hint` |
+| `definitions.rs` parameter default | `seeds_lambda_hint` |
+| `objects.rs` struct-literal field value | `seeds_lambda_hint` |
+| `vectors.rs` vector element | `seeds_lambda_hint` |
+| `vectors.rs` tuple member | `seeds_tuple_member_hint` |
+| `expressions.rs` nested tuple-place assign RHS | `seeds_lambda_hint` |
+
+**`Type::Tuple` is admitted by none of them**, which is why the return and argument positions
+still refuse `(Dot, 9)` and `([], 9)` after this fix.  The block-tail site is the one to read:
+its comment says a type threads *"for the same reason"*, then *"for the third time for the same
+reason"*, then *"for the FOURTH time for the same reason"* — four entries, each added by a
+separate bug, and the general rule LOFT.md already states (*the expected type wherever there is
+one*) never adopted.  That is [carve-out comment is a map](STABILITY_METHOD.md) with the map
+drawn by the author: the phrase counts the hole's remaining occupants.
+
+**Filed rather than fixed here, both with a verified `wa:clean` and both measured on the two
+backends.**  **loft#1122** is the census above as a defect: `(Dot, 9)` refused in a `return`
+and in an argument, and `([], 9)` in a `return` answering `t.1 == null` for a member declared
+`integer` — plus one leaked `__tuple<vector<integer>,integer>` store — while `--native` will
+not compile it.  **loft#1123** is a `--native`-only silent wrong answer found while measuring
+the workaround for the first: a tuple returned with a PRESENT nullable heap member reads back
+`(null, 0)`, both members lost.  Its axis is *nullable and present*, not the member's type
+former — a struct reference and a struct-enum fail alike, a DENSE member is correct, and a
+nullable member holding `null` is correct.
+
+⚠ **The workaround for #1122 exists only because the declared-local half landed**, which is
+the argument for having fixed that half rather than filing the pair together: *bind a declared
+tuple local and return THAT* is a cure a user can apply today, and before this entry it was
+not one.  ⚠ **And the obvious variant of it does NOT work** — binding the MEMBER first
+(`p: W2? = W2 { … }; (p, 9)`) fails exactly as the literal does, which is what says #1123 is
+about the tuple that reaches the `return` rather than about the member expression.  It is
+worth knowing because it is the natural first attempt, and it is the discriminator that puts
+#1123 in loft#1096's family — one notion, two type spellings, the rewrite between the passes
+deciding which one a site sees — a position over.
 
 #### C — process / skills
 
@@ -2094,7 +2866,10 @@ blocks on, and not one of the 41 commits measured an op count except where someb
 | a duplication trigger line in `engineering-rigor` + `loft-codegen` | ✅ done — `engineering-rigor` § *The second always-on sensor* (generic, beside *the tell*) and `loft-codegen` § *Before you add the arm* (with the project's three instruments). `engineering-rigor`'s DESCRIPTION carries it too, since that is what decides whether the skill is entered at all |
 | `skill-creator`'s description-optimisation loop against `design-protocol` | ☐ offered, not run — triggering is the thing being fixed, so it is the one part worth measuring |
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
-| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, six modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
+| a tool for the axis a matrix HELD FIXED | ✅ done — `scripts/matrix_axes.py`, derived rather than declared (the declared form is falsified by D-own-6). `file <path>` censuses one guard against the language's own domains; `cross <A> <B>` names the value PAIRS no corpus file reaches, which is the shape every failure B6m counted actually had. Scored 6 of 6 against hand answers written before it was built, and that scoring found two detector bugs — a grouping paren read as an argument list, and `strip()` erasing the code inside an interpolation. Its depth ranking was falsified by its own oracle and removed. All REPORTS. See B6q |
+| a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, seven modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g); `optional` asks the same question over the TYPE former — who resolves a shape without peeling `τ?`, plus the caller-side `.base()` list (B6p). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
+| a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
+| the negative-control gate's LEAK channel | ⚠ **blind for the corpus's standard guard shape** — `falsify.sh` reads "stores not freed" off stderr, which only a `main`-ful `--interpret` run prints; `--tests` does not leak-check at all (that gate lives in `tests/wrap.rs`). So a leak guard written `main`-less scores INERT on both trees and is recorded as a LOCK. Measured on `a-nullable-return-joins-its-branch-arms.loft`, which `make ci` failed while falsify read `0|0|none|none` (B6p). Warning written into the tool's header; the cure — a leak check on `--tests` — is a decision about every library's `loft test` |
 
 #### B2 — open, and the owner's call
 

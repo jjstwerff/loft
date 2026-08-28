@@ -240,6 +240,22 @@ fn build_test_base(
     built
 }
 
+/// The `default/` directory holding the stdlib, below the directory `--path` names.
+///
+/// Joined with a path separator rather than concatenated (loft#1112).  The two
+/// spellings of the same directory must mean the same thing: `project_dir()` hands
+/// back a trailing-separator path, so a plain `+ "default"` happened to work for it,
+/// while `--path <dir>` arrives verbatim from the command line and yielded
+/// `<dir>default` — a directory that does not exist, reported as *"cannot load
+/// default library"* against a file that passes without the flag.  `main.rs` joins
+/// the same way for an ordinary run (@P363); this is the test runner's half.
+fn stdlib_dir_of(default_dir: &str) -> String {
+    std::path::Path::new(default_dir)
+        .join("default")
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn build_test_base_inner(
     default_dir: &str,
     lib_dirs: &[String],
@@ -248,7 +264,7 @@ fn build_test_base_inner(
 ) -> Option<Box<TestBase>> {
     let mut p = Parser::new();
     p.lib_dirs = lib_dirs.to_vec();
-    let stdlib_dir = default_dir.to_string() + "default";
+    let stdlib_dir = stdlib_dir_of(default_dir);
     if !loft::startup_cache::warm_load_stdlib(&mut p, &stdlib_dir)
         && p.parse_dir(&stdlib_dir, true, false).is_err()
     {
@@ -874,7 +890,7 @@ pub(crate) fn run_tests(
             let start_def = if let Some(stdlib_defs) = seeded {
                 stdlib_defs
             } else {
-                let stdlib_dir = default_dir.to_string() + "default";
+                let stdlib_dir = stdlib_dir_of(default_dir);
                 if !loft::startup_cache::warm_load_stdlib(&mut p, &stdlib_dir) {
                     if p.parse_dir(&stdlib_dir, true, false).is_err() {
                         println!("  FAIL  {display_name}  (cannot load default library)");

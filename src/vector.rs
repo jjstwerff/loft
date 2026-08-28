@@ -446,6 +446,11 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
 
 /// Is this collection ABSENT — a declared `?` that holds no collection (loft#917)?
 ///
+/// Enforces the runtime half of @FR-N-Index and @FR-Col-Lookup: a read that names no element
+/// — an out-of-range index, an absent key — IS that type's null, so a collection reached that
+/// way must answer ABSENT here.  Everything that asks *"is this collection null?"* on either
+/// backend arrives through `OpVectorIsNull`, which is this function.
+///
 /// A collection field or local is addressed by a DbRef aimed AT its 4-byte slot, not at the
 /// collection: `OpGetField` is pure pointer arithmetic (`pos + offset`) and the vector ops
 /// read the record id out of `(rec, pos)` themselves. So the value-level null — `store_nr ==
@@ -456,8 +461,10 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
 /// ([`DbRef::ABSENT_REC`]). This is the one place that reading is done; `OpVectorIsNull`
 /// consults it so `xs == null` and `xs == []` finally answer differently.
 ///
-/// Guarded exactly like [`length_vector`]: a null DbRef, or one with no record or offset,
-/// has no slot to read and is answered without touching a store.
+/// A DbRef with no record or offset reaches no slot at all, and is answered ABSENT without
+/// touching a store: that is the shape a null handle and a MISSED lookup both arrive in.
+/// [`length_vector`] guards on the same three cases and calls them all length `0`, which is
+/// the same judgement seen from the other side — nothing is there to count.
 ///
 /// `#[inline]` because a generated `--native` program links this across a crate boundary
 /// with no LTO — see [`get_vector`].
@@ -468,7 +475,13 @@ pub fn is_absent_collection(db: &DbRef, stores: &[Store]) -> bool {
         return true;
     }
     if db.rec == 0 || db.pos == 0 {
-        return false;
+        // No record, hence no slot, hence no collection.  This is what a MISSED lookup
+        // answers — `get_vector` hands back `rec: 0, pos: 0` for an out-of-range index —
+        // so reading it as "present" is what made `vv[9] == null` answer `false` while
+        // `vv[9] ?? d` beside it took the default (loft#1120).  An allocated collection,
+        // empty or not, always addresses a real slot (`rec != 0`), which is what keeps
+        // `xs == []` and `xs == null` different answers.
+        return true;
     }
     keys::store(db, stores).get_u32_raw(db.rec, db.pos) == DbRef::ABSENT_REC
 }

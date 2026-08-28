@@ -51,6 +51,15 @@
 #             op by `def_nr` (or via `is_projection_op`) and whether they also carry a
 #             `TupleGet` arm.
 #
+#   optional  The same question one TYPE FORMER over: `Optional(τ)` is `τ` with a
+#             nullability bit and the same storage (@FR-L-Null), so a site that resolves a
+#             shape by naming `Type` variants answers for `τ` and not for `τ?` — the value
+#             takes the catch-all and nothing says so (loft#1106).  Classifies every body
+#             that discriminates on a `Type` variant (sees through · descends via the
+#             keystone · opaque) and, for each opaque verb in `data.rs`, lists which callers
+#             peel the receiver with `.base()` first.  Disagreement between two callers of
+#             ONE verb is the shape that bites.
+#
 #   dead      `producers` INTERSECTED with a census of what the front end actually emits
 #             over the 854-program corpus.  Neither half is an oracle and the failures go
 #             opposite ways, which is the whole reason this mode exists: `Loop`/`Single`/
@@ -64,8 +73,8 @@
 # doc/claude/formal/IMPLEMENTATIONS.md.
 #
 # Usage:  python3 scripts/ir_walker_audit.py [walkers|producers|unspan|reach|dead|both]
-#         [spellings]
-#         `reach` and `spellings` need no binary; `dead` needs a built binary (target/debug/loft, or $LOFT_BIN) and takes ~1 min.
+#         [spellings|optional]
+#         `reach`, `spellings` and `optional` need no binary; `dead` needs a built binary (target/debug/loft, or $LOFT_BIN) and takes ~1 min.
 
 import glob
 import os
@@ -579,6 +588,15 @@ def code_only(body):
     return _BLOCK_COMMENT.sub(" ", _LINE_COMMENT.sub(" ", _STRING.sub('""', body)))
 
 
+def code_only_positioned(text):
+    """[`code_only`](#code_only) that keeps every newline, so a match offset still names
+    its line.  The shared one collapses a multi-line block comment to one space, which
+    slid `is_dbref`'s reported call sites four lines up the file — a line number that is
+    close but wrong is worse than none, because it reads as checked."""
+    keep = lambda m: "\n" * m.group(0).count("\n")  # noqa: E731
+    return _BLOCK_COMMENT.sub(keep, _LINE_COMMENT.sub(keep, _STRING.sub(keep, text)))
+
+
 def fn_bodies(path):
     """Yield (name, line, indent, body) for each `fn` in a file, nested ones INCLUDED.
 
@@ -799,6 +817,157 @@ def audit_spellings():
         print(f"  {'TupleGet' if ok else '  --    '}  {site:<40} {name}")
 
 
+# ── optional ──────────────────────────────────────────────────────────────────
+# `Optional(τ)` is `τ` with a nullability BIT — compile-time only, same runtime layout
+# (`Type::Optional`'s own doc).  So a site that resolves a shape by naming its variant
+# (`Type::Vector(..) => …`) does not see the wrapped spelling of the same shape, and the
+# value falls to whatever the catch-all does.  Same question as `spellings`, one type
+# former over: one notion, two spellings, and only one of them matched.
+TYPE_ARM = re.compile(
+    r"(?<![A-Za-z0-9_])Type::([A-Za-z][A-Za-z0-9_]*)\s*(?:\([^)]*\)|\{[^}]*\})?"
+    r"\s*(?:if\b[^\n]*)?(?:=>|\|)"
+)
+TYPE_LET = re.compile(
+    r"(?:^|\W)(?:if\s+let|while\s+let|let)\s+(?:Some\()?(?<![A-Za-z0-9_])Type::([A-Za-z][A-Za-z0-9_]*)"
+)
+TYPE_MATCHES = re.compile(r"matches!\s*\([^;]{0,600}?(?<![A-Za-z0-9_])Type::([A-Za-z][A-Za-z0-9_]*)", re.S)
+# The two spellings of the agnostic peel, plus the two return-side peels that answer
+# "which shapes peel" for their own callers.
+PEEL_CALL = re.compile(r"\.(?:base|peel_optional|ret_dep_shape|ret_promo_base|ret_promo_peels)\s*\(")
+TYPE_DESCEND = re.compile(r"\.(?:any_node|for_each_child|contains_def)\s*\(")
+
+
+def type_discriminated(code):
+    """The `Type` variants this body pattern-matches (not the ones it CONSTRUCTS)."""
+    return (
+        set(TYPE_ARM.findall(code))
+        | set(TYPE_LET.findall(code))
+        | set(TYPE_MATCHES.findall(code))
+    )
+
+
+def classify_optional(code):
+    """`sees` / `descends` / `opaque` for one function body."""
+    if "Type::Optional" in code or PEEL_CALL.search(code):
+        return "sees"
+    if TYPE_DESCEND.search(code):
+        return "descends"
+    return "opaque"
+
+
+def type_verbs():
+    """The `Type` VERBS in `data.rs`: methods in an `impl … Type` block, and free
+    functions taking a `&Type`.
+
+    The filter is what keeps the caller table about the shape question.  Without it the
+    table listed `three_way_swap_exchanges_two_indices` — a test helper that happens to
+    name two variants — beside `heap_dep`, and a reader has no way to tell which rows are
+    the subject.
+    """
+    path = os.path.join(SRC, "data.rs")
+    lines = open(path, encoding="utf-8").read().split("\n")
+    impl_for_type, out = False, {}
+    for i, line in enumerate(lines, 1):
+        if line.startswith("impl"):
+            impl_for_type = bool(re.match(r"impl(?:<[^>]*>)?\s+(?:[\w:]+(?:<[^>]*>)?\s+for\s+)?Type\b", line))
+        elif line.startswith("}"):
+            # A column-0 close ENDS the block.  Without this every free function
+            # between `impl Type` and the next `impl` inherited the flag, and two
+            # unit tests in the `mod tests` between them read as `Type` verbs.
+            impl_for_type = False
+        m = RUST_FN.match(line)
+        if not m:
+            continue
+        if impl_for_type and not line.startswith(" "):
+            continue  # a free fn textually inside the impl's range is not a method
+        sig = line
+        j = i - 1
+        while "{" not in sig and j + 1 < len(lines):
+            j += 1
+            sig += lines[j]
+        takes_type = re.search(r":\s*&(?:mut\s+)?\[?Type\b", sig) is not None
+        takes_self = re.search(r"\(\s*&(?:mut\s+)?self\b", sig) is not None
+        if (impl_for_type and takes_self) or takes_type:
+            out[m.group(1)] = f"{rel(path)}:{i}"
+    return out
+
+
+def audit_optional():
+    """Who can see through the `τ?` wrapper, and who resolves a shape without it?
+
+    `Optional(τ)` shares `τ`'s runtime layout and adds a compile-time bit, so the wrapper
+    is a SPELLING of the same shape rather than a shape of its own.  A function that
+    resolves the shape by naming variants therefore answers for `τ` and not for `τ?`, and
+    nothing says so: the wrapped value simply takes the catch-all.  That is what loft#1106
+    was — `deps_mut` did not peel while `depend` and `with_deps` did, so a nullable heap
+    local's dep could be read and set but never cleared.
+
+    Two halves.  The FUNCTION half classifies every body that discriminates on a `Type`
+    variant: sees through (peels, or carries an `Optional` arm) · descends via the `Type`
+    keystone · opaque.  The CALLER half is the list the function half cannot give — for
+    each opaque verb defined in `data.rs`, who peels the receiver before asking and who
+    does not.  Disagreement between two callers of ONE opaque verb is the shape that bites.
+
+    ⚠ Three limits, all of them lower-bound in the same direction — a body that peels
+    ANYWHERE reads as seeing, even where a second match in it stays bare (the B6f caveat);
+    `fn_bodies` nests, so an outer body inherits a nested helper's peel; and `.base()` is
+    also `use_analysis::Class::base`, whose callers are named under the table rather than
+    silently counted.  So `opaque` is a floor, never a ceiling.
+    """
+    rows, verbs, on_type = [], {}, type_verbs()
+    for path in rust_files():
+        for name, start, body in functions(path):
+            code = code_only(body)
+            variants = type_discriminated(code)
+            if not variants:
+                continue
+            verdict = classify_optional(code)
+            rows.append((f"{rel(path)}:{start}", name, verdict, len(variants)))
+            if verdict == "opaque" and os.path.basename(path) == "data.rs" and name in on_type:
+                verbs[name] = f"{rel(path)}:{start}"
+
+    seen = len(rows)
+    sees = sum(1 for r in rows if r[2] == "sees")
+    desc = sum(1 for r in rows if r[2] == "descends")
+    print(f"functions discriminating on a `Type` variant : {seen}")
+    print(f"  see through the wrapper (peel or arm)      : {sees}")
+    print(f"  descend via the `Type` keystone            : {desc}")
+    print(f"  opaque to a wrapped shape                  : {seen - sees - desc}")
+    print()
+    print("  callers of an OPAQUE `data.rs` verb — does the receiver peel first?")
+    print(f"  {'verb':<22}{'peeled':>7}{'bare':>6}   bare call sites")
+    src = {p: code_only_positioned(open(p, encoding="utf-8").read()) for p in rust_files()}
+    for verb, where in sorted(verbs.items()):
+        peeled, bare = 0, []
+        call = re.compile(r"(?:(\.base\(\)|\.peel_optional\(\)\.0)\s*)?\.%s\s*\(" % verb)
+        own = re.compile(r"fn\s+%s\s*\(" % verb)
+        free = re.compile(r"(?<!fn )(?<![A-Za-z0-9_.])%s\s*\(([^()]{0,80})\)" % verb)
+        for p, code in src.items():
+            for m in call.finditer(code):
+                if m.group(1):
+                    peeled += 1
+                else:
+                    bare.append(f"{rel(p)}:{code[:m.start()].count(chr(10)) + 1}")
+            for m in free.finditer(code):
+                if own.search(code, max(0, m.start() - 4), m.end()):
+                    continue  # the definition, not a call
+                if ".base()" in m.group(1) or "peel_optional" in m.group(1):
+                    peeled += 1
+                else:
+                    bare.append(f"{rel(p)}:{code[:m.start()].count(chr(10)) + 1}")
+        if not peeled and not bare:
+            continue
+        shown = " ".join(bare[:3]) + (f" +{len(bare) - 3}" if len(bare) > 3 else "")
+        print(f"  {verb:<22}{peeled:>7}{len(bare):>6}   {shown}")
+    print()
+    print("  A hit is a site to READ: ask whether a `τ?` can arrive there at all, and")
+    print("  whether the catch-all it falls to is the answer the rules give for `τ`.")
+    for site, name, verdict, n in sorted(rows, key=lambda r: (r[2] != "opaque", -r[3], r[0])):
+        if verdict != "opaque":
+            continue
+        print(f"  {site:<44} {name:<40} {n:>2} variants")
+
+
 mode = sys.argv[1] if len(sys.argv) > 1 else "both"
 if mode in ("walkers", "both"):
     print("== walkers ==")
@@ -820,3 +989,6 @@ if mode == "dead":
 if mode == "spellings":
     print("== spellings (who sees only the CALL half of a projection?) ==")
     audit_spellings()
+if mode == "optional":
+    print("== optional (who can see through the `τ?` wrapper?) ==")
+    audit_optional()

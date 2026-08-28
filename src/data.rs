@@ -2209,7 +2209,11 @@ impl Type {
             | Type::Hash(tp, _, dep)
             | Type::Sorted(tp, _, dep) => Type::Reference(*tp, dep.clone()),
             Type::Vector(tp, _) => *tp.clone(),
-            Type::RefVar(tp) => tp.content(),
+            // `Optional(τ)` shares τ's storage (@FR-L-Null), so a nullable collection holds
+            // exactly what the bare one holds.  Answering `Unknown` instead leaves a literal
+            // with no element hint — which a `vector` survives, because its elements retype
+            // it, and a KEYED collection cannot, because the key has nowhere to come from.
+            Type::RefVar(tp) | Type::Optional(tp) => tp.content(),
             _ => Type::Unknown(0),
         }
     }
@@ -2289,6 +2293,23 @@ impl Type {
                 return sp.len() == op.len()
                     && sp.iter().zip(op.iter()).all(|(a, b)| a.is_equal(b))
                     && sr.is_equal(or);
+            }
+            // A `τ?` is the same type as another `τ?` when the types it wraps are the same
+            // type.  Derived `==` on the wrapper compares the INNER's deps, so one `Ps?`
+            // handed back through a local and another returned straight from a call read as
+            // two different types — with the same name, since the renderer omits deps
+            // (*"cannot change type from `fn(integer) -> Ps?` to `fn(integer) -> Ps?`"*).
+            // [`Self::is_same`] has carried this peel for exactly that presentation.
+            //
+            // Restricted to inners that CARRY deps, and that restriction is the whole of it:
+            // a scalar has none, so for it derived `==` is comparing the SPEC, and an
+            // integer's spec is its WIDTH — which this routine deliberately collapses
+            // (loft#663, the width is layout-bearing).  Peeling scalars made `u8?` and a
+            // wider `integer?` one type and lost the implicit narrowing check with them.
+            (Type::Optional(s), Type::Optional(o))
+                if s.deps_ref().is_some() && o.deps_ref().is_some() =>
+            {
+                return s.is_equal(o);
             }
             // T1.7: tuple equality ignores `not_null` on Integer elements (runtime type is same).
             (Type::Tuple(se), Type::Tuple(oe)) => {
@@ -2494,6 +2515,12 @@ impl Type {
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
             Type::Text(dep) if dep.is_empty() => "text".to_string(),
             Type::Text(dep) => format!("text{}", Self::dep_var(dep, vars)),
+            // `τ?` is the base plus the marker.  Without this arm it falls to the `Debug`
+            // catch-all, which spells a struct by its def NUMBER and a dep list as
+            // `deps { items: [0] }` — and the dump is the primary debugging instrument, so a
+            // type rendered by number points the reader at nothing.  [`Type::name`] carries
+            // the same arm for the user-facing spelling.
+            Type::Optional(tp) => format!("{}?", tp.show(data, vars)),
             Type::Tuple(elems) => {
                 let inner = elems
                     .iter()
@@ -2531,6 +2558,9 @@ impl Type {
             }
             Type::Text(dep) if dep.is_empty() => "text".to_string(),
             Type::Text(dep) => format!("text{:?}", Self::dep_att(data, d_nr, dep)),
+            // Recursed rather than left to the `show` fallback below: an argument type's deps
+            // name ATTRIBUTES, and `show` renders them as frame variables.
+            Type::Optional(tp) => format!("{}?", tp.argument(data, d_nr)),
             _ => {
                 let d = data.def(d_nr);
                 self.show(data, &Function::new(&d.name, &d.position.file))
@@ -2579,6 +2609,17 @@ impl Type {
 /// for `(integer, integer)` and similar shapes).
 #[must_use]
 pub fn has_lifetime_concern(t: &Type) -> bool {
+    // @PLN25 — read through `Optional`: a `τ?` has the SAME storage as `τ` (the reason
+    // [`element_stack_align`] below peels it too), so whether a slot may be absent cannot
+    // change whether the value in it owns a store.  Without the peel a `-> (W?, integer)`
+    // return was not promoted to the synthetic-struct ABI while its DENSE twin
+    // `-> (W, integer)` was, and the un-promoted path dropped the tail: the tuple was
+    // emitted as a discarded statement and the function returned null, which `--native`
+    // read back as `(null, 0)` while `--interpret` answered correctly off stack residue
+    // (loft#1123).
+    if let Type::Optional(inner) = t {
+        return has_lifetime_concern(inner);
+    }
     matches!(
         t,
         Type::Text(_)
@@ -3139,19 +3180,15 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
     let offsets = element_stack_offsets(types);
     let mut result = Vec::new();
     for (i, t) in types.iter().enumerate() {
-        match t {
-            Type::Text(_)
-            | Type::Reference(_, _)
-            | Type::Vector(_, _)
-            | Type::Sorted(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Hash(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-            | Type::Enum(_, true, _) => {
-                result.push((offsets[i], i));
-            }
-            _ => {}
+        // The store-backed set plus `text`, which owns a heap `String` rather than a store.
+        // Asked through [`is_dbref`] rather than restated — that function's own doc says a
+        // hand-spelled copy drifts short by the five keyed collections, and this was a copy.
+        //
+        // Peeled: `Optional(τ)` occupies τ's slot exactly (@FR-L-Null), so a `(integer, S?)`
+        // element carries the same `DbRef` as `(integer, S)` and owns the same store.
+        let base = t.base();
+        if is_dbref(base) || matches!(base, Type::Text(_)) {
+            result.push((offsets[i], i));
         }
     }
     result
@@ -3790,6 +3827,26 @@ impl Definition {
     #[must_use]
     pub fn returned(&self) -> &Type {
         &self.returned
+    }
+
+    /// How many hidden `&text` work buffers this function's ABI expects.
+    ///
+    /// `text_return` promotes a text local the return value depends on into a hidden
+    /// `RefVar(Text)` out-parameter, and a body can ask more than once — a text local at
+    /// the `return` and a `??` / `?` / `if` accumulator at the block tail each take one.
+    /// A DIRECT call site knows the callee and mints exactly this many; a fn-ref call site
+    /// cannot know which function the slot holds, so it mints the most any candidate could
+    /// want ([`Data::fnref_text_buffers`]) and the excess is popped where the target IS
+    /// known (`State::fn_call_ref`).  One home for the count, so the two sides of that ABI
+    /// cannot disagree about what a buffer is.
+    #[must_use]
+    pub fn text_work_buffers(&self) -> usize {
+        self.attributes
+            .iter()
+            .filter(|a| {
+                a.hidden && matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+            })
+            .count()
     }
 
     /// Cluster-A (return/bind ownership) — THE one return-ownership query,
@@ -5357,6 +5414,48 @@ impl Data {
         self.definitions.len() as u32
     }
 
+    /// How many hidden `&text` work buffers a FN-REF call of this signature must push.
+    ///
+    /// A call through a fn-typed slot cannot know which function the slot holds, so it
+    /// pushes the most any function of that signature could want and `State::fn_call_ref`
+    /// pops what the actual target does not take.  Over-counting costs caller frame space;
+    /// under-counting enters the callee one buffer short, which is the corrupt-frame crash
+    /// this exists to prevent (loft#1116).
+    ///
+    /// The candidate test is deliberately LOOSE — a text return and a matching visible
+    /// parameter COUNT.  Being loose can only mint a buffer nothing uses, which the pop
+    /// removes; being tight risks missing the very candidate the slot holds, and there is
+    /// no signal when that happens.  Never less than one, which is the shape every
+    /// text-returning fn-ref call had before.
+    #[must_use]
+    pub fn fnref_text_buffers(&self, params: usize, ret: &Type) -> usize {
+        if !matches!(ret.base(), Type::Text(_)) {
+            return 0;
+        }
+        let mut most = 1;
+        for d in 0..self.definitions() {
+            let def = self.def(d);
+            if !matches!(def.def_type(), DefType::Function)
+                || !matches!(def.returned().base(), Type::Text(_))
+            {
+                continue;
+            }
+            let visible = def
+                .attributes()
+                .iter()
+                .filter(|a| {
+                    !a.hidden
+                        && a.name != "__closure"
+                        && !matches!(&a.typedef, Type::RefVar(t) if matches!(**t, Type::Text(_)))
+                })
+                .count();
+            if visible == params {
+                most = most.max(def.text_work_buffers());
+            }
+        }
+        most
+    }
+
     #[must_use]
     pub fn def_referenced(&self, d_nr: u32) -> bool {
         self.referenced.contains_key(&d_nr)
@@ -6570,6 +6669,33 @@ impl Data {
                 == format!("__nullable<{}>", self.definitions[struct_d as usize].name)
     }
 
+    /// The STRUCT a nullable heap type denotes, in either of its two spellings — the `τ?`
+    /// the author writes (`Optional(Reference(S))`) and the synthetic enum the field
+    /// rewrite produces (`Enum(__nullable<S>, true)`).
+    ///
+    /// `None` for anything that is not a nullable struct.  Use it wherever a site must
+    /// treat a nullable heap value the same as its dense twin: the two spellings are ONE
+    /// notion, and a site that recognises only the one it happens to see gives the same
+    /// value two different layouts.  [`Self::same_nullable_struct`] is the two-sided
+    /// question; this is the one-sided one.
+    #[must_use]
+    pub fn nullable_struct_payload(&self, tp: &Type) -> Option<u32> {
+        match tp {
+            Type::Optional(inner) => match &**inner {
+                Type::Reference(d, _) => Some(*d),
+                _ => None,
+            },
+            Type::Enum(syn, true, _) => {
+                let def = self.definitions.get(*syn as usize)?;
+                let inner = def.name.strip_prefix("__nullable<")?.strip_suffix('>')?;
+                self.def_names
+                    .get(&(inner.to_string(), def.source))
+                    .copied()
+            }
+            _ => None,
+        }
+    }
+
     /// The two spellings of a nullable STRUCT, compared as one type: `τ?` written by the
     /// author (`Optional(Reference(S))`) against the synthetic enum the field rewrite
     /// produces (`Enum(__nullable<S>, true)`).
@@ -6612,6 +6738,29 @@ impl Data {
     /// synthesized layout equals a hand-written `enum { Null, Some { … } }` by
     /// construction.  Idempotent + globally registered (source 0) like
     /// [`tuple_def`].
+    /// Is this type the SYNTHETIC nullable wrapper — `__nullable<S>`, the enum
+    /// [`Self::nullable_enum_for`] mints so an inline slot (a struct field, a vector or tuple
+    /// element) can hold an absent `S`?
+    ///
+    /// `τ?` has two spellings, and this is the one that is not `Type::Optional`. A site that
+    /// asks *"may this destination be absent?"* and matches only `Optional` calls the wrapper
+    /// NON-null and is wrong in the direction that speaks: `(N-Store)` warned that a `W2?`
+    /// "is stored into element 0 of the non-null type `__nullable<W2>`", which is the
+    /// nullable type saying it is not one (loft#1123).
+    ///
+    /// ⚠ The spelling is tested by hand at about ten further sites (`typedef.rs`,
+    /// `parser/builtins.rs`, `parser/control.rs`, `database/types.rs`, `database/format.rs`).
+    /// They are not folded here yet, and each one is a place the same blindness can appear.
+    #[must_use]
+    pub fn is_nullable_wrapper(&self, tp: &Type) -> bool {
+        match tp.base() {
+            Type::Enum(d, _, _) | Type::Reference(d, _) => {
+                *d != u32::MAX && self.def(*d).name.starts_with("__nullable<")
+            }
+            _ => false,
+        }
+    }
+
     pub fn nullable_enum_for(&mut self, lexer: &mut Lexer, struct_d: u32) -> u32 {
         let struct_name = self.def(struct_d).name.clone();
         let name = format!("__nullable<{struct_name}>");

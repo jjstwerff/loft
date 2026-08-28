@@ -555,6 +555,29 @@ impl Parser {
     /// over an `integer` slot (loft#1020).  [`Parser::rewrite_generic_type_defaults`]
     /// re-asks it once `T` is real.  Answering it anywhere else would mint a sixth
     /// spelling of `τ`'s null, which is the defect loft#1014 was.
+    /// *"is this collection ABSENT?"* — the ONE lowering both spellings of the question
+    /// share: [`null_test`](Parser::null_test)'s `c == null` and
+    /// [`coalesce_not_null`](Parser::coalesce_not_null)'s `c ?? d`.
+    ///
+    /// Enforces @FR-E-Coalesce for a collection subject — `e ?? d` yields `d` for exactly the
+    /// null @FR-N-Index and @FR-Col-Lookup define — and it is one lowering because the two
+    /// spellings ask one question: a `??` that discharged a null `== null` reports, or the
+    /// reverse, would be two answers where the rules give one.
+    ///
+    /// Absence has three encodings, because a collection is reached three ways: a HANDLE
+    /// (a local, a parameter, a return) carries the store_nr sentinel; a SLOT (a field, a
+    /// vector element) holds [`DbRef::ABSENT_REC`] in its four-byte word; and a MISSED
+    /// lookup answers a DbRef with no record at all.  `OpVectorIsNull`
+    /// (`vector::is_absent_collection`) is the one test that reads all three.
+    ///
+    /// `OpConvBoolFromRef`'s `rec != 0` reads only the third, which is why the coalesce
+    /// used to call every null collection FIELD present: a field read is a sub-reference
+    /// whose `rec` is the HOLDER's record, so the default was unreachable and a `hash`
+    /// / `index` then dereferenced the absent record (loft#1120).
+    fn collection_is_null(&mut self, operand: &Value) -> Value {
+        self.cl("OpVectorIsNull", std::slice::from_ref(operand))
+    }
+
     pub(crate) fn null_test(&mut self, operand: Value, tp: &Type, negate: bool) -> Option<Value> {
         let is_null = if Self::is_collection_type(tp.base()) {
             // A heap-owning collection TEMP (a call result) consumed by the null test
@@ -571,14 +594,12 @@ impl Parser {
                 self.vars.work_refs(tp, &mut self.lexer)
             };
             if w == u16::MAX {
-                self.cl("OpVectorIsNull", &[operand])
+                self.collection_is_null(&operand)
             } else {
                 self.vars.mark_inline_ref(w);
+                let test = self.collection_is_null(&Value::Var(w));
                 crate::data::v_block(
-                    vec![
-                        crate::data::v_set(w, operand),
-                        self.cl("OpVectorIsNull", &[Value::Var(w)]),
-                    ],
+                    vec![crate::data::v_set(w, operand), test],
                     Type::Boolean,
                     "vec-null-workref",
                 )
@@ -1600,16 +1621,17 @@ impl Parser {
                     if !self.first_pass && !owns_closure {
                         self.vars.set_skip_free(fn_work);
                     }
-                    // P227: one work-buffer per text-returning fn-ref
-                    // call (the return-value buffer the lambda fills via
-                    // its hidden RefVar(Text) attr).  Previously
-                    // `deps.len()` — but fn-ref types carry `deps = []`,
-                    // so the count was zero, causing SIGSEGV.
-                    let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
-                        vec![self.vars.work_text(&mut self.lexer)]
-                    } else {
-                        vec![]
-                    };
+                    // P227 — the fn-ref call through a FIELD, tuple member or other
+                    // expression.  Like its two siblings in `control.rs` it pushes the
+                    // `&text` work buffers the widest candidate of this signature could
+                    // want, because a `&text` points into the CALLER's frame and only the
+                    // caller can supply one (loft#1116).  Every site that builds a
+                    // text-returning `CallRef` must read the SAME count: `fn_call_ref`
+                    // trims the frame against it, so a site one buffer short has a real
+                    // buffer trimmed away and the callee reads `__closure` from the wrong
+                    // offset.
+                    let work_vars =
+                        self.fnref_text_buffer_vars(param_types.len(), ret_type.as_ref());
                     // Parse arguments (both passes).
                     let mut list: Vec<Value> = Vec::new();
                     let mut types: Vec<Type> = Vec::new();
@@ -1632,17 +1654,7 @@ impl Parser {
                                 self.convert(&mut converted[i], &types[i], expected);
                             }
                         }
-                        let ref_def = self.data.def_nr("reference");
-                        for &wv in &work_vars {
-                            converted.push(v_block(
-                                vec![
-                                    v_set(wv, Value::Text(String::new())),
-                                    self.cl("OpCreateStack", &[Value::Var(wv)]),
-                                ],
-                                Type::Reference(ref_def, crate::data::Deps::frame1(wv)),
-                                "cref_work_buf",
-                            ));
-                        }
+                        self.push_fnref_text_buffers(&mut converted, &work_vars);
                         let orig = std::mem::replace(code, Value::Null);
                         *code = v_block(
                             vec![v_set(fn_work, orig), Value::CallRef(fn_work, converted)],
@@ -2162,23 +2174,30 @@ impl Parser {
             let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
             let is_null = self.cl("OpEqInt", &[disc, Value::Int(0)]);
             self.cl("OpNot", &[is_null])
-        } else if matches!(
-            tp,
-            Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Enum(_, true, _),
-        ) {
-            // @PLAN52 cluster IV interpret (2026-05-30): heap-DbRef types
-            // have no registered `OpConv*FromX → Boolean` so the generic
-            // `convert(Hash/Vector/..., Boolean)` returns the bare Var.
-            // The interpreter's `if <bare Var(DbRef)>` then tests raw
-            // bytes (not `.rec != 0`) and produces the wrong result.
-            // Force an explicit `OpConvBoolFromRef` call — Reference,
-            // Vector, Hash, Sorted, Index, struct-Enum all share the
-            // 12-byte DbRef representation under the hood.
+        } else if Self::is_collection_type(tp.base()) {
+            // A collection answers through [`collection_is_null`](Parser::collection_is_null),
+            // the same lowering `== null` uses, because they are one question.  Reading the
+            // `rec` of a heap DbRef — what the arm below does — is right only for a value
+            // that IS the collection; a field, an element and a parameter given either are
+            // addresses of the SLOT holding it, and their `rec` belongs to the holder.
+            //
+            // `is_collection_type` also covers `spatial` (`Radix`) and `trie`, which the
+            // hand-written variant list below never named: they fell through to the generic
+            // `convert`, which has no `OpConv*FromX -> Boolean` for a collection and hands
+            // back the bare handle — so the interpreter tested twelve pointer bytes as a
+            // boolean and `--native` would not compile the `if` at all (loft#1120).
+            let is_null = self.collection_is_null(src);
+            self.cl("OpNot", &[is_null])
+        } else if matches!(tp, Type::Reference(_, _) | Type::Enum(_, true, _)) {
+            // @PLAN52 cluster IV interpret (2026-05-30): a heap-DbRef type registers no
+            // `OpConv*FromX → Boolean`, so the generic `convert(Reference, Boolean)` hands
+            // back the bare Var and the interpreter's `GotoFalseWord` tests the FIRST BYTE
+            // of a twelve-byte pointer.  `OpConvBoolFromRef` asks `rec != 0` instead.
+            //
+            // Right for a bare reference and a struct-enum, whose value IS the record it
+            // points at — a missing one has no record.  A COLLECTION is the case above:
+            // there the DbRef addresses the slot HOLDING the collection, so `rec` names
+            // the holder and says nothing about what the slot contains.
             let conv_nr = self.data.def_nr("OpConvBoolFromRef");
             Value::Call(conv_nr, vec![src.clone()])
         } else if matches!(tp, Type::Boolean) {
@@ -2396,6 +2415,16 @@ impl Parser {
         {
             let w = *w;
             self.vars.register_work_ref(w);
+            // Whether `_vec_N` is BACKED — a view of a `__vdb_N` wrapper record rather
+            // than the owner of its own store.  Read off the emitted block, which SAYS so:
+            // `vector_db` writes `_vec_N = OpGetField(__vdb_N, 0)` into it, and the shape
+            // that owns its store has no such assignment (its literal builds straight into
+            // `_vec_N` through `OpPreAllocVector`).  The dep list cannot answer this — the
+            // strip below clears it for both shapes.
+            let backed = bl.operators.iter().any(|op| {
+                matches!(op.unspan(), Value::Set(sv, val)
+                    if *sv == w && self.inline_slot_word(val).is_some())
+            });
             if let Type::Vector(elm, dep) = self.vars.tp(w).clone()
                 && !dep.is_empty()
             {
@@ -2424,6 +2453,24 @@ impl Parser {
             // it there double-drops / panics.
             if matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty()) {
                 self.vars.set_skip_free(w);
+            } else if backed {
+                // A BORROWED subject gets the OTHER half of that bit: `inline_ref` says
+                // *"do not ALLOCATE in the preamble"* WITHOUT saying *"never free"*, so the
+                // doomed store goes away and every free that exists today still runs — which
+                // is what the return-delivery materializer relies on.  `skip_free` says both
+                // at once, and it is only the second half this case cannot have.
+                //
+                // The orphan is the same one described above, reached from the other side:
+                // the preamble `OpDatabase`-allocates at `_vec_N`'s slot and the
+                // `OpGetField(__vdb_N, 0)` overwrites it.  `--interpret` recovers by freeing
+                // the displaced store before it rebinds; `--native` has no such step, so it
+                // orphaned one store per evaluation, unbounded in a loop (loft#1121).
+                //
+                // `backed` is what makes this safe to say: an UNBACKED `_vec_N` IS the owner
+                // of its store — nothing overwrites it, `OpPreAllocVector` fills it in place
+                // — and taking its preamble allocation away leaves the default arm building
+                // into a null sentinel, which answers length 0 for every literal default.
+                self.vars.mark_inline_ref(w);
             }
         }
 

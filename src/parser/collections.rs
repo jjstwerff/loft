@@ -4789,6 +4789,50 @@ use #count instead"
         (Value::Var(for_var), var_tp.clone())
     }
 
+    /// A `CallRef` to a callback, carrying the one hidden text work buffer that a
+    /// text-returning target expects (loft#1115).
+    ///
+    /// The fn-ref call ABI hands a text-returning callee exactly one `RefVar(Text)` work
+    /// buffer, allocated by the CALLER, because the call site cannot know which lambda a
+    /// fn-typed slot holds (`State::fn_call_ref`, and P227 on the callee side).  The
+    /// ordinary `f(args)` spelling appends it in `parse_operators`; a combinator that
+    /// lowers its own call had to append it too, and did not — so a capturing lambda
+    /// written inline in `map` and returning `text` was entered with its frame one DbRef
+    /// span short and read its `__closure` from the wrong offset.
+    ///
+    /// Only the buffer is appended here.  The closure argument is NOT: `fn_call_ref` reads
+    /// it back from the 20-byte fn-ref slot at run time, which is why the same shape
+    /// returning an integer, a struct, or a boolean was always correct.
+    ///
+    /// The buffer is drawn from `caller_text_buf`'s `__work_c<N>` sequence rather than
+    /// `work_text`'s `__work_<N>`, because this mint is **pass-2 only**: the map/filter
+    /// family early-returns on pass 1, where an unresolved callback type makes the
+    /// desugar impossible.  A pass-2-only mint drawing from the shared counter shifts
+    /// every later `__work_N`, and the variable tables persist across passes BY NAME —
+    /// so pass 2 would re-find pass 1's variables under the wrong roles (loft#662).
+    /// `caller_text_buf` is the sequence for exactly this: a buffer the CALLER allocates
+    /// for a callee's hidden `&text` out-param.
+    fn callback_call_ref(&mut self, fn_ref_var: u16, mut args: Vec<Value>, ret: &Type) -> Value {
+        if !self.first_pass {
+            // The COUNT is the one every text-returning `CallRef` site reads
+            // (`Data::fnref_text_buffers`), because `fn_call_ref` trims the frame against
+            // it: a combinator's callback can be a NAMED function declaring more buffers
+            // than the one a lambda ever takes (loft#1116).
+            //
+            // The VARIABLES come from `caller_text_buf` rather than
+            // `Parser::fnref_text_buffer_vars`' `work_text`, and that difference is
+            // load-bearing: the map family early-returns on pass 1, so this mint is
+            // pass-2-only, and taking it from the shared counter would shift every later
+            // `__work_N` (loft#662's class).
+            let n = self.data.fnref_text_buffers(args.len(), ret);
+            let work_vars: Vec<u16> = (0..n)
+                .map(|_| self.vars.caller_text_buf(&mut self.lexer))
+                .collect();
+            self.push_fnref_text_buffers(&mut args, &work_vars);
+        }
+        Value::CallRef(fn_ref_var, args)
+    }
+
     pub(crate) fn callback_call(
         &mut self,
         d_nr: u32,
@@ -4941,7 +4985,8 @@ use #count instead"
         let body = if let Some(d) = fn_d_nr {
             self.callback_call(d, vec![elem_arg], vec![elem_arg_tp])
         } else {
-            Value::CallRef(fn_ref_var.unwrap(), vec![elem_arg])
+            let rt = fn_ret_type.clone();
+            self.callback_call_ref(fn_ref_var.unwrap(), vec![elem_arg], &rt)
         };
 
         self.data.vector_def(&mut self.lexer, &out_elem);

@@ -7003,11 +7003,93 @@ impl Scopes {
         if was_optional { Type::optional(tp) } else { tp }
     }
 
+    /// loft#1118 — may an `ncc` block that DOES carry a dep be lifted anyway?
+    ///
+    /// The empty-dep test is the conservative reading of "nobody else owns this", and it
+    /// refuses the shape a NULLABLE PARAMETER produces: a callee whose return may be the
+    /// argument or may be a store it minted answers `Own::Join`, whose dep names that
+    /// argument. The block then stayed inline with the minted store owned by nothing — one
+    /// leaked record per evaluation, unbounded in a loop.
+    ///
+    /// Lifting is safe exactly when the bind that follows is the RUNTIME guard rather than
+    /// a static bet. It is: a lifted `__lift_N` is a dense `Reference`, so the heap
+    /// first-bind dispatch reaches it and emits `OpBindOrCopy`, which adopts the arm where
+    /// the callee minted (making the scope-exit free right) and materialises the arm where
+    /// the value is the witness's store (leaving the caller's argument intact). This asks
+    /// the same `Own::Join` question of the same value, so the lift cannot fire where that
+    /// guard would not.
+    ///
+    /// **The subject must be a call to a LOFT-DEFINED function**, and that is the whole of
+    /// the narrowing rather than a detail. loft's IR spells every operator as a
+    /// `Value::Call`, so "the subject is a call" also matches an element read (`t[p] ?? d`
+    /// is `OpGetVector`) — a view INTO a container the caller still owns, where the lift
+    /// hands the temp a free that reaches inside it. Measured, not hypothetical: admitting
+    /// the read made the ownership fuzz gate's `local_source` cell answer WRONG on
+    /// `--native` with the two backends diverging. Only the FIRST statement is read, too:
+    /// the block's default arm is often a call of its own (`t[p] ?? dflt()`), and asking
+    /// `any` operator re-admits the very cell this excludes.
+    ///
+    /// A join whose witness the bracket cannot name keeps the conservative no-lift, which
+    /// costs the leak that was already there rather than a free nothing protects.
+    fn ncc_join_is_witnessed(&self, val: &Value, data: &Data) -> bool {
+        if !crate::keys::join_own_enabled() {
+            return false;
+        }
+        let Value::Block(bl) = val.unspan() else {
+            return false;
+        };
+        // The subject is the block's first REAL statement, not its first.  A REUSED
+        // `__ncc_N` opens its block with an overwrite `OpFreeRef`, which is not a subject:
+        // it shifts the `Set` to second, and a predicate reading `first()` then answers
+        // "not a user call" for a block that is one.  Whether a given spelling reuses the
+        // temp is a numbering property, so the set of spellings this hides is not stable
+        // enough to name here —
+        // `tests/scripts/1118b-an-inline-join-lifts-in-every-statement-context.loft` is
+        // the measurement, one cell per statement context.
+        //
+        // Skipping a LEADING FREE cannot re-admit the `t[p] ?? dflt()` cell the narrowing
+        // above excludes: the first non-free statement still has to be a `Set` of a
+        // loft-defined call.
+        let subject = bl
+            .operators
+            .iter()
+            .map(Value::unspan)
+            .find(|op| !matches!(op, Value::Call(d, _) if data.def(*d).name() == "OpFreeRef"));
+        let subject_is_user_call = match subject {
+            Some(Value::Set(_, rhs)) => match rhs.unspan() {
+                Value::Call(fn_nr, _) => data.def(*fn_nr).is_loft_defined(),
+                Value::CallRef(_, _) => true,
+                _ => false,
+            },
+            _ => false,
+        };
+        subject_is_user_call && self.join_is_witnessed(val, data)
+    }
+
+    /// Is this value a `Own::Join` — borrow-or-mint, settled only per execution — whose borrow
+    /// arm the @P290 bracket can NAME?
+    ///
+    /// That is the question deciding whether the bind following a lift is a runtime GUARD
+    /// (`OpBindOrCopy`: adopt the minted arm, materialise the borrowed one) or a static bet.
+    /// A lift may fire wherever the answer is yes, and must not where it is no — there the
+    /// conservative no-lift costs the leak that was already there, rather than a free that
+    /// protects nothing.
+    ///
+    /// One home, because the lift, the deps strip and both backends' `OpBindOrCopy` all read
+    /// it: a second spelling of the same question could only agree by accident.
+    fn join_is_witnessed(&self, val: &Value, data: &Data) -> bool {
+        crate::keys::join_own_enabled()
+            && matches!(
+                crate::use_analysis::ownership_of(data, self.d_nr, val),
+                crate::use_analysis::Own::Join { base } if base != u16::MAX
+            )
+    }
+
     fn inline_struct_return(
         &self,
         val: &Value,
         data: &Data,
-        _outer_call: u32,
+        outer_call: u32,
         function: &Function,
     ) -> Option<Type> {
         // loft#721 — a closure call is lifted only when its target definition is
@@ -7029,10 +7111,44 @@ impl Scopes {
         // the @PLN85 skip_free-orphan pass ([`collect_consumed_ncc_text`]) and a
         // vector one by its own delivery path; both measured clean, and lifting
         // them too would free what those mechanisms free.
+        // An EMPTY dep list licenses the lift because it says the value is owned.  It says
+        // that for a `Call`; for a `CallRef` it says nothing.  `fnref_result_type` maps the
+        // callee's return deps through the caller's ARGUMENTS and drops every index naming a
+        // HIDDEN attribute, on the stated grounds that the value then arrives owned — and
+        // `__closure` is a hidden attribute.  So a lambda returning a value it CAPTURED
+        // hands the caller an empty dep list for a store the outer scope still owns, and
+        // lifting it emits a free that reaches into that scope: the capture is released
+        // while the variable it came from is still live, and the next read of it answers
+        // garbage (loft#1114).
+        //
+        // The witnessed-`Join` route stays open to a `CallRef`, because there the bind that
+        // follows is the runtime guard rather than a static bet.  Declining the other route
+        // costs the leak that was already there, which is the direction this gate has always
+        // taken when it cannot name what it would be freeing.
+        let subject_is_call_ref = match val.unspan() {
+            Value::Block(bl) if bl.name == "ncc" => {
+                match bl.operators.first().map(Value::unspan) {
+                    Some(Value::Set(_, rhs)) => match rhs.unspan() {
+                        // Only a CAPTURING fn-ref can hand back a store the caller's scope
+                        // owns; a fn-ref carrying no captures has nothing to borrow FROM,
+                        // so its empty dep list means what it says and the lift stands.
+                        // The fn-ref type's own deps are exactly that question, and they
+                        // name the closure the call reads.
+                        Value::CallRef(fn_var, _) => !matches!(
+                            function.tp(*fn_var),
+                            Type::Function(_, _, d) if d.is_empty()
+                        ),
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
         if let Value::Block(bl) = val.unspan()
             && bl.name == "ncc"
             && let (Type::Reference(d_nr, dep), opt) = bl.result.peel_optional()
-            && dep.is_empty()
+            && ((dep.is_empty() && !subject_is_call_ref) || self.ncc_join_is_witnessed(val, data))
         {
             return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
         }
@@ -7074,7 +7190,48 @@ impl Scopes {
                     && (def.attr_names.contains_key("__retbuf")
                         || def.monomorph_return_is_fresh()));
             if lift_owned_return && def.code != Value::Null {
-                if let Type::Reference(d_nr, _) = returned {
+                // The same `returns_borrowed_view()` question its struct-enum sibling below
+                // asks, and for the same reason: an EMPTY return dep (or one naming only a
+                // hidden work-ref) is a store the callee minted and the caller adopts, while
+                // a dep naming a VISIBLE parameter is a BORROW — lifting that and freeing
+                // the temp releases the caller's own record while the variable holding it is
+                // still live.  A function delegating to one that borrows its argument is how
+                // that is reached without any borrow appearing at the call site.
+                //
+                // A `__retbuf` callee is exempt, and the exemption is what the borrow means
+                // there: it delivers INTO the buffer the caller allocated, so the lifted temp
+                // is that buffer and freeing it releases the caller's own allocation rather
+                // than the argument.  Declining for those instead orphans one buffer per
+                // evaluation — measured on the dense delegating twin, which was correct
+                // before this gate and has to stay correct after it.
+                //
+                // `returns_borrowed_view()` is the deps PROXY (@FR-O-Proxy), and it is
+                // deliberately not the last word: a callee that mints into its buffer on one
+                // path and returns a parameter on another carries a dep naming that
+                // parameter, so the proxy calls it a borrow while the value the caller
+                // actually receives is owned.  `ownership_of` is the oracle (@FR-O-Oracle)
+                // and this is the chokepoint that should read it.
+                //
+                // `Owned` lifts.  A `Join` lifts only where the bind that follows is the
+                // runtime guard — the witness has to be nameable, and the statement has to
+                // be one that BINDS.  `outer_call == u32::MAX` is the bare-statement
+                // lowering, where the lifted temp gets no `OpBindOrCopy` on the interpreter,
+                // so the free would run on the borrow arm too and release the caller's own
+                // record; there the conservative no-lift stands and costs the mint arm's
+                // leak instead.  `Borrowed` never lifts.
+                let own = crate::use_analysis::ownership_of(data, self.d_nr, val);
+                let lift_by_oracle = match own {
+                    crate::use_analysis::Own::Owned => true,
+                    crate::use_analysis::Own::Join { base } => {
+                        outer_call != u32::MAX && base != u16::MAX
+                    }
+                    crate::use_analysis::Own::Borrowed { .. } => false,
+                };
+                if let Type::Reference(d_nr, _) = returned
+                    && (!def.returns_borrowed_view()
+                        || def.attr_names.contains_key("__retbuf")
+                        || lift_by_oracle)
+                {
                     return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
                 }
                 // @P303 / #490 — a user fn returning a heap struct-enum that the

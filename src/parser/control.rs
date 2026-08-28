@@ -212,6 +212,10 @@ enum TextDep {
     /// A non-argument LOCAL (loft#771) — no hoist; promoting it would hand the
     /// free obligation to a caller that never receives the store.
     SkipOwnedLocal,
+    /// A text local in a function that already carries a work buffer (loft#1113)
+    /// — no hoist; the fn-ref call ABI passes exactly one, so a second is
+    /// unreachable through it.
+    SkipSecondTextBuf,
     /// A text local — promote to a hidden `RefVar(Text)` work-buffer param.
     PromoteHidden,
     /// Any other dep type — promote as a plain (visible) parameter.
@@ -842,12 +846,25 @@ impl Parser {
             // reason: `fn make() -> fn(integer) -> integer { |x| { x * 2 } }` has no
             // other way to say what `x` is, and the return type is as much an expected
             // type as a parameter is.
+            // loft#1122 — a TUPLE result threads for the fifth, and it is the entry that
+            // says this list wants a rule rather than a fifth `||`: a member whose parse
+            // needs the expected type (a bare variant, an empty collection literal) had
+            // nothing to resolve against here, while a DECLARED LOCAL of the same type
+            // accepted it — that position reads its destination from `var_tp` and never
+            // needed the channel.  `seeds_tuple_hint` is the one home for the tuple
+            // question, asked at the argument sites too; the general census of this
+            // channel's ten push sites and six admission lists is QUALITY.md § B6t.
             if self.enum_context(result)
                 || crate::parser::vectors::is_collection(result)
                 || self.interpolation_target(result) != u32::MAX
                 || Self::seeds_lambda_hint(result)
             {
                 self.expected = result.clone();
+            } else if let Some(tuple) = self.tuple_hint_type(result) {
+                // The tuple hint is the promoted type read BACK to the source spelling, so
+                // what reaches the literal is `(τ₁, …, τₙ)` and not the synthetic struct
+                // reference the retbuf ABI turned it into.
+                self.expected = tuple;
             }
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
             // parsed is non-null" — used by the very next operator (`p.field ?? d`'s defended
@@ -1569,9 +1586,13 @@ impl Parser {
             // the existing `Return(If(...))` native codegen at
             // `src/generation/emit.rs:166-182` emits
             // `return if cond { ... } else { ... }` correctly.
+            // `base`, because the question is whether the RETURN is heap-shaped, and a
+            // nullable one is: `S?` holds the same record as `S` (@FR-L-Null, layout(τ) =
+            // layout(τ?)).  Asked bare, every `τ?` tail kept a work-ref per arm plus a
+            // separate result slot where its non-null twin shares one.
             let if_unified = !self.first_pass
                 && context == "return from block"
-                && crate::data::is_dbref(result)
+                && crate::data::is_dbref(result.base())
                 && matches!(l[last].unspan(), Value::If(_, _, _))
                 && self.unify_if_branches_work_refs(&mut l[last]).is_some();
             if if_unified {
@@ -1680,8 +1701,17 @@ impl Parser {
             // i32 { n }` reported the narrowing on the closing brace while the same
             // narrowing in an assignment, an argument and a struct-literal field all
             // named their own line.  Seek for the duration and restore.
-            let needs_convert =
-                !tuple_rewritten && !if_unified && !vec_match_candidate && !vec_arm_handled;
+            // @FR-C-Var — an `else` arm that is a SIBLING variant of the then arm's is not
+            // a conversion question at all.  `Reference(S) ⤳ Enum(E)` is licensed for each
+            // of them and nothing is licensed BETWEEN them, so asking `convert` produced
+            // *"expected A, got B on else"* for a join `match` accepts (loft#1117).  The
+            // arm keeps its own type and `parse_if` joins the two to their enum.
+            let sibling_variant = context == "else" && self.sibling_variants(t, result);
+            let needs_convert = !tuple_rewritten
+                && !if_unified
+                && !vec_match_candidate
+                && !vec_arm_handled
+                && !sibling_variant;
             let converted = if needs_convert {
                 self.lexer.to((tail_pos.line, tail_pos.pos));
                 let done = self.convert(&mut l[last], t, result);
@@ -1743,7 +1773,14 @@ impl Parser {
                 // walkers in `parse_if`, which match the `OpConv*FromNull` spelling.  One
                 // notion with two spellings and only one of them asked about; this is the
                 // other spelling, asked about here where the arm's own type is still in hand.
-                let honest = result.with_deps_of(t);
+                // A sibling variant keeps its OWN shape: the expected type names the
+                // then arm's variant, and taking it whole would report this arm as that
+                // one — which is also what lets `parse_if` see that the two differ.
+                let honest = if sibling_variant {
+                    t.clone()
+                } else {
+                    result.with_deps_of(t)
+                };
                 if crate::keys::pln25_dn1_enabled()
                     && matches!(t, Type::Optional(_))
                     && !matches!(honest, Type::Optional(_))
@@ -3372,7 +3409,48 @@ impl Parser {
                     chain_borrow = Some(chain_type);
                 }
             } else {
+                // @FR-C-Var — an `else` arm is checked against the ENUM, not against its
+                // SIBLING.  `types.md (C-Var)` licenses `Reference(S) ⤳ Enum(E)` for
+                // `S ∈ variants(E)` and licenses nothing between two variants, so handing
+                // the then-arm's type down asked a question the rules do not answer:
+                // `if c { E::A { … } } else { E::B { … } }` was refused *"expected A, got B
+                // on else"* while `match` — which lowers to this very node — accepted the
+                // identical join (loft#1117).  `match` gets this right by expecting
+                // `Unknown` per arm; an `if` cannot, because its else arm needs the
+                // sibling's type for `null` / `[]` / a bare variant name.  The enum is the
+                // type that serves both: it is what the arms actually join to, and it still
+                // carries the context those spellings need.
+                let variant_enum = self.variant_parent_enum(&true_type);
                 false_type = self.parse_block("else", &mut false_code, &true_type);
+                // @FR-C-Var — two DIFFERENT variants of one enum join to the ENUM, and
+                // that is this expression's type.  `parse_block` accepted the sibling arm
+                // and kept its own type (see its `sibling_variants` carve-out); deciding
+                // the join is this site's half, because only here are both arms in hand.
+                //
+                // The widening is what keeps the acceptance sound.  Left at the then-arm's
+                // variant, `v: A = if c { E::A { … } } else { E::B { … } }` would be
+                // accepted and a slot declared as one variant would hold another, read at
+                // this variant's offsets (loft#980's class).  Two arms of the SAME variant
+                // widen nothing, so a variant-typed destination stays legal for them.
+                if let Some(enum_tp) = &variant_enum
+                    && Self::joins_to_enum(enum_tp, &true_type, &false_type)
+                {
+                    true_type = enum_tp.clone();
+                }
+                // ...and when the arms really are two DIFFERENT variants, the join is the
+                // ENUM, so that is this expression's type.  Keeping the then-arm's variant
+                // would let `v: A = if c { E::A { … } } else { E::B { … } }` through — a
+                // slot declared as one variant holding another, whose fields are read at
+                // this variant's offsets (loft#980's class).  `(C-Var)` converts the enum
+                // to nothing narrower, so the declaration is refused where it belongs.
+                //
+                // Two arms of the SAME variant keep that variant: nothing was widened, and
+                // a `v: A` destination stays legal for them.
+                if let Some(enum_tp) = &variant_enum
+                    && Self::joins_to_enum(enum_tp, &true_type, &false_type)
+                {
+                    true_type = enum_tp.clone();
+                }
             }
             if true_type == Type::Unknown(0) {
                 if let Value::Block(bl) = &mut true_code {
@@ -9059,7 +9137,15 @@ impl Parser {
         // pushed a `null` placeholder into a frame laid out for a work buffer
         // (`realloc(): invalid next size` in the multiplayer/ws consumers).
         if matches!(tp.base(), Type::Text(_)) {
-            TextDep::PromoteHidden
+            // loft#1113 — one text work buffer per lambda, and the first asker
+            // takes it (`holds_text_work_buf`).  Two promotions can meet in one
+            // body: `parse_return` promotes at the `return`, and the block tail
+            // promotes the `??` / `?` / `if` accumulator afterwards.
+            if self.holds_text_work_buf() {
+                TextDep::SkipSecondTextBuf
+            } else {
+                TextDep::PromoteHidden
+            }
         } else if matches!(tp, Type::Tuple(_)) {
             // @P330: a tuple local must NOT hoist to a parameter — call sites
             // would push a 12-byte null DbRef where the slot is 16+ bytes per
@@ -9091,6 +9177,84 @@ impl Parser {
             // Any other dep type promotes as a plain (visible) parameter.
             TextDep::PromotePlain
         }
+    }
+
+    /// Does the LAMBDA being parsed already carry a hidden `RefVar(Text)` work
+    /// buffer?
+    ///
+    /// A lambda takes at most ONE, because that is what the fn-ref call ABI
+    /// passes.  A call site holding a fn-typed slot cannot know which lambda is
+    /// in it, so it injects exactly one buffer and the callee either uses it or
+    /// has it popped (`State::fn_call_ref`).  A callee carrying TWO leaves the
+    /// frame one DbRef span short, and the callee then reads its `__closure`
+    /// slot from the wrong offset — loft#717's fault line, reached by a second
+    /// route (loft#1113).
+    ///
+    /// So the FIRST promotion to ask for a buffer takes it, and every later text
+    /// local stays a local — its value is delivered by copy into the caller's
+    /// `&text` buffer, which is what `SkipOwnedLocal` already describes for a
+    /// local it declines to hoist.
+    ///
+    /// Scoped to lambdas, and the narrowness is measured rather than cautious: a
+    /// NAMED function's call sites lower against a known signature and carry as
+    /// many buffers as it declares, and applying the rule to them instead moved
+    /// five suite results (`float=0.25` came back `0` through the sqlite
+    /// bridges).  A named function that shares a fn-ref's signature does reach
+    /// the generated dispatch arm, which forwards one buffer twice and fails to
+    /// compile — that is a separate, older defect and is not cured here.
+    ///
+    /// The verdict is pass-stable: a var promoted on pass 1 is an attribute by
+    /// pass 2 and takes `classify_text_dep`'s `Attr` branch, so it re-acquires the
+    /// same buffer rather than asking for a new one.
+    /// Mint the hidden `&text` work buffers a fn-ref call of this signature must carry,
+    /// and answer their variables.
+    ///
+    /// A `&text` is a pointer into the CALLER's frame, so only the caller can supply a
+    /// buffer that outlives the call — and a call through a fn-typed slot cannot know which
+    /// function the slot holds.  So it mints what the widest candidate of that signature
+    /// could want and `State::fn_call_ref` trims the frame to what the actual target
+    /// declares (loft#1116).
+    ///
+    /// **Every site that builds a text-returning `CallRef` must mint through here.**  The
+    /// trim is computed from the same count, so a site that mints fewer has a REAL buffer
+    /// trimmed away, and the callee then reads its `__closure` from the wrong offset — a
+    /// corrupt `DbRef` rather than a diagnostic.  Minting happens on BOTH passes so the
+    /// work-variable numbering does not shift across the pass boundary;
+    /// [`Self::push_fnref_text_buffers`] builds the argument blocks on pass 2.
+    pub(crate) fn fnref_text_buffer_vars(&mut self, params: usize, ret: &Type) -> Vec<u16> {
+        (0..self.data.fnref_text_buffers(params, ret))
+            .map(|_| self.vars.work_text(&mut self.lexer))
+            .collect()
+    }
+
+    /// Append one `OpCreateStack` argument block per buffer from
+    /// [`Self::fnref_text_buffer_vars`], cleared so a loop iteration starts fresh.
+    ///
+    /// Order matters and is the callee's: visible parameters, then work buffers, then the
+    /// closure `fn_call_ref` reads out of the fn-ref slot.
+    pub(crate) fn push_fnref_text_buffers(&mut self, args: &mut Vec<Value>, work_vars: &[u16]) {
+        let ref_def = self.data.def_nr("reference");
+        for &wv in work_vars {
+            let create = self.cl("OpCreateStack", &[Value::Var(wv)]);
+            args.push(v_block(
+                vec![crate::data::v_set(wv, Value::Text(String::new())), create],
+                Type::Reference(ref_def, Deps::frame1(wv)),
+                "cref_work_buf",
+            ));
+        }
+    }
+
+    fn holds_text_work_buf(&self) -> bool {
+        self.data
+            .def(self.context)
+            .name()
+            .starts_with("n___lambda_")
+            && self
+                .data
+                .def(self.context)
+                .attributes()
+                .iter()
+                .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))))
     }
 
     pub(crate) fn text_return(&mut self, ls: &[u16]) {
@@ -9139,7 +9303,10 @@ impl Parser {
                                 .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
                         }
                     }
-                    TextDep::SkipCaptured | TextDep::SkipTupleLocal | TextDep::SkipOwnedLocal => {
+                    TextDep::SkipCaptured
+                    | TextDep::SkipTupleLocal
+                    | TextDep::SkipOwnedLocal
+                    | TextDep::SkipSecondTextBuf => {
                         // SkipTupleLocal (@P330): the dep drops on purpose — the
                         // return type loses this local, which lets scopes'
                         // B5-L3 single-text branch deep-copy the tail into a
@@ -9204,11 +9371,7 @@ impl Parser {
                 .def(self.context)
                 .name()
                 .starts_with("n___lambda_");
-            let has_work_buf =
-                self.data.def(self.context).attributes().iter().any(
-                    |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
-                );
-            if self.first_pass && is_lambda && !has_work_buf {
+            if self.first_pass && is_lambda && !self.holds_text_work_buf() {
                 let work_tp = Type::RefVar(Box::new(Type::Text(Deps::none())));
                 let a = self.data.add_attribute(
                     &mut self.lexer,
@@ -9981,6 +10144,66 @@ impl Parser {
     /// same question six times and drift at the first one anybody forgets. `Void` / `Null` arms
     /// are left alone: they carry no type of their own to contribute, and the DN1 walkers own
     /// the bare-`null` arm.
+    /// Are these two types two DIFFERENT variants of one enum?
+    ///
+    /// @FR-C-Var licenses `Reference(S) ⤳ Enum(E)` for each variant and nothing between
+    /// two of them, so this is the pair for which "does one convert to the other?" is the
+    /// wrong question — they join to their enum instead.  The SAME variant twice is not a
+    /// sibling pair: that conversion is reflexive and takes the ordinary path.
+    fn sibling_variants(&self, a: &Type, b: &Type) -> bool {
+        let (Type::Reference(x, _), Type::Reference(y, _)) = (a, b) else {
+            return false;
+        };
+        if x == y {
+            return false;
+        }
+        let (dx, dy) = (self.data.def(*x), self.data.def(*y));
+        matches!(self.data.def_type(*x), DefType::EnumValue)
+            && matches!(self.data.def_type(*y), DefType::EnumValue)
+            && dx.parent != u32::MAX
+            && dx.parent == dy.parent
+    }
+
+    /// Do a then-arm and an else-arm join to `enum_tp` rather than to the then-arm's own
+    /// variant?
+    ///
+    /// True when the else arm is a DIFFERENT variant of the same enum, or the enum itself.
+    /// False for the same variant (nothing widened), and false for a `Void` / `Never` /
+    /// `Null` else arm — a diverging or valueless arm states no type to join with, and an
+    /// `else if` chain deliberately keeps its shape out of `false_type` (loft#936).
+    fn joins_to_enum(enum_tp: &Type, true_type: &Type, false_type: &Type) -> bool {
+        let Type::Enum(e, _, _) = enum_tp else {
+            return false;
+        };
+        match (true_type, false_type) {
+            (Type::Reference(a, _), Type::Reference(b, _)) => a != b,
+            (_, Type::Enum(f, _, _)) => f == e,
+            _ => false,
+        }
+    }
+
+    /// The ENUM a variant type belongs to — `Some(Enum(E))` for a `Reference(S)` whose def
+    /// is one of `E`'s variants, `None` for anything else.
+    ///
+    /// @FR-C-Var is the rule: `Reference(S) ⤳ Enum(E)` when `S ∈ variants(E)`, and there is
+    /// no conversion between two SIBLING variants.  So wherever one variant's type would be
+    /// handed to a position that another variant may also fill, this is the type to hand
+    /// down instead.  The deps travel with it: which store the value borrows is not changed
+    /// by naming its type more widely.
+    ///
+    /// `Definition::parent` makes this O(1) — a variant records its enum — so it is cheap
+    /// enough to ask on every `if` that yields a record.
+    fn variant_parent_enum(&self, tp: &Type) -> Option<Type> {
+        let Type::Reference(d, deps) = tp else {
+            return None;
+        };
+        let def = self.data.def(*d);
+        if !matches!(self.data.def_type(*d), DefType::EnumValue) || def.parent == u32::MAX {
+            return None;
+        }
+        Some(Type::Enum(def.parent, true, deps.clone()))
+    }
+
     fn join_arm_into(&self, so_far: &Type, arm: &Value, tp: &Type) -> Type {
         let joined = so_far.joined_deps(&self.arm_join_type(arm, tp));
         if crate::keys::pln25_dn1_enabled()
@@ -13243,38 +13466,20 @@ impl Parser {
                     // @PLN85 L1 — callee-attr-space deps must not leak into the
                     // caller (see `fnref_result_type`).
                     let ret_type = Box::new(Self::fnref_result_type(*ret_type, &[]));
-                    // P227: text-returning fn-ref calls need exactly ONE
-                    // work-buffer at caller-function scope (the return-value
-                    // buffer that the lambda fills via its hidden RefVar(Text)
-                    // attr).  The fn-ref TYPE's `Type::Text(deps)` is always
-                    // `deps = []`, so the previous `(0..deps.len())` count
-                    // was always zero — leaving the lambda's stack slot for
-                    // its work-buffer empty and causing a SIGSEGV when the
-                    // lambda body read it.  Allocating one work_text var here
-                    // matches the canonical "one return buffer per text fn"
-                    // ABI; lambdas with multiple `RefVar(Text)` hidden attrs
-                    // (the rare case) are diagnosed separately.
-                    let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
-                        vec![self.vars.work_text(&mut self.lexer)]
-                    } else {
-                        vec![]
-                    };
+                    // P227: a text-returning fn-ref call carries its target's `&text`
+                    // work buffers at caller-function scope, because a `&text` is a
+                    // pointer into the CALLER's frame — the callee cannot conjure one
+                    // that outlives its own return.  The call site cannot know which
+                    // function the slot holds, so it pushes what the widest candidate of
+                    // this signature wants and `State::fn_call_ref` pops the excess once
+                    // the target IS known (loft#1116).
+                    let work_vars = self.fnref_text_buffer_vars(0, ret_type.as_ref());
                     if !self.first_pass {
                         self.var_usages(v_nr, true);
                         let mut args = vec![];
                         // inject work-buffer DbRef blocks before __closure (zero-param case).
                         // clear the work buffer before each call so loop iterations start fresh.
-                        let ref_def = self.data.def_nr("reference");
-                        for &wv in &work_vars {
-                            args.push(v_block(
-                                vec![
-                                    crate::data::v_set(wv, Value::Text(String::new())),
-                                    self.cl("OpCreateStack", &[Value::Var(wv)]),
-                                ],
-                                Type::Reference(ref_def, Deps::frame1(wv)),
-                                "cref_work_buf",
-                            ));
-                        }
+                        self.push_fnref_text_buffers(&mut args, &work_vars);
                         // closure is embedded in the 16-byte fn-ref slot; fn_call_ref
                         // pushes it automatically — no explicit injection needed here.
                         // mark captured vars as read at the call site
@@ -13320,6 +13525,8 @@ impl Parser {
                                 || Self::seeds_lambda_hint(&expected)
                             {
                                 self.expected = expected;
+                            } else if let Some(tuple) = self.tuple_hint_type(&expected) {
+                                self.expected = tuple;
                             }
                             break;
                         }
@@ -13385,6 +13592,14 @@ impl Parser {
                         // mints an accumulator, and a one-pass mint would shift the
                         // name-keyed variable tables.
                         self.expected = expected;
+                    } else if let Some(tuple) = self.tuple_hint_type(&expected) {
+                        // loft#1122 — seed a tuple argument's MEMBER types, so
+                        // `f(([], 9))` and `f((Dot, 9))` resolve against the parameter
+                        // the way the same literal does in a declared local.  Both
+                        // passes, for the reason the enum hint above states: a bare
+                        // variant seeded on one pass only becomes a stray placeholder
+                        // var that shadows the real variant on the other.
+                        self.expected = tuple;
                     }
                 }
             }
@@ -13840,18 +14055,11 @@ impl Parser {
         // (see `fnref_result_type`): map visible-param deps through the actual
         // argument types, drop hidden/grown indices (the value arrives OWNED).
         let ret_type = Box::new(Self::fnref_result_type(*ret_type, types));
-        // P227: one work-buffer per text-returning fn-ref call.
-        // The fn-ref TYPE's `Type::Text(deps)` is always `deps = []`,
-        // so the previous deps-derived count was zero — leaving the
-        // lambda's stack slot for its work-buffer empty and causing
-        // SIGSEGV.  Allocating one work_text matches the canonical
-        // "one return buffer per text fn" ABI; lambdas with multiple
-        // `RefVar(Text)` hidden attrs are diagnosed separately.
-        let work_vars: Vec<u16> = if matches!(ret_type.as_ref(), Type::Text(_)) {
-            vec![self.vars.work_text(&mut self.lexer)]
-        } else {
-            vec![]
-        };
+        // P227 — see the zero-argument twin above: the call site pushes the widest
+        // candidate's `&text` buffer count and the dispatcher pops the excess, because a
+        // `&text` points into the CALLER's frame and only the caller can supply one that
+        // outlives the call (loft#1116).
+        let work_vars = self.fnref_text_buffer_vars(param_types.len(), ret_type.as_ref());
         if !self.first_pass {
             if list.len() != param_types.len() {
                 diagnostic!(
@@ -13871,17 +14079,7 @@ impl Parser {
             // Each block emits OpCreateStack → 12-byte DbRef, matching callee's &text param.
             // Order: visible params → work bufs → __closure (must match callee slot layout).
             // prepend v_set(wv, "") to clear the buffer so loop iterations start fresh.
-            let ref_def = self.data.def_nr("reference");
-            for &wv in &work_vars {
-                converted.push(v_block(
-                    vec![
-                        crate::data::v_set(wv, Value::Text(String::new())),
-                        self.cl("OpCreateStack", &[Value::Var(wv)]),
-                    ],
-                    Type::Reference(ref_def, Deps::frame1(wv)),
-                    "cref_work_buf",
-                ));
-            }
+            self.push_fnref_text_buffers(&mut converted, &work_vars);
             // inject hidden __closure argument — the closure allocation
             // expression is generated inline so it runs at the call site, avoiding
             // closure is embedded in the 16-byte fn-ref slot; fn_call_ref

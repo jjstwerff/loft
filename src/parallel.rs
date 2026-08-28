@@ -670,44 +670,31 @@ pub fn rebase_walk_record(
     for (offset, idx) in owned {
         let field_pos = record_ref.pos + offset as u32;
         let field_tp = &elem_types[idx];
-        match field_tp {
-            // Text fields use `Str { ptr, len }` — the pointer is a
-            // raw heap address, not a store-relative slot.  Adoption
-            // doesn't move bytes, so the pointer stays valid; no
-            // translation needed.
-            Type::Text(_) => {}
-            Type::Reference(_, _)
-            | Type::Vector(_, _)
-            | Type::Sorted(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Hash(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-            | Type::Enum(_, true, _) => {
-                let store = &mut stores.allocations[record_ref.store_nr as usize];
-                let cur: DbRef = *store.addr::<DbRef>(record_ref.rec, field_pos);
-                let translated = map.translate(&cur);
-                if translated != cur {
-                    *store.addr_mut::<DbRef>(record_ref.rec, field_pos) = translated;
-                }
-                // Recurse into the pointed-at record using the field's
-                // declared type so the next layer's `owned_elements`
-                // call sees the right shape.
-                if translated.store_nr != u16::MAX
-                    && (translated.store_nr as usize) < stores.allocations.len()
-                {
-                    rebase_walk_record(stores, &translated, field_tp, data, map, visited);
-                }
-            }
-            _ => {
-                // owned_elements only returns owned types; this arm is
-                // defensive.  Hitting it would indicate `owned_elements`
-                // and the match above are out of sync.
-                debug_assert!(
-                    false,
-                    "rebase_walk_record: unexpected owned-element type {field_tp:?}"
-                );
-            }
+        // `owned_elements` already decided membership, so the only question left is which
+        // of the two owning shapes this is.  Restating its variant list here is what the
+        // `_` arm used to guard with a `debug_assert` — absent from release builds and from
+        // the ordinary debug build too, since the loft package turns debug assertions off.
+        // One list, asked once, cannot drift.  Peeled for the same reason it is peeled
+        // there: a nullable element holds the bare one's `DbRef` (@FR-L-Null).
+        //
+        // A text field is the one owning shape with nothing to translate: it holds a
+        // `Str { ptr, len }` whose pointer is a raw heap address, not a store-relative
+        // slot, and adoption does not move those bytes.
+        if matches!(field_tp.base(), Type::Text(_)) {
+            continue;
+        }
+        let store = &mut stores.allocations[record_ref.store_nr as usize];
+        let cur: DbRef = *store.addr::<DbRef>(record_ref.rec, field_pos);
+        let translated = map.translate(&cur);
+        if translated != cur {
+            *store.addr_mut::<DbRef>(record_ref.rec, field_pos) = translated;
+        }
+        // Recurse into the pointed-at record using the field's declared type so the next
+        // layer's `owned_elements` call sees the right shape.
+        if translated.store_nr != u16::MAX
+            && (translated.store_nr as usize) < stores.allocations.len()
+        {
+            rebase_walk_record(stores, &translated, field_tp, data, map, visited);
         }
     }
 }
@@ -1148,31 +1135,24 @@ fn revive_record_chain(
     for (offset, idx) in owned {
         let field_pos = record_ref.pos + offset as u32;
         let field_tp = &elem_types[idx];
-        match field_tp {
-            Type::Text(_) => {}
-            Type::Reference(_, _)
-            | Type::Vector(_, _)
-            | Type::Sorted(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Hash(_, _, _)
-            | Type::Radix(_, _, _)
-            | Type::Trie(_, _, _)
-            | Type::Enum(_, true, _) => {
-                let cur: DbRef =
-                    *stores.allocations[store_nr as usize].addr::<DbRef>(record_ref.rec, field_pos);
-                if cur.store_nr != u16::MAX && (cur.store_nr as usize) < stores.allocations.len() {
-                    revive_record_chain(
-                        stores,
-                        &cur,
-                        field_tp,
-                        data,
-                        visited,
-                        adopted,
-                        parent_store_count,
-                    );
-                }
-            }
-            _ => {}
+        // The same one-list reading as `rebase_walk_record` above: membership is
+        // `owned_elements`', and `text` is the shape that owns no store.
+        // `text` again: a heap `String` pointer, not a store-relative slot.
+        if matches!(field_tp.base(), Type::Text(_)) {
+            continue;
+        }
+        let cur: DbRef =
+            *stores.allocations[store_nr as usize].addr::<DbRef>(record_ref.rec, field_pos);
+        if cur.store_nr != u16::MAX && (cur.store_nr as usize) < stores.allocations.len() {
+            revive_record_chain(
+                stores,
+                &cur,
+                field_tp,
+                data,
+                visited,
+                adopted,
+                parent_store_count,
+            );
         }
     }
 }

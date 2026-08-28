@@ -126,10 +126,55 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-OPEN: **1** (D-tup-4's KEYED half, 2026-08-26 — below); D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
+OPEN: **1** (D-tup-4's KEYED half, 2026-08-26 — below); D-tup-5 and D-tup-6 opened and closed
+2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
-all-`(integer, integer)` oracle cannot express, so the zero above never covered it.
+all-`(integer, integer)` oracle cannot express, so the zero above never covered it.  D-tup-5 and
+D-tup-6 are two more from the same blind spot, one axis further: a NULLABLE element, which the
+all-`(integer, integer)` oracle cannot express either.
+
+### D-tup-5 — OPENED AND CLOSED (2026-08-28, loft#1122): a member was not parsed against the type its position names
+
+The typing relation checks a tuple element against its member type, so LOFT.md's `⇐` rule —
+*the expected type wherever there is one* — makes a member one of those places.  It was pushed
+for a DECLARED LOCAL and for nothing else: a local reads its destination from `var_tp`, while a
+`return` and a call ARGUMENT have only the channel, and `Type::Tuple` was in none of that
+channel's admission lists.  A member whose parse NEEDS the expected type therefore had nothing
+to resolve against one position over — a bare variant (`(Dot, 9)`) was REFUSED, and an empty
+collection literal (`([], 9)`) answered `t.1 == null` for a member declared `integer`, leaked
+the tuple's store, and would not compile on `--native`.
+
+Closed by asking one predicate at each of those push sites (`Parser::tuple_hint_type`).
+
+⚠ **The notion has two spellings and a return only ever shows the second.**  A source-level
+`(τ₁, …, τₙ)` is a `Type::Tuple`; a tuple RETURN is promoted to `Reference(__tuple<…>)` — the
+synthetic struct carrying the caller's `__retbuf` ABI — before the body is parsed.  Admitting
+only `Type::Tuple` at the block tail changed nothing at all, silently, and the measurement is
+what said so: the argument cells went green and every return cell stayed red.  Guard:
+`tests/scripts/1122-a-tuple-member-is-parsed-against-its-type-in-every-position.loft`.
+
+### D-tup-6 — OPENED AND CLOSED (2026-08-28, loft#1123): a nullable element did not earn the ABI its dense twin earns
+
+`(T-Ret)` says a returned tuple is an INDEPENDENT value.  A tuple return is promoted to the
+synthetic-struct ABI when any element carries a lifetime concern, and that predicate read its
+argument directly — so `Optional(Reference(W))` answered NO where `Reference(W)` answered yes,
+and `-> (W?, integer)` kept the by-value tuple ABI its DENSE twin did not.
+
+On that un-promoted path a tail whose member BUILDS a value is dropped: the tuple is emitted as
+a discarded statement and the function returns null.  `--native` read that back as `(null, 0)`
+— both members lost, no diagnostic — while `--interpret` answered correctly off stack residue,
+so a program passed its tests on one backend and was wrong on the other, and the other is the
+default.  The axis is *nullable and PRESENT*: a `null` member was correct (its tail builds
+nothing) and so was the dense twin.
+
+Closed by reading through `Optional` in `has_lifetime_concern` — `τ?` has the same storage as
+`τ`, which is why `element_stack_align` beside it already peels.  ⚠ That makes a tuple ELEMENT
+a `__nullable<S>` slot, and `(N-Store)` read the synthetic wrapper as NON-null, warning that a
+`W?` becomes null in `__nullable<W>` — the nullable type saying it is not one.  `τ?`'s second
+spelling now has a home (`Data::is_nullable_wrapper`), and the doc there names the ten further
+sites that still test it by hand.  Guard:
+`tests/scripts/1123-a-nullable-tuple-member-returns-like-its-dense-twin.loft`.
 
 > **D-tup-4 — OPENED 2026-08-26 (loft#1102); the VECTOR half CLOSED the same day, the KEYED
 > half OPEN — a tuple literal ALIASED a heap local while both sibling constructors copied it.**

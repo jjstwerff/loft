@@ -1559,35 +1559,12 @@ use a separate collection or add after the loop"
     /// `spatial` / `trie` — or `None` for anything else, including a keyed type whose
     /// element record has no runtime type yet (pass 1).
     ///
-    /// One list of the keyed kinds, because a site that names four of the five reads as a
-    /// complete rule and is not one: the field-replace site named three, so `spatial` and
-    /// `trie` fields silently kept the whole-collection-assign defect the site exists to
-    /// fix (loft#922).  Peel the `?` before calling — an `Optional(τ)` collection lays out
-    /// exactly like `τ`.
+    /// [`Parser::keyed_known_type`] is the home; this is its name at the expression sites.
+    /// It carries the one list of the keyed kinds and the `?` peel, so the two cannot give
+    /// different answers about the same collection — which is what they did while each
+    /// spelled the five kinds itself.
     fn keyed_type_id(&mut self, tp: &Type) -> Option<u16> {
-        match tp {
-            Type::Sorted(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.sorted(c, key))
-            }
-            Type::Hash(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.hash(c, key))
-            }
-            Type::Index(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.index(c, key))
-            }
-            Type::Radix(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.spatial(c, key))
-            }
-            Type::Trie(td, key, _) => {
-                let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.trie(c, key))
-            }
-            _ => None,
-        }
+        self.keyed_known_type(tp)
     }
 
     /// The clear that must run before a whole-collection literal is built into the
@@ -2630,6 +2607,55 @@ use a separate collection or add after the loop"
                 );
             }
         }
+        // loft#1034 — a TUPLE target reaches `convert` too.
+        //
+        // `scalar_target` above lists the types whose annotation drives a conversion, and
+        // a tuple is not one of them, so `c: (text?, integer) = ("c0", 3)` never converted
+        // the literal against what the annotation asked for.  That had two consequences,
+        // one loud and one silent:
+        //
+        //   * `change_var_type` then compared the declared `(text?, integer)` against the
+        //     literal's own inferred `(text, integer)` and refused the declaration —
+        //     "cannot change type from (text?, integer) to (text, integer)" — for a
+        //     widening that is legal in every other position;
+        //   * a `null` ELEMENT stayed a bare null instead of becoming the element type's
+        //     sentinel, so `(null, 3)` stored the empty text (`h.0 == null` answered
+        //     false) and would not compile at all on `--native`, which emitted `()`.
+        //
+        // The RETURN position always converted — `convert`'s own Tuple arm walks the
+        // elements and applies each one's coercion — which is exactly why the identical
+        // type was accepted there and the issue read as a local-only refusal.  Routing the
+        // local through the same function is what makes the two positions agree, rather
+        // than teaching this site a second opinion about tuples.
+        //
+        // Adopting `f_type` on success is what lets `change_var` below, and the rest of
+        // this function, see the declared type rather than the literal's.
+        //
+        // ⚠ ORDER IS THE CONTRACT, and it is why this sits immediately above
+        // `change_var`.  `change_var_type` decides acceptance with `decl_accepts`, which
+        // answers `(N-Decl)` — a `τ?` slot admits a `τ` — and nothing else.  A member
+        // needing a REAL coercion is not in that relation, so a conversion performed
+        // AFTER the retype arrives too late to prevent the refusal: `t: (Shape, integer)
+        // = (Shape::Circle { r: 7 }, 9)` was rejected *"cannot change type from
+        // (Shape, integer) to (Circle, integer)"* even though `convert` — running a few
+        // hundred lines below — then answered yes to the very same question.  The two
+        // positions that always worked, RETURN and ARGUMENT, convert before anything
+        // records a type; this is that same order.
+        //
+        // BOTH passes, for the same reason.  A pass-1 refusal aborts before pass 2 runs,
+        // so gating the conversion on `!first_pass` left it permanently unreachable for
+        // exactly the programs it exists to accept.  Pass-1 IR is rebuilt from source in
+        // pass 2, so the coercions emitted here are discarded rather than duplicated.
+        let s_type = if op == "="
+            && matches!(f_type, Type::Tuple(_))
+            && matches!(s_type, Type::Tuple(_))
+            && !f_type.is_equal(&s_type)
+            && self.convert(code, &s_type, f_type)
+        {
+            f_type.clone()
+        } else {
+            s_type
+        };
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
@@ -2992,7 +3018,7 @@ use a separate collection or add after the loop"
             && var_nr == u16::MAX
             && self.is_field(to)
             && (matches!(&*code, Value::Insert(_)) || matches!(s_type, Type::Null));
-        if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type.base()) {
+        if keyed_field_write && let Some(kt) = self.keyed_type_id(f_type) {
             let clear = self.keyed_group_clear(to, kt, &lhs_parent_tp);
             match code {
                 // A literal: run the clear FIRST, so the element-construction ops that
@@ -3440,40 +3466,6 @@ use a separate collection or add after the loop"
                 f_type.name(&self.data),
             );
         }
-        // loft#1034 — a TUPLE target reaches `convert` too.
-        //
-        // `scalar_target` above lists the types whose annotation drives a conversion, and
-        // a tuple is not one of them, so `c: (text?, integer) = ("c0", 3)` never converted
-        // the literal against what the annotation asked for.  That had two consequences,
-        // one loud and one silent:
-        //
-        //   * `change_var_type` then compared the declared `(text?, integer)` against the
-        //     literal's own inferred `(text, integer)` and refused the declaration —
-        //     "cannot change type from (text?, integer) to (text, integer)" — for a
-        //     widening that is legal in every other position;
-        //   * a `null` ELEMENT stayed a bare null instead of becoming the element type's
-        //     sentinel, so `(null, 3)` stored the empty text (`h.0 == null` answered
-        //     false) and would not compile at all on `--native`, which emitted `()`.
-        //
-        // The RETURN position always converted — `convert`'s own Tuple arm walks the
-        // elements and applies each one's coercion — which is exactly why the identical
-        // type was accepted there and the issue read as a local-only refusal.  Routing the
-        // local through the same function is what makes the two positions agree, rather
-        // than teaching this site a second opinion about tuples.
-        //
-        // Adopting `f_type` on success is what lets the rest of this function, and
-        // `change_var_type` after it, see the declared type rather than the literal's.
-        let s_type = if op == "="
-            && !self.first_pass
-            && matches!(f_type, Type::Tuple(_))
-            && matches!(s_type, Type::Tuple(_))
-            && !f_type.is_equal(&s_type)
-            && self.convert(code, &s_type, f_type)
-        {
-            f_type.clone()
-        } else {
-            s_type
-        };
         // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
         // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
         // an explicit `as` unless the RHS is a constant that provably fits.

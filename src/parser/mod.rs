@@ -3313,26 +3313,69 @@ impl Parser {
         matches!(tp.base(), Type::Function(_, _, _))
     }
 
-    /// Is this declared tuple MEMBER type worth pushing on the `⇐` channel — because it
-    /// is a `fn(…)`, or because a `fn(…)` sits somewhere inside it?
+    /// The tuple type a `⇐` push should carry for `tp` — the one home for the tuple
+    /// question on that channel, asked identically at every push site a tuple literal can
+    /// stand in: a block tail / `return`, and a call argument (positional and named).
+    /// [`Self::seeds_tuple_member_hint`] then answers for each MEMBER once the literal has
+    /// the tuple type in hand.
     ///
-    /// [`Self::seeds_lambda_hint`] answers for the member that IS the lambda's
-    /// destination; a member that merely CONTAINS one is a step on the way there, and the
-    /// tuple-literal branch needs both. Seeding only the outer step made the seeding
-    /// per top-level member: `(fn(integer) -> integer, integer)` inferred `|x|` and
-    /// `((fn(integer) -> integer, integer), text)` did not, because a nested member is a
-    /// `Type::Tuple`, so nothing reached the inner literal and `x` had no type
-    /// (loft#1073).
+    /// A member whose PARSE needs the expected type has nothing else to resolve against: a
+    /// bare variant (`(Dot, 9)`) has no enum context, and an empty collection literal
+    /// (`([], 9)`) has no element type. Both were accepted in a DECLARED LOCAL and refused
+    /// one position over, because the local reads its destination from `var_tp` while a
+    /// return and an argument have only this channel (loft#1122).
     ///
-    /// Same bound as the flat rule: only a member on the way to a `fn(…)` touches the
-    /// channel at all, so this does not thread member types in general — that is the
-    /// wider question of loft#942/#943.
-    pub(crate) fn seeds_tuple_member_hint(tp: &Type) -> bool {
+    /// ⚠ **The notion has two spellings, and a return only ever shows the second.** A
+    /// source-level `(τ₁, …, τₙ)` is a `Type::Tuple`; a tuple RETURN is PROMOTED to
+    /// `Reference(__tuple<…>)` — the synthetic struct carrying the caller's `__retbuf` ABI
+    /// — before the body is parsed, so a matcher that knows only `Type::Tuple` is blind at
+    /// exactly the position the defect is about, and is blind SILENTLY (it answers "no
+    /// tuple here" and the member parses with nothing). The members come back off the
+    /// struct's `tuple_group`, which is element ORDER rather than attribute order.
+    ///
+    /// Read through `base()`, so a nullable tuple asks what its base asks — whether a slot
+    /// may be absent says nothing about what its members are.
+    pub(crate) fn tuple_hint_type(&self, tp: &Type) -> Option<Type> {
         match tp.base() {
-            Type::Function(_, _, _) => true,
-            Type::Tuple(members) => members.iter().any(Self::seeds_tuple_member_hint),
-            _ => false,
+            Type::Tuple(_) => Some(tp.base().clone()),
+            Type::Reference(d_nr, _) => {
+                let group = self.data.def(*d_nr).tuple_group()?;
+                let members: Vec<Type> = group
+                    .field_indices
+                    .iter()
+                    .map(|&f| self.data.attr_type(*d_nr, f as usize))
+                    .collect();
+                (!members.is_empty()).then_some(Type::Tuple(members))
+            }
+            _ => None,
         }
+    }
+
+    /// Does this declared tuple MEMBER type say anything the element's own parse needs
+    /// to hear on the `⇐` channel?
+    ///
+    /// LOFT.md states the rule as *the expected type wherever there is one*, and a tuple
+    /// member is one of those places: the element is checked against the member type, so
+    /// it should be PARSED against it too.  A member with a known type therefore seeds,
+    /// and only an `Unknown` — which has nothing to say — does not.
+    ///
+    /// The channel used to carry `fn(…)` alone, held back until loft#1069 because a
+    /// `fn(…)` in a tuple could not be called back out of one whatever spelling put it
+    /// there.  That bound is what made three shapes fail in a DECLARED tuple local while
+    /// every other position accepted them: a bare variant name (`(Dot, 9)`) had no enum
+    /// context to resolve against, and an empty collection literal (`([], 9)`) had no
+    /// element type, which reached codegen as *"Incorrect var `__ret_1[32]` versus 24"*
+    /// rather than as a diagnostic.  Seeding is what gives each of them the type the
+    /// declaration already named.
+    ///
+    /// A `Type::Tuple` member recurses so a NESTED literal is reached as well: seeding
+    /// only the outer step made it per top-level member, and
+    /// `((fn(integer) -> integer, integer), text)` left the inner `|x|` untyped
+    /// (loft#1073).  With every member seeding, the recursion is what the caller's
+    /// `tuple_members` walk does anyway; the arm stays because the predicate is also
+    /// asked about a member in isolation.
+    pub(crate) fn seeds_tuple_member_hint(tp: &Type) -> bool {
+        !matches!(tp.base(), Type::Unknown(_))
     }
 
     /// Expected enum type for a bare value-position variant (`f(Red)`) — `expected`
@@ -3603,6 +3646,12 @@ impl Parser {
                 target_tp,
                 Type::Optional(_) | Type::Void | Type::Never | Type::Null
             )
+            // `τ?` has a second spelling: an INLINE slot holds an absent `S` as the synthetic
+            // `__nullable<S>` enum, which is not a `Type::Optional` and is exactly as nullable.
+            // A tuple ELEMENT is such a slot, so recursing into a promoted tuple return reaches
+            // one — and reading it as non-null made the check warn that a `W2?` becomes null in
+            // `__nullable<W2>` (loft#1123).
+            && !self.data.is_nullable_wrapper(target_tp)
         {
             let nm = inner.name(&self.data);
             // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
@@ -10523,16 +10572,17 @@ impl Parser {
             if *ar as usize >= types.len() {
                 continue;
             }
-            if let Type::Text(ad)
-            | Type::Vector(_, ad)
-            | Type::Sorted(_, _, ad)
-            | Type::Hash(_, _, ad)
-            | Type::Index(_, _, ad)
-            | Type::Radix(_, _, ad)
-            | Type::Trie(_, _, ad)
-            | Type::Reference(_, ad)
-            | Type::Enum(_, true, ad) = &types[*ar as usize]
-            {
+            // Asked through [`Type::deps_ref`], which is where "what does this type
+            // borrow?" is answered, rather than re-listing the kinds that carry deps.  The
+            // hand-written list this replaces was missing `Optional`, so a `τ?` argument
+            // contributed nothing: a function delegating to one that borrows its argument
+            // (`fn outer(a: S?, c) -> S? { inner(a, c) }`) declared an EMPTY return dep and
+            // so read as returning an OWNED store.  The caller then lifted that return and
+            // freed it — releasing its own record while the variable holding it was still
+            // live, and answering whatever the next allocation reused (loft#1114's class,
+            // and its dense twin was correct throughout).  `deps_ref` documents `Optional`
+            // as dep-transparent; a second list could only agree with it by accident.
+            if let Some(ad) = types[*ar as usize].deps_ref() {
                 for a in ad {
                     dp.insert(*a);
                 }

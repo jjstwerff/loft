@@ -217,7 +217,9 @@ VARIANT beside an op call, a TYPE fact beside a node shape, an absence beside a 
 the notion, not the spelling, and put both in ONE predicate. `python3
 scripts/ir_walker_audit.py spellings` asks it for the projection notion (18 functions, 2 handle
 both); the mode is ~30 lines and the shape generalises to any notion whose two spellings can be
-named. Full treatment, with what each instance cost:
+named. `… optional` asks it one TYPE FORMER over — who resolves a shape by naming `Type`
+variants and so cannot see the same shape wrapped in `τ?`, plus which callers peel with
+`.base()` first. Re-run either rather than reading a count off this page. Full treatment, with what each instance cost:
 `doc/claude/formal/IMPLEMENTATIONS.md` § *One notion, how many SPELLINGS?*
 
 ⚠ The normal appearance of this defect is a matcher that is RIGHT about every site it can see.

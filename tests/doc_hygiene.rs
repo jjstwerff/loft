@@ -1923,3 +1923,49 @@ fn quality_spellings_table_matches_the_audit() {
          {nums:?} — re-run the audit and update the row"
     );
 }
+
+#[test]
+fn quality_optional_table_matches_the_audit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = match std::process::Command::new("python3")
+        .arg(root.join("scripts/ir_walker_audit.py"))
+        .arg("optional")
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            eprintln!("SKIP quality_optional_table_matches_the_audit: cannot run the audit");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let nums: Vec<u32> = stdout
+        .lines()
+        .filter_map(|l| l.rsplit(':').next())
+        .filter_map(|t| t.trim().parse::<u32>().ok())
+        .take(4)
+        .collect();
+    assert_eq!(nums.len(), 4, "audit header changed shape; got: {stdout}");
+
+    // Anchored on the table's own header, like the unspan gate: another numeric table added
+    // above it must not silently become the subject of this check.
+    let doc = std::fs::read_to_string(root.join("doc/claude/QUALITY.md")).expect("QUALITY.md");
+    let lines: Vec<&str> = doc.lines().collect();
+    let header = lines
+        .iter()
+        .position(|l| l.starts_with("| functions discriminating on a `Type` variant"))
+        .expect("the optional table header is gone from QUALITY.md — update this gate with it");
+    let row = lines
+        .get(header + 2)
+        .expect("the optional table is truncated after its header");
+    let cells: Vec<u32> = row
+        .split('|')
+        .filter_map(|c| c.trim().trim_matches('*').parse::<u32>().ok())
+        .collect();
+    assert_eq!(
+        cells, nums,
+        "QUALITY.md's optional row says {cells:?} and `ir_walker_audit.py optional` reports \
+         {nums:?} — re-run the audit and update the row"
+    );
+}
