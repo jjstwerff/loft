@@ -128,14 +128,6 @@ struct Scopes {
     /// `None` unless the body actually reaches a displacing site (`displaces_return_buffer`),
     /// so a function that cannot leak pays no slot.
     rbuf_witness: Option<(u16, u16)>,
-    /// Every variable this body ASSIGNS, read off the pre-scan IR (loft#1135).
-    ///
-    /// The dep-init prefix below exists for a dep whose only other mention is its FREE — a
-    /// lift var assigned inside a conditional arm needs its slot reserved along every path.
-    /// A dep the body assigns has no such gap: its own `Set` initialises it, in its own
-    /// scope.  Pre-initialising it here registers it in the scope of whatever happened to
-    /// name it FIRST, which is not where it lives.
-    body_assigns: HashSet<u16>,
     /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
     /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
     /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
@@ -1325,22 +1317,6 @@ fn tuple_owned_elem_frees(elems: &[Type], v: u16, data: &Data) -> Vec<Value> {
     }
     out
 }
-/// Every variable the pre-scan IR ASSIGNS — the `Set` targets, at any depth.
-///
-/// Answered once per function so the dep-init prefix can tell a variable that initialises
-/// ITSELF from one whose only other mention is a free (loft#1135).
-fn collect_assigned(code: &Value) -> HashSet<u16> {
-    fn walk(node: &Value, out: &mut HashSet<u16>) {
-        if let Value::Set(v, _) = node.unspan() {
-            out.insert(*v);
-        }
-        node.unspan().for_each_child(&mut |c| walk(c, out));
-    }
-    let mut out = HashSet::new();
-    walk(code, &mut out);
-    out
-}
-
 fn run_scan_phase(
     data: &mut Data,
     d_nr: u32,
@@ -1375,7 +1351,6 @@ fn run_scan_phase(
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         rbuf_witness: None,
-        body_assigns: collect_assigned(orig_code),
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
@@ -4384,21 +4359,33 @@ impl Scopes {
             if d >= function.count() {
                 continue;
             }
-            // loft#1135 — a dep the body ASSIGNS initialises itself, in its own scope.
+            // loft#1135 — a LOOP VARIABLE reserves its own slot, in its own scope.
+            //
+            // This prefix exists for a dep whose only other mention is its FREE: a lift var
+            // assigned inside a conditional arm needs its slot reserved along every path, or
+            // the path that skips the arm reads an uninitialised one.  A `for` loop's
+            // variable has no such gap — its header assigns it unconditionally, every
+            // iteration, inside the loop.
             //
             // `e`'s type carries ONE dep list while `e` may be assigned in two disjoint
             // scopes (`Function::depend` replaces rather than accumulates), so the surviving
             // dep is whichever assignment parsed LAST.  Two `for` loops over the same keyed
-            // type give the first loop's `e` a dep on the SECOND loop's collection, and
+            // type give the FIRST loop's `e` a dep on the SECOND loop's collection, and
             // pre-initialising it here put a `Set(c#1, Null)` — and `var_scope[c#1]` — inside
             // the first loop's body.  The second loop then read its own variable as
             // out-of-scope and copied it, leaving the original a keyed local nothing writes
             // and nothing reads: a store-backed slot, allocated by that init and freed by
             // nobody.  One orphan per program, on `--interpret`.
             //
-            // The dep list being wrong is the defect above this one; not reserving a slot
-            // for a variable that reserves its own is right regardless of which dep it names.
-            if !self.var_scope.contains_key(&d) && !self.body_assigns.contains(&d) {
+            // The dep list being wrong is the defect above this one; not reserving a slot for
+            // a loop variable is right regardless of which dep names it.
+            //
+            // ⚠ The predicate is `was_loop_var` and NOT "assigned somewhere in the body",
+            // which is the first thing to reach for and is wrong: a lift var IS assigned, in
+            // a conditional arm, which is exactly the case the prefix is for.  Measured —
+            // `890-consumed-lift-double-free.loft` returned a garbage record under
+            // `LOFT_POISON`.
+            if !self.var_scope.contains_key(&d) && !function.was_loop_var(d) {
                 depend.push(d);
                 self.put_scope(d);
                 self.var_order.push(d);

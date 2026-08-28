@@ -35,9 +35,17 @@
 struct Dk { k: integer, v: integer }
 struct Dj { k: integer, v: integer }
 
-fn dk_one() -> iterator<hash<Dk[k]>> { yield [Dk { k: 1, v: 11 }]; }
+// The literals are BOUND before they are yielded, deliberately.  Yielding a keyed-collection
+// literal is loft#1130, fixed on this branch — so the direct spelling would make this file
+// depend on that fix and read as a #1130 failure on any tree without it.  A guard should fail
+// on its own defect.
+fn dk_one() -> iterator<hash<Dk[k]>> {
+  a: hash<Dk[k]> = [Dk { k: 1, v: 11 }];
+  yield a;
+}
 fn dk_three() -> iterator<hash<Dk[k]>> {
-  yield [Dk { k: 1, v: 11 }, Dk { k: 2, v: 22 }, Dk { k: 3, v: 33 }];
+  a: hash<Dk[k]> = [Dk { k: 1, v: 11 }, Dk { k: 2, v: 22 }, Dk { k: 3, v: 33 }];
+  yield a;
 }
 
 // TWO generators over the SAME keyed type, each consumed with a LOOKUP on the loop variable.
@@ -87,9 +95,18 @@ fn test_the_shapes_that_were_always_clean() {
   assert(b == 3, "1 + 2 vector elements: {b}");
 }
 
-fn dj_one() -> iterator<hash<Dj[k]>> { yield [Dj { k: 5, v: 55 }]; }
-fn vec_one() -> iterator<vector<Dk>> { yield [Dk { k: 1, v: 11 }]; }
-fn vec_two() -> iterator<vector<Dk>> { yield [Dk { k: 1, v: 11 }, Dk { k: 2, v: 22 }]; }
+fn dj_one() -> iterator<hash<Dj[k]>> {
+  a: hash<Dj[k]> = [Dj { k: 5, v: 55 }];
+  yield a;
+}
+fn vec_one() -> iterator<vector<Dk>> {
+  a: vector<Dk> = [Dk { k: 1, v: 11 }];
+  yield a;
+}
+fn vec_two() -> iterator<vector<Dk>> {
+  a: vector<Dk> = [Dk { k: 1, v: 11 }, Dk { k: 2, v: 22 }];
+  yield a;
+}
 
 fn main() {
   test_two_generators_over_one_keyed_type();
