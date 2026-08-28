@@ -157,9 +157,10 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **3** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; D-own-16, below; and
+D-own-18, below) — D-own-17 opened and closed 2026-08-28;
 D-own-15 opened and
 closed 2026-08-27 with loft#1119; D-own-14 opened and
 closed 2026-08-27 with loft#1118; D-own-13's second face
@@ -174,6 +175,38 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-17 — OPENED AND CLOSED (2026-08-28): a mint carried the DESTINATION's deps
+
+`(O-Deps)` reads a value's deps to place its free, so what a value's deps SAY is the whole of
+what the sweep knows.  A keyed collection literal in value position (`[K { … }]` as a return,
+a call argument, a `??` default) builds into a function-scoped `__kvb_N` accumulator whose
+store is its own — a keyed collection has no wrapper record — and the accumulator was minted
+at the DESTINATION's type, deps and all.  `??` is the position where that destination is a
+BORROW: the subject of `b.c ?? []` is a field read typed `["b"]`, so the mint inherited `["b"]`
+and `get_free_vars`' `dep.is_empty()` ownership test read someone else's store.  Nothing freed
+it, and the mint sits inside the arm — one store per EVALUATION, unbounded in a loop, on BOTH
+backends, with every value right.
+
+Closed by minting at `var_tp.without_deps()`: a deps list describes where THIS value's storage
+comes from, and a freshly minted store's comes from the mint.  The `vector` twin three lines
+away has always minted dep-free, which is why the defect was keyed-only.  Guard:
+`tests/scripts/a-keyed-literal-default-owns-the-store-it-mints.loft`.
+
+### D-own-18 — OPEN (2026-08-28): `--native` does not free the store a rebound owning local displaces
+
+The interpreter's assign path emits a pre-Set `OpFreeRef` when it overwrites a local that owns
+its store (`src/state/codegen.rs`, the `owned_ref && !s1_substituted` arm).  The native emitter
+has displaced-free machinery of its own but does not reach this shape: an owning vector local
+rebound to a `OpGetField(__vdb_N, 0)` view inside a `??` arm keeps its preamble store, which
+`emit_null_dbref` allocated because `owns_store` still calls it an owner.  One orphan per
+evaluation, unbounded in a loop, `--native` only, values right — `fn q(p: vector<T>?) { len(p
+?? [lit]) }` over fifty iterations leaks fifty stores.
+
+Same family as D-own-16 above: a displaced-store free that the two backends do not agree on.
+Pre-existing (reproduces on the published `loft 2026.8.0`) and reached by more programs since
+loft#1120, whose fix makes the null arm REACHABLE for a slot-addressed subject — before it the
+present arm was taken wrongly and the default was never built.  Filed as loft#1121.
 
 ### D-own-16 — OPEN (2026-08-27): a SELF-referential join never frees the store it displaces
 

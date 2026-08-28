@@ -30,9 +30,12 @@
 // `--native` would not compile the `if` at all.
 //
 // The keyed defaults are BORROWED (held in a record, passed as an argument) rather than
-// written as literals at the `??`.  A keyed literal default mints a store the coalesce never
-// frees — pre-existing, identical before and after this fix, and unrelated to the null
-// question — and a leaking guard cannot be told apart from a leaking fix.
+// written as literals at the `??`.  That was forced when this guard was written: a keyed
+// literal default minted a store the exit sweep never freed, and a leaking guard cannot be
+// told apart from a leaking fix.  That leak is a separate defect, cured on this branch by
+// `a-keyed-literal-default-owns-the-store-it-mints.loft`; the borrowed form stays, because it
+// is also what scores the PARAMETER holder, which reads a null field exactly as the field
+// itself does.
 //
 // @falsified-at: 2542c527 — interpret exit 1 -> 0, interpret 1 assertion failures -> 0,
 //   native exit 1 -> 0.  The first field cell stops the run, so the count is 1 rather than

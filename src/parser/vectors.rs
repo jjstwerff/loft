@@ -2613,7 +2613,15 @@ impl Parser {
             // function-exit sweep is what frees it — a block-local temp left an argument
             // literal (`f([K { … }])`) leaking.  See `Function::work_kvb` for why
             // neither of the existing namespaces will do.
-            self.vars.work_keyed(&var_tp.clone(), &mut self.lexer)
+            //
+            // WITHOUT the destination's deps, because they are the destination's and not
+            // this accumulator's: the store is minted here.  A `??` default whose SUBJECT
+            // is a borrowed field (`b.c ?? []`) reaches here with `var_tp` naming `b`, and
+            // that dep is what the exit sweep reads as *"someone else owns this"* — so it
+            // freed nothing and the literal leaked one store per evaluation, unbounded in
+            // a loop.  The `vector` twin three lines below has always minted dep-free.
+            let kvb_tp = var_tp.without_deps();
+            self.vars.work_keyed(&kvb_tp, &mut self.lexer)
         } else {
             self.create_unique(
                 "vec",
