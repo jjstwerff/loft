@@ -19,7 +19,15 @@
 // `BUG (#306)` its own comment describes.  Both sites now read `data::is_dbref`.
 //
 // `spatial` is here because `coroutine_layout::next_operands` lists six of the eight
-// (no Radix, no Trie) — that turned out not to bite, and this cell is what keeps it that way.
+// (no Radix, no Trie).  For a BARE yield that does not bite, and this cell keeps it that way.
+//
+// ⚠ For a yield inside a TUPLE it DID bite, which is why the tuple cells below exist, and the
+// correction is worth stating plainly: *"probed and it does not bite"* is a claim about the
+// SHAPE probed, and a bare yield is not a tuple member.  A tuple member is classified by
+// `YieldSlot::classify`, which restated the same DbRef set and omitted `Radix` and `Trie`; an
+// unclassifiable member makes `tuple_kinds` answer `None`, so the yield lost the unified
+// `next_into` channel it was entitled to and `--native` REFUSED a program `--interpret` ran
+// correctly.  `classify` now asks `data::is_dbref` like the other two sites of that list.
 
 struct CyE { k: integer, v: text }
 
@@ -131,4 +139,92 @@ fn cy_checks_itself() -> iterator<hash<CyE[k]>> {
   a: hash<CyE[k]> = [CyE { k: 1, v: "a" }];
   yield a;
   assert(len(a) == 1, "the generator lost its own value at the yield: {len(a)}");
+}
+
+// ---- a DbRef collection as a TUPLE MEMBER ----
+//
+// The tuple channel classifies each member separately, so the member type set is a SECOND
+// place the DbRef list can drift short — and did.  All five keyed kinds are here rather than
+// only the two that failed, because the member set and the bare-yield set are the SAME set: a
+// fix naming two kinds would leave the next one to be found the same way.  The scalar member
+// beside each collection is the control that says the value really travelled the TUPLE channel.
+//
+// @falsified-at (these cells): d1220a1b — native exit 1 -> 0; under `loft test --native`,
+// 12 passed -> 12 FAILED.  The `--interpret` channel does not move, and that is the POINT:
+// this is a backend divergence, so a guard scored on the interpreter alone would call the
+// broken build fixed.
+//
+// ⚠ Two things `make falsify` cannot tell you about this file, both measured by hand.
+// (1) It runs the file WITHOUT `--tests`, and there is no `main` here — so its interpret
+//     row executes nothing and reads `0 asserts` on both trees.  That is vacuous, not
+//     agreement, and it is why the tool's summary line says NOT falsified while the native
+//     row says falsified.  Score this file with `loft test --native`.
+// (2) The native figure is whole-FILE: a native compile failure takes every test in the
+//     file with it, so the three cells that were already correct fail on the control too
+//     without being individually wrong.
+//
+// ⚠ NO `vector` tuple-member cell, though it is the natural control.  A `vector`-member and a
+// keyed-member tuple yield in ONE program make `--native` emit invalid Rust for the WHOLE file
+// (`error[E0425]`, loft#1148 — pre-existing, order-independent, and reproducing from a plain
+// `main` as well as under `--tests`).  The cell would not add a control; it would turn this
+// file red on native and lock that failure here.  `test_yielding_a_vector` at the top carries
+// the same claim on the bare-yield channel and is unaffected.
+//
+// ⚠ One test function EACH, for the same reason: grouping several into one function trips
+// loft#1148's shape as soon as the kinds mix.
+
+struct CyW { k: integer, w: text }
+
+fn test_a_hash_tuple_member() {
+  s = 0; t = 0;
+  for p in cy_tup_hash() { for r in p.0 { s += r.k; } t += p.1; }
+  assert(s == 3 && t == 7, "hash tuple member: sum {s} tag {t}");
+}
+fn cy_tup_hash() -> iterator<(hash<CyE[k]>, integer)> {
+  a: hash<CyE[k]> = [CyE { k: 1, v: "a" }, CyE { k: 2, v: "b" }];
+  yield (a, 7);
+}
+
+fn test_a_sorted_tuple_member() {
+  s = 0; t = 0;
+  for p in cy_tup_sorted() { for r in p.0 { s += r.k; } t += p.1; }
+  assert(s == 3 && t == 7, "sorted tuple member: sum {s} tag {t}");
+}
+fn cy_tup_sorted() -> iterator<(sorted<CyE[k]>, integer)> {
+  a: sorted<CyE[k]> = [CyE { k: 1, v: "a" }, CyE { k: 2, v: "b" }];
+  yield (a, 7);
+}
+
+fn test_an_index_tuple_member() {
+  s = 0; t = 0;
+  for p in cy_tup_index() { for r in p.0 { s += r.k; } t += p.1; }
+  assert(s == 3 && t == 7, "index tuple member: sum {s} tag {t}");
+}
+fn cy_tup_index() -> iterator<(index<CyE[k]>, integer)> {
+  a: index<CyE[k]> = [CyE { k: 1, v: "a" }, CyE { k: 2, v: "b" }];
+  yield (a, 7);
+}
+
+// `spatial` (Radix) — one of the two `classify` omitted.
+fn test_a_spatial_tuple_member() {
+  s = 0; t = 0;
+  for p in cy_tup_spatial() { for r in p.0 { s += r.x; } t += p.1; }
+  assert(s == 3 && t == 7, "spatial tuple member: sum {s} tag {t}");
+}
+fn cy_tup_spatial() -> iterator<(spatial<CyP[x, y]>, integer)> {
+  a: spatial<CyP[x, y]> = [CyP { x: 1, y: 1, n: "a" }, CyP { x: 2, y: 2, n: "b" }];
+  yield (a, 7);
+}
+
+// `trie` — the other one.  It reached a CLEAN refusal rather than broken Rust, because a trie
+// carries one `String` key and so renders without the quoted key list that breaks the message
+// (loft#1149).  Refused all the same, for a program the interpreter ran correctly.
+fn test_a_trie_tuple_member() {
+  s = 0; t = 0;
+  for p in cy_tup_trie() { for r in p.0 { s += r.k; } t += p.1; }
+  assert(s == 3 && t == 7, "trie tuple member: sum {s} tag {t}");
+}
+fn cy_tup_trie() -> iterator<(trie<CyW[w]>, integer)> {
+  a: trie<CyW[w]> = [CyW { k: 1, w: "aa" }, CyW { k: 2, w: "bb" }];
+  yield (a, 7);
 }
