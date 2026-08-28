@@ -387,6 +387,34 @@ in years, and the practice has to survive being picked up and put down.
   the marker honest by failing on a citation that names no rule, but it cannot tell an earned
   citation from a sprinkled one — only the reviewer can.
 
+### What a walk owes at its end — the signal, not the verdict
+
+A walk that finds four defects in one area has NOT established that the area is rotten. Two
+situations produce the identical count and look the same from inside the walk:
+
+- a **sore spot** — machinery so fragile it keeps manufacturing bugs, where the answer may be to
+  cut the shape rather than repair it (§ Stability trumps features);
+- a **maturing asset** — a feature being exercised properly for the first time, converging, and
+  about to become one of the language's strengths.
+
+Telling those apart needs the project's history and its direction, which is a judgement from
+outside the walk; it is why the PR stream is owner-controlled ([CLAUDE.md](../../CLAUDE.md)
+§ Branch policy). **So report the evidence and do not editorialise the verdict** — a walk that
+concludes *"this subsystem is a mess"* has spent its credibility on the one call it is least
+equipped to make.
+
+What IS the walk's to report, because it is measurable from inside:
+
+- **Convergence or divergence.** Did each fix close a class — the remaining siblings verified
+  clean — or did each one reveal two more? A walk whose route table shrinks as it goes is
+  converging; one whose findings branch is not. State which, with the counts.
+- **Whether the defects share a root.** Four faults from one unpeeled `Optional` is a different
+  fact from four independent faults that happen to be adjacent, and only the first is evidence
+  about the machinery.
+- **Whether the rules covered the cells.** A shape the rules settle and the code got wrong is a
+  deviation being closed. A shape the rules cannot express is a gap in the definition, and that
+  is a design question rather than a quality one.
+
 ### Why this is not the same as the screens
 
 `ir_walker_audit.py`, `matrix_axes.py` and the rest rank SITES: they answer *"who might have
