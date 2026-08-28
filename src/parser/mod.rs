@@ -10243,12 +10243,15 @@ impl Parser {
         // I8.1: if any operand is a generic type variable, skip the main operator loop
         // and go straight to the T-stub lookup.  The main loop would otherwise false-match
         // concrete operators (e.g. OpEqRef, OpEqBool) via implicit type conversions on T.
-        let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
+        let generic_name = types
+            .iter()
+            .find_map(|t| self.generic_type_name(t))
+            .map(str::to_string);
         if let Some(tv_name) = generic_name {
             if self.first_pass {
                 // Return the type variable type so assignments keep a consistent type
                 // through the first pass (Type::Void would trigger "cannot change type").
-                let tv_nr = self.data.def_nr(tv_name);
+                let tv_nr = self.data.def_nr(&tv_name);
                 return if tv_nr == u32::MAX {
                     Type::Unknown(0)
                 } else {
@@ -10263,11 +10266,45 @@ impl Parser {
             // sum<T: Addable>) would leak into unbound generics like `fn bad<T>(x+y)`.
             if stub_nr != u32::MAX
                 && self.context != u32::MAX
-                && self.has_bound_for_method(&op_method, self.data.def_nr(tv_name))
+                && self.has_bound_for_method(&op_method, self.data.def_nr(&tv_name))
             {
                 let tp = self.call_nr(code, stub_nr, list, types, false, &[], None);
                 if tp != Type::Null {
                     return tp;
+                }
+            }
+            // loft#1144 — `!=` DERIVES from the bound's `==`.  `Equatable` declares `==`
+            // alone, deliberately: an interface demanding every spelling would break every
+            // user type that implements the minimum, and `default/01_code.loft` says the
+            // bound is *"satisfied by … user types defining OpEq"*.  So the bound names
+            // exactly the operator the derivation needs, and refusing `!=` left the
+            // interface unable to serve the commonest use of itself — a guard that fires on
+            // inequality — forcing every generic comparison to be written backwards.
+            //
+            // `!(a == b)` is EXACT, not an approximation, and that is what makes it
+            // shippable where the non-strict comparisons are not: it agrees with the
+            // concrete `OpNe*` on every value including IEEE `NaN` (`NaN == NaN` is false,
+            // so `!(NaN == NaN)` is true, which is what `NaN != NaN` answers), and each
+            // operand is emitted exactly ONCE, so an operand with side effects runs once.
+            // `<=` / `>=` have neither property when derived from `<` alone — see loft#1151.
+            //
+            // The swap that already derives `>` from `<` lives one layer up, in
+            // `operators.rs::handle_operator`; this is the same act for the equality pair,
+            // placed HERE because the fallback is only correct once the direct stub lookup
+            // above has come up empty — a bound that DOES declare `!=` keeps its own.
+            if op == "!="
+                && self.context != u32::MAX
+                && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name))
+            {
+                let eq_stub = format!("t_{}{}_OpEq", tv_name.len(), tv_name);
+                let eq_nr = self.data.def_nr(&eq_stub);
+                if eq_nr != u32::MAX {
+                    let mut eq_code = Value::Null;
+                    let tp = self.call_nr(&mut eq_code, eq_nr, list, types, false, &[], None);
+                    if tp != Type::Null {
+                        *code = self.cl("OpNot", &[eq_code]);
+                        return Type::Boolean;
+                    }
                 }
             }
         } else {
