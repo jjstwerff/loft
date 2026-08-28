@@ -2265,7 +2265,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 644 | 283 | 4 | **357** |
+| PENDING | PENDING | PENDING | **PENDING** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were

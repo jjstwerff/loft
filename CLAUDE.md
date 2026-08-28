@@ -45,7 +45,18 @@ make check-rlib                          # 1s pre-flight: is libloft.rlib curren
                                          #   native tests link, and a bare `cargo test`
                                          #   builds no rlib either (`make ci` builds all
                                          #   three itself, so it needs no pre-flight)
+./scripts/find_problems.sh --subject <name>     # SECONDS — the tight loop; use this while
+                                         #   iterating, not `make ci`.  Subjects: parser scopes
+                                         #   codegen runtime store wasm packages lsp sql docs
+                                         #   host (`--list-subjects` to see them + exclusions).
+                                         #   Shape: --subject while iterating → the two clippy
+                                         #   variants + fmt → ONE `make ci` before committing.
+                                         #   `make ci` is ~10 min and only that if the box is
+                                         #   idle — two checkouts running gates at once doubles
+                                         #   it (CI_BUDGET.md § A LOCAL `make ci`).
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
+make ci-roundtrip                        # the exhaustive stdlib round-trip pair, which `make ci`
+                                         #   excludes; run it before an IR-schema/serialiser change
 make falsify GUARD=<guard.loft> REF=<commit>   # does this guard FAIL on the build it was
                                          #   written to catch?  Compares exit/asserts/leak/
                                          #   panic apart and names the channel that moved.

@@ -53,6 +53,45 @@ Summing those wall times gave "4696 s of CPU" and a confident, wrong conclusion 
 `deliver_wasm` was the biggest cost. It is ~1 s a test. **Anything derived from JUnit `time`
 under load measures contention, not work** — isolate before believing it.
 
+⚠⚠ **RE-MEASURED 2026-08-28 — the table below is STALE by three orders of magnitude, and it
+sent one round of work down the wrong path.** The pair now runs in **0.139 s together**:
+
+```
+PASS [0.112s] stdlib_whole_data_round_trip      ← was 136.4 s
+PASS [0.128s] stdlib_load_compares_equal_to_fresh
+Summary [0.139s] 2 tests run
+```
+
+They are not self-skipping — `--no-capture` shows the real work
+(*"710 definitions, 1053573 bytes of JSON, 710 names re-resolved"*). Something between
+2026-08-21 and now made them ~1000× faster and nobody re-measured the number this document
+recommends acting on. Acting on it: `make ci` was changed to exclude the pair locally, then
+**reverted the same hour** once measured — it removed coverage to save 0.14 s.
+
+**So the local ten minutes is NOT two tests, and there is no single hot test at all.** Isolating
+the slowest entries from a contended run on an idle box:
+
+| test | in the contended run | alone | inflation |
+|---|---:|---:|---:|
+| `pln10_n2_cdylib_text_wrapper_returns_owned_string` | 280 s | **14.0 s** | 20× |
+| `dhtml_vector_arg_gl_host_import_is_emitted` | 234 s | **19.1 s** | 12× |
+| `a_declared_font_reaches_the_emitted_page` | 230 s | **0.9 s** | **255×** |
+
+The cost is STRUCTURAL: ~4 474 tests of which a large share shell out to `rustc` or link a
+cdylib, saturating the cores, so wall clock is set by how much else is running rather than by any
+one test. The two levers that follow are behavioural, not code:
+
+1. **Do not run two gates at once.** A second checkout's `make ci` took this one from ~10 min to
+   **19 min** (load 42 on 24 cores) and, the same morning, triggered the `systemd-oomd` kill that
+   ended a session. Check `pgrep -af "make ci"` and its cwd first.
+2. **Do not use `make ci` as the iteration loop.** `./scripts/find_problems.sh --subject <name>`
+   is seconds; the full gate is the pre-commit check. Measured cost of getting this wrong: six
+   full gates in one day on a three-line change.
+
+⚠ The general lesson is the one this document already teaches about JUnit `time` and did not
+apply to itself: **a recorded measurement is a claim with a date on it.** Re-measure before
+acting on one, especially when it is the number that decides what to optimise.
+
 **Where the time actually is.** `ir_schema_roundtrip`, in the general pool:
 
 | test | alone, 24 cores free |
@@ -394,6 +433,13 @@ unconditionally). The step that now solely carries them also gained
 across all three red pushes format stability was verified **nowhere** — the one
 guarantee this section is about, silently absent exactly when the suite was
 broken.
+
+⚠ **A third copy exists — the local `make ci` — and it should STAY.** The exclusion lives in
+`ci_test_filter.py`, which only the workflow invokes, so `make ci` still runs the pair. That was
+briefly "fixed" on 2026-08-28 and reverted within the hour: re-measured, the pair costs **0.139 s**
+(see § A LOCAL `make ci` above), so excluding it locally removed coverage for nothing. The CI-side
+exclusion still earns its place — there the pair rode a 600 s slow-timeout when double-run — but
+the local gate should keep running it until a fresh measurement says otherwise.
 
 ### B′. Duration-balanced sharding — TRIED, MEASURED, REVERTED
 

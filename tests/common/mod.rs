@@ -12,6 +12,9 @@
 #[allow(dead_code)]
 pub mod cross_mode;
 
+#[allow(dead_code)]
+pub mod timing;
+
 /// The `file://` URL for a local path, in the one shape this repo's registry fixtures and
 /// `registry_index::http_get_bytes` both handle.
 ///
