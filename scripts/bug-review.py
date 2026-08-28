@@ -123,6 +123,31 @@ def walker_omissions():
     return present, total
 
 
+def stated_fixed(issue):
+    """Is this an issue we STATED WE FIXED — the population a contract verdict applies to?
+
+    Closed, or carrying `fixed-pending-merge`.  One home because section 5 asks it twice
+    (by month, then by mechanism class) and two spellings of a population predicate is how
+    two tables come to disagree about their own denominator.
+
+    NOT the `bug` label: sections 1-4 ask what KIND of defect it was, this one asks what
+    the FIX needed.  Measured while building it — three of the first four judged issues
+    (#1120, #1122, #1123) carry no `bug` label, so that filter counted one of four.
+    """
+    return (issue["state"] == "CLOSED"
+            or any(l["name"] == "fixed-pending-merge" for l in issue["labels"]))
+
+
+def verdict_of(issue):
+    """`settled` / `strained` / None — None means NOT JUDGED, never "settled"."""
+    names = {l["name"] for l in issue["labels"]}
+    if "contract:strained" in names:
+        return "strained"
+    if "contract:settled" in names:
+        return "settled"
+    return None
+
+
 def contract_pressure(issues, months):
     """Section 5 — of the bugs we FIXED, how many moved the written standard?
 
@@ -138,25 +163,13 @@ def contract_pressure(issues, months):
     from collections import Counter
     settled, strained, unjudged = Counter(), Counter(), Counter()
     for i in issues:
-        names = {l["name"] for l in i["labels"]}
-        # The population is what we STATED WE FIXED — closed, or carrying
-        # `fixed-pending-merge` — not what carries the `bug` label.  Sections 1-4 filter
-        # on `bug` because they ask what KIND of defect it was; this one asks what the FIX
-        # needed, so an open feature request has no verdict to give and a fixed issue
-        # without the `bug` label still does.  Measured: three of the first four judged
-        # issues (#1120, #1122, #1123) carry no `bug` label, so the `bug` filter counted
-        # one of four and would have reported a ratio off a quarter of its own evidence.
-        if i["state"] != "CLOSED" and "fixed-pending-merge" not in names:
+        if not stated_fixed(i):
             continue
         m = i.get("createdAt", "")[:7]
         if not m:
             continue
-        if "contract:strained" in names:
-            strained[m] += 1
-        elif "contract:settled" in names:
-            settled[m] += 1
-        else:
-            unjudged[m] += 1
+        v = verdict_of(i)
+        (strained if v == "strained" else settled if v == "settled" else unjudged)[m] += 1
     seen = sorted(set(settled) | set(strained) | set(unjudged))[-months:]
     print("\n=== 5. Contract pressure — did fixing them MOVE the standard? ===")
     if not seen:
@@ -177,6 +190,39 @@ def contract_pressure(issues, months):
     elif tot_u > tot_j:
         print(f"\n  ⚠ {tot_u} unjudged against {tot_j} judged — the ratio above is drawn from")
         print("  a minority of the population and is not yet evidence either way.")
+
+    # The cross-tab.  Same axis cut by mechanism class, because a rising class means two
+    # different jobs depending on which way its fixes went, and the month view cannot tell
+    # them apart:
+    #
+    #   mostly SETTLED  — the rules were right and the code kept missing them, so the
+    #                     duplicated case analysis is the target (a code keystone);
+    #   any STRAINED    — closing them had to MOVE the standard, so the formal spec is
+    #                     incomplete there and a RULE is the target, not a refactor.
+    #
+    # Reported, not judged — which class is worth one generalization stays the pass's call
+    # (BUG_REVIEW.md § The pass).  Sorted by strained first so an unsettled SPEC surfaces
+    # above a merely busy class; ties by judged count, so the best-evidenced row leads.
+    print("\n  by mechanism class — of the FIXED ones, which way did they go?")
+    print("    class                 fixed  settled  strained   unjudged")
+    # Classified from the STATED-FIXED population, not from section 2's `hits`.  That set
+    # is built from `bug`-labelled issues, and the `bug` label is not reliably applied —
+    # three of the first four judged issues lack it — so reusing it would drop exactly the
+    # rows this table exists to show, and drop them silently.
+    fixed_hits = classify([i for i in issues if stated_fixed(i)])
+    rows = []
+    for name in CLASSES:
+        fixed = fixed_hits.get(name, [])
+        if not fixed:
+            continue
+        v = [verdict_of(i) for i in fixed]
+        rows.append((v.count("strained"), v.count("settled"), name, len(fixed),
+                     v.count(None)))
+    for x_, s_, name, n, u_ in sorted(rows, key=lambda r: (-r[0], -(r[0] + r[1]), r[2])):
+        print(f"    {name:<20}{n:6d}{s_:9d}{x_:10d}{u_:11d}")
+    if rows and not any(r[0] + r[1] for r in rows):
+        print("\n    Every class is entirely unjudged, so this table says nothing yet —")
+        print("    it is the shape the next month fills in, not a reading.")
 
 
 def main():

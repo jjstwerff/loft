@@ -149,6 +149,19 @@ These are lessons from building the aid; each one produced a wrong answer first.
   a minority of the population is not evidence either way, and the report says so rather
   than printing a reassuring percentage.
 
+- **The class × verdict cross-tab is a ROUTING table, and its two columns mean opposite
+  jobs.** A rising class tells you *where* the bugs are; it cannot tell you what kind of
+  work retires them, and the two answers are not interchangeable:
+
+  | the class's fixed bugs are… | what it is saying | what to reach for |
+  |---|---|---|
+  | mostly **`contract:settled`** | the rules were already right and the code kept missing them — a duplicated case analysis | a **code keystone** (one predicate, one home), and § 3 checks it next cycle |
+  | **any `contract:strained`** | closing them had to MOVE the standard, so the formal spec is incomplete here | a **RULE** — extend `doc/claude/formal/`; a refactor cannot fix an under-specified edge |
+
+  A class can want both, and the strained column is the one that sorts first for that
+  reason: an unsettled spec surfaces above a merely busy class, because generalizing code
+  against rules that are still moving is work you do twice.
+
 > **A note on adoption, learned the expensive way.** `Fixes #NNN` was in CLAUDE.md,
 > ISSUE_TRACKING.md and two skills, and fixes still shipped without it — prose does not
 > fire at the moment you type a commit message. So the `Contract:` trailer ships with the
