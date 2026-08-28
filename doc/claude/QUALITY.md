@@ -2265,14 +2265,15 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 644 | 281 | 4 | **359** |
+| 644 | 283 | 4 | **357** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
 picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
 added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
-again, then 642 · 270 until B6s peeled seven and merged one body away — every count here is a
-snapshot of two moving checkouts, so re-run the tool rather than
+again, then 642 · 270 until B6s peeled seven and merged one body away, then 644 · 281 until
+loft#1125 peeled the three sites that decided a nullable collection's LAYOUT — every count here
+is a snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
