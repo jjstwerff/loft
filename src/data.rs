@@ -1789,7 +1789,7 @@ impl Type {
                 if matches!(
                     inner.as_ref(),
                     Type::Reference(_, _) | Type::Enum(_, true, _)
-                ) =>
+                ) || crate::parser::vectors::is_keyed(inner) =>
             {
                 (inner, RetPeel::SignatureOnly)
             }

@@ -3268,18 +3268,20 @@ use a separate collection or add after the loop"
             // `stores.allocations[u16::MAX]` lookup.  Strip ALL deps for
             // any non-Var RHS — after the deep copy `var_nr` owns its store
             // regardless of how the RHS was shaped.
+            //
+            // `Type::depend` is the declared home for "which vars does this type borrow?"
+            // and it is dep-transparent through `Optional` (@PLN25), which is why the list
+            // is asked for rather than restated.  @FR-L-Null: `layout(τ) = layout(τ?)`, so
+            // a nullable keyed local owns its store exactly as its dense twin does and must
+            // be stripped by the same rule.  `make_independent` already peels the wrapper on
+            // the WRITE side (loft#1106); a hand-rolled five-variant match here left the
+            // READ side an `Optional` short, so `hash<S[k]>?` kept the borrow it had just
+            // deep-copied away from and took the sentinel path the paragraph above describes
+            // (loft#1143).
             if let Value::Var(rhs) = code.unspan() {
                 self.vars.make_independent(var_nr, *rhs);
             } else {
-                let deps: Vec<u16> = match self.vars.tp(var_nr) {
-                    Type::Sorted(_, _, d)
-                    | Type::Hash(_, _, d)
-                    | Type::Index(_, _, d)
-                    | Type::Radix(_, _, d)
-                    | Type::Trie(_, _, d) => d.to_vec(),
-                    _ => Vec::new(),
-                };
-                for d in deps {
+                for d in self.vars.tp(var_nr).depend() {
                     self.vars.make_independent(var_nr, d);
                 }
             }

@@ -12482,15 +12482,14 @@ impl Parser {
         // signature-only question gets its own answer and `rewrap` keeps reading `peel`.
         let signature_only = peel == crate::data::RetPeel::SignatureOnly
             || crate::parser::vectors::is_keyed(dep_base);
-        // ⚠ NULLABLE keyed returns are NOT covered, and the measurement is left here so the
-        // next reader does not re-derive it.  `hash<T[k]>?` arrives as `Optional(Hash)`, which
-        // `ret_dep_shape` does not peel, so it matches no arm below and its borrow goes
-        // unrecorded — the same silent free loft#1140 fixes for the dense spelling, still live
-        // for this one (loft#1143).  The one-line cure is an `Optional(inner) if is_keyed`
-        // arm in `ret_dep_shape` returning `SignatureOnly`: it makes the interpreter answer
-        // correctly and makes `--native` PANIC, writing through the u16::MAX null sentinel in
-        // `allocation.rs`.  A wrong answer traded for a crash on the other backend is not a
-        // fix, so the delivery hole has to be found first.
+        // loft#1143 — the NULLABLE spelling takes the same borrow fact as the dense one.
+        // `hash<T[k]>?` arrives as `Optional(Hash)`, and `ret_dep_shape` peels it to
+        // `SignatureOnly` for the same reason @FR-L-Null gives everywhere else: `layout(τ) =
+        // layout(τ?)`, so a `?` around a keyed collection changes what the slot may HOLD and
+        // not what it borrows.  Recording the borrow is only half — the caller must also own
+        // the store it copies into, which is the dep-strip in `expressions.rs`'s keyed
+        // assignment; without that half the peel alone routes the copy through the u16::MAX
+        // null sentinel.
         if let Type::Vector(_, cur)
         | Type::Reference(_, cur)
         | Type::Enum(_, true, cur)

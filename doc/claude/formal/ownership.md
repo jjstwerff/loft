@@ -157,9 +157,11 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **3** (D-own-21, 2026-08-29, the keyed return that can be ABSENT — the half
+D-own-20 left, and the reason loft#1143's guard carries no absent cell; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
 known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+D-own-20 opened and closed 2026-08-29 with loft#1143;
 D-own-19 was opened 2026-08-28, narrowed the same day to its path-sensitive half (loft#1126)
 and CLOSED the same day with loft#1128; D-own-17 and D-own-18 both opened and closed
 2026-08-28;
@@ -177,6 +179,68 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-20 — OPENED AND CLOSED (2026-08-29, loft#1143): the `?` spelling of a keyed return borrowed nothing
+
+`(O-Move)`'s borrow clause — *a return that hands back a parameter is recorded in the return
+type, and the caller COPIES* — was implemented for `hash<T[k]>` by loft#1140 and not for
+`hash<T[k]>?`.  `@FR-L-Null` settles that they are the same question: `layout(τ) = layout(τ?)`,
+so a `?` changes what the slot may HOLD and not what it reaches.
+
+```loft
+struct Hr { hk: integer, hv: integer }
+fn nz(x: hash<Hr[hk]>?) -> hash<Hr[hk]>? { x }
+//  203/203 0/0 0/0        expected 203/203 203/203 203/203 — both backends, no diagnostic
+```
+
+**Two sites, and fixing either alone is worse than fixing neither.**  `Type::ret_dep_shape`
+did not peel `Optional(<keyed>)`, so the borrow went unrecorded and the caller freed a store
+it had been lent.  Peeling it there and stopping turns the wrong answer into a `--native`
+PANIC, because the second site — the keyed assignment's dep-strip in `parser/expressions.rs`
+— restated the five keyed variants inline where `Type::depend` is the declared home for
+*"which vars does this type borrow?"*, and that function is dep-transparent through
+`Optional` (@PLN25).  The nullable destination therefore kept the borrow it had just
+deep-copied away from, was typed as owning no store, and `OpReplaceKeyed` wrote through the
+`u16::MAX` null sentinel.
+
+The write side of that same list had already been fixed once, for the same reason:
+`make_independent` reads `Type::deps_mut`, which peels the wrapper, *"spelled inline here,
+this arm list had drifted behind that one by an `Optional`"* (D-own-13 first face, loft#1106).
+The READ side beside it kept its hand-rolled match for another three days.  **A restated type
+list drifts SHORT, and the direction is always the wrapper** — this register now records the
+same miss at `is_dbref` (D-own-13), `deps_mut` (loft#1106), `is_keyed` (loft#1140's
+`94ae617f`) and `depend` (here).
+
+Guard: `tests/scripts/1143-a-returned-nullable-keyed-parameter-is-still-the-callers.loft`,
+falsified at `d496ace4` on BOTH backends (exit 1 -> 0, 1 assertion failure -> 0 each).  Its
+cells sweep the three signature spellings, all five keyed kinds and the nullable-vector
+control; **it deliberately carries no cell for a keyed return that can be ABSENT** — see
+D-own-21, which that would lock rather than guard.
+
+### D-own-21 — OPEN (2026-08-29, loft#1150): a keyed return that can be ABSENT frees every arm and hands back the sentinel
+
+The nullable half of the keyed return delivery that D-own-20 did not reach.  When the value a
+`-> hash<T[k]>?` hands back can be absent — either literally (`{ null }`) or because the tail
+is a BRANCH JOIN — the body frees every arm's store and returns the null sentinel:
+
+```loft
+fn f(c: boolean) -> hash<Hr[hk]>? { if c { [Hr{hk: 9, hv: 900}] } else { [Hr{hk: 8, hv: 800}] } }
+//  --interpret answers 800 by READING THE FREED STORE (LOFT_STRICT_STORES=1 names the
+//  use-after-free); --native panics in `allocation.rs` indexing allocations[u16::MAX].
+```
+
+The emitted IR shows it directly: the dense twin ends `return if c { __kvb_1 } else { __kvb_2 }`
+and the nullable one drops the `if` to a statement, emits `OpFreeRef` for BOTH arm buffers and
+ends `return null`.  `vector<T>?` and `S?` joins are clean, so the boundary is exactly the five
+keyed kinds behind `?` — the kinds whose `block_result` arm (added by loft#1140) records the
+borrow fact and dispatches no delivery, where the vector and reference arms each dispatch one.
+
+Ruled out by measurement, so nobody re-derives them: `is_dbref(result.base())` and
+`tail_is_if` are both TRUE for the nullable spelling, `unify_if_branches_work_refs` returns
+`None` for the DENSE spelling too (its arm terminals are `__kvb_N`, not `__ref_N`), and
+`get_free_vars` reports byte-identical `ret_var` / `return_sources` for both.  The divergence
+is therefore downstream of the scope pass's inputs, not in the `if_unified` gate that names
+this exact symptom in its own comment.
 
 ### D-own-19 — OPENED AND CLOSED (2026-08-28, loft#1126 + loft#1128): ownership read off the BINDING, not the latest assignment
 
