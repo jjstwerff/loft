@@ -2599,6 +2599,72 @@ fn bundle_import(indir: &str) -> i32 {
     }
     0
 }
+/// The packages this package's own source `use`s that `loft.toml` does not declare.
+///
+/// `loft publish` reads `deps` from the manifest and has no other source for them, so when the
+/// manifest declares none it prints `"deps": {}` — a claim, where the honest answer may be
+/// "not stated here".  A multi-package repo keeps its registry deps out of `loft.toml` on
+/// purpose: declared there, loft resolves them from the registry instead of the `--lib` path
+/// and multi-library consumption breaks.  For those packages the emitted entry is silently
+/// incomplete, and a consumer only finds out at `loft install` (loft#1136).
+///
+/// The source settles which case it is.  A `use X` naming neither a sibling module of this
+/// package nor the package itself is a registry dependency, and one the manifest does not
+/// declare is exactly what an empty `deps` would drop.
+///
+/// Deliberately syntactic: `publish` does not parse the package, and the question is only
+/// *"is `{}` believable here?"*.  Over-reporting costs a note the author can ignore;
+/// under-reporting is the defect.
+fn undeclared_source_deps(
+    pkg_path: &std::path::Path,
+    pkg_name: &str,
+    declared: &[(String, String)],
+) -> Vec<String> {
+    let src_dir = pkg_path.join("src");
+    let Ok(entries) = std::fs::read_dir(&src_dir) else {
+        return Vec::new();
+    };
+    let files: Vec<std::path::PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "loft"))
+        .collect();
+    let local: std::collections::HashSet<String> = files
+        .iter()
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for f in &files {
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Some(rest) = line.trim_start().strip_prefix("use ") else {
+                continue;
+            };
+            // `use pkg;`, `use pkg::*;`, `use pkg::item;` — the package is the head.
+            let id: String = rest
+                .trim()
+                .trim_end_matches(';')
+                .split("::")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if id.is_empty()
+                || id == pkg_name
+                || local.contains(&id)
+                || declared.iter().any(|(n, _)| *n == id)
+                || out.contains(&id)
+            {
+                continue;
+            }
+            out.push(id);
+        }
+    }
+    out.sort();
+    out
+}
 
 /// Minimal ISO-8601 UTC timestamp.  Avoid pulling in a date crate;
 /// loft already does its own time formatting elsewhere via
@@ -3190,6 +3256,13 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
         .map(|(n, v)| (n.clone(), v.clone()))
         .collect();
     let published = chrono_iso8601_utc();
+    // loft#1136 — `{}` is a CLAIM, and the manifest is the only thing this command can read
+    // it from.  A multi-package repo deliberately keeps its registry deps out of `loft.toml`
+    // (declaring them there resolves from the registry instead of the `--lib` path, which
+    // breaks multi-library consumption), so for those packages an empty `[dependencies]`
+    // means "not stated here", not "none" — and pasting the entry verbatim publishes a
+    // version that resolves nothing.  The package's own source says which it is.
+    let undeclared = undeclared_source_deps(pkg_path, &pkg.name, &registry_deps);
 
     println!("# Paste this entry into `loft-lang/registry/index.json` under");
     println!(
@@ -3210,6 +3283,19 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     println!("  \"subpath\": \"{}\",", pkg.name);
     if registry_deps.is_empty() {
         println!("  \"deps\": {{}},");
+        if !undeclared.is_empty() {
+            println!(
+                "  # ^^ INCOMPLETE — this package's source uses {}, and `loft.toml` declares",
+                undeclared.join(", ")
+            );
+            println!("  #    none of them, so there was nothing here to read the versions from.");
+            println!(
+                "  #    Copy `deps` from this package's existing index entries before pasting;"
+            );
+            println!(
+                "  #    an entry with empty deps installs a version that resolves none of them."
+            );
+        }
     } else {
         let mut deps_lines: Vec<String> = Vec::new();
         for (n, v) in &registry_deps {
@@ -11438,6 +11524,54 @@ fn resolve_test_target(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// loft#1136 — `publish` must not print `"deps": {}` as an answer when the package's own
+    /// source says otherwise.  A multi-package repo keeps its registry deps out of `loft.toml`
+    /// deliberately, so an empty `[dependencies]` there means "not stated", and the entry is
+    /// pasted verbatim into the index.
+    #[test]
+    fn source_uses_that_the_manifest_does_not_declare_are_reported() {
+        let dir = std::env::temp_dir().join(format!("loft_1136_{}", std::process::id()));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("hex_shape.loft"),
+            "use hex_field::*;\nuse hex_grid;\nuse helper::thing;\nuse hex_shape;\n",
+        )
+        .expect("write entry");
+        // A SIBLING module of this package, not a registry package: `use helper` names it.
+        std::fs::write(src.join("helper.loft"), "fn h() -> integer { 1 }\n").expect("write mod");
+
+        let declared = vec![("hex_grid".to_string(), ">=0.1".to_string())];
+        let got = super::undeclared_source_deps(&dir, "hex_shape", &declared);
+        assert_eq!(
+            got,
+            vec!["hex_field".to_string()],
+            "only the use that is neither a sibling module, nor the package itself, nor \
+             already declared"
+        );
+
+        // With nothing declared, BOTH registry uses are reported — the shape the issue filed.
+        let got_none = super::undeclared_source_deps(&dir, "hex_shape", &[]);
+        assert_eq!(
+            got_none,
+            vec!["hex_field".to_string(), "hex_grid".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The control: a package whose every `use` is a sibling module has nothing to report, so
+    /// a genuinely dependency-free package still gets a clean `"deps": {}`.
+    #[test]
+    fn a_package_with_only_local_modules_reports_nothing() {
+        let dir = std::env::temp_dir().join(format!("loft_1136b_{}", std::process::id()));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(src.join("solo.loft"), "use parts::*;\n").expect("write entry");
+        std::fs::write(src.join("parts.loft"), "fn p() -> integer { 2 }\n").expect("write mod");
+        assert!(super::undeclared_source_deps(&dir, "solo", &[]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     /// loft#925 — a target that IS a directory names itself; only a test FILE
