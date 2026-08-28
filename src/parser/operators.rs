@@ -2415,6 +2415,16 @@ impl Parser {
         {
             let w = *w;
             self.vars.register_work_ref(w);
+            // Whether `_vec_N` is BACKED — a view of a `__vdb_N` wrapper record rather
+            // than the owner of its own store.  Read off the emitted block, which SAYS so:
+            // `vector_db` writes `_vec_N = OpGetField(__vdb_N, 0)` into it, and the shape
+            // that owns its store has no such assignment (its literal builds straight into
+            // `_vec_N` through `OpPreAllocVector`).  The dep list cannot answer this — the
+            // strip below clears it for both shapes.
+            let backed = bl.operators.iter().any(|op| {
+                matches!(op.unspan(), Value::Set(sv, val)
+                    if *sv == w && self.inline_slot_word(val).is_some())
+            });
             if let Type::Vector(elm, dep) = self.vars.tp(w).clone()
                 && !dep.is_empty()
             {
@@ -2443,6 +2453,24 @@ impl Parser {
             // it there double-drops / panics.
             if matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty()) {
                 self.vars.set_skip_free(w);
+            } else if backed {
+                // A BORROWED subject gets the OTHER half of that bit: `inline_ref` says
+                // *"do not ALLOCATE in the preamble"* WITHOUT saying *"never free"*, so the
+                // doomed store goes away and every free that exists today still runs — which
+                // is what the return-delivery materializer relies on.  `skip_free` says both
+                // at once, and it is only the second half this case cannot have.
+                //
+                // The orphan is the same one described above, reached from the other side:
+                // the preamble `OpDatabase`-allocates at `_vec_N`'s slot and the
+                // `OpGetField(__vdb_N, 0)` overwrites it.  `--interpret` recovers by freeing
+                // the displaced store before it rebinds; `--native` has no such step, so it
+                // orphaned one store per evaluation, unbounded in a loop (loft#1121).
+                //
+                // `backed` is what makes this safe to say: an UNBACKED `_vec_N` IS the owner
+                // of its store — nothing overwrites it, `OpPreAllocVector` fills it in place
+                // — and taking its preamble allocation away leaves the default arm building
+                // into a null sentinel, which answers length 0 for every literal default.
+                self.vars.mark_inline_ref(w);
             }
         }
 

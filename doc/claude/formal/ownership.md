@@ -157,10 +157,10 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **3** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; D-own-16, below; and
-D-own-18, below) — D-own-17 opened and closed 2026-08-28;
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+D-own-17 and D-own-18 both opened and closed 2026-08-28;
 D-own-15 opened and
 closed 2026-08-27 with loft#1119; D-own-14 opened and
 closed 2026-08-27 with loft#1118; D-own-13's second face
@@ -193,20 +193,34 @@ comes from, and a freshly minted store's comes from the mint.  The `vector` twin
 away has always minted dep-free, which is why the defect was keyed-only.  Guard:
 `tests/scripts/a-keyed-literal-default-owns-the-store-it-mints.loft`.
 
-### D-own-18 — OPEN (2026-08-28): `--native` does not free the store a rebound owning local displaces
+### D-own-18 — OPENED AND CLOSED (2026-08-28, loft#1121): a store allocated for a value that overwrites it
 
-The interpreter's assign path emits a pre-Set `OpFreeRef` when it overwrites a local that owns
-its store (`src/state/codegen.rs`, the `owned_ref && !s1_substituted` arm).  The native emitter
-has displaced-free machinery of its own but does not reach this shape: an owning vector local
-rebound to a `OpGetField(__vdb_N, 0)` view inside a `??` arm keeps its preamble store, which
-`emit_null_dbref` allocated because `owns_store` still calls it an owner.  One orphan per
-evaluation, unbounded in a loop, `--native` only, values right — `fn q(p: vector<T>?) { len(p
-?? [lit]) }` over fifty iterations leaks fifty stores.
+`(O-Deps)` places a free from the deps a value carries, and the deps are also what decides
+whether a slot gets a store at all.  A `??` vector-literal default has two shapes: one where
+`_vec_N` owns its store and the literal fills it in place, and one where `vector_db` mints a
+wrapper record and writes `_vec_N = OpGetField(__vdb_N, 0)` — a VIEW.  Both took the owning
+preamble, so the second overwrote a live store the moment the null arm ran: one orphan per
+EVALUATION, unbounded in a loop, `--native` only, values right throughout.
 
-Same family as D-own-16 above: a displaced-store free that the two backends do not agree on.
-Pre-existing (reproduces on the published `loft 2026.8.0`) and reached by more programs since
-loft#1120, whose fix makes the null arm REACHABLE for a slot-addressed subject — before it the
-present arm was taken wrongly and the default was never built.  Filed as loft#1121.
+`--interpret` was clean for a reason that is not this rule: its assign path frees the displaced
+store before it rebinds an owning local (`src/state/codegen.rs`, the `owned_ref &&
+!s1_substituted` arm).  So the backends agreed on the answer and disagreed on the heap, which is
+the same shape as D-own-16 above and the reason only the native leak channel could see it.
+
+Closed by giving the backed shape `inline_ref` rather than `skip_free`.  Those two bits were
+conflated: `skip_free` says *do not allocate* AND *never free*, and only the first half is
+wanted here — a borrowed subject's `??` in return-tail position hands `_vec_N` to the
+return-delivery materializer, which owns its free.  The site already applied `skip_free` for an
+OWNED subject and withheld it entirely for a borrowed one; `inline_ref` is what the borrowed
+case could always have had.
+
+⚠ **Which shape a site is cannot be read from the deps.** The same line strips them for BOTH,
+so by the time anything asks, the two agree — gating on the dep list left the owning shape
+building into a null sentinel and every in-place `?? [lit]` answering length 0.  It is read off
+the emitted block instead, which says so: the wrapper shape contains the `OpGetField` assignment
+and the owning shape does not.  Guard:
+`tests/scripts/1121-a-backed-default-does-not-allocate-a-store-it-overwrites.loft`, which scores
+that 0 beside the leak.
 
 ### D-own-16 — OPEN (2026-08-27): a SELF-referential join never frees the store it displaces
 
