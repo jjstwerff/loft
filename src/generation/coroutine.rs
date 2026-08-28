@@ -264,13 +264,26 @@ fn refuse_yield(yield_tp: &Type, data: &crate::data::Data, why: &str) -> (String
 /// The refusal message itself, without the `compile_error!` wrapper — the eager collector
 /// in `emit.rs` places it at a different point in its own emission and needs the text.
 ///
-/// Contains no quote or backslash, so it drops straight into a `compile_error!` literal.
+/// The TYPE NAME is escaped, because it is the one part of the message loft does not write:
+/// a keyed collection renders its key list quoted (`spatial<P,["x", "y"]>`), and spliced raw
+/// that quote ends the Rust literal and the comma becomes a second macro argument.  The
+/// author then gets `compile_error! takes 1 argument` and a suffix error instead of the
+/// refusal — the rustc noise this whole path exists to replace (loft#1149).
 fn refusal_text(yield_tp: &Type, data: &crate::data::Data, why: &str) -> String {
-    let name = yield_tp.name(data);
+    let name = escape_for_rust_literal(&yield_tp.name(data));
     format!(
         "loft --native: a generator yielding `{name}` {why} Run interpreted, or wrap the \
          value in a struct and yield that (a struct yield is carried as a record)."
     )
+}
+
+/// Escape `s` so it can sit inside a generated Rust string literal.
+///
+/// Backslash first, then quote — the other order would re-escape the backslash it just
+/// introduced.  Only these two characters can end or extend a literal; a newline in a type
+/// name is not reachable.
+fn escape_for_rust_literal(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Why a yield type is refused on the straight-line channel ladder.
