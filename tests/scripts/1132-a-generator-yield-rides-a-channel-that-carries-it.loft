@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// loft#1132 — every native generator channel must actually CARRY the type it is chosen for.
+//
+// `--native` picks a generator's transport channel by a ladder, and two of its steps were
+// asking a question they could not answer:
+//
+//   * the ladder ENDS in an `as i64` catch-all whose unstated premise is *whatever is left is
+//     scalar-shaped* (`data::is_scalar`, formal/IMPLEMENTATIONS.md #1).  Nothing tested it, so
+//     a tuple `tuple_kinds` could not classify fell through and emitted `(i64, &String) as i64`;
+//   * `lazy_yield_init` and the coroutine struct's `__values` element type each spelled the
+//     DbRef set as the SHORT three-variant list, while their own sibling one screen away read
+//     `data::is_dbref` and said in a comment why the short list is wrong (@FR-Col-Store).  A
+//     keyed collection is a handle too, so a lazily-lowered loop yielding one typed `__y` as
+//     `i64` inside a method returning `DbRef`.
+//
+// The cells below are the ones that must WORK.  The refusals — a tuple with a `text` element,
+// a nested tuple, a tuple carrying a store handle from a LOOP body — are pinned at the emit
+// level in `tests/native_yield_channel.rs`, because a refused program has no run to assert on.
+//
+// @falsified-at: 6bb9918d — native exit 0 -> 1: `error[E0308]`/`error[E0605]` against the
+// generated source for the keyed, tuple-in-loop and boolean-member cells; `--interpret` was
+// green throughout, which is why only a cross-backend cell could see it.
+
+struct Ck { k: integer, v: integer }
+
+// A KEYED collection yielded from a loop body: the lazy lowering's `__y` placeholder must be
+// typed by the same `data::is_dbref` its channel selection used.
+fn test_a_keyed_yield_from_a_loop_body() {
+  seen = 0;
+  elements = 0;
+  for c in keyed_gen(3) {
+    seen += 1;
+    elements += len(c);
+  }
+  assert(seen == 3, "a keyed collection yielded per iteration arrives three times: {seen}");
+  // The LENGTH half is loft#1130: a keyed-collection LITERAL yielded from a generator was
+  // handed back empty on both backends, so the channel could deliver a handle to nothing and
+  // this cell would still have read green on the iteration count alone.
+  assert(elements == 3, "each of the three yields carries its own one-element collection: {elements}");
+}
+
+fn keyed_gen(n: integer) -> iterator<hash<Ck[k]>> {
+  for i in 0..n { yield [Ck { k: i, v: i * 11 }]; }
+}
+
+// A by-value TUPLE yielded from a loop body: the eager collector buffers the elements' i64
+// images FLAT and one advance pops one stride, so the values are the author's, not the last
+// iteration's.  A per-element check, because a length can never witness an element.
+fn test_a_by_value_tuple_from_a_loop_body() {
+  ints = 0;
+  floats = 0.0;
+  trues = 0;
+  chars = 0;
+  for t in tuple_gen(3) {
+    ints += t.0;
+    floats += t.1;
+    if t.2 { trues += 1; }
+    if t.3 == 'a' { chars += 1; }
+  }
+  assert(ints == 30, "0 + 10 + 20 — each iteration's own integer, not the last's: {ints}");
+  assert(floats == 4.5, "0.5 + 1.5 + 2.5 — the float rides its to_bits image: {floats}");
+  assert(trues == 2, "i % 2 == 0 for i in 0, 1, 2: {trues}");
+  assert(chars == 3, "a character member survives the flat buffer: {chars}");
+}
+
+fn tuple_gen(k: integer) -> iterator<(integer, float, boolean, character)> {
+  for i in 0..k { yield (i * 10, (i as float) + 0.5, i % 2 == 0, 'a'); }
+}
+
+// A tuple with a BOOLEAN member, straight-line.  The consumer rebuilds the tuple into a
+// Variable position, where @PLN17 says a boolean is the tri-state `u8`; reading the slot back
+// as a bare `bool` typed the rebuild against nothing.
+fn test_a_boolean_tuple_member_reads_back() {
+  seen = 0;
+  for t in bool_gen() {
+    assert(t.0 == 1, "the integer member is unaffected by the boolean beside it: {t.0}");
+    assert(t.1, "the boolean member arrives true");
+    seen += 1;
+  }
+  assert(seen == 1, "one straight-line yield, one value: {seen}");
+}
+
+fn bool_gen() -> iterator<(integer, boolean)> { yield (1, true); }
+
+fn main() {
+  test_a_keyed_yield_from_a_loop_body();
+  test_a_by_value_tuple_from_a_loop_body();
+  test_a_boolean_tuple_member_reads_back();
+}

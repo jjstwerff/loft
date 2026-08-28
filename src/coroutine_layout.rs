@@ -22,7 +22,10 @@
 //! interning the string into a store (`codegen_runtime::db_from_text`) with
 //! the lifetime question that entails — a separate slice, not this one.  A
 //! tuple containing a text (or other unclassifiable) element returns `None`
-//! from [`tuple_kinds`] and falls back to the legacy per-type channel.
+//! from [`tuple_kinds`], and the legacy per-type channel cannot carry it
+//! either: that channel ends in an `as i64` cast.  [`channel_tag`] answers
+//! [`CHANNEL_NONE`] for such a type so both ends refuse it instead of
+//! emitting a cast rustc rejects (loft#1132).
 
 use crate::data::Type;
 
@@ -169,9 +172,57 @@ pub fn channel_tag(tp: &Type) -> i32 {
         // DbRef (same null repr as Reference), so it must NOT come here — it
         // falls through to channel 0 / next_dbref.
         5
-    } else {
+    } else if channel_0_carries(tp) {
         0
+    } else {
+        CHANNEL_NONE
     }
+}
+
+/// [`channel_tag`] for a yield type `--native` has no transport for at all.
+///
+/// Distinct from the other tags because it is not a channel: it is the answer both ends
+/// dispatch on to REFUSE — the producer emits the `compile_error!` naming the type and
+/// the workaround, the consumer emits a diverging expression so exactly one diagnostic
+/// survives.  The interpreter never sees it: it masks the tag off `value_size` and reads
+/// only the byte size.
+pub const CHANNEL_NONE: i32 = 6;
+
+/// Does the legacy per-byte-size channel (tag `0`) carry a yield of `tp`?
+///
+/// Its arms are `text`, a `DbRef`-carried handle, and a SCALAR — everything else reaches
+/// an `as i64` cast whose unstated premise is *whatever is left is scalar-shaped*.  So the
+/// question is `data::is_scalar` ([formal/types.md](../doc/claude/formal/types.md)'s
+/// scalar/heap split, the one home named in
+/// [formal/IMPLEMENTATIONS.md](../doc/claude/formal/IMPLEMENTATIONS.md) checklist #1)
+/// widened by the two handle shapes.
+///
+/// A tuple [`tuple_kinds`] could not classify — one carrying a `text` element, or a nested
+/// tuple — is exactly the case that violates the premise: the cast then reads
+/// `(i64, &String) as i64`, and the author gets a rustc dump against generated source they
+/// cannot read for a program `--interpret` runs correctly (loft#1132).
+fn channel_0_carries(tp: &Type) -> bool {
+    matches!(tp.base(), Type::Text(_))
+        || crate::data::is_dbref(tp)
+        || crate::data::is_scalar(tp.base())
+}
+
+/// The transport slots an EAGER for-body buffer can hold for a yield of `tp`, or `None`
+/// when it cannot hold one.
+///
+/// The eager collector runs the whole loop up front and reads the buffer afterwards, so it
+/// may only hold values carried BY VALUE.  A store handle pushed once per iteration aliases
+/// the work record the next iteration overwrites — the unsoundness the struct/vector
+/// loop-body refusal in `generation/emit.rs` already names.  A tuple asks the same question
+/// one level in: `(integer, integer)` packs into flat slots and is sound, while
+/// `(integer, P)` carries a [`YieldSlot::Ref`] and is not.
+#[must_use]
+pub fn eager_tuple_kinds(tp: &Type) -> Option<Vec<YieldSlot>> {
+    let kinds = tuple_kinds(tp)?;
+    kinds
+        .iter()
+        .all(|k| !matches!(k, YieldSlot::Ref))
+        .then_some(kinds)
 }
 
 /// The `OpCoroutineNext` operands for a yield type: the packed `value_size`

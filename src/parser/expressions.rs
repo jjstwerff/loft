@@ -1101,7 +1101,21 @@ impl Parser {
                 Type::Void
             } else {
                 let mut v = Value::Null;
+                // loft#1130 — a yielded value LEAVES the function against a type the
+                // declaration already names, exactly as a `return` does, so it takes the
+                // same `⇐` seeding.  Without it a keyed literal (`yield [K { … }]`) had
+                // nothing to resolve against and was built as a `vector<K>`: the consumer
+                // got a collection with the wrong length and no keys, on both backends and
+                // with no diagnostic, while the identical literal BOUND to a declared local
+                // first was correct — that position reads its destination from `var_tp` and
+                // never needed the channel.
+                let saved_expected = std::mem::replace(&mut self.expected, Type::Unknown(0));
+                if let Type::Iterator(elem_tp, _) = &r_type {
+                    let elem = (**elem_tp).clone();
+                    self.seed_leaving_value_hint(&elem);
+                }
                 self.expression(&mut v);
+                self.expected = saved_expected;
                 // @P328 — when yielding a NON-CAPTURING closure into an
                 // `iterator<fn(...) -> ...>` generator, the expression
                 // parser leaves the lambda as a bare `Value::Int(d_nr)`

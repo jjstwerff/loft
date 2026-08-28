@@ -3484,3 +3484,21 @@ mod loop_binding_dep_tests {
         );
     }
 }
+
+/// Does this compiler-internal local OWN the store of the literal it accumulates?
+///
+/// `__vdb_N` (a vector literal's backing record) and `__kvb_N` (loft#703's keyed twin) are
+/// both FUNCTION-scoped for the same reason: the accumulator owns the store it builds, so
+/// the function-exit sweep is what frees it.  Every other `__` local either owns nothing or
+/// has its own emission path.
+///
+/// One home because a coroutine asks it TWICE — which locals become struct fields that
+/// survive a resume, and which are pre-declared at method scope — and both sites spelled it
+/// as a bare `starts_with("__vdb")`.  A keyed literal could not reach a generator at all
+/// until loft#1130 gave `yield` its expected type, and the moment it could, the local it
+/// mints was declared inside one `match` arm and read from another (rustc E0425).
+#[must_use]
+pub fn owns_literal_backing_store(name: &str) -> bool {
+    name.starts_with("__vdb") || name.starts_with("__kvb")
+}
+

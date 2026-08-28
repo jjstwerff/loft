@@ -854,18 +854,9 @@ impl Parser {
             // needed the channel.  `seeds_tuple_hint` is the one home for the tuple
             // question, asked at the argument sites too; the general census of this
             // channel's ten push sites and six admission lists is QUALITY.md § B6t.
-            if self.enum_context(result)
-                || crate::parser::vectors::is_collection(result)
-                || self.interpolation_target(result) != u32::MAX
-                || Self::seeds_lambda_hint(result)
-            {
-                self.expected = result.clone();
-            } else if let Some(tuple) = self.tuple_hint_type(result) {
-                // The tuple hint is the promoted type read BACK to the source spelling, so
-                // what reaches the literal is `(τ₁, …, τₙ)` and not the synthetic struct
-                // reference the retbuf ABI turned it into.
-                self.expected = tuple;
-            }
+            // loft#1130 — and `yield` is the SAME question about the same declared type,
+            // so the list is one home both spellings read (`seed_leaving_value_hint`).
+            self.seed_leaving_value_hint(result);
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
             // parsed is non-null" — used by the very next operator (`p.field ?? d`'s defended
             // read, the redundant-null-check on `p.field == null`). A field access that ENDS a

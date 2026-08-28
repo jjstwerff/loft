@@ -597,6 +597,18 @@ pub struct Output<'a> {
     /// inside a ForLoopBody pushes the DbRef as-is — `as i64` there was
     /// the #481 native E0308/E0605.
     pub yield_collect_dbref: bool,
+    /// When set alongside `yield_collect`, the generator yields a TUPLE whose every element
+    /// is carried by value, and the eager buffer holds those elements' `i64` images FLAT —
+    /// one push per slot, `kinds.len()` per yield.  The `next_into` reader pops the same
+    /// stride, so producer and consumer agree by construction (both derive the list from
+    /// `coroutine_layout::eager_tuple_kinds` over the same `T`).  `None` for every other
+    /// channel, including a tuple carrying a store handle, which the eager collector
+    /// refuses (loft#1132).
+    pub yield_collect_kinds: Option<Vec<crate::coroutine_layout::YieldSlot>>,
+    /// When set alongside `yield_collect`, the eager collector cannot carry this yield type
+    /// at all: emit the value bound to `_` plus the `compile_error!` this string holds, so
+    /// the generated factory still type-checks and exactly one diagnostic survives.
+    pub yield_collect_refuse: Option<String>,
     /// CL-9 (loft#836) — emit a `yield` as the SUSPEND of a lazily-lowered loop: capture the
     /// value into `__y` and leave the single-iteration wrapper, so control returns to the
     /// consumer before the next iteration runs.  Holds the channel's wrap
@@ -1336,6 +1348,8 @@ impl<'a> Output<'a> {
             yield_collect: false,
             yield_collect_text: false,
             yield_collect_dbref: false,
+            yield_collect_kinds: None,
+            yield_collect_refuse: None,
             yield_lazy_wrap: None,
             coroutine_persistent_fields: HashMap::new(),
             coroutine_allocated_vars: HashSet::new(),

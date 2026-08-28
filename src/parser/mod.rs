@@ -3333,6 +3333,36 @@ impl Parser {
     /// tuple here" and the member parses with nothing). The members come back off the
     /// struct's `tuple_group`, which is element ORDER rather than attribute order.
     ///
+    /// Seed the `⇐` expected-type channel for a value LEAVING this function.
+    ///
+    /// One home for the admission list two spellings of one act share: the block tail /
+    /// `return`, and `yield`.  Both hand a value out of the function against a type the
+    /// DECLARATION already names, and a literal that cannot say its own shape — an empty
+    /// collection literal, a keyed literal (`[K { … }]` is a `vector<K>` wherever it
+    /// stands), a bare enum variant, an interpolation target, a lambda whose parameter
+    /// types come from context, a tuple member — has no other way to learn it.
+    ///
+    /// The list grew one `||` per bug at the block tail while `yield` had NO seeding at
+    /// all, so a keyed collection yielded as a literal was built as a `vector<T>` and the
+    /// consumer received a collection with the wrong length and no keys, on both backends
+    /// and with no diagnostic (loft#1130).  The general rule LOFT.md already states is
+    /// *the expected type wherever there is one*; the census of this channel's remaining
+    /// push sites and their differing admission lists is QUALITY.md § B6t.
+    pub(crate) fn seed_leaving_value_hint(&mut self, result: &Type) {
+        if self.enum_context(result)
+            || crate::parser::vectors::is_collection(result)
+            || self.interpolation_target(result) != u32::MAX
+            || Self::seeds_lambda_hint(result)
+        {
+            self.expected = result.clone();
+        } else if let Some(tuple) = self.tuple_hint_type(result) {
+            // The tuple hint is the promoted type read BACK to the source spelling, so
+            // what reaches the literal is `(τ₁, …, τₙ)` and not the synthetic struct
+            // reference the retbuf ABI turned it into.
+            self.expected = tuple;
+        }
+    }
+
     /// Read through `base()`, so a nullable tuple asks what its base asks — whether a slot
     /// may be absent says nothing about what its members are.
     pub(crate) fn tuple_hint_type(&self, tp: &Type) -> Option<Type> {
