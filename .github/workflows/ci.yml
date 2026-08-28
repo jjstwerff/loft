@@ -154,7 +154,7 @@ jobs:
             && [ -n "${{ inputs.os }}" ] && [ "${{ inputs.os }}" != "all" ]; then
             echo 'legs=[{"os":"${{ inputs.os }}"}]' >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'legs=[{"os":"ubuntu-latest","shard":"heavy"},{"os":"ubuntu-latest","shard":"rest"}]' >> "$GITHUB_OUTPUT"
+            echo 'legs=[{"os":"ubuntu-latest","shard":"heavy"},{"os":"ubuntu-latest","shard":"rest-a"},{"os":"ubuntu-latest","shard":"rest-b"}]' >> "$GITHUB_OUTPUT"
           else
             echo 'legs=[{"os":"ubuntu-latest"},{"os":"macos-latest"},{"os":"windows-latest"}]' >> "$GITHUB_OUTPUT"
           fi
@@ -327,6 +327,20 @@ jobs:
       #    two sides are additive (226s + 174s = 398s measured), which is exactly
       #    the condition under which running them concurrently pays; warm they
       #    overlap and it would not.  CI is always cold.
+      #
+      # 4. AND `rest` SPLIT BY DURATION on top of that (2026-08-28).  Strategy 2 was
+      #    exactly this and was reverted — but for a reason that no longer holds: it
+      #    scattered the single-slot group.  Every such group now lives whole in `heavy`,
+      #    so `rest` has nothing left to scatter, which is the axis none of the three
+      #    tried.  Measured halves: 1317s / 16 binaries against 1285s / 200 (1.2 % apart);
+      #    the heavy half is NAMED and the light half is its COMPLEMENT, so a binary added
+      #    later still runs.  Verified an exact, disjoint 3-way partition — 120 + 1431 +
+      #    1850 = 3401 = the unsharded count, pairwise overlaps 0.
+      #
+      #    ⚠ This buys wall clock with runner-minutes, and the fixed ~526s per job is paid
+      #    a third time.  It is worth it only while `rest` is the critical path; if the
+      #    three legs converge on `heavy`'s ~20m (which is mostly that fixed cost, not
+      #    tests), the next lever is the build, not another shard.
       #
       # An ARCHIVE (cargo nextest archive, build once + reuse) was evaluated and
       # rejected: it SERIALISES the build ahead of the shards, so the projection
@@ -898,7 +912,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
 
   # `Test (ubuntu-latest)` is a branch-protection REQUIRED context, and on a PR no
-  # single job produces it any more — the leg is two shards (`[heavy]`, `[rest]`).
+  # single job produces it any more — the leg is three shards (`[heavy]`, `[rest-a]`,
+  # `[rest-b]`).  `needs.test.result` aggregates every matrix cell, so adding a shard
+  # needs no change here.
   # Renaming the required context would mean a repo-settings change that blocks
   # every open PR the moment it lands and unblocks nothing if the split is later
   # reverted, so the shards report under their own names and this job re-publishes
@@ -921,7 +937,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "heavy + rest shards: ${{ needs.test.result }}"
+          echo "heavy + rest-a + rest-b shards: ${{ needs.test.result }}"
           [ "${{ needs.test.result }}" = "success" ]
 
   # @PLAN53 — the cheap per-PR sanitizer.  `stack_align_guard` asserts every
