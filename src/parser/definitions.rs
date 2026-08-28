@@ -3458,7 +3458,7 @@ impl Parser {
         }
         self.lexer.token("}");
         self.lexer.has_token(";");
-        self.link_shared_nullable_hash(d_nr);
+        self.link_shared_nullable_views(d_nr);
         // #91: check for circular init dependencies (second pass, all fields known).
         if !self.first_pass {
             self.check_circular_init(&init_deps);
@@ -3467,17 +3467,27 @@ impl Parser {
         true
     }
 
-    /// @PLN25 Scope B — a keyed HASH field that shares its record set with a sibling NULLABLE
+    /// @PLN25 Scope B — a keyed field that shares its record set with a sibling NULLABLE
     /// vector (the `other_indexes` "two views, one record set" pattern, e.g.
-    /// `struct Db { entries: vector<S>, lookup: hash<S[k]> }`) must index the `Some`-wrapped
-    /// records, not dense `S`.  Rewrite such a hash's element from `S` to the sibling's
+    /// `struct Db { entries: vector<S?>, lookup: hash<S[k]> }`) indexes the `Some`-wrapped
+    /// records, not dense `S`.  Rewrite such a view's element from `S` to the sibling's
     /// `__nullable<S>` enum so the parser type, db storage, lookup type-id, and field-access all
     /// agree on ONE type: the db link then matches by content, `determine_keys` bakes the key at
     /// the payload offset, and `c.lookup[k].field` unwraps via the `Some` payload sub-ref — all
-    /// reusing the kept nullable machinery.  Gate-OFF-inert: a dense vector sibling's element is
-    /// `Reference(S)` (not the `Enum`), so nothing matches.  (Sorted/Index sharing is left dense —
-    /// no consumer exercises it and it needs the index bookkeeping on the `Some` variant.)
-    fn link_shared_nullable_hash(&mut self, d_nr: u32) {
+    /// reusing the kept nullable machinery.
+    ///
+    /// **Every keyed kind is a view on the same terms** (@FR-Col-Group) — `hash`, `sorted`,
+    /// `index`, `spatial` and `trie` are the set `Stores::field` groups, so the rewrite covers
+    /// exactly that set.
+    /// Naming a subset does not refuse the pairing: the view's element type simply stays `S`
+    /// while the vector's is `__nullable<S>`, the two no longer match by content, and the
+    /// declaration silently builds a SECOND, independent collection that every insert through
+    /// the vector misses (loft#927, one axis over).
+    ///
+    /// A DENSE vector sibling's element is `Reference(S)`, not the `Enum`, so nothing matches
+    /// and the rewrite is a no-op — which is also what makes it inert with the `LOFT_E2_SYNTH`
+    /// gate off.  The trigger is the `?` the author wrote (`vector<S?>`), gate or no gate.
+    fn link_shared_nullable_views(&mut self, d_nr: u32) {
         let n = self.data.definitions[d_nr as usize].attributes.len();
         // payload struct `S` -> its `__nullable<S>` enum, gathered from nullable vector siblings.
         let mut nullable_of: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
@@ -3501,11 +3511,26 @@ impl Parser {
             return;
         }
         for a in 0..n {
-            if let Type::Hash(h_elem, keys, deps) = self.data.attr_type(d_nr, a)
-                && let Some(&nd) = nullable_of.get(&h_elem)
-            {
-                self.data.definitions[d_nr as usize].attributes[a].typedef =
-                    Type::Hash(nd, keys, deps);
+            let rewritten = match self.data.attr_type(d_nr, a) {
+                Type::Hash(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Hash(nd, keys, deps))
+                }
+                Type::Sorted(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Sorted(nd, keys, deps))
+                }
+                Type::Index(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Index(nd, keys, deps))
+                }
+                Type::Radix(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Radix(nd, keys, deps))
+                }
+                Type::Trie(el, key, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Trie(nd, key, deps))
+                }
+                _ => None,
+            };
+            if let Some(t) = rewritten {
+                self.data.definitions[d_nr as usize].attributes[a].typedef = t;
             }
         }
     }

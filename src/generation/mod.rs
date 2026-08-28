@@ -3046,15 +3046,30 @@ extern crate loft;"
                 }
                 // Sorted / Hash / Index that are a struct/enum FIELD are
                 // created INLINE during that container's field emission
-                // (via `emit_field` → `db.sorted / hash / index`), so they
-                // must NOT be emitted here — doing so would swap the
-                // container's field source-order and break baked-in
-                // `OpNewRecord(parent_tp, field_index)` calls.  But a keyed
-                // type minted only for a LOCAL var (@P296) is referenced by
-                // no field, so it would otherwise leave a GAP in the runtime
+                // (via `emit_field` → `db.sorted / hash / index`), so this
+                // stream would emit them a second time.  But a keyed type
+                // minted only for a LOCAL var (@P296) is referenced by no
+                // field, so it would otherwise leave a GAP in the runtime
                 // type-id sequence (→ `content(tp)` u16::MAX → panic).  Emit
                 // exactly those local-only keyed types here, at their tid
                 // position; the bare_io arms below already know how.
+                //
+                // ⚠ **What makes a second emission safe is NAME AGREEMENT, not this
+                // exclusion**, which is measured rather than argued.  Every `db.*`
+                // collection constructor is interned by the type NAME it builds, so a
+                // repeat call returns the existing id and the FIRST position wins; only
+                // `db.index` has a side effect (the `#left_N` / `#right_N` / `#color_N`
+                // triple it appends to the element), and it dedups early for exactly
+                // that reason.  `Radix` / `Trie` are absent from `field_keyed` and so
+                // are ALWAYS emitted twice for a field-referenced type — measured
+                // harmless on both backends once the two call sites spell the key list
+                // the same way.  They did not: the bare stream renders key numbers
+                // through `bare_field_name`, which read the element's own field list
+                // and answered `?` for a synth `__nullable<S>`, minting a SECOND
+                // collection type under a name nothing else uses and shifting every
+                // runtime id after it (loft#739's drift).  That is the invariant to
+                // hold when touching this: the two spellings of a collection's key list
+                // must agree, whatever this set contains.
                 crate::database::Parts::Sorted(c, keys) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Sorted(*c, keys.clone())));
                 }
@@ -3454,9 +3469,20 @@ extern crate loft;"
     /// dedup on name and land at the correct runtime id.
     /// Resolve a struct's field name by field_nr — needed for
     /// Sorted/Hash/Index key-string emission at bare-type level.
+    /// The NAME of key field number `k` on collection content `c`, as the bare-stream
+    /// `db.sorted` / `db.hash` / `db.spatial` / `db.trie` / `db.index` call spells it.
+    ///
+    /// Resolved against `Stores::key_owner`, the same field list the runtime constructors
+    /// index — a synth `__nullable<S>` element keeps its keys in the `Some` payload, and the
+    /// enum's own (empty) field list rendered every key as `?`.  That is not cosmetic: the key
+    /// list is part of the type name, the name is the dedup key, so a `?` spelling MINTS a
+    /// second collection type and every runtime id after it sits one above the compile-time id
+    /// baked into the emitted ops (loft#739's drift, reported by `verify_schema_ids`).
     fn bare_field_name(&self, c: u16, k: u16) -> String {
+        let owner = self.stores.key_owner(c);
         if let crate::database::Parts::Struct(ref fields)
-        | crate::database::Parts::EnumValue(_, ref fields) = self.stores.types[c as usize].parts
+        | crate::database::Parts::EnumValue(_, ref fields) =
+            self.stores.types[owner as usize].parts
         {
             fields[k as usize].name.clone()
         } else {

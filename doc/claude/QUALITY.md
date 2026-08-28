@@ -3431,6 +3431,123 @@ there says swaps the container's field source-order.  Whether it bites is unmeas
 asymmetry is real either way and is the same rule drifting at the `Parts` level rather than the
 `Type` level.
 
+#### B7b — the residual measured, and the silent-wrong the measurement led to (2026-08-29)
+
+Fifth rule walked, and the second to start from another walk's own record.  B7a closed with a
+drift found by READING and explicitly not measured:
+
+> `output_init`'s `field_keyed` set detects a field-referenced keyed type with
+> `Parts::Sorted | Hash | Index` — three of the five — while the `bare_io` arms directly below
+> handle all five.  A `spatial` or `trie` FIELD would therefore be emitted both inline and in
+> the bare stream, which the comment there says swaps the container's field source-order.
+> Whether it bites is unmeasured.
+
+**The asymmetry is real and the predicted consequence is false.**  A one-struct probe emits
+`let trie_look = db.trie(t78, "nm")` and `let t80 = db.trie(t78, "nm")` two lines apart, so the
+double emission is exactly as described.  It swaps nothing: every `db.*` collection constructor
+is **interned by the type NAME it builds**, so the second call returns the existing id and the
+FIRST position wins.  Only `db.index` has a side effect (the `#left_N` / `#right_N` / `#color_N`
+triple it appends to the element struct) and it dedups early for precisely that reason.
+
+> **What makes a second emission safe is NAME AGREEMENT, not the exclusion.**  That reframing is
+> the whole of this walk: the guard everyone reads is a partial one, and the invariant under it
+> was never written down.
+
+So the question became *do the two spellings agree?*, and the probe for that is a collection
+whose keys are not where the naive reader looks — a synth `__nullable<S>` element, which keeps
+S's keys inside the `Some` payload.  Building one found a defect that has nothing to do with the
+emitter.
+
+**A keyed view beside a `vector<S?>` was silently a SECOND, independent collection.**  Records
+put in through the vector were missing from the view; `len` answered 0 and a lookup answered
+null, both legal values.  Both backends agreed, so a differential oracle could not see it.
+
+| view kind | beside `vector<S>` | beside `vector<S?>` |
+|---|---|---|
+| `hash` | ✅ | ✅ |
+| `sorted` / `index` / `trie` / `spatial` | ✅ | ❌ empty view, no diagnostic |
+
+**The carve-out comment was the map.**  `link_shared_nullable_hash` rewrote a `Type::Hash`
+element to the sibling's `__nullable<S>` and said so:
+
+> *(Sorted/Index sharing is left dense — no consumer exercises it and it needs the index
+> bookkeeping on the `Some` variant.)*
+
+`Trie` / `Radix` are not even named — they post-date it (loft#927).  Of the two reasons given,
+one was a scope note and one was a real mechanism, and they cover different kinds: `sorted`
+needed **nothing** beyond the rewrite, and `index` needed exactly what the sentence said.
+
+**One question, six homes.**  *Which field list do a keyed collection's key NUMBERS index?*
+`Stores::key_owner` is the declared home — a synth `__nullable<S>` answers the `Some` payload,
+everything else answers itself.
+
+| site | asked `key_owner`? | what the short spelling cost |
+|---|---|---|
+| `Stores::hash` | ✅ (inline) | — |
+| `Stores::create_key` (sorted, index) | ✅ | — |
+| `typedef::key_bearing_def` (the DEF-level twin) | ✅ | — |
+| `Stores::field_name` (spatial, trie) | ❌ | `trie`/`spatial` over a `__nullable<S>` element REFUSED: *"`nm` is not a field of `__nullable<W>`"* |
+| `Stores::key_name` (the `sorted` → `ordered` group rename) | ❌ | the promoted type was named `ordered<__nullable<W>[]>` — an empty key list |
+| `generation::bare_field_name` (the bare `init()` stream) | ❌ | `db.sorted(t78, &[("?", true)])` — a name nothing else uses, so it MINTED a second type and `verify_schema_ids` reported loft#739's drift |
+
+The last row is the one the walk was chasing: the double emission and the short key rendering are
+harmless on their own and a wrong program together.
+
+**And the RB-link offset had three spellings.**  `Stores::fields`, `Stores::find_index` and
+`Stores::build_index_sorted_vec` each recomputed `8 + fields[left_field].position`; the two
+copies read the ENUM's own field list, so `index` over a nullable element aborted on a corrupt
+reference (`fld=65539` = `u16::MAX + RB_RIGHT`) even after its element type matched.  Both now
+call `fields`, which resolves through the same `index_owner` the append uses — so where the
+bookkeeping is WRITTEN and where the tree DESCENDS from cannot drift apart.
+
+**A second silent-wrong, found by permuting an axis the corpus never moved.**  Group formation
+asked *"is the field being ADDED keyed?"*, so a plain `vector<E>` declared AFTER its keyed sibling
+formed no group at all — `{ look: sorted<E[k]>, data: vector<E> }` built two collections where
+`{ data: vector<E>, look: sorted<E[k]> }` built one, for all five kinds and in BOTH fill
+directions, with nothing in either declaration saying which you had.  Same defect as the one-way
+`others` link loft#843 fixed, one level up.  The test is now on the PAIR.
+
+⚠ **An existing control pinned the wrong half of that, and the file it lives in had already
+made the same mistake once.**  `901-linked-group-fill.loft` § c1 asserted *"a plain vector is not
+auto-linked"* with a reason attached: *"the group forms off the KEYED field being declared, and
+widening that to any collection would make two independent vectors alias."*  The hazard is real
+and the cell does not test it — two plain VECTORS were never in the file.  What c1 actually
+pinned was the ORDER dependency, and `make ci` failing on it is the only reason it was read at
+all.
+
+The file says the rest itself, about the control right below: *"c2 … used to read 0 here, and
+this file pinned that as the scope — which was the defect, not the boundary"* (loft#927).  Two of
+this file's three controls have now turned out to be pinned defects, and both were pinned with a
+plausible sentence.
+
+> **A control with a REASON attached is still only as good as the cell under it.**  c1's reason
+> describes a widening nobody proposed — dropping the keyed requirement — while the change it
+> blocked keeps that requirement and asks it of the PAIR.  The cure is the cell the reason was
+> reaching for: c4 now pins two plain vectors staying independent, so the boundary is tested
+> rather than asserted.
+
+`c1` now reads 2 in both fill directions, `c1b` adds the reverse route, and `c4` is the boundary.
+This is a **shipped-surface semantic change**: a program with `{ look: hash<E[k]>, data:
+vector<E> }` that relied on the two being independent now has one record set.  The alternative is
+worse — the same declaration written the other way round already means one record set, so leaving
+it would keep two spellings of one declaration meaning different things.  `revalidate-libs` was
+run locally over the published registry for exactly this reason.
+
+**Guards.**  Two, because they are two contracts and a failure in one must not mask the other:
+`a-keyed-view-joins-a-nullable-element-vector.loft` (all five kinds, both fill routes, the dense
+twins, and two plain vectors as the negative control) and
+`a-collection-group-does-not-depend-on-declaration-order.loft` (all five kinds × both orders).
+Both `@falsified-at: 0785871f`, both on BOTH backends — `exit 1 → 0`.
+
+**One finding filed rather than folded in — loft#1152.**  A vector VALUE assigned or appended to
+a group member (`a.data = rows()`) reaches only that member; the sibling views stay empty.
+`Stores::record_finish` is the per-record chokepoint that maintains a group, and
+`vector_add` / `vector_replace` move records in bulk without reaching it.  Pre-existing on
+`0785871f` (verified against the cached control build) and untouched by either fix.  The append
+half is mechanical; the ASSIGN half has to clear and rebuild every sibling and free what they
+held, which is an ownership design call, so the two halves are filed to be decided together.
+Workaround verified: add the records element by element (`for r in rows() { a.data += [r]; }`).
+
 #### C — process / skills
 
 | item | state |

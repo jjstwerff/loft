@@ -636,6 +636,50 @@ noise.  The
 fourth row above was found by hand, from inside one of the lists the screen could not see; a
 mode that asks "who is blind to spelling B" is worth asking of the mode itself.
 
+## The key-owner question — one notion, six homes, three of them short (2026-08-29)
+
+*Which field list do a keyed collection's key NUMBERS index?*  `Stores::key_owner` is the
+declared home and its doc says why: a synth `__nullable<S>` element keeps S's keys inside the
+`Some` variant's inline payload, so indexing the enum's own field list finds none of them.  Every
+other element answers itself, which makes the short spelling **correct on every dense program**
+— the normal appearance of this defect.
+
+| site | direction | asked `key_owner`? |
+|---|---|---|
+| `Stores::hash` | name → number | ✅ (inline loop) |
+| `Stores::create_key` — `sorted`, `index` | name → number | ✅ |
+| `typedef::key_bearing_def` — the DEF-level twin the parser and `fill_database` use | name → def | ✅ |
+| `Stores::field_name` — `spatial`, `trie` | name → number | ❌ |
+| `Stores::key_name` — the `sorted` → `ordered` group rename | number → name | ❌ |
+| `generation::bare_field_name` — the bare `init()` stream | number → name | ❌ |
+
+Three short, and each failed differently because the DIRECTION differs.  Name → number failed
+LOUDLY (*"`nm` is not a field of `__nullable<W>`"* — a refusal for a program the interpreter had
+no trouble with).  Number → name failed SILENTLY and worse: the key list is part of the type
+NAME, a type name is the intern key, so a `?` or an empty list is not a cosmetic difference — it
+MINTS a second collection type, and every runtime id past it sits one above the compile-time id
+baked into the emitted ops.  `verify_schema_ids` caught it (loft#739's guard, doing its job).
+
+⚠ **The inverse direction is a distinct question and has to be counted separately.**  A census of
+"who calls `key_owner`" finds the name → number sites and none of the number → name ones, because
+the latter do not look like key resolution at the call site — they look like rendering.  Both
+belong to one notion: `create_key` and `key_name` are inverses of each other and disagreed.
+
+**A fourth spelling, of the neighbouring question.**  *Where does an `index`'s red-black
+bookkeeping live?* had three homes — `Stores::fields`, `Stores::find_index` and
+`Stores::build_index_sorted_vec` — each recomputing `8 + fields[left_field].position`.  The two
+copies read the element's own field list, so the tree descended from `u16::MAX` for a nullable
+element.  They now call `fields`, which resolves through the new `Stores::index_owner`, the same
+helper the APPEND uses — so where the links are written and where the walk starts cannot drift.
+
+**The rules gap this sits in is the one already recorded above.**  `Col-Hash` / `Col-Sorted` /
+`Col-Index` / `Col-Spatial` / `Col-Trie` each define one kind and no rule names the keyed FAMILY;
+nothing in `formal/` states the linked-GROUP contract at all — *two or more collections over one
+element type in one struct are several routes to a single record set* — even though loft#843,
+loft#901 and loft#927 are all fixes to it and two more landed this week (a view beside a
+`vector<S?>`, and group formation ceasing to depend on declaration order).  An edge the rules
+cannot express is a rule that wants extending: `Col-Group` is the missing one.
+
 ## Not mergeable — recorded so the question is not reopened
 
 | the pair | why they must stay apart |

@@ -37,19 +37,21 @@
 // could not fail. Rows a1/a4 are the two ends of that: a1 has no vector or sorted
 // member at all, a4 has no hash or index one.
 //
-// The controls carry the scope. c1 pins that a plain `vector` as the SECOND field IS a
-// group member: membership is a fact about the PAIR, so the same two fields mean the
-// same thing in either order (@FR-Col-Group). This cell read `0` and this file pinned
-// that as the boundary, on the reasoning that widening the test to any collection would
-// make two independent vectors alias — which a BOTH-SIDES test does not do, since two
-// vectors are still two non-keyed kinds (loft#1158; the aliasing control it names lives
-// in `1158-a-group-forms-whichever-member-is-declared-first.loft`). c2 is the same
-// mistake one kind over: a `trie` second field IS keyed, so it joins the group. It too
-// used to read 0 here and was pinned as the scope — the defect, not the boundary, since
-// a trie was simply missing from the test that forms a group (loft#927). c3 pins a LONE
-// hash, which must keep packing its entries into the arena (@PLN135 arc H): a fix that
-// made every hash allocate one record per entry would pass every row above and
-// silently give back that plan's win.
+// The controls carry the scope, and the boundary is @FR-Col-Group: a group needs at
+// least one KEYED member, and nothing else about how it is written matters. c1 pins a
+// plain `vector` as the SECOND field, which IS a member — the pairing is a fact about
+// the PAIR, not about which field is being declared. It used to read 0 here and this
+// file pinned that as the scope, exactly as it once did for c2: the group formed off
+// the keyed field being ADDED, so `{ a: hash<E[k]>, b: vector<E> }` built two
+// independent collections while `{ b: vector<E>, a: hash<E[k]> }` built one record
+// set, in both fill directions, with nothing saying which you had. c4 is the boundary
+// the old c1 comment was reaching for and did not test: two plain VECTORS over one
+// element type must stay independent, or inserting into one would alias the other.
+// c2 is the same story a kind earlier: a `trie` second field IS keyed, so it joins the
+// group — it also used to read 0 here, and that was the defect, not the boundary
+// (loft#927). c3 pins a LONE hash, which must keep packing its entries into the arena
+// (@PLN135 arc H): a fix that made every hash allocate one record per entry would pass
+// every row above and silently give back that plan's win.
 
 struct E1 { k: integer, n: text }
 struct E2 { k: integer, n: text }
@@ -60,6 +62,7 @@ struct E6 { k: integer, n: text }
 struct E7 { k: integer, n: text }
 struct E8 { k: integer, n: text }
 struct E9 { k: integer, n: text }
+struct E10 { k: integer, n: text }
 
 struct HI { a: hash<E1[k]>, b: index<E1[k]> }
 struct HH { a: hash<E2[k]>, b: hash<E2[k]> }
@@ -70,6 +73,7 @@ struct SSS { a: sorted<E6[k]>, b: sorted<E6[k]>, c: sorted<E6[k]> }
 struct HV { a: hash<E7[k]>, b: vector<E7> }
 struct ST { a: sorted<E8[k]>, b: trie<E8[n]> }
 struct LoneH { a: hash<E9[k]>, tag: integer }
+struct VV { a: vector<E10>, b: vector<E10> }
 
 // Sum of the keys and of the name lengths over one member — order-independent, and
 // it separates "two entries" from "two entries naming one record" (which reads back
@@ -126,10 +130,16 @@ fn main() {
   tally(kc2, nc2, "b2 third sorted", 2, len(b2.c));
 
   // ---- c1: a plain vector as the SECOND field IS a group member ----------------
+  // Filled through the KEYED member, and the reverse direction too: the pair is the
+  // group, so neither spelling and neither route is the privileged one.
   c1 = HV { a: [], b: [] };
   c1.a = [E7{k:1,n:"alpha"}, E7{k:2,n:"beta"}];
   assert(len(c1.a) == 2, "c1 hash len = {len(c1.a)}, want 2");
-  assert(len(c1.b) == 2, "c1 vector len = {len(c1.b)}, want 2 — a group is order-independent");
+  assert(len(c1.b) == 2, "c1 vector len = {len(c1.b)}, want 2 — a vector second is still a member");
+  c1b = HV { a: [], b: [] };
+  c1b.b = [E7{k:3,n:"gamma"}, E7{k:4,n:"delta"}];
+  assert(len(c1b.a) == 2 && len(c1b.b) == 2,
+    "c1b filled through the vector: hash={len(c1b.a)} vector={len(c1b.b)}, want 2/2");
 
   // ---- c2: a trie IS a group member, like every other keyed kind ---------------
   c2 = ST { a: [], b: [] };
@@ -143,6 +153,15 @@ fn main() {
   kc3 = 0; nc3 = 0; for e9 in c3.a { kc3 += e9.k; nc3 += len(e9.n); }
   tally(kc3, nc3, "c3 lone hash", 2, len(c3.a));
   assert(c3.tag == 7, "c3 tag = {c3.tag}, want 7");
+
+  // ---- c4: two plain VECTORS are not a group — the boundary c1 is not -----------
+  // Neither member is keyed, so there is no group and inserting into one must not
+  // reach the other.  This is what "widening the pairing test" would have broken, and
+  // it is the cell that keeps @FR-Col-Group's `at least one keyed member` honest.
+  c4 = VV { a: [], b: [] };
+  c4.a = [E10{k:1,n:"alpha"}, E10{k:2,n:"beta"}];
+  assert(len(c4.a) == 2, "c4 first vector len = {len(c4.a)}, want 2");
+  assert(len(c4.b) == 0, "c4 second vector len = {len(c4.b)}, want 0 — two plain vectors are independent");
 
   println("901 ok");
 }

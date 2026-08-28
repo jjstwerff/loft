@@ -43,9 +43,15 @@ impl Stores {
         key
     }
 
+    /// Byte offset within a record where an `index`'s red-black links start — what `tree`
+    /// descends from.  `u16::MAX` when `tp` is not an index.
+    ///
+    /// The field list is the one `Stores::index_owner` names, so a synth `__nullable<S>`
+    /// element reads its links out of the `Some` record the append put them in.
     #[must_use]
     pub fn fields(&self, tp: u16) -> u16 {
         if let Parts::Index(c, _, f) = self.types[tp as usize].parts {
+            let c = self.index_owner(c);
             if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 &self.types[c as usize].parts
             {
@@ -215,9 +221,7 @@ impl Stores {
             Parts::Radix(_, _) => {
                 crate::radix_db::find(data, &self.allocations, self.keys(db), key)
             }
-            Parts::Index(rec_nr, _, left_field) => {
-                self.find_index(data, *rec_nr, *left_field, db, key)
-            }
+            Parts::Index(_, _, _) => self.find_index(data, db, key),
             Parts::Base
             | Parts::Struct(_)
             | Parts::Enum(_)
@@ -234,21 +238,11 @@ impl Stores {
         }
     }
 
-    pub(super) fn find_index(
-        &self,
-        data: &DbRef,
-        rec_nr: u16,
-        left_field: u16,
-        db: u16,
-        key: &[Content],
-    ) -> DbRef {
-        let left = if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[rec_nr as usize].parts
-        {
-            8 + fields[left_field as usize].position
-        } else {
-            u16::MAX
-        };
+    pub(super) fn find_index(&self, data: &DbRef, db: u16, key: &[Content]) -> DbRef {
+        // Where the links live is [`Self::fields`]'s question, asked once: a synth
+        // `__nullable<S>` element keeps them in the `Some` record, and recomputing the
+        // offset here from the enum's own (absent) field list read `u16::MAX`.
+        let left = self.fields(db);
         let rec = tree::find(data, true, left, &self.allocations, self.keys(db), key);
         let mut result = DbRef {
             store_nr: data.store_nr,

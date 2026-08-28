@@ -1002,11 +1002,60 @@ refused ([`src/placement.rs`](../../src/placement.rs)).
 
 ### Clearing one member of a linked group (loft#898)
 
-Two or more keyed collections over one element type in one struct are auto-linked into
+Two or more collections over one element type in one struct are auto-linked into
 several routes to a SINGLE record set (`Field.other_indexes`, loft#843) — filling either
 fills both. `trie` and `spatial` join on the same terms as the rest: they were missing
 from the test that FORMS a group, which did not refuse the pairing but silently built a
-second, independent collection (loft#927). Every combination of kinds is a valid group
+second, independent collection (loft#927).
+
+**A group needs at least one KEYED member, and nothing else about how it is written
+matters.** Two plain vectors over one element type stay independent — inserting into one
+must not propagate to the other — but a plain `vector<E>` beside any keyed collection over
+`E` is a member like any other, in EITHER declaration order, and whether the element is
+dense (`vector<E>`) or nullable (`vector<E?>`). Each of those three was once a hole that
+did not refuse the pairing but built a second, silent collection:
+
+* **declaration order** — the pairing test asked only whether the field being ADDED was
+  keyed, so `{ look: sorted<E[k]>, data: vector<E> }` formed no group while
+  `{ data: vector<E>, look: sorted<E[k]> }` did. It now asks it of the PAIR.
+* **a nullable element** — `vector<E?>` stores the synth `__nullable<E>` enum, so a view
+  still declared over dense `E` no longer matched by content. The view's element is
+  rewritten to the sibling's enum for every keyed kind (`link_shared_nullable_views`);
+  only `hash` used to be.
+* **a vector VALUE** — `data = rows()` and `data += rows()` move records in bulk through
+  `vector_add` / `vector_replace`, which never reach `record_finish`, the per-record
+  chokepoint that maintains the other members. Still open — **loft#1152**; add the records
+  element by element until it is closed.
+
+#### Two collections over one element type that must stay APART
+
+A group is formed from the element TYPE, so the way out is a different element type — and the
+one spelling that looks like a different type and is not is a type ALIAS:
+
+| written this way | result |
+|---|---|
+| `struct Lvl { by_key: hash<Tile[k]>, picked: vector<Chosen> }` — a second STRUCT, fields identical | **independent** |
+| the two collections in **different structs** | **independent** |
+| both as **locals**, not fields — a group is a struct-FIELD rule | **independent** |
+| `type Chosen = Tile;` then `vector<Chosen>` | ⚠ **one group** — an alias names the same type |
+
+The newtype is the escape, and its cost is the conversion, which is a plain field copy:
+
+```loft
+struct Tile   { k: integer, n: text }
+struct Chosen { k: integer, n: text }
+fn to_chosen(t: Tile) -> Chosen { Chosen { k: t.k, n: t.n } }
+
+struct Lvl { by_key: hash<Tile[k]>, picked: vector<Chosen> }
+```
+
+Two collections over one element type in one struct are a group with no way to decline it in
+place — that is the deliberate trade behind auto-linking (loft#843): the pairing is what makes
+the keyed view stay in step with its list without any code to keep them in step, and a
+per-field opt-out would be a second way to spell the same declaration. If you want the two
+apart, say so in the TYPES, where the reader can see it.
+
+Every combination of kinds is a valid group
 except **two `index` members with the same key**, which is refused where it is declared: an index keeps its tree links in a
 field of the element record, so a second one has nowhere to put them (loft#902, and
 [DESIGN_DECISIONS.md § C113](DESIGN_DECISIONS.md) for why it is refused rather than

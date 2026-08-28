@@ -221,7 +221,7 @@ impl Stores {
                     // number, so it is SKIPPED rather than treated as the end of
                     // the list: that is what lets a view maintain its siblings
                     // too, and an insert then means the same thing whichever of
-                    // the collections it is spelled through (loft#843).
+                    // the collections it is spelled through (@FR-Col-Group).
                     if *fld_nr == u16::MAX {
                         continue;
                     }

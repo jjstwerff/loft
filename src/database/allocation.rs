@@ -1544,19 +1544,13 @@ impl Stores {
     /// @PLN105 Phase 3 — collect an `index<T[key]>` (red-black tree) in ascending key order into an
     /// iterable scratch rec-nr vector, for the deliver pre-flatten. Mirrors `tree::count`'s in-order
     /// walk (`first` → `next`), keyed off the node type's left-child BYTE position
-    /// (`8 + fields[left_field].position`, per `Stores::find_index`); result iterated via the same
-    /// Ordered (on=3) path as the hash/radix scratches.
+    /// (`Stores::fields`); result iterated via the same Ordered (on=3) path as the hash/radix
+    /// scratches.
     pub fn build_index_sorted_vec(&mut self, coll: &DbRef, tp: u16) -> DbRef {
-        let (node_tp, left_field) = match &self.types[tp as usize].parts {
-            Parts::Index(node_tp, _, lf) => (*node_tp, *lf),
-            _ => return self.build_rec_scratch(coll, &[]),
-        };
-        let left = match &self.types[node_tp as usize].parts {
-            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
-                8 + fields[left_field as usize].position
-            }
-            _ => return self.build_rec_scratch(coll, &[]),
-        };
+        let left = self.fields(tp);
+        if left == u16::MAX {
+            return self.build_rec_scratch(coll, &[]);
+        }
         let recs = {
             let store = crate::keys::store(coll, &self.allocations);
             let mut recs = Vec::new();

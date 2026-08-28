@@ -291,11 +291,11 @@ duplication question askable at all rather than a matter of taste.
 position:
 
 ```
-255 defined rules · 76 cited · 163 citation sites
+257 defined rules · 78 cited · 203 citation sites
 ```
 
 **179 rules (70 %) have no code representation** — for those, *"where is this enforced?"* has
-no answer. And of the 76 that do, **21 are cited from two or more files**; the most scattered
+no answer. And of the 78 that do, **23 are cited from two or more files**; the most scattered
 is the most instructive. One rule is comfortably an afternoon. The queue is therefore measured
 in years, and the practice has to survive being picked up and put down.
 
