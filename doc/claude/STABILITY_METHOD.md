@@ -318,6 +318,21 @@ in years, and the practice has to survive being picked up and put down.
    kinds, the other positions (local / field / argument / return), the other spellings of one
    notion, the READ twin of a write. A root you cannot enumerate siblings for is a root you have
    not found yet.
+
+   **Order them shallowest first** — a cell a programmer reaches without knowing the language
+   has edges, before one reached by composing four features nobody would naturally combine. A
+   shallow cell that fails is the finding; a deep cell that fails is a note. ⚠ That is an
+   ORDERING, not a licence to refuse: whether a shape must work is settled by the rule you are
+   walking, and **a rule that gives a clear picture of what to implement is implemented right
+   away, at any depth** — refusing there would be a deviation, not a decision.
+
+   The ranking is not a new judgement to make: it is what the **`wa:` labels already measure**,
+   because a contrived cell has the simple thing to fall back on by construction (`wa:clean`)
+   while a casual user who hit a wall on an obvious shape has nowhere simpler to go
+   (`wa:none`, *"blocks whoever hits it"*). Read `wa:none` as decisive; `wa:clean` only runs one
+   way and is weak evidence. That is also why a VERIFIED workaround belongs in every issue —
+   it is the ranking datum, not a courtesy.
+   [GOALS.md § Not every unwalked cell is worth the same](GOALS.md).
 5. **The defects live in the disagreements.** Where two sites answer the same question
    differently, one of them is wrong, and the wrong one has usually been wrong quietly.
 6. **Guard on the channel the defect actually moved.** It is frequently not the value channel —
