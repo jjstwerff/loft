@@ -356,16 +356,24 @@ in years, and the practice has to survive being picked up and put down.
   the issue list short and lands fixes as PRs, so an issue is a HANDOFF and costs someone's
   attention. If nobody but you will act on it, it is a commit message, not an issue.
 
-  ⚠ **That obligates a MERGE CADENCE, and the obligation is on this stream.** Not filing the
-  de-duplication only works if the de-duplication is on `main` where the other stream can build
-  on it. Held on an unmerged branch it is worse than an issue: every ticket in the area then
-  needs this branch as its base, so their work becomes stacking rather than shipping, and their
-  throughput drops to this branch's merge clock. **Land a walk when the walk finishes** — one
-  rule, one PR — rather than accumulating a tranche. The counter-pressure is real (a PR that
-  keeps receiving commits never goes green), which is the argument for small walks, not for
-  long branches.
-  ⚠ And it does NOT mean file less overall: everything a walk turns up that needs a different
-  pair of hands is their SUPPLY, and a walk typically produces more of those than it fixes.
+  ⚠ **But the boundary runs the other way too, and getting it wrong starves them.** A walk
+  surfaces far more than it fixes, and everything it surfaces that needs a DIFFERENT pair of
+  hands is that stream's supply. File those generously and file them well — a walk typically
+  produces several per defect it cures. The line is not *"did I find it?"* but:
+
+  > **Would fixing this be part of the same commit as the de-duplication?**
+  > Yes → it is the work; it goes in the commit message. No → it is an issue.
+
+  Three shapes come out of that, and today's walk produced one of each: the **de-duplication
+  itself** (a `Vector`-only list retired onto `vectors::is_collection`, plus the bogus free its
+  disagreement was causing) is the commit; a **separate root the walk merely revealed** (a
+  nullable `index<T[k]>?` failing layout, loft#1125 — A/B'd as pre-existing, its own
+  investigation, its own fix) is an issue; and a **de-duplication blocked on another defect**
+  (the `⇐` channel's return position, loft#1122, which could not land until the `__retbuf`
+  divergence behind it did) is an issue too, saying plainly what blocks it.
+
+  An unmerged branch is not itself a reason to file: the other checkout cherry-picks from here
+  when it needs a fix, so work in flight is reachable without a merge.
 - **Findings that are not this defect get FILED, not folded in.** The `@FR-L-Null` walk turned
   up a nullable `index<T[k]>?` that fails layout outright (loft#1125) and a latent unpeeled arm
   in the generic `FromNull` loop. Neither belongs in the fix; both belong on the record. Folding

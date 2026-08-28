@@ -185,6 +185,18 @@ src/main.rs            CLI; loads default/ then user file
 3. **Never create a branch, open, or merge a PR without an explicit user ask** ("create PR",
    "merge", "switch branch"). "fix X" / "push" / "retry" are NOT such asks; a prior ask doesn't carry
    over. If a protected branch blocks a commit, surface it and ask — don't invent a branch.
+   ⚠ **Nor is "the work looks finished" an ask.** A PR is opened when BOTH streams reach a stable
+   point — most issues fixed, a clean endpoint — and **the owner is the one who determines that**,
+   not the agent that judges its own branch ready. Accumulated commits on a work branch are not a
+   reason to propose one either: the sibling checkout cherry-picks what it needs, so work in
+   flight is reachable without a merge. Keep committing and pushing to the branch; wait to be told.
+   ⚠ **Target cadence is roughly ONE PR PER DAY of work**, and the owner actively looks for the
+   stopping point when work spills into a following day. That shapes the work rather than the
+   asking: prefer a coherent unit that FINISHES inside a day over starting something that will
+   straddle. And the bar for that unit is not "green" — a PR that looks OK while carrying
+   internal regressions is worse for a language's users than no PR, so a walk ships only with its
+   own verification complete (both backends, the matrix built and hand-checked, guards falsified,
+   side-findings filed rather than left implicit).
 4. With an **open PR**, hold non-blocking pushes for the user's consent (force-push/rebase/surprise
    commits) — EXCEPT a push that unblocks a red required check (allowed; it can't merge while red).
 5. **While a PR is unmerged, branch from the TIP of that in-flight work — NEVER fork a fresh
