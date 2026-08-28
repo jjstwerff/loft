@@ -179,6 +179,7 @@ the NEXT cycle's step 5, which is what keeps the claim honest.
 |---|---|---|---|---|
 | `2026-08` | #246–#1029 (334 bugs) | tuple / generic / null → one root: the type-variable fact | **Collapse ×5, landed** ([Cluster F](STABILITY_REDFLAGS.md)): the deferred-marker walk onto `Value::for_each_child_mut`, `type_mentions_tv` onto `Type::contains_def`, the `__nullable<S>` eligibility onto one predicate, the tuple emitter's owned-text split, and `tuple_has_text_leaf` peeling `Optional`. One residual, characterised and unfixed. | **NO EFFECT.** Across the 26 bugs filed after the pass's own watermark (#1030–#1078), measured against the 100 immediately before it: generic/monomorph **6.4 % → 19.2 %**, tuple **12.8 % → 19.2 %**, null/sentinel **17.9 % → 15.4 %**. Two of the three named classes got LOUDER. Read below — the premise was not wrong, it was too coarse. |
 | `2026-08` (2nd) | #1030–#1078 (26 bugs) | generic/monomorph — still rising, and the titles name one mechanism: the type VARIABLE's layout / null / route used where the instantiation's belongs | **Collapse + check, landed.** `TYPEVAR_ROW_PREFIX` gets one home used by both the site that MINTS the row and the site that refuses it; `Stores::enum_parent_size` — the one call every record allocation makes with the type row in hand — now refuses to allocate a record with a type variable's row. | — |
+| `2026-08` (3rd) | #1096–#1123 (27 bugs, two checkouts in one window) | **rules the code does not represent** — 179 of 255 `@FR-` rules have no citation site, and of the 76 that do, 21 are enforced from 2+ files (`@FR-L-Null` from **13 sites across 8 files**). 14 of the 27 bugs name null/`??`/sentinel/absent. | **Queue, not a sweep.** Per uncited rule: evaluate its sites → de-duplicate onto one home → fix what the disagreement was causing → *then* cite. Starting at `@FR-L-Null`'s thirteen sites. Plus a MODE change: start from a defect, not a screen — measured 24 `Fixes` vs 2 across the two checkouts' original commits in the same window. | — |
 
 ### Why `2026-08` read NO EFFECT — the premise was too coarse, not wrong
 
@@ -218,6 +219,99 @@ Retrospective entries, measured when the protocol was written rather than by a p
 |---|---|---|---|
 | `2026-06` | narrow-int / width | `IntegerSpec::range_to_width` | **9.6 % → 2.0 %** — the one measured payoff so far |
 | `2026-07` | keyed collections | `Stores::for_each_owned_child` | cannot judge — the class had no bugs before it landed |
+
+### `2026-08` (3rd) — what MODE produced the bugs, measured across two checkouts
+
+This cycle has an unusual control: the same project ran in **two checkouts at once** over one
+72-hour window (#1096–#1123), same subsystem, every issue `hit-by:loft`. That makes the working
+MODE the only variable, and the difference is not small.
+
+Counting original commits only (author date == committer date, so cherry-picks between the two
+trees are excluded):
+
+| checkout | original commits | carrying a `Fixes #` trailer | without |
+|---|---:|---:|---:|
+| `../loft` | 47 | **24** | 23 |
+| `loft2` | 29 | **2** | 27 |
+
+By committer date, **every one of #1096–#1123 was fixed first in `../loft`** — including the
+two `loft2` filed on the last day, closed there within the hour.
+
+**The two modes, in their own words.** `../loft`'s commit bodies say how each defect was found,
+and the phrases repeat: *"FOUND BY THE GUARD CELL WRITTEN FOR THE FIRST"* (×4), *"found by
+giving an element a HEAP type, which that doc's all-`(integer, integer)` oracle cannot
+express"* (×4), *"found while building #1119's boundary matrix"*, *"found while writing #1120's
+guard"*. One loop: **fix → write the guard → move an axis that guard pins → the neighbour falls
+out → fix.** It compounds, and its setup cost was paid by the previous fix.
+
+`loft2` ran the other loop: build a screen over the whole tree, rank 33–124 sites, read them one
+at a time. High setup, low compounding — 27 of its 29 originals carry no `Fixes` trailer.
+
+⚠ **This was already measured here a day earlier and not acted on.** QUALITY.md § B6m ③ —
+written by the `loft2` stream — states *"The instruments find CLASSES; people find DEFECTS. Of
+the eleven tickets the `spellings` screen produced two."* The correction is not new information;
+it is the same finding, now with a control beside it.
+
+**What the screen-building stream did produce, and it is not nothing:** the gates both streams
+now run. `../loft`'s commits carry *"Guard falsified at &lt;ref&gt;"* — that is `loft2`'s
+`falsify.sh` and its `@falsified-at` ratchet over 878 guards. Their highest-yield phrase, *"the
+all-`(integer, integer)` oracle cannot express a heap element"*, is the held-fixed-axis question
+`matrix_axes.py` asks. `ir_walker_audit.py` is run in their reconcile commit. The instruments
+transferred and are compounding in the other stream's throughput; the ratio, 27 : 2, is what was
+wrong, not the existence of the work.
+
+**Disposition: invert the default.** Start from a defect, not a screen. After each fix, write
+the guard, then ask `scripts/matrix_axes.py cross` which axis that guard pins and build that
+cell. Run the four existing instruments on the neighbourhood a fix just touched rather than over
+the tree. Build no new screen this cycle.
+
+⚠ **What would falsify this.** The window is 72 hours and entirely self-generated, so it
+measures our reach, not the language (B6m ④). If a later window shows the screen-first stream
+producing defects at a comparable rate once its instruments are BUILT — the setup cost being
+one-off — then the ratio measured here is an artefact of when we sampled, not of the mode.
+Re-measure at the next cycle rather than reading this table as settled.
+
+### The class this cycle names: rules the code does not represent
+
+The pass's own step 2 asks for the duplicated case analysis behind a rising class. The
+nullability class is rising (**14 of the 27** issues in this window name `null` / `nullable` /
+`??` / `sentinel` / `absent` in the title alone), and the duplication behind it is now
+countable rather than argued:
+
+```
+scripts/rule_tags.py  →  255 defined rules · 76 cited · 163 citation sites
+```
+
+**179 of 255 rules (70 %) have no representation in the code at all** — no site says it
+enforces them, so *"where is this rule enforced?"* has no answer and *"is this rule already
+implemented somewhere?"* cannot be asked. The gap by document:
+
+| doc | uncited | doc | uncited |
+|---|---:|---|---:|
+| `types.md` | 38 | `calls.md` | 12 |
+| `matching.md` | 22 | `iteration.md` | 11 |
+| `heap.md` | 17 | `formatting.md` | 10 |
+| `operational.md` | 15 | `tuples.md` | 7 |
+| `collections.md` | 14 | `closures.md` | 6 |
+| `binding.md` | 14 | others | 13 |
+
+And of the 76 rules that ARE cited, `rule_tags.py dups` reports **21 cited from two or more
+files**, headed by **`@FR-L-Null` at 13 sites across 8 files**, `@FR-O-Proxy` at 9 and
+`@FR-O-Move` at 7. The rule with the most scattered enforcement is the rule whose defects
+dominated the window.
+
+⚠ **The remedy is NOT to add 179 citations.** A citation added without reading the code records
+that somebody looked; it does not make the code adhere to the rule, and a tree at
+`76 cited → 255 cited` with the same duplication underneath would read as progress while
+nothing had changed. Each uncited rule is a LENS: ask where it is implemented, expect the answer
+to be *"in three places that do not agree"*, and the disagreement is the defect. That is the
+owner's diagnosis at the head of QUALITY.md § OPEN WORK — *"during that bug fixing a lot of
+duplications were written without design"* — turned into a queue with a count.
+
+So the work per rule is, in order: **evaluate the sites → de-duplicate onto one home → fix what
+the disagreement was already causing → then cite.** The citation is the receipt, not the task.
+`@FR-L-Null`'s thirteen sites are where it starts, because that is the largest known
+disagreement surface and it sits under half of this window's bugs.
 
 ## What this is NOT
 
