@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I75 — Diagnostics collector
 
-use std::fmt::{Arguments, Debug, Display, Formatter};
+use std::fmt::{Arguments, Debug, Display, Formatter, Write as _};
 
 #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Level {
@@ -145,9 +145,16 @@ impl DiagEntry {
     /// the same path a cold one does — `LOFT_ERRORS=pretty|compact`, colour and the
     /// warnings-off filter are all read at replay time and keep working.
     ///
-    /// `fixes` is deliberately NOT carried: it feeds `loft fix`, which is its own subcommand
-    /// and re-parses, and `--explain` forces a cold parse for the same reason.  Everything a
-    /// normal run PRINTS is here.
+    /// **`fixes` travels too, and the reason is measured rather than assumed.**  It was
+    /// first left out on the reasoning that it only feeds `loft fix` and `--explain`, both
+    /// of which re-parse.  Neither half held: `--explain` reads the cache like every other
+    /// run, so a warm one printed NO fix lines where a cold one printed two; and the
+    /// once-per-run *"N diagnostics above suggest what to write instead"* note counts
+    /// entries whose `fixes` are non-empty, so a warm run dropped that line as well.  Both
+    /// are things a normal run PRINTS, which is the bar this encoding has to clear.
+    ///
+    /// An `Edit` is a position into the source, and the bundle is invalidated whenever a
+    /// source it was built from changes — so a replayed edit points where it pointed.
     #[must_use]
     pub fn encode_for_cache(&self) -> String {
         fn esc(s: &str) -> String {
@@ -162,47 +169,36 @@ impl DiagEntry {
             Level::Error => "E",
             Level::Fatal => "F",
         };
+        // A fix is six fields after the count, and the EDIT is one of them — `line,col,len,text`
+        // split at most four ways so a rewrite containing a comma survives.  `-` is "no edit",
+        // which a fix that knows the rewrite but not the span must use.
         let mut out = format!(
-            "{lvl}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{lvl}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.line,
             self.col,
             esc(self.code.unwrap_or("")),
             esc(&self.file),
             esc(self.suggestion.as_deref().unwrap_or("")),
             esc(&self.message),
+            self.fixes.len(),
         );
-        // @PLN131 — the FIXES ride along, in fixed-width groups appended after the message.
-        //
-        // A warm load that reproduces the entries but not their fixes says LESS than the cold
-        // run it is standing in for: `fixable` counts entries carrying a fix, and it is what
-        // puts the once-per-run *"N diagnostics above suggest what to write instead — re-run
-        // with `--explain`"* line under the report.  Dropping them made a cached run's output
-        // differ from an uncached one on identical input — the exact divergence the
-        // diagnostics replay exists to close (loft#1129).
-        //
-        // Groups of seven, positional, so no new separator and no change to the escaping: the
-        // decoder reads them until the fields run out, and a manifest written without them
-        // simply yields none.  An absent `edit` is `line == 0`, which no real edit can be
-        // (positions are 1-based).  `concept` / `concept_ref` are `&'static str` from a frozen
-        // catalogue, so they are carried the same way `code` is.
-        use std::fmt::Write as _;
-        for fix in &self.fixes {
-            let kind = match fix.kind {
-                FixKind::Mechanical => "M",
-                FixKind::Conditional => "C",
-            };
-            let (el, ec, elen, etext) = match &fix.edit {
-                Some(e) => (e.line, e.col, e.len, e.text.as_str()),
-                None => (0, 0, 0, ""),
-            };
+        for f in &self.fixes {
+            let edit = f.edit.as_ref().map_or_else(
+                || "-".to_string(),
+                |e| format!("{},{},{},{}", e.line, e.col, e.len, esc(&e.text)),
+            );
             let _ = write!(
                 out,
-                "\t{kind}\t{}\t{}\t{el}\t{ec}\t{elen}\t{}\t{}\t{}",
-                esc(&fix.title),
-                esc(fix.condition.as_deref().unwrap_or("")),
-                esc(etext),
-                esc(fix.concept),
-                esc(fix.concept_ref),
+                "\t{}\t{}\t{}\t{}\t{}\t{}",
+                match f.kind {
+                    FixKind::Mechanical => "M",
+                    FixKind::Conditional => "C",
+                },
+                esc(&f.title),
+                esc(f.condition.as_deref().unwrap_or("")),
+                edit,
+                esc(f.concept),
+                esc(f.concept_ref),
             );
         }
         out
@@ -245,6 +241,44 @@ impl DiagEntry {
         let file = unesc(f.next()?);
         let sugg = unesc(f.next()?);
         let message = unesc(f.next()?);
+        // A line written before fixes travelled has no count field; treat it as "no fixes"
+        // rather than as a malformed line, so an older bundle is a hit and not a hard miss.
+        let n_fixes = f.next().map_or(0, |t| t.parse::<usize>().unwrap_or(0));
+        let mut fixes = Vec::with_capacity(n_fixes);
+        for _ in 0..n_fixes {
+            let kind = match f.next()? {
+                "M" => FixKind::Mechanical,
+                "C" => FixKind::Conditional,
+                _ => return None,
+            };
+            let title = unesc(f.next()?);
+            let cond = unesc(f.next()?);
+            let edit_s = f.next()?;
+            let edit = if edit_s == "-" {
+                None
+            } else {
+                let mut e = edit_s.splitn(4, ',');
+                Some(Edit {
+                    line: e.next()?.parse().ok()?,
+                    col: e.next()?.parse().ok()?,
+                    len: e.next()?.parse().ok()?,
+                    text: unesc(e.next()?),
+                })
+            };
+            // `concept` / `concept_ref` are `&'static str` for the same reason `code` is —
+            // every producing site is a literal.  Leaking is bounded: a warm load decodes
+            // each entry at most once per process.
+            let concept = Box::leak(unesc(f.next()?).into_boxed_str());
+            let concept_ref = Box::leak(unesc(f.next()?).into_boxed_str());
+            fixes.push(Fix {
+                kind,
+                title,
+                condition: (!cond.is_empty()).then_some(cond),
+                edit,
+                concept,
+                concept_ref,
+            });
+        }
         Some(Self {
             level,
             message,
@@ -257,10 +291,12 @@ impl DiagEntry {
             // process, so this cannot grow with runtime.
             code: (!code_s.is_empty()).then(|| &*Box::leak(code_s.into_boxed_str())),
             suggestion: (!sugg.is_empty()).then_some(sugg),
-            fixes: decode_fixes(&mut f, &unesc),
+            fixes,
         })
     }
 
+    /// Format as a single-line string: `Level: message at file:line:col`
+    #[must_use]
     pub fn to_string_compact(&self) -> String {
         // @PLN102 arc-E E1 — `[code]` after the level names the precise,
         // frozen-identity diagnostic (rustc's `error[E0308]` shape); absent
@@ -683,58 +719,6 @@ pub fn suggest_similar_capped<'a>(name: &str, candidates: &[&'a str]) -> Option<
             d > 0 && d <= max_dist
         })
         .min_by_key(|c| levenshtein(name, c))
-}
-
-/// Read the trailing fix groups of an [`DiagEntry::encode_for_cache`] line.
-///
-/// Nine positional fields each, in the order the encoder writes them.  A group that runs out
-/// mid-way is dropped rather than faulting: the entry itself is already decoded, and a fix is
-/// an addition to what the diagnostic SAYS, never part of its identity — so a truncated tail
-/// costs the `--explain` pointer, not the diagnostic.
-fn decode_fixes(f: &mut std::str::Split<'_, char>, unesc: &dyn Fn(&str) -> String) -> Vec<Fix> {
-    let mut out = Vec::new();
-    loop {
-        let Some(kind) = f.next() else { return out };
-        let kind = match kind {
-            "M" => FixKind::Mechanical,
-            "C" => FixKind::Conditional,
-            _ => return out,
-        };
-        let Some(title) = f.next() else { return out };
-        let Some(cond) = f.next() else { return out };
-        let (Some(el), Some(ec), Some(elen)) = (f.next(), f.next(), f.next()) else {
-            return out;
-        };
-        let Some(etext) = f.next() else { return out };
-        let (Some(concept), Some(concept_ref)) = (f.next(), f.next()) else {
-            return out;
-        };
-        let (Ok(el), Ok(ec), Ok(elen)) =
-            (el.parse::<u32>(), ec.parse::<u32>(), elen.parse::<u32>())
-        else {
-            return out;
-        };
-        let cond = unesc(cond);
-        let concept = unesc(concept);
-        let concept_ref = unesc(concept_ref);
-        out.push(Fix {
-            kind,
-            title: unesc(title),
-            condition: (!cond.is_empty()).then_some(cond),
-            // `line == 0` is the encoder's "no edit": edit positions are 1-based.
-            edit: (el != 0).then(|| Edit {
-                line: el,
-                col: ec,
-                len: elen,
-                text: unesc(etext),
-            }),
-            // Both are `&'static str` from a frozen catalogue, and a warm load decodes each
-            // at most once per process — the same bounded leak `code` above takes, for the
-            // same reason.
-            concept: Box::leak(concept.into_boxed_str()),
-            concept_ref: Box::leak(concept_ref.into_boxed_str()),
-        })
-    }
 }
 
 #[cfg(test)]
