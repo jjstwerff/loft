@@ -3014,6 +3014,36 @@ extern crate loft;"
                 crate::database::Parts::Vector(c) => {
                     bare_io.push((tid, BareIo::Vector(*c)));
                 }
+                // loft#1148 — `Array` is `Vector` AFTER the linked-group conversion:
+                // `finish_type` rewrites a collection whose content struct is shared by
+                // another collection (`linked`) and renames it `array<…>`.  It is the same
+                // runtime type built the same way, so it is emitted as what it was BUILT as
+                // and the generated `init()` re-derives the conversion exactly as the parse
+                // did.
+                //
+                // Without this arm a converted type fell to `_ => {}` and got no `t{N}`
+                // binding at all, while a type that REFERENCES it is still emitted — so
+                // `init()` contained `let t85 = db.vector(t82);` with `t82` never bound and
+                // `--native` handed the user `error[E0425]: cannot find value t82` for the
+                // WHOLE program.  It takes two collections over ONE element struct to make
+                // that struct linked, which is why distinct element structs are clean.
+                crate::database::Parts::Array(c) => {
+                    bare_io.push((tid, BareIo::Vector(*c)));
+                }
+                // `Ordered` is the same conversion applied to `Sorted`, and it is here for
+                // that symmetry — NOT because a failing case was found.  ⚠ Evidence level
+                // differs from the arm above and the difference is the point: `Array` has a
+                // reproducing program, `Ordered` has none.  Every shape tried reached
+                // neither (a tuple-yielded `sorted` beside a `vector` over one struct, and a
+                // struct holding `sorted<E[k]>` + `vector<E>` as a linked GROUP) — no
+                // `ordered<…>` type was minted on any build.  So this arm is unreached as
+                // far as it has been measured, and is kept because a file whose entire bug
+                // history is omitted variants is the wrong place to leave a known-symmetric
+                // hole open.  If you are here because it fired, that is new information:
+                // record the shape.
+                crate::database::Parts::Ordered(c, keys) => {
+                    bare_io.push((tid, BareIo::Sorted(*c, keys.clone())));
+                }
                 // Sorted / Hash / Index that are a struct/enum FIELD are
                 // created INLINE during that container's field emission
                 // (via `emit_field` → `db.sorted / hash / index`), so they

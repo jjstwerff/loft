@@ -163,15 +163,14 @@ fn cy_checks_itself() -> iterator<hash<CyE[k]>> {
 //     file with it, so the three cells that were already correct fail on the control too
 //     without being individually wrong.
 //
-// ⚠ NO `vector` tuple-member cell, though it is the natural control.  A `vector`-member and a
-// keyed-member tuple yield in ONE program make `--native` emit invalid Rust for the WHOLE file
-// (`error[E0425]`, loft#1148 — pre-existing, order-independent, and reproducing from a plain
-// `main` as well as under `--tests`).  The cell would not add a control; it would turn this
-// file red on native and lock that failure here.  `test_yielding_a_vector` at the top carries
-// the same claim on the bare-yield channel and is unaffected.
-//
-// ⚠ One test function EACH, for the same reason: grouping several into one function trips
-// loft#1148's shape as soon as the kinds mix.
+// The `vector` cell below is the control: `vector` was never missing from either list, so it
+// passes on the broken build too, and that is what says the cells above are about the type SET
+// rather than about tuple members as such.  It was ABSENT when these cells first landed — a
+// `vector`-member and a keyed-member tuple yield in one program made `--native` emit invalid
+// Rust for the whole file (loft#1148), so the control would have locked that failure here.
+// #1148 is fixed, so the exclusion has expired and the cell is back: an exclusion's
+// justification is a claim about the state it was written in, and it has to be re-asked once
+// that state changes.
 
 struct CyW { k: integer, w: text }
 
@@ -226,5 +225,17 @@ fn test_a_trie_tuple_member() {
 }
 fn cy_tup_trie() -> iterator<(trie<CyW[w]>, integer)> {
   a: trie<CyW[w]> = [CyW { k: 1, w: "aa" }, CyW { k: 2, w: "bb" }];
+  yield (a, 7);
+}
+
+// The CONTROL — and, since loft#1148, also the cell that keeps a `vector` member and a keyed
+// member coexisting in one program.
+fn test_a_vector_tuple_member() {
+  s = 0; t = 0;
+  for p in cy_tup_vector() { for r in p.0 { s += r.k; } t += p.1; }
+  assert(s == 3 && t == 7, "vector tuple member: sum {s} tag {t}");
+}
+fn cy_tup_vector() -> iterator<(vector<CyE>, integer)> {
+  a: vector<CyE> = [CyE { k: 1, v: "a" }, CyE { k: 2, v: "b" }];
   yield (a, 7);
 }
