@@ -1779,6 +1779,33 @@ impl Lexer {
             val += &exp;
         }
         if f {
+            // loft#1146 — `f` is the ONLY suffix a decimal literal takes (LOFT.md § Literals),
+            // so any other letter glued to one is a suffix the author guessed.  Left to the
+            // parser it became "Expect token ;", which names nothing: the `s` was lexed as a
+            // separate identifier and the reader was told a semicolon was missing.  Say what
+            // the suffix set is, here, where the two characters are still adjacent.
+            if let Some(&c) = self.iter.peek()
+                && c.is_ascii_alphabetic()
+                && c != 'f'
+            {
+                let mut bad = String::new();
+                while let Some(&n) = self.iter.peek() {
+                    if n.is_ascii_alphanumeric() || n == '_' {
+                        bad.push(n);
+                        self.next_char();
+                    } else {
+                        break;
+                    }
+                }
+                // The run is CONSUMED, so the reader gets one diagnostic rather than this
+                // one plus the `Expect token ;` the leftover identifier used to earn.
+                self.err(
+                    Level::Error,
+                    &format!(
+                        "`{bad}` is not a numeric suffix; write `f` for a `single` literal (`1.5f`) — a bare decimal literal is a `float`"
+                    ),
+                );
+            }
             if let Some('f') = self.iter.peek() {
                 self.next_char();
                 if let Ok(r) = val.parse::<f32>() {

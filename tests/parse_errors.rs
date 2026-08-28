@@ -2177,17 +2177,49 @@ fn binary_write_integer_cast_silent() {
 fn p315_float_literal_into_single_vector() {
     // One diagnostic per offending element (clean parse recovery, like the
     // sibling "No common type" path) — both float literals are rejected.
+    // loft#1146 — the SUFFIX is named first: it is the cure `LOFT.md`'s own example
+    // writes and the one that costs no conversion.  The cast stays for non-literals.
     code!("fn test() { v: vector<single> = [1.0, 2.0]; }")
         .error(
             "cannot store float elements in a vector<single> (would lose precision); \
-             cast each element explicitly with 'as single' at \
+             write `single` literals with the `f` suffix (`[1.0f, 2.0f]`), or cast each \
+             element with 'as single' at \
              p315_float_literal_into_single_vector:1:38",
         )
         .error(
             "cannot store float elements in a vector<single> (would lose precision); \
-             cast each element explicitly with 'as single' at \
+             write `single` literals with the `f` suffix (`[1.0f, 2.0f]`), or cast each \
+             element with 'as single' at \
              p315_float_literal_into_single_vector:1:43",
         );
+}
+
+/// loft#1146 — every refusal a `single` earns names the `f` literal suffix, which
+/// `LOFT.md` calls the FIRST cure and states three times.  Before this, all three
+/// prescribed `as` and none of them mentioned the suffix, so a reader who did not
+/// already know it could not reach it from the message; the scalar one additionally
+/// offered "use a new variable name", which is actively wrong here — the name is not
+/// the problem and a second variable earns the same rejection.
+#[test]
+fn single_refusals_name_the_f_suffix() {
+    // The scalar store.  "use a new variable name" is GONE, not merely reordered.
+    code!("fn test() { x: single = 1.5; }").error(
+        "Variable 'x' cannot change type from single to float; a bare decimal literal is \
+         `float` — write it with the `f` suffix (`1.5f`), or cast the value with \
+         `as single` at single_refusals_name_the_f_suffix:1:29",
+    );
+}
+
+/// loft#1146 — a suffix that is not `f` used to be lexed as a separate identifier, so
+/// `1.5s` reported "Expect token ;" — a missing semicolon, which names nothing the
+/// author did.  The run is consumed, so this is ONE diagnostic and not that one plus a
+/// parse error behind it.
+#[test]
+fn a_bad_numeric_suffix_names_the_suffix_set() {
+    code!("fn test() { x = 1.5s; }").error(
+        "`s` is not a numeric suffix; write `f` for a `single` literal (`1.5f`) — a bare \
+         decimal literal is a `float` at a_bad_numeric_suffix_names_the_suffix_set:1:21",
+    );
 }
 
 /// GitHub #256 — SUPERSEDED by @PLN17 (three-state boolean).  A boolean now has a

@@ -2139,6 +2139,22 @@ impl Function {
             );
             return;
         }
+        // loft#1146 — `single` ← `float` is the one pairing where "use a new variable name"
+        // is not merely incomplete but WRONG: the name is not the problem, and a second
+        // variable earns the same rejection.  What a bare `1.5` is missing is the `f`
+        // suffix, which `LOFT.md` calls the first cure and names three times — so the
+        // refusal knew the answer and offered the other one.  Only the ADVICE half differs,
+        // for the same reason the nullable arm above gives: the diagnosis stays word for
+        // word, so the three messages remain one diagnostic to anyone grepping for it.
+        if matches!(var_tp, Type::Single) && matches!(type_def, Type::Float) {
+            diagnostic!(
+                lexer,
+                Level::Error,
+                "Variable '{}' cannot change type from single to float; a bare decimal literal is `float` — write it with the `f` suffix (`1.5f`), or cast the value with `as single`",
+                self.name(var_nr)
+            );
+            return;
+        }
         diagnostic!(
             lexer,
             Level::Error,

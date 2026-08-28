@@ -3260,15 +3260,30 @@ impl Parser {
                 // write overflows them → heap corruption) AND lose data
                 // (float→single).  Consistent with scalar / local-vector
                 // assignment, which already reject this.
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "cannot store {} elements in a vector<{}> (would lose precision); \
+                // loft#1146 — for `float` elements in a `vector<single>` the cheapest cure
+                // is the literal SUFFIX, not a cast: `[1.0f, 2.0f]` is what `LOFT.md`'s own
+                // example writes, and per-element `as single` was the only thing offered.
+                // Named first because it costs no conversion; the cast stays for the case
+                // where the elements are not literals.
+                if matches!(t, Type::Float) && matches!(in_t.base(), Type::Single) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot store float elements in a vector<single> (would lose precision); \
+                         write `single` literals with the `f` suffix (`[1.0f, 2.0f]`), or cast each \
+                         element with 'as single'"
+                    );
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot store {} elements in a vector<{}> (would lose precision); \
                      cast each element explicitly with 'as {}'",
-                    t.name(&self.data),
-                    in_t.name(&self.data),
-                    in_t.name(&self.data)
-                );
+                        t.name(&self.data),
+                        in_t.name(&self.data),
+                        in_t.name(&self.data)
+                    );
+                }
             } else if self.convert(&mut p, in_t, &t) {
                 // INFERRED element type: widen to the common type
                 // (e.g. [1, 2.0] → vector<float>).
