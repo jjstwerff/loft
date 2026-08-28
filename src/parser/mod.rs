@@ -3771,6 +3771,26 @@ impl Parser {
     /// stored bytes.  [`Parser::convert`] answers such a pair by UNBOXING the value, so a
     /// caller that keeps classifying on `from` afterwards is reading a type the value no
     /// longer has — ask this instead of comparing the two spellings by hand.
+    ///
+    /// loft#1139 — the MEMBERS have two spellings too, and the same-type question has to be
+    /// asked the same way one level in.  A member declared `S?` is `Optional(Reference(S))`
+    /// on the stack side and the synthetic `Enum(__nullable<S>, true)` on the stored side
+    /// (the rewrite between the two passes), so `is_equal` alone reported a precision loss
+    /// between a type and itself: `v += [mk()]` was refused for a returned tuple with a
+    /// nullable member while the DENSE twin — whose member is `Reference(S)` on both sides —
+    /// was accepted.  `Data::same_nullable_struct` is the one home for that pair.
+    ///
+    /// ⚠ Admitted only for the LAST member, and that bound is the unboxer's, not the type's.
+    /// `unbox_tuple_from_dbref` re-derives a `__tuple<…>` def from the element types it is
+    /// handed — the STORED spellings — so a tagged member yields
+    /// `__tuple<__nullable<S>,integer>`, a different def with different offsets, and every
+    /// member AFTER it is then read at the wrong one (measured: the trailing scalar of
+    /// `(S?, integer)` reads `0` for `3`).  Nothing follows the last member, so there is no
+    /// offset to shift, and accepting only that case turns a refusal into a CORRECT
+    /// acceptance rather than into a silent wrong answer.  Lifting the bound is the
+    /// unboxer's to earn — it needs the ORIGINAL def rather than one re-derived from the
+    /// rewritten spellings, the same "offsets and types come from one def" question loft#1134
+    /// answers for the write side.
     pub(crate) fn unboxes_stored_tuple(&self, from: &Type, to: &Type) -> bool {
         let (Type::Reference(d_nr, _), Type::Tuple(dst_elems)) = (from, to) else {
             return false;
@@ -3779,11 +3799,12 @@ impl Parser {
             return false;
         }
         let attrs = self.data.def(*d_nr).attributes();
+        let last = dst_elems.len().saturating_sub(1);
         attrs.len() == dst_elems.len()
-            && attrs
-                .iter()
-                .zip(dst_elems)
-                .all(|(a, d)| a.typedef.is_equal(d))
+            && attrs.iter().zip(dst_elems).enumerate().all(|(i, (a, d))| {
+                a.typedef.is_equal(d)
+                    || (i == last && self.data.same_nullable_struct(&a.typedef, d).is_some())
+            })
     }
 
     /// Element types of a stored tuple (`Reference(__tuple<…>)`), in order — the argument
