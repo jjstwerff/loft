@@ -102,6 +102,33 @@ files would.  The win is the *uniform* convention, not GitHub itself.
 - **Roadmap** — a `gh` Project board across the orgs for "which release bundles
   which consumer-driven work"; ROADMAP.md can't span orgs.
 
+## A repro carries the base it was measured on — name it
+
+A repro written from a work branch silently depends on every OTHER fix that branch holds, and
+the reader who tries it on `main` gets a different symptom. Twice in one day (2026-08-28) that
+cost a false start between the two checkouts:
+
+* **loft#1135** ("two generators leak one store") was filed with *"values are correct on both
+  backends throughout"*. True on the branch it was measured on, which had loft#1130 fixed. On
+  `main` the same program does not leak at all — it fails an assertion, because the yielded
+  keyed-collection LITERAL is corrupted by #1130 and the lookup answers null. A reader would
+  spend the first hour on the wrong defect.
+* **loft#1139**'s workaround (`t = mk(); v += [(t.0, t.1)]`) compiles on any base and answers
+  WRONG on one without loft#1134, because the rebuilt member goes through the tuple-element
+  write that #1134 fixes.
+
+So, in the body of any issue whose repro was run from a work branch:
+
+* say which base it was measured on (`measured on <branch> @ <sha>`), and
+* if it needs another fix to be reachable at all, name that issue — *"needs #1130; without it the
+  assertion fails first"*.
+
+And when a repro's symptom does not match its report, **suspect the base before the report**:
+re-run it on `main` and on the filer's branch tip before concluding the issue is wrong. The
+cheap isolating move is to apply the other issue's own WORKAROUND — that is what separated
+#1135 from #1130 in one run. Related: [DEBUG.md](DEBUG.md) § matrix-first, and
+STABILITY_METHOD.md § *When a filed issue names which route is broken*.
+
 ## Workarounds — the agent's "can you keep moving?" signal
 
 A bug's workaround is the **primary thing the loft agent communicates to others**
