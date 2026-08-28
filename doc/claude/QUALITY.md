@@ -461,7 +461,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 322 | 305 | **17** |
+| 323 | 306 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2265,7 +2265,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 641 | 277 | 4 | **360** |
+| 641 | 278 | 4 | **359** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2701,8 +2701,15 @@ written at `is_keyed` where the next reader meets the question. The three peels 
 their own stayed.
 
 ⚠ **And the probes for that chain found a defect pair with no `Optional` opacity in it at
-all** — **loft#1120**, filed rather than fixed because curing it wants one representation
-decision:
+all** — **loft#1120**, filed rather than fixed here because curing it wants one representation
+decision.  **CLOSED since (2026-08-28), in the sibling checkout and now in this tree**: the
+cure is one lowering (`Parser::collection_is_null` → `OpVectorIsNull`, which `??` now asks
+instead of carrying a third list) plus widening `vector::is_absent_collection` so a DbRef
+reaching no slot — the missed-lookup encoding — answers absent.  That closes all four rows of
+the table below at once, including the `spatial` / `trie` omission and the `hash` / `index`
+panic.  `formal/collections.md` D-col-null; guard
+`tests/scripts/1120-one-null-question-for-a-collection.loft`.  The table stands as the
+diagnosis it was:
 
 | spelling | right about | wrong about |
 |---|---|---|
