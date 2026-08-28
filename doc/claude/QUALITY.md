@@ -3290,6 +3290,76 @@ must not build on — rather than by either side finishing alone.  The message t
 the one reporting a NEGATIVE result (*"the declared local is still refused on my tree"*), which
 is what told the other side its wrong-value cell was its own to own.
 
+#### B6z — `@FR-O-Move` walked: two clauses, five hand-spelled `Vector` lists, and the clause nothing implemented (2026-08-28)
+
+Third rule walked, next after `@FR-L-Null` and `@FR-O-Proxy` by `rule_tags.py dups` (7 sites).
+
+**The split (step 2).**  `(O-Move)` is two sentences and the seven sites divide cleanly along
+them, which is the whole result:
+
+| clause | sites | state |
+|---|---:|---|
+| **the TRANSFER** — a returned store is the caller's; the callee must not free what it transfers | 4 | implemented, and correct |
+| **the BORROW** — *"if the return borrows a parameter, the return type records it and the caller COPIES"* | 3 | implemented **for `Vector` and `Reference` only** |
+
+**The second clause had no implementation for keyed collections at all**, and the shape is
+the one B6u found: `block_result`'s heap-return delivery dispatches on `Text`, `Type::Vector`
+and `Type::Reference`, so the five keyed `Type` variants matched no arm, `ref_return` never
+ran for them, and nothing recorded that a returned keyed collection borrows a parameter.
+`Def::returns_borrowed_view` reads an empty return-dep list as *owned*, so the keyed copy set
+its `0x8000` source-free bit on a store the caller still held: **`fn id(x: hash<T[k]>) ->
+hash<T[k]> { x }` freed the caller's collection, and every call after the first read it
+empty** — both backends, no diagnostic (loft#1140).
+
+`vectors::is_collection` is the declared one home for the store-backed set, and **five sites
+spell a `Type::Vector`-only list beside it**: the promotion-pass guard, the write-back match,
+`var_bound_to_branch`'s call site, `views_local`'s, and `fresh_owned_vector_deps`.  The last
+three are correct — keyed returns never reach the ladder, so gating them on `Vector` is right
+by construction — and that is a **negative result worth its lines**: the carve-out comments
+there (*"Vector only: the record return reaches its own view repair earlier"*) read as if the
+world were {vector, record}, and it is not, but the conclusion survives.
+
+**The defect is where the two questions in one predicate came apart.**  The site setting the
+source-free bit asked `is_struct_returning_call` — *is the RHS a call* — while its own comment
+claimed *"a fresh-storage call"*.  A borrowing return satisfies the first and not the second.
+That is `[[one-predicate-two-questions]]` again, and the cure was **not** a sibling predicate
+this time: `use_analysis::call_return_frees_source` already answers exactly this question,
+was written for this bit (loft#981/#982), and reads both the callee's return deps and whether
+the site's @P290 bracket covers every ref argument.  The site simply did not consult it — and
+emitted no bracket, so its licence did not hold either.  Fixed by doing both.
+
+⚠ **Three edits changed nothing before one changed everything, and that is the transferable
+part.**  Recording the return dep, then routing the caller's adopt-vs-copy gate, then wiring
+in `call_return_frees_source` — each was a defensible reading, each left the behaviour
+byte-identical, because none of them was read by the site that actually frees.  The IR diff
+against a pristine `origin/main` worktree is what ended it: the emitted `OpReplaceKeyed(…,
+32847)` names its own `0x8000` bit, and `32847` is a fact no amount of reading upstream
+predicates was going to produce.  **Stop patching after the second no-op and go read what is
+emitted.**
+
+**A conservative fix and a precise one, and the difference is measurable.**  Answering only
+the callee-side half (*never free a borrowing return's source*) closes the use-after-free but
+leaks one store per call on the MINTING arm of a borrowing signature — measured ×1 → ×2
+against `origin/main`.  Emitting the bracket instead lets the runtime decide, which is what
+the borrow/owned split needs: a protected store is refused the free, a callee-minted one is
+not.  Both were built and measured; the second ships.
+
+**Two findings recorded rather than folded in.**  loft#1142 — a keyed return through a branch
+join leaks the UNTAKEN arm's store, one per CALL, for an inline literal and for a local alike,
+and identical on `origin/main` and on this build.  Its cells are **deliberately absent** from
+the guard, whose header says so; the join coverage there mints nothing.  And the two entry
+points — `block_result`'s tail dispatch and `parse_return` — are two spellings of one act, so
+both new arms route through `is_keyed` rather than each carrying its own five-variant list;
+folding them into one function is a byte-identical-IR refactor that does not belong in a
+behaviour change.
+
+**The guard needed a churn cell to be non-vacuous.**  A wrongly-freed store still reads
+correctly until its slot is RECYCLED, so the first call always answers right — and a program
+measuring several kinds in sequence reports whichever kind happens to get its slot reused and
+calls the rest clean.  The first matrix built for this read `hash` broken and the other four
+correct; each kind in its own file read all five broken.  Every loop in the guard now
+allocates and drops a collection between the call and the assertion.
+
 #### C — process / skills
 
 | item | state |

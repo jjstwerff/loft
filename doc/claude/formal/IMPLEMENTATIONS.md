@@ -446,7 +446,7 @@ without anyone having to remember.
 | `@FR-O-Deps` | one fact; every lifetime decision derives from it | `data::Deps` (`src/data.rs`) — the type itself |
 | `@FR-O-Borrow` | an aliasing value names its source; borrowers are skip-free | the `Deps` list; `Function::make_independent` strips a dep to promote a borrow to owner |
 | `@FR-O-Owner` · `@FR-O-Derived` | single owner; free is DERIVED, once, at scope exit | `Scopes::get_free_vars` (`src/scopes.rs`) — the scope-exit sweep |
-| `@FR-O-Move` | a returned store transfers to the caller | `get_free_vars`'s `ret_var` / `return_sources` suppression; `Parser::ref_return` (`src/parser/control.rs`) |
+| `@FR-O-Move` | a returned store transfers to the caller — and a return that BORROWS a parameter is recorded, so the caller copies | TRANSFER: `get_free_vars`'s `ret_var` / `return_sources` suppression; `Parser::ref_return` (`src/parser/control.rs`). BORROW: `Def::returns_borrowed_view` reads the recorded dep, `use_analysis::call_return_frees_source` gates the source-free bit on it plus the @P290 bracket. ⚠ The borrow clause is recorded only where a delivery arm runs — `block_result` for `Text` / `Vector` / `Reference` / keyed, and `parse_return` for the explicit spelling; a return shape reaching neither records nothing and reads as OWNED (loft#1140 was the keyed kinds missing from both) |
 | `@FR-O-Complete` | per binding, per path — set-and-reconcile | `Scopes::scan_if`'s intersect of `owned_refs` across both arms (`src/scopes.rs`) |
 | `@FR-O-NoDiverge` | both backends translate the SAME facts | structural: `scopes` decides and writes `OpFreeRef` into the IR; the emitters translate |
 

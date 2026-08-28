@@ -1968,6 +1968,33 @@ impl Parser {
                 let td = *td;
                 let delivery = self.classify_reference_delivery(ls, l);
                 self.dispatch_reference_delivery(delivery, td, l);
+            } else if crate::parser::vectors::is_keyed(t) {
+                // Enforces @FR-O-Move's second clause for the keyed kinds — *if the return
+                // borrows a parameter, the return type records it*.
+                //
+                // loft#1140 — the five KEYED kinds reached no arm above, so no delivery was
+                // classified for them and `ref_return` never ran.  Nothing recorded that a
+                // returned keyed collection BORROWS a parameter, and an empty return-dep
+                // list is what `Def::returns_borrowed_view` reads as *owned*: the caller
+                // then set `OpCopyRecord`'s source-free bit on a store it still held, so
+                // `fn id(x: hash<T[k]>) -> hash<T[k]> { x }` freed the caller's collection
+                // and every call after the first read it empty, on both backends.
+                //
+                // A keyed collection needs the BORROW FACT and nothing else — it already
+                // carries its own delivery, returning its store directly rather than
+                // through a `__retbuf` the way a vector does.  `ref_return` treats it as
+                // `signature_only` for exactly that reason, so this records the dep and
+                // makes no placement decision; the runtime @P290 bracket then refuses the
+                // free for a store belonging to a protected argument, which is the
+                // borrow-vs-owned split `use_analysis::protectable_ref_args` describes and
+                // has covered keyed arguments since loft#981.
+                //
+                // `is_keyed` is the one home for the kind list (@FR-Col-Hash · -Sorted ·
+                // -Index · -Spatial · -Trie), so a sixth keyed kind arrives here already
+                // handled instead of joining the four hand-spelled `Type::Vector` lists
+                // this arm sits beside.
+                let ls = t.base().depend();
+                self.ref_return(&ls, l, RetSite::BlockTail);
             } else if let Type::Vector(elm, _) = result.ret_promo_base()
                 && let Some((buf_attr, buf_var)) = self.return_buffer()
                 && self.returned_uses_buffer(buf_attr)
@@ -12446,8 +12473,32 @@ impl Parser {
         // decision — widening the DELIVERY peel instead was measured, and it re-typed the
         // return non-nullable and diverged the backends on a missing key.
         let (dep_base, peel) = ret.ret_dep_shape();
-        let signature_only = peel == crate::data::RetPeel::SignatureOnly;
-        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = dep_base
+        // loft#1140 — a KEYED collection return takes the borrow fact and no placement
+        // decision, which is what `RetPeel::SignatureOnly` already means.  It cannot be
+        // said through `peel`, because that answers two questions at once: *was a `?`
+        // peeled* (which `rewrap` below reads, to put the `?` back) and *is this
+        // signature-only*.  Those coincide for `Optional(Reference)` and come apart here —
+        // a bare `hash<T[k]>` needs the second and must NOT be re-wrapped — so the
+        // signature-only question gets its own answer and `rewrap` keeps reading `peel`.
+        let signature_only = peel == crate::data::RetPeel::SignatureOnly
+            || crate::parser::vectors::is_keyed(dep_base);
+        // ⚠ NULLABLE keyed returns are NOT covered, and the measurement is left here so the
+        // next reader does not re-derive it.  `hash<T[k]>?` arrives as `Optional(Hash)`, which
+        // `ret_dep_shape` does not peel, so it matches no arm below and its borrow goes
+        // unrecorded — the same silent free loft#1140 fixes for the dense spelling, still live
+        // for this one (loft#1143).  The one-line cure is an `Optional(inner) if is_keyed`
+        // arm in `ret_dep_shape` returning `SignatureOnly`: it makes the interpreter answer
+        // correctly and makes `--native` PANIC, writing through the u16::MAX null sentinel in
+        // `allocation.rs`.  A wrong answer traded for a crash on the other backend is not a
+        // fix, so the delivery hole has to be found first.
+        if let Type::Vector(_, cur)
+        | Type::Reference(_, cur)
+        | Type::Enum(_, true, cur)
+        | Type::Hash(_, _, cur)
+        | Type::Sorted(_, _, cur)
+        | Type::Index(_, _, cur)
+        | Type::Radix(_, _, cur)
+        | Type::Trie(_, _, cur) = dep_base
         {
             let mut dep = cur.clone();
             // #306: a returned local can itself hold a view — its TYPE deps name
@@ -12785,6 +12836,14 @@ impl Parser {
                 Type::Vector(it, _) => rewrap(Type::Vector(it, dep)),
                 Type::Reference(td, _) => rewrap(Type::Reference(td, dep)),
                 Type::Enum(td, true, _) => rewrap(Type::Enum(td, true, dep)),
+                // loft#1140 — the five keyed kinds, rebuilt with their key lists intact.
+                // Only the dep list is replaced; a keyed return is signature-only above, so
+                // nothing here has moved the value.
+                Type::Hash(td, k, _) => rewrap(Type::Hash(td, k, dep)),
+                Type::Sorted(td, k, _) => rewrap(Type::Sorted(td, k, dep)),
+                Type::Index(td, k, _) => rewrap(Type::Index(td, k, dep)),
+                Type::Radix(td, k, _) => rewrap(Type::Radix(td, k, dep)),
+                Type::Trie(td, k, _) => rewrap(Type::Trie(td, k, dep)),
                 _ => {
                     diagnostic!(
                         self.lexer,
@@ -13048,6 +13107,24 @@ impl Parser {
                         let ls_own: Vec<u16> = ls.to_vec();
                         self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
                     }
+                } else if crate::parser::vectors::is_keyed(&t) {
+                    // @FR-O-Move, the same clause the tail arm records — this is the second
+                    // entry point that has to record it.
+                    //
+                    // loft#1140, the EXPLICIT-return twin of the keyed arm in
+                    // `block_result`.  `return h;` never reaches that one — the tail
+                    // dispatch sees a bare `Var`, and an explicit return is routed here
+                    // instead — so a function written `{ return h; }` kept an empty return
+                    // dep list while `{ h }` recorded the borrow, and only the first
+                    // spelling still freed the caller's collection.  `LOFT_TRACE_RETPROMO`
+                    // printed no ENTER line at all for it, which is what named the second
+                    // entry point.
+                    //
+                    // Same treatment as the tail: hand `ref_return` the returned value's
+                    // deps so `MergeAttr` records any borrowed parameter, and let it make
+                    // no placement decision (a keyed return is signature-only there).
+                    let ls_own: Vec<u16> = t.depend();
+                    self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
                 } else if let Type::Vector(_, ls) = &t
                     && self.return_buffer().is_some()
                 {
