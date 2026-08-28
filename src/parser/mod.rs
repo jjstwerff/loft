@@ -4203,18 +4203,15 @@ impl Parser {
         // the null sentinel (store_nr=u16::MAX), reusing the reference sentinel producer
         // — distinct from an empty `[]` (a valid store with length 0).
         //
-        // Every collection handle is a twelve-byte `DbRef`, so the sentinel is the only
-        // thing that can mean absent in its slot — the same reasoning the struct-enum arm
-        // below carries, and the reason this reads through `base()` (@FR-L-Null:
-        // layout(τ) = layout(τ?), so the shape under the wrapper is what decides).  Asked
-        // for `Type::Vector` alone it was short by the five KEYED kinds and by the
-        // wrapper: `c: spatial<P[x,y]>? = null` left a bare `Value::Null` in the slot,
-        // which writes nothing, and the scope-exit `OpFreeRef` then read the untouched
-        // bytes as store #0 and tried to free the STACK (loft#1125, BUG #306).
-        if *is_type == Type::Null
-            && (matches!(should.base(), Type::Vector(_, _))
-                || crate::parser::vectors::is_keyed(should.base()))
-        {
+        // @FR-L-Null, through the one home `vectors::is_collection` rather than a hand-
+        // spelled variant list: every store-backed collection has the same twelve-byte slot,
+        // so the same thing means absent in all of them.  Spelled `Type::Vector` alone, the
+        // five KEYED kinds kept a bare `Value::Null` — which writes nothing — and the
+        // scope-exit `OpFreeRef` then read the untouched bytes as store #0 and tried to free
+        // the STACK, exactly the fault the struct-enum arm below records for its own shape.
+        // `base()` for the same reason that arm gives: the shape needing this most is the
+        // nullable one (`h: hash<S[k]>? = null`).
+        if *is_type == Type::Null && Self::is_collection_type(should.base()) {
             let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
             *code = Value::Call(sentinel_nr, vec![]);
             return true;

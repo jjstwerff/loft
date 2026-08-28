@@ -313,6 +313,12 @@ the disagreement was already causing → then cite.** The citation is the receip
 `@FR-L-Null`'s thirteen sites are where it starts, because that is the largest known
 disagreement surface and it sits under half of this window's bugs.
 
+The loop is a STANDING practice rather than a sprint — 179 uncited rules is a queue measured in
+years — and is written up as such in
+[STABILITY_METHOD.md § The rule-led walk](STABILITY_METHOD.md).  The first rule walked that way,
+with its two questions, its one defect, its one filed side-finding and its one measured negative
+result, is [QUALITY.md § B6u](QUALITY.md).
+
 ## What this is NOT
 
 - **Not bug triage.** It never decides whether a bug is worth fixing, or fixes one.

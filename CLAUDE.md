@@ -343,7 +343,11 @@ when + the 20-min PR rule.
 [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) declined-features register ·
 [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) / [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) ·
 [FORMATTER.md](doc/claude/FORMATTER.md) · stability: [STABILITY_ROADMAP.md](doc/claude/STABILITY_ROADMAP.md)
-(the tracking view) · [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) /
+(the tracking view) · [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) — incl. **§ The
+rule-led walk**, the STANDING practice: pick a `@FR-` rule (not a site), split it into the
+questions its sites actually ask, find each question's ONE home, then verify the RELATED cases
+against it — the defects are in the disagreements, and the citation is the receipt, never the
+task.  179 of 255 rules have no code representation, so this is a queue measured in years /
 [_SWEEP](doc/claude/STABILITY_SWEEP.md) / [_HOTSPOTS](doc/claude/STABILITY_HOTSPOTS.md) /
 [_REDFLAGS](doc/claude/STABILITY_REDFLAGS.md) · [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) ·
 formal lens: [FORMALIZATION.md](doc/claude/FORMALIZATION.md) / [TYPING_RELATION.md](doc/claude/TYPING_RELATION.md) ·

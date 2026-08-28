@@ -2860,6 +2860,72 @@ worth knowing because it is the natural first attempt, and it is the discriminat
 #1123 in loft#1096's family — one notion, two type spellings, the rewrite between the passes
 deciding which one a site sees — a position over.
 
+#### B6u — `@FR-L-Null` walked as a lens: 13 sites, two questions, one defect and one filed (2026-08-28)
+
+BUG_REVIEW.md's `2026-08` (3rd) cycle names the class — *rules the code does not represent* —
+and says the work per rule is **evaluate the sites → de-duplicate onto one home → fix what the
+disagreement was causing → cite last**.  This is the first rule walked that way.
+`@FR-L-Null` was chosen because it is the most scattered rule the tree has (13 citation sites
+across 8 files, `rule_tags.py dups`) and because 14 of the cycle's 27 bugs name null.
+
+**The 13 sites are TWO questions, not one, and the split is the first product.**
+
+| question | sites | state |
+|---|---:|---|
+| **the PEEL** — `Optional(τ)` occupies τ's storage, so `.base()` before asking a shape question | 9 | 8 peel; `is_keyed` is the documented LOCK |
+| **the SENTINEL** — which reserved bit pattern absence is | 4 | consolidated as IR / store-init / narrow read+write twins |
+
+Merging them would be the early-abstraction failure the checklist warns about: *"is this the
+same storage?"* and *"what value means absent in it?"* are different sentences, and the second
+has a legitimate three-way split (an IR op, a runtime store-init write, a narrow-width pair).
+
+**The sentinel half is genuinely consolidated, measured rather than assumed.** `data::to_null`
+keys on the `Type` variant and answers an `OpConv*FromNull`; `Stores::set_default_value_nullable`
+keys on the content-type NUMBER and writes a raw value; `to_null`'s doc claims they produce the
+same sentinels *"so a record built by a literal and one filled by a `#read` answer the same"*.
+That is a claim, so it was tested: nine nullable field types (`integer`, `float`, `single`,
+`boolean`, `character`, `text`, `i8`, `i16`, `i32`) × three routes (field OMITTED so store-init
+writes it, an explicit `null` literal so the IR path picks the op, and a later `= null`
+assignment) — **27 cells, all agreeing**.  A negative result, and worth the lines: the doc's
+claim is now measured, and the next reader does not have to re-derive it.
+
+**The peel half produced the defect, and the duplication was the cause.**  `convert`'s
+Null→heap arm asked `matches!(should, Type::Vector(_, _))` — a hand-spelled variant list short
+by all five KEYED kinds, and not peeling `Optional` either.  So `h: hash<S[k]>? = null` kept a
+bare `Value::Null`, **which writes nothing**, and the scope-exit `OpFreeRef` read the untouched
+bytes as store #0 and tried to free the STACK: `BUG (#306)`, *"a stack-record ref was treated as
+an owned heap store"*.  Values stayed correct throughout, so only the FREE channel could see it
+— `tests/wrap.rs` Part A2 (loft#920) is the gate that fails on it, which is why the guard is
+`main`-ful rather than `#[test]`-shaped (`--tests` does not run that gate).
+
+⚠ **The arm immediately BELOW the broken one records the identical fault, in the same words.**
+loft#1065 fixed the struct-enum shape and its comment ends *"the scope-exit `OpFreeRef` then read
+the untouched bytes as store #0 and tried to free the STACK … BUG #306"*.  Its collection sibling
+was two lines up, listing `Vector` alone, and was not touched.  That is
+[carve-out comment is a map](STABILITY_METHOD.md) and [audit the siblings of a fixed
+rewrite](STABILITY_METHOD.md) arriving together: the comment naming the hole was written by the
+person who fixed the neighbouring instance of it.
+
+Cured by asking the one home that already exists — `vectors::is_collection`, whose doc already
+says it is the `is_keyed` set plus `Vector` — instead of a sixth spelling of the list.  Verified
+on both backends over `hash` / `sorted` / `spatial` / `trie` / `vector` absent, plus dense and
+present-nullable controls so the sentinel write is not scored alone.
+
+**Two things the walk found that are NOT this defect, both recorded rather than folded in:**
+
+* **loft#1125** — a nullable `index<T[k]>?` fails type layout outright: `#left_1`, `#right_1`
+  and `#color_1` all land at offset `0`, overlapping each other and the first real field, while
+  the DENSE `index<T[k]>` of the same struct is fine.  A/B'd against a build with the fix
+  reverted and the errors are byte-identical, so it is independent and pre-existing.  The
+  nullable-index cell is therefore deliberately ABSENT from the guard, whose axes section says
+  so — a cell there would lock #1125 rather than guard this.
+* **The generic `OpConv*FromNull` loop does not peel** (`let Type::Reference(_, _) = *should`),
+  which predicts the same bare-`Value::Null` fault for a nullable struct REFERENCE local.  It was
+  probed — `x: RS? = null`, plus `text?` and `integer?` — and every cell is clean on the same
+  harness that shows the keyed `BUG (#306)`, so the shape is covered elsewhere and the missing
+  peel is LATENT.  Left alone deliberately: changing it would alter code with nothing to measure
+  the change against, which is the trap the `is_keyed` lock below already documents.
+
 #### C — process / skills
 
 | item | state |

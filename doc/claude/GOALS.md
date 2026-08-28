@@ -512,25 +512,6 @@ capability lens and are the point under a stability one:
 This is the same doctrine as § Stability trumps features, read from the other end: that section
 says do not add a shape you cannot afford to keep working; this one says the shapes you already
 promised must work everywhere they are promised, not only where they are used.
-
-**None of this is a complaint about the language.** Unwalked paths are a property of having more
-feature combinations than programs — arithmetic, not a failing, and true of everything that
-ships. The progress already made is real and is measured elsewhere: the consumers hit far fewer
-bugs than they did, which is Goal C working as designed. What this section adds is a second
-axis, not a correction of the first — and the reason it is worth adding is that the alternative
-was never a better method, it was **waiting for problems**, which cannot be scheduled, measured
-or finished. Naming the gap is what makes it a task.
-
-**And it is the decision this feeds.** At **contract 1** every behaviour that works becomes a
-permanent promise, unwalked paths included — a defect found on a walked path today is simply
-fixed, while one on an unwalked path is FROZEN and can afterwards only be handled additively,
-never fixed in place. So *"the dogfood projects hit far fewer bugs"* does not license the freeze:
-it measures our reach, and the contract binds far more than our reach. The readiness question is
-**"would the NEXT program be stable?"**, which no consumer metric answers. Nor can it ever be
-answered fully — the matrix of feature × type × position × nullability × backend is not
-enumerable, and this will not be a proof. It can be got materially closer, and the rules are the
-only instrument stated over whole domains rather than over the programs we happen to own. See
-[COMPATIBILITY.md § What a falling bug rate does and does not license](COMPATIBILITY.md).
 ---
 
 ## Goal D — Cross-platform + cross-backend parity

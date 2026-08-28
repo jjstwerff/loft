@@ -277,34 +277,6 @@ because it says what the change *cannot* do rather than what happened not to bre
 
 ## The rule-led walk — the standing practice, measured in years
 
-**What changed here is the tractability, not the situation.** Any language with more feature
-COMBINATIONS than it has programs has paths nobody has walked; that is arithmetic, not a
-failing, and it is true of every language that has ever shipped. It is not a thing to be sad
-about — it is the shape of the field.
-
-What it used to mean in practice, though, was a **waiting-for-problems game**: the only way an
-outlier defect surfaced was for somebody to hit it, which cannot be scheduled, cannot be
-measured, cannot be assigned, cannot be reviewed, and can never be finished — its work arrives
-only once someone is already hurt by it, and its "progress" is indistinguishable from nobody
-having tried the shape yet.
-
-The rule index converts that into an ordinary task, with the four properties waiting lacks:
-
-- **a ranked queue** — 255 rules, a `dups` ordering, and a bug review that says which class is
-  rising;
-- **an oracle per item** — the rule states what must be true, so a cell's expected value is read
-  off the rule instead of guessed;
-- **a definition of done per item** — the questions split, one home each, related cases verified,
-  guard, cite;
-- **a position marker** — how many rules have a representation in the code, which moves only when
-  the work is actually done.
-
-That is the whole gain, and it is worth being plain that it IS a gain: the progress already made
-is real (the consumers hit far fewer bugs than they did, and that is Goal C working), and this
-adds an axis that progress could not previously be made on at all, rather than replacing it.
-Years of queue is a feature of the estimate, not a complaint — it means the work is finally
-sized, and a sized job can be picked up, put down, handed over, and finished.
-
 The three passes above start from a **condition thicket**: you notice a structure has decayed
 and you go clean it. That works, and it needs someone to notice. The rule-led walk starts from
 the **formal rules** instead, which makes it a queue rather than an observation — and a queue
