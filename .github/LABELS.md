@@ -272,6 +272,44 @@ it.  Apply at most one; remove it once the blocker clears.
 |---|---|---|
 | `fixed-pending-merge` | The fix has landed on a **long-lived working branch** but is **not yet in `main`** (the release branch).  The issue stays **open** so the tracker doesn't claim "fixed" while released code still has the bug — but it is **not a pick-up**: no agent work remains, only the merge.  The fixing commit's `Fixes #NNN` line **auto-closes it on merge to `main`**, in one clean transition (no manual close → reopen → close ping-pong).  The full lifecycle is **automated off that one trailer**: [`apply-fixed-pending-merge.yml`](workflows/apply-fixed-pending-merge.yml) adds the label (+ a bookkeeping comment) when a `Fixes #NNN` commit is pushed to any non-`main` branch; the merge to `main` auto-closes the issue; [`strip-fixed-pending-merge.yml`](workflows/strip-fixed-pending-merge.yml) removes the label on close (a closed issue is never "pending merge").  So multiple actors can fix bugs on their own branches concurrently with the tracker staying correct. | **Automatic** — just write `Fixes #NNN` in the commit; the label is applied on push.  The author still adds the **substantive comment** (regression test, verified `wa:*`, or a "still unverified" caveat) — the workflow's auto-comment is mechanical only.  Never close such an issue by hand; let the merge close it.  See [ISSUE_TRACKING.md § Issue lifecycle](../doc/claude/ISSUE_TRACKING.md). |
 
+## `contract:` — what closing it did to the STANDARD
+
+Set at **fix time**, on the issue being closed.  `sev:`/`wa:` describe the bug as
+reported; this pair describes the *fix*, and it answers a question nothing else on
+the issue does: **did we make the code match a rule we had already written, or did
+we have to move the rule?**
+
+| Label | Meaning |
+|---|---|
+| `contract:settled` | The fix made an **already-written rule hold**.  `doc/claude/formal/` stated what must be true, the code disagreed, and the code changed.  No rule, doc, or design decision moved. |
+| `contract:strained` | Closing it **moved the standard** — a rule was added, split, weakened, or reworded; a design decision was taken; a documented promise changed.  The code was not simply wrong against a rule that already covered it. |
+
+Exactly one of the two, on every closed bug.  Neither is a criticism: a `strained`
+close is often the more valuable one, because it means the walk reached a case the
+rules could not express.
+
+**How to tell them apart, mechanically.**  Look at what the fixing commit changed
+under `doc/claude/formal/`:
+
+* nothing, or prose that only records the fix → **`contract:settled`**
+* a `(Rule-Name)` line added or rewritten, a deviation entry re-scoped, a
+  `DESIGN_DECISIONS.md` entry added → **`contract:strained`**
+
+Worked pair, both closed 2026-08-28.  loft#1138 (an absent nullable struct read as
+present across a call) is `settled`: the null model already promised absence
+survives a boundary, and `convert` was unwrapping the payload without consulting
+the discriminant.  loft#1134 (a nullable tuple element one field high) is
+`strained`: closing it required splitting `(L-Null)` — true for every type with a
+sentinel, false for an inline struct, which needs a tag — into `(L-Null)` plus the
+new `(L-Null-Tag)`.  The rule as written had licensed the defect.
+
+**Why it is worth a label.**  `strained` is the queryable record of where the rules
+were incomplete, which is the input the rule-led walk ranks from
+([STABILITY_METHOD.md § The rule-led walk](../doc/claude/STABILITY_METHOD.md)) and
+what the monthly bug review reads to see whether a class is rising
+([BUG_REVIEW.md](../doc/claude/BUG_REVIEW.md)).  A run of `strained` closes in one
+area says the specification is thin there, not that the code is.
+
 > **Multi-repo:** `sev:`/`wa:`/cross-cutting are shared across the loft-family
 > repos (loft / dryopea / lavition / `loft-lang/*`).  `area:` is loft-specific;
 > each game/engine repo defines its own `area:` set in its own `LABELS.md`.
