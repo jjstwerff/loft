@@ -442,6 +442,31 @@ gone over — is the `0 → 1` flip earned. This is *why* the freeze is not immi
 type surface being feature-complete: the language nearing done is phase 1; the libs are phase
 2, and they are given their time.
 
+**One thing IS measurable before the freeze, and it is not resilience — it is whether the
+standard has stopped MOVING.** The `contract:` axis ([.github/LABELS.md](../../.github/LABELS.md))
+records, for every bug we state we have fixed, whether closing it needed the written standard to
+change: `contract:settled` = the formal rules and the tests already gave the right answer and the
+fix makes that promise hold; `contract:strained` = it took a rule EXTENDED, a documented surface
+changed, or a design call. `make bug-review` § 5 reports the monthly ratio.
+
+That is the convergence evidence the freeze decision has been missing, and it is a different gate
+from the one below it:
+
+- **`silent-wrong` → 0** is the per-bug blocker — no known wrong answer may be frozen into the
+  contract. True on any given day, and true today.
+- **`contract:strained` → 0, SUSTAINED over a window long enough to be evidence**, is the
+  convergence gate — the standard has stopped moving. Only this one can say the blockers are
+  truly gone rather than currently absent.
+
+⚠ **A bug count cannot substitute for it, and reading one as the other is the specific mistake
+this axis exists to prevent.** `silent-wrong` ran at 33 % of everything filed in August while
+every fix examined was `contract:settled` — the audits were productive and the standard held.
+Those are opposite readings of the same number. **Owner's call (2026-08-28): track this
+statistic through the next month rather than declaring on a few days of it** — the mechanism is
+working, it has not yet had time to settle. Expect the first weeks to be mostly UNJUDGED, which
+the report prints beside the ratio and never folds into either side; that column is what to watch
+first.
+
 **Clear the blockers first; measurement comes after the freeze.** The path to contract 1 is a bounded
 job — get rid of *everything* that blocks the freeze (the open plans, the language + lib audits) — and
 **new feature development is held off until those blockers are worked through**. This pre-freeze work is

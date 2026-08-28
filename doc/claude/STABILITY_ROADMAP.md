@@ -113,6 +113,23 @@ Two cuts matter more than the totals:
   because the program never starts — there is no "write it differently" when the file
   will not run. So blockers migrating OUT of codegen/parser/store-lifetime and INTO the
   toolchain surface is the shape of a language settling, even while the raw count holds.
+- **WHO hit it, over time** (`hit-by:`) — the cut that made the August picture legible, and
+  the sharpest demonstration of this section's own point. Measured over four weeks:
+
+  | week of | hit by a consumer | hit by loft's own audits | consumer share |
+  |---|---:|---:|---:|
+  | 2026-08-03 | 35 | 4 | 89.7 % |
+  | 2026-08-10 | 46 | 30 | 60.5 % |
+  | 2026-08-17 | 22 | 69 | 24.2 % |
+  | 2026-08-24 | 5 | 33 | 13.2 % |
+
+  Consumers went from 35 defects a week to 5 while the TOTAL rose, because our own
+  instruments took over the finding. Read as a ticket rate that month looks like a
+  regression; read this way it is the `@F` / formal-tag rewrites working — the defects
+  moved from being met by a consumer to being found by an audit before one arrived. **A
+  discovery shift is invisible to every other cut**, which is why it belongs beside the
+  two above: a rising count with a falling consumer share is a language settling, and the
+  same rising count with a flat consumer share would be the opposite.
 
 Reproduce all of it from the tracker (needs `gh` + `jq`):
 
