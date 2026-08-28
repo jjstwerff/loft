@@ -141,6 +141,14 @@ predicate given one home and the 56 hand-spelled recognitions of it left as a ra
 dump renderers are on the diagnostic path a passing program never takes — three defects fixed,
 two duplications merged, and one one-home peel built, measured to diverge on `--native`, and
 BACKED OUT with the measurement written at the site.
+**B6t read the first of `spellings`' 17 never-read sites** and the yield came from one former
+UP: a tuple MEMBER is not parsed against its declared type, so six shapes the return and
+argument positions accept are refused — or ICE — in a declared local.  Two independent causes,
+each of which alone reads as the whole cure; both fixed.  The census under it is the entry's
+real product: the `⇐` expected-type channel has **ten push sites carrying six different
+admission lists**, and `Type::Tuple` is in none of them — which is why the same shapes still
+fail in a `return` and in an argument, filed as **loft#1122**.  A `--native`-only silent wrong
+answer found beside it is **loft#1123**.
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -2724,6 +2732,125 @@ route"* — was wrong for exactly this reason, and only a NON-EMPTY default sepa
 so the dump improvement could not mask a code change: **4 files differ**, and all four are the
 intended ones — `1028` gains the `OpFreeRef` for its nullable tuple element, and `909`,
 `909b`, `923` get their element variable's real type. Everything else is byte-identical.
+
+#### B6t — the `⇐` channel has ten push sites and six admission lists, and `Type::Tuple` is in none of them (2026-08-28)
+
+B6g's `spellings` screen left 33 sites resolving a projection by op name, and **17 of them had
+never been read**.  This is the first of the 17 read.  It did not produce the defect the screen
+predicted — it produced a different one, one TYPE FORMER up, which is B6m § 3 again: the
+instrument makes the queue tractable and the person walking it finds something else.
+
+⚠ **BEING ANSWERED ELSEWHERE — loft#1120 was NOT this branch's to take (2026-08-28).**  The
+obvious next item after B6s is the defect pair it filed, and the sibling checkout
+(`tuxedo-work-2026-08-25`) had an UNCOMMITTED fix for it — `src/parser/operators.rs`,
+`src/vector.rs`, `formal/collections.md` and a new
+`tests/scripts/1120-one-null-question-for-a-collection.loft`, all touched minutes before this
+session started.  Their cure is one lowering (`collection_is_null` → `OpVectorIsNull`) plus
+widening `is_absent_collection` so a MISSED lookup answers absent, which closes all four rows
+of the filed table at once.  Recorded because the register alone did not say so: the issue was
+open, unassigned, and reads as available work.  **`operators.rs` and `vector.rs` were left
+untouched by this session for the same reason** — B6m § 5's sequencing point, paid rather than
+restated.
+
+**The finding: a tuple MEMBER is not parsed against the type its declaration names.**  Six
+shapes fail in a DECLARED tuple local that the RETURN and ARGUMENT positions accept, and the
+position axis is what makes them visible — a matrix over member-type × member-expression alone
+would have read them as "tuples cannot do this".
+
+| declared local | before | channel |
+|---|---|---|
+| `t: (Shape, integer) = (Shape::Circle { r: 7 }, 9)` | refused *"cannot change type from (Shape, integer) to (Circle, integer)"* | contradicts `@FR-C-Var` |
+| `t: (Shape, integer) = (Dot, 9)` | refused *"bare variant 'Dot' has no type here"* | the target DID have an enum type |
+| `t: (Shape?, integer) = (Shape::Circle { r: 7 }, 9)` | refused | — |
+| `t: (float, integer) = (5, 9)` | refused | an ordinary numeric coercion |
+| `t: (vector<integer>, integer) = ([], 9)` | **ICE** — *"Incorrect var `__ret_1[32]` versus 24"* | — |
+| `t: (vector<integer>?, integer) = ([], 9)` | **ICE** | — |
+
+**Two independent causes, and either one alone reads as the whole cure.**  Both were A/B'd on
+one grid before either landed, which is the only reason the split is known:
+
+1. **The `⇐` channel carried `fn(…)` alone into a tuple member.**
+   `seeds_tuple_member_hint` admitted `Type::Function` and a `Type::Tuple` containing one,
+   because loft#1067 held the channel back until a `fn(…)` in a tuple could be called back out
+   of one.  Its doc named the bound and pointed at the wider question
+   (*"this does not thread member types in general — loft#942/#943"*).  Widening it to every
+   member with a KNOWN type cures the bare variant and BOTH ICEs, and nothing else.
+2. **The literal was converted AFTER `change_var` retyped the variable.**  loft#1034 routed a
+   declared tuple local through `convert` — the same function the return position uses — but
+   placed it ~830 lines below the `change_var` that decides acceptance.  Acceptance is
+   `decl_accepts`, which answers `(N-Decl)` (a `τ?` slot admits a `τ`) and nothing else, so a
+   member needing a real coercion was refused before the conversion that says yes ever ran.
+   Hoisting it directly above `change_var` cures the variant and float cells, and nothing else.
+
+⚠ **The `!first_pass` gate on that conversion made it permanently unreachable for exactly the
+programs it exists to accept.**  The site is reached in pass 1 only; a pass-1 refusal aborts
+before pass 2, so the guarded branch never ran for a refused program.  loft#1034's own guard
+passed regardless because `decl_accepts` already admitted `(text?, integer) ← (text, integer)`
+— the fix needed only the COERCION, never the acceptance, so the ordering fault was invisible
+to it.  Removing the gate ALONE changes nothing (measured); it only matters hoisted.
+
+⚠ **The seeding widening invalidates the justification written above it, and the cell that
+checks this was one the grid had PINNED.**  `seeding` clears the ambient expectation for the
+duration of the tuple-literal parse, and the comment justifying that for member 0 ends
+*"and only a `fn(…)`-typed member seeds"* — which is now false.  The hazard it guards against
+is real and recorded (`115-snapshot-roundtrip` went from a text build to *"No matching operator
+'&' on 'text' and 'integer'"* when the clear was made unconditional).  What still holds is the
+other half: the clear fires only when the destination IS a tuple type.  Measured rather than
+argued — a parenthesised WHOLE-tuple expression (`t: (integer, integer) = (mk())`), the same
+call unparenthesised, an operator-expression member and a nested tuple all answer correctly on
+both backends, and all four are in the guard.
+
+**Blast radius: `make ci` 4474/4474, 35 skipped.**  Guard
+`tests/scripts/a-tuple-member-is-parsed-against-its-declared-type.loft`, which keeps four
+already-working cells (`(Sm?, …) = (null, …)`, `(i8, …)`, `(integer?, …)`, `(text?, …)`) as
+controls so the widening is not scored on its own, and reads BOTH members of every cell —
+a broken first member takes the second down with it, and a cell checking only `t.0` cannot see
+half the defect.
+
+##### The census the fix stands on: one channel, ten push sites, six admission lists
+
+`seeds_lambda_hint`'s doc calls itself *"the one predicate behind every `⇐` push site that can
+carry a `fn(…)`"*, and for the `fn(…)` question that is true.  The CHANNEL is shared, though,
+and each site decides independently which OTHER types may use it:
+
+| push site | admits |
+|---|---|
+| `control.rs` block tail / `return` | `enum_context ∥ is_collection ∥ interpolation_target ∥ seeds_lambda_hint` |
+| `control.rs` call argument (×3 separate lists) | `seeds_collection_hint ∥ interpolation_target ∥ seeds_lambda_hint`; `matches!(Function)`; `enum_context` / `seeds_collection_hint` / `interpolation_target` as an if-chain |
+| `definitions.rs` field / param default shorthand | `enum_context ∥ seeds_lambda_hint` |
+| `definitions.rs` parameter default | `seeds_lambda_hint` |
+| `objects.rs` struct-literal field value | `seeds_lambda_hint` |
+| `vectors.rs` vector element | `seeds_lambda_hint` |
+| `vectors.rs` tuple member | `seeds_tuple_member_hint` |
+| `expressions.rs` nested tuple-place assign RHS | `seeds_lambda_hint` |
+
+**`Type::Tuple` is admitted by none of them**, which is why the return and argument positions
+still refuse `(Dot, 9)` and `([], 9)` after this fix.  The block-tail site is the one to read:
+its comment says a type threads *"for the same reason"*, then *"for the third time for the same
+reason"*, then *"for the FOURTH time for the same reason"* — four entries, each added by a
+separate bug, and the general rule LOFT.md already states (*the expected type wherever there is
+one*) never adopted.  That is [carve-out comment is a map](STABILITY_METHOD.md) with the map
+drawn by the author: the phrase counts the hole's remaining occupants.
+
+**Filed rather than fixed here, both with a verified `wa:clean` and both measured on the two
+backends.**  **loft#1122** is the census above as a defect: `(Dot, 9)` refused in a `return`
+and in an argument, and `([], 9)` in a `return` answering `t.1 == null` for a member declared
+`integer` — plus one leaked `__tuple<vector<integer>,integer>` store — while `--native` will
+not compile it.  **loft#1123** is a `--native`-only silent wrong answer found while measuring
+the workaround for the first: a tuple returned with a PRESENT nullable heap member reads back
+`(null, 0)`, both members lost.  Its axis is *nullable and present*, not the member's type
+former — a struct reference and a struct-enum fail alike, a DENSE member is correct, and a
+nullable member holding `null` is correct.
+
+⚠ **The workaround for #1122 exists only because the declared-local half landed**, which is
+the argument for having fixed that half rather than filing the pair together: *bind a declared
+tuple local and return THAT* is a cure a user can apply today, and before this entry it was
+not one.  ⚠ **And the obvious variant of it does NOT work** — binding the MEMBER first
+(`p: W2? = W2 { … }; (p, 9)`) fails exactly as the literal does, which is what says #1123 is
+about the tuple that reaches the `return` rather than about the member expression.  It is
+worth knowing because it is the natural first attempt, and it is the discriminator that puts
+#1123 in loft#1096's family — one notion, two type spellings, the rewrite between the passes
+deciding which one a site sees — a position over.
 
 #### C — process / skills
 

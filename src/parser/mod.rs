@@ -3313,26 +3313,31 @@ impl Parser {
         matches!(tp.base(), Type::Function(_, _, _))
     }
 
-    /// Is this declared tuple MEMBER type worth pushing on the `⇐` channel — because it
-    /// is a `fn(…)`, or because a `fn(…)` sits somewhere inside it?
+    /// Does this declared tuple MEMBER type say anything the element's own parse needs
+    /// to hear on the `⇐` channel?
     ///
-    /// [`Self::seeds_lambda_hint`] answers for the member that IS the lambda's
-    /// destination; a member that merely CONTAINS one is a step on the way there, and the
-    /// tuple-literal branch needs both. Seeding only the outer step made the seeding
-    /// per top-level member: `(fn(integer) -> integer, integer)` inferred `|x|` and
-    /// `((fn(integer) -> integer, integer), text)` did not, because a nested member is a
-    /// `Type::Tuple`, so nothing reached the inner literal and `x` had no type
-    /// (loft#1073).
+    /// LOFT.md states the rule as *the expected type wherever there is one*, and a tuple
+    /// member is one of those places: the element is checked against the member type, so
+    /// it should be PARSED against it too.  A member with a known type therefore seeds,
+    /// and only an `Unknown` — which has nothing to say — does not.
     ///
-    /// Same bound as the flat rule: only a member on the way to a `fn(…)` touches the
-    /// channel at all, so this does not thread member types in general — that is the
-    /// wider question of loft#942/#943.
+    /// The channel used to carry `fn(…)` alone, held back until loft#1069 because a
+    /// `fn(…)` in a tuple could not be called back out of one whatever spelling put it
+    /// there.  That bound is what made three shapes fail in a DECLARED tuple local while
+    /// every other position accepted them: a bare variant name (`(Dot, 9)`) had no enum
+    /// context to resolve against, and an empty collection literal (`([], 9)`) had no
+    /// element type, which reached codegen as *"Incorrect var `__ret_1[32]` versus 24"*
+    /// rather than as a diagnostic.  Seeding is what gives each of them the type the
+    /// declaration already named.
+    ///
+    /// A `Type::Tuple` member recurses so a NESTED literal is reached as well: seeding
+    /// only the outer step made it per top-level member, and
+    /// `((fn(integer) -> integer, integer), text)` left the inner `|x|` untyped
+    /// (loft#1073).  With every member seeding, the recursion is what the caller's
+    /// `tuple_members` walk does anyway; the arm stays because the predicate is also
+    /// asked about a member in isolation.
     pub(crate) fn seeds_tuple_member_hint(tp: &Type) -> bool {
-        match tp.base() {
-            Type::Function(_, _, _) => true,
-            Type::Tuple(members) => members.iter().any(Self::seeds_tuple_member_hint),
-            _ => false,
-        }
+        !matches!(tp.base(), Type::Unknown(_))
     }
 
     /// Expected enum type for a bare value-position variant (`f(Red)`) — `expected`
