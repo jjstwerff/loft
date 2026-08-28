@@ -2687,23 +2687,8 @@ impl Parser {
         };
         let fn_nr_val = *fn_nr;
 
-        // (3) Find the first hidden buffer attribute index on the callee
-        //     whose typedef is heap-allocated (Reference / Vector / struct-Enum).
-        let hidden_idx = {
-            let def = self.data.def(fn_nr_val);
-            def.attributes().iter().enumerate().find_map(|(i, a)| {
-                if !a.hidden {
-                    return None;
-                }
-                if !matches!(
-                    &a.typedef,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) {
-                    return None;
-                }
-                Some(i)
-            })
-        };
+        // (3) The callee's return-buffer attribute (see `hidden_return_buffer_attr`).
+        let hidden_idx = self.data.def(fn_nr_val).hidden_return_buffer_attr();
         let Some(i) = hidden_idx else { return };
 
         // (4) args[i] must be a parser-internal __ref_N / __rref_N work-ref,
@@ -11943,13 +11928,8 @@ impl Parser {
     /// has no hidden heap attr or its var is not in this fn's table.
     fn return_buffer(&self) -> Option<(u16, u16)> {
         let def = self.data.def(self.context);
-        let (a_idx, a) = def.attributes().iter().enumerate().find(|(_, a)| {
-            a.hidden
-                && matches!(
-                    &a.typedef,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                )
-        })?;
+        let a_idx = def.hidden_return_buffer_attr()?;
+        let a = &def.attributes()[a_idx];
         let v = self.vars.var(&a.name);
         if v == u16::MAX {
             return None;

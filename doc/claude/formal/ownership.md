@@ -157,9 +157,11 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **3** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; D-own-16, below; and
+D-own-19, opened 2026-08-28 and NARROWED the same day to the path-sensitive half — the
+dominating case closed with loft#1126, the conditionally-assigned one filed as loft#1128) —
 D-own-17 and D-own-18 both opened and closed 2026-08-28;
 D-own-15 opened and
 closed 2026-08-27 with loft#1119; D-own-14 opened and
@@ -175,6 +177,44 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-19 — OPENED AND NARROWED (2026-08-28, loft#1126): ownership read off the BINDING, not the latest assignment
+
+`(O-Latest)` says ownership is a property of the LATEST ASSIGNMENT to a binding, at the loop
+depth that assignment was taken.  A function whose TAIL is a call hands the callee its own
+return buffer so the result can be built straight into the destination — and when that callee
+mints a store of its own instead, the buffer variable stops holding what it held.
+
+The interpreter did not free the displaced store, because the buffer variable is the hidden
+return-buffer PARAMETER and `state/codegen.rs`'s `is_hidden_buf_arg` reads exactly that: *an
+argument, so the CALLER owns this store, so never free it*.  True at function entry and false
+from the first assignment onward — the binding-level reading `O-Latest` exists to replace.  One
+orphan per CALL, so a hot path grew the heap without bound; the answer was right throughout.
+
+Both halves are needed: an earlier `return` of the variable (which is what makes it the buffer
+variable) AND a tail call that allocates for itself.  Either alone is clean.
+
+`--native` was already correct, and by reading the same fact a different way: it stashes the
+caller's buffer at function entry as `_rb_w_<name>` and guards the displaced free with `_old !=
+_rb_w_<name>` — a RUNTIME answer to "is this still the caller's store?".  So the two backends
+agreed on the value and disagreed on the heap, which is the asymmetry `(O-NoDiverge)` forbids
+and the reason only the interpreter's leak channel could see it.
+
+Closed in `scopes.rs::scan_set`, beside the `#316` transition free that already answers this
+question for the borrow-rhs shape: `owned_refs` IS `O-Latest` (the oracle memoised per path and
+per loop depth, intersect-merged at every join per `O-Complete`), it lives there, so the free is
+emitted there.  Gated on the callee's carried adopt-vs-copy fact
+(`Definition::return_adopts_fresh_store`) — a callee that DELIVERS through the buffer displaces
+nothing, and a pre-Set free would then destroy what it is about to write into.  Guard:
+`tests/scripts/a-tail-call-frees-the-store-its-buffer-var-stops-holding.loft`.
+
+⚠ **OPEN residual (loft#1128): the static fact is sound but not complete.**  Where the
+prior assignment is CONDITIONAL — `if c { r = mk(1); … } mk(3)` — the intersect-merge correctly
+answers "not owned on every path" and no free is emitted, so that shape still leaks on
+`--interpret` while `--native`'s runtime witness gets it right.  Conservative in the safe
+direction (a leak, never an over-free), and closing it needs the interpreter to carry the same
+ENTRY WITNESS native has.  There is no IR spelling for it today: `OpCreateStack` yields a
+pointer to the variable's SLOT, which tracks the current value rather than the entry one.
 
 ### D-own-17 — OPENED AND CLOSED (2026-08-28): a mint carried the DESTINATION's deps
 

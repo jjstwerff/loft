@@ -4232,6 +4232,39 @@ impl Scopes {
                 transition_free = Some(Value::Insert(frees));
             }
         }
+        // loft#1126 / @FR-O-Latest — the ownership-transition free for the OTHER
+        // reassignment shape: `v = f(…, v, …)` with `v` at `f`'s hidden
+        // return-buffer position, where `f` mints a store of its own and never
+        // delivers into the buffer.  The hand-off is not taken, so `v`'s current
+        // store is displaced with nothing left naming it.
+        //
+        // Codegen cannot decide this one.  `v` is the function's hidden
+        // return-buffer PARAMETER, so `state/codegen.rs`'s `is_hidden_buf_arg`
+        // reads "argument → the CALLER owns that store → never free" — the
+        // BINDING-level reading.  @FR-O-Latest says ownership is a property of the
+        // LATEST ASSIGNMENT: the caller's store is gone the moment this function
+        // assigns `v`, and what `v` holds from then on is this function's to
+        // release.  `owned_refs` is that fact (@FR-O-Oracle memoised per path and
+        // per loop depth), and it lives here, so the free is emitted here.
+        //
+        // `--native` reaches the same verdict at runtime through its entry-buffer
+        // witness (`_rb_w_<name>`, `generation/mod.rs`), which is why only the
+        // interpreter reported the leak — an @FR-O-NoDiverge asymmetry, with the
+        // interpreter on the deviating side.  Its own guarded free is a no-op after
+        // this one: the `OpFreeRef` emitter resets a freed Var to the null
+        // sentinel, so the store it captures is already NULL.
+        if transition_free.is_none()
+            && was_in_scope
+            && matches!(function.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
+            && function.tp(v).depend().is_empty()
+            // @FR-O-Proxy is unsound alone — a free taken on the empty dep list
+            // must consult @FR-O-Override.
+            && !function.is_skip_free(v)
+            && self.owned_refs.get(&v) == Some(&self.loops.len())
+            && displaces_owned_through_fresh_callee(value, v, ov, data)
+        {
+            transition_free = Some(call("OpFreeRef", v, data));
+        }
         if was_in_scope
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
             && self.owned_refs.get(&v) == Some(&self.loops.len())
@@ -7451,6 +7484,44 @@ fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Func
             result.push(call("OpFreeText", w, data));
         }
     }
+}
+
+/// Does this reassignment displace a store the function OWNS through a callee that
+/// mints its own?
+///
+/// The shape is `v = f(…, v, …)` with `v` sitting at `f`'s hidden return-buffer
+/// attribute — the NRVO hand-off that lets a callee build its result straight into
+/// the destination instead of into a work-ref of its own.  The hand-off is only
+/// taken when `f` actually delivers through that buffer.  A callee whose return
+/// ADOPTS a fresh store (`Definition::return_adopts_fresh_store`, the carried
+/// adopt-vs-copy fact) allocates for itself and never reads the buffer, so the store
+/// `v` held before the call is displaced and unreachable.
+///
+/// Answering "yes" only licenses the free; whether the displaced store is this
+/// function's to release is a separate question that @FR-O-Latest answers (the caller
+/// checks `owned_refs` first).  `v` must not be read anywhere ELSE in the call — a
+/// pre-Set free would then destroy data the call still reads.
+fn displaces_owned_through_fresh_callee(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
+    let Value::Call(fn_nr, args) = value.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if !def.return_adopts_fresh_store() {
+        return false;
+    }
+    // WHICH attribute is the return buffer is `Definition::hidden_return_buffer_attr`'s
+    // question — the same answer the substitution that put `v` there read.
+    let Some(buf_idx) = def.hidden_return_buffer_attr() else {
+        return false;
+    };
+    let names_v = |x: &Value| matches!(x.unspan(), Value::Var(w) if *w == v || *w == ov);
+    if !args.get(buf_idx).is_some_and(names_v) {
+        return false;
+    }
+    // Pre-scan IR can still name the ORIGINAL slot, so both spellings count as a read.
+    args.iter()
+        .enumerate()
+        .all(|(i, a)| i == buf_idx || (!a.reads_var(v) && !a.reads_var(ov)))
 }
 
 fn call(to: &'static str, v: u16, data: &Data) -> Value {

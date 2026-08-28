@@ -3829,6 +3829,34 @@ impl Definition {
         &self.returned
     }
 
+    /// The index of this function's hidden RETURN BUFFER attribute — the out-parameter a
+    /// caller allocates so the callee can build its heap result straight into the
+    /// destination — or `None` for a function that has none.
+    ///
+    /// The first hidden attribute of a heap type IS the buffer: `ref_return` appends it, and
+    /// the `&text` work buffers (`Type::RefVar`) are a different ABI with its own count
+    /// ([`Self::text_work_buffers`]).  One home for it, because three sites were asking the
+    /// question with three hand-written copies of the same `matches!` — the parser's
+    /// `return_buffer` and `nrvo_collapse_tail_set`, and the scope pass's
+    /// ownership-transition free — and a free that disagreed with the substitution about
+    /// WHICH attribute the buffer is would free a store the caller still owns.
+    ///
+    /// Reads the attribute type BARE, and that is the conservative direction here rather
+    /// than an oversight: a nullable heap return is loft#896's synthetic `__nullable<S>`
+    /// enum with its own delivery, so admitting an `Optional` wrapper would hand the buffer
+    /// machinery a return that does not use one.  A caller that finds nothing takes no
+    /// action; a caller that finds the wrong attribute frees the wrong store.
+    #[must_use]
+    pub fn hidden_return_buffer_attr(&self) -> Option<usize> {
+        self.attributes.iter().position(|a| {
+            a.hidden
+                && matches!(
+                    &a.typedef,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                )
+        })
+    }
+
     /// How many hidden `&text` work buffers this function's ABI expects.
     ///
     /// `text_return` promotes a text local the return value depends on into a hidden
