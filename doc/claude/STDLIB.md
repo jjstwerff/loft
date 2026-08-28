@@ -142,6 +142,32 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 | `starts_with(self: text, value: text) -> boolean` | Returns true if `self` begins with `value`. |
 | `ends_with(self: text, value: text) -> boolean` | Returns true if `self` ends with `value`. |
 
+### Taking part of a text (substring / substr / slice)
+
+loft has no `substr` or `substring` function. A part of a text is a **slice**, written with
+a range:
+
+```loft
+s = "abcdef";
+s[1..3]                 // "bc" — from byte 1 up to, not including, byte 3
+s.char_slice(1, 3)      // "bc" — the same, counting CHARACTERS instead of bytes
+```
+
+Which one you want depends on where the numbers came from:
+
+| you have | use | why |
+|---|---|---|
+| numbers from `find`, `rfind`, `size`, `byte_at` | `s[a..b]` | those are byte positions, and so is the slice |
+| a count of CHARACTERS (a width to fit, a column, a caret) | `s.char_slice(a, b)` | `len` counts characters, and a character can be several bytes |
+
+Getting this the wrong way round is the commonest text bug in this stack, and it is silent
+on ASCII: a character count used as a byte range fits fewer characters than it measured, so
+the text comes back short. `"héllo"[0..4]` is `"hél"`; `"héllo".char_slice(0, 4)` is
+`"héll"`. See [`char_slice`](#bytes-and-code-points) for the full rule, and
+[`size` vs `len`](#length) for the two counts.
+
+Both ends clamp, a reversed range gives `""`, and a negative bound counts from the end.
+
 ### Transformation
 
 | Function | Description |
