@@ -2609,6 +2609,17 @@ impl Type {
 /// for `(integer, integer)` and similar shapes).
 #[must_use]
 pub fn has_lifetime_concern(t: &Type) -> bool {
+    // @PLN25 — read through `Optional`: a `τ?` has the SAME storage as `τ` (the reason
+    // [`element_stack_align`] below peels it too), so whether a slot may be absent cannot
+    // change whether the value in it owns a store.  Without the peel a `-> (W?, integer)`
+    // return was not promoted to the synthetic-struct ABI while its DENSE twin
+    // `-> (W, integer)` was, and the un-promoted path dropped the tail: the tuple was
+    // emitted as a discarded statement and the function returned null, which `--native`
+    // read back as `(null, 0)` while `--interpret` answered correctly off stack residue
+    // (loft#1123).
+    if let Type::Optional(inner) = t {
+        return has_lifetime_concern(inner);
+    }
     matches!(
         t,
         Type::Text(_)
@@ -6727,6 +6738,29 @@ impl Data {
     /// synthesized layout equals a hand-written `enum { Null, Some { … } }` by
     /// construction.  Idempotent + globally registered (source 0) like
     /// [`tuple_def`].
+    /// Is this type the SYNTHETIC nullable wrapper — `__nullable<S>`, the enum
+    /// [`Self::nullable_enum_for`] mints so an inline slot (a struct field, a vector or tuple
+    /// element) can hold an absent `S`?
+    ///
+    /// `τ?` has two spellings, and this is the one that is not `Type::Optional`. A site that
+    /// asks *"may this destination be absent?"* and matches only `Optional` calls the wrapper
+    /// NON-null and is wrong in the direction that speaks: `(N-Store)` warned that a `W2?`
+    /// "is stored into element 0 of the non-null type `__nullable<W2>`", which is the
+    /// nullable type saying it is not one (loft#1123).
+    ///
+    /// ⚠ The spelling is tested by hand at about ten further sites (`typedef.rs`,
+    /// `parser/builtins.rs`, `parser/control.rs`, `database/types.rs`, `database/format.rs`).
+    /// They are not folded here yet, and each one is a place the same blindness can appear.
+    #[must_use]
+    pub fn is_nullable_wrapper(&self, tp: &Type) -> bool {
+        match tp.base() {
+            Type::Enum(d, _, _) | Type::Reference(d, _) => {
+                *d != u32::MAX && self.def(*d).name.starts_with("__nullable<")
+            }
+            _ => false,
+        }
+    }
+
     pub fn nullable_enum_for(&mut self, lexer: &mut Lexer, struct_d: u32) -> u32 {
         let struct_name = self.def(struct_d).name.clone();
         let name = format!("__nullable<{struct_name}>");

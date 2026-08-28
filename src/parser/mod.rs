@@ -3313,6 +3313,44 @@ impl Parser {
         matches!(tp.base(), Type::Function(_, _, _))
     }
 
+    /// The tuple type a `⇐` push should carry for `tp` — the one home for the tuple
+    /// question on that channel, asked identically at every push site a tuple literal can
+    /// stand in: a block tail / `return`, and a call argument (positional and named).
+    /// [`Self::seeds_tuple_member_hint`] then answers for each MEMBER once the literal has
+    /// the tuple type in hand.
+    ///
+    /// A member whose PARSE needs the expected type has nothing else to resolve against: a
+    /// bare variant (`(Dot, 9)`) has no enum context, and an empty collection literal
+    /// (`([], 9)`) has no element type. Both were accepted in a DECLARED LOCAL and refused
+    /// one position over, because the local reads its destination from `var_tp` while a
+    /// return and an argument have only this channel (loft#1122).
+    ///
+    /// ⚠ **The notion has two spellings, and a return only ever shows the second.** A
+    /// source-level `(τ₁, …, τₙ)` is a `Type::Tuple`; a tuple RETURN is PROMOTED to
+    /// `Reference(__tuple<…>)` — the synthetic struct carrying the caller's `__retbuf` ABI
+    /// — before the body is parsed, so a matcher that knows only `Type::Tuple` is blind at
+    /// exactly the position the defect is about, and is blind SILENTLY (it answers "no
+    /// tuple here" and the member parses with nothing). The members come back off the
+    /// struct's `tuple_group`, which is element ORDER rather than attribute order.
+    ///
+    /// Read through `base()`, so a nullable tuple asks what its base asks — whether a slot
+    /// may be absent says nothing about what its members are.
+    pub(crate) fn tuple_hint_type(&self, tp: &Type) -> Option<Type> {
+        match tp.base() {
+            Type::Tuple(_) => Some(tp.base().clone()),
+            Type::Reference(d_nr, _) => {
+                let group = self.data.def(*d_nr).tuple_group()?;
+                let members: Vec<Type> = group
+                    .field_indices
+                    .iter()
+                    .map(|&f| self.data.attr_type(*d_nr, f as usize))
+                    .collect();
+                (!members.is_empty()).then_some(Type::Tuple(members))
+            }
+            _ => None,
+        }
+    }
+
     /// Does this declared tuple MEMBER type say anything the element's own parse needs
     /// to hear on the `⇐` channel?
     ///
@@ -3608,6 +3646,12 @@ impl Parser {
                 target_tp,
                 Type::Optional(_) | Type::Void | Type::Never | Type::Null
             )
+            // `τ?` has a second spelling: an INLINE slot holds an absent `S` as the synthetic
+            // `__nullable<S>` enum, which is not a `Type::Optional` and is exactly as nullable.
+            // A tuple ELEMENT is such a slot, so recursing into a promoted tuple return reaches
+            // one — and reading it as non-null made the check warn that a `W2?` becomes null in
+            // `__nullable<W2>` (loft#1123).
+            && !self.data.is_nullable_wrapper(target_tp)
         {
             let nm = inner.name(&self.data);
             // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).

@@ -846,12 +846,25 @@ impl Parser {
             // reason: `fn make() -> fn(integer) -> integer { |x| { x * 2 } }` has no
             // other way to say what `x` is, and the return type is as much an expected
             // type as a parameter is.
+            // loft#1122 — a TUPLE result threads for the fifth, and it is the entry that
+            // says this list wants a rule rather than a fifth `||`: a member whose parse
+            // needs the expected type (a bare variant, an empty collection literal) had
+            // nothing to resolve against here, while a DECLARED LOCAL of the same type
+            // accepted it — that position reads its destination from `var_tp` and never
+            // needed the channel.  `seeds_tuple_hint` is the one home for the tuple
+            // question, asked at the argument sites too; the general census of this
+            // channel's ten push sites and six admission lists is QUALITY.md § B6t.
             if self.enum_context(result)
                 || crate::parser::vectors::is_collection(result)
                 || self.interpolation_target(result) != u32::MAX
                 || Self::seeds_lambda_hint(result)
             {
                 self.expected = result.clone();
+            } else if let Some(tuple) = self.tuple_hint_type(result) {
+                // The tuple hint is the promoted type read BACK to the source spelling, so
+                // what reaches the literal is `(τ₁, …, τₙ)` and not the synthetic struct
+                // reference the retbuf ABI turned it into.
+                self.expected = tuple;
             }
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
             // parsed is non-null" — used by the very next operator (`p.field ?? d`'s defended
@@ -13512,6 +13525,8 @@ impl Parser {
                                 || Self::seeds_lambda_hint(&expected)
                             {
                                 self.expected = expected;
+                            } else if let Some(tuple) = self.tuple_hint_type(&expected) {
+                                self.expected = tuple;
                             }
                             break;
                         }
@@ -13577,6 +13592,14 @@ impl Parser {
                         // mints an accumulator, and a one-pass mint would shift the
                         // name-keyed variable tables.
                         self.expected = expected;
+                    } else if let Some(tuple) = self.tuple_hint_type(&expected) {
+                        // loft#1122 — seed a tuple argument's MEMBER types, so
+                        // `f(([], 9))` and `f((Dot, 9))` resolve against the parameter
+                        // the way the same literal does in a declared local.  Both
+                        // passes, for the reason the enum hint above states: a bare
+                        // variant seeded on one pass only becomes a stray placeholder
+                        // var that shadows the real variant on the other.
+                        self.expected = tuple;
                     }
                 }
             }
