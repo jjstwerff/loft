@@ -4360,16 +4360,69 @@ fn handle_registry(argv: &[String], i: &mut usize) {
     }
 }
 
-/// REG.3: Download the latest registry from the source URL.
+/// REG.3: Refresh the local registry so the next `install` / `search` sees what was published.
+///
+/// loft#1137 — this used to fetch `registry.txt`, the flat-text format `registry.rs` parses,
+/// and the live registry has not served that file for a long time: it holds `index.json`.  So
+/// the obviously-named refresh 404'd and signed off with *"local registry is unchanged"*,
+/// which reads as *nothing to do* rather than *this command cannot work*.  The next pinned
+/// install then failed with *"no version satisfies constraint"* against a stale local index —
+/// two misleading messages in a row, and neither naming the real state.
+///
+/// It now refreshes what every other command reads: `install::load_index` with `refresh`, the
+/// same signature-verified loader behind `loft install`, `loft search` and
+/// `loft api --registry --refresh` (the workaround users had to find).  One home, so the
+/// command that is NAMED for the job cannot drift from the one that does it.
+///
+/// The flat-text path stays reachable for an explicitly configured source — `LOFT_REGISTRY_URL`
+/// or a `source:` header in a local `registry.txt` — because that is the only case where such
+/// a file exists to fetch.
+#[cfg(feature = "registry")]
 fn registry_sync() {
     use loft::registry;
 
-    // Determine source URL.
     let existing_source = registry::registry_path().and_then(|p| {
         let (_, src) = registry::read_registry(p.to_str().unwrap_or(""));
         src
     });
-    let url = registry::source_url(existing_source.as_deref());
+    let custom = std::env::var("LOFT_REGISTRY_URL").is_ok_and(|u| !u.is_empty())
+        || existing_source.as_deref().is_some_and(|u| !u.is_empty());
+    if !custom {
+        let opts = loft::install::InstallOptions {
+            allow_unsigned: true,
+            refresh: true,
+            offline: false,
+            allow_prerelease: false,
+            skip_lockfile: false,
+            lock_path: None,
+        };
+        match loft::install::load_index(&opts) {
+            Ok(index) => {
+                let pkgs = index.packages.len();
+                let versions: usize = index.packages.values().map(|p| p.versions.len()).sum();
+                println!("registry synced: {pkgs} packages, {versions} versions");
+            }
+            Err(e) => {
+                eprintln!("loft registry sync: {e}\n  local registry is unchanged.");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    registry_sync_flat_file(existing_source.as_deref());
+}
+
+#[cfg(not(feature = "registry"))]
+fn registry_sync() {
+    eprintln!("loft registry sync: registry feature not compiled in.");
+    std::process::exit(1);
+}
+
+/// The legacy flat-text sync, for an explicitly configured `registry.txt` source.
+fn registry_sync_flat_file(existing_source: Option<&str>) {
+    use loft::registry;
+
+    let url = registry::source_url(existing_source);
 
     eprintln!("syncing registry from {url} ...");
 
