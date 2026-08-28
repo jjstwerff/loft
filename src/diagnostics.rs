@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @I75 — Diagnostics collector
 
-use std::fmt::{Arguments, Debug, Display, Formatter};
+use std::fmt::{Arguments, Debug, Display, Formatter, Write as _};
 
 #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Level {
@@ -79,7 +79,10 @@ pub struct Edit {
 /// `concept` is a **handle, not an explanation**: `move` is the searchable noun that opens
 /// the door. `concept_ref` names the catalogue entry behind it, so the door leads somewhere
 /// real — a door onto nothing is worse than no door.
-#[derive(Debug, Clone)]
+// `PartialEq` so a round trip through the startup cache can be checked as a whole rather
+// than field by field — a fix that stops being carried then fails the comparison instead of
+// going quietly missing (loft#1129).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fix {
     pub kind: FixKind,
     /// The imperative, standing alone: "build it in place", "drop the later use of `src`".
@@ -130,6 +133,168 @@ pub struct DiagEntry {
 }
 
 impl DiagEntry {
+    /// Encode the DISPLAY fields as one escaped line, for the whole-program cache manifest.
+    ///
+    /// A warm bundle load skips the parser, and diagnostics are a parser product — so
+    /// without carrying them a cached run is SILENT where the cold run warned, and the same
+    /// program run twice reports differently.  That is not a caching detail: a `warning`
+    /// gates a library's CI (`LOFT_DENY_WARNINGS`), so the verdict would depend on whether
+    /// anyone had run the build before.
+    ///
+    /// The STRUCTURED fields travel, not the rendered text, so a warm run re-renders through
+    /// the same path a cold one does — `LOFT_ERRORS=pretty|compact`, colour and the
+    /// warnings-off filter are all read at replay time and keep working.
+    ///
+    /// **`fixes` travels too, and the reason is measured rather than assumed.**  It was
+    /// first left out on the reasoning that it only feeds `loft fix` and `--explain`, both
+    /// of which re-parse.  Neither half held: `--explain` reads the cache like every other
+    /// run, so a warm one printed NO fix lines where a cold one printed two; and the
+    /// once-per-run *"N diagnostics above suggest what to write instead"* note counts
+    /// entries whose `fixes` are non-empty, so a warm run dropped that line as well.  Both
+    /// are things a normal run PRINTS, which is the bar this encoding has to clear.
+    ///
+    /// An `Edit` is a position into the source, and the bundle is invalidated whenever a
+    /// source it was built from changes — so a replayed edit points where it pointed.
+    #[must_use]
+    pub fn encode_for_cache(&self) -> String {
+        fn esc(s: &str) -> String {
+            s.replace('\\', "\\\\")
+                .replace('\n', "\\n")
+                .replace('\t', "\\t")
+        }
+        let lvl = match self.level {
+            Level::Debug => "D",
+            Level::Advice => "A",
+            Level::Warning => "W",
+            Level::Error => "E",
+            Level::Fatal => "F",
+        };
+        // A fix is six fields after the count, and the EDIT is one of them — `line,col,len,text`
+        // split at most four ways so a rewrite containing a comma survives.  `-` is "no edit",
+        // which a fix that knows the rewrite but not the span must use.
+        let mut out = format!(
+            "{lvl}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.line,
+            self.col,
+            esc(self.code.unwrap_or("")),
+            esc(&self.file),
+            esc(self.suggestion.as_deref().unwrap_or("")),
+            esc(&self.message),
+            self.fixes.len(),
+        );
+        for f in &self.fixes {
+            let edit = f.edit.as_ref().map_or_else(
+                || "-".to_string(),
+                |e| format!("{},{},{},{}", e.line, e.col, e.len, esc(&e.text)),
+            );
+            let _ = write!(
+                out,
+                "\t{}\t{}\t{}\t{}\t{}\t{}",
+                match f.kind {
+                    FixKind::Mechanical => "M",
+                    FixKind::Conditional => "C",
+                },
+                esc(&f.title),
+                esc(f.condition.as_deref().unwrap_or("")),
+                edit,
+                esc(f.concept),
+                esc(f.concept_ref),
+            );
+        }
+        out
+    }
+
+    /// Rebuild an entry from [`encode_for_cache`].  `None` on any malformed line, which the
+    /// caller treats as a cache MISS rather than as an absent diagnostic — a bundle that
+    /// cannot reproduce what the parse said must not be served.
+    #[must_use]
+    pub fn decode_from_cache(line: &str) -> Option<Self> {
+        fn unesc(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut it = s.chars();
+            while let Some(c) = it.next() {
+                if c != '\\' {
+                    out.push(c);
+                    continue;
+                }
+                match it.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(other) => out.push(other),
+                    None => {}
+                }
+            }
+            out
+        }
+        let mut f = line.split('\t');
+        let level = match f.next()? {
+            "D" => Level::Debug,
+            "A" => Level::Advice,
+            "W" => Level::Warning,
+            "E" => Level::Error,
+            "F" => Level::Fatal,
+            _ => return None,
+        };
+        let line_no = f.next()?.parse::<u32>().ok()?;
+        let col = f.next()?.parse::<u32>().ok()?;
+        let code_s = unesc(f.next()?);
+        let file = unesc(f.next()?);
+        let sugg = unesc(f.next()?);
+        let message = unesc(f.next()?);
+        // A line written before fixes travelled has no count field; treat it as "no fixes"
+        // rather than as a malformed line, so an older bundle is a hit and not a hard miss.
+        let n_fixes = f.next().map_or(0, |t| t.parse::<usize>().unwrap_or(0));
+        let mut fixes = Vec::with_capacity(n_fixes);
+        for _ in 0..n_fixes {
+            let kind = match f.next()? {
+                "M" => FixKind::Mechanical,
+                "C" => FixKind::Conditional,
+                _ => return None,
+            };
+            let title = unesc(f.next()?);
+            let cond = unesc(f.next()?);
+            let edit_s = f.next()?;
+            let edit = if edit_s == "-" {
+                None
+            } else {
+                let mut e = edit_s.splitn(4, ',');
+                Some(Edit {
+                    line: e.next()?.parse().ok()?,
+                    col: e.next()?.parse().ok()?,
+                    len: e.next()?.parse().ok()?,
+                    text: unesc(e.next()?),
+                })
+            };
+            // `concept` / `concept_ref` are `&'static str` for the same reason `code` is —
+            // every producing site is a literal.  Leaking is bounded: a warm load decodes
+            // each entry at most once per process.
+            let concept = Box::leak(unesc(f.next()?).into_boxed_str());
+            let concept_ref = Box::leak(unesc(f.next()?).into_boxed_str());
+            fixes.push(Fix {
+                kind,
+                title,
+                condition: (!cond.is_empty()).then_some(cond),
+                edit,
+                concept,
+                concept_ref,
+            });
+        }
+        Some(Self {
+            level,
+            message,
+            file,
+            line: line_no,
+            col,
+            // `code` is `&'static str` because every producing site is a literal.  A decoded
+            // one has to become static somehow; leaking is bounded and correct here — the
+            // codes are a small frozen set and a warm load decodes each at most once per
+            // process, so this cannot grow with runtime.
+            code: (!code_s.is_empty()).then(|| &*Box::leak(code_s.into_boxed_str())),
+            suggestion: (!sugg.is_empty()).then_some(sugg),
+            fixes,
+        })
+    }
+
     /// Format as a single-line string: `Level: message at file:line:col`
     #[must_use]
     pub fn to_string_compact(&self) -> String {
@@ -298,6 +463,19 @@ impl Diagnostics {
         if level > self.level {
             self.level = level;
         }
+    }
+
+    /// Re-add an entry decoded from the whole-program cache, preserving the level
+    /// bookkeeping `add_at_coded` does — so a warm run's exit code and errors-only
+    /// filtering behave exactly as the cold run's did.
+    ///
+    /// Separate from `add_at_coded` because this is a REPLAY, not a new finding: the
+    /// entry is already complete (suggestion included) and must not be re-derived.
+    pub fn restore_from_cache(&mut self, entry: DiagEntry) {
+        if entry.level > self.level {
+            self.level = entry.level;
+        }
+        self.entries.push(entry);
     }
 
     /// Attach a machine-readable `suggestion` (a replacement token) to the
@@ -541,4 +719,115 @@ pub fn suggest_similar_capped<'a>(name: &str, candidates: &[&'a str]) -> Option<
             d > 0 && d <= max_dist
         })
         .min_by_key(|c| levenshtein(name, c))
+}
+
+#[cfg(test)]
+mod cache_roundtrip_tests {
+    use super::{DiagEntry, Edit, Fix, FixKind, Level};
+
+    /// Field-by-field, because `DiagEntry` is a public type and deriving `PartialEq` on it
+    /// for a test would widen its surface.  Every field the encoder writes is compared, so a
+    /// new one that is not carried fails here rather than silently going missing.
+    fn assert_same(back: &DiagEntry, original: &DiagEntry) {
+        assert_eq!(back.level, original.level, "level");
+        assert_eq!(back.message, original.message, "message");
+        assert_eq!(back.file, original.file, "file");
+        assert_eq!(back.line, original.line, "line");
+        assert_eq!(back.col, original.col, "col");
+        assert_eq!(back.code, original.code, "code");
+        assert_eq!(back.suggestion, original.suggestion, "suggestion");
+        assert_eq!(back.fixes, original.fixes, "fixes");
+    }
+
+    fn entry_with(fixes: Vec<Fix>) -> DiagEntry {
+        DiagEntry {
+            level: Level::Warning,
+            message: "Variable i is never read".to_string(),
+            file: "/tmp/x/consumer.loft".to_string(),
+            line: 8,
+            col: 22,
+            code: Some("never-read"),
+            suggestion: Some("_".to_string()),
+            fixes,
+        }
+    }
+
+    /// The round trip has to carry the FIXES, not only the entry: `fixable` is what puts the
+    /// once-per-run `--explain` pointer under the report, so an entry that comes back without
+    /// them makes a cached run say less than an uncached one on identical input (loft#1129).
+    #[test]
+    fn a_cached_entry_comes_back_with_its_fixes() {
+        let original = entry_with(vec![
+            Fix {
+                kind: FixKind::Mechanical,
+                title: "rename to `_`".to_string(),
+                condition: None,
+                edit: Some(Edit {
+                    line: 8,
+                    col: 22,
+                    len: 1,
+                    text: "_".to_string(),
+                }),
+                concept: "discard-binding",
+                concept_ref: "@F1",
+            },
+            Fix {
+                kind: FixKind::Conditional,
+                title: "drop the loop".to_string(),
+                condition: Some("the body has no effect".to_string()),
+                edit: None,
+                concept: "dead-loop",
+                concept_ref: "@F2",
+            },
+        ]);
+        let back = DiagEntry::decode_from_cache(&original.encode_for_cache())
+            .expect("a line this encoder wrote must decode");
+        assert_same(&back, &original);
+    }
+
+    /// An entry with NO fixes still round-trips, and must not gain one — the pointer counts
+    /// entries that carry a fix, so a phantom would over-report just as a lost one
+    /// under-reports.
+    #[test]
+    fn an_entry_without_fixes_gains_none() {
+        let original = entry_with(Vec::new());
+        let back = DiagEntry::decode_from_cache(&original.encode_for_cache()).expect("decode");
+        assert!(back.fixes.is_empty(), "no fixes in, no fixes out");
+        assert_same(&back, &original);
+    }
+
+    /// A fix's text is author prose and can hold the field and record separators the encoder
+    /// uses.  Escaping is what keeps a title with a tab or a newline in it from being read as
+    /// three more fields — which would silently truncate the tail of the group.
+    #[test]
+    fn a_fix_whose_prose_holds_the_separators_survives() {
+        let original = entry_with(vec![Fix {
+            kind: FixKind::Conditional,
+            title: "write\tit\nin place".to_string(),
+            condition: Some("a\\b\tc".to_string()),
+            edit: Some(Edit {
+                line: 3,
+                col: 1,
+                len: 0,
+                text: "x = [\n  1,\n]".to_string(),
+            }),
+            concept: "build-in-place",
+            concept_ref: "@F3",
+        }]);
+        let back = DiagEntry::decode_from_cache(&original.encode_for_cache()).expect("decode");
+        assert_same(&back, &original);
+    }
+
+    /// A manifest written by an OLDER binary has no fix groups.  It must decode to an entry
+    /// with none rather than to a miss: the build signature already invalidates across a
+    /// rebuild, and a decoder that faulted here would turn a format addition into a hard
+    /// failure.
+    #[test]
+    fn a_line_with_no_fix_groups_still_decodes() {
+        let line = "W\t8\t22\tnever-read\t/tmp/x.loft\t_\tVariable i is never read";
+        let back = DiagEntry::decode_from_cache(line).expect("an entry with no fix groups");
+        assert!(back.fixes.is_empty());
+        assert_eq!(back.line, 8);
+        assert_eq!(back.message, "Variable i is never read");
+    }
 }

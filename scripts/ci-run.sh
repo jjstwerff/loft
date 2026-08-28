@@ -1,0 +1,80 @@
+#!/bin/bash
+# Start `make ci` detached, or report the verdict of the run that is (or was) going.
+#
+# Why this exists: reading `result.txt` for a `CI-RESULT` line is not a reliable
+# completion signal, and three different ways of being wrong showed up in one day:
+#
+#   * a run that DIES — an oomd kill, a link error, a Ctrl-C — never writes a verdict, so
+#     a waiter blocks forever on a process that is already gone;
+#   * a verdict from a PREVIOUS run is still in the file while the next one is compiling,
+#     so `grep -q CI-RESULT` answers "finished" about the wrong run;
+#   * `.ci-running` is left behind by a killed run, so its presence means nothing.
+#
+# The fix is to record the run's own identity and check the PROCESS, not the log.
+# `.ci-verdict` holds one line: STATE PID EPOCH [detail].  `status` re-reads the pid, so a
+# run that vanished reports DIED rather than RUNNING.
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit 1
+V=.ci-verdict
+
+case "${1:-status}" in
+  start)
+    if [ -f $V ] && read -r st pid _ < $V && [ "$st" = RUNNING ] && kill -0 "$pid" 2>/dev/null; then
+      echo "already RUNNING (pid $pid) — refusing to start a second gate"; exit 1
+    fi
+    for p in $(pgrep -f "make ci" 2>/dev/null); do
+      cwd=$(readlink "/proc/$p/cwd" 2>/dev/null)
+      [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && echo "note: another gate is running in $cwd — expect ~2x wall time"
+    done
+    # Three ways this ends, and each writes a verdict so the waiter never guesses:
+    #   * make exits 0 / non-zero        → PASSED / FAILED
+    #   * make is killed by a signal     → rc > 128, so the signal is rc-128 (the shape an
+    #                                      oomd kill takes when the CHILD dies and this
+    #                                      wrapper survives)
+    #   * THIS wrapper is signalled      → the trap writes KILLED before dying.  TERM, INT,
+    #                                      HUP and QUIT are all catchable; only SIGKILL and
+    #                                      SIGSTOP are not, which is why `status` still
+    #                                      re-reads the pid as a last resort.
+    setsid nohup bash -c '
+      s=$(date +%s)
+      note() { echo "$1 $$ $(date +%s) $(( $(date +%s) - s ))s $2" > .ci-verdict; }
+      for sg in TERM INT HUP QUIT; do
+        trap "note KILLED \"the gate wrapper received SIG$sg\"; exit 1" $sg
+      done
+      make ci > /dev/null 2>&1
+      rc=$?
+      if   [ $rc -eq 0 ];   then note PASSED ""
+      elif [ $rc -gt 128 ]; then note KILLED "make ci died on signal $((rc-128))"
+      else note FAILED "$(grep -m1 -E "^error|FAIL \[" result.txt 2>/dev/null | head -c 90)"
+      fi' >/dev/null 2>&1 &
+    echo "RUNNING $! $(date +%s) started" > $V
+    echo "gate started (pid $!)"
+    ;;
+  status)
+    [ -f $V ] || { echo "NOT-STARTED"; exit 0; }
+    read -r st pid epoch rest < $V
+    if [ "$st" = RUNNING ] && ! kill -0 "$pid" 2>/dev/null; then
+      # No verdict AND no process: the wrapper never got to write one, so it was SIGKILLed
+      # (systemd-oomd's cgroup kill, or `kill -9`).  Every catchable end writes its own
+      # verdict via the traps above, so reaching here really does mean the uncatchable case.
+      echo "DIED after $(( $(date +%s) - epoch ))s — SIGKILL/uncatchable (oomd cgroup kill?); no verdict written"
+      exit 2
+    fi
+    [ "$st" = RUNNING ] && echo "RUNNING ${rest} for $(( $(date +%s) - epoch ))s" || echo "$st $rest"
+    ;;
+  wait|notify)
+    # Designed to be launched with the Bash tool's `run_in_background`: the harness
+    # re-invokes the agent when a background command EXITS, so this exits exactly once —
+    # the moment a verdict exists — and the agent stays free until then.  That is the
+    # difference from a foreground wait, which blocks the agent and the user with it.
+    #
+    # It ends on DIED too, which a `grep CI-RESULT` waiter never does: a run killed by
+    # oomd or a link failure writes no verdict, so the naive loop waits forever on a
+    # process that is already gone.
+    while :; do
+      out=$("$0" status); rc=$?
+      case "$out" in RUNNING*) sleep 15 ;; *) echo "$out"; exit $rc ;; esac
+    done
+    ;;
+  *) echo "usage: ci-run.sh {start|status|wait}"; exit 1 ;;
+esac

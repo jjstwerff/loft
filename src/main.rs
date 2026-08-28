@@ -2599,6 +2599,72 @@ fn bundle_import(indir: &str) -> i32 {
     }
     0
 }
+/// The packages this package's own source `use`s that `loft.toml` does not declare.
+///
+/// `loft publish` reads `deps` from the manifest and has no other source for them, so when the
+/// manifest declares none it prints `"deps": {}` — a claim, where the honest answer may be
+/// "not stated here".  A multi-package repo keeps its registry deps out of `loft.toml` on
+/// purpose: declared there, loft resolves them from the registry instead of the `--lib` path
+/// and multi-library consumption breaks.  For those packages the emitted entry is silently
+/// incomplete, and a consumer only finds out at `loft install` (loft#1136).
+///
+/// The source settles which case it is.  A `use X` naming neither a sibling module of this
+/// package nor the package itself is a registry dependency, and one the manifest does not
+/// declare is exactly what an empty `deps` would drop.
+///
+/// Deliberately syntactic: `publish` does not parse the package, and the question is only
+/// *"is `{}` believable here?"*.  Over-reporting costs a note the author can ignore;
+/// under-reporting is the defect.
+fn undeclared_source_deps(
+    pkg_path: &std::path::Path,
+    pkg_name: &str,
+    declared: &[(String, String)],
+) -> Vec<String> {
+    let src_dir = pkg_path.join("src");
+    let Ok(entries) = std::fs::read_dir(&src_dir) else {
+        return Vec::new();
+    };
+    let files: Vec<std::path::PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "loft"))
+        .collect();
+    let local: std::collections::HashSet<String> = files
+        .iter()
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for f in &files {
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Some(rest) = line.trim_start().strip_prefix("use ") else {
+                continue;
+            };
+            // `use pkg;`, `use pkg::*;`, `use pkg::item;` — the package is the head.
+            let id: String = rest
+                .trim()
+                .trim_end_matches(';')
+                .split("::")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if id.is_empty()
+                || id == pkg_name
+                || local.contains(&id)
+                || declared.iter().any(|(n, _)| *n == id)
+                || out.contains(&id)
+            {
+                continue;
+            }
+            out.push(id);
+        }
+    }
+    out.sort();
+    out
+}
 
 /// Minimal ISO-8601 UTC timestamp.  Avoid pulling in a date crate;
 /// loft already does its own time formatting elsewhere via
@@ -3190,6 +3256,13 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
         .map(|(n, v)| (n.clone(), v.clone()))
         .collect();
     let published = chrono_iso8601_utc();
+    // loft#1136 — `{}` is a CLAIM, and the manifest is the only thing this command can read
+    // it from.  A multi-package repo deliberately keeps its registry deps out of `loft.toml`
+    // (declaring them there resolves from the registry instead of the `--lib` path, which
+    // breaks multi-library consumption), so for those packages an empty `[dependencies]`
+    // means "not stated here", not "none" — and pasting the entry verbatim publishes a
+    // version that resolves nothing.  The package's own source says which it is.
+    let undeclared = undeclared_source_deps(pkg_path, &pkg.name, &registry_deps);
 
     println!("# Paste this entry into `loft-lang/registry/index.json` under");
     println!(
@@ -3210,6 +3283,19 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     println!("  \"subpath\": \"{}\",", pkg.name);
     if registry_deps.is_empty() {
         println!("  \"deps\": {{}},");
+        if !undeclared.is_empty() {
+            println!(
+                "  # ^^ INCOMPLETE — this package's source uses {}, and `loft.toml` declares",
+                undeclared.join(", ")
+            );
+            println!("  #    none of them, so there was nothing here to read the versions from.");
+            println!(
+                "  #    Copy `deps` from this package's existing index entries before pasting;"
+            );
+            println!(
+                "  #    an entry with empty deps installs a version that resolves none of them."
+            );
+        }
     } else {
         let mut deps_lines: Vec<String> = Vec::new();
         for (n, v) in &registry_deps {
@@ -4274,16 +4360,69 @@ fn handle_registry(argv: &[String], i: &mut usize) {
     }
 }
 
-/// REG.3: Download the latest registry from the source URL.
+/// REG.3: Refresh the local registry so the next `install` / `search` sees what was published.
+///
+/// loft#1137 — this used to fetch `registry.txt`, the flat-text format `registry.rs` parses,
+/// and the live registry has not served that file for a long time: it holds `index.json`.  So
+/// the obviously-named refresh 404'd and signed off with *"local registry is unchanged"*,
+/// which reads as *nothing to do* rather than *this command cannot work*.  The next pinned
+/// install then failed with *"no version satisfies constraint"* against a stale local index —
+/// two misleading messages in a row, and neither naming the real state.
+///
+/// It now refreshes what every other command reads: `install::load_index` with `refresh`, the
+/// same signature-verified loader behind `loft install`, `loft search` and
+/// `loft api --registry --refresh` (the workaround users had to find).  One home, so the
+/// command that is NAMED for the job cannot drift from the one that does it.
+///
+/// The flat-text path stays reachable for an explicitly configured source — `LOFT_REGISTRY_URL`
+/// or a `source:` header in a local `registry.txt` — because that is the only case where such
+/// a file exists to fetch.
+#[cfg(feature = "registry")]
 fn registry_sync() {
     use loft::registry;
 
-    // Determine source URL.
     let existing_source = registry::registry_path().and_then(|p| {
         let (_, src) = registry::read_registry(p.to_str().unwrap_or(""));
         src
     });
-    let url = registry::source_url(existing_source.as_deref());
+    let custom = std::env::var("LOFT_REGISTRY_URL").is_ok_and(|u| !u.is_empty())
+        || existing_source.as_deref().is_some_and(|u| !u.is_empty());
+    if !custom {
+        let opts = loft::install::InstallOptions {
+            allow_unsigned: true,
+            refresh: true,
+            offline: false,
+            allow_prerelease: false,
+            skip_lockfile: false,
+            lock_path: None,
+        };
+        match loft::install::load_index(&opts) {
+            Ok(index) => {
+                let pkgs = index.packages.len();
+                let versions: usize = index.packages.values().map(|p| p.versions.len()).sum();
+                println!("registry synced: {pkgs} packages, {versions} versions");
+            }
+            Err(e) => {
+                eprintln!("loft registry sync: {e}\n  local registry is unchanged.");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    registry_sync_flat_file(existing_source.as_deref());
+}
+
+#[cfg(not(feature = "registry"))]
+fn registry_sync() {
+    eprintln!("loft registry sync: registry feature not compiled in.");
+    std::process::exit(1);
+}
+
+/// The legacy flat-text sync, for an explicitly configured `registry.txt` source.
+fn registry_sync_flat_file(existing_source: Option<&str>) {
+    use loft::registry;
+
+    let url = registry::source_url(existing_source);
 
     eprintln!("syncing registry from {url} ...");
 
@@ -7289,6 +7428,20 @@ fn main() {
             if !native_requested {
                 native_mode = false;
             }
+        // @P229 G3, restored at the new location — pre-build every installed registry
+        // package's native cdylib SEQUENTIALLY, so a parallel test runner does not have
+        // many processes queueing on the one global build lock while holding its slots.
+        // Not a user-facing verb: it is a CI warm-up, and it says what it did so a run
+        // that pre-builds nothing is distinguishable from one that had nothing to do.
+        } else if a == "--prebuild-natives" {
+            #[cfg(feature = "registry")]
+            {
+                let (attempted, built) = loft::extensions::prebuild_installed_natives();
+                println!("loft: pre-built {built} of {attempted} installed native package(s)");
+            }
+            #[cfg(not(feature = "registry"))]
+            println!("loft: built without the registry feature — nothing to pre-build");
+            return;
         // @F55 — package management (loft install, loft.toml, lockfile)
         } else if a == "install" {
             // Collect flags + positional in any order.
@@ -8420,11 +8573,15 @@ fn main() {
     // @PLN11 arc E / D2b / track 1 — the whole-program startup cache mmaps the
     // ENTIRE parsed program (stdlib + lazily-loaded libs + user file) on a
     // repeated unchanged run, skipping all parsing (~3–3.6× faster).  It is now
-    // **default-on** (`cache::program_cache_enabled`): off only under
-    // `LOFT_NO_CACHE`, or automatically when running inside Cargo (`cargo run` /
-    // the test suite — the dev-safety + test-isolation default).  The narrower
-    // stdlib cache (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages
-    // just when the program cache is off.
+    // **default-on everywhere** (`cache::program_cache_enabled`): off only under
+    // `LOFT_NO_CACHE`, the explicit slow path.  It used to switch itself off inside
+    // Cargo and for any `target/` binary — which covered the whole test suite and every
+    // compiler-development run — as a proxy for invalidation that was incomplete: the
+    // program bundle folded in the binary's mtime and the STDLIB key did not.  Both do
+    // now, so a rebuild invalidates on the fact itself (measured: `touch target/debug/loft`
+    // makes the next run cold) and the proxy is gone.  The narrower stdlib cache
+    // (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages just when the program
+    // cache is off.
     // @PLN13 step 3 — AUTO-DETECT a beginner script (loose top-level statements, no
     // `fn main`) and desugar it to one run-once `fn main`, once, here; the parse below
     // uses this transformed source. `is_script` classifies every file the compiler
@@ -8929,7 +9086,7 @@ fn main() {
     // the interpreted image would pin it, so the "rebuild once editing settles" check
     // would never run on a warm load.
     if program_cache_on && !program_warm && !has_auto_native && !any_dev_interpret {
-        loft::startup_cache::save_program(&p, &abs_file, start_def);
+        loft::startup_cache::save_program(&p, &abs_file, start_def, &placed_libs);
     }
     // @PLAN28 debug/validation hook — when `LOFT_DUMP_SNAPSHOT=<path>` is set,
     // write the parsed `Data` as the startup-cache JSON snapshot and exit.
@@ -11420,6 +11577,54 @@ fn resolve_test_target(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// loft#1136 — `publish` must not print `"deps": {}` as an answer when the package's own
+    /// source says otherwise.  A multi-package repo keeps its registry deps out of `loft.toml`
+    /// deliberately, so an empty `[dependencies]` there means "not stated", and the entry is
+    /// pasted verbatim into the index.
+    #[test]
+    fn source_uses_that_the_manifest_does_not_declare_are_reported() {
+        let dir = std::env::temp_dir().join(format!("loft_1136_{}", std::process::id()));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("hex_shape.loft"),
+            "use hex_field::*;\nuse hex_grid;\nuse helper::thing;\nuse hex_shape;\n",
+        )
+        .expect("write entry");
+        // A SIBLING module of this package, not a registry package: `use helper` names it.
+        std::fs::write(src.join("helper.loft"), "fn h() -> integer { 1 }\n").expect("write mod");
+
+        let declared = vec![("hex_grid".to_string(), ">=0.1".to_string())];
+        let got = super::undeclared_source_deps(&dir, "hex_shape", &declared);
+        assert_eq!(
+            got,
+            vec!["hex_field".to_string()],
+            "only the use that is neither a sibling module, nor the package itself, nor \
+             already declared"
+        );
+
+        // With nothing declared, BOTH registry uses are reported — the shape the issue filed.
+        let got_none = super::undeclared_source_deps(&dir, "hex_shape", &[]);
+        assert_eq!(
+            got_none,
+            vec!["hex_field".to_string(), "hex_grid".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The control: a package whose every `use` is a sibling module has nothing to report, so
+    /// a genuinely dependency-free package still gets a clean `"deps": {}`.
+    #[test]
+    fn a_package_with_only_local_modules_reports_nothing() {
+        let dir = std::env::temp_dir().join(format!("loft_1136b_{}", std::process::id()));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(src.join("solo.loft"), "use parts::*;\n").expect("write entry");
+        std::fs::write(src.join("parts.loft"), "fn p() -> integer { 2 }\n").expect("write mod");
+        assert!(super::undeclared_source_deps(&dir, "solo", &[]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     /// loft#925 — a target that IS a directory names itself; only a test FILE

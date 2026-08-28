@@ -1912,6 +1912,27 @@ ci: ci-guard
 	@# so a run that dies without reaching either branch blocks nothing.
 	@rm -f .ci-running
 
+# Reliable gate control — `ci` itself is unchanged; these wrap it so completion can be
+# DETECTED rather than guessed.  `grep CI-RESULT result.txt` is not a completion signal:
+# a run that dies writes no verdict, and a previous run's verdict is still in the file
+# while the next one compiles.  `ci-status` re-reads the recorded pid, so a vanished run
+# reports DIED instead of RUNNING forever.  See scripts/ci-run.sh.
+ci-bg:  ## Start the full gate detached (refuses if one is already running)
+	@./scripts/ci-run.sh start
+
+ci-status:  ## PASSED / FAILED / RUNNING <n>s / DIED / NOT-STARTED
+	@./scripts/ci-run.sh status
+
+ci-wait:  ## Block until the running gate reaches a verdict, then print it
+	@./scripts/ci-run.sh wait
+
+# The agent-facing form: launch with the Bash tool's `run_in_background`, which re-invokes
+# the agent when the command EXITS.  So this is a one-shot notification that costs nothing
+# while it waits and leaves the session free — the reason not to use a foreground `ci-wait`,
+# which blocks the agent and the user with it.  Ends on DIED as well as PASSED/FAILED.
+ci-notify:  ## Exit (once) when the gate reaches any verdict — for background launch
+	@./scripts/ci-run.sh notify
+
 # Local-only superset of `ci`: same gates plus the development suites
 # that are NOT in .github/workflows/ci.yml — package smoke tests and
 # the GL/golden visual regression.  Useful before merging an

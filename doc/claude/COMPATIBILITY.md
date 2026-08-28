@@ -442,6 +442,31 @@ gone over — is the `0 → 1` flip earned. This is *why* the freeze is not immi
 type surface being feature-complete: the language nearing done is phase 1; the libs are phase
 2, and they are given their time.
 
+**One thing IS measurable before the freeze, and it is not resilience — it is whether the
+standard has stopped MOVING.** The `contract:` axis ([.github/LABELS.md](../../.github/LABELS.md))
+records, for every bug we state we have fixed, whether closing it needed the written standard to
+change: `contract:settled` = the formal rules and the tests already gave the right answer and the
+fix makes that promise hold; `contract:strained` = it took a rule EXTENDED, a documented surface
+changed, or a design call. `make bug-review` § 5 reports the monthly ratio.
+
+That is the convergence evidence the freeze decision has been missing, and it is a different gate
+from the one below it:
+
+- **`silent-wrong` → 0** is the per-bug blocker — no known wrong answer may be frozen into the
+  contract. True on any given day, and true today.
+- **`contract:strained` → 0, SUSTAINED over a window long enough to be evidence**, is the
+  convergence gate — the standard has stopped moving. Only this one can say the blockers are
+  truly gone rather than currently absent.
+
+⚠ **A bug count cannot substitute for it, and reading one as the other is the specific mistake
+this axis exists to prevent.** `silent-wrong` ran at 33 % of everything filed in August while
+every fix examined was `contract:settled` — the audits were productive and the standard held.
+Those are opposite readings of the same number. **Owner's call (2026-08-28): track this
+statistic through the next month rather than declaring on a few days of it** — the mechanism is
+working, it has not yet had time to settle. Expect the first weeks to be mostly UNJUDGED, which
+the report prints beside the ratio and never folds into either side; that column is what to watch
+first.
+
 **Clear the blockers first; measurement comes after the freeze.** The path to contract 1 is a bounded
 job — get rid of *everything* that blocks the freeze (the open plans, the language + lib audits) — and
 **new feature development is held off until those blockers are worked through**. This pre-freeze work is
@@ -452,6 +477,52 @@ additive way (fold / host / contract-key — the escape valve above), never by b
 minimum (audits green, plans closed, suite passing) is *necessary, not sufficient*: it gets us to the
 door, and the freeze is declared only when the blockers are truly gone and the converted consumers are
 stable again — deliberately weeks away, never on the strength of a passing board alone.
+
+### What a falling bug rate does and does not license
+
+The dogfood consumers are building and hitting far fewer bugs than they used to. That is real,
+it is the point of Goal C, and **it is not evidence that the freeze is earned** — because it is a
+measurement of the paths *those consumers walk*. Games-first is the right lib-side readiness bar
+and it has the same shape: it proves the surface a game exercises, and a game exercises what its
+author needed.
+
+The freeze does not bind only the walked paths. **At contract 1 every behaviour that works
+becomes a permanent promise**, including behaviour on paths nobody has taken yet — the same
+feature at another type, in another position, under a `?`, on the other backend. An outlier is
+not a rare shape; it is an *unwalked* one, and the next project's author walks a different set
+than ours ([GOALS.md § Useful is not stable](GOALS.md)).
+
+That asymmetry is what makes the unwalked surface the expensive part:
+
+- A defect on a walked path is found by somebody running a program, and while we are at
+  contract 0 it is simply fixed.
+- A defect on an unwalked path is **frozen on the day the contract is declared**. After that it
+  can only be handled additively — fold, host, or contract-key — never fixed in place, because
+  fixing it is exactly the breakage the promise forbids. A `silent-wrong` is the sharpest case
+  and CLAUDE.md's filing policy already calls it *the FREEZE axis*: a `sev:low` edge that
+  answers quietly wrong cannot be frozen into the contract, while a `sev:high` crash can,
+  because a crash tells you.
+
+So the readiness question is not *"are our programs stable?"* — they are — but **"would the next
+program be?"**, and no consumer metric can answer it. A falling bug rate says our reach has been
+hardened; it is silent about everything outside our reach, which is the majority of what the
+contract will bind.
+
+**The honest bound, stated so nobody plans against a fantasy.** The matrix of
+feature × type × position × nullability × backend is not enumerable, and this will never be a
+proof. What is achievable is to get materially closer to a language that does not let the next
+user down — and the instrument for that is the one thing we have that is stated over a *whole
+domain* rather than over the programs we happen to own: the formal rules. A corpus can only
+cover what somebody already wrote; a rule covers every case it quantifies over, so walking one
+reaches cells no program in the tree does. That is the practice in
+[STABILITY_METHOD.md § The rule-led walk](STABILITY_METHOD.md), and its position marker is the
+one to read against this section: **179 of 255 rules currently have no representation in the
+code at all.**
+
+This does not add a checklist item to the two phases above; it says what the phases are *for*.
+The checklist minimum stays necessary-not-sufficient, and the judgement it is not sufficient for
+is precisely this one — whether the surface we are about to promise forever behaves on the paths
+we have not walked.
 
 ## Per-surface — additive is the path; here is what a regression looks like
 

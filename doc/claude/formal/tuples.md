@@ -176,6 +176,49 @@ spelling now has a home (`Data::is_nullable_wrapper`), and the doc there names t
 sites that still test it by hand.  Guard:
 `tests/scripts/1123-a-nullable-tuple-member-returns-like-its-dense-twin.loft`.
 
+⚠ **That ⚠ was a map, and the sites it pointed at were not swept (loft#1134, closed
+2026-08-28).**  Giving the element a `__nullable<S>` slot changed the LAYOUT; nothing taught the
+writers, so a member was copied in as a dense `S` — landing field `a` on top of the discriminant
+at offset 0 and never setting it.  `(E-Null)`'s guarantee for this representation is *no
+collision*, and the collision came straight back: a PRESENT `S { a: 0, … }` read absent, a
+`float` first member read absent whenever its low byte was zero, and a member written `null`
+read present.  The reason it survived a day is that the mistake was symmetric — the indexed read
+projected offset 0 too, so write and read cancelled and the tag-consulting `for` loop was the
+only route that looked wrong.
+
+The rule the sweep owes, stated so the next layout change can be checked against it: **a tuple
+element whose declared type is `τ?` and whose storage is the tagged `__nullable<τ>` is written
+and read through the tag at EVERY position — a collection element, a struct field, a
+reassignment, and a nested tuple.**  `Parser::emit_nullable_slot_write` and
+`emit_nullable_slot_read` are the pair that hold it, and they spell the discriminant exactly as
+`operators.rs::enum_null` does so a slot cannot be written by one and read by the other.  Guard:
+`tests/scripts/1134-a-nullable-tuple-element-is-stored-behind-its-tag.loft`.
+
+One position dropped the tag on the way OUT and was fixed straight after (**loft#1138**):
+crossing a FUNCTION BOUNDARY.  `convert` unwrapped a `__nullable<S>` by sub-referencing the
+`Some` payload without consulting the discriminant, and a sub-ref into an absent slot is a valid
+`DbRef` — so an absent value arrived at a callee, and returned from a `-> S?`, as a present
+record of zeroes.  Not a tuple question at all: a `vector<S?>` element and a plain struct field
+reproduce it identically, so the axis is the boundary and the fix sits in `convert`.
+
+One more consequence of the two spellings closed the same day (**loft#1139**): three sites
+RE-DERIVED the synthetic `__tuple<…>` def from the element types they were handed, and the def
+is NAMED by the source spelling — so a list read straight off the def's own attributes minted
+`__tuple<__nullable<S>,integer>`, a different def with different offsets.  That is why
+`v += [f()]` was refused for a tuple with a nullable member while its dense twin was accepted,
+and why merely LIFTING the refusal writes the scalar member at byte 16 where the read looks at
+24.  `Parser::source_spelling` is the normalisation; the rule it serves is the same one the
+write side answers — **a tuple's offsets and its member types come from ONE def**, and any list
+that will be used to re-derive that def has to be in the spelling the def is named by.
+
+The split in the unwrap is worth keeping in mind too: only a NULLABLE target reads
+through the tag.  A DENSE `S` target keeps the bare payload sub-ref, because `(N-Store)` has
+already ruled that it cannot hold absence, and because two sites downstream recognise that
+unwrap by its SHAPE — `tail_is_nullable_unwrap` (the #306 view-return materialise) and
+`new_record_field_op` both match `Value::Call(OpGetField, …)`.  One spelling per question, rather
+than a third spelling both would have to learn.  Guard:
+`tests/scripts/1138-an-absent-nullable-struct-stays-absent-across-a-call.loft`.
+
 > **D-tup-4 — OPENED 2026-08-26 (loft#1102); the VECTOR half CLOSED the same day, the KEYED
 > half OPEN — a tuple literal ALIASED a heap local while both sibling constructors copied it.**
 >

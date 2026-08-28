@@ -29,18 +29,10 @@ pub(crate) fn yield_slot_write(
     slot: usize,
     expr: &str,
 ) -> std::io::Result<()> {
+    if let Some(img) = yield_slot_i64(kind, expr) {
+        return writeln!(w, "                dest[{slot}] = {img};");
+    }
     match kind {
-        YieldSlot::Int | YieldSlot::CharI32 | YieldSlot::Routine => {
-            writeln!(w, "                dest[{slot}] = ({expr}) as i64;")
-        }
-        YieldSlot::Bool => writeln!(w, "                dest[{slot}] = (({expr}) as u8) as i64;"),
-        // f64::to_bits → u64 / f32::to_bits → u32, both zero-extend to i64.
-        YieldSlot::F64 | YieldSlot::F32 => {
-            writeln!(
-                w,
-                "                dest[{slot}] = (({expr}).to_bits()) as i64;"
-            )
-        }
         YieldSlot::Ref => {
             let s1 = slot + 1;
             writeln!(
@@ -50,6 +42,28 @@ pub(crate) fn yield_slot_write(
                  dest[{s1}] = ((_r.rec as u64) | ((_r.pos as u64) << 32)) as i64; }}"
             )
         }
+        // Every other kind has a single-slot i64 image, taken above.
+        _ => unreachable!("yield_slot_i64 covers every non-Ref kind"),
+    }
+}
+
+/// The single `i64` transport image of a one-slot yield element, or `None` for
+/// [`YieldSlot::Ref`], which spans two slots and has no single image.
+///
+/// One home for the scalar encodings, because they are written at two places that must
+/// agree: [`yield_slot_write`]'s `dest[slot] = …` (the lazy/straight-line `next_into`
+/// channel) and the EAGER for-body collector, which pushes the same images flat into
+/// `__values` (loft#1132).  The consumer's `yield_slot_read` is the mirror of both.
+#[must_use]
+pub(crate) fn yield_slot_i64(kind: YieldSlot, expr: &str) -> Option<String> {
+    match kind {
+        YieldSlot::Int | YieldSlot::CharI32 | YieldSlot::Routine => {
+            Some(format!("({expr}) as i64"))
+        }
+        YieldSlot::Bool => Some(format!("(({expr}) as u8) as i64")),
+        // f64::to_bits → u64 / f32::to_bits → u32, both zero-extend to i64.
+        YieldSlot::F64 | YieldSlot::F32 => Some(format!("(({expr}).to_bits()) as i64")),
+        YieldSlot::Ref => None,
     }
 }
 
@@ -63,7 +77,12 @@ pub(crate) fn yield_slot_read(kind: YieldSlot, slot: usize) -> String {
     match kind {
         YieldSlot::Int => format!("_loft_yield_buf[{slot}]"),
         YieldSlot::CharI32 => format!("(_loft_yield_buf[{slot}] as i32)"),
-        YieldSlot::Bool => format!("(_loft_yield_buf[{slot}] != 0)"),
+        // @PLN17 — a boolean's storage form is the tri-state `u8`, and the tuple this
+        // rebuild writes into is a Variable position, so the slot is `u8`, not `bool`.
+        // `generation::boolean_u8_cast` is the one home for that conversion; reading the
+        // slot back as a bare `bool` typed the whole rebuild against nothing and handed the
+        // author an E0308 for a straight-line `(integer, boolean)` yield (loft#1132).
+        YieldSlot::Bool => format!("((_loft_yield_buf[{slot}] != 0) as u8)"),
         YieldSlot::F64 => format!("f64::from_bits(_loft_yield_buf[{slot}] as u64)"),
         YieldSlot::F32 => format!("f32::from_bits(_loft_yield_buf[{slot}] as u32)"),
         YieldSlot::Routine => format!("(_loft_yield_buf[{slot}] as u32)"),
@@ -218,6 +237,52 @@ fn is_text_slot(tp: &Type) -> bool {
     matches!(tp.base(), Type::Text(_))
 }
 
+/// The `compile_error!` a refused yield type gets, wrapping the yielded value so the
+/// generated method still type-checks.
+///
+/// `--native` picks a generator's transport channel by a ladder that ends in an `as i64`
+/// catch-all, and the catch-all's premise is *whatever is left is scalar-shaped*.
+/// [`channel_tag`](crate::coroutine_layout::channel_tag) is the one home that now answers
+/// [`CHANNEL_NONE`](crate::coroutine_layout::CHANNEL_NONE) when nothing carries the type —
+/// a tuple with a `text` element, or a nested tuple — instead of letting the cast read
+/// `(i64, &String) as i64` and hand the author a rustc dump against generated source they
+/// cannot read, for a program `--interpret` runs correctly (loft#1132).
+///
+/// The yielded value is still emitted, bound to `_`, so no cast happens and no
+/// `E0605`/`E0308` cascade drowns the message; `compile_error!` is what stops the build,
+/// exactly as the loop-body struct-yield refusal in `emit.rs` does.  A refusal keeps the
+/// door open: naming the unsupported yield type and the workaround costs nothing to
+/// withdraw once the channel exists.
+fn refuse_yield(yield_tp: &Type, data: &crate::data::Data, why: &str) -> (String, String) {
+    let msg = refusal_text(yield_tp, data, why);
+    (
+        format!("{{ compile_error!(\"{msg}\"); let _ = ("),
+        "); 0i64 }".to_string(),
+    )
+}
+
+/// The refusal message itself, without the `compile_error!` wrapper — the eager collector
+/// in `emit.rs` places it at a different point in its own emission and needs the text.
+///
+/// Contains no quote or backslash, so it drops straight into a `compile_error!` literal.
+fn refusal_text(yield_tp: &Type, data: &crate::data::Data, why: &str) -> String {
+    let name = yield_tp.name(data);
+    format!(
+        "loft --native: a generator yielding `{name}` {why} Run interpreted, or wrap the \
+         value in a struct and yield that (a struct yield is carried as a record)."
+    )
+}
+
+/// Why a yield type is refused on the straight-line channel ladder.
+const NO_CHANNEL: &str = "has no native transport channel — every element of a yielded \
+                          tuple must have one, and a `text` element or a nested tuple does \
+                          not.";
+
+/// Why a yield type is refused from a LOOP body, where the collector is eager.
+const NO_EAGER_BUFFER: &str = "cannot be collected from a generator's LOOP body — the \
+                               eager collector holds values by copy, and this one carries \
+                               a store handle every iteration would overwrite.";
+
 /// The placeholder a lazily-lowered loop's iteration state gives `__y` before running the
 /// body.  The `yield` always overwrites it before it is read, so it only has to type-check
 /// against the channel this generator answers on.
@@ -225,10 +290,14 @@ fn lazy_yield_init(yield_tp: &Type) -> &'static str {
     if is_text_slot(yield_tp) {
         return "String::new()";
     }
-    match yield_tp {
-        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => "DbRef::NULL",
-        _ => "0i64",
+    // Every DbRef-carried type, not the three obvious ones: a keyed collection is a handle
+    // too.  @FR-Col-Store — one home, `data::is_dbref`.  A short list spelled here typed
+    // `__y` as `i64` inside a method returning `DbRef`, so a lazily-lowered loop yielding a
+    // `hash`/`index`/`sorted`/`trie` handed the author a rustc E0308 (loft#1132).
+    if crate::data::is_dbref(yield_tp) {
+        return "DbRef::NULL";
     }
+    "0i64"
 }
 
 /// Recognise the loop shape a single advance can run one iteration of (CL-9 slice 1).
@@ -527,13 +596,15 @@ fn coroutine_persistent_locals(data: &crate::data::Data, def_nr: u32) -> Vec<(u1
             continue;
         }
         let name = var_table.name(v);
-        // `__vdb_*` is the exception among the compiler-internal locals: it OWNS the backing
-        // store of a vector literal, so it has to survive resumes or the store allocated in
+        // The store-OWNING literal accumulators are the exception among the
+        // compiler-internal locals: they have to survive resumes or the store allocated in
         // one state is orphaned when the next `next_*` call re-declares the local — and the
-        // tail's `OpFreeRef(__vdb_N)` then frees a fresh `DbRef::NULL` instead.  `__work_*`
-        // (P218, a `String` pre-declared at function scope) and `__yf_*` (built inline by the
+        // tail's `OpFreeRef` then frees a fresh `DbRef::NULL` instead.  `__work_*` (P218, a
+        // `String` pre-declared at function scope) and `__yf_*` (built inline by the
         // eager-collect factory) own no store and keep their own emission paths.
-        if name.starts_with("__") && !name.starts_with("__vdb") {
+        // One home: `variables::owns_literal_backing_store` — the keyed twin `__kvb_*` was
+        // missing here and at the pre-declaration below (loft#1130).
+        if name.starts_with("__") && !crate::variables::owns_literal_backing_store(name) {
             continue;
         }
         let tp = var_table.tp(v);
@@ -707,14 +778,16 @@ fn emit_struct_def(
         .iter()
         .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }))
     {
+        // @P326 — a DbRef-yielding generator buffers `DbRef`s.  Every DbRef-carried type,
+        // not the three obvious ones (@FR-Col-Store — one home, `data::is_dbref`): a short
+        // list here disagreed with `emit_for_body_factory`'s `vec_ty`, which already asked
+        // `is_dbref`, so a keyed yield declared `Vec<i64>` and filled it with `DbRef`.
         let elem_ty = if is_text_slot(yield_tp) {
             "String"
+        } else if crate::data::is_dbref(yield_tp) {
+            "DbRef"
         } else {
-            match yield_tp {
-                // @P326 — Reference / Vector / struct-enum yields are DbRef-shaped.
-                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => "DbRef",
-                _ => "i64",
-            }
+            "i64"
         };
         writeln!(w, "    __values: Vec<{elem_ty}>,")?;
         writeln!(w, "    __idx: usize,")?;
@@ -864,57 +937,6 @@ impl Output<'_> {
         let is_tuple_into = tkinds.is_some();
         let is_fnref_into = matches!(yield_tp, Type::Function(_, _, _));
         let uses_next_into = is_tuple_into || is_fnref_into;
-        let (sig, exhaust, advance, wrap_open, wrap_close) = if is_text {
-            (
-                "    fn next_text(&mut self, stores: &mut Stores) -> String {",
-                "loft::state::STRING_NULL.to_string()",
-                "next_text",
-                "(",
-                ").to_string()",
-            )
-        } else if is_dbref {
-            (
-                "    fn next_dbref(&mut self, stores: &mut Stores) -> DbRef {",
-                "DbRef::NULL",
-                "next_dbref",
-                "(",
-                ")",
-            )
-        } else if uses_next_into {
-            // `wrap_open` / `wrap_close` aren't used by the Simple yield
-            // arm below for this channel — that arm emits its own
-            // per-shape writes (see `is_tuple_into` / `is_fnref_into`
-            // branches in the match).
-            (
-                "    fn next_into(&mut self, stores: &mut Stores, dest: &mut [i64]) -> bool {",
-                "false",
-                "next_into",
-                "",
-                "",
-            )
-        } else if matches!(yield_tp, Type::Float | Type::Single) {
-            // #401 — float/single yield: store the IEEE bit-pattern via
-            // `to_bits`, NOT a numeric `as i64` (which truncates 1.5 → 1).  The
-            // consumer's tagged channel (3 = f64, 4 = f32) mirrors this with
-            // `from_bits`.  `f64::to_bits` → u64 and `f32::to_bits` → u32 both
-            // zero-extend cleanly through `as i64`.
-            (
-                "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {",
-                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
-                "next_i64",
-                "(",
-                ").to_bits() as i64",
-            )
-        } else {
-            (
-                "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {",
-                "loft::codegen_runtime::COROUTINE_EXHAUSTED",
-                "next_i64",
-                "(",
-                ") as i64",
-            )
-        };
-        writeln!(w, "{sig}")?;
         // P225: when the generator contains any `ForLoopBody` segment,
         // the factory eager-collects EVERY yield (Simple, YieldFrom, and
         // ForLoopBody alike) into `__values`.  In that case the impl
@@ -926,6 +948,85 @@ impl Output<'_> {
         let has_for_body = segments
             .iter()
             .any(|s| matches!(s, YieldSegment::ForLoopBody { .. }));
+        // The eager buffer holds elements FLAT — one `i64` per slot — for a tuple whose
+        // every element is carried by value.  A tuple carrying a store handle is refused
+        // instead, for the reason the struct/vector loop-body refusal already names.
+        let eager_kinds = has_for_body
+            .then(|| crate::coroutine_layout::eager_tuple_kinds(yield_tp))
+            .flatten();
+        let eager_stride: usize = eager_kinds
+            .as_ref()
+            .map_or(0, |ks| ks.iter().map(|k| k.width()).sum());
+        // Which shapes each path refuses, and why.  `--interpret` carries all of them, so
+        // every refusal names running interpreted as the workaround.
+        let refusal = if crate::coroutine_layout::channel_tag(yield_tp)
+            == crate::coroutine_layout::CHANNEL_NONE
+        {
+            Some(NO_CHANNEL)
+        } else if has_for_body && uses_next_into && eager_kinds.is_none() {
+            Some(NO_EAGER_BUFFER)
+        } else {
+            None
+        };
+        let (sig, exhaust, advance, wrap_open, wrap_close) = if is_text {
+            (
+                "    fn next_text(&mut self, stores: &mut Stores) -> String {".to_string(),
+                "loft::state::STRING_NULL.to_string()".to_string(),
+                "next_text",
+                "(".to_string(),
+                ").to_string()".to_string(),
+            )
+        } else if is_dbref {
+            (
+                "    fn next_dbref(&mut self, stores: &mut Stores) -> DbRef {".to_string(),
+                "DbRef::NULL".to_string(),
+                "next_dbref",
+                "(".to_string(),
+                ")".to_string(),
+            )
+        } else if uses_next_into {
+            // `wrap_open` / `wrap_close` aren't used by the Simple yield
+            // arm below for this channel — that arm emits its own
+            // per-shape writes (see `is_tuple_into` / `is_fnref_into`
+            // branches in the match).
+            (
+                "    fn next_into(&mut self, stores: &mut Stores, dest: &mut [i64]) -> bool {"
+                    .to_string(),
+                "false".to_string(),
+                "next_into",
+                String::new(),
+                String::new(),
+            )
+        } else if matches!(yield_tp, Type::Float | Type::Single) {
+            // #401 — float/single yield: store the IEEE bit-pattern via
+            // `to_bits`, NOT a numeric `as i64` (which truncates 1.5 → 1).  The
+            // consumer's tagged channel (3 = f64, 4 = f32) mirrors this with
+            // `from_bits`.  `f64::to_bits` → u64 and `f32::to_bits` → u32 both
+            // zero-extend cleanly through `as i64`.
+            (
+                "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {".to_string(),
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED".to_string(),
+                "next_i64",
+                "(".to_string(),
+                ").to_bits() as i64".to_string(),
+            )
+        } else {
+            // The catch-all, and it now says when it is one: its premise is that whatever
+            // is left is scalar-shaped, and `channel_tag` is the one home that answers
+            // whether that holds (loft#1132).
+            let (open, close) = match refusal {
+                Some(why) => refuse_yield(yield_tp, self.data, why),
+                None => ("(".to_string(), ") as i64".to_string()),
+            };
+            (
+                "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {".to_string(),
+                "loft::codegen_runtime::COROUTINE_EXHAUSTED".to_string(),
+                "next_i64",
+                open,
+                close,
+            )
+        };
+        writeln!(w, "{sig}")?;
         if has_for_body {
             writeln!(
                 w,
@@ -934,16 +1035,34 @@ impl Output<'_> {
             )?;
             writeln!(w, "        let _ = &cell;")?;
             writeln!(w, "        let _ = stores;")?;
-            writeln!(w, "        if self.__idx < self.__values.len() {{")?;
-            if is_text {
-                writeln!(w, "            let v = self.__values[self.__idx].clone();")?;
+            if eager_stride > 0 {
+                // A by-value tuple: the collector pushed each yield's slots FLAT, so one
+                // advance pops one STRIDE and hands it to the consumer's `dest` buffer.
+                // The stride is `eager_tuple_kinds` over the same `T` the consumer's
+                // channel-1 rebuild reads, so the two ends cannot drift apart.
+                writeln!(
+                    w,
+                    "        if self.__idx + {eager_stride} <= self.__values.len() {{"
+                )?;
+                writeln!(
+                    w,
+                    "            dest[..{eager_stride}].copy_from_slice\
+                     (&self.__values[self.__idx..self.__idx + {eager_stride}]);"
+                )?;
+                writeln!(w, "            self.__idx += {eager_stride};")?;
+                writeln!(w, "            return true;")?;
             } else {
-                // i64 and DbRef are both `Copy`; the `[idx]` indexing
-                // returns by value.
-                writeln!(w, "            let v = self.__values[self.__idx];")?;
+                writeln!(w, "        if self.__idx < self.__values.len() {{")?;
+                if is_text {
+                    writeln!(w, "            let v = self.__values[self.__idx].clone();")?;
+                } else {
+                    // i64 and DbRef are both `Copy`; the `[idx]` indexing
+                    // returns by value.
+                    writeln!(w, "            let v = self.__values[self.__idx];")?;
+                }
+                writeln!(w, "            self.__idx += 1;")?;
+                writeln!(w, "            return v;")?;
             }
-            writeln!(w, "            self.__idx += 1;")?;
-            writeln!(w, "            return v;")?;
             writeln!(w, "        }}")?;
             writeln!(w, "        {exhaust}")?;
             writeln!(w, "    }}")?;
@@ -1003,7 +1122,8 @@ impl Output<'_> {
             writeln!(w, "        let mut var_{name}: String = String::new();")?;
             self.declared.insert(*v);
         }
-        // P226: pre-declare vector-literal backing DbRefs (`__vdb_*`) at
+        // P226: pre-declare the literal-backing DbRefs (`__vdb_*`, and loft#1130's keyed
+        // twin `__kvb_*`) at
         // function scope.  Same scoping family as P218's `__work_*` fix,
         // but for vector literals: each `[...]` expression in the
         // generator body allocates a `__vdb_N` slot for its backing
@@ -1029,7 +1149,8 @@ impl Output<'_> {
                 // inside one match arm's pre-statements, then referenced
                 // from another arm where they're out of scope.  Each
                 // Reference-typed yield arm allocates a `__ref_N` slot.
-                if !name.starts_with("__vdb") && !name.starts_with("__ref") {
+                if !crate::variables::owns_literal_backing_store(name) && !name.starts_with("__ref")
+                {
                     continue;
                 }
                 // A `__vdb_*` that became a persistent FIELD must not also get a local of the
@@ -1253,7 +1374,7 @@ impl Output<'_> {
                     )?;
                     writeln!(w, "                'iter: loop {{")?;
                     let prev_wrap = self.yield_lazy_wrap.take();
-                    self.yield_lazy_wrap = Some((wrap_open.to_string(), wrap_close.to_string()));
+                    self.yield_lazy_wrap = Some((wrap_open.clone(), wrap_close.clone()));
                     for stmt in body {
                         let stmt_code = self.generate_expr_buf(stmt)?;
                         writeln!(w, "                    {stmt_code};")?;
@@ -1561,6 +1682,22 @@ impl Output<'_> {
         // handle too.  @FR-Col-Store — one home, `data::is_dbref`.  A short list spelled
         // here routes a handle down the `next_i64` channel instead of `next_dbref`.
         let is_dbref = crate::data::is_dbref(yield_tp);
+        // A by-value tuple is buffered FLAT — one `i64` per slot, `kinds.len()` per yield —
+        // which is what lets a tuple yield from a loop body compile at all (loft#1132).  A
+        // tuple carrying a store handle, a fn-ref, and a type with no channel at all are
+        // refused instead; `refuse` carries the message the pushes then emit.
+        let eager_kinds = crate::coroutine_layout::eager_tuple_kinds(yield_tp);
+        let refuse = if crate::coroutine_layout::channel_tag(yield_tp)
+            == crate::coroutine_layout::CHANNEL_NONE
+        {
+            Some(refusal_text(yield_tp, self.data, NO_CHANNEL))
+        } else if eager_kinds.is_none()
+            && (tuple_kinds(yield_tp).is_some() || matches!(yield_tp, Type::Function(_, _, _)))
+        {
+            Some(refusal_text(yield_tp, self.data, NO_EAGER_BUFFER))
+        } else {
+            None
+        };
         let (vec_ty, push_wrap_open, push_wrap_close, sub_advance, sub_exhaust) = if is_text {
             (
                 "String",
@@ -1643,6 +1780,8 @@ impl Output<'_> {
         self.yield_collect = true;
         self.yield_collect_text = is_text;
         self.yield_collect_dbref = is_dbref;
+        self.yield_collect_kinds.clone_from(&eager_kinds);
+        self.yield_collect_refuse.clone_from(&refuse);
         for seg in segments {
             match seg {
                 YieldSegment::ForLoopBody { pre, body } => {
@@ -1716,6 +1855,8 @@ impl Output<'_> {
         self.yield_collect = false;
         self.yield_collect_text = false;
         self.yield_collect_dbref = false;
+        self.yield_collect_kinds = None;
+        self.yield_collect_refuse = None;
         writeln!(w, "    Box::new({struct_name} {{")?;
         writeln!(w, "        state: 0,")?;
         for attr in attrs {

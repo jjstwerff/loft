@@ -854,18 +854,9 @@ impl Parser {
             // needed the channel.  `seeds_tuple_hint` is the one home for the tuple
             // question, asked at the argument sites too; the general census of this
             // channel's ten push sites and six admission lists is QUALITY.md § B6t.
-            if self.enum_context(result)
-                || crate::parser::vectors::is_collection(result)
-                || self.interpolation_target(result) != u32::MAX
-                || Self::seeds_lambda_hint(result)
-            {
-                self.expected = result.clone();
-            } else if let Some(tuple) = self.tuple_hint_type(result) {
-                // The tuple hint is the promoted type read BACK to the source spelling, so
-                // what reaches the literal is `(τ₁, …, τₙ)` and not the synthetic struct
-                // reference the retbuf ABI turned it into.
-                self.expected = tuple;
-            }
+            // loft#1130 — and `yield` is the SAME question about the same declared type,
+            // so the list is one home both spellings read (`seed_leaving_value_hint`).
+            self.seed_leaving_value_hint(result);
             // @PLN46/@PLN25: `expr_not_null` is a TRANSIENT marker — "the field access just
             // parsed is non-null" — used by the very next operator (`p.field ?? d`'s defended
             // read, the redundant-null-check on `p.field == null`). A field access that ENDS a
@@ -1977,6 +1968,33 @@ impl Parser {
                 let td = *td;
                 let delivery = self.classify_reference_delivery(ls, l);
                 self.dispatch_reference_delivery(delivery, td, l);
+            } else if crate::parser::vectors::is_keyed(t) {
+                // Enforces @FR-O-Move's second clause for the keyed kinds — *if the return
+                // borrows a parameter, the return type records it*.
+                //
+                // loft#1140 — the five KEYED kinds reached no arm above, so no delivery was
+                // classified for them and `ref_return` never ran.  Nothing recorded that a
+                // returned keyed collection BORROWS a parameter, and an empty return-dep
+                // list is what `Def::returns_borrowed_view` reads as *owned*: the caller
+                // then set `OpCopyRecord`'s source-free bit on a store it still held, so
+                // `fn id(x: hash<T[k]>) -> hash<T[k]> { x }` freed the caller's collection
+                // and every call after the first read it empty, on both backends.
+                //
+                // A keyed collection needs the BORROW FACT and nothing else — it already
+                // carries its own delivery, returning its store directly rather than
+                // through a `__retbuf` the way a vector does.  `ref_return` treats it as
+                // `signature_only` for exactly that reason, so this records the dep and
+                // makes no placement decision; the runtime @P290 bracket then refuses the
+                // free for a store belonging to a protected argument, which is the
+                // borrow-vs-owned split `use_analysis::protectable_ref_args` describes and
+                // has covered keyed arguments since loft#981.
+                //
+                // `is_keyed` is the one home for the kind list (@FR-Col-Hash · -Sorted ·
+                // -Index · -Spatial · -Trie), so a sixth keyed kind arrives here already
+                // handled instead of joining the four hand-spelled `Type::Vector` lists
+                // this arm sits beside.
+                let ls = t.base().depend();
+                self.ref_return(&ls, l, RetSite::BlockTail);
             } else if let Type::Vector(elm, _) = result.ret_promo_base()
                 && let Some((buf_attr, buf_var)) = self.return_buffer()
                 && self.returned_uses_buffer(buf_attr)
@@ -2687,23 +2705,8 @@ impl Parser {
         };
         let fn_nr_val = *fn_nr;
 
-        // (3) Find the first hidden buffer attribute index on the callee
-        //     whose typedef is heap-allocated (Reference / Vector / struct-Enum).
-        let hidden_idx = {
-            let def = self.data.def(fn_nr_val);
-            def.attributes().iter().enumerate().find_map(|(i, a)| {
-                if !a.hidden {
-                    return None;
-                }
-                if !matches!(
-                    &a.typedef,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) {
-                    return None;
-                }
-                Some(i)
-            })
-        };
+        // (3) The callee's return-buffer attribute (see `hidden_return_buffer_attr`).
+        let hidden_idx = self.data.def(fn_nr_val).hidden_return_buffer_attr();
         let Some(i) = hidden_idx else { return };
 
         // (4) args[i] must be a parser-internal __ref_N / __rref_N work-ref,
@@ -11943,13 +11946,8 @@ impl Parser {
     /// has no hidden heap attr or its var is not in this fn's table.
     fn return_buffer(&self) -> Option<(u16, u16)> {
         let def = self.data.def(self.context);
-        let (a_idx, a) = def.attributes().iter().enumerate().find(|(_, a)| {
-            a.hidden
-                && matches!(
-                    &a.typedef,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                )
-        })?;
+        let a_idx = def.hidden_return_buffer_attr()?;
+        let a = &def.attributes()[a_idx];
         let v = self.vars.var(&a.name);
         if v == u16::MAX {
             return None;
@@ -12475,8 +12473,32 @@ impl Parser {
         // decision — widening the DELIVERY peel instead was measured, and it re-typed the
         // return non-nullable and diverged the backends on a missing key.
         let (dep_base, peel) = ret.ret_dep_shape();
-        let signature_only = peel == crate::data::RetPeel::SignatureOnly;
-        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = dep_base
+        // loft#1140 — a KEYED collection return takes the borrow fact and no placement
+        // decision, which is what `RetPeel::SignatureOnly` already means.  It cannot be
+        // said through `peel`, because that answers two questions at once: *was a `?`
+        // peeled* (which `rewrap` below reads, to put the `?` back) and *is this
+        // signature-only*.  Those coincide for `Optional(Reference)` and come apart here —
+        // a bare `hash<T[k]>` needs the second and must NOT be re-wrapped — so the
+        // signature-only question gets its own answer and `rewrap` keeps reading `peel`.
+        let signature_only = peel == crate::data::RetPeel::SignatureOnly
+            || crate::parser::vectors::is_keyed(dep_base);
+        // ⚠ NULLABLE keyed returns are NOT covered, and the measurement is left here so the
+        // next reader does not re-derive it.  `hash<T[k]>?` arrives as `Optional(Hash)`, which
+        // `ret_dep_shape` does not peel, so it matches no arm below and its borrow goes
+        // unrecorded — the same silent free loft#1140 fixes for the dense spelling, still live
+        // for this one (loft#1143).  The one-line cure is an `Optional(inner) if is_keyed`
+        // arm in `ret_dep_shape` returning `SignatureOnly`: it makes the interpreter answer
+        // correctly and makes `--native` PANIC, writing through the u16::MAX null sentinel in
+        // `allocation.rs`.  A wrong answer traded for a crash on the other backend is not a
+        // fix, so the delivery hole has to be found first.
+        if let Type::Vector(_, cur)
+        | Type::Reference(_, cur)
+        | Type::Enum(_, true, cur)
+        | Type::Hash(_, _, cur)
+        | Type::Sorted(_, _, cur)
+        | Type::Index(_, _, cur)
+        | Type::Radix(_, _, cur)
+        | Type::Trie(_, _, cur) = dep_base
         {
             let mut dep = cur.clone();
             // #306: a returned local can itself hold a view — its TYPE deps name
@@ -12814,6 +12836,14 @@ impl Parser {
                 Type::Vector(it, _) => rewrap(Type::Vector(it, dep)),
                 Type::Reference(td, _) => rewrap(Type::Reference(td, dep)),
                 Type::Enum(td, true, _) => rewrap(Type::Enum(td, true, dep)),
+                // loft#1140 — the five keyed kinds, rebuilt with their key lists intact.
+                // Only the dep list is replaced; a keyed return is signature-only above, so
+                // nothing here has moved the value.
+                Type::Hash(td, k, _) => rewrap(Type::Hash(td, k, dep)),
+                Type::Sorted(td, k, _) => rewrap(Type::Sorted(td, k, dep)),
+                Type::Index(td, k, _) => rewrap(Type::Index(td, k, dep)),
+                Type::Radix(td, k, _) => rewrap(Type::Radix(td, k, dep)),
+                Type::Trie(td, k, _) => rewrap(Type::Trie(td, k, dep)),
                 _ => {
                     diagnostic!(
                         self.lexer,
@@ -13077,6 +13107,24 @@ impl Parser {
                         let ls_own: Vec<u16> = ls.to_vec();
                         self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
                     }
+                } else if crate::parser::vectors::is_keyed(&t) {
+                    // @FR-O-Move, the same clause the tail arm records — this is the second
+                    // entry point that has to record it.
+                    //
+                    // loft#1140, the EXPLICIT-return twin of the keyed arm in
+                    // `block_result`.  `return h;` never reaches that one — the tail
+                    // dispatch sees a bare `Var`, and an explicit return is routed here
+                    // instead — so a function written `{ return h; }` kept an empty return
+                    // dep list while `{ h }` recorded the borrow, and only the first
+                    // spelling still freed the caller's collection.  `LOFT_TRACE_RETPROMO`
+                    // printed no ENTER line at all for it, which is what named the second
+                    // entry point.
+                    //
+                    // Same treatment as the tail: hand `ref_return` the returned value's
+                    // deps so `MergeAttr` records any borrowed parameter, and let it make
+                    // no placement decision (a keyed return is signature-only there).
+                    let ls_own: Vec<u16> = t.depend();
+                    self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
                 } else if let Type::Vector(_, ls) = &t
                     && self.return_buffer().is_some()
                 {

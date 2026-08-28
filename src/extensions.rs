@@ -2107,6 +2107,73 @@ fn runtime_lib_missing_diagnostic(stem: &str, lib: &str) -> String {
     )
 }
 
+/// Build the native cdylib of every INSTALLED registry package, one at a time.
+///
+/// @P229 G3, restored at the new location.  A test that `use`s a native-backed package
+/// calls [`auto_build_native`], which takes ONE global exclusive lock
+/// (`loft-native-build.lock`) around its `cargo build`.  Under a parallel test runner many
+/// of those fire at once: each blocked process still occupies a runner slot, so the suite
+/// loses concurrency it is being charged for, and the builds churn the shared cargo dir
+/// while they are at it.
+///
+/// CI used to prevent that by pre-building `lib/<pkg>/native/` sequentially before the
+/// suite.  Those libraries moved to their own repos (@PLAN12 5b) and the step became a
+/// stub, so the rebuilds went back to happening DURING the suite — measured on
+/// `tuxedo-work-2026-08-28`: 7 lock waits totalling 62.5s, worst 26.9s, with five cdylibs
+/// rebuilding mid-run because a fresh loft binary stamps them all stale.
+///
+/// This is that step at the new location.  It calls the same [`resolve_native_lib`] the
+/// tests reach, so there is no second spelling of where a cdylib lands or when it is
+/// stale — the reason a shell loop cannot do this job: `native_target_root`'s redirect and
+/// the `[library] native` stem would both have to be re-derived.
+///
+/// Best-effort by design. A package that fails to build here is not fatal: the test that
+/// needs it will try again and report properly. Returns `(attempted, built)`.
+#[cfg(feature = "registry")]
+pub fn prebuild_installed_natives() -> (usize, usize) {
+    let Ok(entries) = std::fs::read_dir(crate::registry_index::cache_dir()) else {
+        return (0, 0);
+    };
+    let mut dirs: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("native").join("Cargo.toml").exists())
+        .collect();
+    // Deterministic order, so two runs of the same tree do the same work in the same
+    // sequence and a slow package is identifiable from the log rather than from timing.
+    dirs.sort();
+    let (mut attempted, mut built) = (0, 0);
+    for dir in dirs {
+        // The stem comes from the package's own `[library] native = "…"`, read through
+        // the one manifest reader — the same value the parser resolves at `use` time.
+        let Some(stem) = crate::manifest::read_manifest(&dir.join("loft.toml").to_string_lossy())
+            .and_then(|m| m.native)
+        else {
+            continue;
+        };
+        attempted += 1;
+        let pkg = dir.to_string_lossy().into_owned();
+        // Name each package as it is reached.  A warm cache makes `resolve_native_lib` an
+        // early return, so this is nearly silent; a run that takes minutes is one where the
+        // loft binary changed and every stamp went stale, and then this log is the only
+        // thing that says which package is being waited on.
+        let name = dir
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let t = std::time::Instant::now();
+        if resolve_native_lib(&pkg, &stem).is_some() {
+            built += 1;
+            let secs = t.elapsed().as_secs_f64();
+            if secs > 1.0 {
+                println!("  prebuilt {name} ({secs:.1}s)");
+            }
+        } else {
+            println!("  warn: {name} did not resolve — the test that needs it will retry");
+        }
+    }
+    (attempted, built)
+}
+
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     use std::path::PathBuf;
     // P244-windows fix #2 (2026-05-12): use PathBuf::join, not

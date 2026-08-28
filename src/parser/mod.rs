@@ -3333,6 +3333,36 @@ impl Parser {
     /// tuple here" and the member parses with nothing). The members come back off the
     /// struct's `tuple_group`, which is element ORDER rather than attribute order.
     ///
+    /// Seed the `⇐` expected-type channel for a value LEAVING this function.
+    ///
+    /// One home for the admission list two spellings of one act share: the block tail /
+    /// `return`, and `yield`.  Both hand a value out of the function against a type the
+    /// DECLARATION already names, and a literal that cannot say its own shape — an empty
+    /// collection literal, a keyed literal (`[K { … }]` is a `vector<K>` wherever it
+    /// stands), a bare enum variant, an interpolation target, a lambda whose parameter
+    /// types come from context, a tuple member — has no other way to learn it.
+    ///
+    /// The list grew one `||` per bug at the block tail while `yield` had NO seeding at
+    /// all, so a keyed collection yielded as a literal was built as a `vector<T>` and the
+    /// consumer received a collection with the wrong length and no keys, on both backends
+    /// and with no diagnostic (loft#1130).  The general rule LOFT.md already states is
+    /// *the expected type wherever there is one*; the census of this channel's remaining
+    /// push sites and their differing admission lists is QUALITY.md § B6t.
+    pub(crate) fn seed_leaving_value_hint(&mut self, result: &Type) {
+        if self.enum_context(result)
+            || crate::parser::vectors::is_collection(result)
+            || self.interpolation_target(result) != u32::MAX
+            || Self::seeds_lambda_hint(result)
+        {
+            self.expected = result.clone();
+        } else if let Some(tuple) = self.tuple_hint_type(result) {
+            // The tuple hint is the promoted type read BACK to the source spelling, so
+            // what reaches the literal is `(τ₁, …, τₙ)` and not the synthetic struct
+            // reference the retbuf ABI turned it into.
+            self.expected = tuple;
+        }
+    }
+
     /// Read through `base()`, so a nullable tuple asks what its base asks — whether a slot
     /// may be absent says nothing about what its members are.
     pub(crate) fn tuple_hint_type(&self, tp: &Type) -> Option<Type> {
@@ -3749,11 +3779,16 @@ impl Parser {
             return false;
         }
         let attrs = self.data.def(*d_nr).attributes();
+        // A member declared `S?` has TWO spellings — `Optional(Reference(S))` as the author
+        // writes it and the tagged `Enum(__nullable<S>)` the layout stores it as
+        // (`@FR-L-Null-Tag`) — and `is_equal` alone read that pair as a precision loss between
+        // a type and itself, so `v += [f()]` was refused for a tuple with a nullable member
+        // while its dense twin was accepted (loft#1139).  `same_nullable_struct` is the home
+        // for the pair; the unboxer below then reads the member through its tag.
         attrs.len() == dst_elems.len()
-            && attrs
-                .iter()
-                .zip(dst_elems)
-                .all(|(a, d)| a.typedef.is_equal(d))
+            && attrs.iter().zip(dst_elems).all(|(a, d)| {
+                a.typedef.is_equal(d) || self.data.same_nullable_struct(&a.typedef, d).is_some()
+            })
     }
 
     /// Element types of a stored tuple (`Reference(__tuple<…>)`), in order — the argument
@@ -3890,6 +3925,31 @@ impl Parser {
                 self.dn4_checked_cast(code, &dst_base, &src_base);
                 return true;
             }
+            // `@FR-L-Null-Tag` — a tagged `__nullable<S>` flowing into a NULLABLE target has to
+            // keep its absence.  The dense unwrap this would otherwise recurse into projects
+            // the `Some` payload without consulting the discriminant, and a sub-ref into an
+            // absent slot is a perfectly valid `DbRef` — so `null` arrived as a record of
+            // zeroes at every function boundary, in the argument position and the return
+            // position alike (loft#1138).  Read through the tag, which answers the reference
+            // null sentinel: what `S?` means once it is out of the slot.
+            //
+            // Only the NULLABLE target takes this route.  A DENSE `S` target keeps the bare
+            // payload sub-ref, because `(N-Store)` has already told it that it cannot hold
+            // absence and because several sites downstream recognise that unwrap by its SHAPE —
+            // `control.rs::tail_is_nullable_unwrap` (the #306 view-return materialise) and
+            // `vectors.rs::new_record_field_op` both match `Value::Call(OpGetField, …)`, and an
+            // `If` is not that.  Splitting on the target keeps one spelling per question.
+            if !self.first_pass
+                && let Type::Enum(syn, true, _) = is_type
+                && let Type::Reference(struct_d, _) = inner.base()
+                && self.data.def(*syn).name
+                    == format!("__nullable<{}>", self.data.def(*struct_d).name())
+            {
+                let syn = *syn;
+                let src = is_type.clone();
+                *code = self.emit_nullable_slot_read(syn, code.clone(), &src);
+                return true;
+            }
             return self.convert(code, is_type, inner);
         }
         if let Type::Optional(inner) = is_type {
@@ -3961,8 +4021,20 @@ impl Parser {
             // A `Value::Null` here is the shape-only probe the Tuple→Tuple arm above
             // runs for a non-literal source; there is no expression to unbox.
             if !self.first_pass && !matches!(code.unspan(), Value::Null) {
-                let src_elems = self.stored_tuple_elements(is_type);
-                *code = self.unbox_tuple_from_dbref(code.clone(), &src_elems);
+                // The DESTINATION spellings, not the stored ones.  `unbox_tuple_from_dbref`
+                // re-derives the `__tuple<…>` def from what it is handed, and the def is
+                // NAMED by the source-level spelling — so handing it a tagged member yields
+                // `__tuple<__nullable<S>,integer>`, a different def with different offsets,
+                // and every member after it reads at the wrong one.  Passing the destination
+                // types re-derives the SAME def the value is stored in, and each member's
+                // declared type is what tells the unboxer to read a tagged slot through its
+                // tag.  Offsets and types then come from one def, which is the same rule the
+                // write side answers (loft#1134).
+                let dst_elems = match should {
+                    Type::Tuple(elems) => elems.clone(),
+                    _ => self.stored_tuple_elements(is_type),
+                };
+                *code = self.unbox_tuple_from_dbref(code.clone(), &dst_elems);
             }
             return true;
         }
@@ -4199,10 +4271,19 @@ impl Parser {
             }
             check_type = &e;
         }
-        // @PLN25: a null literal returned/assigned where a vector is expected becomes
+        // @PLN25: a null literal returned/assigned where a COLLECTION is expected becomes
         // the null sentinel (store_nr=u16::MAX), reusing the reference sentinel producer
         // — distinct from an empty `[]` (a valid store with length 0).
-        if *is_type == Type::Null && matches!(should, Type::Vector(_, _)) {
+        //
+        // @FR-L-Null, through the one home `vectors::is_collection` rather than a hand-
+        // spelled variant list: every store-backed collection has the same twelve-byte slot,
+        // so the same thing means absent in all of them.  Spelled `Type::Vector` alone, the
+        // five KEYED kinds kept a bare `Value::Null` — which writes nothing — and the
+        // scope-exit `OpFreeRef` then read the untouched bytes as store #0 and tried to free
+        // the STACK, exactly the fault the struct-enum arm below records for its own shape.
+        // `base()` for the same reason that arm gives: the shape needing this most is the
+        // nullable one (`h: hash<S[k]>? = null`).
+        if *is_type == Type::Null && Self::is_collection_type(should.base()) {
             let sentinel_nr = self.data.def_nr("OpNullRefSentinel");
             *code = Value::Call(sentinel_nr, vec![]);
             return true;
@@ -8757,6 +8838,14 @@ impl Parser {
                 let mut tuple_elems = Vec::with_capacity(elems_vec.len());
                 for (i, et) in elems_vec.iter().enumerate() {
                     let elem_pos = pos + u32::from(offsets[i]);
+                    // @PLN25 — a member declared `S?` is stored behind its tag, so its bytes
+                    // here are the discriminant followed by the payload.
+                    if let Some(tagged) =
+                        self.tuple_elem_tag_read(tuple_d_nr, i, &code, elem_pos, et)
+                    {
+                        tuple_elems.push(tagged);
+                        continue;
+                    }
                     let elem_val = self.get_val(et, false, elem_pos, code.clone(), u32::MAX);
                     tuple_elems.push(elem_val);
                 }
@@ -8940,6 +9029,12 @@ impl Parser {
                 // so a saturating placeholder is safe and keeps the
                 // arithmetic well-defined across both profiles.
                 let elem_pos = base_pos.saturating_add(offsets[i]);
+                if let Some(tagged) =
+                    self.tuple_elem_tag_write(tuple_d_nr, i, ref_code, elem_pos, elem_tp, &value_i)
+                {
+                    ops.extend(tagged);
+                    continue;
+                }
                 ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, value_i));
             }
             return ops;
@@ -8995,9 +9090,87 @@ impl Parser {
         for (i, elem_tp) in elems_vec.iter().enumerate() {
             let elem_pos = base_pos.saturating_add(offsets[i]);
             let elem_val = Value::TupleGet(tmp, i as u16);
+            if let Some(tagged) =
+                self.tuple_elem_tag_write(tuple_d_nr, i, ref_code, elem_pos, elem_tp, &elem_val)
+            {
+                ops.extend(tagged);
+                continue;
+            }
             ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, elem_val));
         }
         ops
+    }
+
+    /// The tagged READ for tuple element `i`, or `None` when that element is not a tagged
+    /// slot — the mirror of [`Self::tuple_elem_tag_write`], and every stored-tuple reader
+    /// goes through it so a slot cannot be written by one spelling and read by the other.
+    ///
+    /// `elem_pos` is the slot's byte offset within `ref_code`'s record.
+    pub(crate) fn tuple_elem_tag_read(
+        &mut self,
+        tuple_d_nr: u32,
+        i: usize,
+        ref_code: &Value,
+        elem_pos: u32,
+        elem_tp: &Type,
+    ) -> Option<Value> {
+        if self.first_pass {
+            return None;
+        }
+        let Type::Enum(syn, true, _) = self.data.attr_type(tuple_d_nr, i) else {
+            return None;
+        };
+        if !self.needs_nullable_wrap(syn, elem_tp) {
+            return None;
+        }
+        let enum_kt = i32::from(self.data.def(syn).known_type());
+        let slot = self.cl(
+            "OpGetField",
+            &[
+                ref_code.clone(),
+                Value::Int(elem_pos as i32),
+                Value::Int(enum_kt),
+            ],
+        );
+        let stored = self.data.attr_type(tuple_d_nr, i);
+        Some(self.emit_nullable_slot_read(syn, slot, &stored))
+    }
+
+    /// The tagged write for tuple element `i`, or `None` when that element is not a tagged
+    /// slot (every non-nullable member, and a source already in the slot's own form).
+    ///
+    /// The member's SOURCE type is the spelling the author writes (`S?`) while the element's
+    /// STORED type is the tagged `__nullable<S>` the layout uses; both are needed to decide,
+    /// and this is the one place in the tuple writer that holds both.  See
+    /// [`Self::emit_nullable_slot_write`] for what the tag buys.
+    fn tuple_elem_tag_write(
+        &mut self,
+        tuple_d_nr: u32,
+        i: usize,
+        ref_code: &Value,
+        elem_pos: u16,
+        elem_tp: &Type,
+        value: &Value,
+    ) -> Option<Vec<Value>> {
+        if self.first_pass {
+            return None;
+        }
+        let Type::Enum(syn, true, _) = self.data.attr_type(tuple_d_nr, i) else {
+            return None;
+        };
+        if !self.needs_nullable_wrap(syn, elem_tp) {
+            return None;
+        }
+        let enum_kt = i32::from(self.data.def(syn).known_type());
+        let slot = self.cl(
+            "OpGetField",
+            &[
+                ref_code.clone(),
+                Value::Int(i32::from(elem_pos)),
+                Value::Int(enum_kt),
+            ],
+        );
+        Some(self.emit_nullable_slot_write(syn, &slot, value.clone()))
     }
 
     /// Emit the OpSet* (or recursive flatten) for a single tuple
@@ -9148,6 +9321,231 @@ impl Parser {
             ),
             self.set_field_no_check(some_d, payload_attr, 0, some_ref, src),
         ]
+    }
+
+    /// The dense struct a synthetic `__nullable<S>` wraps, or `None` for any other type.
+    ///
+    /// Reads it off the `Some` variant's `payload` field rather than parsing the enum's
+    /// NAME, so it answers with the def the layout actually uses.
+    pub(crate) fn nullable_payload_struct(&self, syn: u32) -> Option<u32> {
+        if !self.data.def(syn).name.starts_with("__nullable<") {
+            return None;
+        }
+        let some_d = self.data.variant_of(syn, "Some");
+        if some_d == u32::MAX {
+            return None;
+        }
+        let payload_attr = self.data.attr(some_d, "payload");
+        if payload_attr == usize::MAX {
+            return None;
+        }
+        match self.data.attr_type(some_d, payload_attr) {
+            Type::Reference(struct_d, _) => Some(struct_d),
+            _ => None,
+        }
+    }
+
+    /// Write a value that is spelled `S?` into a slot that is STORED as the tagged
+    /// `__nullable<S>` — one home for the three positions that hold such a slot inline: a
+    /// struct field, a collection element, and a tuple member.
+    ///
+    /// Enforces `@FR-L-Null-Tag`: an inline struct slot has no out-of-band absent value the way
+    /// a `DbRef` field does — it spends its whole width on real values — so `S?` is the tagged
+    /// `__nullable<S>` (discriminant, then the payload) rather than `@FR-L-Null`'s sentinel in
+    /// the same bytes.  A PRESENT value therefore has
+    /// to say it is present. Copying the dense `S` in raw leaves the discriminant aliased with
+    /// the payload's first byte, and then presence is decided by whatever that byte holds: a
+    /// legitimate `S { a: 0, … }` reads back ABSENT, and a `float` first member reads absent
+    /// for every value whose low byte is zero.
+    ///
+    /// The source arrives DENSE because it is parsed against the spelling the author writes
+    /// (`S?`), which is `Optional(Reference(S))` — the enum is the STORAGE spelling and exists
+    /// only in the layout. So the write is: stash the source once, set the discriminant
+    /// present and copy the dense payload when it is non-null, and otherwise leave the slot
+    /// absent. `build_nullable_set_null` is what the absent arm uses, so a slot being
+    /// REASSIGNED releases the payload it held instead of leaking it.
+    ///
+    /// `slot_ref` addresses the slot itself — an `OpGetField` at the enum's own type.
+    /// Answers the statements to emit; the caller decides where they go.
+    pub(crate) fn emit_nullable_slot_write(
+        &mut self,
+        syn: u32,
+        slot_ref: &Value,
+        value: Value,
+    ) -> Vec<Value> {
+        let Some(struct_d) = self.nullable_payload_struct(syn) else {
+            return Vec::new();
+        };
+        let some_d = self.data.variant_of(syn, "Some");
+        // The stash is typed by the PAYLOAD struct, not by the source expression: a bare
+        // `null` member has type `Type::Null`, which names no storage to stash into.
+        let src_tp = Type::Reference(struct_d, crate::data::Deps::none());
+        let src_var = self.vars.work_refs(&src_tp, &mut self.lexer);
+        if src_var == u16::MAX {
+            return Vec::new();
+        }
+        let mut list = vec![v_set(src_var, value)];
+        let present = self.build_some_present(some_d, slot_ref.clone(), Value::Var(src_var));
+        let absent = self.build_nullable_set_null(syn, slot_ref.clone());
+        let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
+        let not_null = self.cl("OpNot", &[is_null]);
+        list.push(v_if(not_null, Value::Insert(present), absent));
+        list
+    }
+
+    /// Read a tagged `__nullable<S>` slot back as the dense-or-absent value its declared
+    /// type `S?` promises — the mirror of [`emit_nullable_slot_write`].
+    ///
+    /// The read half of `@FR-L-Null-Tag`.  A reader that takes the slot's address as if it were
+    /// a dense `S` is wrong twice: it
+    /// starts at the DISCRIMINANT rather than at the payload, so every field answers with its
+    /// predecessor's value, and it has no way to say "absent" at all, so a cleared slot reads
+    /// as a present record of zeroes. Consult the discriminant and project the payload, or
+    /// answer the reference null sentinel — which is what `S?` means outside the slot.
+    ///
+    /// The discriminant test is spelled exactly as the inline null test is
+    /// (`operators.rs::enum_null`), so a slot written by one and read by the other cannot
+    /// disagree about which values are present.
+    pub(crate) fn emit_nullable_slot_read(
+        &mut self,
+        syn: u32,
+        slot_ref: Value,
+        src_tp: &Type,
+    ) -> Value {
+        let Some(struct_d) = self.nullable_payload_struct(syn) else {
+            return slot_ref;
+        };
+        let some_kt = {
+            let some_d = self.data.variant_of(syn, "Some");
+            self.data.def(some_d).known_type()
+        };
+        let struct_kt = self.data.def(struct_d).known_type();
+        if some_kt == u16::MAX || struct_kt == u16::MAX {
+            return slot_ref;
+        }
+        let payload_pos = i32::from(self.database.position(some_kt, "payload"));
+        // The result is a VIEW into whatever store the slot lives in, so it inherits that
+        // store's deps.  Building it with `Deps::none()` instead said the argument borrows
+        // nothing, the @P290 bracket then saw no store to protect, `scan_args` stopped lifting
+        // the argument to a name, and the caller kept the callee's minted return without ever
+        // freeing it — one record per call (loft#1105's leak gate is the only channel that
+        // scores that; every value was identical either way).
+        let dense = Type::Reference(struct_d, crate::data::Deps::none()).with_deps_of(src_tp);
+        let result_tp = Type::Optional(Box::new(dense));
+        // The slot is read TWICE — once for the discriminant, once for the payload — so an
+        // expression that is not free to repeat is named first.  A projection chain
+        // (`OpGetField(v, …)`, the tuple-element route) IS free to repeat: it is address
+        // arithmetic with no store in it.  Anything else can be a whole `??` block, whose
+        // default arm BUILDS a value, and evaluating that twice mints two stores and orphans
+        // one.
+        if Self::is_repeatable_place(&self.data, &slot_ref) {
+            let pick = self.nullable_pick(slot_ref.clone(), slot_ref, payload_pos, struct_kt);
+            return pick;
+        }
+        let named = self.vars.work_refs(src_tp, &mut self.lexer);
+        if named == u16::MAX {
+            return slot_ref;
+        }
+        // The name BORROWS — it holds a `DbRef` into a store the container owns — so the
+        // scope-exit sweep must not free it, and it allocates nothing of its own.
+        self.vars.set_skip_free(named);
+        self.vars.mark_inline_ref(named);
+        let pick = self.nullable_pick(Value::Var(named), Value::Var(named), payload_pos, struct_kt);
+        v_block(
+            vec![v_set(named, slot_ref), pick],
+            result_tp,
+            "nullable_slot_read",
+        )
+    }
+
+    /// `if <discriminant is set> { <payload> } else { <the reference null sentinel> }` — the
+    /// body of [`Self::emit_nullable_slot_read`], with the slot's address supplied twice
+    /// because the tag and the payload are two reads of it.
+    fn nullable_pick(
+        &mut self,
+        for_tag: Value,
+        for_payload: Value,
+        payload_pos: i32,
+        struct_kt: u16,
+    ) -> Value {
+        let disc = self.cl("OpGetEnum", &[for_tag, Value::Int(0)]);
+        let as_int = self.cl("OpConvIntFromEnum", &[disc]);
+        let is_absent = self.cl("OpEqInt", &[as_int, Value::Int(0)]);
+        let present = self.cl("OpNot", &[is_absent]);
+        let payload = self.cl(
+            "OpGetField",
+            &[
+                for_payload,
+                Value::Int(payload_pos),
+                Value::Int(i32::from(struct_kt)),
+            ],
+        );
+        let absent = self.cl("OpNullRefSentinel", &[]);
+        v_if(present, payload, absent)
+    }
+
+    /// Is this value free to evaluate TWICE — a variable, or a projection chain rooted at one?
+    ///
+    /// A projection is address arithmetic: it reads a `DbRef` out of a place and allocates
+    /// nothing, so repeating it costs a few instructions.  Everything else is assumed to have
+    /// an effect worth keeping to one evaluation — a block that BUILDS a value is the case
+    /// that matters, since repeating it mints a second store nothing then frees.
+    fn is_repeatable_place(data: &crate::data::Data, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Var(_) => true,
+            // A projection has two IR spellings and both are address arithmetic: the CALL
+            // (`OpGetField`, `OpGetVector`, …) and `TupleGet`, which reads one element off a
+            // stack tuple.  Answering only the first would stash a value that was free to
+            // repeat — harmless, but it is the same half-answer the `spellings` screen exists
+            // to find, so both are here.
+            Value::TupleGet(_, _) => true,
+            Value::Call(d, args) => {
+                crate::use_analysis::is_projection_op(data, *d)
+                    && args
+                        .first()
+                        .is_some_and(|a| Self::is_repeatable_place(data, a))
+            }
+            _ => false,
+        }
+    }
+
+    /// The SOURCE spelling of a stored element type — the one the author wrote.
+    ///
+    /// A member declared `S?` is stored as the tagged `Enum(__nullable<S>)` (`@FR-L-Null-Tag`)
+    /// while the author wrote `Optional(Reference(S))`, and the synthetic `__tuple<…>` def is
+    /// NAMED by the second. So a list read straight off the def's attributes is in the storage
+    /// spelling, and handing that to anything which re-derives the def from its element types
+    /// mints a DIFFERENT tuple — different offsets, and every member after the tagged one read
+    /// or written at the wrong place. It also hides the member from
+    /// [`Self::needs_nullable_wrap`], which asks about the declared type.
+    ///
+    /// Everything that is not a nullable-struct wrapper answers unchanged, so this is safe to
+    /// apply to a whole element list.
+    pub(crate) fn source_spelling(&self, stored: &Type) -> Type {
+        let Type::Enum(syn, true, deps) = stored else {
+            return stored.clone();
+        };
+        match self.nullable_payload_struct(*syn) {
+            Some(struct_d) => Type::Optional(Box::new(Type::Reference(struct_d, deps.clone()))),
+            None => stored.clone(),
+        }
+    }
+
+    /// Is this element type the DENSE spelling of `syn`'s payload — i.e. a value parsed
+    /// against it arrives needing [`emit_nullable_slot_write`]?
+    ///
+    /// `S?` (`Optional(Reference(S))`), a bare `S` and a bare `null` all answer yes; the
+    /// tagged enum itself answers NO, because such a value is already in the slot's own form
+    /// and wrapping it a second time would bury the real discriminant one payload deep.
+    pub(crate) fn needs_nullable_wrap(&self, syn: u32, src_tp: &Type) -> bool {
+        let Some(struct_d) = self.nullable_payload_struct(syn) else {
+            return false;
+        };
+        match src_tp.base() {
+            Type::Reference(src_d, _) => *src_d == struct_d,
+            Type::Null => true,
+            _ => false,
+        }
     }
 
     /// @PLN25 E2a.5 / loft#896 — emit "this `__nullable<S>` slot is ABSENT" against `to`, the
@@ -9483,13 +9881,33 @@ impl Parser {
                 // that choice: per-element writes for a stack tuple, one
                 // `OpCopyRecord` when the source is itself a promoted
                 // `Reference(__tuple<…>)` (PLAN51 V-b).
-                if !self.first_pass && self.data.def(inner_tp).name().starts_with("__tuple<") {
+                // …and the slot has to actually HOLD that record.  `deps.contains(&u16::MAX)`
+                // is the #328 marker saying the attribute stores a 12-byte `DbRef` rather
+                // than inline bytes — the spelling three other sites already read for the
+                // same question (`objects.rs`'s two, and the #318 carrying-walk below).  A
+                // closure record's capture of a `vector<(…)>` is exactly that: it is typed
+                // `Reference(__tuple<…>)` because `closure_attr_type` names the ELEMENT def
+                // as a stand-in for "some DbRef", and the value stored is the COLLECTION
+                // handle.  Reading the destination alone, this arm wrote the vector's own
+                // bytes out as two integers, so the closure captured a garbage pair and a
+                // `for` over it read no elements at all — silently on `--interpret`, `E0308`
+                // on `--native` (loft#1131).
+                if !self.first_pass
+                    && !deps.contains(&u16::MAX)
+                    && self.data.def(inner_tp).name().starts_with("__tuple<")
+                {
+                    // Read in the SOURCE spelling: `emit_tuple_set_ops` re-derives the
+                    // `__tuple<…>` def from these types to get its offsets, and the def is
+                    // named by what the author wrote.  Handing it the stored spelling of a
+                    // nullable member minted `__tuple<__nullable<S>,integer>` instead, whose
+                    // `_1` sits at 16 where the real one sits at 24 — so the append wrote a
+                    // member the read could not find.
                     let elems: Vec<Type> = self
                         .data
                         .def(inner_tp)
                         .attributes()
                         .iter()
-                        .map(|a| a.typedef.clone())
+                        .map(|a| self.source_spelling(&a.typedef))
                         .collect();
                     let base_pos = if let Value::Int(p) = pos_val {
                         p as u16

@@ -1,0 +1,143 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! loft#1132 — `--native` refuses a yield type it has no transport for, and says so.
+//!
+//! The positive half — every channel that DOES carry its type — is
+//! `tests/scripts/1132-a-generator-yield-rides-a-channel-that-carries-it.loft`, which runs on
+//! both backends.  A refused program has no run to assert on, so the refusals are pinned here
+//! at the emit level instead: `--native-emit` writes the generated Rust without invoking
+//! rustc, so the assertion is on the source loft produced.
+//!
+//! Two things are checked per shape, and the second is the one that decays: the
+//! `compile_error!` is PRESENT, and the yielded value is BOUND TO `_` rather than cast.  A
+//! refusal that merely adds a message while the bad cast still stands satisfies the first
+//! alone, and that was the state of the first attempt at this fix — the message arrived
+//! buried under an `E0605` from the producer and an `E0308` from the consumer.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+fn loft_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_loft"))
+}
+
+/// Emit the generated Rust for `src`, without running rustc over it.
+fn emit(tag: &str, src: &str) -> String {
+    let dir = std::env::temp_dir();
+    let lf = dir.join(format!("loft_1132_{tag}_{}.loft", std::process::id()));
+    let rf = dir.join(format!("loft_1132_{tag}_{}.rs", std::process::id()));
+    std::fs::write(&lf, src).expect("write probe");
+    let st = Command::new(loft_bin())
+        .args(["--native-emit", rf.to_str().expect("path")])
+        .arg(&lf)
+        .env("LOFT_TIMEOUT", "300")
+        .status()
+        .expect("spawn loft");
+    assert!(st.success(), "--native-emit must succeed for {tag}");
+    let rs = std::fs::read_to_string(&rf).expect("read emitted Rust");
+    let _ = std::fs::remove_file(&lf);
+    let _ = std::fs::remove_file(&rf);
+    rs
+}
+
+/// The producer refuses, and nothing else in the emit still tries to cast the value.
+fn assert_refused(tag: &str, src: &str, named: &str) {
+    let rs = emit(tag, src);
+    assert!(
+        rs.contains("has no native transport channel")
+            || rs.contains("cannot be collected from a generator's LOOP body"),
+        "{tag}: a yield type with no channel must be REFUSED by name, not cast — \
+         the emit carries neither refusal"
+    );
+    assert!(
+        rs.contains(named),
+        "{tag}: the refusal must name the yield type `{named}` — a message the author \
+         cannot match against their own source is a rustc dump with extra steps"
+    );
+    assert!(
+        rs.contains("compile_error!"),
+        "{tag}: the refusal has to STOP the build, not warn inside it"
+    );
+    assert!(
+        rs.contains("); let _ = (") || rs.contains("{ let _ = ("),
+        "{tag}: the refused value must be BOUND TO `_`, not cast — the cast is the `E0605` \
+         the refusal exists to replace, and leaving it in buries the message under it"
+    );
+}
+
+/// A tuple carrying a `text` element: `tuple_kinds` cannot classify it, and the legacy
+/// channel it fell through to ends in `(i64, &String) as i64`.
+#[test]
+fn a_tuple_with_a_text_element_is_refused_by_name() {
+    assert_refused(
+        "text_elem",
+        "fn g() -> iterator<(integer, text)> { yield (1, \"a\".to_uppercase()); }\n\
+         fn main() { for t in g() { print(\"{t.0} {t.1}\\n\"); } }\n",
+        "(integer, text)",
+    );
+}
+
+/// A NESTED tuple — the other shape `tuple_kinds` answers `None` for, and the one that
+/// shows the refusal is about the classification and not about `text`.
+#[test]
+fn a_nested_tuple_yield_is_refused_by_name() {
+    assert_refused(
+        "nested",
+        "struct P1132 { n: integer }\n\
+         fn g() -> iterator<((integer, P1132), integer)> { yield ((1, P1132 { n: 11 }), 5); }\n\
+         fn main() { for t in g() { print(\"{t.1}\\n\"); } }\n",
+        "((integer, P1132), integer)",
+    );
+}
+
+/// A tuple carrying a store HANDLE, from a loop body.  The type has a channel — it is the
+/// eager collector that cannot hold it, because a handle pushed once per iteration aliases
+/// the work record the next iteration overwrites.  So this cell refuses for a different
+/// reason than the two above, and the straight-line form of the SAME type must not.
+#[test]
+fn a_handle_carrying_tuple_from_a_loop_body_is_refused_but_not_straight_line() {
+    assert_refused(
+        "loop_handle",
+        "struct P1132 { n: integer }\n\
+         fn g(k: integer) -> iterator<(integer, P1132)> {\n\
+         \x20 i = 0;\n\
+         \x20 while i < k { yield (i, P1132 { n: i * 10 }); i += 1; }\n\
+         }\n\
+         fn main() { for t in g(3) { print(\"{t.0} {t.1.n}\\n\"); } }\n",
+        "(integer, P1132)",
+    );
+    let straight = emit(
+        "straight_handle",
+        "struct P1132 { n: integer }\n\
+         fn g() -> iterator<(integer, P1132)> { yield (1, P1132 { n: 10 }); }\n\
+         fn main() { for t in g() { print(\"{t.0} {t.1.n}\\n\"); } }\n",
+    );
+    assert!(
+        !straight.contains("compile_error!"),
+        "the SAME yield type is fine straight-line — it is the eager collector that cannot \
+         hold a handle, so refusing the type outright would take a working shape with it"
+    );
+}
+
+/// The control that keeps the refusal from widening: a by-value tuple from a loop body is
+/// exactly what the eager buffer was taught to carry, so it must emit no refusal at all.
+#[test]
+fn a_by_value_tuple_from_a_loop_body_is_not_refused() {
+    let rs = emit(
+        "by_value",
+        "fn g(k: integer) -> iterator<(integer, boolean)> {\n\
+         \x20 for i in 0..k { yield (i * 10, i % 2 == 0); }\n\
+         }\n\
+         fn main() { for t in g(3) { print(\"{t.0} {t.1}\\n\"); } }\n",
+    );
+    assert!(
+        !rs.contains("compile_error!"),
+        "a tuple whose every element is carried BY VALUE packs into the eager buffer flat; \
+         refusing it would give up the row the decided edge in formal/coroutines.md claims"
+    );
+    assert!(
+        rs.contains("__values.push("),
+        "…and it packs through the eager collector, which is what the stride pop reads back"
+    );
+}

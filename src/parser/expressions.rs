@@ -1101,7 +1101,21 @@ impl Parser {
                 Type::Void
             } else {
                 let mut v = Value::Null;
+                // loft#1130 — a yielded value LEAVES the function against a type the
+                // declaration already names, exactly as a `return` does, so it takes the
+                // same `⇐` seeding.  Without it a keyed literal (`yield [K { … }]`) had
+                // nothing to resolve against and was built as a `vector<K>`: the consumer
+                // got a collection with the wrong length and no keys, on both backends and
+                // with no diagnostic, while the identical literal BOUND to a declared local
+                // first was correct — that position reads its destination from `var_tp` and
+                // never needed the channel.
+                let saved_expected = std::mem::replace(&mut self.expected, Type::Unknown(0));
+                if let Type::Iterator(elem_tp, _) = &r_type {
+                    let elem = (**elem_tp).clone();
+                    self.seed_leaving_value_hint(&elem);
+                }
                 self.expression(&mut v);
+                self.expected = saved_expected;
                 // @P328 — when yielding a NON-CAPTURING closure into an
                 // `iterator<fn(...) -> ...>` generator, the expression
                 // parser leaves the lambda as a bare `Value::Int(d_nr)`
@@ -3207,8 +3221,28 @@ use a separate collection or add after the loop"
             // the RHS is a fresh-storage call (`s = build()`), matching
             // `copy_ref`'s leak guard.  Plain Var-RHS aliases a live local —
             // no source-free (its own scope frees it).
+            //
+            // @FR-O-Move — a store the callee only BORROWED is not the callee's to give
+            // away, so releasing "the source" here has to know which it is.
+            //
+            // loft#1140 — "a fresh-storage call" is what this comment says and is NOT what
+            // `is_struct_returning_call` asks: it answers *is the RHS a call*, and a call
+            // that hands back a BORROW of its own parameter (`fn id(x: hash<T[k]>) ->
+            // hash<T[k]> { x }`) passed it.  The bit then freed the caller's collection,
+            // which every call after the first read as empty.  `call_return_frees_source`
+            // is the canonical answer to exactly this question — it was written for this
+            // bit (loft#981/#982) — it reads the callee's return deps AND whether this
+            // site's bracket covers every ref argument.  Its licence is conditional on that
+            // bracket actually being emitted, which this site did not do, so the bracket is
+            // emitted below.  Answering the callee-side half alone would also close the
+            // use-after-free, but conservatively: the minting arm of a borrowing signature
+            // (`if c { x } else { […] }`) would then leak one store per call, which the
+            // bracket instead resolves at runtime — protected store, free refused;
+            // callee-minted store, freed.
             #[cfg(not(feature = "wasm"))]
-            let tp_val = if self.is_struct_returning_call(code) {
+            let tp_val = if self.is_struct_returning_call(code)
+                && crate::use_analysis::call_return_frees_source(&self.data, code)
+            {
                 i32::from(kt) | 0x8000
             } else {
                 i32::from(kt)
@@ -3263,7 +3297,30 @@ use a separate collection or add after the loop"
             // `OpReplaceKeyed` (whose `remove_claims` clears `v`'s
             // existing store before `copy_claims`).  No parse-time
             // first-vs-reassign discriminator needed.
-            *code = Value::Insert(vec![Value::Set(var_nr, Box::new(Value::Null)), replace]);
+            // loft#1140 — @P290 bracket, the same one `state/codegen.rs` emits around
+            // `OpCopyRecord`'s source-free.  Whether a borrowing callee hands back the
+            // argument's store or one it minted itself is a RUNTIME fact no static bit can
+            // carry, so the free is decided by marking the argument stores: `OpReplaceKeyed`
+            // refuses to free a source that is `is_free_protected`, and frees one that is
+            // not.  Without it this site had to choose statically, and either choice is
+            // wrong for one arm — free, and `fn id(x) -> hash<T[k]> { x }` takes the
+            // caller's collection; do not free, and the minting arm leaks one store per
+            // call.  `protectable_ref_args` is the same derivation the source-free gate
+            // above consults for coverage, so the marks and the licence cannot drift.
+            let mut seq = vec![Value::Set(var_nr, Box::new(Value::Null))];
+            let guarded: Vec<u16> = if tp_val & 0x8000 != 0 {
+                crate::use_analysis::protectable_ref_args(&self.data, code).0
+            } else {
+                Vec::new()
+            };
+            for av in &guarded {
+                seq.push(self.cl("n_protect_store_frees", &[Value::Var(*av)]));
+            }
+            seq.push(replace);
+            for av in &guarded {
+                seq.push(self.cl("n_unprotect_store_frees", &[Value::Var(*av)]));
+            }
+            *code = Value::Insert(seq);
             return Type::Void;
         }
         // `lhs += other_vec` where both sides are vectors: append all elements

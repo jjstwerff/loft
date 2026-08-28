@@ -96,6 +96,21 @@ impl Placement {
         }
     }
 
+    /// The manifest spelling of this placement — the exact inverse of [`Self::parse`].
+    ///
+    /// Written beside `parse` so the two cannot drift: a spelling that does not round-trip
+    /// would make the cache manifest replay a DIFFERENT placement than the one the parse
+    /// read, and the two placements are meant to be indistinguishable in behaviour — so
+    /// nothing in any output would show the difference.
+    #[must_use]
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Placement::InProc => "inproc",
+            Placement::Process => "process",
+            Placement::Remote => "remote",
+        }
+    }
+
     /// Does this placement put the library outside this process?
     #[must_use]
     pub fn is_out_of_process(self) -> bool {

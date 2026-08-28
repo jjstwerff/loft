@@ -113,6 +113,18 @@ struct ManifestState {
     /// warm `--native` build P269s a reachable `#native` fn as "no implementation
     /// in any registered native crate" (the ssh-lib regression).
     native_crate_regs: Vec<(String, String)>,
+    /// @PLN119 — `[library] placement` registrations: `(name, spelling, pkg_dir)` per library
+    /// that asked to run OUT OF PROCESS.  `mark_exports` writes its marks into `Data`, so the
+    /// bundle already carries them — but the WORKER that those marked functions dispatch to is
+    /// started from this list, and a warm load never ran the parse that built it.  Without the
+    /// replay the marks point at `compile.rs`'s "native function not loaded" stub, so a placed
+    /// library works on its first run and panics on its second.
+    placed_libs: Vec<(String, String, String)>,
+    /// Diagnostics the COLD parse produced, replayed on a warm load so a cached run says
+    /// exactly what an uncached one says.  Without this the parser does not run, so nothing
+    /// warns — the same program reports differently on its second run, and a library's CI
+    /// (`LOFT_DENY_WARNINGS`) turns on whether anyone had run the build before.
+    diagnostics: Vec<crate::diagnostics::DiagEntry>,
     /// Def-table index where USER definitions start (the stdlib def count when
     /// the user-file parse began).  A warm load restores stdlib + user defs in
     /// one table, so without this boundary the no-`main` test-fn fallback sees
@@ -183,6 +195,27 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
         native_crate_regs.push((krate.to_string(), pkg_dir.to_string()));
         next = lines.next();
     }
+    // Optional `plib <name> <spelling> <pkg_dir>` headers: one per out-of-process placed
+    // library.  A package name and a placement spelling each have no spaces, so `splitn(3)`
+    // leaves the package dir verbatim — directories may contain them.
+    let mut placed_libs = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("plib ")) {
+        let mut it = rest.splitn(3, ' ');
+        let name = it.next()?.to_string();
+        let spelling = it.next()?.to_string();
+        let pkg_dir = it.next()?.to_string();
+        placed_libs.push((name, spelling, pkg_dir));
+        next = lines.next();
+    }
+    // Optional `diag <encoded>` headers: the diagnostics the cold parse emitted, one per
+    // line (see `DiagEntry::encode_for_cache`).  A line that will not decode fails the whole
+    // manifest — a bundle that cannot reproduce what the parse SAID must not be served,
+    // because the failure mode is silence and silence reads as "no problem".
+    let mut diagnostics = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("diag ")) {
+        diagnostics.push(crate::diagnostics::DiagEntry::decode_from_cache(rest)?);
+        next = lines.next();
+    }
     // #444 — optional `wbroute <loft_sym> <crate> <bridge_fn>` headers: the
     // `[wasm.bridge].routes` map.  The three tokens are a `#native` symbol, a
     // crate name, and a bridge fn — none contains a space — so `splitn(3)` is
@@ -224,6 +257,8 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
         program_relative,
         native_lib_regs,
         native_crate_regs,
+        placed_libs,
+        diagnostics,
         user_def_start,
         wasm_bridge_routes,
         wasm_bridge_packages,
@@ -312,6 +347,24 @@ pub fn warm_load_program(
     // `extensions::load_all` gets an empty list on warm runs and every
     // `#native` call hits the "native function not loaded" stub.
     p.pending_native_libs = native_libs;
+    // @PLN119 — restore the out-of-process placement registrations.  `main` starts a worker
+    // for each entry here and points the marked functions at it; the marks themselves came
+    // back with the bundle (`mark_exports` writes them into `Data`), so without this the
+    // marked calls resolve to the "native function not loaded" stub instead.  A spelling this
+    // build cannot parse fails the whole warm load rather than dropping the library: falling
+    // back to in-process would run the program correctly and isolate nothing, which is the one
+    // outcome `Placement::parse` refuses for exactly this reason.
+    for (name, spelling, pkg_dir) in &state.placed_libs {
+        let placement = crate::lib_placement::Placement::parse(spelling).ok()?;
+        p.pending_placed_libs
+            .push((name.clone(), pkg_dir.clone(), placement));
+    }
+    // Replay what the cold parse said.  The parser did not run, so these are the only
+    // diagnostics this run will have; `main` renders them through the same path a cold run
+    // uses, so `LOFT_ERRORS`, colour and the warnings-off filter all still apply.
+    for e in state.diagnostics {
+        p.diagnostics.restore_from_cache(e);
+    }
     p.native_lib_regs = state.native_lib_regs;
     // #444 — restore the `[wasm.bridge]` state the IR bundle does not carry.
     // `--html` codegen keys the host-import-extern skip AND the routed-call on
@@ -332,7 +385,12 @@ pub fn warm_load_program(
 /// hash).  The bundle is published first, then the manifest atomically — so a
 /// manifest is only ever present alongside a complete bundle.
 #[cfg(feature = "mmap")]
-pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
+pub fn save_program(
+    p: &Parser,
+    script_abspath: &str,
+    user_def_start: u32,
+    placed_libs: &[(String, String, crate::lib_placement::Placement)],
+) {
     use std::fmt::Write as _;
     let (bundle, manifest) = crate::cache::program_cache_paths(script_abspath, &p.lib_dirs);
 
@@ -360,6 +418,19 @@ pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
     // `#native` fn as "no implementation in any registered native crate".
     for (krate, pkg_dir) in &p.data.native_packages {
         let _ = writeln!(lines, "ncrate {krate} {pkg_dir}");
+    }
+    // @PLN119 — persist the out-of-process placement registrations.  Taken as an ARGUMENT
+    // rather than read off the parser, because `main` has already `mem::take`n them by the
+    // time this runs: the list drives both the native-candidate exclusion and the worker
+    // install, so it is consumed before the bundle is written.
+    for (name, pkg_dir, placement) in placed_libs {
+        let _ = writeln!(lines, "plib {name} {} {pkg_dir}", placement.spelling());
+    }
+    // The diagnostics this parse produced, so a warm load can say what the cold run said.
+    // Order is preserved: the renderer's warning-cascade dedup and the caller's
+    // errors-only filter both depend on it.
+    for e in p.diagnostics.entries() {
+        let _ = writeln!(lines, "diag {}", e.encode_for_cache());
     }
     // #444 — persist the `[wasm.bridge]` state so a warm load reconstructs the
     // route table `--html` codegen reads (the IR bundle stores only the def
@@ -393,11 +464,20 @@ pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
     {
         return;
     }
-    // Manifest last + atomically — a stale/partial manifest would just be a miss.
-    let tmp = manifest.with_extension("manifest.tmp");
+    // Manifest last + atomically, through a tmp name of THIS PROCESS's own — the same shape
+    // `ir_store::save_bundle` uses for the bundle beside it, and for the same reason.  A fixed
+    // `.manifest.tmp` is shared by every loft writing the same program, so two of them
+    // interleave their bytes into one file and both rename it: the reader then validates a
+    // manifest that is a MIX of two writes.  Its `diag` lines are the visible half — a warm
+    // load replays fewer diagnostics than the cold run produced, so one side of a
+    // parity comparison reports a warning the other does not (loft#1129).  Concurrent loft
+    // processes over one bundle are not a test artefact: two builds at once is an ordinary
+    // thing for a user to do.
+    let tmp = manifest.with_extension(format!("manifest.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, lines.as_bytes()).is_ok() {
         let _ = std::fs::rename(&tmp, &manifest);
     }
+    let _ = std::fs::remove_file(&tmp);
     // @PLN11 G2 / track 1 — with the cache default-on, bound the directory size
     // by evicting the oldest bundles after each cold save.
     crate::cache::prune_program_cache();
@@ -414,7 +494,13 @@ pub fn warm_load_program(
     None
 }
 #[cfg(not(feature = "mmap"))]
-pub fn save_program(_p: &Parser, _script_abspath: &str, _user_def_start: u32) {}
+pub fn save_program(
+    _p: &Parser,
+    _script_abspath: &str,
+    _user_def_start: u32,
+    _placed_libs: &[(String, String, crate::lib_placement::Placement)],
+) {
+}
 
 #[cfg(all(test, feature = "mmap"))]
 mod ncrate_manifest_tests {

@@ -137,6 +137,31 @@ impl Output<'_> {
                     write!(w, "{{ __y = {open}")?;
                     self.output_code_node(w, node.yield_inner())?;
                     write!(w, "{close}; __exhausted = false; break 'iter; }}")?;
+                } else if let Some(msg) = self.yield_collect_refuse.clone() {
+                    // The eager collector cannot carry this yield type.  Emit the value
+                    // bound to `_` so nothing is cast and no rustc cascade drowns the
+                    // message, then stop the build with the refusal itself (loft#1132).
+                    write!(w, "{{ let _ = (")?;
+                    self.output_code_node(w, node.yield_inner())?;
+                    write!(w, "); compile_error!(\"{msg}\"); }}")?;
+                } else if let Some(kinds) = self.yield_collect_kinds.clone() {
+                    // A by-value tuple yield: push each element's `i64` image FLAT, in the
+                    // slot order `yield_slot_i64` defines, so the `next_into` reader pops
+                    // one stride per yield.  Every kind here is single-slot by construction
+                    // (`eager_tuple_kinds` rejects a `Ref`), so slot index == element index.
+                    let inner = node.yield_inner().unspan();
+                    write!(w, "{{ ")?;
+                    if inner.kind() == ValueType::Tuple {
+                        for (elem, &kind) in inner.tuple_items().iter().zip(kinds.iter()) {
+                            let mut buf: Vec<u8> = Vec::new();
+                            self.output_code_node(&mut buf, elem)?;
+                            let code = String::from_utf8_lossy(&buf).into_owned();
+                            let img = super::coroutine::yield_slot_i64(kind, &code)
+                                .expect("eager_tuple_kinds admits only single-slot kinds");
+                            write!(w, "__values.push({img}); ")?;
+                        }
+                    }
+                    write!(w, "}}")?;
                 } else if self.yield_collect {
                     // Inside a ForLoopBody factory: push to the collector.
                     write!(w, "__values.push((")?;

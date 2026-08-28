@@ -211,10 +211,30 @@ What that buys, and none of it is available from a rule NAME alone:
    exists for them. A citation naming one is an error, which is exactly what the resolve check
    catches.
 
+**Why this is the quality lever, and not just tidiness.** Fixing a bug has no intrinsic test
+for *did we now cover every similar case?* — a fix is shaped by the subset of the language
+that happened to get stressed, and nothing in it asks about the rest. A citation converts that
+question into one a tool answers: given `@FR-X`, `rule_tags.py sites @FR-X` IS the coverage
+check. So the tag is what ties the code to the LANGUAGE rather than to our incident history,
+and generality — code organised around the constructions the language has — is the thing being
+bought.  The bug that prompted a site is not what the comment should say (see
+[DOC_QUALITY.md](../DOC_QUALITY.md)); the rule it obeys is.
+
 **Adopt honestly rather than completely.** A citation naming a rule that does not exist is
 worth failing on from the first day; *every rule has at least one citation* tightens as coverage
-grows (5 rules cited across 7 sites at the time of writing). Any rule→site index is **generated** from the citations, never maintained beside
+grows. Any rule→site index is **generated** from the citations, never maintained beside
 them — a second copy of where the rules live is the defect this convention exists to remove.
+
+**Coverage, measured (2026-08-28): 76 of 255 rules cited, across 163 sites — 179 uncited.**
+Re-measure rather than reading that off this page (`scripts/rule_tags.py check`). ⚠ **An
+uncited rule is not merely undocumented — it is one where the coverage question cannot be
+ASKED**, because the query returns nothing and the absence looks identical to "no sites needed".
+By area the gap tracks where the bugs still are: `types.md` 38 uncited of 49 and `tuples.md` 7
+of 8, whose classes are both RISING in `make bug-review`; `ownership.md` 11 of 11 CITED and
+`layout.md` 8 of 9, whose classes are falling or paid off. ⚠ Read that correlation the right
+way round: `ownership.md` is fully cited BECAUSE it was hammered, so coverage is a lagging
+record of attention, not a leading indicator of safety. What it does say is where the next
+coverage question cannot yet be asked at all.
 
 The generic form of this argument, for any project: the `design-protocol` skill, § *As the
 system grows, anchor the question on the RULE, not on the code*.

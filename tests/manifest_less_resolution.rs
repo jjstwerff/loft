@@ -32,6 +32,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "common/mod.rs"]
+mod common;
+
 fn loft_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_loft"))
 }
@@ -351,14 +354,14 @@ fn file_registry(home: &Path, name: &str, version: &str) -> String {
         &index,
         &format!(
             r#"{{"schema_version":1,"packages":{{"{name}":{{"description":"probe",
-               "versions":{{"{version}":{{"url":"file://{}","sha256":"{}","size":{},
+               "versions":{{"{version}":{{"url":"{}","sha256":"{}","size":{},
                "loft":">=0.8","published":"2026-08-18T00:00:00Z"}}}}}}}}}}"#,
-            out.tarball.display(),
+            common::file_url(&out.tarball),
             out.sha256,
             out.size
         ),
     );
-    format!("file://{}", index.display())
+    common::file_url(&index)
 }
 
 /// Run the `loft` CLI in `dir` against the private home + `url` registry.

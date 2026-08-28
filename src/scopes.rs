@@ -118,6 +118,16 @@ struct Scopes {
     /// instead (only at the same loop depth: emitting inside a deeper loop
     /// would re-free a viewed store on iterations 2+).
     owned_refs: HashMap<u16, usize>,
+    /// loft#1128 — the RUNTIME ownership witness for the hidden return-buffer parameter:
+    /// `(buffer var, boolean flag var)`.  `owned_refs` above is the same fact answered
+    /// STATICALLY, and it is intersect-merged at every join (@FR-O-Complete), so a prior
+    /// assignment inside one `if` arm correctly answers *"not owned on every path"* and no
+    /// free is emitted — sound, and incomplete.  The flag mirrors the same fact per RUN, the
+    /// way `--native` already does with its entry-buffer witness `_rb_w_<name>`.
+    ///
+    /// `None` unless the body actually reaches a displacing site (`displaces_return_buffer`),
+    /// so a function that cannot leak pays no slot.
+    rbuf_witness: Option<(u16, u16)>,
     /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
     /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
     /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
@@ -1294,10 +1304,28 @@ fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32>
 /// underflows (loft#1004's corpus script panics with "attempt to subtract with
 /// overflow").  Text elements are released with the frame and are not the leak
 /// this exists for.
-fn tuple_owned_elem_frees(elems: &[Type], v: u16, data: &Data) -> Vec<Value> {
+fn tuple_owned_elem_frees(
+    elems: &[Type],
+    v: u16,
+    data: &Data,
+    function: &crate::variables::Function,
+) -> Vec<Value> {
     let mut out = Vec::new();
     for &(_offset, idx) in crate::data::owned_elements(elems).iter().rev() {
-        if !elems[idx].depend().is_empty() || matches!(elems[idx].base(), Type::Text(_)) {
+        // @FR-O-Override vetoes the proxy at every site that frees on it, and this is one:
+        // the element test concludes "this element owns its store" from an empty dep list,
+        // which is @FR-O-Proxy and unsound alone.  `OpFreeRef(TupleGet(v, i))` releases
+        // storage reached through `v`, so a binding the parser marked never-free is
+        // never-free here too — and a tuple has no dep list of its own to say it through.
+        //
+        // The test reads NEGATED, guarding a `continue`, so the free is on the FALL-THROUGH
+        // and the site concludes ownership exactly as a positive test would.  Reading the
+        // `!` as "this asks whether it is a borrow" is what kept this site out of
+        // `scripts/o_proxy_check.py`'s obligation set entirely.
+        if function.is_skip_free(v)
+            || !elems[idx].depend().is_empty()
+            || matches!(elems[idx].base(), Type::Text(_))
+        {
             continue;
         }
         out.push(Value::Call(
@@ -1307,7 +1335,6 @@ fn tuple_owned_elem_frees(elems: &[Type], v: u16, data: &Data) -> Vec<Value> {
     }
     out
 }
-
 fn run_scan_phase(
     data: &mut Data,
     d_nr: u32,
@@ -1341,6 +1368,7 @@ fn run_scan_phase(
         paired_witness: HashMap::new(),
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
+        rbuf_witness: None,
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
@@ -1352,7 +1380,29 @@ fn run_scan_phase(
     for a in function.arguments() {
         scopes.var_scope.insert(a, 0);
     }
+    // loft#1128 — mint the return-buffer's runtime ownership witness BEFORE the scan, so the
+    // first assignment that has to maintain it already has a flag to write.  Only for a body
+    // that actually reaches a displacing site: everywhere else the static `owned_refs` answer
+    // is complete and the slot would be dead weight.
+    if let Some(buf) = hidden_return_buffer_var(d_nr, &function, data)
+        && displaces_return_buffer(orig_code, buf, data)
+    {
+        let name = format!("__rbo_{}", function.name(buf));
+        let flag = function.add_temp_var(&name, &Type::Boolean);
+        scopes.var_scope.insert(flag, 0);
+        scopes.var_order.push(flag);
+        scopes.rbuf_witness = Some((buf, flag));
+    }
     let mut code = scopes.scan(orig_code, &mut function, data);
+    // The witness starts FALSE: on entry the buffer holds the CALLER's store, which this
+    // function must never release.  A transition site is reachable with no prior assignment at
+    // all (`fn g() -> Res { mk(2) }`), and `needs_pre_init` does not cover `boolean`, so an
+    // uninitialised slot would read as garbage and free the caller's buffer.
+    if let Some((_, flag)) = scopes.rbuf_witness
+        && let Value::Block(bl) = &mut code
+    {
+        bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+    }
     // lift vars from `scan_args` are assigned inside conditional branches but
     // their `OpFreeRef` lives at function exit; prepend the null-inits so codegen
     // reserves their slot along every path (see the original comment in check).
@@ -4227,10 +4277,69 @@ impl Scopes {
             && !value.reads_var(ov)
         {
             let elems = elems.clone();
-            let frees = tuple_owned_elem_frees(&elems, v, data);
+            let frees = tuple_owned_elem_frees(&elems, v, data, function);
             if !frees.is_empty() {
                 transition_free = Some(Value::Insert(frees));
             }
+        }
+        // loft#1126 / @FR-O-Latest — the ownership-transition free for the OTHER
+        // reassignment shape: `v = f(…, v, …)` with `v` at `f`'s hidden
+        // return-buffer position, where `f` mints a store of its own and never
+        // delivers into the buffer.  The hand-off is not taken, so `v`'s current
+        // store is displaced with nothing left naming it.
+        //
+        // Codegen cannot decide this one.  `v` is the function's hidden
+        // return-buffer PARAMETER, so `state/codegen.rs`'s `is_hidden_buf_arg`
+        // reads "argument → the CALLER owns that store → never free" — the
+        // BINDING-level reading.  @FR-O-Latest says ownership is a property of the
+        // LATEST ASSIGNMENT: the caller's store is gone the moment this function
+        // assigns `v`, and what `v` holds from then on is this function's to
+        // release.  `owned_refs` is that fact (@FR-O-Oracle memoised per path and
+        // per loop depth), and it lives here, so the free is emitted here.
+        //
+        // `--native` reaches the same verdict at runtime through its entry-buffer
+        // witness (`_rb_w_<name>`, `generation/mod.rs`), which is why only the
+        // interpreter reported the leak — an @FR-O-NoDiverge asymmetry, with the
+        // interpreter on the deviating side.  Its own guarded free is a no-op after
+        // this one: the `OpFreeRef` emitter resets a freed Var to the null
+        // sentinel, so the store it captures is already NULL.
+        if transition_free.is_none()
+            && was_in_scope
+            && matches!(function.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
+            && function.tp(v).depend().is_empty()
+            // @FR-O-Proxy is unsound alone — a free taken on the empty dep list
+            // must consult @FR-O-Override.
+            && !function.is_skip_free(v)
+            && self.owned_refs.get(&v) == Some(&self.loops.len())
+            && displaces_owned_through_fresh_callee(value, v, ov, data)
+        {
+            transition_free = Some(call("OpFreeRef", v, data));
+        }
+        // loft#1128 — the PATH-SENSITIVE half of the same fact.  `owned_refs` above is
+        // intersect-merged at every join (@FR-O-Complete), so an assignment inside ONE `if`
+        // arm answers "not owned on every path" and the branch above emits nothing: sound,
+        // and incomplete — the store that assignment minted is displaced here with nothing
+        // naming it, one per call.  The runtime witness carries the same @FR-O-Latest fact
+        // per RUN, so the free is emitted GUARDED instead of not at all.  `--native` has
+        // reached this answer all along through its entry-buffer witness `_rb_w_<name>`,
+        // which is why only the interpreter reported the leak.
+        if transition_free.is_none()
+            && was_in_scope
+            && let Some((buf, flag)) = self.rbuf_witness
+            && buf == v
+            && matches!(
+                function.tp(v),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && function.tp(v).depend().is_empty()
+            && !function.is_skip_free(v)
+            && displaces_owned_through_fresh_callee(value, v, ov, data)
+        {
+            transition_free = Some(v_if(
+                Value::Var(flag),
+                call("OpFreeRef", v, data),
+                Value::Null,
+            ));
         }
         if was_in_scope
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
@@ -4268,7 +4377,33 @@ impl Scopes {
             if d >= function.count() {
                 continue;
             }
-            if !self.var_scope.contains_key(&d) {
+            // loft#1135 — a LOOP VARIABLE reserves its own slot, in its own scope.
+            //
+            // This prefix exists for a dep whose only other mention is its FREE: a lift var
+            // assigned inside a conditional arm needs its slot reserved along every path, or
+            // the path that skips the arm reads an uninitialised one.  A `for` loop's
+            // variable has no such gap — its header assigns it unconditionally, every
+            // iteration, inside the loop.
+            //
+            // `e`'s type carries ONE dep list while `e` may be assigned in two disjoint
+            // scopes (`Function::depend` replaces rather than accumulates), so the surviving
+            // dep is whichever assignment parsed LAST.  Two `for` loops over the same keyed
+            // type give the FIRST loop's `e` a dep on the SECOND loop's collection, and
+            // pre-initialising it here put a `Set(c#1, Null)` — and `var_scope[c#1]` — inside
+            // the first loop's body.  The second loop then read its own variable as
+            // out-of-scope and copied it, leaving the original a keyed local nothing writes
+            // and nothing reads: a store-backed slot, allocated by that init and freed by
+            // nobody.  One orphan per program, on `--interpret`.
+            //
+            // The dep list being wrong is the defect above this one; not reserving a slot for
+            // a loop variable is right regardless of which dep names it.
+            //
+            // ⚠ The predicate is `was_loop_var` and NOT "assigned somewhere in the body",
+            // which is the first thing to reach for and is wrong: a lift var IS assigned, in
+            // a conditional arm, which is exactly the case the prefix is for.  Measured —
+            // `890-consumed-lift-double-free.loft` returned a garbage record under
+            // `LOFT_POISON`.
+            if !self.var_scope.contains_key(&d) && !function.was_loop_var(d) {
                 depend.push(d);
                 self.put_scope(d);
                 self.var_order.push(d);
@@ -4661,12 +4796,25 @@ impl Scopes {
             }
             self.put_scope(d);
         }
-        if prefix.is_empty() && ls.is_empty() {
+        // loft#1128 — keep the runtime witness in step with what `v` now holds.  A call that
+        // DELIVERS into the buffer (`v` at the callee's buffer position and the callee does
+        // NOT adopt a fresh store) leaves `v` holding whatever it held, so the flag is left
+        // alone; every other assignment sets it to the same @FR-O-Latest verdict `owned_refs`
+        // records statically.
+        let witness_update = match self.rbuf_witness {
+            Some((buf, flag)) if buf == v && !delivers_into_buffer(value, v, ov, data) => {
+                let owned = matches!(self.ref_rhs_ownership(value, data), RefRhs::Owned);
+                Some(v_set(flag, Value::Boolean(owned)))
+            }
+            _ => None,
+        };
+        if prefix.is_empty() && ls.is_empty() && witness_update.is_none() {
             Value::Set(v, Box::new(set_value))
         } else {
             let mut all = prefix;
             all.append(&mut ls);
             all.push(Value::Set(v, Box::new(set_value)));
+            all.extend(witness_update);
             Value::Insert(all)
         }
     }
@@ -5821,7 +5969,7 @@ impl Scopes {
             // T1.3: tuple scope exit — free owned elements in reverse index order.
             if let Type::Tuple(elems) = function.tp(v) {
                 let elems = elems.clone();
-                ls.extend(tuple_owned_elem_frees(&elems, v, data));
+                ls.extend(tuple_owned_elem_frees(&elems, v, data, function));
                 continue;
             }
             if matches!(function.tp(v).base(), Type::Text(_)) {
@@ -7453,6 +7601,104 @@ fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Func
     }
 }
 
+/// Does this reassignment displace a store the function OWNS through a callee that
+/// mints its own?
+///
+/// The shape is `v = f(…, v, …)` with `v` sitting at `f`'s hidden return-buffer
+/// attribute — the NRVO hand-off that lets a callee build its result straight into
+/// the destination instead of into a work-ref of its own.  The hand-off is only
+/// taken when `f` actually delivers through that buffer.  A callee whose return
+/// ADOPTS a fresh store (`Definition::return_adopts_fresh_store`, the carried
+/// adopt-vs-copy fact) allocates for itself and never reads the buffer, so the store
+/// `v` held before the call is displaced and unreachable.
+///
+/// Answering "yes" only licenses the free; whether the displaced store is this
+/// function's to release is a separate question that @FR-O-Latest answers (the caller
+/// checks `owned_refs` first).  `v` must not be read anywhere ELSE in the call — a
+/// pre-Set free would then destroy data the call still reads.
+/// The hidden return-buffer PARAMETER of `d_nr`, as a variable number — or `None` when the
+/// function has none.
+///
+/// Which attribute is the buffer is `Definition::hidden_return_buffer_attr`'s question; this
+/// resolves it to the slot the body actually assigns.
+fn hidden_return_buffer_var(d_nr: u32, function: &Function, data: &Data) -> Option<u16> {
+    let def = data.def(d_nr);
+    let idx = def.hidden_return_buffer_attr()?;
+    let name = def.attributes().get(idx)?.name.clone();
+    let v = function.var(&name);
+    (v != u16::MAX).then_some(v)
+}
+
+/// Does this body ever displace a store held by the return-buffer parameter `v`?
+///
+/// The pre-scan answer to *"is a runtime ownership witness worth a slot here?"* — asked once
+/// per function so the witness exists before the first assignment that has to maintain it, in
+/// the same shape `displaced_owned` and `collect_views_to_materialise` already use.  A body
+/// that never reaches such a site pays nothing.
+fn displaces_return_buffer(code: &Value, v: u16, data: &Data) -> bool {
+    fn walk(node: &Value, v: u16, data: &Data) -> bool {
+        if let Value::Set(t, val) = node.unspan()
+            && *t == v
+            && displaces_owned_through_fresh_callee(val, v, v, data)
+        {
+            return true;
+        }
+        let mut found = false;
+        node.unspan().for_each_child(&mut |c| {
+            if !found {
+                found = walk(c, v, data);
+            }
+        });
+        found
+    }
+    walk(code, v, data)
+}
+
+/// Does this call DELIVER its result into `v`'s existing store?
+///
+/// The complement of [`displaces_owned_through_fresh_callee`] on the same two facts: `v` sits
+/// at the callee's hidden buffer position AND the callee does not adopt a fresh store, so it
+/// writes through the buffer it was handed.  `v` then holds exactly what it held before, which
+/// is why the runtime ownership witness must be left UNCHANGED rather than recomputed from the
+/// call's return (loft#1128).
+fn delivers_into_buffer(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
+    let Value::Call(fn_nr, args) = value.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if def.return_adopts_fresh_store() {
+        return false;
+    }
+    let Some(buf_idx) = def.hidden_return_buffer_attr() else {
+        return false;
+    };
+    args.get(buf_idx)
+        .is_some_and(|a| matches!(a.unspan(), Value::Var(w) if *w == v || *w == ov))
+}
+
+fn displaces_owned_through_fresh_callee(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
+    let Value::Call(fn_nr, args) = value.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if !def.return_adopts_fresh_store() {
+        return false;
+    }
+    // WHICH attribute is the return buffer is `Definition::hidden_return_buffer_attr`'s
+    // question — the same answer the substitution that put `v` there read.
+    let Some(buf_idx) = def.hidden_return_buffer_attr() else {
+        return false;
+    };
+    let names_v = |x: &Value| matches!(x.unspan(), Value::Var(w) if *w == v || *w == ov);
+    if !args.get(buf_idx).is_some_and(names_v) {
+        return false;
+    }
+    // Pre-scan IR can still name the ORIGINAL slot, so both spellings count as a read.
+    args.iter()
+        .enumerate()
+        .all(|(i, a)| i == buf_idx || (!a.reads_var(v) && !a.reads_var(ov)))
+}
+
 fn call(to: &'static str, v: u16, data: &Data) -> Value {
     Value::Call(data.def_nr(to), vec![Value::Var(v)])
 }
@@ -8320,24 +8566,24 @@ fn collect_adopted_block_results(ir: &Value, freed: &HashSet<u16>, result: &mut 
     });
 }
 
-/// After scope analysis, assert that every Reference variable that should be
-/// freed has a corresponding `OpFreeRef` somewhere in `ir`.
+/// Debug-only check: refuse to compile a text-returning function that frees a
+/// local text on a path that REACHES a `Return` handing that same local back.
+/// The returned Str would dangle into freed `String` memory — the interpreter
+/// occasionally gets away with it (if the underlying allocator hasn't reused
+/// the slot), but native codegen materialises this as
+/// `let _v = String::new(); … free(_v); return &_v;` and trips Rust's UB check.
 ///
-/// A variable "should be freed" when:
-/// - Its type is `Reference(_, dep)` with `dep.is_empty()`
-/// - It is not a function parameter (scope > 0)
-/// - It is not marked `skip_free`
-/// - It is not in the function's return-type dependencies
+/// The judgement is per-`Return` and path-sensitive, and it has to be both.
+/// A function with more than one `return` legitimately frees the locals it is
+/// NOT handing back, and that free sits inside the branch returning something
+/// else: `if n > 0 { free(ta); return tb; } return ta;` is correct code, and
+/// the free of `ta` never runs on the path that returns `ta`.  Asking instead
+/// "is this var freed anywhere in the body?" answers that shape as a dangling
+/// return.  A branch that always returns cannot fall through, so its frees are
+/// carried on its own path only and are dropped at the join.
 ///
-/// Only compiled in debug builds; the check panics rather than emitting a
-/// diagnostic so that the failure is visible immediately during development.
-/// Debug-only check: when a text-returning function's `Return` source Str
-/// is backed by a local text variable `v`, refuse to compile if any
-/// `OpFreeText(v)` appears before that `Return`.  The returned Str would
-/// dangle into freed `String` memory — the interpreter occasionally gets
-/// away with it (if the underlying allocator hasn't reused the slot), but
-/// native codegen materialises this as `let _v = String::new(); … free(_v);
-/// return &_v;` and trips Rust's UB check.
+/// Every `Return` is judged, not only the body's tail — an early return is
+/// exactly where a second text buffer puts its free.
 ///
 /// Companion to `check_ref_leaks` above — that check catches owned-ref leaks
 /// at compile time; this one catches use-after-free on return.
@@ -8350,38 +8596,236 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
     if free_text_nr == u32::MAX {
         return;
     }
-
-    // Collect every text var freed anywhere in the body (order-agnostic —
-    // we only care whether the var *is* freed, not when).  If the var is
-    // both the Return source and freed locally, codegen emits the free
-    // before the return value lands at the caller, leaving a dangling
-    // Str.  False negatives are fine (later walker will be stricter);
-    // false positives would misfire on valid patterns, so keep the
-    // criteria narrow.
     let mut freed: HashSet<u16> = HashSet::new();
-    collect_freed_vars(ir, &[free_text_nr], &mut freed);
-    if freed.is_empty() {
-        return;
-    }
-
-    let ret_var = returned_var_null_unified(ir, data.def_nr("OpNullRefSentinel"));
-    if ret_var == u16::MAX {
-        return;
-    }
-    if !matches!(function.tp(ret_var), Type::Text(_)) {
-        return;
-    }
-    assert!(
-        !freed.contains(&ret_var),
-        "[check_text_return] fn '{}' frees local text '{}' (var_nr={ret_var}) \
-         before its Return — the returned Str would dangle into freed \
-         String memory.  scopes.rs must leave '{}' for the caller to free.",
+    check_text_return_path(
+        ir,
+        &mut freed,
+        free_text_nr,
+        data.def_nr("OpNullRefSentinel"),
+        function,
         fn_name,
-        function.name(ret_var),
-        function.name(ret_var),
     );
 }
 
+/// True when control cannot fall out of `node` — every path through it returns.
+/// A free inside such a node is released on that path only, so it can never
+/// reach a `Return` that follows the node.
+///
+/// Answers `false` for anything it cannot prove, including `Loop` (which
+/// normally leaves via `Break`).  That is the safe direction: an unproven
+/// terminator keeps its frees in the continuation set, which can only make the
+/// check stricter, never blinder.
+#[cfg(debug_assertions)]
+fn always_returns(node: &Value) -> bool {
+    match node.unspan() {
+        Value::Return(_) => true,
+        // Anything after a `Return` in the same block is dead, so one
+        // top-level `Return` terminates the whole block.
+        Value::Block(bl) => bl.operators.iter().any(always_returns),
+        Value::Insert(ops) => ops.iter().any(always_returns),
+        Value::If(_, t, f) => always_returns(t) && always_returns(f),
+        _ => false,
+    }
+}
+
+/// Walk `node` in execution order carrying `freed` — the text vars already
+/// released on the path reaching it — and assert each `Return` hands back a
+/// var this path has not freed.  See `check_text_return` for the rule.
+#[cfg(debug_assertions)]
+fn check_text_return_path(
+    node: &Value,
+    freed: &mut HashSet<u16>,
+    free_text_nr: u32,
+    null_nr: u32,
+    function: &Function,
+    fn_name: &str,
+) {
+    let walk = |n: &Value, set: &mut HashSet<u16>| {
+        check_text_return_path(n, set, free_text_nr, null_nr, function, fn_name);
+    };
+    match node.unspan() {
+        Value::Call(d_nr, args) if *d_nr == free_text_nr => {
+            if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
+                freed.insert(*v);
+            }
+        }
+        Value::Return(inner) => {
+            // The return expression runs BEFORE the return itself, so a free
+            // inside it counts against this very return.
+            walk(inner, freed);
+            let ret_var = returned_var_null_unified(inner, null_nr);
+            if ret_var != u16::MAX && matches!(function.tp(ret_var), Type::Text(_)) {
+                assert!(
+                    !freed.contains(&ret_var),
+                    "[check_text_return] fn '{}' frees local text '{}' (var_nr={ret_var}) \
+                     on the path reaching its Return — the returned Str would dangle into \
+                     freed String memory.  scopes.rs must leave '{}' for the caller to free.",
+                    fn_name,
+                    function.name(ret_var),
+                    function.name(ret_var),
+                );
+            }
+        }
+        Value::If(cond, t, f) => {
+            // The condition runs on both paths; each arm gets its own.
+            walk(cond, freed);
+            let mut then_freed = freed.clone();
+            walk(t, &mut then_freed);
+            let mut else_freed = freed.clone();
+            walk(f, &mut else_freed);
+            // Only an arm that can fall through hands its frees to what follows.
+            if !always_returns(t) {
+                freed.extend(then_freed);
+            }
+            if !always_returns(f) {
+                freed.extend(else_freed);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                walk(op, freed);
+            }
+        }
+        Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+            for op in ops {
+                walk(op, freed);
+            }
+        }
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            for a in args {
+                walk(a, freed);
+            }
+        }
+        Value::Iter(_, create, next, extra_init) => {
+            walk(create, freed);
+            walk(next, freed);
+            walk(extra_init, freed);
+        }
+        Value::Set(_, inner)
+        | Value::TuplePut(_, _, inner)
+        | Value::Drop(inner)
+        | Value::Yield(inner) => walk(inner, freed),
+        _ => {}
+    }
+}
+
+/// The `check_text_return` walker's own gate.  Every cell is one step from
+/// another, and the pair that matters is `free_then_return_same_var_in_arm`
+/// (must fire) against `free_in_arm_that_returns_another_var` (must not) —
+/// they differ only in WHICH var the arm hands back, which is exactly the
+/// distinction the path rule exists to draw.
+///
+/// Compiled only where the check itself is: `[profile.dev.package.loft]`
+/// strips debug assertions from ordinary builds, so these run in the
+/// `-C debug-assertions=on` CI gate that runs the check.
+#[cfg(all(test, debug_assertions))]
+mod text_return_path_tests {
+    use super::check_text_return_path;
+    use crate::data::{Deps, Type, Value, v_block, v_if};
+    use crate::variables::Function;
+    use std::collections::HashSet;
+
+    const FREE_TEXT: u32 = 7;
+    const NULL_SENTINEL: u32 = 8;
+    const TA: u16 = 0;
+    const TB: u16 = 1;
+
+    fn vars() -> Function {
+        let mut f = Function::new("f", "t.loft");
+        f.add_temp_var("ta", &Type::Text(Deps::none()));
+        f.add_temp_var("tb", &Type::Text(Deps::none()));
+        f
+    }
+
+    fn free(v: u16) -> Value {
+        Value::Call(FREE_TEXT, vec![Value::Var(v)])
+    }
+    fn ret(v: u16) -> Value {
+        Value::Return(Box::new(Value::Var(v)))
+    }
+
+    /// Run the walker over a function body; panics exactly as the check does.
+    fn check(body: Vec<Value>) {
+        let ir = v_block(body, Type::Text(Deps::none()), "body");
+        let mut freed = HashSet::new();
+        check_text_return_path(&ir, &mut freed, FREE_TEXT, NULL_SENTINEL, &vars(), "probe");
+    }
+
+    /// Straight-line use-after-free: the plainest shape the check exists for.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_then_return_same_var() {
+        check(vec![free(TA), ret(TA)]);
+    }
+
+    /// The free and the `return` of the same var sit in ONE arm.  Skipping a
+    /// returning arm wholesale would blind the check here, so this is the cell
+    /// that keeps the fall-through rule honest.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_then_return_same_var_in_arm() {
+        check(vec![
+            v_if(
+                Value::Var(TB),
+                v_block(vec![free(TA), ret(TA)], Type::Never, "then"),
+                Value::Null,
+            ),
+            ret(TB),
+        ]);
+    }
+
+    /// A free on an arm that FALLS THROUGH still reaches the tail return —
+    /// the arm not returning is the whole difference from the cell below.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_in_arm_that_falls_through() {
+        check(vec![
+            v_if(
+                Value::Var(TB),
+                v_block(vec![free(TA)], Type::Void, "then"),
+                Value::Null,
+            ),
+            ret(TA),
+        ]);
+    }
+
+    /// The shape the path rule was written for: the arm frees `ta` and returns
+    /// `tb`, so the free never runs on the path that returns `ta`.  Correct
+    /// code — the check must stay silent (loft#1113's two-text-local lambda).
+    #[test]
+    fn free_in_arm_that_returns_another_var() {
+        check(vec![
+            v_if(
+                Value::Var(TB),
+                v_block(vec![free(TA), ret(TB)], Type::Never, "then"),
+                Value::Null,
+            ),
+            ret(TA),
+        ]);
+    }
+
+    /// Both arms return, each freeing the local it does not hand back.
+    #[test]
+    fn each_arm_frees_what_it_does_not_return() {
+        check(vec![v_if(
+            Value::Var(TB),
+            v_block(vec![free(TA), ret(TB)], Type::Never, "then"),
+            v_block(vec![free(TB), ret(TA)], Type::Never, "else"),
+        )]);
+    }
+}
+
+/// After scope analysis, assert that every Reference variable that should be
+/// freed has a corresponding `OpFreeRef` somewhere in `ir`.
+///
+/// A variable "should be freed" when:
+/// - Its type is `Reference(_, dep)` with `dep.is_empty()`
+/// - It is not a function parameter (scope > 0)
+/// - It is not marked `skip_free`
+/// - It is not in the function's return-type dependencies
+///
+/// Only compiled in debug builds; the check panics rather than emitting a
+/// diagnostic so that the failure is visible immediately during development.
 #[cfg(debug_assertions)]
 fn check_ref_leaks(
     ir: &Value,

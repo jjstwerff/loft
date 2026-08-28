@@ -677,12 +677,16 @@ impl Function {
         }
     }
 
-    /// C61.local (planned): reserved for the future liveness-aware
-    /// diagnostic that rejects `x = 5; for x in …` when the outer `x`
-    /// has a live read after the loop.  Unused today — kept so the
-    /// `was_loop_var` flag on Variable has a read path and is not
-    /// dead-code-linted away before the diagnostic ships.
-    #[allow(dead_code)]
+    /// Has this variable served as a `for` loop's variable anywhere in this function?
+    ///
+    /// Read by `scopes.rs`'s dep-init prefix (loft#1135): a loop variable is assigned
+    /// unconditionally by its own header, inside its own loop, so it never needs a slot
+    /// reserved for it somewhere else — and reserving one registers it in the scope of
+    /// whatever dep list happened to name it first, which is not where it lives.
+    ///
+    /// C61.local also reserved this for a future liveness-aware diagnostic that would reject
+    /// `x = 5; for x in …` when the outer `x` has a live read after the loop.
+    #[must_use]
     pub fn was_loop_var(&self, var_nr: u16) -> bool {
         if var_nr == u16::MAX || (var_nr as usize) >= self.variables.len() {
             return false;
@@ -3483,4 +3487,21 @@ mod loop_binding_dep_tests {
             "a depless incoming type must not clear an established dep"
         );
     }
+}
+
+/// Does this compiler-internal local OWN the store of the literal it accumulates?
+///
+/// `__vdb_N` (a vector literal's backing record) and `__kvb_N` (loft#703's keyed twin) are
+/// both FUNCTION-scoped for the same reason: the accumulator owns the store it builds, so
+/// the function-exit sweep is what frees it.  Every other `__` local either owns nothing or
+/// has its own emission path.
+///
+/// One home because a coroutine asks it TWICE — which locals become struct fields that
+/// survive a resume, and which are pre-declared at method scope — and both sites spelled it
+/// as a bare `starts_with("__vdb")`.  A keyed literal could not reach a generator at all
+/// until loft#1130 gave `yield` its expected type, and the moment it could, the local it
+/// mints was declared inside one `match` arm and read from another (rustc E0425).
+#[must_use]
+pub fn owns_literal_backing_store(name: &str) -> bool {
+    name.starts_with("__vdb") || name.starts_with("__kvb")
 }

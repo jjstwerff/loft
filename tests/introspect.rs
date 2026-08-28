@@ -506,6 +506,12 @@ fn compiling_the_same_file_twice_gives_the_same_bytecode_and_slots() {
                 .arg("introspect")
                 .arg(workspace_root().join(name))
                 .current_dir(workspace_root())
+                // This test is about COMPILATION being reproducible (loft#750), so both runs
+                // have to compile.  The whole-program cache is default-on, and without this
+                // the second invocation is a warm bundle load rather than a second compile —
+                // it renders work-ref slots as the unassigned `u16::MAX` and the comparison
+                // reports a reproducibility failure that is really a cold-vs-warm difference.
+                .env("LOFT_NO_CACHE", "1")
                 .output()
                 .expect("failed to invoke loft binary");
             assert!(out.status.success(), "introspect {name} failed");

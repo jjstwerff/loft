@@ -93,8 +93,9 @@ with the closure's environment in scope.
 ## Deviations
 
 OPEN: **1** — a lambda that BINDS its return value to a local first leaks one store
-(D-clo-7, below; the value half of that entry is closed). Closed: both lambda forms capture
-identically (D-clo-1), the
+(D-clo-7, below; the value half of that entry is closed). D-clo-8 — a captured
+`vector<(…)>` unpacked rather than shared — was opened and closed 2026-08-28. Closed: both
+lambda forms capture identically (D-clo-1), the
 stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
 2026-07-04 —
 `L-Escape`'s *storage* half is complete (D-clo-3, opened and closed 2026-08-22), a lambda
@@ -141,6 +142,36 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-8 — OPENED AND CLOSED (2026-08-28, loft#1131): a captured `vector<(…)>` was
+> UNPACKED instead of shared.** `(L-CapHeap)` says a captured heap value is SHARED, and the
+> mechanism is a 12-byte `DbRef` in the closure record. `closure_attr_type` types every
+> collection capture as `Reference(<element def>)` carrying the #328 share marker — the def
+> is a stand-in for *"some DbRef"*, not a claim about what the slot holds.
+>
+> For a `vector<(…)>` that stand-in def is `__tuple<…>`, which is exactly what loft#821's
+> per-element tuple write in `set_field_check` matches on. It read the DESTINATION slot's
+> spelling while its own comment says the arm must be chosen by *"the SOURCE's
+> representation rather than by which spelling the slot happened to carry"* — so the capture
+> emitted the vector's own bytes as two integers:
+>
+> ```loft
+> xs: vector<(integer, integer)> = [];  xs += [(1, 11)];  xs += [(2, 22)];
+> s = c0(fn() -> integer { a = 0; for t in xs { a += t.0 * 1000 + t.1; } a });
+> //  --interpret: 0, silently.  vector<(integer, P)>: len 0 then SIGSEGV.  --native: E0308.
+> //  the same loop OUTSIDE the closure: 3033.
+> ```
+>
+> A tuple of SCALARS fails too, and it carries no store — which is what rules an ownership
+> explanation out and names the capture's SHAPE as the axis. The arm now also asks whether
+> the slot holds a `DbRef` (`deps.contains(&u16::MAX)`, the spelling three neighbouring sites
+> already read for the same question), which routes a capture to the auto-Reference store
+> directly below it.
+>
+> Guard: `tests/scripts/1131-a-captured-collection-is-stored-as-a-handle-not-unpacked.loft`,
+> which keeps the struct / nested-vector / keyed element types as controls — those are the
+> @PLN93 shapes the tuple row fell outside of, and a fix that took one of them down would be
+> worse than the defect.
 
 > **D-clo-7 — value half CLOSED, leak half OPEN (2026-08-27, loft#1114).** `(L-CapHeap)`
 > says a captured heap value is SHARED. A NULLABLE one was not: `closure_attr_type`

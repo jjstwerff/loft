@@ -361,3 +361,97 @@ fn lib_dependency_edit_invalidates_program_cache() {
     let _ = std::fs::remove_dir_all(&lib_dir);
     let _ = std::fs::remove_dir_all(&cache_dir);
 }
+
+/// A warm run renders the SAME diagnostics a cold one does — including the parts computed
+/// from a diagnostic's `fixes`.
+///
+/// Diagnostics are a parser product, so a bundle that skips the parser has to carry them.
+/// Carrying only the message is not enough, and the two things it misses are both things a
+/// normal run prints:
+///
+///   * the once-per-run *"N diagnostics above suggest what to write instead"* note, which
+///     counts entries whose `fixes` are non-empty — a warm run dropped the line entirely;
+///   * every `fix` line under `--explain`, which reads the cache like any other run rather
+///     than forcing a cold parse as its design assumed — two lines cold, none warm.
+///
+/// Asserted as EQUALITY between the two runs plus a positive check that the cold run
+/// actually produced the thing being compared: two empty stderrs are equal too.
+#[test]
+fn a_warm_run_renders_the_same_diagnostics_including_their_fixes() {
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir();
+    let script = tmp.join(format!("loft_diagfix_{pid}.loft"));
+    let cache = tmp.join(format!("loft_diagfix_cache_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache);
+    std::fs::create_dir_all(&cache).expect("create cache dir");
+    // `omitted-field-zero` is an ADVICE that carries two fixes, one of them with an edit.
+    std::fs::write(
+        &script,
+        "struct DfPlayer { name: text, health: integer }\nfn main() {\n  p = DfPlayer { name: \"Bob\" };\n  print(\"{p.name}\");\n}\n",
+    )
+    .expect("write script");
+
+    let stderr_of = |explain: bool| -> String {
+        let mut cmd = Command::new(loft_bin());
+        cmd.arg("--interpret")
+            .arg(&script)
+            .current_dir(workspace_root())
+            .env_remove("LOFT_STDLIB_CACHE")
+            .env("LOFT_PROGRAM_CACHE", "1")
+            .env("XDG_CACHE_HOME", &cache);
+        if explain {
+            cmd.env("LOFT_EXPLAIN", "1");
+        }
+        let out = cmd.output().expect("failed to invoke loft binary");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+
+    let cold = stderr_of(false);
+    let warm = stderr_of(false);
+    assert!(
+        cold.contains("omitted-field-zero"),
+        "the cold run must produce the advice this compares; got: {cold}"
+    );
+    assert!(
+        cold.contains("suggests what to write instead"),
+        "the cold run must produce the fixes-derived note; got: {cold}"
+    );
+    assert_eq!(
+        cold, warm,
+        "a warm run must render what the cold run rendered"
+    );
+
+    // `--explain` prints the fix lines themselves.  Fresh cache dir so the first of the two
+    // is genuinely cold for this mode as well.
+    let cache_x = tmp.join(format!("loft_diagfix_cache_x_{pid}"));
+    let _ = std::fs::remove_dir_all(&cache_x);
+    std::fs::create_dir_all(&cache_x).expect("create cache dir");
+    let stderr_x = |dir: &std::path::Path| -> String {
+        let out = Command::new(loft_bin())
+            .arg("--interpret")
+            .arg(&script)
+            .current_dir(workspace_root())
+            .env_remove("LOFT_STDLIB_CACHE")
+            .env("LOFT_PROGRAM_CACHE", "1")
+            .env("XDG_CACHE_HOME", dir)
+            .env("LOFT_EXPLAIN", "1")
+            .output()
+            .expect("failed to invoke loft binary");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let cold_x = stderr_x(&cache_x);
+    let warm_x = stderr_x(&cache_x);
+    assert_eq!(
+        cold_x.matches("  fix ").count(),
+        2,
+        "the cold --explain run must print both fixes; got: {cold_x}"
+    );
+    assert_eq!(
+        cold_x, warm_x,
+        "a warm --explain run must print the fix lines a cold one printed"
+    );
+
+    let _ = std::fs::remove_file(&script);
+    let _ = std::fs::remove_dir_all(&cache);
+    let _ = std::fs::remove_dir_all(&cache_x);
+}

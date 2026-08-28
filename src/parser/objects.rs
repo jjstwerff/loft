@@ -4090,6 +4090,22 @@ impl Parser {
         out
     }
 
+    /// Write the reserved ABSENT record id into a collection field's 4-byte slot — the one
+    /// way a collection field says *absent* rather than *empty*.
+    ///
+    /// Zero is the EMPTY collection, so a slot left at its zero-init cannot mean absence;
+    /// `DbRef::ABSENT_REC` is the id reserved for it (loft#917), read raw by
+    /// `vectors::is_absent_collection` and mapped back to `0` by every other reader.  One
+    /// home, because the two spellings that must agree — `H { xs: null }` and a field
+    /// declared `xs: τ? = null` that the literal OMITS — are written in different
+    /// functions, and a marker only one of them wrote is exactly how the omitted spelling
+    /// came to read back present-and-empty.
+    fn mark_collection_absent(&mut self, code: &Value, item_pos: i32) -> Value {
+        #[allow(clippy::cast_possible_wrap)]
+        let absent = Value::Int(crate::keys::DbRef::ABSENT_REC as i32);
+        self.cl("OpSetInt4", &[code.clone(), Value::Int(item_pos), absent])
+    }
+
     pub(crate) fn object_init(
         &mut self,
         list: &mut Vec<Value>,
@@ -4167,6 +4183,27 @@ impl Parser {
                 if group_primed.contains(&(pos + fld)) && default == Value::Null {
                     continue;
                 }
+            }
+            // loft#917's other half — an OMITTED nullable COLLECTION field.  The MENTIONED
+            // spelling (`H { xs: null }`) writes the reserved absent id; omitting the field
+            // fell through to the zero its type takes, and zero IS the empty collection —
+            // the one value absence has to be distinguishable from.  So a field declared
+            // `xs: vector<τ>? = null` read back present-and-empty and `xs == null` answered
+            // false, with a `?? []` at every use site hiding it.
+            //
+            // @FR-L-Null: absence is a sentinel IN the field's bytes, so a nullable field's
+            // zero is its null.  The synthetic `__nullable<S>` field is skipped further up
+            // for the same rule with the opposite conclusion — ITS absence IS discriminant
+            // zero, which the zero-init already writes.  Reads `tp.base()`, because the
+            // shape that needs this is by definition the wrapped one.
+            if !self.first_pass
+                && matches!(&tp, Type::Optional(_))
+                && crate::parser::vectors::is_collection(tp.base())
+                && default == Value::Null
+            {
+                let mark = self.mark_collection_absent(code, i32::from(pos + fld));
+                list.push(mark);
+                continue;
             }
             // #328/#332: a POINTER field (`reference<T>`, the u16::MAX share
             // marker) is a 12-byte DbRef — its omitted default is the null
@@ -4412,9 +4449,7 @@ impl Parser {
                     self.database
                         .position(self.data.def(td_nr).known_type(), field),
                 );
-                #[allow(clippy::cast_possible_wrap)]
-                let absent = Value::Int(crate::keys::DbRef::ABSENT_REC as i32);
-                let mark = self.cl("OpSetInt4", &[code.clone(), Value::Int(item_pos), absent]);
+                let mark = self.mark_collection_absent(code, item_pos);
                 list.push(mark);
                 return;
             }

@@ -12,6 +12,25 @@
 #[allow(dead_code)]
 pub mod cross_mode;
 
+#[allow(dead_code)]
+pub mod timing;
+
+/// The `file://` URL for a local path, in the one shape this repo's registry fixtures and
+/// `registry_index::http_get_bytes` both handle.
+///
+/// `http_get_bytes` strips the `file://` prefix and hands the remainder straight to
+/// `std::fs::read`, so the URL carries a NATIVE path — not an RFC `file:///D:/…` URI, whose
+/// leading slash that reader would keep.  What the naive `format!("file://{}", p.display())`
+/// gets wrong is Windows separators: a fixture index is JSON, and `\U` / `\r` / `\t` are
+/// not valid JSON string escapes, so loft's own parser correctly refused the index the
+/// fixture had just written (`invalid escape \U`, the nightly's Windows leg).  Windows
+/// accepts `/` in a path, so rendering separators as `/` is JSON-safe and unchanged on unix.
+#[allow(dead_code)]
+#[must_use]
+pub fn file_url(p: &std::path::Path) -> String {
+    format!("file://{}", p.display().to_string().replace('\\', "/"))
+}
+
 /// How much to stretch a test's wall-clock deadline, because the machine is shared.
 ///
 /// A deadline is an UPPER bound: a fast run returns early and pays nothing for a

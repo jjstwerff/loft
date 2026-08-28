@@ -148,6 +148,49 @@ reserved bit pattern inside the field. So a nullable and a not-null integer have
 the difference is meaning, carried by the schema (`data_to_json`), not the layout hash. (Verified:
 the golden renders both identically.)
 
+⚠ **The rule as written is true for a SENTINEL type and false for an INLINE STRUCT, measured
+2026-08-28 (loft#1134).** `LOFT_DUMP_TYPES=1` on two pairs of structs that differ only in a `?`:
+
+```
+IntD[16/8]   k:integer[0]  n:integer[8]        IntN[16/8]   k:integer[0]  n:integer[8]
+Dense[24/8]  k:integer[0]  item:S[8]           Nble[32/8]   k:integer[0]  item:__nullable<S>[8]
+```
+
+The scalar pair is identical, exactly as the rule says. The struct pair is not: the record grows
+by eight bytes and `S`'s own fields move from offset 8 to offset 16, behind a discriminant. That
+is not a sentinel — a struct stored inline has no reserved bit pattern to spend, which is why
+[types.md](types.md) gives it the tagged `__nullable<S>` (discriminant + payload) and calls the
+property bought *"no collision"*. So `(L-Null)` holds for every type that HAS a sentinel and does
+not hold for the one representation that needs a tag, and the two documents did not agree.
+
+**The incomplete half is what licensed a defect.** A reader of this rule alone concludes that
+`S?` and `S` share their offsets, which is precisely the belief that wrote a dense `S` into a
+tagged slot: field `a` landed on the discriminant, presence became a data byte, and a present
+`S { a: 0, … }` read back absent (loft#1134, and its layout-side account in
+[tuples.md](tuples.md) § D-tup-6). A rule stated for four of its five cases is more expensive
+than no rule, because it is CITED.
+
+The rule wants splitting rather than weakening, and the split is decidable from the type alone:
+
+```
+  (L-Null)     τ ≈ τ?  for every τ that reserves a null VALUE  —  layout(τ) = layout(τ?);
+               absence is a sentinel in those bytes (i64::MIN / NaN / 255 / nullref / codepoint
+               0), never an extra byte or a moved offset.
+  (L-Null-Tag) a struct stored INLINE — a `vector`/keyed element, an embedded field, a tuple
+               member — has no sentinel to spend, so `S?` is the tagged `__nullable<S>`:
+               layout(S?) = discriminant ++ layout(S) at the payload base, and
+               size(S?) > size(S).  Absence is discriminant 0.  Every writer and reader of such
+               a slot goes through the tag; the pair that holds this is
+               `Parser::emit_nullable_slot_write` / `emit_nullable_slot_read`.
+```
+
+Neither half is a new decision — both are what the code has shipped since @PLN25 — so this
+records the boundary rather than moving it. The falsifier below covers `(L-Null)`; `(L-Null-Tag)`
+is covered behaviourally by
+`tests/scripts/1134-a-nullable-tuple-element-is-stored-behind-its-tag.loft`, whose zero-valued
+first field is the cell that a size-and-offset golden cannot see — the same blind spot the ⚠
+under the falsifier list already records for the sentinel half.
+
 ### The soundness invariant — no silent cross-version misread
 
 ```
@@ -185,6 +228,30 @@ that gate, now applied across a network boundary.
   the durable store (`plans/43`) is not yet driven by a loft builtin, so nothing *calls* the
   load-time gate automatically yet — the deviation closes fully when a persistence consumer wires
   `check_beside` into its open path. Until then the guard exists but is opt-in.
+
+- **D-layout-2 — the `?` changed the layout** (2026-08-28, loft#1125). `L-Null` says
+  `layout(τ) = layout(τ?)`, and three sites decided layout by naming `Type` variants BARE, so a
+  wrapped shape reached none of them.
+
+  The visible one: the walk that gives an `index` its bookkeeping triple a position runs at the
+  end of `fill_all` precisely so `#left_N / #right_N / #color_N` are appended to the ELEMENT
+  struct before it is sized. `Optional(Index(…))` matched nothing there, the triple was appended
+  afterwards, and `finish_type` returns early for a type that already has a size — so all three
+  kept `position: 0`, on top of each other and of the first real field. The nullable form then
+  refused to lay out at all while its dense twin was fine.
+
+  Its two siblings, same rule: the `null` → sentinel conversion asked for `Type::Vector` alone
+  and was short by the five KEYED kinds and by the wrapper, so a `spatial<P[x,y]>? = null` local
+  kept a bare `Value::Null` — which writes nothing — and the scope-exit `OpFreeRef` read the
+  untouched bytes as store #0 (BUG #306); and an OMITTED nullable collection FIELD took the zero
+  its type gives, where zero is the EMPTY collection and absence has its own reserved id
+  (`DbRef::ABSENT_REC`, loft#917), so `c: vector<τ>? = null` read back present-and-empty.
+
+  **Status — CLOSED.** All three read through `base()`. Guard:
+  `tests/scripts/a-nullable-collection-lays-out-like-its-dense-twin.loft`, which gives every
+  keyed kind its OWN element struct: the layout half is invisible whenever the same index type
+  also has a dense local somewhere in the program, because that one registers the bookkeeping in
+  time and the nullable form inherits a correct layout.
 
 ---
 

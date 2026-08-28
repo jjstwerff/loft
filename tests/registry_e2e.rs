@@ -35,6 +35,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[path = "common/mod.rs"]
+mod common;
+
 // ── HTTP fixture server ───────────────────────────────────────────
 
 /// Tiny single-threaded HTTP server.  Serves a static map of
@@ -845,9 +848,9 @@ fn a_sidecar_pin_decides_the_install_and_is_not_rewritten() {
         let out = loft::package::package_create(&src, Some(&tmp)).expect("package_create");
         shas.push(out.sha256.clone());
         entries.push(format!(
-            r#""{version}":{{"url":"file://{}","sha256":"{}","size":{},"loft":">=0.8",
+            r#""{version}":{{"url":"{}","sha256":"{}","size":{},"loft":">=0.8",
                "published":"2026-08-18T00:00:00Z"}}"#,
-            out.tarball.display(),
+            common::file_url(&out.tarball),
             out.sha256,
             out.size
         ));
@@ -863,7 +866,7 @@ fn a_sidecar_pin_decides_the_install_and_is_not_rewritten() {
     );
 
     let (_home, _lh) = HomeGuard::set(&home_dir);
-    let (_reg, _lr) = RegUrlGuard::set(&format!("file://{}", index.display()));
+    let (_reg, _lr) = RegUrlGuard::set(&common::file_url(&index));
 
     // The sidecar `loft pin` would have written: the older version, and the file a run
     // must leave exactly as it found it.
@@ -1013,7 +1016,7 @@ fn a_refused_advisory_feed_is_not_left_in_the_cache() {
     let served = tmpdir("1048-served");
     fs::create_dir_all(&served).expect("served dir");
     write_file(&served.join("advisories.json"), advisory_feed());
-    let url = format!("file://{}/index.json", served.display());
+    let url = common::file_url(&served.join("index.json"));
     let (_url_guard, _url_lock) = RegUrlGuard::set(&url);
 
     let cache = home.join(".loft").join("registry");

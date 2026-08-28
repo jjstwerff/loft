@@ -15,9 +15,10 @@
 # reaches the code path it was written for.
 #
 # So this does not ask "does it pass now".  It builds `<control-ref>`, runs the guard THERE
-# and HERE through the entry point the corpus runner would pick, and compares four channels
-# separately — exit code, assertion failures, leaked stores, panic.  The verdict names the
-# channel that moved, which is the fact a bare pass/fail hides.
+# and HERE through the entry point the corpus runner would pick, and compares five channels
+# separately — exit code, assertion failures, leaked stores, panic, and stack-store free
+# refusals (`BUG (#306)`).  The verdict names the channel that moved, which is the fact a
+# bare pass/fail hides.
 #
 # The control build is cached per ref under the scratch root, so a second guard against the
 # same ref costs nothing.
@@ -29,7 +30,7 @@
 # form — reports `leak none` on BOTH trees whatever it leaks, and a guard written to catch a
 # LEAK is therefore recorded INERT, i.e. mislabelled a lock.  Measured 2026-08-27 on
 # `a-nullable-return-joins-its-branch-arms.loft`, whose leaking cell `make ci` failed on while
-# this reported `0|0|none|none` for both trees (QUALITY.md B6p).  Until `--tests` grows a leak
+# this reported `0|0|none|none|0` for both trees (QUALITY.md B6p).  Until `--tests` grows a leak
 # check, score a leak guard by giving it a `main` and running it under `--interpret`.
 set -uo pipefail
 
@@ -82,9 +83,17 @@ build() { # <dir> <target-dir> -> path to binary
   echo "$2/debug/loft"
 }
 
-# Four channels, read apart.  A guard scored on one of them can be silent on the others,
+# Five channels, read apart.  A guard scored on one of them can be silent on the others,
 # and which one moved is the thing worth printing.
-signature() { # <binary> <guard-path> <extra-args…> ; prints "exit|asserts|leak|panic"
+#
+# The REFUSAL channel is here because `tests/wrap.rs` Part A2 already fails a corpus file on
+# it and this script did not read it — so a guard for an ownership defect that moves only
+# that channel scored INERT while `make ci` would have failed on the control.  Two
+# consecutive rule-led walks (@FR-L-Null, @FR-O-Proxy) had to measure it by hand.  A
+# `BUG (#306)` line means a whole-store free aimed at the eval-stack store that only the
+# allocator's guard stopped, and the guard keeps the store alive — which is exactly why
+# values, exit code and the leak report can all stay put while it fires.
+signature() { # <binary> <guard-path> <extra-args…> ; prints "exit|asserts|leak|panic|refusals"
   local bin="$1" file="$2"; shift 2
   local out rc
   # `timeout` as well as `LOFT_TIMEOUT`, and the outer one is not redundant: an OLD control
@@ -95,11 +104,12 @@ signature() { # <binary> <guard-path> <extra-args…> ; prints "exit|asserts|lea
   local lim="${LOFT_FALSIFY_TIMEOUT:-180}"
   out=$(timeout -k 5 "$((lim + 20))" env LOFT_NATIVE_LEAK_CHECK=1 LOFT_TIMEOUT="$lim" \
         "$bin" "$@" "$file" 2>&1); rc=$?
-  local asserts leak panic
+  local asserts leak panic refusals
   asserts=$(echo "$out" | grep -c "assertion failed")
   leak=$(echo "$out" | grep -oE "stores not freed at program exit: .*" | head -1 | sed 's/.*exit: //')
   panic=$(echo "$out" | grep -oE "panicked at [^:]*" | head -1)
-  echo "$rc|$asserts|${leak:-none}|${panic:-none}"
+  refusals=$(echo "$out" | grep -c "BUG (#306)")
+  echo "$rc|$asserts|${leak:-none}|${panic:-none}|$refusals"
 }
 
 mkdir -p "$CACHE"
@@ -137,7 +147,7 @@ if [ -n "$BULK" ]; then
       entry_modes "$ROOT/$g"
       c=$(signature "$SHARED/debug/loft" "$ROOT/$g" --path "$wt/" "${MODE_I[@]}")
       h=$(signature "$HERE" "$ROOT/$g" --path "$ROOT/" "${MODE_I[@]}")
-      if [ "$h" != "0|0|none|none" ]; then
+      if [ "$h" != "0|0|none|none|0" ]; then
         printf '%s\t%s\there-not-clean\t%s\n' "$g" "$ref" "$h"
       elif [ "$c" = "$h" ]; then
         printf '%s\t%s\tINERT\t%s\n' "$g" "$ref" "$c"
@@ -174,7 +184,7 @@ HERE=$(build "$ROOT" "$CACHE/head-target") || { echo "this tree does not build" 
 
 fail=0
 CHANNELS=""
-printf '%-12s %-10s %-38s %s\n' backend tree "exit|asserts|leak|panic" verdict
+printf '%-12s %-10s %-40s %s\n' backend tree "exit|asserts|leak|panic|refusals" verdict
 for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
   name=${pair%% *}; args=${pair#* }
   # shellcheck disable=SC2086
@@ -186,7 +196,7 @@ for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
   h=$(signature "$HERE" "$ROOT/$GUARD" --path "$ROOT/" $args)
   clean_here="ok"
   [ "${h%%|*}" = "0" ] || clean_here="NOT-CLEAN"
-  case "$h" in *"|none|none") ;; *) clean_here="NOT-CLEAN";; esac
+  case "$h" in *"|none|none|0") ;; *) clean_here="NOT-CLEAN";; esac
   [ "$(echo "$h" | cut -d'|' -f2)" = "0" ] || clean_here="NOT-CLEAN"
   if [ "$c" = "$h" ]; then
     verdict="INERT — the control and this tree answer the same"
@@ -198,7 +208,7 @@ for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
     verdict="falsified"
     # Name the channel that moved, so the recorded line says what was measured rather
     # than only that something was.
-    for i in 1 2 3 4; do
+    for i in 1 2 3 4 5; do
       cf=$(echo "$c" | cut -d'|' -f$i); hf=$(echo "$h" | cut -d'|' -f$i)
       [ "$cf" = "$hf" ] && continue
       case $i in
@@ -206,13 +216,14 @@ for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
         2) d="$cf assertion failures -> $hf";;
         3) d="leaked $cf -> clean";;
         4) d="panicked -> clean";;
+        5) d="$cf stack-store free refusal(s) (BUG #306) -> $hf";;
       esac
       [ -n "$CHANNELS" ] && CHANNELS="$CHANNELS, "
       CHANNELS="$CHANNELS$name $d"
     done
   fi
-  printf '%-12s %-10s %-38s %s\n' "$name" control "$c" ""
-  printf '%-12s %-10s %-38s %s\n' "$name" here "$h" "$verdict"
+  printf '%-12s %-10s %-40s %s\n' "$name" control "$c" ""
+  printf '%-12s %-10s %-40s %s\n' "$name" here "$h" "$verdict"
 done
 
 echo

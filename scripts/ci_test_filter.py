@@ -6,7 +6,7 @@ unsharded push/nightly matrix, and the two-way sharded PR path.  A filter
 duplicated across workflow steps drifts silently — a test excluded on one leg
 and not the other reads as a flake — so it is built here, once.
 
-Usage:  ci_test_filter.py <event_name> [heavy|rest]
+Usage:  ci_test_filter.py <event_name> [heavy|rest|rest-a|rest-b]
 
 The optional shard restricts the leg to the `heavy-serial` test group, or to
 its complement.  The group's membership is NOT repeated here: it is read out of
@@ -68,6 +68,67 @@ PR_ONLY = [
 ]
 
 
+# The shard boundary is EVERY single-slot test group, not just `heavy-serial`.
+#
+# A `max-threads = 1` group scattered across shards pins every shard holding a member to
+# a serial floor while the work divides unevenly — the root cause ci.yml records for both
+# reverted sharding strategies.  Cutting along `heavy-serial` fixed that for one group and
+# left `html-wasm-serial` (139s over 32 tests) in `rest`, which is the critical path: the
+# same defect, one group over.
+#
+# This is a SHARD boundary, not a runtime grouping.  The two groups stay separate in
+# `.config/nextest.toml` on purpose — `heavy-serial` exists so a native rustc storm never
+# starves a timing-sensitive server test, which is a different question from which JOB a
+# binary runs in — so the fix belongs here and not in a group merge.
+SERIAL_GROUPS = ["heavy-serial", "html-wasm-serial"]
+
+
+# The heavier half of `rest`, BY DURATION.  ci.yml records that a duration-balanced split
+# was tried and reverted — but for a reason that no longer applies: it scattered the
+# single-slot `heavy-serial` group across shards, and every such group now lives whole in
+# the `heavy` shard, so there is nothing left in `rest` to scatter.  That is the axis none
+# of the three earlier attempts tried.
+#
+# Named as the HEAVY HALF, with the light half taken as its COMPLEMENT.  That asymmetry is
+# the safety property: a binary added later and not listed here lands in `rest-b` and still
+# runs.  A pair of explicit lists could omit one silently, and a test that runs on no leg
+# is the one failure mode a sharding scheme must not have.
+#
+# Measured 2026-08-28 from a full `make ci` (per-binary seconds; regenerate the same way
+# and re-pack when the halves drift): A 1317s over 16 binaries, B 1285s over 200 — 1.2
+# percent apart.  Drift costs only balance, never coverage, so re-measuring is a tuning
+# job and not a gate.
+REST_HEAVY_HALF = [
+    "issues",
+    "store_persist_loft",
+    "mut_closure_matrix",
+    "deliver_wasm",
+    "ir_schema_roundtrip",
+    "html_gl_imports",
+    "tuple_matrix",
+    "issue_896_nullable_field",
+    "native_loader",
+    "binary_io_matrix",
+    "template_matrix",
+    "engine_host_connector",
+    "closure_matrix",
+    "use_analysis",
+    "engine_host_kernel",
+    "parse_errors",
+]
+
+
+def rest_half(heavy_half: bool) -> str:
+    """The filterset for one half of `rest`, split by measured duration."""
+    named = " + ".join(f"binary({b})" for b in REST_HEAVY_HALF)
+    return f"({named})" if heavy_half else f"not ({named})"
+
+
+def serial_boundary() -> str:
+    """The filterset selecting every binary in a single-slot group — the shard cut."""
+    return " + ".join(f"({group_filter(g)})" for g in SERIAL_GROUPS)
+
+
 def group_filter(group: str) -> str:
     """The filterset nextest itself uses to populate `group`."""
     with NEXTEST_TOML.open("rb") as fh:
@@ -88,11 +149,15 @@ def main() -> None:
     if event == "pull_request":
         clauses += PR_ONLY
     if shard == "heavy":
-        clauses.append(f"({group_filter('heavy-serial')})")
-    elif shard == "rest":
-        clauses.append(f"not ({group_filter('heavy-serial')})")
+        clauses.append(f"({serial_boundary()})")
+    elif shard in ("rest", "rest-a", "rest-b"):
+        clauses.append(f"not ({serial_boundary()})")
+        if shard != "rest":
+            clauses.append(rest_half(shard == "rest-a"))
     elif shard is not None:
-        raise SystemExit(f"unknown shard '{shard}' (expected 'heavy' or 'rest')")
+        raise SystemExit(
+            f"unknown shard '{shard}' (expected 'heavy', 'rest', 'rest-a' or 'rest-b')"
+        )
 
     print(" and ".join(clauses))
 

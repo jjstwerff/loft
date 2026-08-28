@@ -149,6 +149,14 @@ real product: the `⇐` expected-type channel has **ten push sites carrying six 
 admission lists**, and `Type::Tuple` is in none of them — which is why the same shapes still
 fail in a `return` and in an argument, filed as **loft#1122**.  A `--native`-only silent wrong
 answer found beside it is **loft#1123**.
+**B6w walked the issue B6v had FILED (loft#1134) and found the report inverted**: the route it
+called broken was the only correct one, and the two it called correct were two mistakes
+cancelling.  The declared layout is what settles such a question — a `LOFT_DUMP_TYPES=1` dump,
+not a comparison of the two programs — and it also promotes the defect: *"one field high"* was
+the milder half, because the discriminant was aliased onto the payload's first byte and a
+PRESENT `S { a: 0, … }` therefore read absent.  Three write sites and two read sites, two shared
+homes; the two side findings are **loft#1138** (not tuple-specific — the tag is dropped at every
+function boundary) and **loft#1139** (a legal program refused).
 
 #### A — rule-tag adoption (`scripts/rule_tags.py`, `idx tag:@FR-…`)
 
@@ -461,7 +469,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 323 | 306 | **17** |
+| 326 | 309 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -1375,7 +1383,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 38 | **5** | 33 |
+| 39 | **6** | 33 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -2265,14 +2273,25 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 643 | 281 | 4 | **358** |
+| 649 | 291 | 4 | **354** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
 picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
 added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
-again, then 642 · 270 until B6s peeled seven and merged one body away — every count here is a
-snapshot of two moving checkouts, so re-run the tool rather than
+again, then 642 · 270 until B6s peeled seven and merged one body away, then 644 · 281 until loft#1125
+peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 284 until B6v added
+`data::holds_dbref`, which asks through `.base()` and so lands on the seeing-through side, then
+644 · 285 until B6w added four, then 648 · 286 until B6y added `source_spelling` — which reads
+`Type::Enum(syn, true, …)` to answer with the `Optional` the author wrote, and so is a peel in
+the OTHER direction: it sees through by construction.  B6w's four were: `needs_nullable_wrap`
+asks through `.base()` and sees through,
+while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are opaque ON
+PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored tuple
+attribute, or of the `Some` variant's `payload`), and a stored attribute is already the storage
+spelling, so an `Optional` cannot reach them.  That is the distinction the opaque column is for:
+a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
+every count here is a snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
 `for_each_child` / `ret_dep_shape` / `ret_promo_base` see through; `heap_dep` / `is_dbref` /
@@ -2858,6 +2877,488 @@ about the tuple that reaches the `return` rather than about the member expressio
 worth knowing because it is the natural first attempt, and it is the discriminator that puts
 #1123 in loft#1096's family — one notion, two type spellings, the rewrite between the passes
 deciding which one a site sees — a position over.
+
+#### B6u — `@FR-L-Null` walked as a lens: 13 sites, two questions, one defect and one filed (2026-08-28)
+
+BUG_REVIEW.md's `2026-08` (3rd) cycle names the class — *rules the code does not represent* —
+and says the work per rule is **evaluate the sites → de-duplicate onto one home → fix what the
+disagreement was causing → cite last**.  This is the first rule walked that way.
+`@FR-L-Null` was chosen because it is the most scattered rule the tree has (13 citation sites
+across 8 files, `rule_tags.py dups`) and because 14 of the cycle's 27 bugs name null.
+
+**The 13 sites are TWO questions, not one, and the split is the first product.**
+
+| question | sites | state |
+|---|---:|---|
+| **the PEEL** — `Optional(τ)` occupies τ's storage, so `.base()` before asking a shape question | 9 | 8 peel; `is_keyed` is the documented LOCK |
+| **the SENTINEL** — which reserved bit pattern absence is | 4 | consolidated as IR / store-init / narrow read+write twins |
+
+Merging them would be the early-abstraction failure the checklist warns about: *"is this the
+same storage?"* and *"what value means absent in it?"* are different sentences, and the second
+has a legitimate three-way split (an IR op, a runtime store-init write, a narrow-width pair).
+
+**The sentinel half is genuinely consolidated, measured rather than assumed.** `data::to_null`
+keys on the `Type` variant and answers an `OpConv*FromNull`; `Stores::set_default_value_nullable`
+keys on the content-type NUMBER and writes a raw value; `to_null`'s doc claims they produce the
+same sentinels *"so a record built by a literal and one filled by a `#read` answer the same"*.
+That is a claim, so it was tested: nine nullable field types (`integer`, `float`, `single`,
+`boolean`, `character`, `text`, `i8`, `i16`, `i32`) × three routes (field OMITTED so store-init
+writes it, an explicit `null` literal so the IR path picks the op, and a later `= null`
+assignment) — **27 cells, all agreeing**.  A negative result, and worth the lines: the doc's
+claim is now measured, and the next reader does not have to re-derive it.
+
+**The peel half produced the defect, and the duplication was the cause.**  `convert`'s
+Null→heap arm asked `matches!(should, Type::Vector(_, _))` — a hand-spelled variant list short
+by all five KEYED kinds, and not peeling `Optional` either.  So `h: hash<S[k]>? = null` kept a
+bare `Value::Null`, **which writes nothing**, and the scope-exit `OpFreeRef` read the untouched
+bytes as store #0 and tried to free the STACK: `BUG (#306)`, *"a stack-record ref was treated as
+an owned heap store"*.  Values stayed correct throughout, so only the FREE channel could see it
+— `tests/wrap.rs` Part A2 (loft#920) is the gate that fails on it, which is why the guard is
+`main`-ful rather than `#[test]`-shaped (`--tests` does not run that gate).
+
+⚠ **The arm immediately BELOW the broken one records the identical fault, in the same words.**
+loft#1065 fixed the struct-enum shape and its comment ends *"the scope-exit `OpFreeRef` then read
+the untouched bytes as store #0 and tried to free the STACK … BUG #306"*.  Its collection sibling
+was two lines up, listing `Vector` alone, and was not touched.  That is
+[carve-out comment is a map](STABILITY_METHOD.md) and [audit the siblings of a fixed
+rewrite](STABILITY_METHOD.md) arriving together: the comment naming the hole was written by the
+person who fixed the neighbouring instance of it.
+
+Cured by asking the one home that already exists — `vectors::is_collection`, whose doc already
+says it is the `is_keyed` set plus `Vector` — instead of a sixth spelling of the list.  Verified
+on both backends over `hash` / `sorted` / `spatial` / `trie` / `vector` absent, plus dense and
+present-nullable controls so the sentinel write is not scored alone.
+
+**Two things the walk found that are NOT this defect, both recorded rather than folded in:**
+
+* **loft#1125** — a nullable `index<T[k]>?` fails type layout outright: `#left_1`, `#right_1`
+  and `#color_1` all land at offset `0`, overlapping each other and the first real field, while
+  the DENSE `index<T[k]>` of the same struct is fine.  A/B'd against a build with the fix
+  reverted and the errors are byte-identical, so it is independent and pre-existing.  The
+  nullable-index cell is therefore deliberately ABSENT from the guard, whose axes section says
+  so — a cell there would lock #1125 rather than guard this.
+* **The generic `OpConv*FromNull` loop does not peel** (`let Type::Reference(_, _) = *should`),
+  which predicts the same bare-`Value::Null` fault for a nullable struct REFERENCE local.  It was
+  probed — `x: RS? = null`, plus `text?` and `integer?` — and every cell is clean on the same
+  harness that shows the keyed `BUG (#306)`, so the shape is covered elsewhere and the missing
+  peel is LATENT.  Left alone deliberately: changing it would alter code with nothing to measure
+  the change against, which is the trap the `is_keyed` lock below already documents.
+
+#### B6v — `@FR-O-Proxy` walked: one predicate, two questions, and the spelling that belongs to only one (2026-08-28)
+
+Next rule by `rule_tags.py dups` after `@FR-L-Null`, and the one with a **checkable
+obligation already written into it** — *"a site that FREES on the proxy MUST also consult
+@FR-O-Override"*.  Thirty-one sites read `tp.depend().is_empty()`.
+
+**The split (step 2 of the walk).**  The sites ask two questions, and the whole result turns
+on which:
+
+* **LAYOUT** — *"does this value occupy a DbRef slot?"*  `data::is_dbref`.  A tuple correctly
+  answers **no**: it is multi-slot and every transport path gives it its own channel — native's
+  `next_into` rather than `next_dbref`, tuple ops rather than `OpPutRef`, per-element frees
+  rather than one.  **Seventeen of the eighteen remaining `is_dbref` callers ask this**, read
+  one by one, and all seventeen are right — including two that look like exceptions and are
+  not: `scopes`'s return-source suppression excludes `Tuple` deliberately (*"TEXT and TUPLE
+  returns keep their own, mature free paths"*), and `data::owned_elements` is already inside
+  the tuple's decomposition, asking per element.
+* **BORROW** — *"can this binding REACH a store someone else owns?"*  A tuple answers **yes**,
+  through its elements.  `data::holds_dbref` is now the home.
+
+**The defect is one site asking the borrow question with the layout predicate.**
+`collections.rs`'s coroutine loop-variable arm binds the loop var as a borrow of the generator
+so the consumer never emits a per-iteration free — its own comment says *"⚠ A short list here
+does not skip a nicety — it inverts this arm"* — and it gated on `is_dbref`, which rejects
+`Type::Tuple`.  Measured on a four-pull generator over `iterator<(integer, S)>`: the
+generator's extensible **frame store took a whole-store free on every iteration**, four frees
+of one live store, the values surviving only because the allocator handed the slot straight
+back.  Only the exhaustion pull's free landed on a stale ref and raised `BUG (#306)`, which is
+the channel `tests/wrap.rs` Part A2 gates on and the only one that moves — values and exit
+status are identical either way.
+
+**Two homes retired, in one `if` block.**  Under the gate sat a `match` rebuilding each of the
+eight DbRef variants with the dep — a THIRD copy of a list the gate above had just been
+de-duplicated onto, with an `other => other` fall-through that binds the unspellable type
+unchanged while the arm reads as taken.  `Type::with_deps` is the declared home and its doc
+already states how a tuple holds a dep (no list of its own; the deps spread to the elements
+and `Type::depend` unions them back), so one call replaces the match and reaches nested tuples
+without naming them.
+
+⚠ **A short list is not the only way this hides — a NEGATED one is, and it defeated the
+rule's own checker.**  `scripts/o_proxy_check.py` reported the obligation set clean while
+`scopes::tuple_owned_elem_frees` freed a tuple element on empty element deps with no override
+consult.  Its discrimination 1 reads `!tp.depend().is_empty()` as *"this asks whether it is a
+borrow"* — true of a condition, false of an early-exit GUARD, where `if !…is_empty() {
+continue; }` puts the free on the FALL-THROUGH and the site concludes ownership exactly as a
+positive test would.  The check now classifies by what the guard falls through to, and bounds
+the region by what the keyword actually exits (`continue` leaves the enclosing loop body,
+`return` the function) — taking the rest of the function for both accused a loop that only
+pushes to a list.  It fires on both forms and is clean with both vetoes present, proven by
+removing each in turn.
+
+**What the walk reports, not the verdict.**  It **converged**: every cell the fix moved was a
+tuple spelling of one question, the controls (bare `S`, bare `vector`, a scalar tuple, plain
+and captured collection iteration) never moved, and the sibling that asks the borrow question
+with the layout predicate — `scopes.rs`'s loft#1029 argument-witness lift — was **probed and
+held** on both backends.  One root, three homes retired (gate, attach, free site).  The rules
+covered every cell: `@FR-O-Proxy` says the proxy needs the override, `@FR-Col-Store` says
+which types reach a store, so nothing here was a design call.
+
+**Three findings FILED rather than folded in** — each a different root, each reproducing
+byte-identically on a build with this fix reverted:
+
+* **loft#1130** — `yield [<keyed-collection literal>]` hands back a corrupted collection:
+  `hash` counts words instead of records (`5n − 3` for a 5-field element) and loses every key
+  lookup; `index` / `trie` / `spatial` report `len == 1` for three elements; `sorted` and
+  `vector` survive.  Binding the identical literal to a local and yielding the name is correct
+  in all twelve cells, which is what isolates the route.  It also revises a claim in
+  `formal/IMPLEMENTATIONS.md` § The DbRef set — *"a `spatial` yield is correct anyway"* holds
+  for the bound route that was probed, and `coroutine-yields-a-dbref-value.loft` passes for
+  exactly that reason: every one of its generators binds first.
+* **loft#1131** — iterating a captured `vector<(…)>` inside a closure reads no elements
+  (silently `0`; SIGSEGV when the tuple holds a struct; `--native` cannot compile it).  The
+  adjacent @PLN93 capture arm spells its own three-variant list, so this looked like the same
+  root — until the control separated them: **a tuple of SCALARS fails too**, and it reaches no
+  store, so no ownership story covers it.
+* **loft#1132** — `--native` emits invalid Rust rather than refusing for a yield type with no
+  transport channel (a tuple with a `text` or nested-tuple element, or a tuple yield in a loop
+  body): `tuple_kinds` answers `None` and the selection falls into an `as i64` catch-all.  The
+  clear `compile_error!` the struct/vector-in-loop case already gets is the fix shape.
+
+* **loft#1134** — a tuple with a NULLABLE struct element, read by iterating a collection,
+  comes back one field high: the first field answers with the second's value and the last
+  reads uninitialised bytes (`n=111 tag=4294967200` where `n=11 tag=111` was stored).  The
+  same element by INDEX is correct, and so is the same tuple as a LOCAL — which is the axis
+  `a-nullable-tuple-element-owns-like-its-dense-twin.loft` never moves: it covers both
+  positions, the absent case and four element types, and every one of its tuples is a local.
+  Found while checking whether this walk's `Optional` peel changed behaviour for a nullable
+  yield element.  It did not; the defect is older and has no generator in it.
+
+**Four reds cleared that were not findings, all from the previous commit on this branch.**
+`cargo fmt` and `cargo clippy` were both failing — an inserted function had landed BETWEEN
+`to_string_compact`'s doc-comment and its `#[must_use]`, silently moving both onto the new
+function, which the compiler warned about and nothing read.
+
+The third was the gate's own subject: **`error_messages::baselines_are_locked_in` had been
+failing since the diagnostics-in-cache commit**, whose whole claim is *"a cached run says what
+an uncached one says"*.  Two things a normal run PRINTS did not travel, and both come off a
+diagnostic's `fixes`, which that commit deliberately dropped:
+
+* the once-per-run *"N diagnostics above suggest what to write instead"* note counts entries
+  with non-empty `fixes`, so a warm run dropped the line;
+* **every `fix` line under `--explain`** — two cold, none warm.  The justification for
+  dropping them was *"`--explain` forces a cold parse"*, and `startup_cache.rs` has no
+  `explain` awareness at all.  The claim was never true; nothing had measured it.
+
+`fixes` now travel — kind, title, condition, edit and both catalogue handles.  An `Edit` is a
+position into source and the bundle is invalidated whenever a source changes, so a replayed
+edit points where it pointed.  Guarded by
+`arc_e_program_cache::a_warm_run_renders_the_same_diagnostics_including_their_fixes`, which
+compares the two runs' stderr as EQUALITY and separately asserts the cold run produced the
+thing being compared — two empty stderrs are equal too.  Falsified by re-encoding zero fixes:
+it fails naming the missing note line.
+
+**The fourth red is the same commit's other half, and it is put back rather than fixed.**
+That commit also made the program cache default-on EVERYWHERE, removing the two exemptions
+(a Cargo invocation, a `target/` binary) on the argument that they were a proxy for
+incomplete invalidation now that both keys fold in `binary_signature_tag`.  The argument is
+right about rebuilds and incomplete about everything else: a warm load skips the PARSE, so
+every parse-time effect has to be carried, and the placement decision for a
+`placement = "remote"` library is not.  Measured cold-then-warm on one unchanged tree —
+correct refusal, then *"native function not loaded"* — and the flip is what put the whole
+test suite on that path, so `placement_remote::a_server_that_stops_answering_is_an_error_
+not_a_hang` failed.
+
+⚠ **The sibling checkout reached the same conclusion independently and got there first**:
+`main` carries the exemptions, its head is *"…and the cache flip deferred"*, and **loft#1129**
+is the open issue — *"the program-cache default cannot flip on until the warm path reproduces
+every parse-time effect"*.  So this branch was carrying a decision main had already reversed,
+and the fix is to match main.  The `binary_signature_tag` half is orthogonal and stays.
+
+Two method notes from how long that took to see.  It presented as *"the native cdylib is
+missing or stale"*, which reads as a build problem and sent me through a `cargo clean -p loft
+--release` first — that DID fix a separate stale-artifact fault, which is the trap: a real
+cure for the wrong cause.  What actually separated them was running the SAME tree twice and
+watching cold pass and warm fail; and the reference build (this branch's own HEAD) showed the
+identical cold/warm split, which is what said the defect was older than today's edits.
+
+#### B6w — loft#1134: the route the report called broken was the only correct one (2026-08-28)
+
+Filed off B6v as *"a nullable tuple element read by ITERATING a collection is one field high;
+correct as a local and correct by index"*.  Every clause of that is true as an observation and
+the conclusion drawn from it was backwards.
+
+**The declared layout settles it, and it takes one command to ask.**  `LOFT_DUMP_TYPES=1`:
+
+```
+82:__tuple<integer,S?>[32/1]      _0:integer[0]   _1:__nullable<S>[8]
+81:__nullable<S>::Some[24/8]      enum:byte[0]    payload:S[8]
+79:S[16/8]                        a:integer[0]    b:integer[8]
+```
+
+So `S`'s fields live at tuple offset **16**, behind a discriminant at 8.  The `for` loop was
+the ONE reader that went there — `OpGetField(t, 8, 78)`, then the tag, then
+`OpGetField(x, 8, 79)`.  The write copied a dense `S` straight into offset 8, and the INDEXED
+read projected offset 8 as a dense `S` as well: **two mistakes that cancel**, which is the
+entire reason the index route looked right and the loop route looked broken.  Scoring the
+routes against each other could only ever elect the majority — [[agreement-is-not-correctness]]
+one level up, where the thing agreeing is not two backends but two routes through one program.
+
+**And "one field high" was the milder half.**  With the discriminant aliased onto field `a`,
+presence stopped being a fact and became a data byte:
+
+| cell | before |
+|---|---|
+| `S { a: 0, b: 22 }`, PRESENT, read in the loop | **ABSENT** |
+| a `float` first member (`1.5`) | **ABSENT** — the low byte of the payload is the tag |
+| element written `null`, read across a call | **present**, a record of zeroes |
+| `S { a: 11, b: 111 }` | `a=111`, `b=4294967200` (the filed cell) |
+
+The zero-valued first field is the cell the whole fix turns on, and no route-vs-route
+comparison proposes it: it only looks interesting once you know a TAG is supposed to be there.
+`formal/types.md` names the property being lost — *a struct `S` as a `vector` element is the
+tagged `__nullable<S>` (discriminant + payload; **no collision**)* — so this was a deviation
+from a written rule, not a design call.
+
+**Root: one notion, two spellings, and the tuple never bridged them.**  A member is PARSED
+against the spelling the author writes (`S?` = `Optional(Reference(S))`) and STORED against the
+layout spelling (`Enum(__nullable<S>)`).  `synth_nullable_struct_fields` rewrites a struct
+FIELD's typedef from one to the other and skips synthetic hosts — *"tuples, fn-ref, and our own
+`__nullable<T>` variants … so the rewrite never recurses into generated layouts"* — while
+D-tup-6 (loft#1123, closed the day before) gave the tuple ELEMENT the tagged slot anyway.  The
+layout moved and the writers did not.  That is [[audit-the-siblings-of-a-fixed-rewrite]]: the
+sibling had the precondition written into its own ⚠ note (*"that makes a tuple ELEMENT a
+`__nullable<S>` slot"*) and nothing swept the sites that write one.
+
+**Five sites, two homes.**  `emit_nullable_slot_write` / `emit_nullable_slot_read` are the pair
+— tag on the way in, tag on the way out, the discriminant spelled exactly as
+`operators.rs::enum_null` spells it so a slot cannot be written by one and read by the other.
+`tuple_elem_tag_write` / `tuple_elem_tag_read` select for the tuple positions, and they are the
+only place holding BOTH the member's source type and the slot's stored type, which is what the
+decision needs.  The three writers were the vector-element literal (`new_record`), the tuple
+field/assignment writer (`emit_tuple_set_ops`) and reassignment through an index; the two
+readers were the unbox (`v[i]`) and the tuple struct-field read.
+
+⚠ **Fixing the write alone made two passing cells fail**, and that is the shape rather than a
+setback: a keyed-collection element and a nested tuple were both dense-write + dense-read, so
+correcting one half exposed the other.  A fix that moves a cell from *right by cancellation* to
+*wrong* is not a regression to back out — it is the second site announcing itself.
+
+**Three findings filed rather than folded in**, each A/B'd against the control build `make
+falsify` had already produced at `2b3691a4`:
+
+* **loft#1138** — an ABSENT nullable struct reads as PRESENT across a function boundary
+  (argument or return).  `convert`'s `Enum(__nullable<S>) → Reference(S)` arm projects the
+  payload sub-ref without consulting the discriminant, and a sub-ref into an absent slot is a
+  valid `DbRef`.  **Not tuple-specific** — it reproduces for a `vector<S?>` element and a plain
+  struct field, which is what makes it a separate root; in-place tests, local binds, declared
+  `S?` locals and `??` are all correct.  Filed rather than folded because the cure changes the
+  unwrap's IR spelling from a bare `OpGetField` to an `If`, and `tail_is_nullable_unwrap` keys
+  on the bare shape while `unwrap_source_is_nullable` beside it already peels `Value::If` — the
+  two have to move together, which is its own verification.
+* **loft#1139** — `v += [f()]` is refused for a tuple with a nullable member while the dense
+  twin is accepted, reporting a precision loss between `__tuple<integer,S?>` and
+  `(integer, S?)` — two spellings of one type.  A legal program refused.
+* the guard reads `1|1|none|none` -> `0|0|none|none` on BOTH backends, so the defect was shared
+  semantics rather than a parity bug.
+
+**Two process notes, both of them repeats.**
+
+*A workaround written from plausibility is a wrong workaround.*  I filed #1139 saying *"bind
+the call to a local first"* without running it; `t = mk(); v += [t];` is refused identically.
+`.github/LABELS.md` says it outright — *"a wrong workaround is worse than `wa:none`"* — and the
+`wa:` label is the one field a consumer triages on.  Both issues were re-measured and both
+dropped to `wa:partial`; #1139's real workaround additionally answers WRONG on `main` until
+this fix lands, which is worth saying in the issue rather than discovering downstream.
+
+*The doc-comment insertion hazard bit again, one commit after it was cleared.*  B6v's own
+"four reds" were `cargo fmt` and `cargo clippy` failing because an inserted function had landed
+BETWEEN a doc-comment and its `#[must_use]`; anchoring this walk's helpers on
+`pub(crate) fn emit_tuple_set_ops(` put them between that function's doc block and the function.
+Clippy caught it (`doc_lazy_continuation`), which is the argument for running the two clippy
+variants before `make ci` rather than after — but the durable fix is the one already recorded in
+[[make-ci-not-find-problems-before-push]]: **anchor an insertion on the doc block, never on the
+`fn` line**.  Repeating a recorded lesson the day after recording it says the note was filed
+where it is read after the fact, not where the decision is made.
+
+#### B6x — loft#1138: the tag was built on the way in and dropped on the way out (2026-08-28)
+
+B6w gave a tagged slot a writer.  This is the other half, and it was filed as a separate root
+for a reason that held up: it reproduces with no tuple in sight.
+
+An ABSENT `S?` arrived at a callee, and came back from a `-> S?`, as a PRESENT record of zeroes.
+`convert`'s `Enum(__nullable<S>) → Reference(S)` arm unwraps by sub-referencing the `Some`
+payload and never reads the discriminant — and a sub-ref into an absent slot is a perfectly
+valid `DbRef`, so absence had nowhere to go.  Every in-function position was already right
+(tested in place, bound to a local, assigned to a declared `S?`, discharged with `??`), which is
+exactly why it survived: the obvious cells all pass.
+
+**The fix is one arm, and its narrowness is the whole design.**  It sits at `convert`'s
+`Optional` peel, so only a NULLABLE target reads through the tag.  A DENSE `S` target keeps the
+bare payload sub-ref, because two sites downstream recognise that unwrap BY SHAPE —
+`tail_is_nullable_unwrap` (the #306 view-return materialise) and `new_record_field_op` — and an
+`If` is not a `Value::Call`.  Splitting on the target keeps one spelling per question instead of
+minting a third that both would have to learn.
+
+⚠ **Two wrong causes before the right one, and the IR had said it in one line the whole time.**
+The change broke loft#1105's leak gate (12 records, every value correct), and I explained it
+twice from the mechanism instead of reading the diff:
+
+1. *"The slot is read twice, so a `??` default builds twice."* REAL — `emit_nullable_slot_read`
+   used its `slot_ref` for both the tag and the payload — and fixed, and **not the cause**: the
+   leak was identical afterwards.
+2. *"`view_root_slots` cannot walk the new shape."* Also wrong; it already walks `If`,
+   `OpNullRefSentinel` and projection chains, and a `None` answer is FINE — it is what makes
+   `scan_args` LIFT the argument, which is loft#1105's own cure.
+3. The actual cause, visible in `diff` of the two IRs: `r(1):ref(S1105g)?` became
+   `r(1):ref(S1105g)["v"]?` and `OpFreeRef(r(1))` vanished.  I had built the result type with
+   `Deps::none()`.  The value is a VIEW into the container's store, so with no deps the @P290
+   bracket saw nothing to protect, the argument was never lifted to a name, and the caller kept
+   the callee's minted return unfreed.  `with_deps_of(src_tp)` is the fix.
+
+The rule that would have saved two rounds: **a new IR shape in argument position inherits its
+source's deps**, and the check is whether the `__lift_1` bind is still emitted.  Both wrong
+causes were mechanism stories told from the code; the diff was one command away and decided it.
+
+⚠ **And the guard reports nothing under either obvious invocation.**
+`1105-an-unnameable-argument-borrow-witness.loft` has no `main`, so `--interpret` runs nothing,
+and `--tests` does not leak-check at all — only `tests/wrap.rs` does.  Reproducing it standalone
+meant appending a `main` that calls all eleven `test_*` functions.  That is
+[[loft-tests-flag-skips-leak-gate]] and [[guard-entry-point-decides-what-runs]] meeting in one
+file, and it is worth knowing before hunting a leak the suite reports and no hand-run does.
+
+**A screen caught a real half-answer in the new code, which is what they are for.**
+`is_repeatable_place` asks *"is this free to evaluate twice?"* and answered it for the CALL
+spelling of a projection only, so `ir_walker_audit.py spellings` moved 38 · 5 → 39 · 5.  A
+`TupleGet` is a projection too and is equally free to repeat; the arm is one line and the count
+now reads 39 · 6 · 33.  The cost of the omission was only a needless stash, but it is the same
+shape as B6g's finding and it was found by running the screen rather than by reasoning.
+
+Guard: `tests/scripts/1138-an-absent-nullable-struct-stays-absent-across-a-call.loft`, falsified
+`1|1|none|none` → `0|0|none|none` on both backends.  It carries the four in-function controls
+and a PRESENT half in every position, because a fix that answered "absent" everywhere would pass
+an absent-only cell list.
+
+#### B6y — loft#1139: three sites derive one def, and the refusal was cheaper than half a fix (2026-08-28)
+
+The third of B6w's findings, and the one that shows what a REFUSAL is worth.
+
+`v += [f()]` was refused for `f() -> (integer, S?)` while the dense twin was accepted, reporting
+a precision loss between `__tuple<integer,S?>` and `(integer, S?)` — two spellings of one type,
+the class B6g named.  `unboxes_stored_tuple` compared members with `is_equal` alone, and
+`Data::same_nullable_struct` already existed for exactly that pair, so the acceptance is one
+condition.
+
+**Shipping only that condition makes the program silently wrong**, which the sibling checkout
+measured, reverted, and said so on the issue — the right call, and the reason the fix has a
+guard rather than a one-liner.  Accepting the pair without the rest turns a program that will
+not compile into one that answers `a=9` for `a=4` and `k=0` for `k=3`.
+
+**The root is one mistake at three sites: a `__tuple<…>` def RE-DERIVED from element types read
+in the STORED spelling.**  The def is NAMED by what the author wrote, so handing it a tagged
+member mints `__tuple<__nullable<S>,integer>` — a different def, different offsets:
+
+| site | what it did | what it does |
+|---|---|---|
+| `convert`'s unbox arm | passed `stored_tuple_elements(is_type)` | passes the DESTINATION elements, which re-derive the def the value actually lives in — and each member's declared type is also what tells the unboxer to read a tagged slot through its tag |
+| `set_field_check`'s `tuple_elem_set` arm | built elems from `def(inner_tp).attributes()` | maps them through `source_spelling` first.  **This is the one that made the append wrong**: it wrote the scalar member at byte 16 while the read looked at 24 |
+| `unboxes_stored_tuple` | `is_equal` only | also accepts `same_nullable_struct` |
+
+`Parser::source_spelling` (stored `Enum(__nullable<S>)` → `Optional(Reference(S))`, identity for
+everything else) is the shared home, and the read-side counterpart of `needs_nullable_wrap`.
+
+**A positional bound cannot fix this, and knowing why is the transferable part.**  The first
+attempt admitted the two spellings for the LAST member only, which is sound-looking and holds
+exactly as long as nothing follows the tagged member — every member AFTER one is displaced.  So
+the guard moves the tagged member through first, last, middle-of-three and BOTH ends of a
+three-member tuple, and reads a member on each side of it.  Those four cells are the ones a
+last-member rule passes and a correct fix earns.
+
+⚠ **`make falsify` scores this file on the EXIT channel only, and the header says so.**  The
+control REFUSES the program, so not one assertion runs there — the assert channel reads `0` on
+both sides.  What the tool proves is rejected → accepted, which is the cheap half.  The VALUE
+half was falsified by hand against the build that matters — acceptance WITHOUT the def fix,
+the state the file exists to make impossible — where every append cell is wrong and every
+declared-local cell passes.  A guard scored only on the parse would have called that build
+fixed.  This is [[channel-captured-never-compared]] in the shape a REFUSAL takes: when the
+control cannot run, the automated verdict is about admission and nothing else.
+
+**Two-checkout note.**  This is the first defect today where the two streams' fixes were
+genuinely coupled rather than merely adjacent: the sibling's acceptance change is unshippable
+without this branch's def work, and the def work is unobservable without the acceptance.  It was
+resolved by saying so early — who holds which issue, what each has measured, and what the other
+must not build on — rather than by either side finishing alone.  The message that mattered was
+the one reporting a NEGATIVE result (*"the declared local is still refused on my tree"*), which
+is what told the other side its wrong-value cell was its own to own.
+
+#### B6z — `@FR-O-Move` walked: two clauses, five hand-spelled `Vector` lists, and the clause nothing implemented (2026-08-28)
+
+Third rule walked, next after `@FR-L-Null` and `@FR-O-Proxy` by `rule_tags.py dups` (7 sites).
+
+**The split (step 2).**  `(O-Move)` is two sentences and the seven sites divide cleanly along
+them, which is the whole result:
+
+| clause | sites | state |
+|---|---:|---|
+| **the TRANSFER** — a returned store is the caller's; the callee must not free what it transfers | 4 | implemented, and correct |
+| **the BORROW** — *"if the return borrows a parameter, the return type records it and the caller COPIES"* | 3 | implemented **for `Vector` and `Reference` only** |
+
+**The second clause had no implementation for keyed collections at all**, and the shape is
+the one B6u found: `block_result`'s heap-return delivery dispatches on `Text`, `Type::Vector`
+and `Type::Reference`, so the five keyed `Type` variants matched no arm, `ref_return` never
+ran for them, and nothing recorded that a returned keyed collection borrows a parameter.
+`Def::returns_borrowed_view` reads an empty return-dep list as *owned*, so the keyed copy set
+its `0x8000` source-free bit on a store the caller still held: **`fn id(x: hash<T[k]>) ->
+hash<T[k]> { x }` freed the caller's collection, and every call after the first read it
+empty** — both backends, no diagnostic (loft#1140).
+
+`vectors::is_collection` is the declared one home for the store-backed set, and **five sites
+spell a `Type::Vector`-only list beside it**: the promotion-pass guard, the write-back match,
+`var_bound_to_branch`'s call site, `views_local`'s, and `fresh_owned_vector_deps`.  The last
+three are correct — keyed returns never reach the ladder, so gating them on `Vector` is right
+by construction — and that is a **negative result worth its lines**: the carve-out comments
+there (*"Vector only: the record return reaches its own view repair earlier"*) read as if the
+world were {vector, record}, and it is not, but the conclusion survives.
+
+**The defect is where the two questions in one predicate came apart.**  The site setting the
+source-free bit asked `is_struct_returning_call` — *is the RHS a call* — while its own comment
+claimed *"a fresh-storage call"*.  A borrowing return satisfies the first and not the second.
+That is `[[one-predicate-two-questions]]` again, and the cure was **not** a sibling predicate
+this time: `use_analysis::call_return_frees_source` already answers exactly this question,
+was written for this bit (loft#981/#982), and reads both the callee's return deps and whether
+the site's @P290 bracket covers every ref argument.  The site simply did not consult it — and
+emitted no bracket, so its licence did not hold either.  Fixed by doing both.
+
+⚠ **Three edits changed nothing before one changed everything, and that is the transferable
+part.**  Recording the return dep, then routing the caller's adopt-vs-copy gate, then wiring
+in `call_return_frees_source` — each was a defensible reading, each left the behaviour
+byte-identical, because none of them was read by the site that actually frees.  The IR diff
+against a pristine `origin/main` worktree is what ended it: the emitted `OpReplaceKeyed(…,
+32847)` names its own `0x8000` bit, and `32847` is a fact no amount of reading upstream
+predicates was going to produce.  **Stop patching after the second no-op and go read what is
+emitted.**
+
+**A conservative fix and a precise one, and the difference is measurable.**  Answering only
+the callee-side half (*never free a borrowing return's source*) closes the use-after-free but
+leaks one store per call on the MINTING arm of a borrowing signature — measured ×1 → ×2
+against `origin/main`.  Emitting the bracket instead lets the runtime decide, which is what
+the borrow/owned split needs: a protected store is refused the free, a callee-minted one is
+not.  Both were built and measured; the second ships.
+
+**Two findings recorded rather than folded in.**  loft#1142 — a keyed return through a branch
+join leaks the UNTAKEN arm's store, one per CALL, for an inline literal and for a local alike,
+and identical on `origin/main` and on this build.  Its cells are **deliberately absent** from
+the guard, whose header says so; the join coverage there mints nothing.  And the two entry
+points — `block_result`'s tail dispatch and `parse_return` — are two spellings of one act, so
+both new arms route through `is_keyed` rather than each carrying its own five-variant list;
+folding them into one function is a byte-identical-IR refactor that does not belong in a
+behaviour change.
+
+**The guard needed a churn cell to be non-vacuous.**  A wrongly-freed store still reads
+correctly until its slot is RECYCLED, so the first call always answers right — and a program
+measuring several kinds in sequence reports whichever kind happens to get its slot reused and
+calls the rest clean.  The first matrix built for this read `hash` broken and the other four
+correct; each kind in its own file read all five broken.  Every loop in the guard now
+allocates and drops a collection between the call and the assertion.
 
 #### C — process / skills
 

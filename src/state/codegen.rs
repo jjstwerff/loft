@@ -1801,7 +1801,10 @@ impl State {
         // it returns the existing registered type id when the (content, key)
         // pair has been registered (every struct field of the same shape
         // does so via `fill_database`), otherwise registers a new one.
-        let tp = stack.function.tp(v).clone();
+        // @FR-L-Null — `base()`, because a nullable keyed local holds the SAME store as its
+        // dense twin (layout(τ) = layout(τ?)).  Asked bare, a `hash<S[k]>?` fell to the
+        // catch-all below and ICE'd.
+        let tp = stack.function.tp(v).base().clone();
         let tp_nr = match &tp {
             Type::Sorted(td, key, _) => {
                 let c = stack.data.def(*td).known_type();
@@ -2067,10 +2070,20 @@ impl State {
             //
             // An OWNED Vector `??` subject is unaffected — the parser marks that one
             // `inline_ref`, not `skip_free`, precisely so it keeps the loft#615 free.
-            let owned_ref = matches!(
+            //
+            // The five KEYED kinds are here for the same reason `Vector` is, and were missing:
+            // a keyed local's handle is the same store-backed slot, so `c = null` (which lowers
+            // to `OpNullRefSentinel`, NOT to the @P302 in-place clear above) displaced its store
+            // with nothing naming it — one orphan per evaluation on BOTH backends, values right
+            // throughout.  Read through `base()`, because the shape that reaches this is the
+            // NULLABLE one: a dense keyed local cannot be assigned the sentinel at all.  The
+            // `is_keyed` half only; `Vector` keeps its bare spelling, since a nullable vector
+            // already releases through its own path and widening that one would free twice.
+            let owned_ref = (matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) && stack.function.tp(v).depend().is_empty()
+            ) || crate::parser::vectors::is_keyed(stack.function.tp(v).base()))
+                && stack.function.tp(v).depend().is_empty()
                 && !stack.function.is_skip_free(v)
                 && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing

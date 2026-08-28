@@ -114,7 +114,49 @@ computed lazily, on demand, rather than read from a store.
 
 ## Deviations
 
-OPEN: **0** (2026-08-23) — **D-cor-1 opened and closed the same day.**
+OPEN: **0** (2026-08-28) — **D-cor-2 opened and closed the same day**; D-cor-1 likewise on
+2026-08-23.
+
+> **D-cor-2 — CLOSED (2026-08-28, loft#1132) — a native transport channel was chosen for
+> types it could not carry.**
+> `(G-Next)` says an advance produces the yielded value; nothing says which loft types a
+> backend may refuse, so the working rule is the one the whole doc rests on — the two
+> backends agree, or the difference is a WRITTEN decided edge. `--native` had a third
+> behaviour: it emitted Rust that rustc rejected, against generated source the author cannot
+> read, for programs `--interpret` runs correctly.
+>
+> The channel ladder ends in an `as i64` catch-all whose unstated premise is *whatever is
+> left is scalar-shaped*, and nothing tested it. Measured over yield type × position
+> (straight-line / loop body), on both backends:
+>
+> | yield type | was | now |
+> |---|---|---|
+> | `(integer, text)`, `((integer, P), integer)` | `E0605` non-primitive cast | REFUSED, naming the type and the cure |
+> | `(integer, integer)` / `(integer, float)` from a LOOP body | `E0308` | **works** — the eager buffer holds the elements' `i64` images flat |
+> | `(integer, P)` / a fn-ref from a LOOP body | `E0308` | REFUSED — a store handle buffered per iteration aliases, the reason the struct/vector refusal already gives |
+> | `hash`/`index`/`sorted`/`trie` from a LOOP body | `E0308` | **works** |
+> | `(integer, boolean)`, straight-line | `E0308` | **works** |
+>
+> Four sites, one question each, and three of them had drifted from a home that already
+> existed and already said so in a comment one screen away:
+>
+> * the ladder's catch-all and the eager collector's — premise is `data::is_scalar`
+>   ([types.md](types.md)'s scalar/heap split); `coroutine_layout::channel_tag` now answers
+>   `CHANNEL_NONE` and both ends read it, the producer emitting the `compile_error!` and the
+>   consumer a diverging expression so exactly one diagnostic survives;
+> * `lazy_yield_init` and the coroutine struct's `__values` element type — both spelled the
+>   DbRef set as the SHORT three-variant list (@FR-Col-Store; one home is `data::is_dbref`),
+>   so a keyed collection typed `__y` as `i64` inside a method returning `DbRef`;
+> * `yield_slot_read`'s boolean — @PLN17 makes a boolean's storage form the tri-state `u8`
+>   and the tuple rebuild writes into a Variable position, so reading the slot back as a bare
+>   `bool` typed the rebuild against nothing.
+>
+> The eager tuple buffer is what makes the second row WORK rather than refuse, and it is the
+> row the decided edge above had claimed all along.
+>
+> Guards: `tests/scripts/1132-a-generator-yield-rides-a-channel-that-carries-it.loft` (what
+> must work, both backends) and `tests/native_yield_channel.rs` (the refusals, at the emit
+> level — a refused program has no run to assert on).
 
 > **D-cor-1 — CLOSED (2026-08-23) — `return` in a generator was accepted and DISCARDED.**
 > `(G-Call)` makes any `-> iterator<T>` function a generator and the model gives a returned
@@ -165,8 +207,11 @@ a deviation — recorded here so it is not mistaken for a bug:
 > `continue`, and a statement AFTER the yield (the iteration would have to resume mid-body).
 > A yield of a tuple / fn-ref rides the `next_into` channel, which has no suspend point of its
 > own; a yield of a struct / vector builds its record into a work local that is not persisted, so
-> lowering it lazily would leak one record per yield. Those keep the eager buffer, and their
-> **values agree**; the observable difference stays side-effect interleaving.
+> lowering it lazily would leak one record per yield. Those keep the eager buffer; the observable
+> difference stays side-effect interleaving.
+>
+> ⚠ *"and their values agree"* stood here until 2026-08-28 and was **never measured** — a tuple
+> yield from a loop body did not COMPILE on `--native`. See D-cor-2 below.
 >
 > ⚠ **One of those reasons was firing on code the author did not write — FIXED 2026-08-23.** A
 > generator that writes a **text field of a heap parameter** was eager:

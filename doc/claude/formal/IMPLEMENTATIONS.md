@@ -225,6 +225,62 @@ So the short list is **not** wrong at the remaining 40: three sites were, and th
 The sentinel is what makes that a measurement rather than an opinion, and it cost a fraction of
 what reading forty sites would have.
 
+## The ninth spelling: a tuple is not a DbRef, and it REACHES one (2026-08-28)
+
+The set above drifted short twice — `Reference | Vector | Enum(_, true, _)` for the five
+keyed collections — and both fixes widened the list to `data::is_dbref`'s eight. The next
+spelling is not a ninth variant to add to that list. It is `Type::Tuple`, and it belongs to
+only ONE of the two questions `is_dbref` was being asked.
+
+**The split.** `is_dbref` answers *"does this value occupy a DbRef slot?"* — a LAYOUT
+question, and a tuple correctly answers **no**: it is multi-slot, and every transport path
+gives it its own channel (native's `next_into` rather than `next_dbref`, the tuple ops rather
+than `OpPutRef`, per-element frees rather than one). **Seventeen of the eighteen remaining
+callers ask exactly that and are right to use it**, read one by one. The eighteenth —
+`scopes`'s loft#1029 argument-witness lift, *"only an argument that CARRIES a store needs a
+witness at all"* — asks the BORROW question with the layout predicate, which is the same
+mistake in the same words. It was probed rather than assumed (a `??` argument at a
+`(integer, S)` parameter, against the `Reference` control) and **holds** on both backends
+with no leak, so it is left alone: changing it would alter code with nothing to measure the
+change against.
+
+The coroutine loop-variable arm in `collections.rs` asks a different question: *"can this
+binding REACH a store someone else owns?"* — a BORROW question, where `(integer, S)` answers
+**yes**, because it carries `S`'s handle in its second slot. Asked with the layout predicate,
+the arm that exists to prevent a per-iteration free is the arm that never runs, and the loop
+variable binds as an OWNER. Measured on a four-pull generator: the generator's extensible
+frame store took a whole-store free on every iteration, four frees of one live store, the
+values surviving only because the allocator handed the same slot straight back. `data::
+holds_dbref` is the tuple-transparent home; the free site now sees the borrow.
+
+The same `if` block also held a THIRD copy of the eight-variant list, as a `match` rebuilding
+each variant with the dep — under a gate that had just been de-duplicated onto `is_dbref`.
+Its `other => other` arm is the silent failure: the type it cannot spell binds unchanged
+while the arm reads as taken. `Type::with_deps` is the declared home for *"this type carrying
+this borrow"*, and its doc already states how a tuple holds one (it has no list of its own,
+so the deps spread to the elements and `Type::depend` unions them back). One call replaces
+the match, and it is the reason the fix reaches nested tuples without naming them.
+
+⚠ **A short list is not the only way this hides — a NEGATED one is.**
+`scripts/o_proxy_check.py` reported the obligation set clean while
+`scopes::tuple_owned_elem_frees` freed a tuple element on empty element deps and consulted no
+override. Its discrimination 1 reads `!tp.depend().is_empty()` as *"this asks whether it is a
+borrow"*, which is true of a condition and false of an early-exit GUARD: `if !…is_empty() {
+continue; }` puts the free on the FALL-THROUGH, so the site concludes ownership exactly as a
+positive test would. The check now classifies by what the guard falls through to, and the
+region it searches is what the keyword actually exits — `continue` leaves the enclosing loop
+body, `return` leaves the function. Taking the rest of the function for both accused a loop
+that only pushes to a list.
+
+**Revision to § The DbRef set above:** *"a `spatial` yield is correct anyway, so it does not
+bite"* holds for the route that was probed and not for the other one. A generator that yields
+a keyed-collection LITERAL hands back a corrupted collection — `spatial`, `index` and `trie`
+report `len == 1` for three elements, `hash` counts words instead of records and loses every
+key lookup — while binding the identical literal to a local and yielding the name is correct
+in all twelve cells. `coroutine-yields-a-dbref-value.loft` passes because every one of its
+generators takes the bound route. Filed as loft#1130; it is not an ownership defect, so it is
+not this walk's to fix.
+
 ## Checklist #5, and the duplicate I created while writing the checklist (2026-08-24)
 
 Ten sites spelled the FULL eight-variant DbRef list inline; all ten now call
@@ -390,7 +446,7 @@ without anyone having to remember.
 | `@FR-O-Deps` | one fact; every lifetime decision derives from it | `data::Deps` (`src/data.rs`) — the type itself |
 | `@FR-O-Borrow` | an aliasing value names its source; borrowers are skip-free | the `Deps` list; `Function::make_independent` strips a dep to promote a borrow to owner |
 | `@FR-O-Owner` · `@FR-O-Derived` | single owner; free is DERIVED, once, at scope exit | `Scopes::get_free_vars` (`src/scopes.rs`) — the scope-exit sweep |
-| `@FR-O-Move` | a returned store transfers to the caller | `get_free_vars`'s `ret_var` / `return_sources` suppression; `Parser::ref_return` (`src/parser/control.rs`) |
+| `@FR-O-Move` | a returned store transfers to the caller — and a return that BORROWS a parameter is recorded, so the caller copies | TRANSFER: `get_free_vars`'s `ret_var` / `return_sources` suppression; `Parser::ref_return` (`src/parser/control.rs`). BORROW: `Def::returns_borrowed_view` reads the recorded dep, `use_analysis::call_return_frees_source` gates the source-free bit on it plus the @P290 bracket. ⚠ The borrow clause is recorded only where a delivery arm runs — `block_result` for `Text` / `Vector` / `Reference` / keyed, and `parse_return` for the explicit spelling; a return shape reaching neither records nothing and reads as OWNED (loft#1140 was the keyed kinds missing from both) |
 | `@FR-O-Complete` | per binding, per path — set-and-reconcile | `Scopes::scan_if`'s intersect of `owned_refs` across both arms (`src/scopes.rs`) |
 | `@FR-O-NoDiverge` | both backends translate the SAME facts | structural: `scopes` decides and writes `OpFreeRef` into the IR; the emitters translate |
 

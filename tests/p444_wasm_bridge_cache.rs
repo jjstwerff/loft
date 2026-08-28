@@ -16,6 +16,14 @@
 //! and asserts the three fields round-trip — the cold-equal invariant the
 //! `--html` extern-skip decision depends on.  It runs in its own test binary, so
 //! the `XDG_CACHE_HOME` override is free of in-process env races.
+//!
+//! @PLN119 — the second test is the same claim for a different parse-time-only fact: an
+//! out-of-process library's PLACEMENT.  `mark_exports` writes its marks into `Data`, so the
+//! bundle carries them; the list `main` starts a worker from is built by the parse and does
+//! not.  A warm load therefore left the marked calls pointing at `compile.rs`'s
+//! "native function not loaded" stub — a placed library that works on its first run and panics
+//! on its second (loft#1129).  Both facts ride one bundle and are asserted in the single test
+//! this binary holds — the `XDG_CACHE_HOME` override is what makes a second test here a race.
 
 use loft::database::Stores;
 use loft::keys::DbRef;
@@ -58,7 +66,24 @@ fn wasm_bridge_state_survives_warm_program_cache() {
     cold.data
         .wasm_bridge_host_js_files
         .push("/home/me/.loft/registry/crypto-0.3.3/wasm/host.js".to_string());
-    loft::startup_cache::save_program(&cold, &script_abs, cold.data.definitions());
+    // @PLN119 — the placement registrations ride the same manifest, and are taken as an
+    // ARGUMENT rather than read off the parser because `main` consumes the list before the
+    // bundle is written.  A directory with SPACES on purpose: the line is
+    // `plib <name> <spelling> <pkg_dir>` and only the first two tokens are space-free, so the
+    // reader has to take the remainder verbatim.
+    let placed = vec![
+        (
+            "svc".to_string(),
+            "/home/me/lib dirs/svc".to_string(),
+            loft::lib_placement::Placement::Remote,
+        ),
+        (
+            "worker".to_string(),
+            "/home/me/.loft/registry/worker-1.0.0".to_string(),
+            loft::lib_placement::Placement::Process,
+        ),
+    ];
+    loft::startup_cache::save_program(&cold, &script_abs, cold.data.definitions(), &placed);
 
     // ── warm: a fresh parser loads the bundle and skips parsing entirely. ──
     let mut warm = Parser::new();
@@ -93,6 +118,16 @@ fn wasm_bridge_state_survives_warm_program_cache() {
         warm.data.wasm_bridge_host_js_files,
         vec!["/home/me/.loft/registry/crypto-0.3.3/wasm/host.js".to_string()],
         "host_js preamble file lost across warm load (#444)"
+    );
+
+    // @PLN119 — and the placement registrations, whose loss is worse than a lost route because
+    // the MARKS survive: `mark_exports` writes them into `Data`, so a warm run has functions
+    // marked for a worker that was never started and every one of them resolves to
+    // `compile.rs`'s "native function not loaded" stub.
+    assert_eq!(
+        warm.pending_placed_libs, placed,
+        "the placement registrations must come back, or a placed library works on its first \
+         run and panics on its second"
     );
 
     let _ = std::fs::remove_file(&script);

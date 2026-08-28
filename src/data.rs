@@ -3171,6 +3171,64 @@ mod tuple_stack_layout_tests {
         let elems = vec![boolean(), integer()];
         assert_eq!(element_stack_align(&Type::Tuple(elems)), 8);
     }
+
+    /// The two membership questions part company at `Type::Tuple`, and that is the whole
+    /// reason [`super::holds_dbref`] exists beside [`super::is_dbref`].
+    ///
+    /// A tuple occupies no `DbRef` slot (the LAYOUT answer, `false`) and reaches a store
+    /// through its elements (the BORROW answer, `true`).  Asking the layout predicate for
+    /// the borrow answer bound a generator's loop variable as an OWNER and whole-store-freed
+    /// the generator's frame once per iteration.
+    #[test]
+    fn a_tuple_reaches_a_store_without_occupying_a_dbref_slot() {
+        use super::{Deps, holds_dbref, is_dbref};
+        let handle = Type::Reference(7, Deps::none());
+        let pair = Type::Tuple(vec![integer(), handle.clone()]);
+
+        assert!(
+            is_dbref(&handle) && holds_dbref(&handle),
+            "a bare handle is both"
+        );
+        assert!(!is_dbref(&pair), "a tuple occupies no DbRef slot");
+        assert!(
+            holds_dbref(&pair),
+            "…and still reaches the store in its second element"
+        );
+
+        // A scalar tuple reaches nothing, so it must stay outside the set: a dep there would
+        // make a value the consumer owns read as a borrow.
+        let scalars = Type::Tuple(vec![integer(), boolean()]);
+        assert!(!holds_dbref(&scalars), "a scalar tuple is not a handle");
+    }
+
+    /// The recursive arm.  A nested tuple is the shape the corpus cannot cover — loft#1132
+    /// keeps `iterator<((integer, S), integer)>` from compiling on `--native` at all — so the
+    /// predicate is pinned here instead of through a program.
+    #[test]
+    fn holds_dbref_looks_through_a_nested_tuple_and_through_optional() {
+        use super::{Deps, holds_dbref};
+        let handle = Type::Reference(7, Deps::none());
+        let nested = Type::Tuple(vec![
+            Type::Tuple(vec![integer(), handle.clone()]),
+            integer(),
+        ]);
+        assert!(holds_dbref(&nested), "the handle is one level down");
+
+        let nested_scalars = Type::Tuple(vec![Type::Tuple(vec![integer(), boolean()]), integer()]);
+        assert!(
+            !holds_dbref(&nested_scalars),
+            "nothing to reach at any depth"
+        );
+
+        // `S?` occupies `S`'s slot and carries the same handle (@FR-L-Null), so the peel is
+        // not a convenience: without it a `(integer, S?)` reads as reaching nothing while its
+        // dense twin reaches a store.
+        let opt = Type::Tuple(vec![integer(), Type::optional(handle)]);
+        assert!(
+            holds_dbref(&opt),
+            "a nullable element carries its dense twin's handle"
+        );
+    }
 }
 
 /// `(offset, index)` pairs for elements that need cleanup on scope exit
@@ -3827,6 +3885,34 @@ impl Definition {
     #[must_use]
     pub fn returned(&self) -> &Type {
         &self.returned
+    }
+
+    /// The index of this function's hidden RETURN BUFFER attribute — the out-parameter a
+    /// caller allocates so the callee can build its heap result straight into the
+    /// destination — or `None` for a function that has none.
+    ///
+    /// The first hidden attribute of a heap type IS the buffer: `ref_return` appends it, and
+    /// the `&text` work buffers (`Type::RefVar`) are a different ABI with its own count
+    /// ([`Self::text_work_buffers`]).  One home for it, because three sites were asking the
+    /// question with three hand-written copies of the same `matches!` — the parser's
+    /// `return_buffer` and `nrvo_collapse_tail_set`, and the scope pass's
+    /// ownership-transition free — and a free that disagreed with the substitution about
+    /// WHICH attribute the buffer is would free a store the caller still owns.
+    ///
+    /// Reads the attribute type BARE, and that is the conservative direction here rather
+    /// than an oversight: a nullable heap return is loft#896's synthetic `__nullable<S>`
+    /// enum with its own delivery, so admitting an `Optional` wrapper would hand the buffer
+    /// machinery a return that does not use one.  A caller that finds nothing takes no
+    /// action; a caller that finds the wrong attribute frees the wrong store.
+    #[must_use]
+    pub fn hidden_return_buffer_attr(&self) -> Option<usize> {
+        self.attributes.iter().position(|a| {
+            a.hidden
+                && matches!(
+                    &a.typedef,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                )
+        })
     }
 
     /// How many hidden `&text` work buffers this function's ABI expects.
@@ -4541,6 +4627,29 @@ pub fn is_dbref(tp: &Type) -> bool {
             | Type::Trie(_, _, _)
             | Type::Enum(_, true, _)
     )
+}
+
+/// Does a value of this type REACH a store — directly, or through a tuple element?
+///
+/// [`is_dbref`] answers the direct question and says `false` for a `Type::Tuple`, which is
+/// right: a tuple is a stack value and holds no handle of its own.  Its ELEMENTS each may,
+/// though, so a site asking *"does this binding reach a store?"* — a borrow to record, a
+/// free to emit — has to look inside, and `is_dbref` alone silently answers "no" for
+/// `(integer, S)`.  That is a whole spelling of the question falling outside the set, not
+/// an edge: it is why a `for` over a generator yielding `(integer, S)` bound its loop
+/// variable as an OWNER and whole-store-freed the generator's frame once per iteration.
+///
+/// The store-membership half of @FR-Col-Store, asked as a REACH question rather than a
+/// layout one.  Recursive, because a tuple element may itself be a tuple.  `Optional` is
+/// peeled (`.base()`): a `S?` occupies `S`'s slot and carries the same handle (@FR-L-Null).
+///
+/// `text` is deliberately NOT here.  It owns a heap `String` rather than a store, and the
+/// two are released by different ops on different rules — [`owned_elements`] is the home
+/// for the wider "needs cleanup" set that spans both.
+#[must_use]
+pub fn holds_dbref(tp: &Type) -> bool {
+    let base = tp.base();
+    is_dbref(base) || matches!(base, Type::Tuple(elems) if elems.iter().any(holds_dbref))
 }
 
 /// Is `tp` a SCALAR — a value that lives inline in its slot and owns no store?

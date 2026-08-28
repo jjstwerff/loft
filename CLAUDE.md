@@ -45,7 +45,18 @@ make check-rlib                          # 1s pre-flight: is libloft.rlib curren
                                          #   native tests link, and a bare `cargo test`
                                          #   builds no rlib either (`make ci` builds all
                                          #   three itself, so it needs no pre-flight)
+./scripts/find_problems.sh --subject <name>     # SECONDS — the tight loop; use this while
+                                         #   iterating, not `make ci`.  Subjects: parser scopes
+                                         #   codegen runtime store wasm packages lsp sql docs
+                                         #   host (`--list-subjects` to see them + exclusions).
+                                         #   Shape: --subject while iterating → the two clippy
+                                         #   variants + fmt → ONE `make ci` before committing.
+                                         #   `make ci` is ~10 min and only that if the box is
+                                         #   idle — two checkouts running gates at once doubles
+                                         #   it (CI_BUDGET.md § A LOCAL `make ci`).
 ./scripts/find_problems.sh --bg|--peek|--wait   # background full-suite run + inspect/block
+make ci-roundtrip                        # the exhaustive stdlib round-trip pair, which `make ci`
+                                         #   excludes; run it before an IR-schema/serialiser change
 make falsify GUARD=<guard.loft> REF=<commit>   # does this guard FAIL on the build it was
                                          #   written to catch?  Compares exit/asserts/leak/
                                          #   panic apart and names the channel that moved.
@@ -185,6 +196,18 @@ src/main.rs            CLI; loads default/ then user file
 3. **Never create a branch, open, or merge a PR without an explicit user ask** ("create PR",
    "merge", "switch branch"). "fix X" / "push" / "retry" are NOT such asks; a prior ask doesn't carry
    over. If a protected branch blocks a commit, surface it and ask — don't invent a branch.
+   ⚠ **Nor is "the work looks finished" an ask.** A PR is opened when BOTH streams reach a stable
+   point — most issues fixed, a clean endpoint — and **the owner is the one who determines that**,
+   not the agent that judges its own branch ready. Accumulated commits on a work branch are not a
+   reason to propose one either: the sibling checkout cherry-picks what it needs, so work in
+   flight is reachable without a merge. Keep committing and pushing to the branch; wait to be told.
+   ⚠ **Target cadence is roughly ONE PR PER DAY of work**, and the owner actively looks for the
+   stopping point when work spills into a following day. That shapes the work rather than the
+   asking: prefer a coherent unit that FINISHES inside a day over starting something that will
+   straddle. And the bar for that unit is not "green" — a PR that looks OK while carrying
+   internal regressions is worse for a language's users than no PR, so a walk ships only with its
+   own verification complete (both backends, the matrix built and hand-checked, guards falsified,
+   side-findings filed rather than left implicit).
 4. With an **open PR**, hold non-blocking pushes for the user's consent (force-push/rebase/surprise
    commits) — EXCEPT a push that unblocks a red required check (allowed; it can't merge while red).
 5. **While a PR is unmerged, branch from the TIP of that in-flight work — NEVER fork a fresh
@@ -275,7 +298,12 @@ subsystem. Lineage is separate and goes in the BODY as `Found-via: #N`
 ([.github/LABELS.md § hit-by](.github/LABELS.md)).
 
 **Fixing an existing issue not yet on `main`:** push the fix, write `Fixes #NNN`, keep the issue open
-(the `fixed-pending-merge` label is automated off that trailer) — never hand-close. **Inside a
+(the `fixed-pending-merge` label is automated off that trailer) — never hand-close. **Add a
+`Contract: settled|strained — <why>` trailer beside it** — settled = the formal rules already gave
+the right answer and the fix makes that promise hold; strained = closing it extended a rule, changed
+a documented surface, or needed a design call. The fixing commit is the ONLY moment that answer
+exists, and the monthly ratio is what the contract-1 decision reads (`make bug-review` § 5,
+[.github/LABELS.md § `contract:`](.github/LABELS.md)); absence counts as UNJUDGED, never settled. **Inside a
 plan:** file only if it reproduces on `main`; branch-internal breakage stays in the plan's docs.
 Don't scope-creep the active fix with unrelated bugs.
 
@@ -338,7 +366,11 @@ when + the 20-min PR rule.
 [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) declined-features register ·
 [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) / [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) ·
 [FORMATTER.md](doc/claude/FORMATTER.md) · stability: [STABILITY_ROADMAP.md](doc/claude/STABILITY_ROADMAP.md)
-(the tracking view) · [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) /
+(the tracking view) · [STABILITY_METHOD.md](doc/claude/STABILITY_METHOD.md) — incl. **§ The
+rule-led walk**, the STANDING practice: pick a `@FR-` rule (not a site), split it into the
+questions its sites actually ask, find each question's ONE home, then verify the RELATED cases
+against it — the defects are in the disagreements, and the citation is the receipt, never the
+task.  179 of 255 rules have no code representation, so this is a queue measured in years /
 [_SWEEP](doc/claude/STABILITY_SWEEP.md) / [_HOTSPOTS](doc/claude/STABILITY_HOTSPOTS.md) /
 [_REDFLAGS](doc/claude/STABILITY_REDFLAGS.md) · [DEPS_INVENTORY.md](doc/claude/DEPS_INVENTORY.md) ·
 formal lens: [FORMALIZATION.md](doc/claude/FORMALIZATION.md) / [TYPING_RELATION.md](doc/claude/TYPING_RELATION.md) ·

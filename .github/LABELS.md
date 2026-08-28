@@ -100,6 +100,85 @@ a wrong ERROR MESSAGE, or a leak.  All of those announce themselves.  A leak tha
 eventually OOMs is still not silent-wrong — the answers it gives are right until it dies,
 and the death is loud.
 
+## `contract:` — did closing it MOVE the standard? (the convergence axis)
+
+`silent-wrong` asks *if we froze today, would this be in the contract?* — a question about
+one bug, answerable when it is FILED.  This asks the other one: *when we fixed it, did the
+written standard have to change?*  That is **not knowable at filing** — it is what the fix
+turned out to need — so this axis is set when we state the bug is FIXED, and never before.
+
+Over a month the RATIO is the convergence signal the freeze needs, because a raw bug count
+fuses two things that mean opposite things:
+
+- **we keep FINDING bugs** — the audits are productive, which is what they are for; and
+- **the standard keeps MOVING** — the only one of the two that can make a freeze premature.
+
+| Label | Meaning |
+|---|---|
+| `contract:settled` | The formal spec ([`doc/claude/formal/`](../doc/claude/formal/README.md)) and the existing tests **already gave the right answer**; the code was wrong, and the fix makes a written promise hold.  Freezing before this bug was found would still have been correct. |
+| `contract:strained` | The rules did **not** settle it.  Closing it needed a rule EXTENDED, a documented behaviour CHANGED, or a design call about what *correct* even means.  Freezing before it would have frozen something we then had to move. |
+
+### Where it is written: the fix commit, beside `Fixes #N`
+
+The judgement exists exactly once — in the commit that lands the fix, written by whoever
+just found out what the fix needed.  So it goes there, as a trailer, next to the
+`Fixes #N` the `fixed-pending-merge` automation already reads:
+
+```
+Fixes #1120
+Contract: settled — `(E-Coalesce)` and `(N-Index)` already said what the right
+  answer was; the two lowerings were what disagreed.
+```
+
+`Contract: settled` or `Contract: strained`, then a dash and one line of WHY — the reason
+is the part a month-later reader needs, and writing it is what stops the call becoming a
+reflex.  `.githooks/commit-msg` reports a `Fixes #N` with no `Contract:` trailer (it never
+blocks — same two-tier rule as the rest of that hook), and `scripts/contract_labels.py`
+reads the trailers off a branch and applies the labels.
+
+Setting the label by hand on the issue is equally fine; the trailer just puts it where the
+knowledge already is.
+
+### Three triggers for `contract:strained`
+
+Any ONE of these makes it strained.  Each is observable in the diff, so the call is not a
+feeling:
+
+1. a rule TEXT under `doc/claude/formal/` changed, or a new rule was written, to admit the
+   fix — *"an edge the rules cannot express means the RULE wants extending"*;
+2. a documented surface changed (LOFT.md, STDLIB.md, a `@F` catalogue entry), or the fix
+   needed a `#superseded` steer or a contract key;
+3. it carried `design` / `needs-design`, or closing it added a
+   [`DESIGN_DECISIONS.md`](../doc/claude/DESIGN_DECISIONS.md) entry — the rules could not
+   say what *correct* even meant.
+
+Anything else is `contract:settled`: the deviation register closed it by changing code to
+match a rule already written, which is the doctrine
+([formal/README.md](../doc/claude/formal/README.md)) — *the rules do not change to match
+the code; the code changes to match the rules*.
+
+### Independent of `silent-wrong`, and that independence is the point
+
+A silently wrong answer is USUALLY `contract:settled` — the spec said what the right answer
+was and the code did not deliver it, so the fix moves nothing.  `silent-wrong` +
+`contract:settled` is the common pair, and reading a rising `silent-wrong` count as a moving
+contract is exactly the mistake this axis exists to prevent.
+
+**The freeze wants BOTH, and they are different gates.**  `silent-wrong` → 0 is the per-bug
+blocker: no known wrong answer may be frozen into the contract.  `contract:strained` → 0
+**sustained over a window long enough to be evidence** is the convergence gate: the written
+standard has stopped moving.  The first can be true on any given day; only the second says
+the surface has settled.
+
+**Absence means NOT JUDGED, never "settled"** — the same rule [`hit-by:`](#hit-by--which-project-hit-it)
+and `steered` follow.  A monthly count that read unlabelled as settled would report
+convergence it never measured, so `scripts/bug-review.py` prints the UNJUDGED count beside
+the ratio and folds it into neither side.
+
+```console
+gh issue list --state all --label contract:strained
+```
+
 ## `area:` — which part of loft (plain-English, with orienting files — NOT required reading)
 
 loft is a tree-walking interpreter **and** a native code generator for a
@@ -123,10 +202,31 @@ statically-typed language.  Source flows: **text → parser → IR → codegen �
 One per issue: a **direct pointer to the project that ran into it**.  loft is one of those
 projects, so a find of our own is `hit-by:loft` — not a blank.
 
-| Label | Meaning |
-|---|---|
-| `hit-by:moros` / `:routing` / `:dryopea` / `:crawler` / `:zerotrust` | that dogfood consumer ran into it |
-| `hit-by:loft` | loft itself ran into it — a nightly gate, a sanitizer, a sweep, a follow-on investigation |
+| Label | Project | What it is | What it puts the language under |
+|---|---|---|---|
+| `hit-by:moros` | [jjstwerff/moros](https://github.com/jjstwerff/moros) | role-playing game + blueprint editor | the heaviest consumer by volume — long-lived stores, editor sessions, placed geometry, `--html` |
+| `hit-by:dryopea` | [jjstwerff/dryopea](https://github.com/jjstwerff/dryopea) | sci-fi free-build / tower defence | per-frame allocation, palettes, struct-heavy state |
+| `hit-by:crawler` | [jjstwerff/crawler](https://github.com/jjstwerff/crawler) | clean-room hex roguelike | the hex library family end to end, renderer-agnostic kernel |
+| `hit-by:routing` | [jjstwerff/routing](https://github.com/jjstwerff/routing) | phone-first route planner | the NON-game axis — big read-only stores, `--native-wasm`, remote/paged stores |
+| `hit-by:zerotrust` | [jjstwerff/zero-trust-shared-files](https://github.com/jjstwerff/zero-trust-shared-files) | federated shared-file system | crypto, recursive enums, text-returning `cdylib` boundaries |
+| `hit-by:planets` | `loft_planet`, a package inside [hstellingwerff-jpg/Moros-Economy-Development](https://github.com/hstellingwerff-jpg/Moros-Economy-Development) | a loft re-implementation of that project's planet generator, plus the comparator that checks it against the C# original | the PORT axis — numeric parity against another language, and a loft package living inside a non-loft repo, which is what puts `--lib` and module resolution under pressure |
+| `hit-by:loft` | [loft-lang/loft](https://github.com/loft-lang/loft) | the language itself | a nightly gate, a sanitizer, a sweep, a follow-on investigation |
+
+The libraries those consumers import are `loft-lang/loft-libs-*` (world, net, graphics,
+game, assets, core, plugins, docs) plus the registry — a defect surfaced there is still
+labelled by the APPLICATION that ran into it, because that is the project that can
+reproduce it.
+
+Not every consumer is a repo of its own or even under the same owner: `planets` is a
+package inside someone else's project.  That is worth keeping visible rather than
+normalising away, because a loft package that is not the root of its checkout is exactly
+the shape that finds the resolution bugs a standalone one never will.
+
+**This table is the index for ecosystem analysis, not only a label glossary.**  Asking
+*"is loft usable?"* means asking what its consumers hit, and the answer is only readable
+if the consumer set is written down: a label with no project behind it cannot be checked,
+and a consumer with no label cannot be counted.  Keep a row per project, and add the row
+when the label is minted rather than after.
 
 It says who HIT it, nothing more.  A follow-on we filed while fixing something else is
 `hit-by:loft` even when a consumer's report is what sent us into that subsystem: we hit it.
@@ -192,6 +292,44 @@ it.  Apply at most one; remove it once the blocker clears.
 | Label | Meaning | Apply / clear |
 |---|---|---|
 | `fixed-pending-merge` | The fix has landed on a **long-lived working branch** but is **not yet in `main`** (the release branch).  The issue stays **open** so the tracker doesn't claim "fixed" while released code still has the bug — but it is **not a pick-up**: no agent work remains, only the merge.  The fixing commit's `Fixes #NNN` line **auto-closes it on merge to `main`**, in one clean transition (no manual close → reopen → close ping-pong).  The full lifecycle is **automated off that one trailer**: [`apply-fixed-pending-merge.yml`](workflows/apply-fixed-pending-merge.yml) adds the label (+ a bookkeeping comment) when a `Fixes #NNN` commit is pushed to any non-`main` branch; the merge to `main` auto-closes the issue; [`strip-fixed-pending-merge.yml`](workflows/strip-fixed-pending-merge.yml) removes the label on close (a closed issue is never "pending merge").  So multiple actors can fix bugs on their own branches concurrently with the tracker staying correct. | **Automatic** — just write `Fixes #NNN` in the commit; the label is applied on push.  The author still adds the **substantive comment** (regression test, verified `wa:*`, or a "still unverified" caveat) — the workflow's auto-comment is mechanical only.  Never close such an issue by hand; let the merge close it.  See [ISSUE_TRACKING.md § Issue lifecycle](../doc/claude/ISSUE_TRACKING.md). |
+
+## `contract:` — what closing it did to the STANDARD
+
+Set at **fix time**, on the issue being closed.  `sev:`/`wa:` describe the bug as
+reported; this pair describes the *fix*, and it answers a question nothing else on
+the issue does: **did we make the code match a rule we had already written, or did
+we have to move the rule?**
+
+| Label | Meaning |
+|---|---|
+| `contract:settled` | The fix made an **already-written rule hold**.  `doc/claude/formal/` stated what must be true, the code disagreed, and the code changed.  No rule, doc, or design decision moved. |
+| `contract:strained` | Closing it **moved the standard** — a rule was added, split, weakened, or reworded; a design decision was taken; a documented promise changed.  The code was not simply wrong against a rule that already covered it. |
+
+Exactly one of the two, on every closed bug.  Neither is a criticism: a `strained`
+close is often the more valuable one, because it means the walk reached a case the
+rules could not express.
+
+**How to tell them apart, mechanically.**  Look at what the fixing commit changed
+under `doc/claude/formal/`:
+
+* nothing, or prose that only records the fix → **`contract:settled`**
+* a `(Rule-Name)` line added or rewritten, a deviation entry re-scoped, a
+  `DESIGN_DECISIONS.md` entry added → **`contract:strained`**
+
+Worked pair, both closed 2026-08-28.  loft#1138 (an absent nullable struct read as
+present across a call) is `settled`: the null model already promised absence
+survives a boundary, and `convert` was unwrapping the payload without consulting
+the discriminant.  loft#1134 (a nullable tuple element one field high) is
+`strained`: closing it required splitting `(L-Null)` — true for every type with a
+sentinel, false for an inline struct, which needs a tag — into `(L-Null)` plus the
+new `(L-Null-Tag)`.  The rule as written had licensed the defect.
+
+**Why it is worth a label.**  `strained` is the queryable record of where the rules
+were incomplete, which is the input the rule-led walk ranks from
+([STABILITY_METHOD.md § The rule-led walk](../doc/claude/STABILITY_METHOD.md)) and
+what the monthly bug review reads to see whether a class is rising
+([BUG_REVIEW.md](../doc/claude/BUG_REVIEW.md)).  A run of `strained` closes in one
+area says the specification is thin there, not that the code is.
 
 > **Multi-repo:** `sev:`/`wa:`/cross-cutting are shared across the loft-family
 > repos (loft / dryopea / lavition / `loft-lang/*`).  `area:` is loft-specific;

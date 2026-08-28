@@ -26,6 +26,8 @@ use std::io;
 ///   - 1 = unified `next_into(stores, &mut [i64; N])` channel (@P327 native)
 ///     — allocate a stack `[i64; N]` buffer, call `coroutine_next_into`,
 ///     and rebuild the consumer's tuple from buffer slots
+///   - `CHANNEL_NONE` = no native transport for this yield type; emit a diverging
+///     expression so the producer's `compile_error!` is the only diagnostic
 pub struct OpCoroutineNextEmitter;
 
 impl OpEmitter for OpCoroutineNextEmitter {
@@ -39,6 +41,17 @@ impl OpEmitter for OpCoroutineNextEmitter {
             };
             let channel = (raw_value_size >> 8) & 0xFF;
             let byte_size = raw_value_size & 0xFF;
+            if channel == crate::coroutine_layout::CHANNEL_NONE {
+                // `--native` has no transport for this yield type, and the generator's own
+                // emitter carries the `compile_error!` that names it and the workaround.
+                // Emitting the legacy `as i64` read here would type-check against nothing
+                // and bury that message under an E0605/E0308 cascade, so answer with a
+                // DIVERGING expression: `!` coerces to whatever the consumer's slot is, and
+                // exactly one diagnostic survives — the same rule the routeless-`#native`
+                // skip in `generation/mod.rs` follows (loft#1132).
+                write!(ctx.w, "unreachable!()")?;
+                return Ok(());
+            }
             if channel == 1 {
                 // @PLAN16 phase 02 — unified channel, layout-driven rebuild.
                 // The per-slot kind list rides as extra OpCoroutineNext args

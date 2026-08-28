@@ -2,29 +2,43 @@
 # Copyright (c) 2026 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN117 E1 — off-main-thread UI-responsiveness gate.  A requestAnimationFrame
-# loop runs one heavy par() per frame; with the Web Worker pool each frame
-# finishes faster, so the loop delivers markedly MORE frames (and a smaller
-# worst-case gap) than the sequential fallback — the qualitative "UI not blocked"
-# proof, made quantitative.  Asserts threaded frames >= MIN_FRAME_RATIO_X10/10 x
-# sequential and a smaller max inter-frame gap, with the value stable.
+# loop runs one heavy par() per frame; with the Web Worker pool each frame's par
+# finishes faster, so the main thread is BLOCKED for less of every frame.  That
+# shorter block IS "the UI is not blocked", and it is what this gate asserts:
+# threaded avg_block_ms <= sequential / (MIN_BLOCK_RATIO_X10/10), with the worst
+# single block smaller too and the value stable.
 #
-# Calibration (env): THREADS (default 8 workers) and MIN_FRAME_RATIO_X10 (20,
-# i.e. 2.0x) describe this 24-core dev box; the CI workflow lowers both for a
+# It does NOT gate on the frame count, though it still reports it.  How often
+# rAF fires is the browser's decision, not the work's: a page Chrome treats as
+# hidden gets rAF at ~1 Hz whatever runs underneath.  On the CI runner that
+# throttle landed on one leg at a time and decided the verdict — the threaded
+# leg read a frozen `frames=12 max_gap_ms=1017` (1000 ms + one 60 Hz tick,
+# identical to the millisecond across five runs on different runners) while
+# the sequential leg varied 11..26 with the compute.  Whichever leg it hit lost,
+# so the ratio measured the throttle and not par: it failed runs where par was
+# fine, and passed runs by throttling the OTHER leg.  Block time is immune —
+# a throttled loop delivers fewer frames, each blocking exactly as long.
+#
+# The sparse-scheduling NOTE is therefore an observation, never a failure: a leg
+# whose idle time dwarfs its work was scheduled sparsely by the browser, which
+# says nothing about par.
+#
+# Calibration (env): THREADS (default 8 workers) and MIN_BLOCK_RATIO_X10 (15,
+# i.e. 1.5x) describe this 24-core dev box; the CI workflow lowers both for a
 # 4-vCPU runner — see .github/workflows/browser-threads.yml.
 #
-# UI_WORK / UI_WINDOW size the SAMPLE, and they matter more than the floor: a
-# ratio needs frames to be a ratio at all.  On a slow runner the dev-box values
-# yielded 4 frames against 3 — noise, not a measurement — so CI asks for lighter
-# per-frame work over a longer window.  They fall back to WORK / WINDOW so
+# UI_WORK / UI_WINDOW size the SAMPLE.  They fall back to WORK / WINDOW so
 # running this gate by hand still works; the separate names keep them from
-# retuning par-scaling-bench, which reads WORK too.
+# retuning par-scaling-bench, which reads WORK too.  MIN_FRAMES is a liveness
+# floor only — it catches a loop that never ran, which is the one thing a frame
+# count still says reliably.
 # Exit 0 pass / 1 fail.
 set -u
 cd "$(dirname "$0")/../.."
 . tests/wasm/gate-lib.sh
 PORT="${PORT:-8764}"; ROOT=tests/wasm; REPORT="$(mktemp)"
 WORK="${UI_WORK:-${WORK:-40000}}"; ELEMS="${ELEMS:-48}"; WINDOW="${UI_WINDOW:-${WINDOW:-3000}}"
-THREADS="${THREADS:-8}"; MIN_FRAME_RATIO_X10="${MIN_FRAME_RATIO_X10:-20}"
+THREADS="${THREADS:-8}"; MIN_BLOCK_RATIO_X10="${MIN_BLOCK_RATIO_X10:-15}"; MIN_FRAMES="${MIN_FRAMES:-5}"
 CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || echo chromium)"
 [ -f "$ROOT/pkg-mt/loft.js" ] || { echo "SKIP: no threaded bundle — run 'make wasm-mt'"; exit 0; }
 python3 "$ROOT/coi-server.py" "$PORT" "$ROOT" "$REPORT" >/dev/null 2>&1 &
@@ -36,12 +50,37 @@ TH="$(run "$THREADS")"; echo "  threaded:   $TH"
 SQ="$(run 0)"; echo "  sequential: $SQ"
 fail=0
 echo "$TH" | grep -q '^E1 ' && echo "$SQ" | grep -q '^E1 ' || { echo "FAIL: a run did not report"; exit 1; }
-tf=$(echo "$TH" | grep -oP 'frames=\K\d+'); sf=$(echo "$SQ" | grep -oP 'frames=\K\d+')
-tg=$(echo "$TH" | grep -oP 'max_gap_ms=\K\d+'); sg=$(echo "$SQ" | grep -oP 'max_gap_ms=\K\d+')
-tv=$(echo "$TH" | grep -oP 'value=\K\d+'); sv=$(echo "$SQ" | grep -oP 'value=\K\d+')
+num() { echo "$1" | grep -oP "$2=\K[0-9.]+"; }
+# Block time in tenths of a ms, so the ratio stays in integer arithmetic.
+# Read back with `10#` — a sub-millisecond block gives a leading zero (`0.8` ->
+# `08`), which bash would otherwise parse as octal and reject outright.
+tb=$(num "$TH" avg_block_ms); sb=$(num "$SQ" avg_block_ms)
+tbx=${tb%.*}$(printf '%s' "${tb#*.}" | cut -c1); sbx=${sb%.*}$(printf '%s' "${sb#*.}" | cut -c1)
+tm=$(num "$TH" max_block_ms); sm=$(num "$SQ" max_block_ms)
+tf=$(num "$TH" frames); sf=$(num "$SQ" frames)
+tw=$(num "$TH" work_ms); sw=$(num "$SQ" work_ms)
+tg=$(num "$TH" max_gap_ms); sg=$(num "$SQ" max_gap_ms)
+tv=$(num "$TH" value); sv=$(num "$SQ" value)
 [ "$tv" = "$sv" ] || { echo "FAIL: value drift threaded=$tv sequential=$sv"; fail=1; }
-[ $(( ${tf:-0} * 10 )) -ge $(( sf * MIN_FRAME_RATIO_X10 )) ] 2>/dev/null \
-  || { echo "FAIL: threaded frames ($tf) < ${MIN_FRAME_RATIO_X10}/10 x sequential ($sf)"; fail=1; }
-[ "${tg:-999999}" -lt "${sg:-0}" ] 2>/dev/null || echo "WARN: threaded max_gap ($tg) not < sequential ($sg)"
-[ $fail -eq 0 ] && echo "PASS: threading keeps the UI responsive — ${tf} frames vs ${sf} sequential ($(( tf * 10 / (sf>0?sf:1) ))x/10), worst gap ${tg}ms vs ${sg}ms; value=$tv"
+# Liveness: a loop that never ran cannot be judged on its averages.
+for leg in "threaded:$tf" "sequential:$sf"; do
+  [ "${leg#*:}" -ge "$MIN_FRAMES" ] 2>/dev/null \
+    || { echo "FAIL: ${leg%%:*} delivered ${leg#*:} frames (< $MIN_FRAMES) — the loop never ran"; fail=1; }
+done
+# The gate: threading must shorten the main-thread block.
+[ $(( 10#${tbx:-999999} * MIN_BLOCK_RATIO_X10 )) -le $(( 10#${sbx:-0} * 10 )) ] 2>/dev/null \
+  || { echo "FAIL: threaded avg block (${tb}ms) is not ${MIN_BLOCK_RATIO_X10}/10 x shorter than sequential (${sb}ms)"; fail=1; }
+[ "${tm:-999999}" -lt "${sm:-0}" ] 2>/dev/null \
+  || { echo "FAIL: threaded worst block (${tm}ms) not < sequential (${sm}ms)"; fail=1; }
+# Reported, never gated: a leg that spent most of the window NOT computing was
+# scheduled sparsely by the browser.  This is the state that used to decide the
+# old frame-count verdict; naming it keeps it visible now that it cannot.
+note_sparse() {
+  [ "$(( ${3%.*} * 2 ))" -lt "$WINDOW" ] \
+    && echo "  NOTE: $1 leg computed for ${3}ms of the ${WINDOW}ms window (frames=$2) — rAF scheduled it sparsely"
+  return 0
+}
+note_sparse threaded "$tf" "$tw"
+note_sparse sequential "$sf" "$sw"
+[ $fail -eq 0 ] && echo "PASS: threading shortens the main-thread block — avg ${tb}ms vs ${sb}ms, worst ${tm}ms vs ${sm}ms; frames ${tf} vs ${sf}, gap ${tg}ms vs ${sg}ms; value=$tv"
 exit $fail

@@ -1,0 +1,212 @@
+name: Gate probe (red-step validation)
+
+# A MEASUREMENT run for the two gates that were red on PR #1124, so a fix to
+# either can be validated on a real 4-vCPU runner without waiting for the
+# nightly that owns them.  Not a gate, never runs on a PR, blocks nothing.
+#
+# Both legs answer a question the dev box cannot:
+#
+#   debug-assertions — the `check_text_return` / `check_ref_leaks` invariants
+#     are compiled out of every ordinary build ([profile.dev.package.loft]),
+#     so the corpus sweep under `-C debug-assertions=on` is the only place
+#     they speak.  This runs exactly the miri.yml command.
+#
+#   browser threading — the UI-responsiveness gate reads a metric the runner
+#     and the dev box disagree about: Chrome throttles rAF to ~1 Hz for a page
+#     it treats as hidden, which happens on the runner and not on a 24-core
+#     desktop.  So the gate repeats REPEATS times and prints every leg's
+#     numbers, because the failure it replaced was visible only as a value
+#     that did not vary between runs.  One run cannot show that; three can.
+#
+# Trigger:
+#   gh workflow run gate-probe.yml --ref <branch>
+#   git push origin <branch>:gate-probe        # push trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: 'UI-gate repetitions (browser leg)'
+        default: '3'
+      legs:
+        description: 'which legs to run: both | da | browser'
+        default: 'both'
+  push:
+    branches: [gate-probe]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_NET_RETRY: 10
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  debug-assertions:
+    name: probe — debug-assertions sweep
+    if: github.event_name == 'push' || inputs.legs != 'browser'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      # Private `probe-*` namespace so this never disturbs the nightly gate's
+      # cache, and a cold/warm A/B here stays reproducible in isolation.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: probe-da-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: probe-da-cargo-
+
+      # The walker's own unit cells, which the corpus sweep cannot supply:
+      # three shapes that MUST panic and two that must not.  They run first
+      # because a check that cannot fail would make the sweep below vacuous —
+      # a green corpus proves nothing about a check that never fires.
+      - name: Non-vacuity — the check's own must-fire cells
+        env:
+          RUSTFLAGS: '-C debug-assertions=on'
+        run: cargo test --release --lib text_return_path -- --nocapture
+
+      # Byte-for-byte the command in miri.yml's `Debug-assertions gate`.
+      - name: Debug-assertions sweep (interpreter corpus)
+        env:
+          RUSTFLAGS: '-C debug-assertions=on'
+          LOFT_STORE_GUARD: '1'
+        run: >
+          cargo test --release --no-fail-fast
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -- --skip library_suite
+
+  browser-ui-gate:
+    name: probe — browser UI responsiveness
+    if: github.event_name == 'push' || inputs.legs != 'da'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Same calibration as browser-threads.yml — the point is to reproduce that
+    # job's conditions, so these must not drift from it.
+    env:
+      WAIT_SCALE: "3"
+      THREADS: "4"
+      MIN_BLOCK_RATIO_X10: "13"
+      UI_WORK: "15000"
+      UI_WINDOW: "9000"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust nightly (rust-src)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install mold + binaryen
+        run: sudo apt-get update && sudo apt-get install -y mold binaryen
+
+      - name: Install wasm-pack
+        run: curl -sSLf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      - name: Ensure a headless browser
+        run: |
+          if command -v google-chrome || command -v chromium || command -v chromium-browser; then
+            echo "browser present"
+          else
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          fi
+          "$(command -v google-chrome || command -v chromium || command -v chromium-browser)" --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: probe-threads-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: probe-threads-cargo-
+
+      - name: Build loft (release)
+        run: cargo build --release
+
+      - name: Build the threaded wasm bundle
+        run: make wasm-mt
+
+      # How many cores the gate is actually being calibrated against.  The
+      # frame-count metric this probe exists to retire was sensitive to it and
+      # the block metric should not be, so record it beside the numbers.
+      - name: Runner capacity
+        run: |
+          echo "nproc=$(nproc)"
+          grep -m1 'model name' /proc/cpuinfo || true
+          echo "| runner | \`nproc=$(nproc)\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      # The heart of the probe.  Each repetition prints both legs' full report
+      # lines; the summary table puts them side by side so a value that does
+      # NOT move between repetitions is visible at a glance — that frozen
+      # reading is exactly what identified the old frame-count metric as a
+      # browser artefact rather than a measurement.
+      - name: Repeat the UI gate and tabulate every run
+        run: |
+          n='${{ inputs.repeats }}'; n="${n:-3}"
+          {
+            echo "## UI-responsiveness probe — ${n} repetitions"
+            echo ""
+            echo "| run | leg | frames | max_gap_ms | avg_block_ms | max_block_ms | value |"
+            echo "|---:|---|---:|---:|---:|---:|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          rc=0
+          for i in $(seq 1 "$n"); do
+            echo "═════════ repetition $i/$n"
+            out="$(tests/wasm/par-ui-responsive.sh 2>&1)" || rc=1
+            printf '%s\n' "$out"
+            printf '%s\n' "$out" | grep -E '^ +(threaded|sequential):' | while read -r line; do
+              leg="${line%%:*}"; leg="${leg# }"
+              f() { printf '%s' "$line" | grep -oP "$1=\K[0-9.]+"; }
+              printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
+                "$i" "$leg" "$(f frames)" "$(f max_gap_ms)" \
+                "$(f avg_block_ms)" "$(f max_block_ms)" "$(f value)" \
+                >> "$GITHUB_STEP_SUMMARY"
+            done
+          done
+          {
+            echo ""
+            echo "A metric that reads the WORK varies between repetitions; one that reads"
+            echo "the browser's frame scheduling repeats.  \`avg_block_ms\` is what the gate"
+            echo "asserts on (threaded must be ${MIN_BLOCK_RATIO_X10}/10 x shorter); \`frames\` is reported only."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      # Proves the rewritten gate still has a negative: one worker is no
+      # speedup, so the block ratio must FAIL.  A gate whose failure branch is
+      # never exercised is the shape this probe exists to catch.
+      #
+      # `always()` because the two answers are independent: if the step above
+      # went red, "can this gate fail at all?" is exactly the question that
+      # decides whether the red means anything.
+      - name: Non-vacuity — a single worker must FAIL the gate
+        if: always()
+        run: |
+          if THREADS=1 tests/wasm/par-ui-responsive.sh > /tmp/one_worker.log 2>&1; then
+            echo "::error::the gate PASSED with a single worker — its failure branch is dead"
+            cat /tmp/one_worker.log
+            exit 1
+          fi
+          echo "gate correctly failed with one worker:"
+          grep -E '^(FAIL|  threaded|  sequential)' /tmp/one_worker.log

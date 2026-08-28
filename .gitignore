@@ -144,3 +144,6 @@ target-*/
 # build time (@PLN146 F4), not authored.  `make game` / `make play` regenerate
 # it, and `[[embed]]` in the game's loft.toml carries it into the browser page.
 /tools/brick-buster/assets/
+
+# Gate verdict written by scripts/ci-run.sh — local run state, never committed.
+.ci-verdict

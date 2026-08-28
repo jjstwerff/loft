@@ -503,12 +503,47 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **0** — `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Chk-Yield — OPENED AND CLOSED (2026-08-28, loft#1130): `yield` carried no expected type
+
+`(T-Chk)` is the **single** carrier of an expected type, *"pushed structurally into
+sub-expressions"*, and a `yield` hands a value out of the function against a type the
+declaration already names — the same position `return` occupies. It was not a push site at
+all: `yield e` parsed `e` in synthesis mode only.
+
+A collection literal cannot synthesise its KIND — `[K { … }]` is a `vector<K>` wherever it
+stands, and `(T-Chk-Vec)` is what says otherwise — so a keyed literal yielded from a generator
+was BUILT as a vector:
+
+```loft
+fn g() -> iterator<hash<A[k]>> { yield [A { k: 1, v: 11 }, A { k: 2, v: 22 }]; }
+//  len 1, and c[1] misses — both backends, no diagnostic
+fn ok() -> iterator<hash<A[k]>> { a: hash<A[k]> = [ … ]; yield a; }   // len 2, c[1] found
+```
+
+The bound route was correct because a declared local reads its destination from `var_tp` and
+never needed the channel. `hash` lost length AND lookup, `index` / `trie` / `spatial` stuck at
+length 1, `sorted` and `vector` were correct — five kinds, one missing push site.
+
+`yield` and the block tail / `return` now share ONE admission list
+(`Parser::seed_leaving_value_hint`): they are two spellings of one act against one declared
+type. The census of this channel's remaining push sites — ten of them, carrying six different
+admission lists, none admitting `Type::Tuple` — is [QUALITY.md § B6t](../QUALITY.md); the
+general rule LOFT.md already states is *the expected type wherever there is one*.
+
+⚠ **The incident-shaped patch that stood in for the rule was one screen above the fix.** The
+same `yield` branch already rewrote a bare `Value::Int(d_nr)` into a full fn-ref when the
+element type was `Function` (@P328) — a per-type repair of exactly the missing channel, which
+is what a missing `(T-Chk)` push site looks like from inside one bug.
+
+Guard: `tests/scripts/1130-a-yielded-collection-literal-takes-its-declared-kind.loft`, all six
+kinds plus the bound route, each cell with its own element struct.
 
 ### D-Var-Join — OPENED AND CLOSED (2026-08-27, loft#1117): an `if` whose arms are two variants of one enum was refused
 

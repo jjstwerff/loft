@@ -2822,28 +2822,34 @@ use #count instead"
             // generator still live, and the exhausted-null read trips the #306
             // stack-store guard well after the corruption.
             //
-            // The test is EVERY DbRef-carried type, not the three obvious ones: a keyed
-            // collection is handed over as a handle exactly as a `Reference` or `Vector`
-            // is.  `data::is_dbref` is the one home for that set (@FR-Col-Store).
+            // The test is EVERY type that REACHES a store, not the three obvious ones: a
+            // keyed collection is handed over as a handle exactly as a `Reference` or
+            // `Vector` is, and a TUPLE reaches one through its elements — `(integer, S)`
+            // carries `S`'s handle in its second slot and is freed element by element
+            // (`scopes::tuple_owned_elem_frees`).  `data::holds_dbref` is the one home for
+            // that set (@FR-Col-Store), and it is the tuple-transparent question because
+            // this arm's is the borrow question, not the layout one.
             //
             // ⚠ A short list here does not skip a nicety — it inverts this arm.  The loop
             // var binds WITHOUT the dep, the scope machinery reads it as an owner, and the
             // per-iteration free this arm exists to PREVENT is exactly what gets emitted.
+            // Measured with the tuple spelling outside the set: `for t in g()` over an
+            // `iterator<(integer, S)>` freed the generator's whole extensible frame store
+            // once per iteration, four frees of one live store across four iterations, the
+            // values surviving only on the allocator handing the slot straight back.
+            //
+            // The dep is attached with `Type::with_deps`, which is the declared home for
+            // "this type carrying this borrow" and already states how each variant holds
+            // one — including a tuple, which has no list of its own and spreads the dep to
+            // its elements for `Type::depend` to union back.  A `match` restating the
+            // variants here was a THIRD copy of the set inside one `if`, and its
+            // `other => other` fall-through is silent: the type it cannot spell binds
+            // unchanged and the arm reads as taken (@FR-O-Proxy).
             if gen_var != u16::MAX
                 && matches!(in_type, Type::Iterator(_, _))
-                && crate::data::is_dbref(&var_tp)
+                && crate::data::holds_dbref(&var_tp)
             {
-                let dep_tp = match var_tp.clone() {
-                    Type::Reference(d, _) => Type::Reference(d, crate::data::Deps::frame1(gen_var)),
-                    Type::Enum(d, m, _) => Type::Enum(d, m, crate::data::Deps::frame1(gen_var)),
-                    Type::Vector(e, _) => Type::Vector(e, crate::data::Deps::frame1(gen_var)),
-                    Type::Hash(d, k, _) => Type::Hash(d, k, crate::data::Deps::frame1(gen_var)),
-                    Type::Sorted(d, k, _) => Type::Sorted(d, k, crate::data::Deps::frame1(gen_var)),
-                    Type::Index(d, k, _) => Type::Index(d, k, crate::data::Deps::frame1(gen_var)),
-                    Type::Radix(d, k, _) => Type::Radix(d, k, crate::data::Deps::frame1(gen_var)),
-                    Type::Trie(d, k, _) => Type::Trie(d, k, crate::data::Deps::frame1(gen_var)),
-                    other => other,
-                };
+                let dep_tp = var_tp.with_deps(&crate::data::Deps::frame1(gen_var));
                 self.change_var_type(for_var, &dep_tp);
             }
             // @PLN93 (#511): iterating a CAPTURED collection (`for e in h`, `h` captured

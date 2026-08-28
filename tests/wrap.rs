@@ -345,7 +345,13 @@ fn loft_suite() -> std::io::Result<()> {
             println!("skip {entry:?} (has dedicated #[ignore] test)");
             continue;
         }
-        run_test(entry, false, false)?;
+        // One row per corpus PROGRAM (`LOFT_TEST_TIMING=<file>`), because to nextest this
+        // whole loop is a single test: ~895 programs with no individual time and one shared
+        // output bucket.  See `common::timing` for why the row is CPU and not wall.
+        let unit = common::timing::Unit::start();
+        let outcome = run_test(entry, false, false);
+        unit.finish(&name);
+        outcome?;
     }
     Ok(())
 }

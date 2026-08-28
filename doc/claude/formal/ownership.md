@@ -160,7 +160,9 @@ implication that reading `deps` is *sufficient*.
 OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
 known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
-D-own-17 and D-own-18 both opened and closed 2026-08-28;
+D-own-19 was opened 2026-08-28, narrowed the same day to its path-sensitive half (loft#1126)
+and CLOSED the same day with loft#1128; D-own-17 and D-own-18 both opened and closed
+2026-08-28;
 D-own-15 opened and
 closed 2026-08-27 with loft#1119; D-own-14 opened and
 closed 2026-08-27 with loft#1118; D-own-13's second face
@@ -175,6 +177,65 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-19 — OPENED AND CLOSED (2026-08-28, loft#1126 + loft#1128): ownership read off the BINDING, not the latest assignment
+
+`(O-Latest)` says ownership is a property of the LATEST ASSIGNMENT to a binding, at the loop
+depth that assignment was taken.  A function whose TAIL is a call hands the callee its own
+return buffer so the result can be built straight into the destination — and when that callee
+mints a store of its own instead, the buffer variable stops holding what it held.
+
+The interpreter did not free the displaced store, because the buffer variable is the hidden
+return-buffer PARAMETER and `state/codegen.rs`'s `is_hidden_buf_arg` reads exactly that: *an
+argument, so the CALLER owns this store, so never free it*.  True at function entry and false
+from the first assignment onward — the binding-level reading `O-Latest` exists to replace.  One
+orphan per CALL, so a hot path grew the heap without bound; the answer was right throughout.
+
+Both halves are needed: an earlier `return` of the variable (which is what makes it the buffer
+variable) AND a tail call that allocates for itself.  Either alone is clean.
+
+`--native` was already correct, and by reading the same fact a different way: it stashes the
+caller's buffer at function entry as `_rb_w_<name>` and guards the displaced free with `_old !=
+_rb_w_<name>` — a RUNTIME answer to "is this still the caller's store?".  So the two backends
+agreed on the value and disagreed on the heap, which is the asymmetry `(O-NoDiverge)` forbids
+and the reason only the interpreter's leak channel could see it.
+
+Closed in `scopes.rs::scan_set`, beside the `#316` transition free that already answers this
+question for the borrow-rhs shape: `owned_refs` IS `O-Latest` (the oracle memoised per path and
+per loop depth, intersect-merged at every join per `O-Complete`), it lives there, so the free is
+emitted there.  Gated on the callee's carried adopt-vs-copy fact
+(`Definition::return_adopts_fresh_store`) — a callee that DELIVERS through the buffer displaces
+nothing, and a pre-Set free would then destroy what it is about to write into.  Guard:
+`tests/scripts/a-tail-call-frees-the-store-its-buffer-var-stops-holding.loft`.
+
+**The residual is CLOSED (2026-08-28, loft#1128): the interpreter carries the fact per RUN.**
+Where the prior assignment is CONDITIONAL — `if c { r = mk(1); … } mk(3)` — the intersect-merge
+correctly answered "not owned on every path" and emitted nothing, so that shape leaked on
+`--interpret` while `--native`'s runtime witness got it right.  Conservative in the safe
+direction (a leak, never an over-free) and incomplete, which is the half `O-Complete` names.
+
+Closed by giving the interpreter its own witness, as a BOOLEAN rather than native's `DbRef`
+snapshot: there is no IR spelling for a raw `DbRef` copy — `OpCreateStack` yields a pointer to
+the variable's SLOT, which tracks the current value rather than the entry one — while a
+`__rbo_<name>: boolean` mirroring `owned_refs` needs nothing new.  It is written after every
+assignment to the buffer variable (left UNCHANGED where the call DELIVERS through the buffer,
+since the variable then holds what it held), the displaced free becomes
+`if __rbo_<name> { OpFreeRef(v) }`, and it starts FALSE — on entry the buffer is the caller's,
+and a transition site is reachable with no prior assignment at all (`fn g() -> Res { mk(2) }`),
+so an uninitialised slot would release the caller's store.  Minted only for a body that
+actually reaches a displacing site, so nothing else pays a slot.
+
+The same witness makes the LATENT over-free in the mirror direction moot rather than needing
+the hazard proven: at the FIRST assignment of a buffer variable with a non-S1 rhs, codegen's
+`owned_ref` was true and it emitted an UNCONDITIONAL pre-Set `OpFreeRef` on the caller's buffer
+(measured directly — `owned_ref=true s1=false hidbuf=false arg=true` — and never reproduced as
+a fault, because every shape tried has the caller's `__ref_N` still null).  A flag that is
+false until this function mints something cannot free what it did not mint.
+
+Guard: `tests/scripts/1128-a-conditionally-assigned-return-buffer-frees-what-it-displaces.loft`,
+whose loop cell alternates the branch fifty times — the leak is one store per CALL, so a single
+call cannot witness its size, and a fix that simply freed unconditionally would over-free on
+half of them.
 
 ### D-own-17 — OPENED AND CLOSED (2026-08-28): a mint carried the DESTINATION's deps
 

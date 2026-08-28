@@ -1304,7 +1304,15 @@ fn test_store_release_answers_bytes_and_keeps_every_reference_valid() {
   // A reference taken BEFORE the release -- the entry's "every reference stays valid".
   before947 = held947[7];
   first947 = store_release(held947);
-  assert(first947 > 0, "a written region below the frontier drops bytes, got {first947}");
+  // What it drops is bytes it WROTE, so the answer can never exceed the file.  The
+  // positive-release half is deliberately not asserted here and cannot be: `release_resident`
+  // has a body only where there is a file to flush to AND `madvise` to drop with
+  // (`#[cfg(all(feature = "mmap", unix))]`), and off unix it is a documented no-op answering
+  // 0 — a hint the platform cannot honour, not a program that is wrong.  A loft program has
+  // no way to ask which platform it is on, so the both-directions gate lives where `cfg!`
+  // does: `store_release_keeps_every_record_and_reference_both_backends` in
+  // `tests/store_persist_loft.rs` pins TRUE on unix and FALSE off it (loft#1127).
+  assert(first947 <= file(sp947).size, "it drops bytes it wrote, got {first947}");
 
   // THE POINT of the return value: it is the bytes THIS call dropped, not the resident
   // total.  Nothing new has been written, so the second call has nothing left to do.
