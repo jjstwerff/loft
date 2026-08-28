@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Monthly bug-review aid: which MECHANISM classes are still producing bugs.
 
-Reports four things and judges none of them (see BUG_REVIEW.md):
+Reports five things and judges none of them (see BUG_REVIEW.md):
 
   1. the population this cycle reviews;
   2. each mechanism class's share of bugs over time, so a class that is still
@@ -11,7 +11,11 @@ Reports four things and judges none of them (see BUG_REVIEW.md):
   3. the payoff check — for every keystone already landed, whether its class's
      bug share actually fell afterwards;
   4. enumeration exposure — how often each child-bearing `Value` variant is
-     omitted from a hand-written walker, beside how many bugs it has carried.
+     omitted from a hand-written walker, beside how many bugs it has carried;
+  5. contract pressure — of the bugs we FIXED, how many needed the written standard
+     to move.  That is the convergence signal the contract-1 decision reads, and it
+     is not the bug count: finding bugs is the audits working, while a moving
+     standard is the only one of the two that can make a freeze premature.
 
 Bugs are bucketed by ISSUE NUMBER, not close date: the tracker is young and a
 release-month close-out lands hundreds of old issues at once, which makes any
@@ -64,7 +68,7 @@ def load(cache):
         return json.loads(pathlib.Path(cache).read_text())
     out = subprocess.run(
         ["gh", "issue", "list", "--state", "all", "--limit", "1200",
-         "--json", "number,title,labels,state,closedAt"],
+         "--json", "number,title,labels,state,closedAt,createdAt"],
         capture_output=True, text=True)
     if out.returncode != 0:
         sys.exit(f"gh failed: {out.stderr.strip()}\n"
@@ -119,10 +123,68 @@ def walker_omissions():
     return present, total
 
 
+def contract_pressure(issues, months):
+    """Section 5 — of the bugs we FIXED, how many moved the written standard?
+
+    Counted by the month the issue was FILED, which is the only date every issue has;
+    the verdict itself is set when the fix lands (.github/LABELS.md `contract:`).  A
+    lag between the two is expected and harmless — a month's ratio settles as its fixes
+    land, and the UNJUDGED column is what says how much of it is still settling.
+
+    Unjudged is printed, never folded into either side.  A count that read an
+    unlabelled issue as settled would report convergence it never measured, which is
+    exactly the reassurance this section exists to withhold.
+    """
+    from collections import Counter
+    settled, strained, unjudged = Counter(), Counter(), Counter()
+    for i in issues:
+        names = {l["name"] for l in i["labels"]}
+        # The population is what we STATED WE FIXED — closed, or carrying
+        # `fixed-pending-merge` — not what carries the `bug` label.  Sections 1-4 filter
+        # on `bug` because they ask what KIND of defect it was; this one asks what the FIX
+        # needed, so an open feature request has no verdict to give and a fixed issue
+        # without the `bug` label still does.  Measured: three of the first four judged
+        # issues (#1120, #1122, #1123) carry no `bug` label, so the `bug` filter counted
+        # one of four and would have reported a ratio off a quarter of its own evidence.
+        if i["state"] != "CLOSED" and "fixed-pending-merge" not in names:
+            continue
+        m = i.get("createdAt", "")[:7]
+        if not m:
+            continue
+        if "contract:strained" in names:
+            strained[m] += 1
+        elif "contract:settled" in names:
+            settled[m] += 1
+        else:
+            unjudged[m] += 1
+    seen = sorted(set(settled) | set(strained) | set(unjudged))[-months:]
+    print("\n=== 5. Contract pressure — did fixing them MOVE the standard? ===")
+    if not seen:
+        print("  no dated bugs")
+        return
+    print("  month     settled  strained   judged-ratio   unjudged")
+    for m in seen:
+        s_, x_, u_ = settled[m], strained[m], unjudged[m]
+        judged = s_ + x_
+        ratio = f"{100 * x_ / judged:5.1f}% strained" if judged else "      —      "
+        print(f"  {m}   {s_:6d}  {x_:7d}   {ratio}   {u_:7d}")
+    tot_j = sum(settled[m] + strained[m] for m in seen)
+    tot_u = sum(unjudged[m] for m in seen)
+    if tot_j == 0:
+        print("\n  Nothing judged yet in this window — the axis is new.  Every fix that")
+        print("  writes a `Contract:` trailer adds one; `scripts/contract_labels.py`")
+        print("  names the fixes on a branch that did not.")
+    elif tot_u > tot_j:
+        print(f"\n  ⚠ {tot_u} unjudged against {tot_j} judged — the ratio above is drawn from")
+        print("  a minority of the population and is not yet evidence either way.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", help="issues JSON from a previous gh call")
     ap.add_argument("--bands", type=int, default=4, help="time slices (default 4)")
+    ap.add_argument("--months", type=int, default=6,
+                    help="months of contract-pressure history (default 6)")
     a = ap.parse_args()
 
     issues = load(a.cache)
@@ -206,6 +268,8 @@ def main():
         bc = bugcount.get(v)
         print(f"  {v:<12}{om:8.1f}%{(str(bc) if bc is not None else '-'):>7}")
     print()
+
+    contract_pressure(issues, a.months)
 
 
 if __name__ == "__main__":

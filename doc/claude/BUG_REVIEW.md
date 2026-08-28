@@ -140,6 +140,22 @@ These are lessons from building the aid; each one produced a wrong answer first.
   carried 22 bugs and `ParFor` almost none. The tail is not safe, it is unexercised.
   So section 4 is read as a *forecast*: an often-omitted variant that a consumer is
   about to start using is next month's class.
+- **Section 5 counts what the FIXES needed, not what the bugs were.** The bug count and
+  the contract-pressure ratio answer different questions, and fusing them is the trap the
+  section exists to break: finding bugs is the audits working — a rising `silent-wrong`
+  count with every fix `contract:settled` says the detector is productive and the standard
+  is holding. Only `contract:strained` says the written standard had to move, and only
+  that can make a freeze premature. **Read the UNJUDGED column first**: a ratio drawn from
+  a minority of the population is not evidence either way, and the report says so rather
+  than printing a reassuring percentage.
+
+> **A note on adoption, learned the expensive way.** `Fixes #NNN` was in CLAUDE.md,
+> ISSUE_TRACKING.md and two skills, and fixes still shipped without it — prose does not
+> fire at the moment you type a commit message. So the `Contract:` trailer ships with the
+> same two supports from day one: `.githooks/commit-msg` asks while you type, and
+> `scripts/contract_labels.py` names the fixes on a branch that went without, so a miss is
+> RECOVERABLE instead of becoming a permanently unjudged issue. Expect the first weeks to
+> be mostly unjudged; that is the column to watch, not the ratio.
 
 ## Watermark table
 

@@ -51,4 +51,21 @@ if [ -n "$deliberate" ]; then
   echo "  amend to \`Fixes #N\` so it gets fixed-pending-merge and closes on merge." >&2
 fi
 
+# The `contract:` axis (.github/LABELS.md) records whether closing a bug had to MOVE the
+# written standard.  That is not knowable when the bug is filed — it is what the fix turned
+# out to need — so the one moment it can be written is this one, in the commit that says
+# `Fixes #N`.  Ask for it HERE for the same reason the check above exists: prose in four
+# documents does not fire at the moment you type the message.
+#
+# Reports, never blocks — a judgement the author has not made yet is not a wrong result,
+# and an unjudged issue is counted as unjudged rather than guessed (the axis says absence
+# means NOT JUDGED, never "settled").
+if [ -n "$closes" ] && ! printf '%s' "$body" | grep -qiE '^[[:space:]]*Contract:[[:space:]]*(settled|strained)\>'; then
+  echo "commit-msg: \`Fixes #\` with no \`Contract:\` trailer — this fix is counted UNJUDGED." >&2
+  echo "  Add \`Contract: settled — <why>\` if the formal rules and existing tests already" >&2
+  echo "  gave the right answer and the fix just makes that promise hold; \`Contract: strained" >&2
+  echo "  — <why>\` if closing it extended a rule, changed a documented surface, or needed a" >&2
+  echo "  design call.  It is the convergence statistic the contract-1 decision reads." >&2
+fi
+
 exit 0

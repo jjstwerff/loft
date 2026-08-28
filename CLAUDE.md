@@ -275,7 +275,12 @@ subsystem. Lineage is separate and goes in the BODY as `Found-via: #N`
 ([.github/LABELS.md § hit-by](.github/LABELS.md)).
 
 **Fixing an existing issue not yet on `main`:** push the fix, write `Fixes #NNN`, keep the issue open
-(the `fixed-pending-merge` label is automated off that trailer) — never hand-close. **Inside a
+(the `fixed-pending-merge` label is automated off that trailer) — never hand-close. **Add a
+`Contract: settled|strained — <why>` trailer beside it** — settled = the formal rules already gave
+the right answer and the fix makes that promise hold; strained = closing it extended a rule, changed
+a documented surface, or needed a design call. The fixing commit is the ONLY moment that answer
+exists, and the monthly ratio is what the contract-1 decision reads (`make bug-review` § 5,
+[.github/LABELS.md § `contract:`](.github/LABELS.md)); absence counts as UNJUDGED, never settled. **Inside a
 plan:** file only if it reproduces on `main`; branch-internal breakage stays in the plan's docs.
 Don't scope-creep the active fix with unrelated bugs.
 

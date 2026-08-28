@@ -240,6 +240,17 @@ Filing is half the loop; closing is the other half.
   surface: `gh issue list --label needs-design` is read as the design backlog, and a
   solved issue sitting in it sends the next agent to re-answer a question that has
   an implementation.  Cheapest at fix time, when what changed is still in hand.
+- **Judge the CONTRACT axis, in the fixing commit.**  Write a `Contract: settled` or
+  `Contract: strained` trailer beside `Fixes #NNN`, plus one line of why
+  ([.github/LABELS.md § `contract:`](../../.github/LABELS.md)).  *Settled* = the formal
+  rules and the existing tests already gave the right answer and the fix makes that
+  promise hold; *strained* = closing it EXTENDED a rule, changed a documented surface,
+  or needed a design call.  **This is the one moment the answer exists** — it is what the
+  fix turned out to need, which nobody could know when the bug was filed — and over a
+  month the settled : strained ratio is the convergence signal the contract-1 decision
+  reads (`make bug-review` § 5).  `.githooks/commit-msg` asks for it while you type;
+  `scripts/contract_labels.py` names the fixes on a branch that went without and applies
+  the labels.  Absence counts as UNJUDGED, never as settled.
 - **A fix needs a regression** — link the `tests/scripts/NNN` / `tests/*.rs` that
   locks it in.  A `fixed-pending-merge` issue with no regression is a re-opening
   waiting to happen.

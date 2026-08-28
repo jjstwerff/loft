@@ -100,6 +100,85 @@ a wrong ERROR MESSAGE, or a leak.  All of those announce themselves.  A leak tha
 eventually OOMs is still not silent-wrong — the answers it gives are right until it dies,
 and the death is loud.
 
+## `contract:` — did closing it MOVE the standard? (the convergence axis)
+
+`silent-wrong` asks *if we froze today, would this be in the contract?* — a question about
+one bug, answerable when it is FILED.  This asks the other one: *when we fixed it, did the
+written standard have to change?*  That is **not knowable at filing** — it is what the fix
+turned out to need — so this axis is set when we state the bug is FIXED, and never before.
+
+Over a month the RATIO is the convergence signal the freeze needs, because a raw bug count
+fuses two things that mean opposite things:
+
+- **we keep FINDING bugs** — the audits are productive, which is what they are for; and
+- **the standard keeps MOVING** — the only one of the two that can make a freeze premature.
+
+| Label | Meaning |
+|---|---|
+| `contract:settled` | The formal spec ([`doc/claude/formal/`](../doc/claude/formal/README.md)) and the existing tests **already gave the right answer**; the code was wrong, and the fix makes a written promise hold.  Freezing before this bug was found would still have been correct. |
+| `contract:strained` | The rules did **not** settle it.  Closing it needed a rule EXTENDED, a documented behaviour CHANGED, or a design call about what *correct* even means.  Freezing before it would have frozen something we then had to move. |
+
+### Where it is written: the fix commit, beside `Fixes #N`
+
+The judgement exists exactly once — in the commit that lands the fix, written by whoever
+just found out what the fix needed.  So it goes there, as a trailer, next to the
+`Fixes #N` the `fixed-pending-merge` automation already reads:
+
+```
+Fixes #1120
+Contract: settled — `(E-Coalesce)` and `(N-Index)` already said what the right
+  answer was; the two lowerings were what disagreed.
+```
+
+`Contract: settled` or `Contract: strained`, then a dash and one line of WHY — the reason
+is the part a month-later reader needs, and writing it is what stops the call becoming a
+reflex.  `.githooks/commit-msg` reports a `Fixes #N` with no `Contract:` trailer (it never
+blocks — same two-tier rule as the rest of that hook), and `scripts/contract_labels.py`
+reads the trailers off a branch and applies the labels.
+
+Setting the label by hand on the issue is equally fine; the trailer just puts it where the
+knowledge already is.
+
+### Three triggers for `contract:strained`
+
+Any ONE of these makes it strained.  Each is observable in the diff, so the call is not a
+feeling:
+
+1. a rule TEXT under `doc/claude/formal/` changed, or a new rule was written, to admit the
+   fix — *"an edge the rules cannot express means the RULE wants extending"*;
+2. a documented surface changed (LOFT.md, STDLIB.md, a `@F` catalogue entry), or the fix
+   needed a `#superseded` steer or a contract key;
+3. it carried `design` / `needs-design`, or closing it added a
+   [`DESIGN_DECISIONS.md`](../doc/claude/DESIGN_DECISIONS.md) entry — the rules could not
+   say what *correct* even meant.
+
+Anything else is `contract:settled`: the deviation register closed it by changing code to
+match a rule already written, which is the doctrine
+([formal/README.md](../doc/claude/formal/README.md)) — *the rules do not change to match
+the code; the code changes to match the rules*.
+
+### Independent of `silent-wrong`, and that independence is the point
+
+A silently wrong answer is USUALLY `contract:settled` — the spec said what the right answer
+was and the code did not deliver it, so the fix moves nothing.  `silent-wrong` +
+`contract:settled` is the common pair, and reading a rising `silent-wrong` count as a moving
+contract is exactly the mistake this axis exists to prevent.
+
+**The freeze wants BOTH, and they are different gates.**  `silent-wrong` → 0 is the per-bug
+blocker: no known wrong answer may be frozen into the contract.  `contract:strained` → 0
+**sustained over a window long enough to be evidence** is the convergence gate: the written
+standard has stopped moving.  The first can be true on any given day; only the second says
+the surface has settled.
+
+**Absence means NOT JUDGED, never "settled"** — the same rule [`hit-by:`](#hit-by--which-project-hit-it)
+and `steered` follow.  A monthly count that read unlabelled as settled would report
+convergence it never measured, so `scripts/bug-review.py` prints the UNJUDGED count beside
+the ratio and folds it into neither side.
+
+```console
+gh issue list --state all --label contract:strained
+```
+
 ## `area:` — which part of loft (plain-English, with orienting files — NOT required reading)
 
 loft is a tree-walking interpreter **and** a native code generator for a
