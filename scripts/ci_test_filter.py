@@ -68,6 +68,26 @@ PR_ONLY = [
 ]
 
 
+# The shard boundary is EVERY single-slot test group, not just `heavy-serial`.
+#
+# A `max-threads = 1` group scattered across shards pins every shard holding a member to
+# a serial floor while the work divides unevenly — the root cause ci.yml records for both
+# reverted sharding strategies.  Cutting along `heavy-serial` fixed that for one group and
+# left `html-wasm-serial` (139s over 32 tests) in `rest`, which is the critical path: the
+# same defect, one group over.
+#
+# This is a SHARD boundary, not a runtime grouping.  The two groups stay separate in
+# `.config/nextest.toml` on purpose — `heavy-serial` exists so a native rustc storm never
+# starves a timing-sensitive server test, which is a different question from which JOB a
+# binary runs in — so the fix belongs here and not in a group merge.
+SERIAL_GROUPS = ["heavy-serial", "html-wasm-serial"]
+
+
+def serial_boundary() -> str:
+    """The filterset selecting every binary in a single-slot group — the shard cut."""
+    return " + ".join(f"({group_filter(g)})" for g in SERIAL_GROUPS)
+
+
 def group_filter(group: str) -> str:
     """The filterset nextest itself uses to populate `group`."""
     with NEXTEST_TOML.open("rb") as fh:
@@ -88,9 +108,9 @@ def main() -> None:
     if event == "pull_request":
         clauses += PR_ONLY
     if shard == "heavy":
-        clauses.append(f"({group_filter('heavy-serial')})")
+        clauses.append(f"({serial_boundary()})")
     elif shard == "rest":
-        clauses.append(f"not ({group_filter('heavy-serial')})")
+        clauses.append(f"not ({serial_boundary()})")
     elif shard is not None:
         raise SystemExit(f"unknown shard '{shard}' (expected 'heavy' or 'rest')")
 

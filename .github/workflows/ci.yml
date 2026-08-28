@@ -312,11 +312,18 @@ jobs:
       # still paid twice here — what changed is that the thing being bought is now
       # worth more than 15 seconds.
       #
-      # 3. THIS ONE: cut ALONG the group boundary, so `heavy-serial` is one whole
-      #    shard (77 tests) and its complement the other (3860).  Both failures
-      #    above have the same root — a single-slot group SCATTERED across shards
-      #    pins every shard to a serial floor while the work divides unevenly.  A
-      #    cut that keeps the group intact is the axis neither tried.  Cold, the
+      # 3. THIS ONE: cut ALONG the group boundary, so every single-slot group is one
+      #    whole shard (120 tests) and its complement the other.  Both failures above
+      #    have the same root — a single-slot group SCATTERED across shards pins every
+      #    shard to a serial floor while the work divides unevenly.  A cut that keeps
+      #    the groups intact is the axis neither tried.
+      #
+      #    ⚠ It first cut along `heavy-serial` ALONE, which fixed that for one group and
+      #    left `html-wasm-serial` (139s over 32 tests, `max-threads = 1`) inside `rest`
+      #    — the same defect one group over, in the shard that is the critical path.
+      #    `ci_test_filter.py`'s boundary is now EVERY single-slot group, and the two
+      #    groups stay separate in nextest.toml: which JOB a binary runs in is a
+      #    different question from whether a rustc storm may run beside a server test.  Cold, the
       #    two sides are additive (226s + 174s = 398s measured), which is exactly
       #    the condition under which running them concurrently pays; warm they
       #    overlap and it would not.  CI is always cold.
