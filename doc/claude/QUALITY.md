@@ -2273,21 +2273,24 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 648 | 290 | 4 | **354** |
+| 649 | 291 | 4 | **354** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
 picked in, which added three opaque sites, then 640 · 266 until B6q's `parse_stored_default`
 added one that asks through `.base()`, then 641 · 267 until the four picked in B6r moved it
-again, then 642 · 270 until B6s peeled seven and merged one body away, then 644 · 281 until
-loft#1125 peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 284 until
-B6v added `data::holds_dbref`, which asks through `.base()` and so lands on the seeing-through
-side, then 644 · 285 until B6w added four: `needs_nullable_wrap` asks through `.base()` and sees
-through, while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are
-opaque ON PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored
-tuple attribute, or of the `Some` variant's `payload`), and a stored attribute is already the
-storage spelling, so an `Optional` cannot reach them.  That is the distinction the opaque column
-is for: a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
+again, then 642 · 270 until B6s peeled seven and merged one body away, then 644 · 281 until loft#1125
+peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 284 until B6v added
+`data::holds_dbref`, which asks through `.base()` and so lands on the seeing-through side, then
+644 · 285 until B6w added four, then 648 · 286 until B6y added `source_spelling` — which reads
+`Type::Enum(syn, true, …)` to answer with the `Optional` the author wrote, and so is a peel in
+the OTHER direction: it sees through by construction.  B6w's four were: `needs_nullable_wrap`
+asks through `.base()` and sees through,
+while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are opaque ON
+PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored tuple
+attribute, or of the `Some` variant's `payload`), and a stored attribute is already the storage
+spelling, so an `Optional` cannot reach them.  That is the distinction the opaque column is for:
+a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
 every count here is a snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
 built — `deps_mut` / `depend` / `with_deps` / `without_deps` / `renumber_frame_deps` /
@@ -3234,6 +3237,58 @@ Guard: `tests/scripts/1138-an-absent-nullable-struct-stays-absent-across-a-call.
 `1|1|none|none` → `0|0|none|none` on both backends.  It carries the four in-function controls
 and a PRESENT half in every position, because a fix that answered "absent" everywhere would pass
 an absent-only cell list.
+
+#### B6y — loft#1139: three sites derive one def, and the refusal was cheaper than half a fix (2026-08-28)
+
+The third of B6w's findings, and the one that shows what a REFUSAL is worth.
+
+`v += [f()]` was refused for `f() -> (integer, S?)` while the dense twin was accepted, reporting
+a precision loss between `__tuple<integer,S?>` and `(integer, S?)` — two spellings of one type,
+the class B6g named.  `unboxes_stored_tuple` compared members with `is_equal` alone, and
+`Data::same_nullable_struct` already existed for exactly that pair, so the acceptance is one
+condition.
+
+**Shipping only that condition makes the program silently wrong**, which the sibling checkout
+measured, reverted, and said so on the issue — the right call, and the reason the fix has a
+guard rather than a one-liner.  Accepting the pair without the rest turns a program that will
+not compile into one that answers `a=9` for `a=4` and `k=0` for `k=3`.
+
+**The root is one mistake at three sites: a `__tuple<…>` def RE-DERIVED from element types read
+in the STORED spelling.**  The def is NAMED by what the author wrote, so handing it a tagged
+member mints `__tuple<__nullable<S>,integer>` — a different def, different offsets:
+
+| site | what it did | what it does |
+|---|---|---|
+| `convert`'s unbox arm | passed `stored_tuple_elements(is_type)` | passes the DESTINATION elements, which re-derive the def the value actually lives in — and each member's declared type is also what tells the unboxer to read a tagged slot through its tag |
+| `set_field_check`'s `tuple_elem_set` arm | built elems from `def(inner_tp).attributes()` | maps them through `source_spelling` first.  **This is the one that made the append wrong**: it wrote the scalar member at byte 16 while the read looked at 24 |
+| `unboxes_stored_tuple` | `is_equal` only | also accepts `same_nullable_struct` |
+
+`Parser::source_spelling` (stored `Enum(__nullable<S>)` → `Optional(Reference(S))`, identity for
+everything else) is the shared home, and the read-side counterpart of `needs_nullable_wrap`.
+
+**A positional bound cannot fix this, and knowing why is the transferable part.**  The first
+attempt admitted the two spellings for the LAST member only, which is sound-looking and holds
+exactly as long as nothing follows the tagged member — every member AFTER one is displaced.  So
+the guard moves the tagged member through first, last, middle-of-three and BOTH ends of a
+three-member tuple, and reads a member on each side of it.  Those four cells are the ones a
+last-member rule passes and a correct fix earns.
+
+⚠ **`make falsify` scores this file on the EXIT channel only, and the header says so.**  The
+control REFUSES the program, so not one assertion runs there — the assert channel reads `0` on
+both sides.  What the tool proves is rejected → accepted, which is the cheap half.  The VALUE
+half was falsified by hand against the build that matters — acceptance WITHOUT the def fix,
+the state the file exists to make impossible — where every append cell is wrong and every
+declared-local cell passes.  A guard scored only on the parse would have called that build
+fixed.  This is [[channel-captured-never-compared]] in the shape a REFUSAL takes: when the
+control cannot run, the automated verdict is about admission and nothing else.
+
+**Two-checkout note.**  This is the first defect today where the two streams' fixes were
+genuinely coupled rather than merely adjacent: the sibling's acceptance change is unshippable
+without this branch's def work, and the def work is unobservable without the acceptance.  It was
+resolved by saying so early — who holds which issue, what each has measured, and what the other
+must not build on — rather than by either side finishing alone.  The message that mattered was
+the one reporting a NEGATIVE result (*"the declared local is still refused on my tree"*), which
+is what told the other side its wrong-value cell was its own to own.
 
 #### C — process / skills
 

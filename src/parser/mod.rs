@@ -3779,11 +3779,16 @@ impl Parser {
             return false;
         }
         let attrs = self.data.def(*d_nr).attributes();
+        // A member declared `S?` has TWO spellings — `Optional(Reference(S))` as the author
+        // writes it and the tagged `Enum(__nullable<S>)` the layout stores it as
+        // (`@FR-L-Null-Tag`) — and `is_equal` alone read that pair as a precision loss between
+        // a type and itself, so `v += [f()]` was refused for a tuple with a nullable member
+        // while its dense twin was accepted (loft#1139).  `same_nullable_struct` is the home
+        // for the pair; the unboxer below then reads the member through its tag.
         attrs.len() == dst_elems.len()
-            && attrs
-                .iter()
-                .zip(dst_elems)
-                .all(|(a, d)| a.typedef.is_equal(d))
+            && attrs.iter().zip(dst_elems).all(|(a, d)| {
+                a.typedef.is_equal(d) || self.data.same_nullable_struct(&a.typedef, d).is_some()
+            })
     }
 
     /// Element types of a stored tuple (`Reference(__tuple<…>)`), in order — the argument
@@ -4016,8 +4021,20 @@ impl Parser {
             // A `Value::Null` here is the shape-only probe the Tuple→Tuple arm above
             // runs for a non-literal source; there is no expression to unbox.
             if !self.first_pass && !matches!(code.unspan(), Value::Null) {
-                let src_elems = self.stored_tuple_elements(is_type);
-                *code = self.unbox_tuple_from_dbref(code.clone(), &src_elems);
+                // The DESTINATION spellings, not the stored ones.  `unbox_tuple_from_dbref`
+                // re-derives the `__tuple<…>` def from what it is handed, and the def is
+                // NAMED by the source-level spelling — so handing it a tagged member yields
+                // `__tuple<__nullable<S>,integer>`, a different def with different offsets,
+                // and every member after it reads at the wrong one.  Passing the destination
+                // types re-derives the SAME def the value is stored in, and each member's
+                // declared type is what tells the unboxer to read a tagged slot through its
+                // tag.  Offsets and types then come from one def, which is the same rule the
+                // write side answers (loft#1134).
+                let dst_elems = match should {
+                    Type::Tuple(elems) => elems.clone(),
+                    _ => self.stored_tuple_elements(is_type),
+                };
+                *code = self.unbox_tuple_from_dbref(code.clone(), &dst_elems);
             }
             return true;
         }
@@ -9492,6 +9509,28 @@ impl Parser {
         }
     }
 
+    /// The SOURCE spelling of a stored element type — the one the author wrote.
+    ///
+    /// A member declared `S?` is stored as the tagged `Enum(__nullable<S>)` (`@FR-L-Null-Tag`)
+    /// while the author wrote `Optional(Reference(S))`, and the synthetic `__tuple<…>` def is
+    /// NAMED by the second. So a list read straight off the def's attributes is in the storage
+    /// spelling, and handing that to anything which re-derives the def from its element types
+    /// mints a DIFFERENT tuple — different offsets, and every member after the tagged one read
+    /// or written at the wrong place. It also hides the member from
+    /// [`Self::needs_nullable_wrap`], which asks about the declared type.
+    ///
+    /// Everything that is not a nullable-struct wrapper answers unchanged, so this is safe to
+    /// apply to a whole element list.
+    pub(crate) fn source_spelling(&self, stored: &Type) -> Type {
+        let Type::Enum(syn, true, deps) = stored else {
+            return stored.clone();
+        };
+        match self.nullable_payload_struct(*syn) {
+            Some(struct_d) => Type::Optional(Box::new(Type::Reference(struct_d, deps.clone()))),
+            None => stored.clone(),
+        }
+    }
+
     /// Is this element type the DENSE spelling of `syn`'s payload — i.e. a value parsed
     /// against it arrives needing [`emit_nullable_slot_write`]?
     ///
@@ -9857,12 +9896,18 @@ impl Parser {
                     && !deps.contains(&u16::MAX)
                     && self.data.def(inner_tp).name().starts_with("__tuple<")
                 {
+                    // Read in the SOURCE spelling: `emit_tuple_set_ops` re-derives the
+                    // `__tuple<…>` def from these types to get its offsets, and the def is
+                    // named by what the author wrote.  Handing it the stored spelling of a
+                    // nullable member minted `__tuple<__nullable<S>,integer>` instead, whose
+                    // `_1` sits at 16 where the real one sits at 24 — so the append wrote a
+                    // member the read could not find.
                     let elems: Vec<Type> = self
                         .data
                         .def(inner_tp)
                         .attributes()
                         .iter()
-                        .map(|a| a.typedef.clone())
+                        .map(|a| self.source_spelling(&a.typedef))
                         .collect();
                     let base_pos = if let Value::Int(p) = pos_val {
                         p as u16

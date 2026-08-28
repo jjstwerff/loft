@@ -201,7 +201,17 @@ crossing a FUNCTION BOUNDARY.  `convert` unwrapped a `__nullable<S>` by sub-refe
 record of zeroes.  Not a tuple question at all: a `vector<S?>` element and a plain struct field
 reproduce it identically, so the axis is the boundary and the fix sits in `convert`.
 
-The split there is worth keeping in mind when reading the unwrap: only a NULLABLE target reads
+One more consequence of the two spellings closed the same day (**loft#1139**): three sites
+RE-DERIVED the synthetic `__tuple<…>` def from the element types they were handed, and the def
+is NAMED by the source spelling — so a list read straight off the def's own attributes minted
+`__tuple<__nullable<S>,integer>`, a different def with different offsets.  That is why
+`v += [f()]` was refused for a tuple with a nullable member while its dense twin was accepted,
+and why merely LIFTING the refusal writes the scalar member at byte 16 where the read looks at
+24.  `Parser::source_spelling` is the normalisation; the rule it serves is the same one the
+write side answers — **a tuple's offsets and its member types come from ONE def**, and any list
+that will be used to re-derive that def has to be in the spelling the def is named by.
+
+The split in the unwrap is worth keeping in mind too: only a NULLABLE target reads
 through the tag.  A DENSE `S` target keeps the bare payload sub-ref, because `(N-Store)` has
 already ruled that it cannot hold absence, and because two sites downstream recognise that
 unwrap by its SHAPE — `tail_is_nullable_unwrap` (the #306 view-return materialise) and
