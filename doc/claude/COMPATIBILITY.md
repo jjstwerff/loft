@@ -478,6 +478,52 @@ minimum (audits green, plans closed, suite passing) is *necessary, not sufficien
 door, and the freeze is declared only when the blockers are truly gone and the converted consumers are
 stable again — deliberately weeks away, never on the strength of a passing board alone.
 
+### What a falling bug rate does and does not license
+
+The dogfood consumers are building and hitting far fewer bugs than they used to. That is real,
+it is the point of Goal C, and **it is not evidence that the freeze is earned** — because it is a
+measurement of the paths *those consumers walk*. Games-first is the right lib-side readiness bar
+and it has the same shape: it proves the surface a game exercises, and a game exercises what its
+author needed.
+
+The freeze does not bind only the walked paths. **At contract 1 every behaviour that works
+becomes a permanent promise**, including behaviour on paths nobody has taken yet — the same
+feature at another type, in another position, under a `?`, on the other backend. An outlier is
+not a rare shape; it is an *unwalked* one, and the next project's author walks a different set
+than ours ([GOALS.md § Useful is not stable](GOALS.md)).
+
+That asymmetry is what makes the unwalked surface the expensive part:
+
+- A defect on a walked path is found by somebody running a program, and while we are at
+  contract 0 it is simply fixed.
+- A defect on an unwalked path is **frozen on the day the contract is declared**. After that it
+  can only be handled additively — fold, host, or contract-key — never fixed in place, because
+  fixing it is exactly the breakage the promise forbids. A `silent-wrong` is the sharpest case
+  and CLAUDE.md's filing policy already calls it *the FREEZE axis*: a `sev:low` edge that
+  answers quietly wrong cannot be frozen into the contract, while a `sev:high` crash can,
+  because a crash tells you.
+
+So the readiness question is not *"are our programs stable?"* — they are — but **"would the next
+program be?"**, and no consumer metric can answer it. A falling bug rate says our reach has been
+hardened; it is silent about everything outside our reach, which is the majority of what the
+contract will bind.
+
+**The honest bound, stated so nobody plans against a fantasy.** The matrix of
+feature × type × position × nullability × backend is not enumerable, and this will never be a
+proof. What is achievable is to get materially closer to a language that does not let the next
+user down — and the instrument for that is the one thing we have that is stated over a *whole
+domain* rather than over the programs we happen to own: the formal rules. A corpus can only
+cover what somebody already wrote; a rule covers every case it quantifies over, so walking one
+reaches cells no program in the tree does. That is the practice in
+[STABILITY_METHOD.md § The rule-led walk](STABILITY_METHOD.md), and its position marker is the
+one to read against this section: **179 of 255 rules currently have no representation in the
+code at all.**
+
+This does not add a checklist item to the two phases above; it says what the phases are *for*.
+The checklist minimum stays necessary-not-sufficient, and the judgement it is not sufficient for
+is precisely this one — whether the surface we are about to promise forever behaves on the paths
+we have not walked.
+
 ## Per-surface — additive is the path; here is what a regression looks like
 
 | Surface | Additive (allowed) | Regression (a bug) |

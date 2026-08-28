@@ -466,6 +466,73 @@ Never "finished"; it reads as a fraction, and a falling fraction is the alarm.
 
 ---
 
+## Useful is not stable — the gap dogfood cannot measure
+
+Goal C's fraction says the language is **useful**: real programs build and run, and the
+consumers keep finding it worth using. That is a real measurement, and it is not a stability
+measurement — because a consumer exercises the paths *its author happened to walk*.
+
+Those paths get hard through use. A shape that moros or dryopea leans on daily has been hit
+from every angle a working program hits it from, and its bugs were found years ago by the
+cheapest possible instrument: somebody running the program. **Heavy use is a test suite nobody
+had to write.**
+
+Everything else is an outlier — and an outlier is not a rare shape, it is an *unwalked* one.
+The same feature at a different type, in a different position, under a `?`, on the other
+backend, in a `return` instead of a local. Nothing about it is exotic; it is simply that no
+program we have has needed it yet. **A new project or a new user hits those on their first
+day**, because their program is not our program, and what is peripheral to us is central to
+them. The measured form of this: `hash<S[k]>? = [S { … }]` is refused today, and the reason is
+not that anyone decided it should be — it is that no consumer has ever written a nullable keyed
+literal.
+
+**So the gap this work bridges is between *"works on the paths we walk"* and *"works on the
+paths someone else will walk."*** Every instrument aimed at the corpus measures the first. The
+bug windows say so directly: they are dominated by `hit-by:loft`, and BUG_REVIEW.md's own
+reading is that *"the sample is entirely self-generated, so it measures our reach and not the
+language"*. A corpus can only ever cover what somebody already wrote.
+
+**A rule can cover what nobody has written yet**, and that is why the rules are the instrument
+rather than a nicety. `formal/`'s rules are stated over a whole domain — *every* `τ`, *every*
+collection kind, *every* position — so walking one asks about cells no program in the tree
+reaches. That is the concrete link from this section to the method:
+[STABILITY_METHOD.md § The rule-led walk](STABILITY_METHOD.md).
+
+Two consequences worth stating outright, because both look like poor use of time under a
+capability lens and are the point under a stability one:
+
+- **A cell that works is a result.** Proving that a rule holds on nine types across three
+  routes converts thirty unwalked paths into walked ones. Nothing shipped, and the language
+  got more stable, because the next person to walk them is no longer the first.
+- **An outlier's bug is worth the same as a hot path's.** It is worth *more* than its
+  frequency suggests, because the person who hits it is by definition new — to the project, or
+  to the language — and has the least context for working around it. `sev:` ranks the damage,
+  never the popularity of the path.
+
+This is the same doctrine as § Stability trumps features, read from the other end: that section
+says do not add a shape you cannot afford to keep working; this one says the shapes you already
+promised must work everywhere they are promised, not only where they are used.
+
+**None of this is a complaint about the language.** Unwalked paths are a property of having more
+feature combinations than programs — arithmetic, not a failing, and true of everything that
+ships. The progress already made is real and is measured elsewhere: the consumers hit far fewer
+bugs than they did, which is Goal C working as designed. What this section adds is a second
+axis, not a correction of the first — and the reason it is worth adding is that the alternative
+was never a better method, it was **waiting for problems**, which cannot be scheduled, measured
+or finished. Naming the gap is what makes it a task.
+
+**And it is the decision this feeds.** At **contract 1** every behaviour that works becomes a
+permanent promise, unwalked paths included — a defect found on a walked path today is simply
+fixed, while one on an unwalked path is FROZEN and can afterwards only be handled additively,
+never fixed in place. So *"the dogfood projects hit far fewer bugs"* does not license the freeze:
+it measures our reach, and the contract binds far more than our reach. The readiness question is
+**"would the NEXT program be stable?"**, which no consumer metric answers. Nor can it ever be
+answered fully — the matrix of feature × type × position × nullability × backend is not
+enumerable, and this will not be a proof. It can be got materially closer, and the rules are the
+only instrument stated over whole domains rather than over the programs we happen to own. See
+[COMPATIBILITY.md § What a falling bug rate does and does not license](COMPATIBILITY.md).
+---
+
 ## Goal D — Cross-platform + cross-backend parity
 
 **Definition.** loft behaves identically on **ubuntu / macOS-ARM / windows** and

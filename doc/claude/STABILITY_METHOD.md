@@ -275,6 +275,115 @@ And **bound the blast radius with a property, not with confidence**.  The fix ab
 move.  A one-line invariant of that kind is worth more to a reviewer than a green suite,
 because it says what the change *cannot* do rather than what happened not to break.
 
+## The rule-led walk — the standing practice, measured in years
+
+**What changed here is the tractability, not the situation.** Any language with more feature
+COMBINATIONS than it has programs has paths nobody has walked; that is arithmetic, not a
+failing, and it is true of every language that has ever shipped. It is not a thing to be sad
+about — it is the shape of the field.
+
+What it used to mean in practice, though, was a **waiting-for-problems game**: the only way an
+outlier defect surfaced was for somebody to hit it, which cannot be scheduled, cannot be
+measured, cannot be assigned, cannot be reviewed, and can never be finished — its work arrives
+only once someone is already hurt by it, and its "progress" is indistinguishable from nobody
+having tried the shape yet.
+
+The rule index converts that into an ordinary task, with the four properties waiting lacks:
+
+- **a ranked queue** — 255 rules, a `dups` ordering, and a bug review that says which class is
+  rising;
+- **an oracle per item** — the rule states what must be true, so a cell's expected value is read
+  off the rule instead of guessed;
+- **a definition of done per item** — the questions split, one home each, related cases verified,
+  guard, cite;
+- **a position marker** — how many rules have a representation in the code, which moves only when
+  the work is actually done.
+
+That is the whole gain, and it is worth being plain that it IS a gain: the progress already made
+is real (the consumers hit far fewer bugs than they did, and that is Goal C working), and this
+adds an axis that progress could not previously be made on at all, rather than replacing it.
+Years of queue is a feature of the estimate, not a complaint — it means the work is finally
+sized, and a sized job can be picked up, put down, handed over, and finished.
+
+The three passes above start from a **condition thicket**: you notice a structure has decayed
+and you go clean it. That works, and it needs someone to notice. The rule-led walk starts from
+the **formal rules** instead, which makes it a queue rather than an observation — and a queue
+long enough to work from for years.
+
+**Why the rules are the right index.** Code moves; a rule does not. `formal/`'s rules are the
+thing two implementations are both claiming to implement, so they are the only stable place to
+ask *"is this the same question?"*. That is what `@FR-` tags are for, and what makes the
+duplication question askable at all rather than a matter of taste.
+
+**The size of the queue, so nobody plans it as a sprint.** `scripts/rule_tags.py` reports the
+position:
+
+```
+255 defined rules · 76 cited · 163 citation sites
+```
+
+**179 rules (70 %) have no code representation** — for those, *"where is this enforced?"* has
+no answer. And of the 76 that do, **21 are cited from two or more files**; the most scattered
+is the most instructive. One rule is comfortably an afternoon. The queue is therefore measured
+in years, and the practice has to survive being picked up and put down.
+
+### The loop
+
+1. **Pick a rule, not a site.** Rank by `rule_tags.py dups` (most scattered first) or by which
+   rule sits under a class the bug review says is rising. Both were true of `@FR-L-Null`: 13
+   sites across 8 files, and 14 of that cycle's 27 bugs named null.
+2. **Split the rule into the QUESTIONS its sites actually ask.** A rule with a dozen citations
+   is rarely one question. `@FR-L-Null`'s thirteen were two — *"is this the same storage?"*
+   (the peel) and *"what value means absent in it?"* (the sentinel). Merging those would have
+   been the early-abstraction failure; the split is the first product of the walk, and
+   recording it is what stops the next reader re-deriving it.
+3. **Per question, find the ROOT — the one home.** Usually it already exists and the callers do
+   not ask it. `vectors::is_collection` was already the declared home for *"which collections
+   are store-backed?"*, and the broken site spelled its own `matches!(should, Type::Vector(…))`
+   instead.
+4. **Verify the RELATED cases with the root.** This is the step that yields. Once the root is
+   known, its siblings are cells you can enumerate rather than guess: the other collection
+   kinds, the other positions (local / field / argument / return), the other spellings of one
+   notion, the READ twin of a write. A root you cannot enumerate siblings for is a root you have
+   not found yet.
+5. **The defects live in the disagreements.** Where two sites answer the same question
+   differently, one of them is wrong, and the wrong one has usually been wrong quietly.
+6. **Guard on the channel the defect actually moved.** It is frequently not the value channel —
+   a nullable keyed local produced correct answers and a bogus `OpFreeRef`, visible only as
+   `BUG (#306)` on stderr. Name the channel in the guard's `@falsified-at` line so the next
+   reader knows what would fail.
+7. **Cite last.** The citation is the receipt for work done, never the work.
+
+### What makes it hold up over years
+
+- **A negative result is a product.** `@FR-L-Null`'s sentinel half turned out to be genuinely
+  consolidated — two tables keyed differently (`Type` variant vs content-type number) whose
+  doc *claimed* they agree. Tested: 9 types × 3 routes, 27 cells, all agreeing. That claim is
+  now measured, and no one has to re-derive it. A walk that finds nothing has still converted a
+  claim into a fact.
+- **Findings that are not this defect get FILED, not folded in.** The `@FR-L-Null` walk turned
+  up a nullable `index<T[k]>?` that fails layout outright (loft#1125) and a latent unpeeled arm
+  in the generic `FromNull` loop. Neither belongs in the fix; both belong on the record. Folding
+  them in is how a one-afternoon walk becomes a three-day rewrite that nothing can review.
+- **A/B every causal claim against a reverted build.** *"My change caused this"* and *"this was
+  already broken"* look identical from one run. loft#1125 was called pre-existing only after the
+  hunk was reverted and the errors came back byte-identical.
+- **Do not optimise the citation count.** `76 → 255` over unchanged duplication would read as
+  progress while nothing had changed. The count is a position marker, not a target; what moves
+  is the number of questions with one home. `doc_hygiene::every_rule_citation_resolves` keeps
+  the marker honest by failing on a citation that names no rule, but it cannot tell an earned
+  citation from a sprinkled one — only the reviewer can.
+
+### Why this is not the same as the screens
+
+`ir_walker_audit.py`, `matrix_axes.py` and the rest rank SITES: they answer *"who might have
+forgotten a variant?"* over the whole tree. They are worth running and they found real defects,
+but their yield per unit of effort is low, and BUG_REVIEW.md's `2026-08` (3rd) cycle measured
+how low against a two-checkout control. The rule-led walk is bounded by a rule instead of by the
+tree, comes with its own oracle (the rule states what must be true), and ends with something to
+enforce. Reach for a screen when a rule walk has named a class and you want its full extent;
+do not reach for one as the way in.
+
 ## Relation to the rest of the method stack
 
 - [GOALS.md](GOALS.md) Goal E — the destination this method walks toward;
