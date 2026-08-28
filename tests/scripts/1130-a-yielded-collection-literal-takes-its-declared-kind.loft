@@ -26,7 +26,7 @@
 // ⚠ Two deliberate spellings, both to keep this file failing on its OWN defect.  The lookups
 // are `e = c[k]; e != null` and not `c[k] ?? default`, and every cell has its own element
 // struct: TWO generators over the same keyed type, each consumed with a lookup, leak one store
-// (loft#1134), and so does a `??` default over such a lookup.  Both are PRE-EXISTING — the
+// (loft#1135), and so does a `??` default over such a lookup.  Both are PRE-EXISTING — the
 // bound route, which loft#1130 never touched, leaks identically — and the `??` spelling is
 // what the filed repro used, which is why that leak was read as belonging to this defect.
 

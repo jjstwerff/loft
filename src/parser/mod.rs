@@ -9522,7 +9522,21 @@ impl Parser {
                 // that choice: per-element writes for a stack tuple, one
                 // `OpCopyRecord` when the source is itself a promoted
                 // `Reference(__tuple<…>)` (PLAN51 V-b).
-                if !self.first_pass && self.data.def(inner_tp).name().starts_with("__tuple<") {
+                // …and the slot has to actually HOLD that record.  `deps.contains(&u16::MAX)`
+                // is the #328 marker saying the attribute stores a 12-byte `DbRef` rather
+                // than inline bytes — the spelling three other sites already read for the
+                // same question (`objects.rs`'s two, and the #318 carrying-walk below).  A
+                // closure record's capture of a `vector<(…)>` is exactly that: it is typed
+                // `Reference(__tuple<…>)` because `closure_attr_type` names the ELEMENT def
+                // as a stand-in for "some DbRef", and the value stored is the COLLECTION
+                // handle.  Reading the destination alone, this arm wrote the vector's own
+                // bytes out as two integers, so the closure captured a garbage pair and a
+                // `for` over it read no elements at all — silently on `--interpret`, `E0308`
+                // on `--native` (loft#1131).
+                if !self.first_pass
+                    && !deps.contains(&u16::MAX)
+                    && self.data.def(inner_tp).name().starts_with("__tuple<")
+                {
                     let elems: Vec<Type> = self
                         .data
                         .def(inner_tp)

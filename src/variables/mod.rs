@@ -3501,4 +3501,3 @@ mod loop_binding_dep_tests {
 pub fn owns_literal_backing_store(name: &str) -> bool {
     name.starts_with("__vdb") || name.starts_with("__kvb")
 }
-

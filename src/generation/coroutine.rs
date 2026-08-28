@@ -1149,8 +1149,7 @@ impl Output<'_> {
                 // inside one match arm's pre-statements, then referenced
                 // from another arm where they're out of scope.  Each
                 // Reference-typed yield arm allocates a `__ref_N` slot.
-                if !crate::variables::owns_literal_backing_store(name)
-                    && !name.starts_with("__ref")
+                if !crate::variables::owns_literal_backing_store(name) && !name.starts_with("__ref")
                 {
                     continue;
                 }

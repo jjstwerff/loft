@@ -118,6 +118,16 @@ struct Scopes {
     /// instead (only at the same loop depth: emitting inside a deeper loop
     /// would re-free a viewed store on iterations 2+).
     owned_refs: HashMap<u16, usize>,
+    /// loft#1128 — the RUNTIME ownership witness for the hidden return-buffer parameter:
+    /// `(buffer var, boolean flag var)`.  `owned_refs` above is the same fact answered
+    /// STATICALLY, and it is intersect-merged at every join (@FR-O-Complete), so a prior
+    /// assignment inside one `if` arm correctly answers *"not owned on every path"* and no
+    /// free is emitted — sound, and incomplete.  The flag mirrors the same fact per RUN, the
+    /// way `--native` already does with its entry-buffer witness `_rb_w_<name>`.
+    ///
+    /// `None` unless the body actually reaches a displacing site (`displaces_return_buffer`),
+    /// so a function that cannot leak pays no slot.
+    rbuf_witness: Option<(u16, u16)>,
     /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
     /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
     /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
@@ -1341,6 +1351,7 @@ fn run_scan_phase(
         paired_witness: HashMap::new(),
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
+        rbuf_witness: None,
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
@@ -1352,7 +1363,29 @@ fn run_scan_phase(
     for a in function.arguments() {
         scopes.var_scope.insert(a, 0);
     }
+    // loft#1128 — mint the return-buffer's runtime ownership witness BEFORE the scan, so the
+    // first assignment that has to maintain it already has a flag to write.  Only for a body
+    // that actually reaches a displacing site: everywhere else the static `owned_refs` answer
+    // is complete and the slot would be dead weight.
+    if let Some(buf) = hidden_return_buffer_var(d_nr, &function, data)
+        && displaces_return_buffer(orig_code, buf, data)
+    {
+        let name = format!("__rbo_{}", function.name(buf));
+        let flag = function.add_temp_var(&name, &Type::Boolean);
+        scopes.var_scope.insert(flag, 0);
+        scopes.var_order.push(flag);
+        scopes.rbuf_witness = Some((buf, flag));
+    }
     let mut code = scopes.scan(orig_code, &mut function, data);
+    // The witness starts FALSE: on entry the buffer holds the CALLER's store, which this
+    // function must never release.  A transition site is reachable with no prior assignment at
+    // all (`fn g() -> Res { mk(2) }`), and `needs_pre_init` does not cover `boolean`, so an
+    // uninitialised slot would read as garbage and free the caller's buffer.
+    if let Some((_, flag)) = scopes.rbuf_witness
+        && let Value::Block(bl) = &mut code
+    {
+        bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+    }
     // lift vars from `scan_args` are assigned inside conditional branches but
     // their `OpFreeRef` lives at function exit; prepend the null-inits so codegen
     // reserves their slot along every path (see the original comment in check).
@@ -4265,6 +4298,32 @@ impl Scopes {
         {
             transition_free = Some(call("OpFreeRef", v, data));
         }
+        // loft#1128 — the PATH-SENSITIVE half of the same fact.  `owned_refs` above is
+        // intersect-merged at every join (@FR-O-Complete), so an assignment inside ONE `if`
+        // arm answers "not owned on every path" and the branch above emits nothing: sound,
+        // and incomplete — the store that assignment minted is displaced here with nothing
+        // naming it, one per call.  The runtime witness carries the same @FR-O-Latest fact
+        // per RUN, so the free is emitted GUARDED instead of not at all.  `--native` has
+        // reached this answer all along through its entry-buffer witness `_rb_w_<name>`,
+        // which is why only the interpreter reported the leak.
+        if transition_free.is_none()
+            && was_in_scope
+            && let Some((buf, flag)) = self.rbuf_witness
+            && buf == v
+            && matches!(
+                function.tp(v),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && function.tp(v).depend().is_empty()
+            && !function.is_skip_free(v)
+            && displaces_owned_through_fresh_callee(value, v, ov, data)
+        {
+            transition_free = Some(v_if(
+                Value::Var(flag),
+                call("OpFreeRef", v, data),
+                Value::Null,
+            ));
+        }
         if was_in_scope
             && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
             && self.owned_refs.get(&v) == Some(&self.loops.len())
@@ -4694,12 +4753,25 @@ impl Scopes {
             }
             self.put_scope(d);
         }
-        if prefix.is_empty() && ls.is_empty() {
+        // loft#1128 — keep the runtime witness in step with what `v` now holds.  A call that
+        // DELIVERS into the buffer (`v` at the callee's buffer position and the callee does
+        // NOT adopt a fresh store) leaves `v` holding whatever it held, so the flag is left
+        // alone; every other assignment sets it to the same @FR-O-Latest verdict `owned_refs`
+        // records statically.
+        let witness_update = match self.rbuf_witness {
+            Some((buf, flag)) if buf == v && !delivers_into_buffer(value, v, ov, data) => {
+                let owned = matches!(self.ref_rhs_ownership(value, data), RefRhs::Owned);
+                Some(v_set(flag, Value::Boolean(owned)))
+            }
+            _ => None,
+        };
+        if prefix.is_empty() && ls.is_empty() && witness_update.is_none() {
             Value::Set(v, Box::new(set_value))
         } else {
             let mut all = prefix;
             all.append(&mut ls);
             all.push(Value::Set(v, Box::new(set_value)));
+            all.extend(witness_update);
             Value::Insert(all)
         }
     }
@@ -7501,6 +7573,66 @@ fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Func
 /// function's to release is a separate question that @FR-O-Latest answers (the caller
 /// checks `owned_refs` first).  `v` must not be read anywhere ELSE in the call — a
 /// pre-Set free would then destroy data the call still reads.
+/// The hidden return-buffer PARAMETER of `d_nr`, as a variable number — or `None` when the
+/// function has none.
+///
+/// Which attribute is the buffer is `Definition::hidden_return_buffer_attr`'s question; this
+/// resolves it to the slot the body actually assigns.
+fn hidden_return_buffer_var(d_nr: u32, function: &Function, data: &Data) -> Option<u16> {
+    let def = data.def(d_nr);
+    let idx = def.hidden_return_buffer_attr()?;
+    let name = def.attributes().get(idx)?.name.clone();
+    let v = function.var(&name);
+    (v != u16::MAX).then_some(v)
+}
+
+/// Does this body ever displace a store held by the return-buffer parameter `v`?
+///
+/// The pre-scan answer to *"is a runtime ownership witness worth a slot here?"* — asked once
+/// per function so the witness exists before the first assignment that has to maintain it, in
+/// the same shape `displaced_owned` and `collect_views_to_materialise` already use.  A body
+/// that never reaches such a site pays nothing.
+fn displaces_return_buffer(code: &Value, v: u16, data: &Data) -> bool {
+    fn walk(node: &Value, v: u16, data: &Data) -> bool {
+        if let Value::Set(t, val) = node.unspan()
+            && *t == v
+            && displaces_owned_through_fresh_callee(val, v, v, data)
+        {
+            return true;
+        }
+        let mut found = false;
+        node.unspan().for_each_child(&mut |c| {
+            if !found {
+                found = walk(c, v, data);
+            }
+        });
+        found
+    }
+    walk(code, v, data)
+}
+
+/// Does this call DELIVER its result into `v`'s existing store?
+///
+/// The complement of [`displaces_owned_through_fresh_callee`] on the same two facts: `v` sits
+/// at the callee's hidden buffer position AND the callee does not adopt a fresh store, so it
+/// writes through the buffer it was handed.  `v` then holds exactly what it held before, which
+/// is why the runtime ownership witness must be left UNCHANGED rather than recomputed from the
+/// call's return (loft#1128).
+fn delivers_into_buffer(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
+    let Value::Call(fn_nr, args) = value.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if def.return_adopts_fresh_store() {
+        return false;
+    }
+    let Some(buf_idx) = def.hidden_return_buffer_attr() else {
+        return false;
+    };
+    args.get(buf_idx)
+        .is_some_and(|a| matches!(a.unspan(), Value::Var(w) if *w == v || *w == ov))
+}
+
 fn displaces_owned_through_fresh_callee(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
     let Value::Call(fn_nr, args) = value.unspan() else {
         return false;

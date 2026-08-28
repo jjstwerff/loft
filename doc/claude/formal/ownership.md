@@ -157,12 +157,12 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **3** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; D-own-16, below; and
-D-own-19, opened 2026-08-28 and NARROWED the same day to the path-sensitive half — the
-dominating case closed with loft#1126, the conditionally-assigned one filed as loft#1128) —
-D-own-17 and D-own-18 both opened and closed 2026-08-28;
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+D-own-19 was opened 2026-08-28, narrowed the same day to its path-sensitive half (loft#1126)
+and CLOSED the same day with loft#1128; D-own-17 and D-own-18 both opened and closed
+2026-08-28;
 D-own-15 opened and
 closed 2026-08-27 with loft#1119; D-own-14 opened and
 closed 2026-08-27 with loft#1118; D-own-13's second face
@@ -178,7 +178,7 @@ of the same join.  Face B is also this register's clearest case of a leak MASKIN
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
 
-### D-own-19 — OPENED AND NARROWED (2026-08-28, loft#1126): ownership read off the BINDING, not the latest assignment
+### D-own-19 — OPENED AND CLOSED (2026-08-28, loft#1126 + loft#1128): ownership read off the BINDING, not the latest assignment
 
 `(O-Latest)` says ownership is a property of the LATEST ASSIGNMENT to a binding, at the loop
 depth that assignment was taken.  A function whose TAIL is a call hands the callee its own
@@ -208,13 +208,34 @@ emitted there.  Gated on the callee's carried adopt-vs-copy fact
 nothing, and a pre-Set free would then destroy what it is about to write into.  Guard:
 `tests/scripts/a-tail-call-frees-the-store-its-buffer-var-stops-holding.loft`.
 
-⚠ **OPEN residual (loft#1128): the static fact is sound but not complete.**  Where the
-prior assignment is CONDITIONAL — `if c { r = mk(1); … } mk(3)` — the intersect-merge correctly
-answers "not owned on every path" and no free is emitted, so that shape still leaks on
-`--interpret` while `--native`'s runtime witness gets it right.  Conservative in the safe
-direction (a leak, never an over-free), and closing it needs the interpreter to carry the same
-ENTRY WITNESS native has.  There is no IR spelling for it today: `OpCreateStack` yields a
-pointer to the variable's SLOT, which tracks the current value rather than the entry one.
+**The residual is CLOSED (2026-08-28, loft#1128): the interpreter carries the fact per RUN.**
+Where the prior assignment is CONDITIONAL — `if c { r = mk(1); … } mk(3)` — the intersect-merge
+correctly answered "not owned on every path" and emitted nothing, so that shape leaked on
+`--interpret` while `--native`'s runtime witness got it right.  Conservative in the safe
+direction (a leak, never an over-free) and incomplete, which is the half `O-Complete` names.
+
+Closed by giving the interpreter its own witness, as a BOOLEAN rather than native's `DbRef`
+snapshot: there is no IR spelling for a raw `DbRef` copy — `OpCreateStack` yields a pointer to
+the variable's SLOT, which tracks the current value rather than the entry one — while a
+`__rbo_<name>: boolean` mirroring `owned_refs` needs nothing new.  It is written after every
+assignment to the buffer variable (left UNCHANGED where the call DELIVERS through the buffer,
+since the variable then holds what it held), the displaced free becomes
+`if __rbo_<name> { OpFreeRef(v) }`, and it starts FALSE — on entry the buffer is the caller's,
+and a transition site is reachable with no prior assignment at all (`fn g() -> Res { mk(2) }`),
+so an uninitialised slot would release the caller's store.  Minted only for a body that
+actually reaches a displacing site, so nothing else pays a slot.
+
+The same witness makes the LATENT over-free in the mirror direction moot rather than needing
+the hazard proven: at the FIRST assignment of a buffer variable with a non-S1 rhs, codegen's
+`owned_ref` was true and it emitted an UNCONDITIONAL pre-Set `OpFreeRef` on the caller's buffer
+(measured directly — `owned_ref=true s1=false hidbuf=false arg=true` — and never reproduced as
+a fault, because every shape tried has the caller's `__ref_N` still null).  A flag that is
+false until this function mints something cannot free what it did not mint.
+
+Guard: `tests/scripts/1128-a-conditionally-assigned-return-buffer-frees-what-it-displaces.loft`,
+whose loop cell alternates the branch fifty times — the leak is one store per CALL, so a single
+call cannot witness its size, and a fix that simply freed unconditionally would over-free on
+half of them.
 
 ### D-own-17 — OPENED AND CLOSED (2026-08-28): a mint carried the DESTINATION's deps
 
