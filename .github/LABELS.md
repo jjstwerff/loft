@@ -209,13 +209,18 @@ projects, so a find of our own is `hit-by:loft` — not a blank.
 | `hit-by:crawler` | [jjstwerff/crawler](https://github.com/jjstwerff/crawler) | clean-room hex roguelike | the hex library family end to end, renderer-agnostic kernel |
 | `hit-by:routing` | [jjstwerff/routing](https://github.com/jjstwerff/routing) | phone-first route planner | the NON-game axis — big read-only stores, `--native-wasm`, remote/paged stores |
 | `hit-by:zerotrust` | [jjstwerff/zero-trust-shared-files](https://github.com/jjstwerff/zero-trust-shared-files) | federated shared-file system | crypto, recursive enums, text-returning `cdylib` boundaries |
-| `hit-by:planets` | (no public repo) | small consumer | module + `--lib` resolution, package layout |
+| `hit-by:planets` | `loft_planet`, a package inside [hstellingwerff-jpg/Moros-Economy-Development](https://github.com/hstellingwerff-jpg/Moros-Economy-Development) | a loft re-implementation of that project's planet generator, plus the comparator that checks it against the C# original | the PORT axis — numeric parity against another language, and a loft package living inside a non-loft repo, which is what puts `--lib` and module resolution under pressure |
 | `hit-by:loft` | [loft-lang/loft](https://github.com/loft-lang/loft) | the language itself | a nightly gate, a sanitizer, a sweep, a follow-on investigation |
 
 The libraries those consumers import are `loft-lang/loft-libs-*` (world, net, graphics,
 game, assets, core, plugins, docs) plus the registry — a defect surfaced there is still
 labelled by the APPLICATION that ran into it, because that is the project that can
 reproduce it.
+
+Not every consumer is a repo of its own or even under the same owner: `planets` is a
+package inside someone else's project.  That is worth keeping visible rather than
+normalising away, because a loft package that is not the root of its checkout is exactly
+the shape that finds the resolution bugs a standalone one never will.
 
 **This table is the index for ecosystem analysis, not only a label glossary.**  Asking
 *"is loft usable?"* means asking what its consumers hit, and the answer is only readable
