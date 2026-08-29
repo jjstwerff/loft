@@ -300,6 +300,37 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > travel differently: a return dep parametric in the fn-ref argument, or a per-argument
 > re-derivation at the call site.
 
+> **D-clo-12 / D-clo-13 — the static reading was RE-MEASURED against this tree (2026-08-29),
+> and the cure is now decided.**  Setting `published_ret_type`'s `place_tail` unconditionally
+> true — that is, answering the closure question for a JOIN tail as well — makes loft#1186's
+> PRESENT arm clean on both backends and leaks four stores on the ABSENT arm, one per call, on
+> both.  So D-clo-13's claim is not a historical note about the tree it was written on: it
+> holds after loft#1179's runtime free and after loft#1183's hand-up, and no reading of one dep
+> list serves both arms.  loft#1185 is unmoved by that switch (still seven use-after-free reads
+> on both backends), because a forwarding frame's return type is computed once for every
+> caller and carries nothing about the closure its ARGUMENT held.
+>
+> **The cure is the one loft#1186 names, and it is an ABI change rather than a classification
+> fix: the fn-ref call site mints its heap return buffer as a CALLER LOCAL** — the symmetric
+> twin of `push_fnref_text_buffers` / `fnref_text_buffer_vars`, with
+> `Data::fnref_text_buffers`' widest-candidate-then-trim shape as the precedent.  Today the
+> buffer is allocated inside `State::fn_call_ref` at run time, which is why `fnref_bufs` has to
+> track it by frame depth at all.  With a caller local:
+>
+> - the call's RESULT is published as a borrow of that buffer, so a destination local never
+>   adopts whatever store came back — which is what closes both of D-clo-13's arms at once:
+>   the absent arm's fresh store is the buffer (freed at the caller's scope exit) and the
+>   present arm's capture is simply not the caller's to free;
+> - a FORWARDING frame gets the same buffer in its own scope, so `return f(v)` is a return of a
+>   borrow of a local and the existing #306 materialise copies it into the forwarder's own
+>   return buffer — D-clo-12 closes as a consequence, at the cost of one record copy;
+> - `--native`'s dispatch arm stops needing `__vc_hbuf` at all, which is loft#1183's remaining
+>   half.
+>
+> The cost is one heap buffer per fn-ref call site that may receive a heap delivery, and one
+> extra record copy on the forwarding path.  The `&text` half has paid exactly that since
+> loft#1116.
+>
 > **D-clo-13 — OPEN (2026-08-29, loft#1186): a lambda whose tail JOINS a capture with a mint
 > has one dep list for two ownerships.** `fn(n: integer) -> P { cap ?? P { v: -1 } }` hands
 > back the captured record when the subject is present and the call site's own return buffer
