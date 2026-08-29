@@ -2339,9 +2339,31 @@ impl Parser {
             let delivers_a_collection =
                 matches!(def.returned().ret_promo_base(), Type::Vector(_, _))
                     && !self.tail_root_is_a_capture(def);
+            // loft#1188 — a declared `-> S` / record-enum lambda is reserved for too, and for
+            // the reason #675 gave: what pass 1 can classify is not a property of the
+            // SPELLING but of what was RESOLVED when it read the body.  `fn(v: integer) -> P
+            // { q.p }` reserves nothing while `Q.p` is a forward reference — pass 1 types the
+            // tail `Unknown`, so the #306 view materialisation never fires — and pass 2, which
+            // has the resolved field, mints `__ref_1` and grows the arity.  Declaration order
+            // is free in loft, so the two orderings have to compile the same; and the type is
+            // resolved HERE, between the passes, which is the whole reason this sweep exists.
+            //
+            // A record tail rooted in a CAPTURE is included, where the collection one above is
+            // not, and the difference is a fact about the two legs rather than an omission: a
+            // `-> S` return DELIVERS a copy (#306 materialises the view into the buffer), while
+            // `-> vector<…> { q.xs }` hands back the capture's own store and has nothing to
+            // place (loft#1182, `formal/closures.md` D-clo-14).
+            //
+            // A lambda pass 1 already served carries a hidden heap attribute and is skipped by
+            // the guard below, so this cannot mint a second buffer.
+            let delivers_a_record = matches!(
+                def.returned().ret_promo_base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            );
             if def.name().starts_with("n___lambda_")
                 && !self.adopted_ret_defs.contains(&d)
                 && !delivers_a_collection
+                && !delivers_a_record
             {
                 continue;
             }

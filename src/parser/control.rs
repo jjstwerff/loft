@@ -12301,7 +12301,29 @@ impl Parser {
             || a1b_site
             || (ctx.site == RetSite::MidReturn
                 && matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))));
+        // loft#1188 — a LAMBDA whose RECORD buffer was reserved between the passes BINDS to
+        // it instead of renaming onto it.  The placeholder was minted before pass 2 appended
+        // the `__closure` argument, and the work-ref this tail mints comes after BOTH; the
+        // rename retires the placeholder and makes that later var the argument, which puts
+        // the callee's argument slots out of the attribute order the CALL SITE lowers
+        // against.  Measured: `CallRef` wrote the closure into the buffer's slot, the body
+        // read a null closure and every call answered a zeroed record.  Binding keeps the
+        // reserved var, so the geometry is the one a lambda whose types resolved in pass 1
+        // already has.  The collection lambdas #1178 reserves for keep the rename — their
+        // buffer is a `__vdb_N` the desugar mints, and the shape was measured on that path.
+        let lambda_binds_reserved_buffer = !ctx.is_plain_fn
+            && matches!(
+                ctx.ret.ret_promo_base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && self
+                .data
+                .def(self.context)
+                .attr_names
+                .contains_key("__retbuf")
+            && self.vars.var("__retbuf") != u16::MAX;
         if allow_rename
+            && !lambda_binds_reserved_buffer
             && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
         {
             return RetPromotion::Rename {
@@ -12328,7 +12350,7 @@ impl Parser {
             return RetPromotion::SkipJoinArm;
         }
         // loft#938 gate 5 of 5 — the classification that EMITS the delivery into `__retbuf`.
-        if ctx.is_plain_fn
+        if (ctx.is_plain_fn || lambda_binds_reserved_buffer)
             && matches!(
                 ctx.ret.ret_promo_base(),
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)

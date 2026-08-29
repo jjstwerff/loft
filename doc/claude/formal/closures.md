@@ -162,6 +162,35 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-16 — OPENED AND CLOSED (2026-08-29, loft#1188): a declared-RECORD lambda aborted the
+> compiler when the holder struct was declared before its field's type.** `(L-Escape)` promises
+> `g = fn(v: integer) -> P { q.p }` works, and it did — written one way. Moving `struct P` below
+> `struct Q { xs: vector<integer>, p: P }`, a change with no meaning in a language whose
+> declaration order is free, aborted on the two-pass contract: *"grew a pass-2-only attribute
+> `__ref_1`"*.
+>
+> D-clo-15's sentence, one rung out. What pass 1 can classify is a property of what was RESOLVED
+> when it read the body, never of the SPELLING: a field typed by a forward reference is `Unknown`
+> while pass 1 reads the tail, so the #306 view materialisation that gives this lambda its return
+> buffer never fires there, and pass 2 — which has the resolved field — mints the buffer and grows
+> the arity. No predicate over the pass-1 tail can separate the two orderings, because the two
+> passes are not reading the same type. So the reservation goes where every type IS resolved,
+> which is what `reserve_late_return_buffers` exists for (#675), and every declared-record lambda
+> is reserved for.
+>
+> A CAPTURE tail is included here where D-clo-14 excludes it from the collection leg, and the
+> asymmetry is a fact about the two deliveries rather than an oversight: a `-> P` return hands
+> back an owned COPY (#306 materialises the view into the buffer), while `-> vector<…> { q.xs }`
+> hands back the capture's own store and has nothing to place.
+>
+> The reserved buffer is BOUND, not renamed onto, and that half is load-bearing. The placeholder
+> is minted between the passes, before pass 2 appends the `__closure` argument, so renaming the
+> attribute onto the work-ref the tail mints puts the callee's argument slots out of the attribute
+> order the CALL SITE lowers against — measured, `CallRef` wrote the closure into the buffer's slot
+> and every call answered a zeroed record. Guard
+> `tests/scripts/1188-a-declared-record-lambda-gets-its-buffer.loft`, whose cells assert the VALUE
+> for that reason: a fix that only stops the abort still passes an exit-code channel.
+
 > **D-clo-15 — OPENED AND CLOSED (2026-08-29, loft#1178): a declared-collection lambda whose
 > tail pass 2 REPLACES aborted the compiler.** `(L-Escape)` says a closure is an ordinary
 > value that may be stored, passed and returned, and `(L-Apply)` that calling one is a call;
