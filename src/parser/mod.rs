@@ -2469,6 +2469,14 @@ impl Parser {
     /// template in THIS program, so an ordinary `t_<Type>_<fn>` appearing only in pass 2
     /// stays the fatal divergence the guard was built for.
     fn h5_names_a_bound_stub(&self, name: &str) -> bool {
+        // loft#1153 — EXACT, by the marker `Data::bound_stub_name` mints, rather than inferred
+        // from the shape of whatever def the type name happens to resolve to.  A stub whose
+        // holder has a FORWARD-REFERENCED bound is legitimately pass-2-only (`SqlDb.Both` gains
+        // two of its three stubs on pass 2), and the inferential test below could only reach
+        // that by looking the holder up — which the marked name defeats and no longer needs.
+        if crate::data::Data::is_bound_stub_name(name) {
+            return true;
+        }
         let Some((type_name, _)) = Self::h5_split_mangled(name) else {
             return false;
         };
@@ -10279,7 +10287,7 @@ impl Parser {
                 };
             }
             let op_method = format!("Op{}", rename(op));
-            let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, op_method);
+            let stub_name = crate::data::Data::bound_stub_name(&tv_name, &op_method);
             let stub_nr = self.data.def_nr(&stub_name);
             // Only use the T-stub if the CURRENT function's bounds declare this method.
             // Without this check, T-stubs from unrelated bounded generics (e.g., stdlib's
@@ -10316,7 +10324,7 @@ impl Parser {
                 && self.context != u32::MAX
                 && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name))
             {
-                let eq_stub = format!("t_{}{}_OpEq", tv_name.len(), tv_name);
+                let eq_stub = crate::data::Data::bound_stub_name(&tv_name, "OpEq");
                 let eq_nr = self.data.def_nr(&eq_stub);
                 if eq_nr != u32::MAX {
                     let mut eq_code = Value::Null;
@@ -10350,7 +10358,7 @@ impl Parser {
                 && list.len() == 2
                 && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name))
             {
-                let lt_stub = format!("t_{}{}_OpLt", tv_name.len(), tv_name);
+                let lt_stub = crate::data::Data::bound_stub_name(&tv_name, "OpLt");
                 let lt_nr = self.data.def_nr(&lt_stub);
                 if lt_nr != u32::MAX {
                     // SWAPPED: `a <= b` is `!(b < a)`.

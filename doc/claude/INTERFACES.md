@@ -105,6 +105,13 @@ interface Printable {
 `interface` is a new top-level keyword. Each method is a bare signature
 (no body). `Self` is the only type variable allowed inside the interface body.
 
+**A type variable's name is yours to reuse.** A bound's methods are keyed to the
+type VARIABLE, not to the name it is spelled with, so `fn render<T: Printable>` in
+one library and `struct T` in a consumer are unrelated — the consumer keeps its own
+`to_text`, and the library's generic keeps working. Before loft#1153 they shared one
+namespace, so a bound declaring a common method reserved it against every struct
+spelling that variable's name, and neither library author could see it happen.
+
 ### Bounded generic function
 
 ```loft

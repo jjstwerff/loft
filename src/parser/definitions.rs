@@ -3532,6 +3532,10 @@ impl Parser {
         if holder_nr == u32::MAX || holder_name.is_empty() || self.data.def_nr("Self") == u32::MAX {
             return;
         }
+        // loft#1153 — this is the ONE place that knows a definition is a bound HOLDER, so it is
+        // where the durable flag is set.  Every method key for it then takes the stub spelling,
+        // on both passes, whatever its structure looks like at the moment it is asked.
+        self.data.mark_bound_holder(holder_nr);
         for &iface_nr in bounds {
             let children: Vec<u32> = self.data.children_of(iface_nr).collect();
             for child_nr in children {
@@ -3542,8 +3546,7 @@ impl Parser {
                 let Some(method_suffix) = Self::interface_method_name(&self.data, child_nr) else {
                     continue;
                 };
-                let t_stub_name =
-                    format!("t_{}{}_{}", holder_name.len(), holder_name, method_suffix);
+                let t_stub_name = crate::data::Data::bound_stub_name(holder_name, &method_suffix);
                 if self.data.def_nr(&t_stub_name) != u32::MAX {
                     continue; // already created (e.g. multiple bounds share a method)
                 }

@@ -1321,10 +1321,10 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         if d as usize >= self.data.definitions.len() {
             return u32::MAX;
         }
-        let name = self.data.def(d).name();
-        let md = self
-            .data
-            .def_nr(&format!("t_{}{}_OpIndex", name.len(), name));
+        // loft#1153 — a HOLDER's stub and a concrete type's method are spelled differently,
+        // and this site looks up BOTH: `x[0]` reaches here for a bounded type variable and for a
+        // struct defining `OpIndex` alike.  `method_key` is the one home that knows which.
+        let md = self.data.def_nr(&self.data.method_key(d, "OpIndex"));
         if md == u32::MAX || !matches!(self.data.def_type(md), DefType::Function | DefType::Generic)
         {
             return u32::MAX;

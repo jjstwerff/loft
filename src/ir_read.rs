@@ -595,6 +595,7 @@ pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
     let forced = r.field_int(stores, ds::DEF_FORCED_SIZE);
     let synthetic_s = r.field_str(stores, ds::DEF_SYNTHETIC);
     Definition {
+        bound_holder: false,
         variables: read_function(stores, r, ds::DEF_VARIABLES),
         attributes,
         attr_names,
