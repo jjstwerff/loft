@@ -2750,15 +2750,22 @@ impl Parser {
         } else {
             self.mv_field_origin.get(&vec).cloned()
         };
+        //
+        // `vec` is deliberately KEPT — the binding is a real variable and everything below
+        // that reads it (the pre-allocation, and the `vars` lookups under it) needs one; only
+        // the two store-MINTING branches are suppressed, which is the half that was wrong.
+        // Blanking it to `u16::MAX` instead reads as "no variable" to some of those lookups
+        // and panics on `variables[65535]`.
+        let substituted = binding_origin.is_some();
         let mut owned_origin;
         let mut owned_parent;
-        let (val, parent_tp, vec, is_var, is_field) = match binding_origin {
+        let (val, parent_tp, is_var, is_field) = match binding_origin {
             Some((origin, origin_parent)) => {
                 owned_origin = origin;
                 owned_parent = origin_parent;
-                (&mut owned_origin, &mut owned_parent, u16::MAX, false, true)
+                (&mut owned_origin, &mut owned_parent, false, true)
             }
-            None => (val, &mut parent_tp.clone(), vec, is_var, is_field),
+            None => (val, &mut parent_tp.clone(), is_var, is_field),
         };
         let parent_tp: &Type = parent_tp;
         // loft#944 — in pass 1 an element type naming a type declared LOWER in the file is
@@ -2790,7 +2797,7 @@ impl Parser {
         // the initial `=` assignment; calling vector_db again would reset v to an
         // empty record and discard the existing elements.  create_vector handles
         // the `=` re-assignment case by calling vector_db unconditionally.
-        if self.vars.tp(vec).depend().is_empty() {
+        if !substituted && self.vars.tp(vec).depend().is_empty() {
             ls.extend(self.vector_db(in_t, vec));
         }
         // O8.1a: pre-allocate vector capacity when the element count is known
@@ -2817,7 +2824,8 @@ impl Parser {
             }
         }
         ls.extend(self.new_record(val, parent_tp, elm, vec, res, in_t));
-        if !self.first_pass
+        if !substituted
+            && !self.first_pass
             && vec != u16::MAX
             && !self.vars.is_argument(vec)
             && self.vector_needs_db(vec, in_t, is_var)
