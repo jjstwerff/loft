@@ -157,10 +157,12 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **3** (D-own-21, 2026-08-29, the keyed return that can be ABSENT — the half
+OPEN: **4** (D-own-23, 2026-08-29, the CALL-SITE mirror of the Join leak — loft#1154,
+and the residual D-own-22 left; D-own-21, 2026-08-29, the keyed return that can be ABSENT — the half
 D-own-20 left, and the reason loft#1143's guard carries no absent cell; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
 known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+D-own-22 opened and closed 2026-08-29 with loft#1142;
 D-own-20 opened and closed 2026-08-29 with loft#1143;
 D-own-19 was opened 2026-08-28, narrowed the same day to its path-sensitive half (loft#1126)
 and CLOSED the same day with loft#1128; D-own-17 and D-own-18 both opened and closed
@@ -179,6 +181,69 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-23 — OPEN (2026-08-29, loft#1154): the CALL-SITE mirror — a join whose arm is a call
+
+D-own-22's residual, and the same rule from the other side.  A keyed local bound from a JOIN
+whose arm is a fresh-storage CALL retains that call's store:
+
+```loft
+fn mk(k: integer) -> hash<Hr[hk]> { [Hr{hk: k, hv: k * 11}] }
+g = if c { mk(1) } else { mk(2) };     // one store retained per evaluation of a call arm
+```
+
+`OpReplaceKeyed`'s `0x8000` source-free bit is set from `is_struct_returning_call(code)` —
+*is the RHS a call* — and a `Value::If` is not one, so the store the callee minted is copied
+out of and abandoned.  The deep copy itself is correct, which is why this is a pure retention.
+
+Measured against D-own-22 on one program: `origin/main` ×6, the D-own-22 build ×3 — the callee
+half is closed and this half is untouched, which is what says they are two deviations and not
+one.
+
+⚠ **The obvious cure is an OVER-FREE.**  Widening the gate to *"a join whose arms are calls"*
+breaks the mixed shape `if c { mk(1) } else { m }`: on the local arm the source is `m`'s store
+and freeing it takes the caller's collection.  The static bit cannot separate the arms and
+which arm ran is a runtime fact, so this wants loft#1140's @P290 bracket widened to protect
+every arm TERMINAL that is a live local or parameter — not only the ref ARGUMENTS
+`protectable_ref_args` answers for today, since an arm may be a bare local that is nobody's
+argument.  That widening is the design call this entry is open on.
+
+### D-own-22 — OPENED AND CLOSED (2026-08-29, loft#1142): a Join answered the ownership fact per FUNCTION
+
+`(O-Complete)` requires the fact PER BINDING and PER PATH.  `get_free_vars` answered it per
+FUNCTION: `in_ret` suppresses the scope-exit `OpFreeRef` for every member of `return_sources`,
+and a join puts EVERY arm in that set — while at most one arm is the return on any given run.
+A keyed return through a branch join therefore retained the arms that did not run, one store
+per call, growing without bound in a loop.  Values were correct throughout, so only the leak
+channel could score it.
+
+**Two proximate mechanisms, and that is what decides where the cut goes.**  With LITERAL arms
+the untaken arm's `__kvb_N` is allocated before the branch is tested — `scan_if`'s pre-init
+prefix emits `Set(v, Null)` per assigned variable, and for a keyed local that is an
+`OpDatabase` store rather than a cheap null (the same belief loft#1135 was, one prefix over).
+With NAMED-LOCAL arms nothing is pre-inited and it leaks identically.  So removing the
+allocation closes one shape and leaves the other: **the defect is the free.**
+
+Closed by widening loft#1022's runtime leg rather than adding one — hoist the join to
+`__ret_N`, then `OpFreeRefIfDistinct(src, __ret_N)` per owned candidate.  Which arm ran is not
+a static fact and that comparison is the only thing that can decide it.  The record gate asks
+for an arm that is NOT a source, because a record's orphan is the arm that fails to deliver; a
+keyed join orphans with every arm a source, so the keyed gate asks for **an owned keyed source
+plus more than one arm**.  Counting owned sources alone was measured short:
+`if c { x } else { [lit] }` has exactly one and still orphans it on the `x` path.
+
+Guard: `tests/scripts/1142-a-keyed-return-through-a-join-frees-the-arm-that-did-not-run.loft`,
+falsified at `caa35d27` on BOTH backends — 5 leaked store kinds (94 stores) to clean, with
+`exit` and `asserts` reading `0|0` on both trees, which is why the header says the leak is the
+channel that moves.
+
+⚠ **The CALL-SITE mirror is open as loft#1154**, and the same program measures it: `origin/main`
+leaked ×6, this build ×3.  A keyed local bound from a join whose arm is a fresh-storage CALL
+retains that call's store, because `OpReplaceKeyed`'s `0x8000` gate asks *is the RHS a call*
+and a join is not.  Its obvious cure is an over-free — an arm that is a bare local would have
+the caller's store freed — so it needs the @P290 bracket widened to protect arm terminals and
+not only ref arguments.  Found by `scripts/matrix_axes.py` reporting *statement context:
+MISSING if-arm* on this fix's guard; the cell did not exist until the axis tool asked for it.
 
 ### D-own-20 — OPENED AND CLOSED (2026-08-29, loft#1143): the `?` spelling of a keyed return borrowed nothing
 

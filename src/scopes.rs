@@ -5324,6 +5324,52 @@ impl Scopes {
             // And in the loop: only a source THIS function owns.  A source that is
             // itself a borrow carries deps naming what it views, and freeing that would
             // release the CALLER's store — an over-free where the defect is a leak.
+            // loft#1142 — the FOURTH shape, and the one that needed the gate widened rather
+            // than a new leg.  A KEYED return orphans differently from a record one: the
+            // record case above needs an arm that is NOT a source, because that is the arm
+            // whose path leaves the source unreturned.  A keyed join can have EVERY arm a
+            // source and still orphan, because each arm's `__kvb_N` buffer is ALLOCATED
+            // before the branch is tested — `scan_if`'s pre-init prefix emits `Set(v, Null)`
+            // for each, and for a keyed local that is not a cheap null but an `OpDatabase`
+            // store.  Exactly one arm runs; the rest are minted and freed by nobody, one
+            // store per call and unbounded in a loop.  So the condition is *more than one
+            // owned source*, not *an arm that is not a source*, and the leg is the same:
+            // hoist the join to `__ret_N` and let `OpFreeRefIfDistinct` decide at runtime,
+            // which is the only thing that can — which arm ran is not a static fact
+            // (@FR-O-Complete: the ownership fact is per binding and PER PATH, and
+            // `get_free_vars` was answering it per FUNCTION by suppressing every
+            // `return_source` at once).
+            //
+            // Fixing the ALLOCATION instead would close only half of it: the leak
+            // reproduces identically with named locals minted before the `if`
+            // (`m = [..]; p = [..]; if c { p } else { m }`), where no pre-init runs at all.
+            //
+            // The gate needs an owned keyed source AND a way for it not to be returned.
+            // "More than one source" covers the two shapes that actually leak — every arm a
+            // minted buffer, and every arm a named local — while a PARAMETER arm counts
+            // toward that number without being freeable itself: `if c { x } else { [lit] }`
+            // has one owned source and still orphans it on the `x` path, which is the cell
+            // that showed the first version of this gate was short.  `return_has_non_source_arm`
+            // is the record leg's spelling of the same idea and is kept beside it, for an arm
+            // that names no source at all.
+            let owned_keyed_source = |v: u16| {
+                crate::parser::vectors::is_keyed(function.tp(v))
+                    // A source that is itself a BORROW names what it views, and freeing that
+                    // releases the CALLER's store — an over-free where the defect is a leak.
+                    && function.tp(v).depend().is_empty()
+                    // A parameter belongs to the caller and the callee frees none of it.
+                    && !function.is_argument(v)
+            };
+            let keyed_join = crate::parser::vectors::is_keyed(tp.base())
+                && (sources.len() > 1 || return_has_non_source_arm(expr, &sources))
+                && sources.iter().any(|&v| owned_keyed_source(v));
+            if keyed_join {
+                for &v in &sources {
+                    if !null_arm_record_sources.contains(&v) && owned_keyed_source(v) {
+                        null_arm_record_sources.push(v);
+                    }
+                }
+            }
             if matches!(tp.base(), Type::Reference(_, _) | Type::Enum(_, true, _))
                 && return_has_non_source_arm(expr, &sources)
             {
