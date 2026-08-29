@@ -1272,6 +1272,86 @@ pub fn get_topic_sources() -> Vec<TopicSource> {
         .collect()
 }
 
+/// @PLN149 step 8 — the Run / REPL / Debug panel appended to an executed topic page.
+///
+/// The page is a loft program; this is what lets a reader DRIVE it — run it, stop it on a
+/// line, and evaluate expressions against the frame it stopped in, in their own browser.
+/// The behaviour is `doc/loft-panel.js` over the two wasm entries (`debug_start`,
+/// `debug_command`); this is the markup it binds to, plus the page's source for it to run.
+///
+/// The panel ships `hidden` and the script reveals it, so a reader without JavaScript or
+/// without the wasm bundle sees the page exactly as before rather than a dead widget.
+///
+/// The source rides in a `<pre hidden>` and not a `<script>`: a script element's content is
+/// raw text, where an escaped `&lt;` stays four characters in `textContent`, and the panel
+/// would then compile something that is not the program on the page.
+fn panel_html(source: &str) -> String {
+    format!(
+        "<section id=\"loft-panel\" class=\"loft-panel\" hidden>\n\
+         <h2>Run it yourself</h2>\n\
+         <p class=\"lp-note\">This page is a loft program. It runs here, in your browser \u{2014} \
+         press Run, then ask it something.</p>\n\
+         <div class=\"lp-bar\">\
+         <button id=\"lp-run\" disabled>\u{25B6} Run</button>\
+         <button id=\"lp-step\" disabled>Step</button>\
+         <button id=\"lp-resume\" disabled>Resume</button>\
+         <span id=\"lp-status\" class=\"lp-status\">loading\u{2026}</span>\
+         </div>\n\
+         <pre id=\"lp-output\" class=\"lp-output\"></pre>\n\
+         <div id=\"lp-frame\" class=\"lp-frame\" hidden></div>\n\
+         <div id=\"lp-callables\" class=\"lp-callables\" hidden></div>\n\
+         <div class=\"lp-prompt\"><span class=\"lp-caret\">&gt;</span>\
+         <input id=\"lp-input\" type=\"text\" autocomplete=\"off\" spellcheck=\"false\" disabled \
+         placeholder=\"an expression \u{2014} it is evaluated where the program stopped\"></div>\n\
+         <div id=\"lp-log\" class=\"lp-log\"></div>\n\
+         <details class=\"lp-lines\"><summary>Stop on a line</summary>\
+         <ol id=\"lp-src\" class=\"lp-src\"></ol></details>\n\
+         </section>\n\
+         <pre id=\"lp-source\" hidden>{}</pre>\n\
+         <style>{PANEL_CSS}</style>\n\
+         <script type=\"module\" src=\"loft-panel.js\"></script>\n",
+        html_esc(source)
+    )
+}
+
+/// The panel's styling, beside the markup it styles rather than in the shared stylesheet:
+/// every rule here is scoped to `.loft-panel` and exists only where the panel does.
+const PANEL_CSS: &str = "\
+.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}\
+.loft-panel h2{margin-top:0}\
+.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}\
+.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}\
+.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;\
+font-size:0.9em;font-weight:600;cursor:pointer}\
+.loft-panel button:disabled{opacity:0.4;cursor:default}\
+.lp-status{font-size:0.85em;color:#57606a}\
+.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}\
+.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;\
+min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}\
+.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}\
+.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}\
+.lp-locals{display:flex;gap:6px;flex-wrap:wrap}\
+.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}\
+.lp-local:hover,.lp-callable:hover{background:#d0d7de}\
+.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}\
+.lp-prompt{display:flex;gap:6px;align-items:center}\
+.lp-caret{color:#2563eb;font-weight:700}\
+.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;\
+font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}\
+.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}\
+.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}\
+.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}\
+.lp-row.lp-warn .lp-a{color:#9a6700}\
+.lp-lines{margin-top:1em}\
+.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}\
+.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;\
+border-radius:4px;max-height:20em;overflow:auto}\
+.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;\
+white-space:pre;cursor:pointer;padding:0 4px}\
+.lp-line:hover{background:#eaeef2}\
+.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}\
+@media print{.loft-panel{display:none}}";
+
 fn render_doc_page<S: std::hash::BuildHasher>(
     source: &str,
     name: &str,
@@ -1282,7 +1362,8 @@ fn render_doc_page<S: std::hash::BuildHasher>(
     link_map: &HashMap<String, String, S>,
 ) -> String {
     let nav = build_nav(topic_info, stdlib_sections, active);
-    let body = render_topic_body(source, link_map);
+    let mut body = render_topic_body(source, link_map);
+    body.push_str(&panel_html(source));
     // The topic's `@TITLE` is already a hand-written one-liner — exactly what a
     // search result should show — so it is the description rather than a scrape
     // of the first paragraph.

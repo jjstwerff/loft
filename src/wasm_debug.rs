@@ -125,6 +125,7 @@ fn apply(sess: &mut Session, cmd: &str) -> Vec<String> {
                     .state
                     .set_breakpoint_file_line("program.loft", line, data)
                     .is_some(),
+                Err(_) if arg == "end" => break_at_end_of_main(sess),
                 Err(_) => sess.state.set_breakpoint_fn_start(arg, data).is_some(),
             };
             vec![format!("D:{} bp {arg}", if ok { "ok" } else { "err" })]
@@ -190,6 +191,31 @@ fn apply(sess: &mut Session, cmd: &str) -> Vec<String> {
         }
         _ => vec![format!("D:err unknown command {cmd:?}")],
     }
+}
+
+/// Break on the LAST line of `main`, so a run ends paused instead of unwound.
+///
+/// `eval` reads its answer off a live frame, so a prompt against a program that has
+/// finished has nothing to evaluate against — the reader would type `fib(10)` into a
+/// session with no stack.  Pausing on main's last line leaves the frame standing, with
+/// every local main assigned in it, which is the state a REPL wants and the state the
+/// program is in one instruction before it disappears.
+///
+/// Walks the user file's breakable lines from the bottom and takes the first that lands
+/// inside `main` — the scoping matters, because a bare line number matches that line in
+/// every function.  `false` when there is no `main` or it has no breakable line.
+fn break_at_end_of_main(sess: &mut Session) -> bool {
+    let data = &sess.parser.data;
+    let d = data.def_nr("n_main");
+    if d >= data.definitions() {
+        return false;
+    }
+    let mut lines = sess.state.breakable_lines_in_file("program.loft", data);
+    lines.reverse();
+    let data = &sess.parser.data;
+    lines
+        .into_iter()
+        .any(|line| sess.state.set_breakpoint_fn_line(d, line, data).is_some())
 }
 
 /// @PLN98 P3.4 — full-expression eval over the paused frame.  Binds every

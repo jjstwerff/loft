@@ -670,6 +670,7 @@ const SEARCH_INDEX=[
 {name:"hex_roof::eave_spread",kind:"fn",url:"lib-hex_roof-api.html"},
 {name:"hex_roof::RoofFit",kind:"struct",url:"lib-hex_roof-api.html"},
 {name:"hex_roof::roof_plane_fit",kind:"fn",url:"lib-hex_roof-api.html"},
+{name:"hex_roof::roof_ridge_fit",kind:"fn",url:"lib-hex_roof-api.html"},
 {name:"hex_roof::roof_cone_fit",kind:"fn",url:"lib-hex_roof-api.html"},
 {name:"hex_roof::roof_dome_fit",kind:"fn",url:"lib-hex_roof-api.html"},
 {name:"hex_roof::roof_match",kind:"fn",url:"lib-hex_roof-api.html"},

@@ -56,6 +56,7 @@
 <li><a href="#35-testing">Testing your code</a> — <span class="toc-desc">How to write and run tests — a function whose name starts with test.</span></li>
 <li><a href="#36-debugging">Debugging</a> — <span class="toc-desc">Stop your program on a line and look at what it is really doing.</span></li>
 <li><a href="#37-projects">Projects and libraries</a> — <span class="toc-desc">Growing from one file into a package other code can use.</span></li>
+<li><a href="#38-call-it-yourself">Call it yourself</a> — <span class="toc-desc">A page you drive, not one you read</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
@@ -3056,6 +3057,96 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <pre><code>  greeting = <span class="st">"hello, Ada!"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(greeting == <span class="st">"hello, Ada!"</span>, <span class="st">"what greet(\"</span><span class="en">Ada</span>\<span class="st">") returns"</span>);
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(greeting);
+}</code></pre>
+</section>
+<section class="print-section" id="38-call-it-yourself">
+<h1>Call it yourself</h1>
+<p>Every other page here shows you loft.  This one hands it to you. The functions below are compiled and live in the panel at the bottom of the page: type a call, press enter, and loft answers.  Nothing is a transcript — the number you see is the one your browser just computed.</p>
+<h2 id="what-to-try-first">What to try first</h2>
+<p><code>fib(10)</code> is the shortest way to be sure the panel is real.  Change the 10 and the answer changes; ask for <code>fib(30)</code> and you will wait a moment, because this is the naive recursion and it really does make that many calls.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">fib</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  <span class="kw">if</span> n &lt; <span class="nm">2</span> {
+    <span class="kw">return</span> n;
+  }
+  <span class="fn-call">fib</span>(n - <span class="nm">1</span>) + <span class="fn-call">fib</span>(n - <span class="nm">2</span>)
+}</code></pre>
+<h2 id="numbers-with-a-shape">Numbers with a shape</h2>
+<p><code>nth_prime(1)</code> is 2, <code>nth_prime(10)</code> is 29.  Try to guess <code>nth_prime(100)</code> before you ask for it — the primes thin out faster than most people expect.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">is_prime</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {
+  <span class="kw">if</span> n &lt; <span class="nm">2</span> {
+    <span class="kw">return</span> <span class="kw">false</span>;
+  }
+  d = <span class="nm">2</span>;
+  while d * d &lt;= n {
+    <span class="kw">if</span> n % d == <span class="nm">0</span> {
+      <span class="kw">return</span> <span class="kw">false</span>;
+    }
+    d += <span class="nm">1</span>;
+  }
+  <span class="kw">true</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">nth_prime</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  found = <span class="nm">0</span>;
+  candidate = <span class="nm">1</span>;
+  while found &lt; n {
+    candidate += <span class="nm">1</span>;
+    <span class="kw">if</span> <span class="fn-call">is_prime</span>(candidate) {
+      found += <span class="nm">1</span>;
+    }
+  }
+  candidate
+}</code></pre>
+<h2 id="text-goes-in">Text goes in</h2>
+<p><code>vowels("your name here")</code> counts the vowels in whatever you type.  The argument is a text and the answer is a number, which is the shape the panel renders today — see the note at the end of the page.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">vowels</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  n = <span class="nm">0</span>;
+  <span class="kw">for</span> c <span class="kw">in</span> s {
+    <span class="kw">if</span> c == <span class="ch">'a'</span> || c == <span class="ch">'e'</span> || c == <span class="ch">'i'</span> || c == <span class="ch">'o'</span> || c == <span class="ch">'u'</span> {
+      n += <span class="nm">1</span>;
+    }
+  }
+  n
+}</code></pre>
+<h2 id="a-struct-comes-back">A struct comes back</h2>
+<p><code>stats(3, 17)</code> answers <code>{"lo":3,"hi":17,"span":14}</code> — a whole record, rendered as JSON, from one call.  Give it the arguments in the wrong order and it still answers correctly, which is the point of it.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Span</span> {
+  lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  span: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">stats</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Span</span> {
+  lo = <span class="kw">if</span> a &lt; b { a } <span class="kw">else</span> { b };
+  hi = <span class="kw">if</span> a &lt; b { b } <span class="kw">else</span> { a };
+  <span class="en">Span</span> { lo: lo, hi: hi, span: hi - lo }
+}</code></pre>
+<h2 id="pausing-inside-a-run">Pausing inside a run</h2>
+<p>The panel can also stop the program mid-flight.  Click a line number in the code above to set a breakpoint, press Run, and the panel lists the variables that line can see — then the same prompt evaluates against THAT frame, so a call like <code>fib(step)</code> uses the <code>step</code> the paused function is holding.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">walk_to</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  total = <span class="nm">0</span>;
+  step = <span class="nm">0</span>;
+  while step &lt; <span class="kw">limit</span> {
+    step += <span class="nm">1</span>;
+    total += <span class="fn-call">fib</span>(step);
+  }
+  total
+}</code></pre>
+<h2 id="what-the-panel-cannot-do-yet">What the panel cannot do yet</h2>
+<p>An expression whose value is a text or a vector answers <code>&lt;unavailable&gt;</code> rather than a value: the browser evaluator reads a result off the paused frame, and only a number, a character, a boolean or a struct survives that trip (loft#1187).  So <code>vowels("hello")</code> answers 2 and <code>stats(1, 9)</code> answers a record, while a function returning a text does not — which is why every function on this page hands back one of the shapes that works.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>The demonstration comes first and the checks follow it, so a reader who presses Run sees an answer straight away — the panel stops on main's LAST line, and a program whose only print IS that line would pause with nothing shown yet.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"</span>hello\<span class="st">")={vowels(\"</span>hello\<span class="st">")}\n"</span>);</code></pre>
+<p>The page is a real program, so these run on both backends like every other page here, and an example that stops being true stops compiling.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">10</span>) == <span class="nm">55</span>, <span class="st">"fib(10)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">1</span>) == <span class="nm">1</span> &amp;&amp; <span class="fn-call">fib</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"fib base cases"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">nth_prime</span>(<span class="nm">1</span>) == <span class="nm">2</span>, <span class="st">"the first prime is 2"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">nth_prime</span>(<span class="nm">10</span>) == <span class="nm">29</span>, <span class="st">"the tenth prime is 29"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">is_prime</span>(<span class="nm">1</span>) &amp;&amp; <span class="fn-call">is_prime</span>(<span class="nm">2</span>) &amp;&amp; !<span class="fn-call">is_prime</span>(<span class="nm">9</span>), <span class="st">"is_prime edges"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">"hello"</span>) == <span class="nm">2</span>, <span class="st">"hello has two vowels"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">""</span>) == <span class="nm">0</span>, <span class="st">"no text, no vowels"</span>);
+  s = <span class="fn-call">stats</span>(<span class="nm">17</span>, <span class="nm">3</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s.lo == <span class="nm">3</span> &amp;&amp; s.hi == <span class="nm">17</span> &amp;&amp; s.span == <span class="nm">14</span>, <span class="st">"stats orders its arguments"</span>);</code></pre>
+<p>fib(1..4) is 1 + 1 + 2 + 3.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">walk_to</span>(<span class="nm">4</span>) == <span class="nm">7</span>, <span class="st">"walk_to sums the first four"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="00-performance">

@@ -353,12 +353,19 @@ for `bp`, `run`, `eval` and `resume`.
 
 ### What the pages expose
 
-`doc/playground.html` has **one button: ▶ Run.** `doc/examples.js` carries 99 examples — every
-`tests/docs/*.loft` file, folded in by `scripts/build-playground-examples.loft` — and every one
-of them is run-only. The 37 executed language topic pages show their code as static text.
+⚠ **This section describes the state before step 8; it is kept as the measurement that
+motivated it.** `doc/playground.html` has **one button: ▶ Run.** `doc/examples.js` carries 99
+examples — every `tests/docs/*.loft` file, folded in by
+`scripts/build-playground-examples.loft` — and every one of them is run-only. The 37 executed
+language topic pages show their code as static text.
 
 So the capability that most distinguishes loft from a language with a syntax-highlighted
 snippet on a page is built, tested, and invisible.
+
+**Since step 8 it is not.** Each executed topic page carries the panel
+(`doc/loft-panel.js`, markup from `documentation.rs::panel_html`), over
+`debug_start` / `debug_command` in `src/wasm_debug.rs`. `doc/playground.html` is unchanged
+and still the place to EDIT code; the panel is for driving the page in front of you.
 
 ### The design
 
@@ -532,8 +539,13 @@ independently shippable and none blocks the next except where marked.
    `html` and `markdown` are written and verified; `graphics` has one already (with the
    defect above, in a repo currently on an active branch); `stage`, `server` and `web` need
    an environment their examples can be run in and are not written.
-8. **The REPL and debug panel**, plus `38-call-it-yourself.loft`. Independent of 1–7; the
-   only step whose value is not library documentation at all.
+8. ~~**The REPL and debug panel**, plus `38-call-it-yourself.loft`.~~ **Landed.** Every
+   executed topic page carries a Run / REPL / Debug panel driven by two new wasm exports
+   (`debug_start`, `debug_command`) over the debugger's own command grammar, plus
+   `tests/docs/38-call-it-yourself.loft`, the page whose whole purpose is to be driven.
+   Verified in headless Chrome: Run pauses, the frame's locals are listed, `nth_prime(10)`
+   typed at the prompt answers 29, and a click on a source line sets a breakpoint. ⚠ Three
+   things the design got wrong, all found by measuring before building — see below.
 9. **Move the three guides home** — `14-image`, `32-time`, `21-random` — and delete the
    hardcoded delegation lists. Late, because it is pure cleanup, and it is only safe once the
    site renders guides from the library side.
@@ -541,6 +553,39 @@ independently shippable and none blocks the next except where marked.
 
 Steps 1, 2 and 4 are each under a day and together change what a new user experiences more
 than everything below them combined; all three have landed.
+
+**Step 8 was blocked by two defects in the machinery it sits on, and is capped by a third.**
+The design read `src/wasm_debug.rs` and believed its doc comment. Measured instead:
+
+- **The program's own functions were not in scope.** `eval len("abc")` answered 3 and
+  `eval fib(10)` answered `<unavailable>` — the stdlib reachable, the page's own definitions
+  not, which is the inverse of what the panel is for. Every `eval` compiles through
+  `parse_str`, which resolves under `STD_SOURCE`; the program had been parsed through
+  `parse_source`, which registers it under its own. One line. The NATIVE debugger never had
+  this, and that contrast is what said the code was wrong rather than the claim.
+- **A failed eval ended the session.** One expression that did not evaluate left its
+  half-parsed definition behind and did not advance the name counter, so every later eval
+  collided with the wreck — a REPL a reader ends with their first typo.
+- **A `text` or `vector` result cannot be read at all** (loft#1187). A scalar works and a
+  struct works (`stats(3,17)` → `{"lo":3,"hi":17,"span":14}`); a text does not, and all three
+  routes to making it work corrupt the store, so `<unavailable>` is the *safe* answer. This
+  is the ceiling on the panel, and it is why `38-call-it-yourself.loft` has `vowels(s) ->
+  integer` where the design named `caesar(s, k) -> text`, and `nth_prime(n) -> integer`
+  where it named `primes_below(n) -> vector`. The panel says so when it happens rather than
+  letting it read as a typo.
+
+**And the auto-pause is one statement earlier than the design assumed.** *"Run auto-pauses at
+the end of `main` before the frame unwinds"* — there is no breakpoint AFTER a function's last
+statement, so `bp end` stops ON main's last line, before it runs. Everything main assigned is
+live, which is what the prompt needs; but a program whose only `print` IS that last line
+pauses with no output shown, which is why page 38 prints first and asserts after. Resume
+finishes it.
+
+**The panel drives the page's whole program, not each code block.** The design said *"every
+code block on a doc page becomes drivable"*; a topic page's blocks are fragments of ONE `.loft`
+file and the session is per program, so the panel runs the page and its line breakpoints
+address the page. Measured: 38 of the 39 topic pages start a session (`31-ref-forward` `use`s
+a library the browser build cannot resolve, and its panel says so).
 
 **Step 5 is cheaper than this document assumed.** The registry index carries each version's
 full `api` array — every `pub` signature *with its doc comment*, re-derived from source by

@@ -150,3 +150,50 @@ fn debug_command_without_a_session_says_so() {
     let r = loft::wasm_debug::debug_command("run");
     assert!(r.contains("no session"), "answers without a session: {r}");
 }
+
+/// @PLN149 step 8 — the panel session against the REAL wasm module.
+///
+/// [`debug_session_json_surface`] above checks the grammar and the values natively, and
+/// cannot check the one field that exists only in a wasm build: `output`. Print is captured
+/// by `crate::wasm::output_push`, compiled in only under the `wasm` feature, so natively
+/// that field is present and always empty — a regression that stopped a page's output
+/// reaching its panel would pass every native test in this file. `tools/doc_panel_check.mjs`
+/// runs the same session against the built module and asserts the output arrives.
+///
+/// Skips (exit 2) when the package is not built or predates the two exports, the same way
+/// [`wasm_compile_and_run_smoke`] does: not having built it is not a wrong answer.
+#[test]
+fn doc_panel_session_runs_on_wasm() {
+    if !std::path::Path::new("tests/wasm/pkg/loft.js").exists() {
+        println!("SKIP doc_panel_session_runs_on_wasm — WASM package not built");
+        println!(
+            "     Run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm"
+        );
+        return;
+    }
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        println!("SKIP doc_panel_session_runs_on_wasm — node not in PATH");
+        return;
+    }
+    let out = std::process::Command::new("node")
+        .arg("tools/doc_panel_check.mjs")
+        .output()
+        .expect("failed to launch node");
+    if out.status.code() == Some(2) {
+        println!(
+            "SKIP doc_panel_session_runs_on_wasm — {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "the doc panel session failed on wasm:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
