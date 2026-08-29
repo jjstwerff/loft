@@ -2312,19 +2312,40 @@ impl Parser {
     /// A bare `Var` tail is where that measurement puts the line, and
     /// [`var_is_mint`](Self::var_is_mint)'s @FR-O-Proxy reading is what puts it there — the
     /// same view that keeps the two passes agreeing about an owned literal.
-    fn body_mints_its_return(def: &crate::data::Definition) -> bool {
+    fn body_mints_its_return(&self, def: &crate::data::Definition) -> bool {
         let Value::Block(bl) = def.code() else {
             return true;
         };
         let Some(tail) = bl.operators.last() else {
             return false;
         };
-        match tail.unspan() {
-            Value::Var(v) => {
-                let vars = def.variables();
-                vars.is_compiler_generated(*v) && vars.owns_store(*v)
+        let (get_field, get_vector) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+        );
+        let vars = def.variables();
+        // A PLACE — a bare slot, or a field / element read out of one — is not a mint: the
+        // store belongs to whatever the chain is rooted at.  `{ q.xs }`, a captured struct's
+        // vector field, is the shape that made the field arm necessary: its tail is not a
+        // `Var`, so a bare-`Var` test reserved a buffer the body never fills, and
+        // `--native`'s dispatch allocates one per call and frees it only when the candidate's
+        // return deps do not name it — which they do, because the buffer exists.
+        let mut node = tail.unspan();
+        loop {
+            match node {
+                // `TupleGet` is the same notion in its other spelling — a projection that
+                // names its base directly rather than through an op — and a walk reading only
+                // the call form calls a tuple-member tail a mint.  @FR-O-Proxy is about the
+                // NOTION, not about which node carries it.
+                Value::Var(v) | Value::TupleGet(v, _) => {
+                    return vars.is_compiler_generated(*v) && vars.owns_store(*v);
+                }
+                Value::Call(d, args) if *d == get_field || *d == get_vector => match args.first() {
+                    Some(base) => node = base.unspan(),
+                    None => return true,
+                },
+                _ => return true,
             }
-            _ => true,
         }
     }
 
@@ -2383,7 +2404,7 @@ impl Parser {
             if def.name().starts_with("n___lambda_")
                 && !self.adopted_ret_defs.contains(&d)
                 && !(matches!(def.returned().ret_promo_base(), Type::Vector(_, _))
-                    && Self::body_mints_its_return(def))
+                    && self.body_mints_its_return(def))
             {
                 continue;
             }
@@ -11264,27 +11285,71 @@ impl Parser {
     /// rode the buffer, so no delivery was emitted and the store
     /// `fn_call_ref` allocates at runtime leaked on both backends.  Convert
     /// exactly as plain calls do (`call_dependencies`): map visible-param
-    /// indices through the actual argument types; out-of-range (hidden /
-    /// grown) indices drop — the adaptive fn-ref ABI allocates those buffers
-    /// at runtime, so the value arrives OWNED.
-    fn fnref_result_type(ret: Type, types: &[Type]) -> Type {
+    /// indices through the actual argument types.
+    ///
+    /// **An index naming no visible argument names the CLOSURE, and `fn_var` is where the
+    /// caller can reach it** (loft#1180).  Dropping those indices outright — on the stated
+    /// grounds that the fn-ref ABI allocates such buffers at runtime, *"so the value arrives
+    /// OWNED"* — is true of a hidden work buffer and false of `__closure`, which is the
+    /// CALLER's own record.  A lambda handing back what it captured then read as owned, so
+    /// the bind ADOPTED the capture and scope exit released it: the captured variable
+    /// answered EMPTY from the second call onward, on both backends, with nothing saying so.
+    /// This is loft#1114's sentence in a third position — *a dep dropped as uninteresting is
+    /// not a dep that was never there.*
+    ///
+    /// Only for a fn-ref that CAPTURES, which is what `fn_var` carries: a non-capturing slot
+    /// has no closure record to borrow from, so its dropped indices really are the runtime
+    /// buffers and dropping them is right.  The predicate is sound HERE, where the fn-ref is
+    /// a caller LOCAL whose type was inferred at the bind and whose deps therefore name the
+    /// closure — it is inert one frame down, where the same slot is a parameter with a
+    /// DECLARED fn-type that carries no deps whatever is passed (loft#1176 measured that).
+    ///
+    /// ⚠ **And only for a COLLECTION return, which is where the capture actually crosses.**
+    /// A struct, record-enum or text return is materialised into a fresh copy before it
+    /// leaves the callee, so `fn(i: integer) -> P { cap }` hands the caller its own record
+    /// and is correct as it stands; a collection return hands back the STORE.  Without that
+    /// restriction the dep is a pure over-approximation and it costs: the out-of-range index
+    /// is `__closure` for `{ cap }` and `{ q.xs }` AND for `{ sr_make(k) }`, whose result is
+    /// a fresh store built from a captured value, so a dep-index test alone cannot separate
+    /// them and reading it as a borrow leaks every struct-returning capturing lambda —
+    /// eleven stores of them in `717-closure-struct-return.loft`.
+    /// `v_nr` when it holds a CAPTURING fn-ref, and `None` otherwise — the closure a
+    /// [`fnref_result_type`](Self::fnref_result_type) dep can name.
+    ///
+    /// The fn-ref TYPE's own deps are exactly the capture question, and they mean it in this
+    /// position: a caller local's fn-type was INFERRED at the bind, so a capturing lambda
+    /// leaves the closure record in them and a non-capturing one leaves them empty.
+    fn capturing_fnref_var(vars: &crate::variables::Function, v_nr: u16) -> Option<u16> {
+        matches!(vars.tp(v_nr).base(), Type::Function(_, _, d) if !d.is_empty()).then_some(v_nr)
+    }
+
+    fn fnref_result_type(ret: Type, types: &[Type], fn_var: Option<u16>) -> Type {
+        let visible = |d: &Deps| Deps::frame(Self::resolve_deps(types, d.as_attr_indices()));
+        // The CLOSURE half, and only for a collection return.  A struct, record-enum or text
+        // return is MATERIALISED into a fresh copy before it leaves the callee — `{ cap }` at
+        // `-> P` hands the caller its own record and is correct as it stands — while a
+        // collection return hands back the STORE, so the capture itself crosses the boundary
+        // and the caller must not take it.
+        let borrows_closure = |d: &Deps| {
+            fn_var.is_some()
+                && d.as_attr_indices()
+                    .iter()
+                    .any(|a| *a as usize >= types.len())
+        };
         match ret {
-            Type::Text(d) => {
-                Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
+            Type::Text(d) => Type::Text(visible(&d)),
+            Type::Vector(to, d) => {
+                let mut out = Self::resolve_deps(types, d.as_attr_indices());
+                if borrows_closure(&d)
+                    && let Some(v) = fn_var
+                    && !out.contains(&v)
+                {
+                    out.push(v);
+                }
+                Type::Vector(to, Deps::frame(out))
             }
-            Type::Vector(to, d) => Type::Vector(
-                to,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            ),
-            Type::Reference(to, d) => Type::Reference(
-                to,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            ),
-            Type::Enum(to, true, d) => Type::Enum(
-                to,
-                true,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            ),
+            Type::Reference(to, d) => Type::Reference(to, visible(&d)),
+            Type::Enum(to, true, d) => Type::Enum(to, true, visible(&d)),
             other => other,
         }
     }

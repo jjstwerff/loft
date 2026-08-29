@@ -1401,7 +1401,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 39 | **6** | 33 |
+| 40 | **7** | 33 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -2291,7 +2291,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 656 | 295 | 5 | **356** |
+| 657 | 296 | 5 | **356** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -4038,6 +4038,24 @@ on both backends, and three of them were not clean.
   now and still refused, because `--native` cannot COMPILE the widened shape (the map desugar
   declares `var__map_result_1` inside the comprehension block and `ref_return` returns it from
   outside), and one backend accepting what the other refuses is worse than both refusing.
+- **loft#1180 — CLOSED, and the report it started from was measuring the wrong channel.**  A
+  lambda handing back a captured COLLECTION had its capture ADOPTED by the caller's bind and
+  released at scope exit: the captured variable answered EMPTY from the second call onward, on
+  both backends.  `fnref_result_type` drops a return-dep index naming no visible argument, on
+  the grounds that *"the value arrives OWNED"* — true of a hidden work buffer, false of
+  `__closure`, which is the caller's own record.  Third position for loft#1114's sentence.
+  ⚠ **It was filed as a LEAK because the probe called the lambda INLINE.**  Nothing binds an
+  inline result, so nothing adopts it, and the wrong answer cannot appear —
+  [[print-inside-the-loop-is-vacuous]]'s lesson from the other side: the SPELLING a probe uses
+  decides which channel can move, and a leak channel that moves is not evidence that the value
+  channel is clean.  The cell that scores it binds, in a loop, and reads the capture back.
+  ⚠ **And the repair had to be narrowed TWICE, both times against a measured cost.**  A
+  dep-index test alone cannot separate `{ cap }` from `{ sr_make(k) }` — a fresh store built
+  FROM a captured value carries the same out-of-range index — so restricting to a CAPTURING
+  slot was not enough and the second restriction is the type former: a struct, record-enum or
+  text return is materialised into a fresh copy before it leaves, so only a COLLECTION return
+  hands the capture across.  Without that, eleven stores leak in
+  `717-closure-struct-return.loft`, which is the guard that caught it.
 
 ⚠ **And one measurement that read as a fourth and was not.** The `T = struct` fn-ref cell first
 looked like a pre-existing leak, because the "twin" beside it leaked too — but that twin applied

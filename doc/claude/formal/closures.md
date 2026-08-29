@@ -94,9 +94,9 @@ with the closure's environment in scope.
 
 OPEN: **1** — a lambda's `??`-default store discarded INLINE leaks one store per call
 (D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed).
-D-clo-9 — a captured record FREED
-by a caller that lifted a fn-ref tail — and D-clo-8 — a captured `vector<(…)>` unpacked
-rather than shared — were opened and closed on 2026-08-29 and 2026-08-28. Closed: both
+D-clo-10 — a captured collection TAKEN by the caller's bind — D-clo-9 — a captured record
+FREED by a caller that lifted a fn-ref tail — and D-clo-8 — a captured `vector<(…)>` unpacked
+rather than shared — were opened and closed on 2026-08-29, 2026-08-29 and 2026-08-28. Closed: both
 lambda forms capture identically (D-clo-1), the
 stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
 2026-07-04 —
@@ -144,6 +144,44 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-10 — OPENED AND CLOSED (2026-08-29, loft#1180): a captured COLLECTION was TAKEN by
+> the caller's bind.** `(L-CapHeap)` says a captured heap value is SHARED — the caller may read
+> it, never take it. `r = g(7)` on `g = fn(v: integer) -> vector<integer> { cap }` adopted the
+> store and released it at scope exit, so `cap` answered EMPTY from the second call onward, on
+> both backends, with nothing saying so.
+>
+> `fnref_result_type` maps a fn-ref call's return deps through the caller's actual arguments
+> and DROPPED any index naming no visible one, on the stated grounds that *"the adaptive fn-ref
+> ABI allocates those buffers at runtime, so the value arrives OWNED"*. That is true of a
+> hidden work buffer and false of `__closure`, which is the CALLER's own record — D-clo-7's
+> sentence one more time, *a dep dropped as uninteresting is not a dep that was never there*,
+> in a third position after the `??`-lift (loft#1114) and the fn-ref tail (loft#1176). The
+> dropped index now becomes a dep on the fn-ref VARIABLE, which is where the caller reaches
+> its closure.
+>
+> Two restrictions, both measurements rather than caution:
+>
+> - only for a CAPTURING slot, read off the fn-ref TYPE's own deps. That predicate means what
+>   it says HERE, where the slot is a caller local whose type was INFERRED at the bind; it is
+>   inert one frame down, where the same slot is a parameter with a DECLARED fn-type
+>   (loft#1176 measured that, and the two entries are the same predicate seen from both sides).
+> - only for a COLLECTION return. A struct, record-enum or text return is MATERIALISED into a
+>   fresh copy before it leaves the callee, so `fn(i: integer) -> P { cap }` hands the caller
+>   its own record and was always right. Without that restriction the dep is a pure
+>   over-approximation, and the cost is measured: the out-of-range index is `__closure` for
+>   `{ cap }` AND for `{ sr_make(k) }`, whose result is a FRESH store built from a captured
+>   value, so no dep-index test can separate them — reading it as a borrow leaks every
+>   struct-returning capturing lambda, eleven stores of them in
+>   `717-closure-struct-return.loft`.
+>
+> ⚠ The captured-FIELD spelling (`{ q.xs }`) answers correctly now and still LEAKS one store
+> per call on `--native` — loft#1182, a different mechanism: `ref_return` promotes the borrowed
+> local into the return attribute, so the callee declares it delivers through a buffer it then
+> ignores. The INLINE spelling was correct throughout, which is why this was first filed as a
+> leak — nothing binds the result, so nothing adopts it.
+>
+> Guard: `tests/scripts/1180-a-captured-collection-is-not-the-callers-to-take.loft`.
 
 > **D-clo-9 — OPENED AND CLOSED (2026-08-29, loft#1176): a captured record was FREED by a
 > caller that lifted a fn-ref tail.** `(L-CapHeap)` says a captured heap value is SHARED, and

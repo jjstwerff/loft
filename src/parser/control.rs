@@ -13533,8 +13533,13 @@ impl Parser {
                     && param_types.is_empty()
                 {
                     // @PLN85 L1 — callee-attr-space deps must not leak into the
-                    // caller (see `fnref_result_type`).
-                    let ret_type = Box::new(Self::fnref_result_type(*ret_type, &[]));
+                    // caller (see `fnref_result_type`), and an index naming no visible
+                    // argument names the closure this slot carries (loft#1180).
+                    let ret_type = Box::new(Self::fnref_result_type(
+                        *ret_type,
+                        &[],
+                        Self::capturing_fnref_var(&self.vars, v_nr),
+                    ));
                     // P227: a text-returning fn-ref call carries its target's `&text`
                     // work buffers at caller-function scope, because a `&text` is a
                     // pointer into the CALLER's frame — the callee cannot conjure one
@@ -14153,8 +14158,13 @@ impl Parser {
         };
         // @PLN85 L1 — callee-attr-space deps must not leak into the caller
         // (see `fnref_result_type`): map visible-param deps through the actual
-        // argument types, drop hidden/grown indices (the value arrives OWNED).
-        let ret_type = Box::new(Self::fnref_result_type(*ret_type, types));
+        // argument types; an index naming no visible argument names the closure this slot
+        // carries, and only a CAPTURING slot has one (loft#1180).
+        let ret_type = Box::new(Self::fnref_result_type(
+            *ret_type,
+            types,
+            Self::capturing_fnref_var(&self.vars, v_nr),
+        ));
         // P227 — see the zero-argument twin above: the call site pushes the widest
         // candidate's `&text` buffer count and the dispatcher pops the excess, because a
         // `&text` points into the CALLER's frame and only the caller can supply one that
