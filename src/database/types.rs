@@ -279,51 +279,46 @@ impl Stores {
         }
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &self.types[structure as usize].parts
         {
-            // only link fields that are indexing types (sorted, hash, index),
-            // not plain vectors. Two vector<integer> fields must NOT be linked —
-            // inserting into one must not propagate to the other.
-            // A trie and a spatial are keyed collections like the rest, so they join a
-            // group on the same terms (loft#927).  Leaving them out did not refuse the
-            // pairing — it silently built a SECOND, independent collection: records put
-            // in through `data` were not in `look`, and nothing said so.  The kinds
-            // already worked as group MEMBERS; what was missing was only the test that
-            // forms the group, which is why `trie` first and `sorted` second did link.
+            // @FR-Col-Group — the pairing test, and the one place a group is FORMED.
             //
-            // ⚠ The test is *"is the field being ADDED a keyed kind"*, which makes group
-            // formation depend on DECLARATION ORDER: `vector` then `sorted` links, and
-            // `sorted` then `vector` links nothing at all — the keyed field arrives first
-            // and finds no sibling, then the vector arrives and never runs the search.
-            // That asymmetry is pinned as the scope by `901-linked-group-fill.loft` c1
-            // ("a plain `vector` as the SECOND field is NOT linked"), so widening it is a
-            // decision and not a fix, and it is filed rather than taken here (loft#1152's
-            // second half). The reason the pin gives — *"widening that to any collection
-            // would make two independent vectors alias"* — is not what a both-sides test
-            // would do, since two vectors are still two non-keyed kinds; but c2 next to it
-            // shows this file has pinned a missing-shape defect as a boundary once already.
-            let is_index_type = Self::is_group_kind(&self.types[content as usize].parts);
-            if is_index_type {
-                for (f_nr, f) in fld.iter().enumerate() {
-                    let fld_content = self.content(f.content);
-                    if fld_content != u16::MAX && fld_content == self.content(content) {
-                        if others.is_empty() {
-                            // Leading `u16::MAX` marks this field as a VIEW of
-                            // records another field also holds — read by the
-                            // JSON walker to skip default-initialising it. It is
-                            // a marker, not a link, and everything that walks
-                            // this list skips it.
-                            others.push(u16::MAX);
-                        }
-                        // Link BOTH ways. Only the earlier-declared field used to
-                        // point at the later one, so which collection maintained
-                        // the others depended on DECLARATION ORDER: an insert
-                        // spelled through the second field reached only that
-                        // field, and said nothing. Two keyed collections over one
-                        // element type are two VIEWS of one set — neither
-                        // spelling is the privileged one (loft#843).
-                        others.push(f_nr as u16);
-                        linked.insert(f_nr as u16, fld.len() as u16);
-                    }
+            // The question is asked of the PAIR: two collections over one element type are
+            // one record set as soon as EITHER of them is a keyed kind.  Two plain vectors
+            // are not — inserting into one must not propagate to the other — and that
+            // control is what the keyed test is for, not the declaration order.
+            //
+            // Asking it only of the field being ADDED made the group depend on which
+            // member came first: `{ data: vector<E>, look: sorted<E[k]> }` was one record
+            // set and `{ look: sorted<E[k]>, data: vector<E> }` was two independent
+            // collections, because the keyed field arrived first and found no sibling and
+            // the vector then arrived and never ran the search.  Both spellings say the
+            // same thing, so both must mean the same thing (loft#1158).  It is the one-way
+            // `others` link below (loft#843) one level up, and the missing `trie`/`spatial`
+            // kinds (loft#927) one level over: every one of the three failed SILENTLY, by
+            // building a second collection whose `len` is a legal `0`.
+            let new_is_keyed = Self::is_group_kind(&self.types[content as usize].parts);
+            for (f_nr, f) in fld.iter().enumerate() {
+                let fld_content = self.content(f.content);
+                if fld_content == u16::MAX || fld_content != self.content(content) {
+                    continue;
                 }
+                if !new_is_keyed && !Self::is_group_kind(&self.types[f.content as usize].parts) {
+                    continue;
+                }
+                if others.is_empty() {
+                    // Leading `u16::MAX` marks this field as a VIEW of records
+                    // another field also holds — read by the JSON walker to skip
+                    // default-initialising it. It is a marker, not a link, and
+                    // everything that walks this list skips it.
+                    others.push(u16::MAX);
+                }
+                // Link BOTH ways. Only the earlier-declared field used to point at
+                // the later one, so which collection maintained the others depended
+                // on DECLARATION ORDER: an insert spelled through the second field
+                // reached only that field, and said nothing. Two keyed collections
+                // over one element type are two VIEWS of one set — neither spelling
+                // is the privileged one (loft#843).
+                others.push(f_nr as u16);
+                linked.insert(f_nr as u16, fld.len() as u16);
             }
         }
         if let Parts::Struct(s) | Parts::EnumValue(_, s) = &mut self.types[structure as usize].parts

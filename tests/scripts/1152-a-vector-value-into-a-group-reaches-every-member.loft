@@ -28,13 +28,13 @@
 // what makes the duplicate-key case (`+=` the same rows twice) checkable at all without
 // deciding here what a keyed view should do with a repeated key.
 //
-// ⚠ **The CONTROLS are the scope, and one of them is a pinned boundary.**  `cf_two_vectors`
-// pins that two `vector` fields over one element type never link — inserting into one must
-// not propagate to the other.  `cf_vector_second` pins the neighbouring case that this fix
-// deliberately does NOT change: a plain `vector` declared AFTER a keyed member is not a
-// group member at all (`901-linked-group-fill.loft` c1), so its `0` here is the documented
-// answer and not this defect.  Widening that is a decision about group FORMATION, filed
-// separately; every cell above it is a group that already exists.
+// ⚠ **`cf_two_vectors` is the CONTROL that carries the scope.**  Two `vector` fields over one
+// element type never link — inserting into one must not propagate to the other — and that is
+// what keeps "at least one member is keyed" the rule rather than "the contents match".
+// `cf_vector_second` is the same whole-value route spelled through a group whose vector is
+// declared SECOND; it read `0` while group FORMATION still depended on declaration order,
+// which was a separate defect in a separate place (@FR-Col-Group, loft#1158, guarded by
+// `1158-a-group-forms-whichever-member-is-declared-first.loft`).
 //
 // @falsified-at: f26b708a — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native exit 1 -> 0, native 1 assertion failures -> 0
 
@@ -138,12 +138,15 @@ fn main() {
   assert(len(cg_f1.cg_a) == 1 && len(cg_f1.cg_b) == 0,
     "cf_two_vectors: a={len(cg_f1.cg_a)} b={len(cg_f1.cg_b)} — inserting into one must not reach the other");
 
-  // ---- CONTROL: a plain vector declared AFTER a keyed member is not a member ------
-  // The pinned boundary (901 c1).  `0` is the documented answer here, not this defect;
-  // changing it is a decision about group FORMATION and is filed separately.
+  // ---- a plain vector declared AFTER a keyed member is a member too ---------------
+  // The whole-value route this file is about, spelled through the member the group used
+  // to be blind to: membership is a fact about the PAIR, not about declaration order
+  // (@FR-Col-Group, loft#1158).  This cell read `1/0` and was pinned here as the
+  // boundary; the order-independence guard is
+  // `1158-a-group-forms-whichever-member-is-declared-first.loft`.
   cg_f2 = CgVSec { }; cg_f2.cg_d = cg_rowse();
-  assert(len(cg_f2.cg_d) == 1 && len(cg_f2.cg_look) == 0,
-    "cf_vector_second: d={len(cg_f2.cg_d)} view={len(cg_f2.cg_look)} — pinned as NOT a group (901 c1)");
+  assert(len(cg_f2.cg_d) == 1 && len(cg_f2.cg_look) == 1,
+    "cf_vector_second: d={len(cg_f2.cg_d)} view={len(cg_f2.cg_look)} — the vector is a member in either order");
 
   println("1152 ok");
 }

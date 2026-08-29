@@ -37,13 +37,16 @@
 // could not fail. Rows a1/a4 are the two ends of that: a1 has no vector or sorted
 // member at all, a4 has no hash or index one.
 //
-// The controls carry the scope. c1 pins that a plain `vector` as the SECOND field is
-// NOT linked — the group forms off the KEYED field being declared, and widening that
-// to any collection would make two independent vectors alias. c2 is the other side of
-// that same rule: a `trie` second field IS keyed, so it joins the group. It used to
-// read 0 here, and this file pinned that as the scope — which was the defect, not the
-// boundary: a trie was simply missing from the test that forms a group, so the pairing
-// compiled and silently gave two independent collections (loft#927). c3 pins a LONE
+// The controls carry the scope. c1 pins that a plain `vector` as the SECOND field IS a
+// group member: membership is a fact about the PAIR, so the same two fields mean the
+// same thing in either order (@FR-Col-Group). This cell read `0` and this file pinned
+// that as the boundary, on the reasoning that widening the test to any collection would
+// make two independent vectors alias — which a BOTH-SIDES test does not do, since two
+// vectors are still two non-keyed kinds (loft#1158; the aliasing control it names lives
+// in `1158-a-group-forms-whichever-member-is-declared-first.loft`). c2 is the same
+// mistake one kind over: a `trie` second field IS keyed, so it joins the group. It too
+// used to read 0 here and was pinned as the scope — the defect, not the boundary, since
+// a trie was simply missing from the test that forms a group (loft#927). c3 pins a LONE
 // hash, which must keep packing its entries into the arena (@PLN135 arc H): a fix that
 // made every hash allocate one record per entry would pass every row above and
 // silently give back that plan's win.
@@ -122,11 +125,11 @@ fn main() {
   tally(kb2, nb2, "b2 second sorted", 2, len(b2.b));
   tally(kc2, nc2, "b2 third sorted", 2, len(b2.c));
 
-  // ---- c1: a plain vector as the SECOND field is not a group member -------------
+  // ---- c1: a plain vector as the SECOND field IS a group member ----------------
   c1 = HV { a: [], b: [] };
   c1.a = [E7{k:1,n:"alpha"}, E7{k:2,n:"beta"}];
   assert(len(c1.a) == 2, "c1 hash len = {len(c1.a)}, want 2");
-  assert(len(c1.b) == 0, "c1 vector len = {len(c1.b)}, want 0 — a plain vector is not auto-linked");
+  assert(len(c1.b) == 2, "c1 vector len = {len(c1.b)}, want 2 — a group is order-independent");
 
   // ---- c2: a trie IS a group member, like every other keyed kind ---------------
   c2 = ST { a: [], b: [] };
