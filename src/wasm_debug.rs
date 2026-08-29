@@ -32,6 +32,10 @@ struct Session {
     done: bool,
     /// Names each synthetic eval fn (`__eval_<n>`) uniquely across evals.
     counter: u32,
+    /// The first definition index belonging to the PROGRAM rather than the stdlib.
+    /// The stdlib is parsed first, so everything from here on is the reader's own code —
+    /// which is what `fns` has to list and what the panel offers to call.
+    user_from: u32,
 }
 
 thread_local! {
@@ -53,15 +57,30 @@ thread_local! {
 /// what makes the definitions in scope.
 #[must_use]
 pub fn start(program_src: &str) -> bool {
+    start_reporting(program_src).is_ok()
+}
+
+/// [`start`], with the diagnostics on failure instead of a bare `false`.
+///
+/// A page that offers a REPL over the code in front of the reader has to say WHY the code
+/// did not compile — "it didn't work" is not something a reader can act on. The bool form
+/// stays for the callers that only branch on it.
+///
+/// # Errors
+/// The parse diagnostics, rendered, when the stdlib or the program does not compile.
+pub fn start_reporting(program_src: &str) -> Result<(), String> {
     let mut p = Box::new(crate::parser::Parser::new());
     for (name, content) in crate::stdlib_sources::STDLIB_SOURCES {
         if !p.parse_source(content, name, true) {
-            return false;
+            return Err(format!(
+                "the bundled standard library ({name}) did not compile"
+            ));
         }
     }
+    let user_from = p.data.definitions();
     p.parse_str(program_src, "program.loft", false);
     if p.diagnostics.level() >= crate::diagnostics::Level::Error {
-        return false;
+        return Err(p.diagnostics.to_string());
     }
     crate::scopes::check(&mut p.data);
     let mut state = Box::new(State::new(p.database.clone()));
@@ -76,9 +95,10 @@ pub fn start(program_src: &str) -> bool {
             started: false,
             done: false,
             counter: 0,
+            user_from,
         });
     });
-    true
+    Ok(())
 }
 
 /// Apply one `D!:`-stripped control command to `sess`, returning the `D:` replies
@@ -95,9 +115,36 @@ fn apply(sess: &mut Session, cmd: &str) -> Vec<String> {
     // Disjoint borrows: `state` and `parser` are separate fields.
     let data = &sess.parser.data;
     match verb {
+        // `bp <fn>` names a function; `bp <line>` names a line of the program, which is
+        // what a gutter click in a browser panel has to send — it knows where the reader
+        // clicked and not which function that is inside.  A loft function name cannot
+        // start with a digit, so the two forms cannot be confused.
         "bp" if !arg.is_empty() => {
-            let ok = sess.state.set_breakpoint_fn_start(arg, data).is_some();
+            let ok = match arg.parse::<u32>() {
+                Ok(line) => sess
+                    .state
+                    .set_breakpoint_file_line("program.loft", line, data)
+                    .is_some(),
+                Err(_) => sess.state.set_breakpoint_fn_start(arg, data).is_some(),
+            };
             vec![format!("D:{} bp {arg}", if ok { "ok" } else { "err" })]
+        }
+        // The program's own callable functions, so a REPL panel can say what there is to
+        // call instead of leaving the reader to scroll up and guess.  Drawn from the
+        // definitions the PROGRAM added (everything after the stdlib), rendered through
+        // `api_surface::signature_of` — the same spelling `loft api` and the LSP hover use.
+        "fns" => {
+            let mut out = Vec::new();
+            for d in sess.user_from..data.definitions() {
+                if let Some(("fn", name)) = crate::api_surface::classify(data, d)
+                    && !name.starts_with("__")
+                    && name != "main"
+                {
+                    let sig = crate::api_surface::signature_of(data, d, "fn");
+                    out.push(format!("{name}{sig}"));
+                }
+            }
+            vec![format!("D:fns {}", out.join("|"))]
         }
         "run" | "resume" | "step" => {
             if sess.done {
@@ -122,8 +169,13 @@ fn apply(sess: &mut Session, cmd: &str) -> Vec<String> {
                 }
             }
             if let Some(hit) = sess.state.paused_frame() {
+                // `user_locals` and not `locals`: the frame also holds the compiler's own
+                // scratch (`__work_N` format buffers, the `#`-infixed loop machinery), and
+                // a reader looking at a panel of their own variables should not have to
+                // know which of them they wrote.  Display-only — `eval <name>` still
+                // resolves a temp for anyone who wants one.
                 let locals = hit
-                    .locals
+                    .user_locals()
                     .iter()
                     .map(|(n, v)| format!("{n}={v}"))
                     .collect::<Vec<_>>()
@@ -345,6 +397,93 @@ pub fn command(cmd: &str) -> Vec<String> {
             None => vec!["D:err no session".to_string()],
         }
     })
+}
+
+// ── @PLN149 step 8 — the entries a doc page calls ───────────────────────────
+//
+// `crate::wasm::compile_and_run` runs a program and hands back its output; these two let a
+// PAGE drive the same program — set a breakpoint, pause, read the frame, evaluate an
+// expression against it, resume.  Until now this module was reachable only from a
+// `--html --debug` build with the source BAKED IN and a WebSocket relay feeding it `D!:`
+// frames.  A doc page has neither: it holds the source the reader is editing and calls
+// straight in.  The command grammar is the same one [`pump`] applies, so the page and the
+// relay drive one implementation rather than two that agree until they do not.
+
+/// Start a debug session over `source`, replacing any previous one.
+///
+/// Returns JSON `{"ok":true}`, or `{"ok":false,"error":"…"}` carrying the diagnostics — a
+/// page that offers to run the code in front of the reader has to say why it will not.
+///
+/// A bare script (top-level statements, no `fn main`) is desugared exactly as
+/// `compile_and_run` desugars it, so the two entries accept the same inputs.
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+#[must_use]
+pub fn debug_start(source: &str) -> String {
+    let desugared = crate::script::script_desugar(source);
+    let src = desugared.as_deref().unwrap_or(source);
+    // The capture buffer is per-thread and shared with `compile_and_run`; a stale tail from
+    // an earlier run would otherwise surface as output of this session's first `run`.
+    let _ = take_output();
+    let value = match start_reporting(src) {
+        Ok(()) => json_object(&[("ok", crate::json::Parsed::Bool(true))]),
+        Err(e) => json_object(&[
+            ("ok", crate::json::Parsed::Bool(false)),
+            ("error", crate::json::Parsed::Str(e)),
+        ]),
+    };
+    crate::json::to_json_string(&value)
+}
+
+/// Apply one debug command to the live session.
+///
+/// Returns JSON `{"replies":[…],"output":"…"}` — the `D:` replies the command produced and
+/// whatever the program printed while it ran.  The two travel together because a `run` or a
+/// `resume` produces both, and a page fetching them separately could paint a pause before
+/// the output that led to it.
+///
+/// The grammar is [`command`]'s: `bp <fn>` / `bp <line>`, `run`, `resume`, `step`,
+/// `eval <expr>`, `fns`.
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+#[must_use]
+pub fn debug_command(cmd: &str) -> String {
+    use crate::json::Parsed;
+    let replies = command(cmd);
+    let value = json_object(&[
+        (
+            "replies",
+            Parsed::Array(replies.into_iter().map(Parsed::Str).collect()),
+        ),
+        ("output", Parsed::Str(take_output())),
+    ]);
+    crate::json::to_json_string(&value)
+}
+
+/// A JSON object from `(key, value)` pairs, rendered through the one serialiser this repo
+/// has (`json::to_json_string`, RFC 8259) rather than a fourth hand-rolled escaper.
+fn json_object(fields: &[(&str, crate::json::Parsed)]) -> crate::json::Parsed {
+    crate::json::Parsed::Object(
+        fields
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), 0, v.clone()))
+            .collect(),
+    )
+}
+
+/// Whatever the program printed since the last call.
+///
+/// Only a browser build captures print — `crate::wasm::output_push` is where the print op
+/// routes under the `wasm` feature.  Natively the output goes to stdout as it always does,
+/// so this is empty and the JSON field is present-but-empty rather than absent: one shape
+/// for the page to read whichever build served it.
+fn take_output() -> String {
+    #[cfg(feature = "wasm")]
+    {
+        crate::wasm::output_take()
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        String::new()
+    }
 }
 
 /// The pump the JS driver calls (per animation frame): drain every pending

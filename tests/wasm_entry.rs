@@ -73,3 +73,80 @@ fn wasm_compile_and_run_smoke() {
         result.code()
     );
 }
+
+/// @PLN149 step 8 — the JSON surface the doc-site panel drives.
+///
+/// One session end to end, through the two exported entries and nothing else: start over a
+/// source, list what there is to call, break on a LINE (what a gutter click sends), pause,
+/// read a live local, call the program's own function against the frame, and resume.
+///
+/// Native, because the entries are ordinary functions — only the `wasm_bindgen` attribute
+/// is behind the feature — so the contract is checkable without a browser.  The `output`
+/// field is the one part that is not: print is captured only in a browser build, so it is
+/// empty here and the browser harness is what checks it carries the program's output.
+#[test]
+fn debug_session_json_surface() {
+    use loft::wasm_debug::{debug_command, debug_start};
+    let src = "fn fib(n: integer) -> integer { if n < 2 { return n; } fib(n-1) + fib(n-2) }\n\
+               fn main() {\n  a = fib(9);\n  b = a * 2;\n  print(\"a={a} b={b}\\n\");\n}\n";
+    assert_eq!(debug_start(src), "{\"ok\":true}");
+
+    // The callable list is the program's own functions — not `main`, and not the stdlib.
+    let fns = debug_command("fns");
+    assert!(
+        fns.contains("fib(n: integer) -> integer"),
+        "the program's function, with its signature: {fns}"
+    );
+    assert!(
+        !fns.contains("main("),
+        "main is not something to call: {fns}"
+    );
+
+    // A LINE breakpoint, which is what a gutter click sends: line 4 is `b = a * 2;`, so
+    // `a` is assigned by now and `b` is not.
+    assert!(debug_command("bp 4").contains("D:ok bp 4"));
+    let hit = debug_command("run");
+    assert!(hit.contains("D:hit main"), "paused in main: {hit}");
+    assert!(hit.contains("a=34"), "fib(9) is 34, and it is live: {hit}");
+    assert!(
+        hit.contains("b=<unset>"),
+        "and b is not assigned yet: {hit}"
+    );
+    assert!(
+        !hit.contains("__work"),
+        "the compiler's scratch is not the reader's variables: {hit}"
+    );
+
+    // Evaluate against the paused frame: a live local, an expression over it, and the
+    // program's own function — the last is the one the panel exists for.
+    assert!(debug_command("eval a").contains("D:eval a=34"));
+    assert!(debug_command("eval a * 2").contains("D:eval a * 2=68"));
+    assert!(debug_command("eval fib(6)").contains("D:eval fib(6)=8"));
+
+    assert!(
+        debug_command("resume").contains("D:terminated"),
+        "runs to completion"
+    );
+}
+
+/// A source that does not compile answers with the reason, not a bare failure — a page that
+/// will not run the reader's code has to say why.
+#[test]
+fn debug_start_reports_why_it_did_not_compile() {
+    let bad = loft::wasm_debug::debug_start("fn main() { nosuchfunction(1); }\n");
+    assert!(bad.starts_with("{\"ok\":false"), "refused: {bad}");
+    assert!(
+        bad.contains("nosuchfunction"),
+        "the diagnostic names the offending call: {bad}"
+    );
+}
+
+/// A command with no session answers, rather than going quiet — the page can lose its
+/// session (a reload, a failed start) and has to render something.
+#[test]
+fn debug_command_without_a_session_says_so() {
+    // A failed start leaves no session behind.
+    let _ = loft::wasm_debug::debug_start("fn main() { nosuchfunction(1); }\n");
+    let r = loft::wasm_debug::debug_command("run");
+    assert!(r.contains("no session"), "answers without a session: {r}");
+}
