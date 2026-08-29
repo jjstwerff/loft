@@ -357,6 +357,33 @@ impl Parser {
         if !self.convert(&mut second_code, &second_type, &Type::Boolean) && !self.first_pass {
             self.can_convert(&second_type, &Type::Boolean);
         }
+        // Both operands of `&&`/`||` are TRUTHINESS positions, so the result is a definite
+        // two-state boolean — C73 (`&&`/`||`/`!` coerce `null` to `false`), which is why the
+        // caller types this expression the non-null `Type::Boolean`.  The left operand becomes
+        // the `if` CONDITION below and a jump coerces it (`OpGotoFalse` tests `!= 1`); the
+        // right operand becomes a branch VALUE, which nothing coerces.  `convert` does not
+        // close that: it inserts a real conversion for every OTHER nullable type reaching a
+        // boolean position (`integer?` picks up `OpConvBoolFromInt`, whose `!= i64::MIN` is
+        // already 0/1), but `boolean?` to `boolean` shares a base type, so it converts to
+        // nothing at all.  `b == true` is the definite-iser — C73's raw compare answers
+        // `false` for the 255 sentinel and is measured identical on both backends — and it is
+        // applied to the one operand the jump never sees.  @FR-E-Truthy, the truthiness
+        // exception to @FR-E-NullArg's contagion.
+        // Not gated on `!first_pass`: a DEFAULT VALUE — a parameter's or a struct field's —
+        // is parsed once, in pass 1, so a pass-2-only wrap left `fn f(b: boolean = t && m())`
+        // answering null while every other position was fixed.
+        //
+        // `Type::Null` is the LITERAL spelling of the same operand (`t && null`), which
+        // `convert` turns into `OpConvBoolFromNull` — the 255 sentinel — and then hands on
+        // unchanged.  It reaches this position the same way and must answer the same
+        // `false`; only the static type differs.  Every OTHER nullable type is already
+        // definite by the time it arrives (`integer?` through `OpConvBoolFromInt`), so
+        // these two are the whole domain.
+        if matches!(&second_type, Type::Optional(inner) if **inner == Type::Boolean)
+            || second_type == Type::Null
+        {
+            second_code = self.cl("OpEqBool", &[second_code, Value::Boolean(true)]);
+        }
         *code = v_if(
             code.clone(),
             if is_or {

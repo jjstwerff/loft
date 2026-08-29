@@ -2273,7 +2273,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 651 | 291 | 4 | **356** |
+| 652 | 292 | 4 | **356** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2287,7 +2287,9 @@ peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 
 it answers *"is this a type CHANGE"* and treats a wrapper mismatch as one, which is the whole
 question `decl_accepts` decides beneath it — and 650 · 291 until loft#1156 added
 `collect_loop_body_sets`, which discriminates on `Value::Loop` rather than on a `Type` at all
-and is counted opaque for want of a wrapper to see through — which reads
+and is counted opaque for want of a wrapper to see through, and 651 · 291 until the
+`@FR-E-NullArg` walk gave `boolean_operator` the `Optional(Boolean)` test that definite-ises
+`&&`/`||`'s right operand — it reads the wrapper's INNER type to decide, so it sees through — which reads
 `Type::Enum(syn, true, …)` to answer with the `Optional` the author wrote, and so is a peel in
 the OTHER direction: it sees through by construction.  B6w's four were: `needs_nullable_wrap`
 asks through `.base()` and sees through,
@@ -3613,7 +3615,7 @@ it had never been walked at all. The walk found **four defects, two of them sile
 a backend divergence**, plus two more it filed rather than fixed (loft#1165, loft#1166).
 
 **The zero was never a measurement.** Its parenthetical said *"a rules doc — it shrinks
-operational.md's D-op-1, adds no code deviation"*, which is a claim about the DOC'''S GENRE, not
+operational.md's D-op-1, adds no code deviation"*, which is a claim about the DOC'S GENRE, not
 about the code. No oracle stood under it, so nothing could have moved it off zero. That is a
 sharper version of the standing warning that an `OPEN: 0` is only as strong as its oracle: here
 there was no oracle to be weak, and the line still read like a result.
@@ -3671,12 +3673,104 @@ true, so nothing was hiding behind them; they are simply live now.
 
 ⚠ **A second shape from the same census is measured and NOT fixed.** An annotation in the file
 HEADER is routed to file-level even when a `fn` follows it immediately, which contradicts the
-binder'''s own comment (*"still binds the annotation to test_foo"*). It is uniform: **12 files have
+binder's own comment (*"still binds the annotation to test_foo"*). It is uniform: **12 files have
 exactly one such annotation each, always the first**, including `36-parse-errors.loft` (34 other
 per-function annotations) and `102b` (15). Those annotations are not dead — they pass if ANY error
 in the file matches — but they cannot detect that their own function stopped producing the error.
 Fixing it makes 50 files strictly stricter and each red would need its own attribution check, so
 it wants its own pass rather than a ride on this one.
+
+#### B7e — `@FR-E-NullArg` walked: the rule that forbade what the language ships (2026-08-29)
+
+Seventh rule walked, and the first in `operational.md` — 17 rules, two of them cited, and
+`E-NullArg` itself uncited. The walk found **one silent-wrong that breaks a type-system
+promise** (fixed here, D-op-6), **one rule that over-claimed** (fixed in the doc), and **one
+misattributed diagnostic** (filed, loft#1169). A position sweep of the fix then turned up a
+second root, unrelated to the rule and also filed (loft#1170).
+
+**The finding: `&&` and `||` kept a null RIGHT operand.** C73 — the three-state boolean — says
+`&&`/`||`/`!` coerce `null` to `false`, and the parser types the whole expression the non-null
+`Type::Boolean` on the strength of it. But `true && maybe()` answered **`null`**, so
+
+```loft
+r: boolean = t && maybe_bool();   // compiles clean
+r == null                         // true, on a variable declared `boolean`
+```
+
+and the same value reached a `boolean` STRUCT FIELD and a `vector<boolean>` element — non-null
+storage holding the 255 sentinel — while `(t && maybe()) ?? true` discharged it to `true`, so a
+defensive fallback answered the opposite of the decision. Both backends agreed throughout;
+there was nothing for a differential oracle to see.
+
+**One home, and the right operand never reached it.** The lowering is `a && b` → `if a { b }
+else { false }`, so the LEFT operand becomes the `if` CONDITION and the jump coerces it
+(`OpGotoFalse` tests `!= 1`), while the RIGHT operand becomes a branch VALUE that nothing
+coerces. `convert` looks like the second home and is not: every *other* nullable type reaching a
+boolean position picks up a real conversion (`integer?` gets `OpConvBoolFromInt`, whose
+`!= i64::MIN` is already 0/1) — which is why `t && maybe_int()` was correct all along and is
+kept as the control cell — but `boolean?` → `boolean` shares a base type and converts to
+**nothing at all**. Fixed in `Parser::boolean_operator`, the one site that knows both operands
+are truthiness positions, by wrapping a nullable-boolean right operand in `b == true`; that is
+C73's own raw compare, it is parser-side so both backends inherit it from one IR change, and
+short-circuit is untouched (measured with a counting right operand, not argued).
+
+**The rule is what let it stand, and no oracle could have moved the register.** `(E-NullArg)`
+named comparisons as the ONLY exception to contagion and never mentioned truthiness — so a `&&`
+answering `null` read as the rule being *obeyed*, not as C73 being broken. The register said
+`OPEN: 2` throughout. This is a sharper version of B7d's lesson: there, an `OPEN: 0` was only as
+strong as its oracle; here it was only as strong as **the rules above it**, and no amount of
+measuring would have found a deviation from a rule that described the wrong contract.
+`(E-Truthy)` now names the positions that coerce, and is what the fix cites.
+
+⚠ **The same rule over-claimed in the other direction.** Its ordering clause said null orders
+low *"the SAME for `integer`, `character`, `float`, `single`, `boolean`"* — but `<` on two
+booleans is REFUSED at compile time, deliberately: there is no `OpLtBool` and `Ord` lists
+`integer`/`single`/`float`/`text`. Equality is uniform across all of them, ordering only across
+the ordered ones. The existing uniformity guard covered float, single, integer and character —
+four of the five types its own rule named — so the two it omitted were exactly the two the rule
+got wrong. **A guard that carries a subset of the types its rule enumerates is where an
+over-claim survives**; `boolean` and `text` cells were added to it.
+
+⚠ **Twelve of the new guard's cells are BLIND to the bug it guards, and that is worth knowing
+before writing the next one.** The natural spelling of a truth-table cell is
+`assert(!(t && maybe()))` — and `!` is *itself* a coercing position, so `!null` is `true` and
+every one of those cells passed on the broken build. Only `== false` / `== null` — the raw
+compare — can see the sentinel. Each load-bearing group was then measured against the control
+**separately**, because a failed assert stops the run and one falsified line says nothing about
+the twenty after it.
+
+The compiler was also making the claim out loud: `s.on == null` emits `redundant-null-check`,
+*"'on' is 'not null', comparison is always false"* — beside a comparison that answered `true`.
+A lint stating an invariant is a place to check that the invariant holds.
+
+⚠ **The fix had a hole at one position, and only a POSITION SWEEP found it.** The first version
+was gated on `!self.first_pass` — reflex, not reasoning — and a parameter default is parsed
+**once, in pass 1**, so `fn f(b: boolean = t && maybe())` still answered `null` while a struct
+field default, a return, a lambda body, a `for` body and a `while` condition were all fixed. The
+matrix that found the bug could not have found this: it varied the OPERAND, and this varies where
+the EXPRESSION sits. Sweeping the positions a construct can occupy is cheap and belongs in the
+verification of any parser-side fix.
+
+**And the sweep found a second, unrelated defect — loft#1170, filed.** A parameter default that
+is a COMPOUND expression whose operand calls a function declared BELOW drops that operand:
+`= 1 + late(0)` stores just `1` and `= true && late(0)` answers `false` where the truth is
+`true`, both backends, no diagnostic, with the interpreter corrupting its stack on the way out.
+That is `#1086`'s class one axis over — its hoist triggers on `unresolved_names`, and a
+forward-declared CALL resolves its name while leaving its RETURN TYPE unlinked, so the identical
+collapse happens with the counter reading zero. Two plausible detectors were measured and
+rejected before filing (the default's own `dtype`, which `&&` overwrites with a concrete
+`Type::Boolean` regardless of its operands; and `can_convert`, which is itself behind
+`!first_pass`) — recorded in the issue so the next attempt does not re-spend them.
+
+**Filed, not fixed — loft#1169.** A null that merely *passes through* a fault-prone op is
+rendered as that fault: `{v[1]}` on a `vector<integer?>` whose element is genuinely null says
+`null(oob)` with the index in range, and `{n / a}` with a null dividend and `a == 5` says
+`null(/0)`. The tag is chosen at PARSE time from the op's shape and consumed at run time from
+the VALUE, so the two facts that must meet — *this op could fault* and *this op did fault* — are
+one and none. The runtime log is correct throughout, so `(E-Report)` holds; it is the render
+path alone. Not fixed here because the missing fact lives in nine `#rust` bodies on the hot path
+(`OpDivFloatNullable` is bare `@v1 / @v2` with no `s` in scope), and `src/parser/operators.rs`
+already carries a deferred note pointing at the shape the fix probably wants.
 
 #### C — process / skills
 

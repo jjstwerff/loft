@@ -45,6 +45,12 @@ pub type u32 = integer limit(0, 4294967294) size(4);
 // Types that support the `<` comparison operator.
 // Satisfied by integer, single, float, text, and any user type defining OpLt.
 //
+// `boolean` is NOT among them, deliberately: it satisfies Equatable below and has no
+// ordering, so `false < true` is a refusal rather than a convention the language picks
+// for you.  A program that wants it says so — `(a as integer) < (b as integer)`.  Note
+// this is what bounds the null-ordering half of @FR-E-NullArg, which applies to the
+// ORDERED types only; boolean null still compares with `==` like every other scalar.
+//
 // ONE method is all a type has to define: inside a generic bounded by this, `>`, `<=` and
 // `>=` all derive from `<` — `a > b` is `b < a`, `a <= b` is `!(b < a)`, `a >= b` is
 // `!(a < b)`.  Each evaluates its operands exactly once.
