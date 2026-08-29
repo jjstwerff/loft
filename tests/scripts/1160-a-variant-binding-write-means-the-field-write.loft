@@ -24,7 +24,9 @@
 //                        picks its origin from the runtime tag, so it has no one field to be
 //                        resolved to and is deliberately not covered.
 //
-// **Two of the cells are in OTHER functions on purpose.**  A binding is resolved by its
+// **Two of the cells are in OTHER functions on purpose.**  They are also what loft#1162 was:
+// a consumer installed the half-fixed build and 271 tests across three of their packages went
+// from green to zero passing, every one on `variables[65535]`.  A binding is resolved by its
 // variable NUMBER, and a variable number is only unique within one function, so a projection
 // held anywhere longer-lived than the function's own variable table makes an unrelated local
 // in the NEXT function look like a binding.  A single-function guard cannot fail on that —
