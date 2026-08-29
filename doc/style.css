@@ -504,3 +504,15 @@ article h3 {
   /* Don't show URLs for internal anchors or nav links */
   a[href^="#"]:after, a[href$=".html"]:after { content: ""; }
 }
+
+/* ── Libraries page (the registry catalogue) ────────────────────────────── */
+
+.lib-count { color: var(--dim); font-size: 0.9em; margin: -0.4em 0 1.2em; }
+.lib-table { width: 100%; border-collapse: collapse; font-size: 0.88em; margin: 0.6em 0 1.8em; }
+.lib-table th { background: var(--nav-bg); border: 1px solid var(--border); padding: 6px 10px; text-align: left; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; }
+.lib-table td { border: 1px solid var(--border); padding: 6px 10px; vertical-align: top; }
+.lib-table tr:nth-child(even) td { background: var(--code-bg); }
+/* The name column is the scan target — keep it on one line so a reader's eye can
+   run down it, and let the description column take the wrapping instead. */
+.lib-table td:first-child { white-space: nowrap; }
+.lib-table td:nth-child(2) { white-space: nowrap; color: var(--dim); font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.9em; }

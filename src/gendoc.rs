@@ -11,6 +11,7 @@ use loft::documentation::{
     page_html, render_topic_body, render_topic_typst,
 };
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 
 // ---  Data model  ---
@@ -78,9 +79,12 @@ fn main() -> std::io::Result<()> {
     generate_print_page(&topic_sources, &sections, &stdlib_info, &link_map, version)?;
     generate_typst(&topic_sources, &sections, version)?;
 
+    let libraries = generate_libraries_page(&stdlib_info, &topic_info)?;
+
     let sitemap_pages = loft::documentation::generate_sitemap()?;
     println!("Generated doc/sitemap.xml ({sitemap_pages} pages) + doc/robots.txt");
     println!("Generated {} stdlib section pages", sections.len());
+    println!("Generated doc/libraries.html ({libraries} registry packages)");
     Ok(())
 }
 
@@ -403,6 +407,151 @@ fn generate_stdlib_section(
 
 /// Generate after all section pages exist so the item counts are accurate and
 /// readers get a complete overview when landing on the stdlib index.
+/// The **Libraries** page — every package in the registry, grouped by category.
+///
+/// A reader's first question about a distribution is *what is there*, and until this page
+/// existed the published site answered it for two of the 42 packages, in an install line.
+/// The registry index is the one place that knows the answer, so the page renders that and
+/// nothing else: no per-library file to maintain, and it cannot fall behind the registry it
+/// is generated from ([USER_DOCS.md](../doc/claude/USER_DOCS.md) Tier 0).
+///
+/// It is the web twin of `loft api --registry`, over the same `load_index` — the CLI and
+/// the page agree because they read one source, not because someone keeps them in step.
+///
+/// A package appears under each of its categories, the way the maintainer catalogue lists
+/// it: a reader arrives looking for *graphics*, not for a name they do not yet know.
+fn generate_libraries_page(
+    stdlib_sections: &[StdlibSection],
+    topic_info: &[(String, String)],
+) -> std::io::Result<usize> {
+    // Offline-tolerant on purpose: `load_index` falls back to the cached index, so a doc
+    // build does not need the network — only that the box has talked to the registry once.
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: false,
+        offline: false,
+        allow_prerelease: false,
+        skip_lockfile: true,
+        lock_path: None,
+    };
+    let index = match loft::install::load_index(&opts) {
+        Ok(index) => index,
+        Err(e) => {
+            // Fail rather than skip.  The nav links this page from every other page, and a
+            // site published without it is the exact hole the page exists to close — so a
+            // missing registry has to stop the build, not quietly ship a 404.
+            eprintln!(
+                "gendoc: cannot build the Libraries page — the registry index is \
+                 unreachable and no cached copy is available: {e}\n\
+                 Run `loft api --registry` once to populate the cache, then re-run gendoc."
+            );
+            return Err(std::io::Error::other("registry index unavailable"));
+        }
+    };
+
+    // Category → the packages carrying it.  A package with no category still has to be
+    // reachable, so it lands under "Other" rather than vanishing from the one page whose
+    // job is completeness.
+    let mut by_category: std::collections::BTreeMap<&str, Vec<&loft::registry_index::Package>> =
+        std::collections::BTreeMap::new();
+    for pkg in index.packages.values() {
+        if pkg.categories.is_empty() {
+            by_category.entry("other").or_default().push(pkg);
+        }
+        for cat in &pkg.categories {
+            by_category.entry(cat.as_str()).or_default().push(pkg);
+        }
+    }
+
+    let mut body = String::new();
+    body.push_str(
+        "<p>Every library in the loft registry. Each one is written in loft itself, so its \
+         source reads like your own code. Install one with <code>loft install &lt;name&gt;</code>, \
+         then <code>use &lt;name&gt;;</code> in your program.</p>\n",
+    );
+    let _ = writeln!(
+        body,
+        "<p class=\"lib-count\">{} packages{}</p>",
+        index.packages.len(),
+        if by_category.len() > 1 {
+            format!(" in {} categories", by_category.len())
+        } else {
+            String::new()
+        }
+    );
+    body.push_str(
+        "<p>The same catalogue on the command line: <code>loft api --registry</code>. \
+         One library's public surface: <code>loft api &lt;name&gt;</code>.</p>\n",
+    );
+
+    for (cat, packages) in &by_category {
+        let _ = writeln!(
+            body,
+            "<h2 id=\"{}\">{}</h2>",
+            esc(cat),
+            esc(&category_title(cat))
+        );
+        body.push_str("<table class=\"lib-table\">\n");
+        body.push_str("<tr><th>Library</th><th>Version</th><th>What it gives you</th></tr>\n");
+        for pkg in packages {
+            let latest = loft::registry_index::find_best_version(pkg, "*", false)
+                .map_or_else(|| "\u{2014}".to_string(), |v| esc(&v.semver));
+            let name = esc(&pkg.name);
+            let described = pkg.description.as_deref().unwrap_or("");
+            let link = match pkg.homepage.as_deref() {
+                Some(url) if !url.is_empty() => {
+                    format!("<a href=\"{}\"><code>{name}</code></a>", esc(url))
+                }
+                _ => format!("<code>{name}</code>"),
+            };
+            let _ = writeln!(
+                body,
+                "<tr><td>{link}</td><td>{latest}</td><td>{}</td></tr>",
+                esc(described)
+            );
+        }
+        body.push_str("</table>\n");
+    }
+
+    let nav = build_nav(topic_info, stdlib_sections, "libraries");
+    let meta = loft::documentation::PageMeta {
+        slug: "libraries",
+        description: "Every library in the loft registry \u{2014} graphics and 3D, an HTTP \
+             server and client, cryptography, text engines and geometry, each written in loft \
+             and installed with `loft install`.",
+    };
+    let html = page_html("Libraries", &nav, "Libraries", &body, &meta);
+    fs::write("doc/libraries.html", html)?;
+    Ok(index.packages.len())
+}
+
+/// The heading a category slug is shown as.  The registry's slugs are terse because they
+/// are also search keys (`asset-format`, `cli`); a heading is read by a person.
+///
+/// An unknown slug renders as itself rather than being dropped, so a category added to the
+/// registry appears on the page the same day, unstyled but present.
+fn category_title(slug: &str) -> String {
+    match slug {
+        "animation" => "Animation".to_string(),
+        "asset-format" => "Asset formats".to_string(),
+        "cli" => "Command line".to_string(),
+        "crypto" => "Cryptography".to_string(),
+        "encoding" => "Encoding".to_string(),
+        "game" => "Games".to_string(),
+        "geometry" => "Geometry".to_string(),
+        "graphics" => "Graphics and 3D".to_string(),
+        "math" => "Mathematics".to_string(),
+        "net" => "Networking".to_string(),
+        "plugins" => "Plugins".to_string(),
+        "random" => "Randomness".to_string(),
+        "text" => "Text".to_string(),
+        "time" => "Time".to_string(),
+        "world" => "World building".to_string(),
+        "other" => "Other".to_string(),
+        s => s.to_string(),
+    }
+}
+
 fn generate_stdlib_toc(
     sections: &[SectionFull],
     stdlib_info: &[StdlibSection],

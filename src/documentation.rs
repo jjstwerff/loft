@@ -226,6 +226,10 @@ fn write_index(
         "      <a class=\"card\" href=\"roadmap.html\">",
         "<h2>Roadmap</h2>",
         "<p>Planned features for version 1.0 and beyond, with syntax previews.</p></a>\n",
+        "      <a class=\"card card-featured\" href=\"libraries.html\">",
+        "<h2>Libraries</h2>",
+        "<p>Every package in the registry \u{2014} graphics and 3D, an HTTP server and client, ",
+        "cryptography, text engines, geometry. Each written in loft.</p></a>\n",
     );
     let title = topics[0].title.clone();
     let intro = index_intro(&topics[0])?;
@@ -935,6 +939,14 @@ pub fn build_nav(
         parts.push("<span class=\"cur\">Roadmap</span>".to_string());
     } else {
         parts.push("<a href=\"roadmap.html\">Roadmap</a>".to_string());
+    }
+    // The registry catalogue. It sits with Install and Roadmap rather than under
+    // "Library:" because that section is the bundled STDLIB, and a reader looking for
+    // `graphics` is asking a different question from one looking for `len`.
+    if active == "libraries" {
+        parts.push("<span class=\"cur\">Libraries</span>".to_string());
+    } else {
+        parts.push("<a href=\"libraries.html\">Libraries</a>".to_string());
     }
 
     parts.push("<span class=\"nav-sep\">Language:</span>".to_string());
