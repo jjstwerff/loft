@@ -129,6 +129,11 @@ doc/claude/plans/h3-narrow-vector/bytecode-comparisons/*-full.txt
 tests/fixtures/libs/*/native/.cargo/
 doc/pkg-mt/
 
+# `loft doc <path>` renders a package to `<path>/doc/`.  Local output of a local
+# command — nothing on the published site comes from it (DOC.md § Library
+# documentation), so it should never arrive in a commit by accident.
+lib/*/doc/
+
 # Scratch build trees (e.g. a feature-variant build used while debugging).
 target-*/
 

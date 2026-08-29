@@ -134,21 +134,30 @@ reported as fine on the strength of an 84-line README that exists only on an unm
 library from `origin/main` rather than from a clone; this is what ignoring it costs, and the
 same rule applies to deciding which library needs work at all.
 
-### The plan of record is stale
+### The plan of record was stale — retired in step 10
 
-[DOC.md § Two tiers of library documentation](DOC.md) already describes a design for this,
-and it no longer matches the tree:
+[DOC.md](DOC.md) carried a design for this under *Bundled library documentation* and *Two
+tiers*, and none of it matched the tree:
 
-- It says bundled libraries live in `lib/` and are `imaging` and `random`. `lib/` holds
+- It said bundled libraries live in `lib/` and are `imaging` and `random`. `lib/` holds
   `audience_crystal`, `engine_host` and `git`; `imaging` and `random` are registry packages.
-- It specifies a **Package Catalog** page generated from `registry.txt`, with an optional
+- It specified a **Package Catalog** page generated from `registry.txt`, with an optional
   `docs` column. `registry.txt` does not exist — the registry is `index.json` in
   `loft-lang/registry` (@PLN112), and no catalog page was ever generated.
-- Its four discoverability paths ("index cards, search, nav bar, catalog") describe a site
-  that has none of them for libraries.
+- Its four discoverability paths ("index cards, search, nav bar, catalog") described a site
+  that had none of them for libraries.
 
-That section is superseded by this document. It should be cut down to what it accurately
-describes — how `gendoc` renders a topic — and point here for the rest.
+- And the machinery underneath: it said `gendoc` discovers `lib/*/loft.toml`, calls
+  `generate_pkg_docs` on each and writes `lib/<name>/doc/`, feeding a third index card grid,
+  a nav section and the search index. **`gendoc` has no `lib/` path at all** — the only
+  caller of `generate_pkg_docs` is `loft doc <name>`, which writes locally and puts nothing
+  on the site.
+
+**Retired (step 10).** `DOC.md § Library documentation` is now the mechanical half only —
+the five page kinds, what each is read from, which two need the package extracted, and the
+release rule — and points here for the design. The dead `lib/` machinery and the
+`registry.txt` catalog are gone rather than corrected, because there was nothing under them
+to correct.
 
 ---
 
@@ -575,17 +584,28 @@ independently shippable and none blocks the next except where marked.
    file said so on its first run. And `imaging`'s page had been describing a three-channel
    `Pixel` since `a` landed in 0.3.0 — the drift this rule exists to end, found by moving the
    text next to the code it describes.
-10. **Retire [DOC.md § Two tiers](DOC.md)**, replacing it with a pointer here.
+10. ~~**Retire [DOC.md § Two tiers](DOC.md)**, replacing it with a pointer here.~~
+    **Landed.** The whole `## Bundled library documentation` block went, not just the one
+    section: measuring it first showed `gendoc` has no `lib/` path, so its *How it works*,
+    *Index integration*, *Navigation*, *Search* and *Adding a new bundled library* described
+    machinery that does not exist — as did the `registry.txt` Package Catalog and the four
+    discoverability paths. `DOC.md § Library documentation` replaces it with what is true:
+    the five page kinds and their sources, the two that need the package extracted, the
+    release rule, and `loft doc` named as the separate local tool it is.
 
 Steps 1, 2 and 4 are each under a day and together change what a new user experiences more
 than everything below them combined; all three have landed.
 
-**Remaining: step 10**, plus the guides for `input` / `pluginabi` (step 1) and `stage` /
-`server` / `web` (step 7), which wait on other checkouts. **Six packages carry a guide and
-all six are published** — `graphics`, `random`, `imaging`, `time`, `html`, `markdown` — so
-`make doc` renders six guide pages where it rendered two. A guide only reaches a reader
-through a RELEASE: `gendoc` reads it out of the extracted tarball, never out of a checkout,
-so writing the file is half the step and bumping the version is the other half.
+**All ten steps have landed.** What is left is not a step but a queue of guides: `input` and
+`pluginabi` (step 1) and `stage`, `server` and `web` (step 7), each waiting on a checkout or
+on an environment their examples can be run in. Writing one is the whole of what it takes —
+the contract, the rendering, the CI gate and the release path all exist now.
+
+**Six packages carry a guide and all six are published** — `graphics`, `random`, `imaging`,
+`time`, `html`, `markdown` — so `make doc` renders six guide pages where it rendered two.
+A guide only reaches a reader through a RELEASE: `gendoc` reads it out of the extracted
+tarball, never out of a checkout, so writing the file is half the step and bumping the
+version is the other half.
 
 **Step 8 was blocked by two defects in the machinery it sits on, and is capped by a third.**
 The design read `src/wasm_debug.rs` and believed its doc comment. Measured instead:
@@ -665,7 +685,8 @@ because 42 packages of idiomatic loft currently have no reader.
 
 ## See also
 
-- [DOC.md](DOC.md) — how `gendoc` renders a topic (§ *Two tiers* is superseded by this document)
+- [DOC.md](DOC.md) — how `gendoc` renders a topic, and § *Library documentation*: which
+  library pages it writes and what each is generated from
 - [DOC_QUALITY.md](DOC_QUALITY.md) — how the prose itself should read
 - [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md) — the monthly by-hand pass and its watermarks
 - [LIBRARY_AUTHORING.md](LIBRARY_AUTHORING.md) / [LIBRARY_CHECKLIST.md](LIBRARY_CHECKLIST.md) — where the guide contract lands
