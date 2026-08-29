@@ -1544,19 +1544,13 @@ impl Stores {
     /// @PLN105 Phase 3 — collect an `index<T[key]>` (red-black tree) in ascending key order into an
     /// iterable scratch rec-nr vector, for the deliver pre-flatten. Mirrors `tree::count`'s in-order
     /// walk (`first` → `next`), keyed off the node type's left-child BYTE position
-    /// (`8 + fields[left_field].position`, per `Stores::find_index`); result iterated via the same
-    /// Ordered (on=3) path as the hash/radix scratches.
+    /// (`Stores::fields`); result iterated via the same Ordered (on=3) path as the hash/radix
+    /// scratches.
     pub fn build_index_sorted_vec(&mut self, coll: &DbRef, tp: u16) -> DbRef {
-        let (node_tp, left_field) = match &self.types[tp as usize].parts {
-            Parts::Index(node_tp, _, lf) => (*node_tp, *lf),
-            _ => return self.build_rec_scratch(coll, &[]),
-        };
-        let left = match &self.types[node_tp as usize].parts {
-            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
-                8 + fields[left_field as usize].position
-            }
-            _ => return self.build_rec_scratch(coll, &[]),
-        };
+        let left = self.fields(tp);
+        if left == u16::MAX {
+            return self.build_rec_scratch(coll, &[]);
+        }
         let recs = {
             let store = crate::keys::store(coll, &self.allocations);
             let mut recs = Vec::new();
@@ -3241,6 +3235,24 @@ impl Stores {
     # Panics
     When a field points to a spatial structure (teardown unimplemented).
     */
+    /// Mark the collection slot `dest` addresses as ABSENT rather than empty (loft#1150).
+    ///
+    /// Zero is the EMPTY collection, so a slot left at its zero-init cannot mean absence;
+    /// `DbRef::ABSENT_REC` is the id reserved for it (loft#917), which
+    /// `vector::is_absent_collection` reads raw and every other reader maps back to `0`.
+    ///
+    /// Used where a keyed assignment's SOURCE is absent: the destination keeps its store —
+    /// there is nowhere else for a later `+=` to build — and reads back `null` rather than
+    /// `[]`, which is the distinction `xs == null` and `xs == []` rest on.  Called from both
+    /// `OpReplaceKeyed` bodies, which is why it lives here rather than twice over.
+    pub fn mark_collection_absent(&mut self, dest: &DbRef) {
+        if dest.store_nr == u16::MAX || dest.rec == 0 || dest.pos == 0 {
+            return;
+        }
+        self.store_mut(dest)
+            .set_u32_raw(dest.rec, dest.pos, DbRef::ABSENT_REC);
+    }
+
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
         self.remove_claims_mode(rec, tp, false);
     }

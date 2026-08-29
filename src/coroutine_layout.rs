@@ -65,13 +65,29 @@ impl YieldSlot {
             Type::Float => Some(YieldSlot::F64),
             Type::Single => Some(YieldSlot::F32),
             Type::Routine(_) => Some(YieldSlot::Routine),
-            Type::Reference(_, _)
-            | Type::Vector(_, _)
-            | Type::Sorted(_, _, _)
-            | Type::Hash(_, _, _)
-            | Type::Index(_, _, _)
-            | Type::Enum(_, true, _)
-            | Type::Iterator(_, _) => Some(YieldSlot::Ref),
+            // An iterator handle is not in the DbRef set — it is a coroutine state handle,
+            // not a store handle — but it travels the same slot, so it stays named here.
+            Type::Iterator(_, _) => Some(YieldSlot::Ref),
+            // Every type carried as a `DbRef` takes the Ref slot.  Asked through
+            // `data::is_dbref`, the declared home for @FR-Col-Store's store-backed set,
+            // rather than restated — which is what that function's own doc asks for: *"a
+            // short list is not a compile error anywhere — it routes a handle down the
+            // scalar path — so call this function rather than restating it."*
+            //
+            // Restated here it had drifted SHORT in exactly the way that doc predicts:
+            // seven kinds written out, `Radix` (`spatial`) and `Trie` missing.  A tuple
+            // MEMBER of either then failed `classify`, so `tuple_kinds` answered `None` and
+            // the yield lost the unified `next_into` channel it was entitled to — leaving a
+            // `spatial` or `trie` tuple member REFUSED by `--native` (loft#1132's
+            // `CHANNEL_NONE`) while `--interpret` answered correctly.  Both are store-backed
+            // collections that already yield correctly on their own, so the refusal was a
+            // deviation rather than a decision.
+            //
+            // This is the third site of one list: `generation/coroutine.rs` and
+            // `parser/collections.rs` were folded onto `is_dbref` when the ORIGINAL
+            // short-list bug was fixed, and `classify` is the residual that fix recorded and
+            // left behind.
+            _ if crate::data::is_dbref(tp) => Some(YieldSlot::Ref),
             // Text needs a store intern (lifetime); function is a (u32, DbRef)
             // pair still served by the dedicated fn-ref channel; a nested tuple
             // would need recursion the walk does not yet do.

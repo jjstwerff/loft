@@ -1785,7 +1785,14 @@ impl State {
         // no `OpFreeRef`).  No owned-vector case needs the vector site changed,
         // so de-conflating there only over-reaches.  See
         // `tests/scripts/122-keyed-return-local-allocates.loft`.
-        if stack.function.is_inline_ref(v) {
+        //
+        // ⚠ loft#1155 — the de-conflation DROPPED that second half here rather than renaming
+        // it, and a keyed match binding then allocated a store and orphaned it the moment the
+        // arm overwrote the slot with its `OpGetField` projection: one store per call,
+        // unbounded in a loop, and `vector` clean beside it — which is precisely the boundary
+        // the issue measured.  It comes back under its own name, `is_overwritten_view`, so the
+        // owned return-local the de-conflation was FOR still allocates.
+        if stack.function.is_inline_ref(v) || stack.function.is_overwritten_view(v) {
             // inline_ref keyed locals borrow an outer-owned store.
             // On first assignment, point the slot at it via the sentinel; on
             // reassignment there is nothing to re-init (no current shape

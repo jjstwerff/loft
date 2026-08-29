@@ -4850,6 +4850,16 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
+                            // loft#1160 — remember which field this binding projects, so a
+                            // write spelled through it can take the field path and reach the
+                            // linked group the field belongs to.
+                            self.vars.mv_field_origin.insert(
+                                v_nr,
+                                (
+                                    field_read.clone(),
+                                    Type::Reference(variant_def_nr, Deps::none()),
+                                ),
+                            );
                             arm_stmts.push(v_set(v_nr, field_read.clone()));
                             let old = self.vars.set_name(&field_name, v_nr);
                             name_aliases.push((field_name.clone(), old));
@@ -8941,6 +8951,15 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
+                            // loft#1160 — the field this binding projects, so a write spelled
+                            // through it takes the field path (see `mv_field_origin`).
+                            self.vars.mv_field_origin.insert(
+                                v_nr,
+                                (
+                                    field_read.clone(),
+                                    Type::Reference(variant_def_nr, Deps::none()),
+                                ),
+                            );
                             // The capture binds a borrowed view into the
                             // subject's record — scope cleanup must not
                             // emit OpFreeRef for it (see the same
@@ -12482,15 +12501,14 @@ impl Parser {
         // signature-only question gets its own answer and `rewrap` keeps reading `peel`.
         let signature_only = peel == crate::data::RetPeel::SignatureOnly
             || crate::parser::vectors::is_keyed(dep_base);
-        // ⚠ NULLABLE keyed returns are NOT covered, and the measurement is left here so the
-        // next reader does not re-derive it.  `hash<T[k]>?` arrives as `Optional(Hash)`, which
-        // `ret_dep_shape` does not peel, so it matches no arm below and its borrow goes
-        // unrecorded — the same silent free loft#1140 fixes for the dense spelling, still live
-        // for this one (loft#1143).  The one-line cure is an `Optional(inner) if is_keyed`
-        // arm in `ret_dep_shape` returning `SignatureOnly`: it makes the interpreter answer
-        // correctly and makes `--native` PANIC, writing through the u16::MAX null sentinel in
-        // `allocation.rs`.  A wrong answer traded for a crash on the other backend is not a
-        // fix, so the delivery hole has to be found first.
+        // loft#1143 — the NULLABLE spelling takes the same borrow fact as the dense one.
+        // `hash<T[k]>?` arrives as `Optional(Hash)`, and `ret_dep_shape` peels it to
+        // `SignatureOnly` for the same reason @FR-L-Null gives everywhere else: `layout(τ) =
+        // layout(τ?)`, so a `?` around a keyed collection changes what the slot may HOLD and
+        // not what it borrows.  Recording the borrow is only half — the caller must also own
+        // the store it copies into, which is the dep-strip in `expressions.rs`'s keyed
+        // assignment; without that half the peel alone routes the copy through the u16::MAX
+        // null sentinel.
         if let Type::Vector(_, cur)
         | Type::Reference(_, cur)
         | Type::Enum(_, true, cur)
@@ -13436,16 +13454,19 @@ impl Parser {
                 *val = Value::Null;
                 return Type::Void;
             }
+            // loft#1147 — the declared signature carries `file` / `line` and the doc says
+            // *"do not pass them manually"*, which is right for a call in user code and
+            // wrong for the one case that must: a stdlib FORWARDER (`assert_eq`) has
+            // already been handed the caller's position and has to hand it on, or every
+            // failure it reports names `01_code.loft` instead of the test.  When the two
+            // are supplied they are honoured; the injection stays the default.
+            let (a_file, a_line) = if list.len() >= 4 {
+                (list[2].clone(), list[3].clone())
+            } else {
+                (Value::str(&call_pos.file), Value::Int(call_pos.line as i32))
+            };
             let d_nr = self.data.def_nr("n_assert");
-            *val = Value::Call(
-                d_nr,
-                vec![
-                    test,
-                    message,
-                    Value::str(&call_pos.file),
-                    Value::Int(call_pos.line as i32),
-                ],
-            );
+            *val = Value::Call(d_nr, vec![test, message, a_file, a_line]);
             Type::Void
         } else if name == "panic" {
             let message = if list.is_empty() {
@@ -14044,6 +14065,37 @@ impl Parser {
                 return Type::Boolean;
             }
             _ => {}
+        }
+        // loft#1147 — `assert_eq` / `assert_ne` take the CALLER's position, exactly as
+        // `assert` does and for the same reason: a failure that names `01_code.loft` names
+        // the forwarder rather than the test that broke.  Unlike `assert` they are NOT
+        // rewritten here — they are ordinary generic loft functions whose bodies live in the
+        // stdlib, and their bound is what makes them work on any type — so this supplies the
+        // two position arguments and nothing else.  The label is optional: with two
+        // arguments the message is the two values alone, which a source position already
+        // qualifies.
+        if matches!(name, "assert_eq" | "assert_ne")
+            && (list.len() == 2 || list.len() == 3)
+            && named_args.is_empty()
+            // `n_`-prefixed: user-level functions live under that namespace (CODE.md), and
+            // the bare name resolves to nothing.  The guard keeps a project that has not
+            // loaded the stdlib — or one defining its own two-argument `assert_eq` — on the
+            // ordinary call path instead of being handed arguments its signature lacks.
+            && self.data.def_nr(&format!("n_{name}")) != u32::MAX
+        {
+            let mut args = list.to_vec();
+            let mut tps = types.to_vec();
+            if args.len() == 2 {
+                args.push(Value::str(""));
+                tps.push(Type::Text(Deps::none()));
+            }
+            args.push(Value::str(&call_pos.file));
+            tps.push(Type::Text(Deps::none()));
+            args.push(Value::Int(call_pos.line as i32));
+            tps.push(Type::Integer(IntegerSpec::wide()));
+            return self.call(
+                val, source, name, &args, &tps, named_args, arg_pos, name_pos,
+            );
         }
         if let Some(tp) = self.try_fn_ref_call(val, name, list, types) {
             return tp;

@@ -1658,6 +1658,14 @@ fn op_drop_takes_only_self() {
 /// (@PLN125 arc C) and an operator all say. `Printable` is that bound, and the
 /// bounded path renders correctly on both backends for every kind
 /// (`tests/scripts/845-generic-format.loft`).
+/// loft#1147 — and this test is LOAD-BEARING beyond its own subject.  Type-variable bounds
+/// are keyed by NAME, so every generic in the program spelling its variable `T` shares one
+/// `T` definition and one bounded generic anywhere mints the bound's stubs for all of them.
+/// Adding an `Equatable + Printable` generic to the stdlib turned this refusal into an
+/// ACCEPT, with nothing in the user's file changed — the format site was asking whether the
+/// stub existed rather than whether this function's bounds declare it, which is the question
+/// `call_op` already asks.  If this test ever goes green-by-accepting again, that leak is
+/// back.
 #[test]
 fn formatting_an_unbounded_type_variable_is_refused() {
     code!(
@@ -1669,6 +1677,50 @@ fn formatting_an_unbounded_type_variable_is_refused() {
          it; write `<T: Printable>` (every built-in satisfies it, and a user type does by \
          defining `fn to_text(self: T) -> text`) at \
          formatting_an_unbounded_type_variable_is_refused:1:33",
+    );
+}
+
+/// loft#1147 — the same leak, swept across every surface a bound can reach.  An UNBOUNDED
+/// `<T>` must be refused each of these however many bounded generics the stdlib carries: a
+/// stub minted for `min_of<T: Ordered>`, `sum<T: Addable>`, `tree_walk<T: Walkable>` or
+/// `assert_eq<T: Equatable + Printable>` is that function's licence, not everyone's.
+#[test]
+fn an_unbounded_type_variable_reaches_no_bound_s_method() {
+    code!("fn bad<T>(a: T, b: T) -> boolean { a == b }\nfn test() {}")
+        .error("generic type T: operator '==' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:43");
+    code!("fn bad<T>(a: T, b: T) -> boolean { a != b }\nfn test() {}")
+        .error("generic type T: operator '!=' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:43");
+    code!("fn bad<T>(a: T, b: T) -> boolean { a < b }\nfn test() {}")
+        .error("generic type T: operator '<' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:42");
+    // loft#1151 — the SWAPPED spellings name the operator the author WROTE.  `handle_operator`
+    // resolves `a > b` as `b < a` and `a >= b` as `b <= a`, and the refusal used to report the
+    // rewritten one: a program that typed `>=` was told about `<=`.
+    code!("fn bad<T>(a: T, b: T) -> boolean { a > b }\nfn test() {}")
+        .error("generic type T: operator '>' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:42");
+    code!("fn bad<T>(a: T, b: T) -> boolean { a >= b }\nfn test() {}")
+        .error("generic type T: operator '>=' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:43");
+    code!("fn bad<T>(a: T, b: T) -> boolean { a <= b }\nfn test() {}")
+        .error("generic type T: operator '<=' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:43");
+    code!("fn bad<T>(v: T) -> text { v.to_text() }\nfn test() {}")
+        .error("generic type T: field access requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:37");
+}
+
+/// loft#1147 — and the leak does not need the stdlib at all: a user's OWN bounded generic
+/// mints the stub, and the unbounded one BESIDE IT in the same file used to borrow it.
+/// Measured on the pre-fix build, this program compiled and printed `1 2`; `bad` reached
+/// `good`'s `Printable` through nothing but the shared spelling of `T`.
+#[test]
+fn a_bounded_generic_does_not_lend_its_bound_to_an_unbounded_sibling() {
+    code!(
+        "fn good<T: Printable>(v: T) -> text { \"{v}\" }\n\
+         fn bad<T>(v: T) -> text { \"{v}\" }\n\
+         fn test() {}"
+    )
+    .error(
+        "generic type T cannot be formatted \u{2014} `\"{\u{2026}}\"` needs a bound that renders \
+            it; write `<T: Printable>` (every built-in satisfies it, and a user type does by \
+            defining `fn to_text(self: T) -> text`) at \
+            a_bounded_generic_does_not_lend_its_bound_to_an_unbounded_sibling:2:32",
     );
 }
 
@@ -2177,17 +2229,49 @@ fn binary_write_integer_cast_silent() {
 fn p315_float_literal_into_single_vector() {
     // One diagnostic per offending element (clean parse recovery, like the
     // sibling "No common type" path) — both float literals are rejected.
+    // loft#1146 — the SUFFIX is named first: it is the cure `LOFT.md`'s own example
+    // writes and the one that costs no conversion.  The cast stays for non-literals.
     code!("fn test() { v: vector<single> = [1.0, 2.0]; }")
         .error(
             "cannot store float elements in a vector<single> (would lose precision); \
-             cast each element explicitly with 'as single' at \
+             write `single` literals with the `f` suffix (`[1.0f, 2.0f]`), or cast each \
+             element with 'as single' at \
              p315_float_literal_into_single_vector:1:38",
         )
         .error(
             "cannot store float elements in a vector<single> (would lose precision); \
-             cast each element explicitly with 'as single' at \
+             write `single` literals with the `f` suffix (`[1.0f, 2.0f]`), or cast each \
+             element with 'as single' at \
              p315_float_literal_into_single_vector:1:43",
         );
+}
+
+/// loft#1146 — every refusal a `single` earns names the `f` literal suffix, which
+/// `LOFT.md` calls the FIRST cure and states three times.  Before this, all three
+/// prescribed `as` and none of them mentioned the suffix, so a reader who did not
+/// already know it could not reach it from the message; the scalar one additionally
+/// offered "use a new variable name", which is actively wrong here — the name is not
+/// the problem and a second variable earns the same rejection.
+#[test]
+fn single_refusals_name_the_f_suffix() {
+    // The scalar store.  "use a new variable name" is GONE, not merely reordered.
+    code!("fn test() { x: single = 1.5; }").error(
+        "Variable 'x' cannot change type from single to float; a bare decimal literal is \
+         `float` — write it with the `f` suffix (`1.5f`), or cast the value with \
+         `as single` at single_refusals_name_the_f_suffix:1:29",
+    );
+}
+
+/// loft#1146 — a suffix that is not `f` used to be lexed as a separate identifier, so
+/// `1.5s` reported "Expect token ;" — a missing semicolon, which names nothing the
+/// author did.  The run is consumed, so this is ONE diagnostic and not that one plus a
+/// parse error behind it.
+#[test]
+fn a_bad_numeric_suffix_names_the_suffix_set() {
+    code!("fn test() { x = 1.5s; }").error(
+        "`s` is not a numeric suffix; write `f` for a `single` literal (`1.5f`) — a bare \
+         decimal literal is a `float` at a_bad_numeric_suffix_names_the_suffix_set:1:21",
+    );
 }
 
 /// GitHub #256 — SUPERSEDED by @PLN17 (three-state boolean).  A boolean now has a

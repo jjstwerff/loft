@@ -168,6 +168,24 @@ file is picked up by:
   runs with `wasmtime` (skipped silently if `wasm32-wasip2` or
   `wasmtime` is unavailable).
 
+### What a `.loft` test asserts with
+
+**`assert(condition, message)` is the whole vocabulary.** There is no `assert_eq`, no
+`assert_true`, and no `Test::` namespace — those are habits from other languages and cost a
+compile error (`Unknown function assert_eq_int`) before they cost anything else.
+
+```loft
+assert(seen == 3, "the generator arrives three times: {seen}");
+```
+
+Interpolate the value you GOT into the message. The condition carries what you wanted, so a
+failure that prints only "assertion failed" tells the next reader nothing they cannot already
+see in the source, while `got 2` tells them how far off it was. (A general `assert_eq` that
+reports both sides is loft-lang/loft#1147.)
+
+The message is a normal interpolated text, so a struct field, a length or a whole expression
+can go in it.
+
 **That's why pure loft tests have a bigger testing scope than Rust
 integration tests.**  A `code!(...)` test in `tests/issues.rs`
 exercises one execution path (the in-process interpreter via

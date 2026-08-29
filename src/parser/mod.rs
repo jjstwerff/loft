@@ -2469,6 +2469,14 @@ impl Parser {
     /// template in THIS program, so an ordinary `t_<Type>_<fn>` appearing only in pass 2
     /// stays the fatal divergence the guard was built for.
     fn h5_names_a_bound_stub(&self, name: &str) -> bool {
+        // loft#1153 — EXACT, by the marker `Data::bound_stub_name` mints, rather than inferred
+        // from the shape of whatever def the type name happens to resolve to.  A stub whose
+        // holder has a FORWARD-REFERENCED bound is legitimately pass-2-only (`SqlDb.Both` gains
+        // two of its three stubs on pass 2), and the inferential test below could only reach
+        // that by looking the holder up — which the marked name defeats and no longer needs.
+        if crate::data::Data::is_bound_stub_name(name) {
+            return true;
+        }
         let Some((type_name, _)) = Self::h5_split_mangled(name) else {
             return false;
         };
@@ -10203,6 +10211,26 @@ impl Parser {
 
     /// Try to find a matching defined operator. There can be multiple possible definitions for each operator.
     fn call_op(&mut self, code: &mut Value, op: &str, list: &[Value], types: &[Type]) -> Type {
+        self.call_op_as(code, op, op, list, types)
+    }
+
+    /// [`Self::call_op`] where the operator the author WROTE differs from the one being
+    /// resolved (loft#1151).
+    ///
+    /// `handle_operator` derives the reversed spellings by swapping operands — `a > b` resolves
+    /// `<`, `a >= b` resolves `<=` — so by the time a refusal is reached the original spelling
+    /// is gone and the message named an operator the author never typed: `a >= b` on an
+    /// unbounded `<T>` reported *"operator '<=' requires a concrete type"*.  `spelled` is
+    /// carried for the DIAGNOSTIC only; every resolution decision still reads `op`, so the two
+    /// cannot drift into disagreeing about what is being resolved.
+    fn call_op_as(
+        &mut self,
+        code: &mut Value,
+        op: &str,
+        spelled: &str,
+        list: &[Value],
+        types: &[Type],
+    ) -> Type {
         // A first-pass UNARY op on an operand whose type is still UNRESOLVED — an
         // Unknown-rooted value, e.g. `x = f()` where `f`'s return type isn't linked
         // yet (a cross-package fn resolved only after this body's first pass) — must
@@ -10243,12 +10271,15 @@ impl Parser {
         // I8.1: if any operand is a generic type variable, skip the main operator loop
         // and go straight to the T-stub lookup.  The main loop would otherwise false-match
         // concrete operators (e.g. OpEqRef, OpEqBool) via implicit type conversions on T.
-        let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
+        let generic_name = types
+            .iter()
+            .find_map(|t| self.generic_type_name(t))
+            .map(str::to_string);
         if let Some(tv_name) = generic_name {
             if self.first_pass {
                 // Return the type variable type so assignments keep a consistent type
                 // through the first pass (Type::Void would trigger "cannot change type").
-                let tv_nr = self.data.def_nr(tv_name);
+                let tv_nr = self.data.def_nr(&tv_name);
                 return if tv_nr == u32::MAX {
                     Type::Unknown(0)
                 } else {
@@ -10256,18 +10287,90 @@ impl Parser {
                 };
             }
             let op_method = format!("Op{}", rename(op));
-            let stub_name = format!("t_{}{}_{}", tv_name.len(), tv_name, op_method);
+            let stub_name = crate::data::Data::bound_stub_name(&tv_name, &op_method);
             let stub_nr = self.data.def_nr(&stub_name);
             // Only use the T-stub if the CURRENT function's bounds declare this method.
             // Without this check, T-stubs from unrelated bounded generics (e.g., stdlib's
             // sum<T: Addable>) would leak into unbound generics like `fn bad<T>(x+y)`.
             if stub_nr != u32::MAX
                 && self.context != u32::MAX
-                && self.has_bound_for_method(&op_method, self.data.def_nr(tv_name))
+                && self.has_bound_for_method(&op_method, self.data.def_nr(&tv_name))
             {
                 let tp = self.call_nr(code, stub_nr, list, types, false, &[], None);
                 if tp != Type::Null {
                     return tp;
+                }
+            }
+            // loft#1144 — `!=` DERIVES from the bound's `==`.  `Equatable` declares `==`
+            // alone, deliberately: an interface demanding every spelling would break every
+            // user type that implements the minimum, and `default/01_code.loft` says the
+            // bound is *"satisfied by … user types defining OpEq"*.  So the bound names
+            // exactly the operator the derivation needs, and refusing `!=` left the
+            // interface unable to serve the commonest use of itself — a guard that fires on
+            // inequality — forcing every generic comparison to be written backwards.
+            //
+            // `!(a == b)` is EXACT, not an approximation, and that is what makes it
+            // shippable where the non-strict comparisons are not: it agrees with the
+            // concrete `OpNe*` on every value including IEEE `NaN` (`NaN == NaN` is false,
+            // so `!(NaN == NaN)` is true, which is what `NaN != NaN` answers), and each
+            // operand is emitted exactly ONCE, so an operand with side effects runs once.
+            // `<=` / `>=` have neither property when derived from `<` alone — see loft#1151.
+            //
+            // The swap that already derives `>` from `<` lives one layer up, in
+            // `operators.rs::handle_operator`; this is the same act for the equality pair,
+            // placed HERE because the fallback is only correct once the direct stub lookup
+            // above has come up empty — a bound that DOES declare `!=` keeps its own.
+            if op == "!="
+                && self.context != u32::MAX
+                && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name))
+            {
+                let eq_stub = crate::data::Data::bound_stub_name(&tv_name, "OpEq");
+                let eq_nr = self.data.def_nr(&eq_stub);
+                if eq_nr != u32::MAX {
+                    let mut eq_code = Value::Null;
+                    let tp = self.call_nr(&mut eq_code, eq_nr, list, types, false, &[], None);
+                    if tp != Type::Null {
+                        *code = self.cl("OpNot", &[eq_code]);
+                        return Type::Boolean;
+                    }
+                }
+            }
+            // loft#1151 — `<=` DERIVES from the bound's `<`, and `>=` comes with it because
+            // `handle_operator` already rewrites `a >= b` to `b <= a`.  `Ordered` declares
+            // `op <` alone — deliberately, so a user type satisfies it by defining one
+            // method — and `>` has always derived from it by swapping operands; this is the
+            // same act for the non-strict spelling.
+            //
+            // `!(b < a)` is exact for a TOTAL order, and every type `Ordered` names has one.
+            // The case to worry about is a NaN, and loft does not have one here: its float
+            // null IS the NaN and the type system keeps it in `float?`, so the NON-NULL
+            // `float` a `<T: Ordered>` binds holds only real numbers.  Measured against the
+            // concrete `<=` over float, single, integer and text INCLUDING their extremes —
+            // 84 pairs, zero disagreements.  A user type's `OpLt` is promised to be an order
+            // by the bound it satisfies; where it is not, no derivation can help.
+            //
+            // Each operand is emitted ONCE.  That is what makes this shippable where
+            // `a < b || a == b` is not: the sound-looking alternative needs `Equatable` as a
+            // second bound AND evaluates both operands twice, so `f(x) <= g(y)` would call
+            // `f` and `g` twice while `f(x) < g(y)` beside it called them once.
+            if op == "<="
+                && self.context != u32::MAX
+                && list.len() == 2
+                && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name))
+            {
+                let lt_stub = crate::data::Data::bound_stub_name(&tv_name, "OpLt");
+                let lt_nr = self.data.def_nr(&lt_stub);
+                if lt_nr != u32::MAX {
+                    // SWAPPED: `a <= b` is `!(b < a)`.
+                    let swapped = [list[1].clone(), list[0].clone()];
+                    let swapped_tp = [types[1].clone(), types[0].clone()];
+                    let mut lt_code = Value::Null;
+                    let tp =
+                        self.call_nr(&mut lt_code, lt_nr, &swapped, &swapped_tp, false, &[], None);
+                    if tp != Type::Null {
+                        *code = self.cl("OpNot", &[lt_code]);
+                        return Type::Boolean;
+                    }
                 }
             }
         } else {
@@ -10367,14 +10470,14 @@ impl Parser {
                 self.lexer,
                 &self.lexer.peek(),
                 Level::Error,
-                "generic type {tv_name}: operator '{op}' requires a concrete type",
+                "generic type {tv_name}: operator '{spelled}' requires a concrete type",
             );
         } else if types.len() > 1 {
             specific!(
                 self.lexer,
                 &self.lexer.peek(),
                 Level::Error,
-                "No matching operator '{op}' on '{}' and '{}'",
+                "No matching operator '{spelled}' on '{}' and '{}'",
                 types[0].name(&self.data),
                 types[1].name(&self.data)
             );
@@ -10383,7 +10486,7 @@ impl Parser {
                 self.lexer,
                 &self.lexer.peek(),
                 Level::Error,
-                "No matching operator {op} on {}",
+                "No matching operator {spelled} on {}",
                 types[0].name(&self.data)
             );
         }

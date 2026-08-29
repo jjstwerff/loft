@@ -160,6 +160,10 @@ implication that reading `deps` is *sufficient*.
 OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
 known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+D-own-23 opened and closed 2026-08-29 with loft#1154; D-own-24 the same day with loft#1156, and D-own-21 with
+loft#1150 — the three-faced one, whose entry records that a DEFERRAL is a missing
+measurement rather than a closed question; D-own-22 opened and closed 2026-08-29 with
+loft#1142; D-own-20 opened and closed 2026-08-29 with loft#1143;
 D-own-19 was opened 2026-08-28, narrowed the same day to its path-sensitive half (loft#1126)
 and CLOSED the same day with loft#1128; D-own-17 and D-own-18 both opened and closed
 2026-08-28;
@@ -177,6 +181,236 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-21 — CLOSED (2026-08-29, loft#1150): three faces of one list that read `Hash` and not `Optional(Hash)`
+
+Opened the same day and closed here.  A `-> hash<T[k]>?` did not hand back what it built, and
+the three defects hid one another in sequence: the value was DISCARDED and the sentinel
+returned; once D-own-22 made it come back, the arm buffers were freed twice — conditionally by
+that fix and unconditionally at scope exit — so the store being returned was released; and a
+genuinely ABSENT return panicked in `copy_claims` on the way into the caller's local.
+
+**All three are one miss wearing three faces.**  `@FR-L-Null` gives `τ?` the same layout and
+the same store as `τ`, so every site deciding *"does this carry a store?"* must peel:
+
+* `get_free_vars`'s `suppress_source` asked `is_dbref(tp(v))` BARE, so a nullable arm buffer
+  failed the `return_sources` suppression and took an unconditional scope-exit free.
+* `is_protectable_store_type` asked it bare **while its own caller peels**, so a `τ?` argument
+  left the @P290 witness set incomplete and the minting arm leaked.
+* `OpReplaceKeyed` dereferenced an ABSENT source, where its own FREE leg had carried the
+  sentinel guard all along — the copy leg simply never got one.
+
+⚠ **The second of those was written down and deliberately deferred**, on the ground that *"the
+change has no measurement asking for it"*: it is not inert (it moves emitted code in six corpus
+programs, every one a guard for this machinery) and it moves in the direction where a mistake
+is a use-after-free rather than a leak.  This issue is that measurement — one program, two
+spellings, and only the wrapper between them.  All six named guards (1021, 1029, 1105, 1106,
+1107, 882) are green under `LOFT_STRICT_STORES=1` + `LOFT_POISON=1` on both backends with the
+peel in place, which is the check the deferral asked for.  **A deferral records a missing
+measurement, not a closed question; take it up when the measurement arrives.**
+
+Absence needed a representation, and one already existed: `DbRef::ABSENT_REC` in the collection
+slot (loft#917) means null for an ALLOCATED store, where zero means the EMPTY collection.  So an
+absent source leaves the destination's store in place — there is nowhere else for a later `+=`
+to build — and marks the slot absent.  `Stores::mark_collection_absent` is the one home, called
+from both `OpReplaceKeyed` bodies.
+
+**This is the sixth and seventh site where this same list has drifted short by the wrapper** —
+`is_dbref` here (twice), at D-own-13, `deps_mut` (loft#1106), `is_keyed` (loft#1140's
+`94ae617f`) and `depend` (loft#1143).  `is_dbref`'s own doc records that it drifts when
+RESTATED; it drifts when asked BARE just as reliably.
+
+Guard: `tests/scripts/1150-a-keyed-return-that-can-be-absent-hands-back-what-it-built.loft`,
+falsified at `d47714d9` on both backends (a PANIC to clean).  `absent_is_not_empty` is the cell
+that separates the two states — every other cell passes if they are conflated.
+
+⚠ Its results are all BOUND before they are read: consuming a nullable keyed return INLINE
+retains the callee's store, which is **loft#1157**, pre-existing and measured unchanged across
+this fix, with the dense spelling clean.  An inline cell would lock that leak.
+
+### D-own-24 — OPENED AND CLOSED (2026-08-29, loft#1156): a body local died at the block, and was read after it
+
+`@FR-O-Owner` places a free where the value DIES.  A local a loop BODY assigns is scoped to the
+body block, so `get_free_vars` released its store at the end of every iteration — and a read
+after the loop then read a freed record.
+
+```loft
+for p in as1 { e = p; }
+// … anything that allocates …
+println("{e.v}");     // answers 100 — a `Junk`'s bytes, through `A`'s layout
+```
+
+⚠ **Three things make this the register's clearest case of a defect no instrument reports.**
+The obvious repro answers CORRECTLY — with nothing allocated in between, the freed slot still
+holds the last value, so the churn is what makes it visible at all.  `LOFT_STRICT_STORES=1`
+does NOT catch it: the slot really is free, so no detector is violated; the read simply lands
+on whatever the allocator handed out next.  And `--native` REFUSED the program (`E0425`),
+which reads like a native limitation and is the opposite — the free analysis had already
+placed the local's death at the block's end and native additionally scoped the Rust `let`
+there.  **One decision, expressed twice, half of it visible.**  Making it compile without
+moving the scope would have shipped the interpreter's use-after-free to native.
+
+Closed by hoisting the SCOPE, not by moving the free: pre-initialised at the enclosing scope
+the local gets ONE store that each iteration copies into.  That is byte-for-byte the IR a
+hand-written `e: A = A { … }` before the loop already produces, which is the strongest evidence
+available that the target shape is right — a program that already ran correctly on both
+backends.  It also settles the design question the issue left open (*extend the lifetime, or
+refuse the read?*) without choosing either: a refusal would have to explain why
+`for i in 0..2 { n = i * 10; } println(n)` is legal, and it is, on both backends — the scalar
+works precisely because a scalar slot is already function-wide, which is the scope the hoist
+gives the heap handle.  The rule was not extended; it reached the case that was missing it.
+
+The exclusion is `was_loop_var`, and it is what keeps loft#1135 closed: a loop's own VARIABLE
+is read after the loop routinely (LOFT.md documents it) and reserving a slot for it at the
+enclosing scope orphans one store per program.
+
+Guard: `tests/scripts/1156-a-loop-body-local-read-after-the-loop-is-not-freed-per-iteration.loft`,
+falsified at `8d3245eb` on both backends — **on different channels**, which is the signature:
+the interpreter fails an ASSERTION (it ran, and answered wrong), native fails to COMPILE and
+has no assertion to fail.  Its cells sweep a copy-bound local, a BORROW-bound one, zero
+iterations (`null`, the answer loft#915 gives), and a local first assigned in an INNER body and
+read after the OUTER loop — that last because hoisting only one level puts it in the outer
+loop's body, where every single-loop cell still passes.
+
+### D-own-23 — OPENED AND CLOSED (2026-08-29, loft#1154): the CALL-SITE mirror — a join whose arm is a call
+
+D-own-22's residual, and the same rule from the other side.  A keyed local bound from a JOIN
+whose arm is a fresh-storage CALL retains that call's store:
+
+```loft
+fn mk(k: integer) -> hash<Hr[hk]> { [Hr{hk: k, hv: k * 11}] }
+g = if c { mk(1) } else { mk(2) };     // one store retained per evaluation of a call arm
+```
+
+`OpReplaceKeyed`'s `0x8000` source-free bit is set from `is_struct_returning_call(code)` —
+*is the RHS a call* — and a `Value::If` is not one, so the store the callee minted is copied
+out of and abandoned.  The deep copy itself is correct, which is why this is a pure retention.
+
+Measured against D-own-22 on one program: `origin/main` ×6, the D-own-22 build ×3 — the callee
+half is closed and this half is untouched, which is what says they are two deviations and not
+one.
+
+⚠ **The obvious cure is an OVER-FREE**, and that is what shaped the fix.  Widening the gate to
+*"a join whose arms are calls"* breaks the mixed shape `if c { mk(1) } else { m }`: on the local
+arm the source is `m`'s store and freeing it takes the caller's collection.  The static bit
+cannot separate the arms and which arm ran is a runtime fact.
+
+Closed by deciding PER ARM (`Parser::join_source_frees`): a fresh-storage CALL's store is
+nobody else's and may be freed; a NAMEABLE arm is marked for the @P290 bracket, which then
+refuses its free at runtime; an arm that is neither leaves the decision unmakeable and the
+conservative never-free stands.  `view_root_slots` already unioned a join's arm roots for the
+ARGUMENT case, so the witness half needed no new derivation — only to be reached.
+
+Guard: `tests/scripts/1154-a-join-of-calls-frees-the-store-its-callee-minted.loft`, falsified
+at `7f80c305` on both backends (ten retained stores to clean, with `exit` and `asserts` reading
+`0|0` on both trees).  `call_or_local` is the OVER-FREE control and fails LOUDLY — it reads the
+local back empty — where the defect itself is silent.
+
+⚠ **No `??` cell.**  `??` is a join in the LANGUAGE and not one in the IR: it lowers to a block
+named `ncc` holding its subject in a `skip_free` `__ncc_N` temp, so its arms are not
+`Value::If` arms and this gate does not reach them.  `X ?? <call>` retains the call's store —
+recorded on loft#1157, whose subject is exactly that: a keyed call result with no owner.
+Protecting `__ncc_1` as a witness would make it WORSE, since that temp is the one needing the
+free.
+
+### D-own-22 — OPENED AND CLOSED (2026-08-29, loft#1142): a Join answered the ownership fact per FUNCTION
+
+`(O-Complete)` requires the fact PER BINDING and PER PATH.  `get_free_vars` answered it per
+FUNCTION: `in_ret` suppresses the scope-exit `OpFreeRef` for every member of `return_sources`,
+and a join puts EVERY arm in that set — while at most one arm is the return on any given run.
+A keyed return through a branch join therefore retained the arms that did not run, one store
+per call, growing without bound in a loop.  Values were correct throughout, so only the leak
+channel could score it.
+
+**Two proximate mechanisms, and that is what decides where the cut goes.**  With LITERAL arms
+the untaken arm's `__kvb_N` is allocated before the branch is tested — `scan_if`'s pre-init
+prefix emits `Set(v, Null)` per assigned variable, and for a keyed local that is an
+`OpDatabase` store rather than a cheap null (the same belief loft#1135 was, one prefix over).
+With NAMED-LOCAL arms nothing is pre-inited and it leaks identically.  So removing the
+allocation closes one shape and leaves the other: **the defect is the free.**
+
+Closed by widening loft#1022's runtime leg rather than adding one — hoist the join to
+`__ret_N`, then `OpFreeRefIfDistinct(src, __ret_N)` per owned candidate.  Which arm ran is not
+a static fact and that comparison is the only thing that can decide it.  The record gate asks
+for an arm that is NOT a source, because a record's orphan is the arm that fails to deliver; a
+keyed join orphans with every arm a source, so the keyed gate asks for **an owned keyed source
+plus more than one arm**.  Counting owned sources alone was measured short:
+`if c { x } else { [lit] }` has exactly one and still orphans it on the `x` path.
+
+Guard: `tests/scripts/1142-a-keyed-return-through-a-join-frees-the-arm-that-did-not-run.loft`,
+falsified at `caa35d27` on BOTH backends — 5 leaked store kinds (94 stores) to clean, with
+`exit` and `asserts` reading `0|0` on both trees, which is why the header says the leak is the
+channel that moves.
+
+⚠ **The CALL-SITE mirror is open as loft#1154**, and the same program measures it: `origin/main`
+leaked ×6, this build ×3.  A keyed local bound from a join whose arm is a fresh-storage CALL
+retains that call's store, because `OpReplaceKeyed`'s `0x8000` gate asks *is the RHS a call*
+and a join is not.  Its obvious cure is an over-free — an arm that is a bare local would have
+the caller's store freed — so it needs the @P290 bracket widened to protect arm terminals and
+not only ref arguments.  Found by `scripts/matrix_axes.py` reporting *statement context:
+MISSING if-arm* on this fix's guard; the cell did not exist until the axis tool asked for it.
+
+### D-own-20 — OPENED AND CLOSED (2026-08-29, loft#1143): the `?` spelling of a keyed return borrowed nothing
+
+`(O-Move)`'s borrow clause — *a return that hands back a parameter is recorded in the return
+type, and the caller COPIES* — was implemented for `hash<T[k]>` by loft#1140 and not for
+`hash<T[k]>?`.  `@FR-L-Null` settles that they are the same question: `layout(τ) = layout(τ?)`,
+so a `?` changes what the slot may HOLD and not what it reaches.
+
+```loft
+struct Hr { hk: integer, hv: integer }
+fn nz(x: hash<Hr[hk]>?) -> hash<Hr[hk]>? { x }
+//  203/203 0/0 0/0        expected 203/203 203/203 203/203 — both backends, no diagnostic
+```
+
+**Two sites, and fixing either alone is worse than fixing neither.**  `Type::ret_dep_shape`
+did not peel `Optional(<keyed>)`, so the borrow went unrecorded and the caller freed a store
+it had been lent.  Peeling it there and stopping turns the wrong answer into a `--native`
+PANIC, because the second site — the keyed assignment's dep-strip in `parser/expressions.rs`
+— restated the five keyed variants inline where `Type::depend` is the declared home for
+*"which vars does this type borrow?"*, and that function is dep-transparent through
+`Optional` (@PLN25).  The nullable destination therefore kept the borrow it had just
+deep-copied away from, was typed as owning no store, and `OpReplaceKeyed` wrote through the
+`u16::MAX` null sentinel.
+
+The write side of that same list had already been fixed once, for the same reason:
+`make_independent` reads `Type::deps_mut`, which peels the wrapper, *"spelled inline here,
+this arm list had drifted behind that one by an `Optional`"* (D-own-13 first face, loft#1106).
+The READ side beside it kept its hand-rolled match for another three days.  **A restated type
+list drifts SHORT, and the direction is always the wrapper** — this register now records the
+same miss at `is_dbref` (D-own-13), `deps_mut` (loft#1106), `is_keyed` (loft#1140's
+`94ae617f`) and `depend` (here).
+
+Guard: `tests/scripts/1143-a-returned-nullable-keyed-parameter-is-still-the-callers.loft`,
+falsified at `d496ace4` on BOTH backends (exit 1 -> 0, 1 assertion failure -> 0 each).  Its
+cells sweep the three signature spellings, all five keyed kinds and the nullable-vector
+control; **it deliberately carries no cell for a keyed return that can be ABSENT** — see
+D-own-21, which that would lock rather than guard.
+
+### D-own-21 (original entry) — superseded by the CLOSED entry above (2026-08-29, loft#1150)
+
+The nullable half of the keyed return delivery that D-own-20 did not reach.  When the value a
+`-> hash<T[k]>?` hands back can be absent — either literally (`{ null }`) or because the tail
+is a BRANCH JOIN — the body frees every arm's store and returns the null sentinel:
+
+```loft
+fn f(c: boolean) -> hash<Hr[hk]>? { if c { [Hr{hk: 9, hv: 900}] } else { [Hr{hk: 8, hv: 800}] } }
+//  --interpret answers 800 by READING THE FREED STORE (LOFT_STRICT_STORES=1 names the
+//  use-after-free); --native panics in `allocation.rs` indexing allocations[u16::MAX].
+```
+
+The emitted IR shows it directly: the dense twin ends `return if c { __kvb_1 } else { __kvb_2 }`
+and the nullable one drops the `if` to a statement, emits `OpFreeRef` for BOTH arm buffers and
+ends `return null`.  `vector<T>?` and `S?` joins are clean, so the boundary is exactly the five
+keyed kinds behind `?` — the kinds whose `block_result` arm (added by loft#1140) records the
+borrow fact and dispatches no delivery, where the vector and reference arms each dispatch one.
+
+Ruled out by measurement, so nobody re-derives them: `is_dbref(result.base())` and
+`tail_is_if` are both TRUE for the nullable spelling, `unify_if_branches_work_refs` returns
+`None` for the DENSE spelling too (its arm terminals are `__kvb_N`, not `__ref_N`), and
+`get_free_vars` reports byte-identical `ret_var` / `return_sources` for both.  The divergence
+is therefore downstream of the scope pass's inputs, not in the `if_unified` gate that names
+this exact symptom in its own comment.
 
 ### D-own-19 — OPENED AND CLOSED (2026-08-28, loft#1126 + loft#1128): ownership read off the BINDING, not the latest assignment
 

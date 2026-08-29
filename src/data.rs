@@ -1789,7 +1789,7 @@ impl Type {
                 if matches!(
                     inner.as_ref(),
                     Type::Reference(_, _) | Type::Enum(_, true, _)
-                ) =>
+                ) || crate::parser::vectors::is_keyed(inner) =>
             {
                 (inner, RetPeel::SignatureOnly)
             }
@@ -3634,8 +3634,19 @@ impl LinkedFieldGroup {
 }
 
 /// Game definition, the data cannot be changed, there can be instances with differences
+// `Definition` is the parser's per-definition RECORD, and its boolean columns are independent
+// facts about one definition rather than a state machine that could be an enum — `bound_holder`
+// (loft#1153) is a fact about what a name IS, and it does not exclude any of the others.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct Definition {
+    /// Is this a bound HOLDER — a generic's type variable, or an interface's associated type?
+    ///
+    /// Set by `create_bound_method_stubs`, which is the one place that knows.  A DURABLE flag
+    /// and not a structural test: `is_type_var_placeholder` is the natural reading and does not
+    /// survive the two passes, so an associated type keyed as concrete on pass 1 and as a
+    /// holder on pass 2 (loft#1153).  Read by `Data::key_type_name`.
+    pub bound_holder: bool,
     pub name: String,
     pub source: u16,
     /// Type of definition.
@@ -5427,6 +5438,7 @@ impl Data {
             self.def_names.insert((name.to_string(), self.source), rec);
         }
         let new_def = Definition {
+            bound_holder: false,
             name: name.to_string(),
             source: self.source,
             position: position.clone(),
@@ -5984,8 +5996,73 @@ impl Data {
         // `type_def_nr` peel still governs LAYOUT (Optional shares the base's
         // storage); this only distinguishes the def KEY. Gate-OFF no `Optional`
         // exists, so the name is the base — byte-identical.
-        let sig = Self::sig_type_name(&self.def(type_nr).name, &arguments[0].typedef);
+        let sig = Self::sig_type_name(&self.key_type_name(type_nr), &arguments[0].typedef);
         Some(format!("t_{}{}_{fn_name}", sig.len(), sig))
+    }
+
+    /// The marker that separates a bound HOLDER's method namespace from a concrete type's
+    /// (loft#1153).  `#` cannot occur in a loft identifier, so no user type can produce it, and
+    /// `generation::sanitize` maps it before anything reaches Rust.
+    const HOLDER_MARK: &'static str = "#g";
+
+    /// The internal name of a BOUND-METHOD STUB for `holder` — a generic's type variable, or an
+    /// interface's associated type.
+    ///
+    /// Deliberately NOT `t_<LEN><holder>_<method>`, which is a CONCRETE type's method spelling.
+    /// A type variable and a struct of the same name mangle identically under that scheme and
+    /// share one namespace, so a bound declaring a method as common as `to_text` or `op ==`
+    /// took that method away from every struct spelling the variable's name: the struct's own
+    /// declaration was refused as a redefinition, and a value of it resolved to the stub.
+    ///
+    /// The marker sits INSIDE the length-counted portion, so the `t_<LEN><Type>_<method>`
+    /// readers (`api_surface::method_name`, the `OpIndex` refusal) still split it correctly.
+    ///
+    /// ⚠ One home, because several sites construct or look this up, and a stub minted under one
+    /// spelling and sought under another is not an error — it is silently unresolvable, which
+    /// reads as *"the bound does not supply that method."*
+    #[must_use]
+    pub fn bound_stub_name(holder: &str, method: &str) -> String {
+        let h = format!("{holder}{}", Self::HOLDER_MARK);
+        format!("t_{}{}_{method}", h.len(), h)
+    }
+
+    /// Is this mangled name a bound-method STUB?  Exact, by the marker
+    /// [`Self::bound_stub_name`] mints — not inferred from the shape of whatever def the type
+    /// name happens to resolve to.
+    #[must_use]
+    pub fn is_bound_stub_name(name: &str) -> bool {
+        name.starts_with("t_") && name.contains(Self::HOLDER_MARK)
+    }
+
+    /// Mark `d_nr` as a bound HOLDER, so every method key for it takes the stub spelling.
+    ///
+    /// ⚠ A DURABLE flag and not a structural test.  `is_type_var_placeholder` is the natural
+    /// reading and does not survive the two passes: an interface's ASSOCIATED type keyed as
+    /// concrete on pass 1 and as a holder on pass 2, so its stubs were minted under two names.
+    pub fn mark_bound_holder(&mut self, d_nr: u32) {
+        if let Some(d) = self.definitions.get_mut(d_nr as usize) {
+            d.bound_holder = true;
+        }
+    }
+
+    /// The full method key for `method` on the definition `type_nr` — the ONE spelling every
+    /// site must use, whether `type_nr` is a concrete type or a bound holder.
+    #[must_use]
+    pub fn method_key(&self, type_nr: u32, method: &str) -> String {
+        let n = self.key_type_name(type_nr);
+        format!("t_{}{}_{method}", n.len(), n)
+    }
+
+    /// The name that KEYS a method on `type_nr`: a concrete type's own name, or a bound
+    /// holder's marked spelling.
+    #[must_use]
+    fn key_type_name(&self, type_nr: u32) -> String {
+        let d = &self.definitions[type_nr as usize];
+        if d.bound_holder {
+            format!("{}{}", d.name, Self::HOLDER_MARK)
+        } else {
+            d.name.clone()
+        }
     }
 
     /**
@@ -6036,7 +6113,7 @@ impl Data {
             && arguments.first().is_some_and(|a| {
                 let tn = self.type_def_nr(&a.typedef);
                 tn != u32::MAX && {
-                    let sig = Self::sig_type_name(&self.def(tn).name, &a.typedef);
+                    let sig = Self::sig_type_name(&self.key_type_name(tn), &a.typedef);
                     own(self, &format!("t_{}{}_{fn_name}", sig.len(), sig)) != u32::MAX
                 }
             });
@@ -6067,7 +6144,7 @@ impl Data {
         {
             let tn = self.type_def_nr(&arg.typedef);
             if tn != u32::MAX {
-                let sig = Self::sig_type_name(&self.def(tn).name, &arg.typedef);
+                let sig = Self::sig_type_name(&self.key_type_name(tn), &arg.typedef);
                 let m_nr = self.def_nr(&format!("t_{}{}_{fn_name}", sig.len(), sig));
                 if m_nr != u32::MAX {
                     // The package short-name for the qualified-call fix line. `use_names`
@@ -6226,7 +6303,7 @@ impl Data {
             );
             // @PLN25 — key the dispatcher attribute by the nullability-aware sig name so a
             // `min(τ?)` overload lives beside `min(τ)` on the `Dynamic` def.
-            let base = self.def(type_nr).name.clone();
+            let base = self.key_type_name(type_nr);
             let sig = Self::sig_type_name(&base, &arguments[0].typedef);
             let a_nr = self.add_attribute(lexer, main, &sig, Type::Routine(d_nr));
             self.definitions[main as usize].attributes[a_nr].mutable = false;
@@ -6255,7 +6332,7 @@ impl Data {
         let is_both = !arguments.is_empty() && arguments[0].name == "both";
         if is_self || is_both {
             let type_nr = self.type_def_nr(&arguments[0].typedef);
-            let base = self.def(type_nr).name.clone();
+            let base = self.key_type_name(type_nr);
             let sig = Self::sig_type_name(&base, &arguments[0].typedef);
             let struct_source = self.definitions[type_nr as usize].source;
             let lookup = |nm: &str| {
@@ -6330,7 +6407,7 @@ impl Data {
             // No method dispatch for types like Function; fall back to n_ global.
             return self.source_nr(source, &format!("n_{fn_name}"));
         }
-        let base = self.def(type_nr).name.clone();
+        let base = self.key_type_name(type_nr);
         let sig = Self::sig_type_name(&base, tp);
         // loft#850 — the mangled key spells the receiver's NAME, and a name is not a type.
         // Two packages may each declare a `Thing`, and both then register their methods
@@ -6414,7 +6491,7 @@ impl Data {
         if type_nr == u32::MAX {
             return u32::MAX;
         }
-        let base = self.def(type_nr).name.clone();
+        let base = self.key_type_name(type_nr);
         let sig = Self::sig_type_name(&base, tp);
         let d_nr = self.source_nr(source, &format!("t_{}{}_{fn_name}", sig.len(), sig));
         if d_nr != u32::MAX {

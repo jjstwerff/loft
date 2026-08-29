@@ -2728,6 +2728,46 @@ impl Parser {
         is_field: bool,
     ) -> (Type, Vec<Value>) {
         let mut ls = Vec::new();
+        // loft#1160 / loft#1161 — a write spelled through a variant's payload BINDING means
+        // what the same write spelled through the FIELD means, so resolve the binding back to
+        // the field access it was projected from and build the ordinary field append.
+        //
+        // It has to happen HERE rather than at `new_record` below, because the two halves that
+        // go wrong are decided on either side of that call.  Treated as a bare local, the
+        // binding gets a store of its own minted for it (`vector_db`, and `vector_needs_db`
+        // after) and is REBOUND to it, so the append landed in a fresh store the block threw
+        // away — the write never reached the subject at all (loft#1161).  And `new_record` was
+        // handed no field, so `Stores::record_finish` had no `other_indexes` to walk and the
+        // record reached the member the binding named and no sibling (loft#1160).  One
+        // substitution, above both, and everything downstream is on the path it already has
+        // for a field.
+        //
+        // A capture spanning ALTERNATIVES (`is A | B { f }`) is deliberately absent from
+        // `mv_field_origin`: it picks its origin from the runtime tag, so it has no one field
+        // to be resolved to.
+        let binding_origin = if self.first_pass || is_field {
+            None
+        } else {
+            self.vars.mv_field_origin.get(&vec).cloned()
+        };
+        //
+        // `vec` is deliberately KEPT — the binding is a real variable and everything below
+        // that reads it (the pre-allocation, and the `vars` lookups under it) needs one; only
+        // the two store-MINTING branches are suppressed, which is the half that was wrong.
+        // Blanking it to `u16::MAX` instead reads as "no variable" to some of those lookups
+        // and panics on `variables[65535]`.
+        let substituted = binding_origin.is_some();
+        let mut owned_origin;
+        let mut owned_parent;
+        let (val, parent_tp, is_var, is_field) = match binding_origin {
+            Some((origin, origin_parent)) => {
+                owned_origin = origin;
+                owned_parent = origin_parent;
+                (&mut owned_origin, &mut owned_parent, false, true)
+            }
+            None => (val, &mut parent_tp.clone(), is_var, is_field),
+        };
+        let parent_tp: &Type = parent_tp;
         // loft#944 — in pass 1 an element type naming a type declared LOWER in the file is
         // still a stub, so there is no record shape and every step below asks for one:
         // `new_record` reports Fatal, and the append path reaches `data.def(u32::MAX)`.
@@ -2757,7 +2797,7 @@ impl Parser {
         // the initial `=` assignment; calling vector_db again would reset v to an
         // empty record and discard the existing elements.  create_vector handles
         // the `=` re-assignment case by calling vector_db unconditionally.
-        if self.vars.tp(vec).depend().is_empty() {
+        if !substituted && self.vars.tp(vec).depend().is_empty() {
             ls.extend(self.vector_db(in_t, vec));
         }
         // O8.1a: pre-allocate vector capacity when the element count is known
@@ -2784,7 +2824,8 @@ impl Parser {
             }
         }
         ls.extend(self.new_record(val, parent_tp, elm, vec, res, in_t));
-        if !self.first_pass
+        if !substituted
+            && !self.first_pass
             && vec != u16::MAX
             && !self.vars.is_argument(vec)
             && self.vector_needs_db(vec, in_t, is_var)
@@ -3260,15 +3301,30 @@ impl Parser {
                 // write overflows them → heap corruption) AND lose data
                 // (float→single).  Consistent with scalar / local-vector
                 // assignment, which already reject this.
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "cannot store {} elements in a vector<{}> (would lose precision); \
+                // loft#1146 — for `float` elements in a `vector<single>` the cheapest cure
+                // is the literal SUFFIX, not a cast: `[1.0f, 2.0f]` is what `LOFT.md`'s own
+                // example writes, and per-element `as single` was the only thing offered.
+                // Named first because it costs no conversion; the cast stays for the case
+                // where the elements are not literals.
+                if matches!(t, Type::Float) && matches!(in_t.base(), Type::Single) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot store float elements in a vector<single> (would lose precision); \
+                         write `single` literals with the `f` suffix (`[1.0f, 2.0f]`), or cast each \
+                         element with 'as single'"
+                    );
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "cannot store {} elements in a vector<{}> (would lose precision); \
                      cast each element explicitly with 'as {}'",
-                    t.name(&self.data),
-                    in_t.name(&self.data),
-                    in_t.name(&self.data)
-                );
+                        t.name(&self.data),
+                        in_t.name(&self.data),
+                        in_t.name(&self.data)
+                    );
+                }
             } else if self.convert(&mut p, in_t, &t) {
                 // INFERRED element type: widen to the common type
                 // (e.g. [1, 2.0] → vector<float>).

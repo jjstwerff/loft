@@ -9,6 +9,17 @@ use super::{
 
 // Variable resolution, struct construction, and object parsing.
 
+/// One member of a linked collection GROUP — a field whose collection is one route to a
+/// record set shared with its siblings (@FR-Col-Group).
+pub(crate) struct GroupMember {
+    /// Index of the field in its container's attribute list, which is DECLARATION order.
+    pub(crate) a_nr: usize,
+    pub(crate) name: String,
+    /// Keyed kinds are what make a group form at all; a plain `vector` member is a member
+    /// but cannot be the reason there is a group.
+    pub(crate) keyed: bool,
+}
+
 /// The ops a struct-literal field parse cannot emit in place, collected for the
 /// caller (`Parser::parse_object`) to splice at a fixed point.  Both exist
 /// because a field's ops are order-sensitive against the record-creation
@@ -3855,6 +3866,38 @@ impl Parser {
         crate::parser::vectors::is_keyed(tp)
     }
 
+    /// The linked collection GROUPS declared by struct/enum-value `td_nr` — every set of two
+    /// or more collections over ONE element type of which at least one is keyed
+    /// (@FR-Col-Group).  Members come back in DECLARATION order, each with the attribute
+    /// index that fixes its place in the declaration.
+    ///
+    /// One home for "which fields are a group", so the two advices over that question — the
+    /// literal that fills two members, and the declaration that spreads one out — cannot
+    /// disagree about what a group is.  Pairs that are not a group (two plain vectors, two
+    /// collections over different element types) never appear.
+    pub(crate) fn collection_groups(&self, td_nr: u32) -> Vec<(u32, Vec<GroupMember>)> {
+        let mut groups: Vec<(u32, Vec<GroupMember>)> = Vec::new();
+        for a_nr in 0..self.data.attributes(td_nr) {
+            let tp = self.data.attr_type(td_nr, a_nr);
+            let Some(elem) = Self::collection_element(&tp) else {
+                continue;
+            };
+            let entry = GroupMember {
+                a_nr,
+                name: self.data.attr_name(td_nr, a_nr),
+                keyed: Self::is_keyed_collection(&tp),
+            };
+            match groups.iter_mut().find(|(e, _)| *e == elem) {
+                Some((_, members)) => members.push(entry),
+                None => groups.push((elem, vec![entry])),
+            }
+        }
+        // A group needs a keyed member; two plain vectors over one element type are two
+        // collections and always were.
+        groups.retain(|(_, m)| m.len() >= 2 && m.iter().any(|x| x.keyed));
+        groups
+    }
+
     /// Advise when ONE literal fills two members of a linked collection group (loft#926).
     ///
     /// See [`crate::keys::linked_group_lint_enabled`] for why this fires at the literal
@@ -3862,6 +3905,11 @@ impl Parser {
     /// it: a declaration that forms a group is usually deliberate and fills one member, so
     /// speaking there would be noise on correct code; a literal handing each member its own
     /// records is the shape that only makes sense if the author thinks they are independent.
+    ///
+    /// That reasoning holds for a group written TOGETHER, which is the idiom. A group whose
+    /// members are declared APART is the case it does not cover, and
+    /// `Parser::advise_group_apart` speaks there — see
+    /// [`crate::keys::group_apart_lint_enabled`].
     fn advise_linked_group_fill(
         &mut self,
         td_nr: u32,
@@ -3871,32 +3919,11 @@ impl Parser {
         if self.default || filled.len() < 2 || !crate::keys::linked_group_lint_enabled() {
             return;
         }
-        // Element def -> the members declared over it, in DECLARATION order, so the member
-        // named as holding the records is the same one whichever literal is being read.
-        let mut groups: Vec<(u32, Vec<(String, bool)>)> = Vec::new();
-        for a_nr in 0..self.data.attributes(td_nr) {
-            let tp = self.data.attr_type(td_nr, a_nr);
-            let Some(elem) = Self::collection_element(&tp) else {
-                continue;
-            };
-            let entry = (
-                self.data.attr_name(td_nr, a_nr),
-                Self::is_keyed_collection(&tp),
-            );
-            match groups.iter_mut().find(|(e, _)| *e == elem) {
-                Some((_, members)) => members.push(entry),
-                None => groups.push((elem, vec![entry])),
-            }
-        }
+        let groups = self.collection_groups(td_nr);
         for (_, members) in &groups {
-            // A group needs a keyed member; two plain vectors over one element type are
-            // two collections and always were.
-            if members.len() < 2 || !members.iter().any(|(_, keyed)| *keyed) {
-                continue;
-            }
             let given: Vec<&String> = members
                 .iter()
-                .map(|(nm, _)| nm)
+                .map(|m| &m.name)
                 .filter(|nm| filled.contains(*nm))
                 .collect();
             let ([holder], rest) = given.split_at(1.min(given.len())) else {

@@ -1002,11 +1002,66 @@ refused ([`src/placement.rs`](../../src/placement.rs)).
 
 ### Clearing one member of a linked group (loft#898)
 
-Two or more keyed collections over one element type in one struct are auto-linked into
+Two or more collections over one element type in one struct are auto-linked into
 several routes to a SINGLE record set (`Field.other_indexes`, loft#843) — filling either
 fills both. `trie` and `spatial` join on the same terms as the rest: they were missing
 from the test that FORMS a group, which did not refuse the pairing but silently built a
-second, independent collection (loft#927). Every combination of kinds is a valid group
+second, independent collection (loft#927).
+
+**A group needs at least one KEYED member, and nothing else about how it is written
+matters** — including whether the fields sit in a `struct` or in a struct-enum VARIANT, which
+holds fields on the same terms. Two plain vectors over one element type stay independent —
+inserting into one must not propagate to the other — but a plain `vector<E>` beside any keyed
+collection over `E` is a member like any other, in EITHER declaration order, and whether the
+element is dense (`vector<E>`) or nullable (`vector<E?>`). Each of these was once a hole that
+did not refuse the pairing but built a second, silent collection:
+
+* **declaration order** — the pairing test asked only whether the field being ADDED was
+  keyed, so `{ look: sorted<E[k]>, data: vector<E> }` formed no group while
+  `{ data: vector<E>, look: sorted<E[k]> }` did. It now asks it of the PAIR.
+* **a nullable element** — `vector<E?>` stores the synth `__nullable<E>` enum, so a view
+  still declared over dense `E` no longer matched by content. The view's element is
+  rewritten to the sibling's enum for every keyed kind (`link_shared_nullable_views`);
+  only `hash` used to be.
+* **a struct-enum VARIANT** — the nullable rewrite above ran from the struct parse only, so
+  every keyed kind in a variant stayed dense beside its `vector<S?>` sibling. The DENSE half
+  was always right, because group formation itself lives in `Stores::field`, which handles a
+  variant like a struct.
+* **a vector VALUE** — `data = rows()` and `data += rows()` move records in bulk through
+  `vector_add` / `vector_replace`, which never reach `record_finish`, the per-record
+  chokepoint that maintains the other members. Still open — **loft#1152**; add the records
+  element by element until it is closed. A member written through an `is` / `match` BINDING
+  is the same shape and is recorded there too.
+
+#### Two collections over one element type that must stay APART
+
+A group is formed from the element TYPE, so the way out is a different element type — and the
+one spelling that looks like a different type and is not is a type ALIAS:
+
+| written this way | result |
+|---|---|
+| `struct Lvl { by_key: hash<Tile[k]>, picked: vector<Chosen> }` — a second STRUCT, fields identical | **independent** |
+| the two collections in **different structs** | **independent** |
+| both as **locals**, not fields — a group is a FIELD rule | **independent** |
+| `type Chosen = Tile;` then `vector<Chosen>` | ⚠ **one group** — an alias names the same type |
+
+The newtype is the escape, and its cost is the conversion, which is a plain field copy:
+
+```loft
+struct Tile   { k: integer, n: text }
+struct Chosen { k: integer, n: text }
+fn to_chosen(t: Tile) -> Chosen { Chosen { k: t.k, n: t.n } }
+
+struct Lvl { by_key: hash<Tile[k]>, picked: vector<Chosen> }
+```
+
+Two collections over one element type in one struct are a group with no way to decline it in
+place — that is the deliberate trade behind auto-linking (loft#843): the pairing is what makes
+the keyed view stay in step with its list without any code to keep them in step, and a
+per-field opt-out would be a second way to spell the same declaration. If you want the two
+apart, say so in the TYPES, where the reader can see it.
+
+Every combination of kinds is a valid group
 except **two `index` members with the same key**, which is refused where it is declared: an index keeps its tree links in a
 field of the element record, so a second one has nowhere to put them (loft#902, and
 [DESIGN_DECISIONS.md § C113](DESIGN_DECISIONS.md) for why it is refused rather than
@@ -1050,6 +1105,50 @@ decode it in ONE place, `Stores::remove_claims_keyed`, so they cannot drift.
 The clear is emitted by the KEYED assign and by the VECTOR assign, because the shape
 DATABASE.md documents by name — `vector<T>` + `hash<T[k]>` — has the vector as its record
 holder. Both route through `Parser::keyed_sibling_view_resets`.
+
+### Filling one member with a whole VECTOR VALUE (loft#1152)
+
+`Stores::record_finish` is the chokepoint that maintains a group — it walks the field's
+`other_indexes` and inserts the record into every sibling — and every route that adds
+records ONE AT A TIME reaches it. A whole-vector write does not: `OpAppendVector` reaches
+`Stores::vector_add` → `vector_add_array`, which moves the records in bulk. So `s.v =
+rows()` and `s.v += rows()` filled the vector and left every sibling view EMPTY, on both
+backends, with `len` answering `0` and a lookup answering `null` — both legal values for a
+group that happens to be empty, which is the state this page says has no repair.
+
+The maintenance is emitted per VIEW member as `OpIndexGroup(primary, view, tp)`, beside the
+resets the clear already emits, through `Parser::keyed_sibling_view_fills`. **A runtime fix
+was not available**: `record_finish` can maintain a group because it is handed `(data, rec,
+parent_tp, field)`, while `vector_add_array` has only the vector field's `DbRef` and the
+element type, and `OpAppendVector` carries neither the parent type nor the field index —
+recovering them from the `DbRef` is not a route, since `db.pos` is a byte offset into a
+record whose type would be a guess. The call site is the right home anyway because the
+unit of work differs on the two halves: the MEMBERS are known at emit time, so the parser
+names them exactly as the clear does, while the per-RECORD loop lives inside the op.
+
+The records are **not copied**. The view is handed the primary's own element records by id,
+exactly as `record_finish` hands them over, which is what keeps a write through the vector
+visible through the view; a null element stays in the vector and out of the index, which is
+the same rule `record_finish` applies. The reset is emitted only where the statement does
+not already carry one — a `=` reset its views via `clear_vector_field`, a `+=` had none —
+because the re-index walks the whole primary and a view still holding the previous records
+would be handed them twice.
+
+An enum VARIANT's fields are a group on the same terms, and needed
+`Parser::field_site` extending: a variant's fields live in the variant's own
+`Parts::EnumValue`, so the enum's type id names no field and every group question about a
+variant field answered *"no group"* — including the clear's. The variant is read back out
+of the discriminant in the guard the field read is already wrapped in.
+
+⚠ **Writing through an `is` / `match` BINDING is not this.** `if h is F { a, b } { a = rows()
+}` leaves `h.a` empty: the binding COPIES (`@FR-B-Copy`), so the write never reaches the
+record and the sibling is right to be empty. Reading `len(a)` after it shows `2` and looks
+like a landed write; reading `h.a` back is what settles it.
+
+⚠ **Group FORMATION is still order-dependent** and deliberately so for now: the test is
+*"is the field being ADDED a keyed kind"*, so `vector` then `sorted` links while `sorted`
+then `vector` links nothing. `901-linked-group-fill.loft` c1 pins that, so widening it is a
+decision rather than a fix (loft#1152's second half, filed separately).
 
 ### Removing one entry of a linked group (loft#900)
 

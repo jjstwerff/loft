@@ -437,6 +437,9 @@ impl Parser {
                     self.data
                         .set_attr_value(v_nr, e_attr, Value::Enum(nr + 1, u16::MAX));
                 }
+                // Each variant field's NAME with its position, for a diagnostic about the
+                // SHAPE of the declaration — see `advise_group_apart`.
+                let mut field_at: Vec<(String, crate::lexer::Position)> = Vec::new();
                 loop {
                     // @PLN35 — `#lexeme` marks the field carrying this token variant's surface
                     // text, so a bare literal in a slice pattern (`[ "fn", … ]`) matches against
@@ -461,6 +464,7 @@ impl Parser {
                     };
                     // @PLN40 — a variant field may also be `const` (write-once).
                     let is_const = self.lexer.has_keyword("const");
+                    let field_pos = self.lexer.peek_pos().clone();
                     let Some(a_name) = self.lexer.has_identifier() else {
                         diagnostic!(self.lexer, Level::Error, "Expect attribute");
                         return true;
@@ -474,6 +478,7 @@ impl Parser {
                         );
                     }
                     self.lexer.token(":");
+                    field_at.push((a_name.clone(), field_pos));
                     self.parse_field(v_nr, &a_name);
                     if is_lexeme {
                         let idx = self.data.attr(v_nr, &a_name);
@@ -491,6 +496,14 @@ impl Parser {
                     }
                 }
                 self.lexer.token("}");
+                // A struct-enum VARIANT holds fields like a struct, and `Stores::field` forms a
+                // linked group inside one on the same terms (@FR-Col-Group).  Both halves of
+                // that therefore belong here as well as in `parse_struct`: without the rewrite,
+                // a keyed view beside a `vector<S?>` in a variant stayed dense and silently
+                // built a second collection — all five kinds, the shape `parse_struct` was
+                // fixed for one container kind over.
+                self.link_shared_nullable_views(v_nr);
+                self.advise_group_apart(v_nr, &field_at);
             } else if self.first_pass {
                 self.data
                     .set_returned(v_nr, Type::Enum(d_nr, false, crate::data::Deps::none()));
@@ -3418,6 +3431,9 @@ impl Parser {
         // by which time the construct — and `report_pos` with it — is at the closing `}`;
         // a struct has many fields and "somewhere in this struct" is not an answer.
         let mut init_deps: Vec<(String, Vec<String>, crate::lexer::Position)> = Vec::new();
+        // Each field's NAME with the position it starts at — what a diagnostic about the
+        // SHAPE of the declaration has to point at.
+        let mut field_at: Vec<(String, crate::lexer::Position)> = Vec::new();
         loop {
             self.lexer.has_token("pub");
             // @PLN40 — a `const` field is write-once at construction.  Consume the
@@ -3441,6 +3457,7 @@ impl Parser {
             }
             self.lexer.token(":");
             self.init_field_deps.clear();
+            field_at.push((a_name.clone(), field_pos.clone()));
             self.parse_field(d_nr, &a_name);
             if is_const {
                 self.mark_const_field(d_nr, &a_name);
@@ -3458,7 +3475,8 @@ impl Parser {
         }
         self.lexer.token("}");
         self.lexer.has_token(";");
-        self.link_shared_nullable_hash(d_nr);
+        self.link_shared_nullable_views(d_nr);
+        self.advise_group_apart(d_nr, &field_at);
         // #91: check for circular init dependencies (second pass, all fields known).
         if !self.first_pass {
             self.check_circular_init(&init_deps);
@@ -3467,17 +3485,27 @@ impl Parser {
         true
     }
 
-    /// @PLN25 Scope B — a keyed HASH field that shares its record set with a sibling NULLABLE
+    /// @PLN25 Scope B — a keyed field that shares its record set with a sibling NULLABLE
     /// vector (the `other_indexes` "two views, one record set" pattern, e.g.
-    /// `struct Db { entries: vector<S>, lookup: hash<S[k]> }`) must index the `Some`-wrapped
-    /// records, not dense `S`.  Rewrite such a hash's element from `S` to the sibling's
+    /// `struct Db { entries: vector<S?>, lookup: hash<S[k]> }`) indexes the `Some`-wrapped
+    /// records, not dense `S`.  Rewrite such a view's element from `S` to the sibling's
     /// `__nullable<S>` enum so the parser type, db storage, lookup type-id, and field-access all
     /// agree on ONE type: the db link then matches by content, `determine_keys` bakes the key at
     /// the payload offset, and `c.lookup[k].field` unwraps via the `Some` payload sub-ref — all
-    /// reusing the kept nullable machinery.  Gate-OFF-inert: a dense vector sibling's element is
-    /// `Reference(S)` (not the `Enum`), so nothing matches.  (Sorted/Index sharing is left dense —
-    /// no consumer exercises it and it needs the index bookkeeping on the `Some` variant.)
-    fn link_shared_nullable_hash(&mut self, d_nr: u32) {
+    /// reusing the kept nullable machinery.
+    ///
+    /// **Every keyed kind is a view on the same terms** (@FR-Col-Group) — `hash`, `sorted`,
+    /// `index`, `spatial` and `trie` are the set `Stores::field` groups, so the rewrite covers
+    /// exactly that set.
+    /// Naming a subset does not refuse the pairing: the view's element type simply stays `S`
+    /// while the vector's is `__nullable<S>`, the two no longer match by content, and the
+    /// declaration silently builds a SECOND, independent collection that every insert through
+    /// the vector misses (loft#927, one axis over).
+    ///
+    /// A DENSE vector sibling's element is `Reference(S)`, not the `Enum`, so nothing matches
+    /// and the rewrite is a no-op — which is also what makes it inert with the `LOFT_E2_SYNTH`
+    /// gate off.  The trigger is the `?` the author wrote (`vector<S?>`), gate or no gate.
+    fn link_shared_nullable_views(&mut self, d_nr: u32) {
         let n = self.data.definitions[d_nr as usize].attributes.len();
         // payload struct `S` -> its `__nullable<S>` enum, gathered from nullable vector siblings.
         let mut nullable_of: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
@@ -3501,12 +3529,103 @@ impl Parser {
             return;
         }
         for a in 0..n {
-            if let Type::Hash(h_elem, keys, deps) = self.data.attr_type(d_nr, a)
-                && let Some(&nd) = nullable_of.get(&h_elem)
-            {
-                self.data.definitions[d_nr as usize].attributes[a].typedef =
-                    Type::Hash(nd, keys, deps);
+            let rewritten = match self.data.attr_type(d_nr, a) {
+                Type::Hash(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Hash(nd, keys, deps))
+                }
+                Type::Sorted(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Sorted(nd, keys, deps))
+                }
+                Type::Index(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Index(nd, keys, deps))
+                }
+                Type::Radix(el, keys, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Radix(nd, keys, deps))
+                }
+                Type::Trie(el, key, deps) => {
+                    nullable_of.get(&el).map(|&nd| Type::Trie(nd, key, deps))
+                }
+                _ => None,
+            };
+            if let Some(t) = rewritten {
+                self.data.definitions[d_nr as usize].attributes[a].typedef = t;
             }
+        }
+    }
+
+    /// Advise when a linked collection group's members are declared APART — @FR-Col-Group
+    /// made legible at the one place it is decidable.
+    ///
+    /// Two collections over one element type in one struct are one record set, and the
+    /// declaration is the only place that is decidable — by the time a `len` reads 0 the
+    /// question looks like an empty collection instead. Nothing else in the source says
+    /// which of the two you have.
+    ///
+    /// Fires only when an unrelated field sits BETWEEN two members, because that is the
+    /// shape whose author was probably not thinking of them as a pair; see
+    /// [`crate::keys::group_apart_lint_enabled`] for why adjacency is the signal and why
+    /// this can only ever be advice.
+    ///
+    /// `field_at` pairs each DECLARED field's name with its position. Resolved by NAME, not
+    /// by index: a struct-enum variant carries an implicit `enum` discriminator field that the
+    /// source never wrote, so its attribute indices and its written fields do not line up.
+    /// The line points at the member that JOINED — the later one, which is the field the
+    /// author most likely added without knowing what it would join.
+    fn advise_group_apart(&mut self, d_nr: u32, field_at: &[(String, crate::lexer::Position)]) {
+        if self.default
+            || self.first_pass
+            || !crate::keys::group_apart_lint_enabled()
+            || !self.data.source_is_owned(self.data.def(d_nr).source)
+        {
+            return;
+        }
+        for (_, members) in self.collection_groups(d_nr) {
+            let (Some(first), Some(last)) = (members.first(), members.last()) else {
+                continue;
+            };
+            // Contiguous in declaration order — the idiom, and quiet.
+            if last.a_nr - first.a_nr + 1 == members.len() {
+                continue;
+            }
+            let Some((_, at)) = field_at.iter().find(|(nm, _)| *nm == last.name) else {
+                continue;
+            };
+            let earlier = members[..members.len() - 1]
+                .iter()
+                .map(|m| format!("`{}`", m.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let is_are = if members.len() > 2 { "are" } else { "is" };
+            diagnostic_at!(
+                self.lexer,
+                at,
+                Level::Advice,
+                code = "linked-group-apart",
+                "`{}` shares one record set with {earlier}, which {is_are} declared further \
+                 up — two collections over one element type in one struct are two routes to \
+                 the same records, so filling either fills both",
+                last.name
+            );
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: format!(
+                    "give `{}` its own element type so the two stay independent",
+                    last.name
+                ),
+                condition: Some("they were meant to be separate collections".to_string()),
+                edit: None,
+                concept: "keyed collections",
+                concept_ref: "@F7",
+            });
+            self.lexer.fix_last(crate::diagnostics::Fix {
+                kind: crate::diagnostics::FixKind::Conditional,
+                title: "declare them next to each other so the pairing reads as deliberate"
+                    .to_string(),
+                condition: Some("they were meant as two routes to one record set".to_string()),
+                edit: None,
+                concept: "keyed collections",
+                concept_ref: "@F7",
+            });
         }
     }
 
@@ -3532,6 +3651,10 @@ impl Parser {
         if holder_nr == u32::MAX || holder_name.is_empty() || self.data.def_nr("Self") == u32::MAX {
             return;
         }
+        // loft#1153 — this is the ONE place that knows a definition is a bound HOLDER, so it is
+        // where the durable flag is set.  Every method key for it then takes the stub spelling,
+        // on both passes, whatever its structure looks like at the moment it is asked.
+        self.data.mark_bound_holder(holder_nr);
         for &iface_nr in bounds {
             let children: Vec<u32> = self.data.children_of(iface_nr).collect();
             for child_nr in children {
@@ -3542,8 +3665,7 @@ impl Parser {
                 let Some(method_suffix) = Self::interface_method_name(&self.data, child_nr) else {
                     continue;
                 };
-                let t_stub_name =
-                    format!("t_{}{}_{}", holder_name.len(), holder_name, method_suffix);
+                let t_stub_name = crate::data::Data::bound_stub_name(holder_name, &method_suffix);
                 if self.data.def_nr(&t_stub_name) != u32::MAX {
                     continue; // already created (e.g. multiple bounds share a method)
                 }

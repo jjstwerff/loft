@@ -724,3 +724,114 @@ fn issue1094_import_form_decides_a_name_clash_and_a_clash_names_both_sites() {
          `expected Frame, got Frame` unreadable: {clash}"
     );
 }
+
+/// loft#1147 — a LIBRARY's bounded generic must not swallow the consumer's own struct.
+///
+/// A type variable's bound stubs are keyed by its NAME (`t_1T_to_text`), and that is the same
+/// string a user `struct T` mangles to.  A library declaring `fn render<T: Printable>(v: T)`
+/// therefore minted a stub that the consumer's `"{T { … }}"` interpolation resolved by name —
+/// and monomorphisation could not resolve it for a struct that is not the type variable, so
+/// every such value rendered as EMPTY, on both backends, with no diagnostic.
+///
+/// This is the RUNTIME half, so it runs the binary rather than reading diagnostics: the
+/// defect renders `[]` where `[{z:9}]` is correct, and neither is an error.  The library call
+/// beside it is the control — it must keep working, since the fix distinguishes the stub's
+/// owner rather than disabling the stub.
+#[test]
+fn a_library_s_bounded_generic_does_not_swallow_a_same_named_struct() {
+    let dir = std::env::temp_dir().join("loft_tv_bound_collision");
+    let libdir = dir.join("lib");
+    std::fs::create_dir_all(&libdir).expect("create temp lib dir");
+    std::fs::write(
+        libdir.join("tvboundlib.loft"),
+        "pub fn render<T: Printable>(v: T) -> text { \"<{v}>\" }\n",
+    )
+    .expect("write lib");
+    let main = dir.join("main.loft");
+    std::fs::write(
+        &main,
+        "use tvboundlib;\nstruct T { z: integer }\nfn main() { println(\"[{T{z:9}}] {render(4)}\"); }\n",
+    )
+    .expect("write main");
+    let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+        .arg("--interpret")
+        .arg("--lib")
+        .arg(libdir.as_os_str())
+        .arg(main.as_os_str())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        stdout.contains("[{z:9}]"),
+        "the consumer's own `struct T` must render its fields, not empty; got stdout {stdout:?} stderr {stderr:?}"
+    );
+    assert!(
+        stdout.contains("<4>"),
+        "CONTROL: the library's bounded generic must keep working; got stdout {stdout:?}"
+    );
+}
+
+/// loft#1153 — TWO libraries' bounded generics, and a consumer that declares the name.
+///
+/// This is the shape a registry produces and the one no single-repo test reaches: a generic's
+/// type variable and a struct of the same name shared ONE method namespace, so a bound
+/// declaring a method as common as `to_text` or `op ==` reserved it against every struct
+/// spelling the variable's name. Measured on the pre-fix build, this program earns BOTH
+/// `Cannot redefine 'OpEq' (already defined at lib/libb.loft)` and `Cannot redefine 'to_text'
+/// (already defined at lib/liba.loft)` — and **neither library author can observe that**, which
+/// is the argument for fixing rather than documenting: a documented landmine only works if the
+/// person who steps on it can read the sign, and here the sign would have to be in two other
+/// people's READMEs.
+///
+/// Every resolution is asserted, not just the absence of an error: the consumer's own
+/// `to_text` and `OpEq` must win for its own type, and both libraries' generics must still
+/// work — a fix that silenced the redefinition by dropping a stub would pass an
+/// error-count-only check.
+#[test]
+fn two_libraries_bounded_generics_leave_a_consumer_s_own_type_alone() {
+    let dir = std::env::temp_dir().join("loft_two_lib_holder_namespace");
+    let libdir = dir.join("lib");
+    std::fs::create_dir_all(&libdir).expect("create temp lib dir");
+    std::fs::write(
+        libdir.join("holdera.loft"),
+        "pub fn show_a<T: Printable>(v: T) -> text { \"A<{v}>\" }\n",
+    )
+    .expect("write lib a");
+    std::fs::write(
+        libdir.join("holderb.loft"),
+        "pub fn show_b<T: Equatable>(a: T, b: T) -> boolean { a != b }\n",
+    )
+    .expect("write lib b");
+    let main = dir.join("main.loft");
+    std::fs::write(
+        &main,
+        "use holdera;\n\
+         use holderb;\n\
+         struct T { z: integer }\n\
+         fn OpEq(self: T, other: T) -> boolean { self.z == other.z }\n\
+         fn to_text(self: T) -> text { \"T<{self.z}>\" }\n\
+         fn main() {\n\
+         t1 = T { z: 1 };\n\
+         t2 = T { z: 2 };\n\
+         println(\"[{t1}] {show_a(4)} {show_b(1,2)} {t1 == t2} {t1.to_text()}\");\n\
+         }\n",
+    )
+    .expect("write main");
+    let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+        .arg("--interpret")
+        .arg("--lib")
+        .arg(libdir.as_os_str())
+        .arg(main.as_os_str())
+        .output()
+        .expect("failed to invoke loft binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        stdout.contains("[T<1>] A<4> true false T<1>"),
+        "the consumer's own `to_text` and `OpEq` must win for its own type, and BOTH libraries' \
+         generics must still resolve; got stdout {stdout:?} stderr {stderr:?}"
+    );
+}

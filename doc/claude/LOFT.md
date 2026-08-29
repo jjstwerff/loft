@@ -2044,6 +2044,52 @@ BYTE order and the terminator sorts before any byte, which is why `kerk` precede
 `kerkstraat` precedes `kerkweg`.  Exactly one key field: a trie orders one key's
 bytes, so several keys have no order to share (use `sorted<T[a, b]>` for that).
 
+### Two collections over one element type are ONE record set
+
+Declare two collections over the same element struct in one struct and you get **two routes to
+a single set of records**, not two collections. Filling either fills both:
+
+```loft
+struct Tile { k: integer, n: text }
+struct Level { tiles: vector<Tile>, by_key: hash<Tile[k]> }
+
+lvl = Level { };
+lvl.tiles += [Tile { k: 7, n: "gate" }];
+// len(lvl.by_key) is 1 — the hash is a VIEW of the same record
+```
+
+That is the point of the feature: the keyed view stays in step with the list with no code to
+keep it in step, and it works whichever member you spell the insert through.
+
+**When it happens — one line:** two or more collections over the same element type, in the same
+struct **or struct-enum variant**, **at least one of them keyed** (`hash` / `sorted` / `index` /
+`spatial` / `trie`). Field order does not matter, and neither does whether the vector's element
+is nullable (`vector<Tile?>`). Two plain vectors over one element type are **independent** — a group needs a
+keyed member.
+
+**When you want them apart**, say so in the TYPES — there is no per-field opt-out:
+
+| written this way | result |
+|---|---|
+| a second element **struct** (`vector<Chosen>` beside `hash<Tile[k]>`), fields identical | **independent** |
+| the two collections in **different structs** | **independent** |
+| both as **locals** rather than struct fields | **independent** |
+| `type Chosen = Tile;` then `vector<Chosen>` | ⚠ **still one group** — an alias names the same type |
+
+The second struct is the escape, and it costs a field copy to move between them:
+
+```loft
+struct Tile   { k: integer, n: text }
+struct Chosen { k: integer, n: text }
+fn to_chosen(t: Tile) -> Chosen { Chosen { k: t.k, n: t.n } }
+
+struct Level { by_key: hash<Tile[k]>, picked: vector<Chosen> }
+```
+
+⚠ **Nothing at the declaration tells you which you got** — a group that did not form looks
+exactly like an empty one, so `len(view) == 0` is the symptom to recognise. Details, teardown
+and the record-ownership rules: [DATABASE.md § Clearing one member of a linked group](DATABASE.md).
+
 ---
 
 ## Structs and record initialization
@@ -2786,6 +2832,29 @@ Reading the variable after the loop still works, and reads what the *last* loop
 that bound the name left there.  Nested loops are the exception: `for i { for i
 { } }` is rejected, because the inner binding would take over `i` for the rest of
 the outer body.
+
+A local declared **inside** a loop body splits the same way, and for the same
+reason — two adjacent loops doing different work want the same short name for the
+same role:
+
+```loft
+fn h() {
+  for x in as1 { e = x; print("a={e.v}\n"); }
+  for y in bs  { e = y; print("b={e.w}\n"); }   // fine — a different variable
+}
+```
+
+The split happens only where the two types differ; a local whose type is the same
+in both loops stays ONE variable, which is what keeps an accumulator working:
+
+```loft
+total = 0;
+for x in as1 { total = total + x.v; }
+for z in cs  { total = total + z.c; }   // still the same `total`
+```
+
+A body local read after its loop keeps the value the last iteration left, and a
+loop that never ran leaves it `null` — the same answer the loop variable gives.
 
 ### Hash collections: name the key (local or struct field)
 

@@ -1560,6 +1560,12 @@ use a separate collection or add after the loop"
                 Type::Reference(d, _) => *d,
                 _ => return None,
             },
+            // loft#1152 — an enum VARIANT's fields live in the variant's own
+            // `Parts::EnumValue`, not in the enum, so the enum's own type id names no
+            // field and every group question about a variant field answered "no group".
+            // The variant is named by the DISCRIMINANT in the guard the field read is
+            // already wrapped in.
+            Type::Enum(e, _, _) => return self.variant_field_site(*e, to, *byte_off as u16),
             _ => return None,
         };
         let struct_tp = self.data.def(d_nr).known_type();
@@ -1567,6 +1573,60 @@ use a separate collection or add after the loop"
             return None;
         }
         Some((struct_tp, *byte_off as u16))
+    }
+
+    /// [`Self::field_site`] for a field of an enum VARIANT: the variant's runtime type id
+    /// plus the byte offset, or `None` when the variant cannot be named.
+    ///
+    /// A variant field read is emitted as `OpGetField(if <disc == N> base else
+    /// OpNullRefSentinel(), off)` — the guard that makes reading the wrong variant answer
+    /// null rather than another variant's bytes. `N` is the only place the variant is
+    /// written down at this point, so it is read back out of it and mapped through the
+    /// enum's attribute order, which is where the discriminant came from.
+    ///
+    /// Unguarded shapes (an `is` / `match` binding, whose variant is already established)
+    /// yield `None` and keep the behaviour they had.
+    fn variant_field_site(&self, e_nr: u32, to: &Value, byte_off: u16) -> Option<(u16, u16)> {
+        let Value::Call(_, gf_args) = to.unspan() else {
+            return None;
+        };
+        let Value::If(test, _, _) = gf_args.first()?.unspan() else {
+            return None;
+        };
+        let Value::Call(test_nr, test_args) = test.unspan() else {
+            return None;
+        };
+        if self.data.def(*test_nr).name() != "OpEqInt" {
+            return None;
+        }
+        let Some(Value::Int(disc)) = test_args.get(1).map(Value::unspan) else {
+            return None;
+        };
+        for v in self.data.children_of(e_nr) {
+            if self.data.def_type(v) != crate::parser::DefType::EnumValue {
+                continue;
+            }
+            let vname = self.data.def(v).name().to_string();
+            let Some(idx) = self
+                .data
+                .def(e_nr)
+                .attributes()
+                .iter()
+                .position(|a| a.name == vname)
+            else {
+                continue;
+            };
+            if i32::try_from(idx).unwrap_or(-1) + 1 != *disc {
+                continue;
+            }
+            let tp = self.data.def(v).known_type();
+            return if tp == u16::MAX {
+                None
+            } else {
+                Some((tp, byte_off))
+            };
+        }
+        None
     }
 
     /// The database collection-type id behind a KEYED type — `sorted` / `hash` / `index` /
@@ -1604,7 +1664,12 @@ use a separate collection or add after the loop"
     /// silently does not index the records) has no operation that repairs it.
     ///
     /// An ungrouped field yields the single clear it always had.
-    fn keyed_group_clear(&mut self, to: &Value, kt: u16, parent_tp: &Type) -> Vec<Value> {
+    pub(crate) fn keyed_group_clear(
+        &mut self,
+        to: &Value,
+        kt: u16,
+        parent_tp: &Type,
+    ) -> Vec<Value> {
         let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
             return vec![self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))])];
         };
@@ -1674,6 +1739,104 @@ use a separate collection or add after the loop"
         ops
     }
 
+    /// loft#1152 — the group re-index that must FOLLOW a whole-vector write into a struct
+    /// field: one `OpIndexGroup` per VIEW member.
+    ///
+    /// The mirror of [`Self::keyed_sibling_view_resets`], and deliberately the same SHAPE.
+    /// `Stores::record_finish` keeps a group's members agreeing by walking `other_indexes`
+    /// per record, and every route that adds records one at a time reaches it. A whole-vector
+    /// write does not: `OpAppendVector` reaches `vector_add` → `vector_add_array`, which moves
+    /// the records in bulk. The views were left empty and nothing said so — `len` answered `0`
+    /// and a lookup answered `null`, both legal values for a group that happens to be empty.
+    ///
+    /// ⚠ **The obvious runtime fix is not available, and the reason decides this shape.**
+    /// `record_finish` can maintain a group because it is handed `(data, rec, parent_tp,
+    /// field)`. `vector_add_array` has only the vector field's `DbRef` and the element type;
+    /// `OpAppendVector` carries neither the parent type nor the field index, and recovering
+    /// them from the `DbRef` is not a route — `db.pos` is a byte offset into a record whose
+    /// type would be a guess.
+    ///
+    /// The unit of work is what makes the call site the right home anyway: the MEMBERS are
+    /// known at emit time, so the parser names them exactly as the clear does, while the
+    /// per-RECORD loop lives inside the op, where the records exist. Naming the members here
+    /// and looping there is the split loft#898 already made for the clear.
+    fn keyed_sibling_view_fills(&mut self, to: &Value, parent_tp: &Type) -> Vec<Value> {
+        let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
+            return Vec::new();
+        };
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        let mut ops = Vec::new();
+        for (off, coll_tp, _is_view) in members {
+            // ⚠ Every OTHER member, not only the views — the filter the RESET beside this
+            // one uses answers a different question. A reset may touch only views, because
+            // a view owns nothing and the primary's records are released once, by the
+            // primary. A FILL has no such asymmetry: the members that need the records are
+            // all of them, and which one happens to hold them is not the question.
+            if off == byte_off {
+                continue;
+            }
+            let field = Self::field_at(to, off);
+            ops.push(self.cl(
+                "OpIndexGroup",
+                &[to.clone(), field, Value::Int(i32::from(coll_tp))],
+            ));
+        }
+        ops
+    }
+
+    /// loft#1152 — wrap a statement that wrote a whole VECTOR VALUE into a grouped struct
+    /// field with the group maintenance that write skipped.
+    ///
+    /// Runs on the finished IR of every assignment rather than at the individual arms,
+    /// because a vector field is written from several of them — `=` from an owned var, from
+    /// a borrowed var, from an arbitrary expression, `+=`, and the iterator
+    /// materialisations — and each builds its own op list. The question they all answer the
+    /// same way is *"did this statement `OpAppendVector` into that field?"*, which is a
+    /// property of the emitted code, so it is asked once, here.
+    ///
+    /// The RESET is conditional and the reason is duplicates: the re-index walks the whole
+    /// primary, so a view that still holds the previous records would be handed them twice.
+    /// A `=` already reset its views (`clear_vector_field`), and an `OpClearKeyed` in the
+    /// statement is exactly that receipt; a `+=` has none, so it gets one here. Resetting a
+    /// VIEW frees only its spine — its hash table, `Ordered` slot list, or b-tree root — and
+    /// never a record, so rebuilding it costs nothing the group owns.
+    fn group_reindex_after_vector_write(&mut self, code: &mut Value, to: &Value, parent_tp: &Type) {
+        let append_nr = self.data.def_nr("OpAppendVector");
+        let clear_keyed_nr = self.data.def_nr("OpClearKeyed");
+        let writes_field = |v: &Value| {
+            matches!(v.unspan(), Value::Call(d, args)
+                if *d == append_nr && args.len() == 3 && *args[0].unspan() == *to.unspan())
+        };
+        let (wrote, already_reset) = match &*code {
+            Value::Insert(ls) => (
+                ls.iter().any(writes_field),
+                ls.iter()
+                    .any(|o| matches!(o.unspan(), Value::Call(d, _) if *d == clear_keyed_nr)),
+            ),
+            other => (writes_field(other), false),
+        };
+        if !wrote {
+            return;
+        }
+        let fills = self.keyed_sibling_view_fills(to, parent_tp);
+        if fills.is_empty() {
+            return;
+        }
+        let resets = if already_reset {
+            Vec::new()
+        } else {
+            self.keyed_sibling_view_resets(to, parent_tp)
+        };
+        let body = match std::mem::replace(code, Value::Null) {
+            Value::Insert(ls) => ls,
+            other => vec![other],
+        };
+        let mut ops = resets;
+        ops.extend(body);
+        ops.extend(fills);
+        *code = Value::Insert(ops);
+    }
+
     /// `OpClearVector(to)` for a struct field, preceded by the sibling-view resets
     /// of [`Self::keyed_sibling_view_resets`] when that vector is the record
     /// holder of a linked collection group (loft#898).
@@ -1733,6 +1896,32 @@ use a separate collection or add after the loop"
     /// field at byte offset `off`. Rebuilt by swapping the offset in the SAME call
     /// so the base expression, its variable and the struct type all stay whatever
     /// the original site resolved them to.
+    /// loft#1159 — name the keyed field `to` the way `OpFillKeyed` needs it: the owning
+    /// struct ref, its type id, and the FIELD INDEX.
+    ///
+    /// The bulk fill places each record through `Stores::record_finish`, the same chokepoint
+    /// the element-wise `+= [r]` spelling reaches, and that walk maintains a linked
+    /// collection group only when it is given the field the write is spelled through — a
+    /// field NUMBER, which a field ref (an `OpGetField` naming a byte offset) does not carry.
+    /// Falling back to `(to, kt, u16::MAX)` is the lone-collection convention: the parent IS
+    /// the collection and there are no siblings to maintain, which is exactly right wherever
+    /// the site cannot be resolved.
+    pub(crate) fn fill_keyed_site(
+        &mut self,
+        to: &Value,
+        parent_tp: &Type,
+        kt: u16,
+    ) -> (Value, u16, u16) {
+        if let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp)
+            && let Value::Call(_, args) = to.unspan()
+            && let Some(parent) = args.first()
+            && let Some(idx) = self.database.field_index_at(struct_tp, byte_off)
+        {
+            return (parent.clone(), struct_tp, idx);
+        }
+        (to.clone(), kt, u16::MAX)
+    }
+
     fn field_at(to: &Value, off: u16) -> Value {
         let mut out = to.unspan().clone();
         if let Value::Call(_, args) = &mut out
@@ -1747,14 +1936,37 @@ use a separate collection or add after the loop"
     /// `code` into the assignment IR.  Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments)]
+    /// Every assignment form routes through here; the body is
+    /// [`Self::parse_assign_op_inner`], and this wraps it with the linked-group
+    /// maintenance a whole-vector field write skips (loft#1152 — see
+    /// [`Self::group_reindex_after_vector_write`]).
+    #[allow(clippy::too_many_arguments)] // the inner fn's parameter list, forwarded
     pub(crate) fn parse_assign_op(
         &mut self,
         code: &mut Value,
         op: &str,
         f_type: &Type,
         to: &Value,
-        mut parent_tp: Type,
+        parent_tp: Type,
         var_nr: u16,
+        skip_validate: bool,
+    ) -> Type {
+        let group_parent = parent_tp.clone();
+        let group_to = to.clone();
+        let tp = self.parse_assign_op_inner(code, op, f_type, to, parent_tp, var_nr, skip_validate);
+        self.group_reindex_after_vector_write(code, &group_to, &group_parent);
+        tp
+    }
+
+    #[allow(clippy::too_many_arguments)] // the wrapper's list, unchanged from before the split
+    fn parse_assign_op_inner(
+        &mut self,
+        code: &mut Value,
+        op: &str,
+        f_type: &Type,
+        to: &Value,
+        mut parent_tp: Type,
+        mut var_nr: u16,
         skip_validate: bool,
     ) -> Type {
         self.check_iter_safety(to, f_type, op);
@@ -2670,6 +2882,53 @@ use a separate collection or add after the loop"
         } else {
             s_type
         };
+        // loft#1145 — the other half of loft#915.  That issue gave a `for` loop's VARIABLE
+        // its own binding per loop, so two loops may spell one name at their own element
+        // types; a local declared in the BODY kept a single function-wide binding, so the
+        // second loop's `e = y` re-typed the first loop's slot and was REFUSED.  #915's own
+        // argument applies unchanged: the binding is what splits, not the scope — `e` is
+        // still readable after the loop (measured: it is, and any fix has to keep that), and
+        // the name resolves to whichever loop most recently bound it, exactly as the loop
+        // variable does.
+        //
+        // ⚠ STRICTLY ADDITIVE, and that is the property the whole cut rests on.  It fires
+        // only where `retype_would_be_refused` says the program is rejected TODAY, so no
+        // program that compiles can change behaviour.  The gate matters: an unconditional
+        // per-loop rebind would break the accumulator idiom — `for … { total = total + x.v }
+        // for … { total = total + 1 }` re-types nothing, so it must keep ONE binding, and a
+        // fresh one would read an unwritten slot.  That predicate is conservative on
+        // purpose; see its doc for why it is not a second opinion about `change_var_type`.
+        let cur_loop = self.vars.current_loop();
+        let born_in = if var_nr == u16::MAX {
+            u16::MAX
+        } else {
+            self.vars.created_in_loop(var_nr)
+        };
+        let rebound_to;
+        let to = if op == "="
+            && !s_type.is_unknown()
+            && cur_loop != u16::MAX
+            && born_in != u16::MAX
+            && born_in != cur_loop
+            && self
+                .vars
+                .retype_would_be_refused(var_nr, &s_type, &self.data)
+        {
+            // The SOURCE spelling, not the bound one.  A variable already split once is
+            // named `e#b1`, and registering the next split under that would key the third
+            // loop by a name no `names` lookup ever asks for — measured: two loops worked
+            // and the third re-typed the second's binding.  `#` cannot occur in a loft
+            // identifier, so the prefix before `#b` is exactly what the program wrote.
+            let bound = self.vars.name(var_nr).to_string();
+            let name = bound.split("#b").next().unwrap_or(&bound).to_string();
+            var_nr = self
+                .vars
+                .body_local_binding(&name, var_nr, &s_type, &mut self.lexer);
+            rebound_to = Value::Var(var_nr);
+            &rebound_to
+        } else {
+            to
+        };
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
@@ -3239,9 +3498,21 @@ use a separate collection or add after the loop"
             // (`if c { x } else { […] }`) would then leak one store per call, which the
             // bracket instead resolves at runtime — protected store, free refused;
             // callee-minted store, freed.
+            //
+            // loft#1154 — a JOIN reaches the same decision through `join_source_frees`, which
+            // answers per ARM: a fresh-storage call's store is nobody else's, and a nameable
+            // arm is protected so the runtime refuses its free.  Without it the gate asked
+            // *is the RHS a call*, a `Value::If` is not one, and the store the taken arm's
+            // callee minted was copied out of and abandoned.
+            // NOT feature-gated, for the reason `is_struct_returning_call` gives about itself:
+            // the free bit's BEHAVIOUR differs under wasm, the query does not.  Gating the
+            // binding and not its use below broke the wasm build alone — which `make ci`
+            // catches and no targeted suite does.
+            let join_witnesses = self.join_source_frees(code);
             #[cfg(not(feature = "wasm"))]
-            let tp_val = if self.is_struct_returning_call(code)
-                && crate::use_analysis::call_return_frees_source(&self.data, code)
+            let tp_val = if (self.is_struct_returning_call(code)
+                && crate::use_analysis::call_return_frees_source(&self.data, code))
+                || join_witnesses.is_some()
             {
                 i32::from(kt) | 0x8000
             } else {
@@ -3268,18 +3539,20 @@ use a separate collection or add after the loop"
             // `stores.allocations[u16::MAX]` lookup.  Strip ALL deps for
             // any non-Var RHS — after the deep copy `var_nr` owns its store
             // regardless of how the RHS was shaped.
+            //
+            // `Type::depend` is the declared home for "which vars does this type borrow?"
+            // and it is dep-transparent through `Optional` (@PLN25), which is why the list
+            // is asked for rather than restated.  @FR-L-Null: `layout(τ) = layout(τ?)`, so
+            // a nullable keyed local owns its store exactly as its dense twin does and must
+            // be stripped by the same rule.  `make_independent` already peels the wrapper on
+            // the WRITE side (loft#1106); a hand-rolled five-variant match here left the
+            // READ side an `Optional` short, so `hash<S[k]>?` kept the borrow it had just
+            // deep-copied away from and took the sentinel path the paragraph above describes
+            // (loft#1143).
             if let Value::Var(rhs) = code.unspan() {
                 self.vars.make_independent(var_nr, *rhs);
             } else {
-                let deps: Vec<u16> = match self.vars.tp(var_nr) {
-                    Type::Sorted(_, _, d)
-                    | Type::Hash(_, _, d)
-                    | Type::Index(_, _, d)
-                    | Type::Radix(_, _, d)
-                    | Type::Trie(_, _, d) => d.to_vec(),
-                    _ => Vec::new(),
-                };
-                for d in deps {
+                for d in self.vars.tp(var_nr).depend() {
                     self.vars.make_independent(var_nr, d);
                 }
             }
@@ -3308,10 +3581,14 @@ use a separate collection or add after the loop"
             // call.  `protectable_ref_args` is the same derivation the source-free gate
             // above consults for coverage, so the marks and the licence cannot drift.
             let mut seq = vec![Value::Set(var_nr, Box::new(Value::Null))];
-            let guarded: Vec<u16> = if tp_val & 0x8000 != 0 {
-                crate::use_analysis::protectable_ref_args(&self.data, code).0
-            } else {
+            // A JOIN's witnesses are its ARMS' — `protectable_ref_args` reads a call's
+            // arguments and a join has none of its own (loft#1154).
+            let guarded: Vec<u16> = if tp_val & 0x8000 == 0 {
                 Vec::new()
+            } else if let Some(w) = join_witnesses {
+                w
+            } else {
+                crate::use_analysis::protectable_ref_args(&self.data, code).0
             };
             for av in &guarded {
                 seq.push(self.cl("n_protect_store_frees", &[Value::Var(*av)]));
@@ -3396,6 +3673,51 @@ use a separate collection or add after the loop"
             };
             let ls = self.new_record(&mut to.clone(), &np, elm, u16::MAX, &[scalar], &elm_tp);
             *code = Value::Insert(ls);
+            return Type::Void;
+        }
+        // loft#1159 — `keyed_field += <vector VALUE>`: insert every record the vector holds,
+        // each placed by its own key.
+        //
+        // The keyed twin of the vector-field arm above, and it was simply absent.  That arm
+        // is gated on `let Type::Vector(elm_tp, _) = f_type`, so a keyed destination never
+        // matched it; the struct-literal arm below is gated on `matches!(code,
+        // Value::Insert(_))` with a SINGLE element's type, so a vector-valued expression
+        // never matched that either.  `h.a += rows()` fell past both to a statement that
+        // emitted no write at all — `introspect` showed the call and then nothing — while
+        // `h.a += [E{…}, E{…}]` was correct, because a literal is parsed into per-element
+        // construction and never becomes a vector value.
+        //
+        // `formal/collections.md` (Col-Insert) is written over `c += [ rec, … ]` and says
+        // keyed kinds place each record by key.  It does not distinguish how that vector is
+        // spelled, so the two spellings owe the same answer.  No clear: `+=` adds.
+        if !self.first_pass
+            && var_nr == u16::MAX
+            && op == "+="
+            && dbref_append_target
+            && !matches!(code, Value::Insert(_))
+            && matches!(s_type.base(), Type::Vector(_, _))
+            && let Some(kt) = self.keyed_field_kt(f_type)
+        {
+            #[cfg(not(feature = "wasm"))]
+            let tp_val = if self.is_struct_returning_call(code) {
+                i32::from(kt) | 0x8000
+            } else {
+                i32::from(kt)
+            };
+            #[cfg(feature = "wasm")]
+            let tp_val = i32::from(kt);
+            let src = code.clone();
+            let (parent, parent_tp_id, field_nr) = self.fill_keyed_site(to, &lhs_parent_tp, kt);
+            *code = Value::Insert(vec![self.cl(
+                "OpFillKeyed",
+                &[
+                    parent,
+                    src,
+                    Value::Int(tp_val),
+                    Value::Int(i32::from(parent_tp_id)),
+                    Value::Int(i32::from(field_nr)),
+                ],
+            )]);
             return Type::Void;
         }
         // P192 follow-up: `field += elem` for keyed-collection fields

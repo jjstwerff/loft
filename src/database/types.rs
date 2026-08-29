@@ -279,47 +279,47 @@ impl Stores {
         }
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &self.types[structure as usize].parts
         {
-            // only link fields that are indexing types (sorted, hash, index),
-            // not plain vectors. Two vector<integer> fields must NOT be linked —
-            // inserting into one must not propagate to the other.
-            // A trie and a spatial are keyed collections like the rest, so they join a
-            // group on the same terms (loft#927).  Leaving them out did not refuse the
-            // pairing — it silently built a SECOND, independent collection: records put
-            // in through `data` were not in `look`, and nothing said so.  The kinds
-            // already worked as group MEMBERS; what was missing was only the test that
-            // forms the group, which is why `trie` first and `sorted` second did link.
-            let is_index_type = matches!(
-                self.types[content as usize].parts,
-                Parts::Sorted(_, _)
-                    | Parts::Ordered(_, _)
-                    | Parts::Hash(_, _)
-                    | Parts::Index(_, _, _)
-                    | Parts::Trie(_, _)
-                    | Parts::Radix(_, _)
-            );
-            if is_index_type {
-                for (f_nr, f) in fld.iter().enumerate() {
-                    let fld_content = self.content(f.content);
-                    if fld_content != u16::MAX && fld_content == self.content(content) {
-                        if others.is_empty() {
-                            // Leading `u16::MAX` marks this field as a VIEW of
-                            // records another field also holds — read by the
-                            // JSON walker to skip default-initialising it. It is
-                            // a marker, not a link, and everything that walks
-                            // this list skips it.
-                            others.push(u16::MAX);
-                        }
-                        // Link BOTH ways. Only the earlier-declared field used to
-                        // point at the later one, so which collection maintained
-                        // the others depended on DECLARATION ORDER: an insert
-                        // spelled through the second field reached only that
-                        // field, and said nothing. Two keyed collections over one
-                        // element type are two VIEWS of one set — neither
-                        // spelling is the privileged one (loft#843).
-                        others.push(f_nr as u16);
-                        linked.insert(f_nr as u16, fld.len() as u16);
-                    }
+            // @FR-Col-Group — the pairing test, and the one place a group is FORMED.
+            //
+            // A group needs a KEYED member: two plain vectors over one element type must NOT
+            // be linked, because inserting into one must not propagate to the other.  A trie
+            // and a spatial are keyed collections like the rest, so they join on the same
+            // terms (loft#927).
+            //
+            // The test is on the PAIR, not on the field being ADDED.  Asking it only of the
+            // new field made group formation depend on which member came first:
+            // `{ data: vector<E>, look: sorted<E[k]> }` was one record set while
+            // `{ look: sorted<E[k]>, data: vector<E> }` was two independent collections,
+            // because the keyed field arrived first and found no sibling and the vector then
+            // arrived and never ran the search.  Both spellings say the same thing, so both
+            // must mean the same thing (loft#1158).  It is the one-way `others` link below
+            // (loft#843) one level up and the missing `trie`/`spatial` kinds (loft#927) one
+            // level over: every one of the three failed SILENTLY, by building a second
+            // collection whose `len` is a legal `0`.
+            let new_is_keyed = Self::is_group_kind(&self.types[content as usize].parts);
+            for (f_nr, f) in fld.iter().enumerate() {
+                let fld_content = self.content(f.content);
+                if fld_content == u16::MAX || fld_content != self.content(content) {
+                    continue;
                 }
+                if !new_is_keyed && !Self::is_group_kind(&self.types[f.content as usize].parts) {
+                    continue;
+                }
+                if others.is_empty() {
+                    // Leading `u16::MAX` marks this field as a VIEW of records
+                    // another field also holds — read by the JSON walker to skip
+                    // default-initialising it. It is a marker, not a link, and
+                    // everything that walks this list skips it.
+                    others.push(u16::MAX);
+                }
+                // Link BOTH ways. Only the earlier-declared field used to point at
+                // the later one, so which collection maintained the others depended
+                // on DECLARATION ORDER: an insert spelled through the second field
+                // reached only that field, and said nothing. Two keyed collections
+                // over one element type are two VIEWS of one set — neither spelling
+                // is the privileged one (loft#843).
+                others.push(f_nr as u16);
+                linked.insert(f_nr as u16, fld.len() as u16);
             }
         }
         if let Parts::Struct(s) | Parts::EnumValue(_, s) = &mut self.types[structure as usize].parts
@@ -400,6 +400,25 @@ impl Stores {
     }
 
     #[must_use]
+    /// loft#1152 — is this collection a KEYED kind, the sort that can index a shared
+    /// record set?  The one home for the question the group test asks of BOTH sides.
+    ///
+    /// A `vector` is not one: two `vector<T>` fields must stay independent, because
+    /// inserting into one must not propagate to the other.  A vector may still JOIN a group
+    /// — it is the record holder in the shape DATABASE.md documents by name — but only
+    /// beside a member that is a keyed kind.
+    fn is_group_kind(parts: &Parts) -> bool {
+        matches!(
+            parts,
+            Parts::Sorted(_, _)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::Trie(_, _)
+                | Parts::Radix(_, _)
+        )
+    }
+
     pub fn is_linked(&self, tp: u16) -> bool {
         tp != u16::MAX && self.types[tp as usize].linked
     }
@@ -766,6 +785,18 @@ impl Stores {
         content
     }
 
+    /// Where an `index`'s red-black bookkeeping (`#left_N` / `#right_N` / `#color_N`) lives for
+    /// an element type — the RECORD that a tree node actually is.
+    ///
+    /// For a dense element that is the element struct itself.  For a synth `__nullable<S>` the
+    /// stored record is the `Some` variant (discriminant plus the inline payload), and the enum
+    /// has no field list to append to at all — so the bookkeeping belongs on `Some`.  Every
+    /// reader of `Parts::Index`'s `left_field_nr` resolves through here, so the append and the
+    /// byte offset `tree` descends from cannot disagree.
+    pub(crate) fn index_owner(&self, content: u16) -> u16 {
+        self.nullable_some_variant(content).unwrap_or(content)
+    }
+
     /// Resolve the `Some` variant type-nr of a synth `__nullable<S>` element by db name,
     /// or `None` for any other element.  Shared by `key_owner` / `key_base`.
     pub(crate) fn nullable_some_variant(&self, content: u16) -> Option<u16> {
@@ -1098,6 +1129,7 @@ impl Stores {
             );
             // Compute the byte offset where tree::add expects to find
             // RB_LEFT — this is `database.fields(tp)`'s return value.
+            let c = self.index_owner(c);
             if let Parts::Struct(fs) | Parts::EnumValue(_, fs) = &self.types[c as usize].parts {
                 if (left_field_nr as usize) < fs.len() {
                     let left = &fs[left_field_nr as usize];
@@ -1290,14 +1322,15 @@ impl Stores {
                 self.validate_layout_by_nr(*c, visited, issues);
             }
             Parts::Index(c, _, left_field_nr) => {
-                // Validate the content struct (which has bookkeeping
-                // fields appended).  Also verify the bookkeeping
-                // field index is in range and points at a `#left_*`
+                // Validate the record that carries the bookkeeping (`index_owner` —
+                // the `Some` variant for a synth `__nullable<S>` element).  Also verify
+                // the bookkeeping field index is in range and points at a `#left_*`
                 // field, since `database.fields(tp)` reads
                 // `fields[left_field_nr].position` and a wrong index
                 // would silently corrupt tree::add's offsets.
+                let owner = self.index_owner(*c);
                 if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-                    &self.types[*c as usize].parts
+                    &self.types[owner as usize].parts
                 {
                     if (*left_field_nr as usize) >= fields.len() {
                         issues.push(format!(
@@ -1626,10 +1659,18 @@ impl Stores {
         }
     }
 
+    /// Resolve a keyed collection's key NAMES to field numbers on its element, appending the
+    /// rendered key list to `name`.
+    ///
+    /// Keys resolve against [`Self::key_owner`], not against `content` itself: a synth
+    /// `__nullable<S>` element keeps S's keys inside the `Some` variant's inline payload, so
+    /// indexing the enum's own field list finds none of them.  Same rule as [`Self::hash`] and
+    /// [`Self::create_key`] — one question, one answer, whichever kind asks it.
     pub fn field_name(&self, content: u16, key: &[String], name: &mut String) -> Vec<u16> {
+        let owner = self.key_owner(content);
         let mut key_nrs = Vec::new();
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[owner as usize].parts
         {
             for (k_nr, k) in key.iter().enumerate() {
                 if k_nr > 0 {
@@ -1714,9 +1755,12 @@ impl Stores {
         // bytes apart, corrupting tree::add's writes.
         let int4 = self.int(0, false);
         let bool_c = self.name("boolean");
+        // The tree node is the stored RECORD, which for a synth `__nullable<S>` element is the
+        // `Some` variant rather than the enum — see `index_owner`.
+        let host = self.index_owner(content);
         let mut nr = 1;
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[host as usize].parts
         {
             for f in fields {
                 if f.name.starts_with("#left_") {
@@ -1725,7 +1769,7 @@ impl Stores {
             }
         }
         let left = if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &mut self.types[content as usize].parts
+            &mut self.types[host as usize].parts
         {
             let left = fields.len();
             fields.push(Field {
@@ -1779,7 +1823,7 @@ impl Stores {
                 &members.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
             );
             let size = crate::data::LinkedFieldGroup::group_size(&members);
-            self.types[content as usize]
+            self.types[host as usize]
                 .field_groups
                 .push(crate::data::LinkedFieldGroup {
                     kind: crate::data::LinkedFieldKind::Index,
@@ -1821,9 +1865,16 @@ impl Stores {
             });
     }
 
+    /// Render a keyed collection's key field NUMBERS back to the bracketed name list — the
+    /// inverse of [`Self::create_key`], and it indexes the same field list ([`Self::key_owner`]).
+    ///
+    /// The rendered list is part of the type NAME, and a type name is the dedup key, so a
+    /// collection whose keys render differently in two places is two runtime types rather than
+    /// one.
     pub(super) fn key_name(&mut self, content: u16, key: &[(u16, bool)], name: &mut String) {
+        let owner = self.key_owner(content);
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &self.types[content as usize].parts
+            &self.types[owner as usize].parts
         {
             for (k_nr, (k, asc)) in key.iter().enumerate() {
                 if k_nr > 0 {

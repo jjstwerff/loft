@@ -28,6 +28,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [The debug-assertions calibration run (`target-da`)](#the-debug-assertions-calibration-run-target-da)
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
 - [Debugging a Scope Analysis Bug](#debugging-a-scope-analysis-bug)
+- [Reading a defect — the shapes that keep recurring](#reading-a-defect--the-shapes-that-keep-recurring)
 - [Using the Test Framework for Quick Iteration](#using-the-test-framework-for-quick-iteration)
 - [Open work](#open-work)
 
@@ -1325,6 +1326,66 @@ Strategy:
    variable name tell you where the wrong free was inserted.
 4. In `src/scopes.rs`, find the `get_free_vars` or `exit_scope` call that produced
    the wrong `OpFreeRef` / `OpFreeText`, and fix the scope assignment for that variable.
+
+---
+
+## Reading a defect — the shapes that keep recurring
+
+The matrix-first protocol in CLAUDE.md says how to *measure* a defect. These are the reading
+errors that survive it, each one measured here rather than imagined. They are ordered by how
+expensive each was.
+
+**Start at the PRODUCER of a wrong fact, not the consumer where it surfaces.** When the bug is
+a lie in the data — a dep, a type, a flag that disagrees with runtime — the crash is at the
+reader and the cure is at the writer. loft#457's dep said `out` borrows `__vdb_1` while at
+runtime `out` held the adopted `__ref_N`; the lie surfaced at the free as a use-after-free, and
+a session of patching the free side (witness-pairing, dep-strip, explicit free, a narrowed
+predicate) only grew complexity. The fix was in the return delivery, so the dep stopped lying.
+
+**A leak on one backend can be a wrong ANSWER on the other, and the leak is the harmless-looking
+half.** loft#1081 was filed from `--interpret` as "a vector-valued `if` leaks a store per
+evaluation". The same program on `--native` — the DEFAULT backend — printed the third call's
+values for all three live bindings, silently, because native's allocator hands the just-freed
+slot straight back while the interpreter retains it. A leak report describes what the detector
+could see. Always run the other backend before accepting a leak as the whole finding.
+
+**One symptom can have two mechanisms, and the first fix turning most of the matrix green is
+not evidence you found the cause.** loft#879's real axis was an optional aggregate return
+whose result stays a temporary, with the reported `??` incidental — peeling `Optional` fixed
+the discarded call, the argument case, the vector case and the loop, and **the filed repro
+still leaked**, because the `??` half was a second, independent defect. Re-run the ORIGINAL
+repro after the matrix goes green.
+
+**A precedent transfers along the MECHANISM, not the problem statement.** Before reusing a
+neighbouring solution, ask what its unit of work is — per member, per record, per call, per
+path, per pass — and whether yours has the same one. `keyed_group_clear` solves the same
+*context* problem as loft#1152 (the emit site lacks the parent type) and does not transfer: a
+clear is per-member and static, the write it was wanted for is per-record and dynamic.
+
+**Read the code BESIDE the defect, not only the defect.** The sibling in the same function that
+solved the same hazard first usually states the rule and the method in its own comment.
+Measured twice in three days: `do_tret_bind`'s comment spelled out the pass-2 promotion rule
+that `do_if_acc` was missing (loft#1099), and the `others`-link comment in `Stores::field`
+named declaration order as the thing a group must not depend on, one level below the pairing
+test that still depended on it (loft#1158).
+
+**A defect has a SCALE, and a comfortable repro silently changes it.** loft#710's persisted-store
+size defect (file = arena capacity, not content) produces byte-identical files at 200 records ×
+40 coords, so every assertion written at that size passed on the broken binary too; the reported
+125 × 2312 showed 1.84×. Allocator, cache and page behaviour are hidden axes. Replay the
+reporter's exact parameters through the pre-change binary before trusting a guard.
+
+**The filed scope is usually a fraction of the defect, in both directions.** An issue reports
+the shape its author hit. Take the reported spelling as one cell, not as the boundary — and
+equally, do not assume the boundary is wider than measured: loft#1158 predicted its fix would
+need a second part (making the vector the record holder whatever the declaration order) and the
+measurement falsified it.
+
+**The cure is often one construct over.** `map`, `filter`, `reduce`, `all`, `count_if` and the
+comprehension all ended their loop on a null ELEMENT and hung forever once a value-struct bind
+deep-copied into a record that is never null. The `for` STATEMENT terminates on LENGTH, which is
+why it was the only correct row in the report — and it became the shared home rather than a
+sixth repair.
 
 ---
 

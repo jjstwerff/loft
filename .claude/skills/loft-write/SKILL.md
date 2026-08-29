@@ -762,6 +762,22 @@ Use `_` for an unused loop variable to keep the build warning-clean.
 
 ## Text pitfalls
 
+**There is no `substr` / `substring`.** A part of a text is a slice:
+
+```loft
+s = "abcdef";
+s[1..3]                 // "bc" — BYTE positions
+s.char_slice(1, 3)      // "bc" — CHARACTER positions
+```
+
+**Pick by where the numbers came from**, and this is the commonest text bug in this stack:
+`len` counts CHARACTERS, `size` and `s[a..b]` count BYTES. A character count used as a byte
+range fits fewer characters than it measured, so the text comes back SHORT — silently, and
+only once the text stops being ASCII. `"héllo"[0..4]` is `"hél"`; `"héllo".char_slice(0, 4)`
+is `"héll"`. Use `char_slice` whenever a character count becomes a cut (fitting a label,
+wrapping, a caret, truncating); use `s[a..b]` only for numbers from `find` / `rfind` / `size`
+/ `byte_at`.
+
 **`character == text` is a compile error** — use `"{c}" == t` to compare as text.
 
 **Cannot reassign text parameter** — copy to local first: `local = param; local = ...`

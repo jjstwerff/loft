@@ -469,7 +469,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 326 | 309 | **17** |
+| 330 | 313 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2273,7 +2273,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 649 | 291 | 4 | **354** |
+| 651 | 291 | 4 | **356** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2282,7 +2282,12 @@ added one that asks through `.base()`, then 641 · 267 until the four picked in 
 again, then 642 · 270 until B6s peeled seven and merged one body away, then 644 · 281 until loft#1125
 peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 284 until B6v added
 `data::holds_dbref`, which asks through `.base()` and so lands on the seeing-through side, then
-644 · 285 until B6w added four, then 648 · 286 until B6y added `source_spelling` — which reads
+644 · 285 until B6w added four, then 648 · 286 until B6y added `source_spelling`, and
+649 · 291 until loft#1145 added `Variables::retype_would_be_refused` — opaque, and deliberately:
+it answers *"is this a type CHANGE"* and treats a wrapper mismatch as one, which is the whole
+question `decl_accepts` decides beneath it — and 650 · 291 until loft#1156 added
+`collect_loop_body_sets`, which discriminates on `Value::Loop` rather than on a `Type` at all
+and is counted opaque for want of a wrapper to see through — which reads
 `Type::Enum(syn, true, …)` to answer with the `Optional` the author wrote, and so is a peel in
 the OTHER direction: it sees through by construction.  B6w's four were: `needs_nullable_wrap`
 asks through `.base()` and sees through,
@@ -3359,6 +3364,247 @@ measuring several kinds in sequence reports whichever kind happens to get its sl
 calls the rest clean.  The first matrix built for this read `hash` broken and the other four
 correct; each kind in its own file read all five broken.  Every loop in the guard now
 allocates and drops a collection between the call and the assertion.
+
+#### B7a — `@FR-Col-Store` walked: the residual a previous walk measured as harmless, and the shape its probe could not reach (2026-08-29)
+
+Fourth rule walked, and the first where the walk started from **another walk's own record**
+rather than from `dups`.  `IMPLEMENTATIONS.md` checklist #2 already carried the finding —
+`Reference | Vector | Enum(_, true, _)` at 43 sites, *"⚠ the short list is a BUG source"* — and
+its § The DbRef set closed 2 of them, cleared 34 by sentinel, and left one residual written
+down:
+
+> ⚠ `coroutine_layout::next_operands` is still short — six of the eight, no `Radix`/`Trie`.
+> Probed: a `spatial` yield is correct anyway, so it does not bite.  The guard now carries a
+> spatial cell to keep it that way.
+
+**That record is accurate and the residual bit anyway**, which is the transferable half.  The
+short list lives in `YieldSlot::classify`, which runs only on the MEMBERS of a yielded tuple.
+A **bare** `spatial` yield never reaches it — so the probe and the hole never overlapped, and
+the cell added to keep it honest could not have moved.  `yield (a_spatial, 7)` and
+`yield (a_trie, 7)` were refused by `--native` for programs `--interpret` ran correctly.
+
+> **"Probed and it does not bite" is a claim about the SHAPE probed.**  Recording a residual
+> as harmless is worth doing; recording *which shape was probed* is what makes the record
+> re-checkable, and is the line the guard header now carries.
+
+Cured by asking `data::is_dbref` — the declared home, whose own doc had already predicted this
+exact failure (*"a short list is not a compile error anywhere — it routes a handle down the
+scalar path — so call this function rather than restating it"*).  Third site of one list: two
+were folded on when the original bug was fixed, and `classify` is the residual they left.
+
+**The guard carries all five keyed kinds, not the two that failed**, because the member set and
+the bare-yield set are the same set — naming two would leave the next kind to be found the same
+way.
+
+⚠ **`make falsify` cannot score this guard, and the tool says so misleadingly.**  It runs the
+file without `--tests`, and the file has no `main`, so its interpret row executes nothing and
+reads `0 asserts` on BOTH trees — which the summary renders as *"INERT — the control and this
+tree answer the same"* and then *"NOT falsified"*, while the native row says `falsified`.  That
+interpret row is **vacuous, not agreement**.  Measured by hand against a real `d1220a1b`
+worktree instead: `loft test --native` 12 passed → 12 FAILED.  A cached falsify control also
+failed to load its `default/` library, producing a `1 failed` line that looked like a
+measurement and was not — both traps are recorded in the guard's annotation.
+
+**Two findings filed rather than folded in**, both pre-existing on `d1220a1b`:
+
+* **loft#1148** — a `vector`-member and a keyed-member tuple yield in ONE program make
+  `--native` emit invalid Rust for the WHOLE file (`E0425`).  Order-independent, two generators
+  is enough, from a plain `main` as well as under `--tests`; six keyed generators are fine.
+  This is why the guard has **no `vector` tuple-member cell** despite it being the natural
+  control — it would lock that failure here.  Reading (not yet measured) says the cause is a
+  **type-id mint**, not a channel: `t{N}` is `type_id_ref`'s rendering of a `known_type`, and
+  those bindings are emitted by `output_init`, so `E0425` is a store-type variable referenced
+  without its declaration.  That fits the whole-FILE blast radius, which a per-call-site cast
+  fault would not have.
+* **loft#1149** — a `--native` yield refusal naming a `Vec`-keyed collection emits a malformed
+  `compile_error!`: the rendered name embeds quoted key names (`spatial<P,["x", "y"]>`), so the
+  quote ends the literal and the comma becomes a second macro argument.  `trie` escaped it only
+  because its type carries ONE `String` key.  `refusal_text`'s doc states the false premise
+  (*"contains no quote or backslash"*) — true of the template, false of the name spliced into
+  it.  Fixed by the sibling checkout.
+
+**A drift found by reading and not yet measured**, recorded so it is not lost: `output_init`'s
+`field_keyed` set detects a field-referenced keyed type with `Parts::Sorted | Hash | Index` —
+three of the five — while the `bare_io` arms directly below handle all five.  A `spatial` or
+`trie` FIELD would therefore be emitted both inline and in the bare stream, which the comment
+there says swaps the container's field source-order.  Whether it bites is unmeasured; the
+asymmetry is real either way and is the same rule drifting at the `Parts` level rather than the
+`Type` level.
+
+#### B7b — the residual measured, and the silent-wrong the measurement led to (2026-08-29)
+
+Fifth rule walked, and the second to start from another walk's own record.  B7a closed with a
+drift found by READING and explicitly not measured:
+
+> `output_init`'s `field_keyed` set detects a field-referenced keyed type with
+> `Parts::Sorted | Hash | Index` — three of the five — while the `bare_io` arms directly below
+> handle all five.  A `spatial` or `trie` FIELD would therefore be emitted both inline and in
+> the bare stream, which the comment there says swaps the container's field source-order.
+> Whether it bites is unmeasured.
+
+**The asymmetry is real and the predicted consequence is false.**  A one-struct probe emits
+`let trie_look = db.trie(t78, "nm")` and `let t80 = db.trie(t78, "nm")` two lines apart, so the
+double emission is exactly as described.  It swaps nothing: every `db.*` collection constructor
+is **interned by the type NAME it builds**, so the second call returns the existing id and the
+FIRST position wins.  Only `db.index` has a side effect (the `#left_N` / `#right_N` / `#color_N`
+triple it appends to the element struct) and it dedups early for precisely that reason.
+
+> **What makes a second emission safe is NAME AGREEMENT, not the exclusion.**  That reframing is
+> the whole of this walk: the guard everyone reads is a partial one, and the invariant under it
+> was never written down.
+
+So the question became *do the two spellings agree?*, and the probe for that is a collection
+whose keys are not where the naive reader looks — a synth `__nullable<S>` element, which keeps
+S's keys inside the `Some` payload.  Building one found a defect that has nothing to do with the
+emitter.
+
+**A keyed view beside a `vector<S?>` was silently a SECOND, independent collection.**  Records
+put in through the vector were missing from the view; `len` answered 0 and a lookup answered
+null, both legal values.  Both backends agreed, so a differential oracle could not see it.
+
+| view kind | beside `vector<S>` | beside `vector<S?>` |
+|---|---|---|
+| `hash` | ✅ | ✅ |
+| `sorted` / `index` / `trie` / `spatial` | ✅ | ❌ empty view, no diagnostic |
+
+**The carve-out comment was the map.**  `link_shared_nullable_hash` rewrote a `Type::Hash`
+element to the sibling's `__nullable<S>` and said so:
+
+> *(Sorted/Index sharing is left dense — no consumer exercises it and it needs the index
+> bookkeeping on the `Some` variant.)*
+
+`Trie` / `Radix` are not even named — they post-date it (loft#927).  Of the two reasons given,
+one was a scope note and one was a real mechanism, and they cover different kinds: `sorted`
+needed **nothing** beyond the rewrite, and `index` needed exactly what the sentence said.
+
+**One question, six homes.**  *Which field list do a keyed collection's key NUMBERS index?*
+`Stores::key_owner` is the declared home — a synth `__nullable<S>` answers the `Some` payload,
+everything else answers itself.
+
+| site | asked `key_owner`? | what the short spelling cost |
+|---|---|---|
+| `Stores::hash` | ✅ (inline) | — |
+| `Stores::create_key` (sorted, index) | ✅ | — |
+| `typedef::key_bearing_def` (the DEF-level twin) | ✅ | — |
+| `Stores::field_name` (spatial, trie) | ❌ | `trie`/`spatial` over a `__nullable<S>` element REFUSED: *"`nm` is not a field of `__nullable<W>`"* |
+| `Stores::key_name` (the `sorted` → `ordered` group rename) | ❌ | the promoted type was named `ordered<__nullable<W>[]>` — an empty key list |
+| `generation::bare_field_name` (the bare `init()` stream) | ❌ | `db.sorted(t78, &[("?", true)])` — a name nothing else uses, so it MINTED a second type and `verify_schema_ids` reported loft#739's drift |
+
+The last row is the one the walk was chasing: the double emission and the short key rendering are
+harmless on their own and a wrong program together.
+
+**And the RB-link offset had three spellings.**  `Stores::fields`, `Stores::find_index` and
+`Stores::build_index_sorted_vec` each recomputed `8 + fields[left_field].position`; the two
+copies read the ENUM's own field list, so `index` over a nullable element aborted on a corrupt
+reference (`fld=65539` = `u16::MAX + RB_RIGHT`) even after its element type matched.  Both now
+call `fields`, which resolves through the same `index_owner` the append uses — so where the
+bookkeeping is WRITTEN and where the tree DESCENDS from cannot drift apart.
+
+**A second silent-wrong, found by permuting an axis the corpus never moved.**  Group formation
+asked *"is the field being ADDED keyed?"*, so a plain `vector<E>` declared AFTER its keyed sibling
+formed no group at all — `{ look: sorted<E[k]>, data: vector<E> }` built two collections where
+`{ data: vector<E>, look: sorted<E[k]> }` built one, for all five kinds and in BOTH fill
+directions, with nothing in either declaration saying which you had.  Same defect as the one-way
+`others` link loft#843 fixed, one level up.  The test is now on the PAIR.
+
+⚠ **An existing control pinned the wrong half of that, and the file it lives in had already
+made the same mistake once.**  `901-linked-group-fill.loft` § c1 asserted *"a plain vector is not
+auto-linked"* with a reason attached: *"the group forms off the KEYED field being declared, and
+widening that to any collection would make two independent vectors alias."*  The hazard is real
+and the cell does not test it — two plain VECTORS were never in the file.  What c1 actually
+pinned was the ORDER dependency, and `make ci` failing on it is the only reason it was read at
+all.
+
+The file says the rest itself, about the control right below: *"c2 … used to read 0 here, and
+this file pinned that as the scope — which was the defect, not the boundary"* (loft#927).  Two of
+this file's three controls have now turned out to be pinned defects, and both were pinned with a
+plausible sentence.
+
+> **A control with a REASON attached is still only as good as the cell under it.**  c1's reason
+> describes a widening nobody proposed — dropping the keyed requirement — while the change it
+> blocked keeps that requirement and asks it of the PAIR.  The cure is the cell the reason was
+> reaching for: c4 now pins two plain vectors staying independent, so the boundary is tested
+> rather than asserted.
+
+`c1` now reads 2 in both fill directions, `c1b` adds the reverse route, and `c4` is the boundary.
+This is a **shipped-surface semantic change**: a program with `{ look: hash<E[k]>, data:
+vector<E> }` that relied on the two being independent now has one record set.  The alternative is
+worse — the same declaration written the other way round already means one record set, so leaving
+it would keep two spellings of one declaration meaning different things.  `revalidate-libs` was
+run locally over the published registry for exactly this reason.
+
+**Guards.**  Two, because they are two contracts and a failure in one must not mask the other:
+`a-keyed-view-joins-a-nullable-element-vector.loft` (all five kinds, both fill routes, the dense
+twins, and two plain vectors as the negative control) and
+`a-collection-group-does-not-depend-on-declaration-order.loft` (all five kinds × both orders).
+Both `@falsified-at: 0785871f`, both on BOTH backends — `exit 1 → 0`.
+
+**One finding filed rather than folded in — loft#1152.**  A vector VALUE assigned or appended to
+a group member (`a.data = rows()`) reaches only that member; the sibling views stay empty.
+`Stores::record_finish` is the per-record chokepoint that maintains a group, and
+`vector_add` / `vector_replace` move records in bulk without reaching it.  Pre-existing on
+`0785871f` (verified against the cached control build) and untouched by either fix.  The append
+half is mechanical; the ASSIGN half has to clear and rebuild every sibling and free what they
+held, which is an ownership design call, so the two halves are filed to be decided together.
+Workaround verified: add the records element by element (`for r in rows() { a.data += [r]; }`).
+
+#### B7c — the lint the walk asked for, and the sibling the walk itself did not audit (2026-08-29)
+
+Two follow-ons to B7b, one requested and one self-inflicted.
+
+**`advice[linked-group-apart]`.** Every bug in the @FR-Col-Group family — loft#843, loft#927 and
+both of B7b's — has one signature: *the group formed, or did not, and nothing said so.*  A group
+that did not form looks exactly like an empty one, so `len(view) == 0` is a legal value and the
+first diagnosis anyone gets is a wrong answer.  The declaration is the only place the question is
+decidable.
+
+I had argued a declaration-site lint would be noise, and `keys.rs::linked_group_lint_enabled`
+says so in as many words as the reason the double-fill advice speaks at the LITERAL instead.
+**The owner's refinement is what made it viable: fire only when the members are declared APART.**
+That reasoning holds for a group written TOGETHER — which is exactly what makes non-adjacency
+informative.  The idiom is written as one thing with two views; a group nobody intended is two
+fields added at different times for different reasons, and that is when unrelated fields end up
+between them.
+
+> **A carve-out's reason can be true of a narrower case than the carve-out covers.**  Second time
+> in one day: `901`'s `c1` said "widening that to any collection would make two independent
+> vectors alias" about a widening nobody proposed, and this one said "a declaration that forms a
+> group is usually deliberate" about the adjacent case.  Both readings were right about what they
+> described and wrong about what they were being used to block.
+
+The quiet half is the design, so it is what the test file pins — `tests/group_apart_lint.rs` is
+five silent cases behind one that fires, because an advice that fires on the idiom is one every
+reader learns to ignore.  Owned source only: a consumer cannot rearrange a library's struct.
+
+**And the sibling the walk did not audit.**  Extending the lint to struct-enum variants exposed
+that B7b's own fix never reached them: `link_shared_nullable_views` ran from `parse_struct` only,
+so **all five keyed kinds read 0 beside a `vector<S?>` in a variant — `hash` included**, meaning
+that half was broken before the struct half was fixed.  `synth_nullable_struct_fields` and
+`Stores::field` both handle `EnumValue`; only the parser site did not.
+
+> That is [[audit-the-siblings-of-a-fixed-rewrite]] going unapplied on the walk that produced the
+> lesson.  The question to have asked at the fix is not "did I fix this site" but **"what else
+> holds fields?"** — and `Stores::field`'s own `Parts::Struct(_) | Parts::EnumValue(_, _)` match
+> answers it in the same file I was editing.  The DECLARATION-ORDER half needed nothing, because
+> it lives in `Stores::field` and inherited the variant arm for free; the split between the two
+> halves' reach is the tell that one of them was written per-container and the other per-question.
+
+A second-order trap in the same fix: the advice resolved its source position by attribute INDEX,
+and a variant carries an implicit `enum` discriminator field the source never wrote — so the
+lookup ran one field past the end and the advice was silently absent in variants while the
+rewrite worked.  Positions are now resolved by field NAME.
+
+**Two findings filed, both pre-existing on `0785871f` and both reached through the `is` binding:**
+
+* **loft#1155** — binding a variant's keyed collection field with `is` or `match` LEAKS its
+  store, one per call, for every keyed kind (`vector` is clean).  Both leaking spellings are the
+  ones `warning[variant-field-unchecked]` recommends, and that warning gates a library's CI — so
+  a library author with a keyed collection in a variant chooses between a leak and a red gate.
+* **loft#1152, third shape** — a group member written through an `is` binding reaches that member
+  and not its siblings (`a=2 b=0`), where the direct field write reaches both.  Not the
+  binding-copies rule: the struct analogue `d = x.a; d = [...]` reads `a=0 d=2`, which IS the copy
+  rule and is correct.  Recorded on the issue so whoever takes the assign/append halves checks it
+  against the same fix.
 
 #### C — process / skills
 

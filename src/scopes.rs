@@ -1936,6 +1936,51 @@ fn collect_move_dest(
     });
 }
 
+/// Does `node` contain a `Value::Loop` anywhere inside it?
+///
+/// The `for` lowering wraps its loop in a block (`{#For block … loop {#For loop …} }`), so the
+/// statement an enclosing block holds is a `Block`, not the `Loop` itself.
+fn contains_loop(node: &Value) -> bool {
+    if matches!(node.unspan(), Value::Loop(_)) {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |c| {
+        if !found && contains_loop(c) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Every variable assigned inside a LOOP BODY reachable from `node` — the `Loop`-recursing
+/// twin of `find_first_ref_vars`, which deliberately does not descend into a loop (loft#1156).
+///
+/// ⚠ It descends to the `Value::Loop` FIRST and only then collects.  Walking the whole
+/// statement instead collects the statement's own top-level `Set` — and a statement whose
+/// value happens to CONTAIN a loop (`test_value = { … for … { } … }`, the shape `expr!`
+/// wraps every snippet in) then hoisted the destination of the assignment being scanned.
+fn collect_loop_body_sets(node: &Value, mapping: &HashMap<u16, u16>, out: &mut Vec<u16>) {
+    if let Value::Loop(b) = node.unspan() {
+        for op in &b.operators {
+            collect_sets_in(op, mapping, out);
+        }
+        return;
+    }
+    node.for_each_child(&mut |c| collect_loop_body_sets(c, mapping, out));
+}
+
+/// Every variable assigned at any depth inside `node`.
+fn collect_sets_in(node: &Value, mapping: &HashMap<u16, u16>, out: &mut Vec<u16>) {
+    if let Value::Set(v, _) = node.unspan() {
+        let resolved = *mapping.get(v).unwrap_or(v);
+        if !out.contains(&resolved) {
+            out.push(resolved);
+        }
+    }
+    node.for_each_child(&mut |c| collect_sets_in(c, mapping, out));
+}
+
 /// Does `node` mention variable `v` anywhere inside it?
 fn mentions_var(node: &Value, v: u16) -> bool {
     if matches!(node.unspan(), Value::Var(x) if *x == v) {
@@ -4999,7 +5044,31 @@ impl Scopes {
         is_return: bool,
     ) -> Vec<Value> {
         let mut ls = Vec::new();
-        for v in &bl.operators {
+        for (i, v) in bl.operators.iter().enumerate() {
+            // loft#1156 — a local a LOOP BODY first assigns and something AFTER the loop
+            // reads.  Scoped to the body block, its store is freed at the end of every
+            // iteration and the later read lands on a freed record: measured, an `A` read
+            // `B`'s bytes once the slot was recycled, and `LOFT_STRICT_STORES=1` does NOT
+            // catch it — the slot is legitimately free, so nothing stands between a user
+            // and the wrong number.  Hoisting the SCOPE is the cure rather than moving the
+            // free: pre-initialised here the local gets ONE store that each iteration
+            // copies into, which is byte-for-byte the IR a hand-written `e: A = A { … }`
+            // before the loop already produces.
+            //
+            // Registered BEFORE the loop is scanned, for the reason `scan_if` gives at its
+            // own pre-init: the body's `Set` must see the variable as already assigned and
+            // take the reassignment path, not `claim()`.
+            let mut hoist: Vec<u16> = Vec::new();
+            self.loop_locals_read_after(v, &bl.operators[i + 1..], function, &mut hoist);
+            for &h in &hoist {
+                self.put_scope(h);
+                self.var_order.push(h);
+                ls.push(if matches!(function.tp(h), Type::Text(_)) {
+                    v_set(h, Value::Text(String::new()))
+                } else {
+                    v_set(h, Value::Null)
+                });
+            }
             let sv = self.scan(v, function, data);
             if let Value::Insert(to_insert) = sv {
                 for i in to_insert {
@@ -5324,6 +5393,52 @@ impl Scopes {
             // And in the loop: only a source THIS function owns.  A source that is
             // itself a borrow carries deps naming what it views, and freeing that would
             // release the CALLER's store — an over-free where the defect is a leak.
+            // loft#1142 — the FOURTH shape, and the one that needed the gate widened rather
+            // than a new leg.  A KEYED return orphans differently from a record one: the
+            // record case above needs an arm that is NOT a source, because that is the arm
+            // whose path leaves the source unreturned.  A keyed join can have EVERY arm a
+            // source and still orphan, because each arm's `__kvb_N` buffer is ALLOCATED
+            // before the branch is tested — `scan_if`'s pre-init prefix emits `Set(v, Null)`
+            // for each, and for a keyed local that is not a cheap null but an `OpDatabase`
+            // store.  Exactly one arm runs; the rest are minted and freed by nobody, one
+            // store per call and unbounded in a loop.  So the condition is *more than one
+            // owned source*, not *an arm that is not a source*, and the leg is the same:
+            // hoist the join to `__ret_N` and let `OpFreeRefIfDistinct` decide at runtime,
+            // which is the only thing that can — which arm ran is not a static fact
+            // (@FR-O-Complete: the ownership fact is per binding and PER PATH, and
+            // `get_free_vars` was answering it per FUNCTION by suppressing every
+            // `return_source` at once).
+            //
+            // Fixing the ALLOCATION instead would close only half of it: the leak
+            // reproduces identically with named locals minted before the `if`
+            // (`m = [..]; p = [..]; if c { p } else { m }`), where no pre-init runs at all.
+            //
+            // The gate needs an owned keyed source AND a way for it not to be returned.
+            // "More than one source" covers the two shapes that actually leak — every arm a
+            // minted buffer, and every arm a named local — while a PARAMETER arm counts
+            // toward that number without being freeable itself: `if c { x } else { [lit] }`
+            // has one owned source and still orphans it on the `x` path, which is the cell
+            // that showed the first version of this gate was short.  `return_has_non_source_arm`
+            // is the record leg's spelling of the same idea and is kept beside it, for an arm
+            // that names no source at all.
+            let owned_keyed_source = |v: u16| {
+                crate::parser::vectors::is_keyed(function.tp(v))
+                    // A source that is itself a BORROW names what it views, and freeing that
+                    // releases the CALLER's store — an over-free where the defect is a leak.
+                    && function.tp(v).depend().is_empty()
+                    // A parameter belongs to the caller and the callee frees none of it.
+                    && !function.is_argument(v)
+            };
+            let keyed_join = crate::parser::vectors::is_keyed(tp.base())
+                && (sources.len() > 1 || return_has_non_source_arm(expr, &sources))
+                && sources.iter().any(|&v| owned_keyed_source(v));
+            if keyed_join {
+                for &v in &sources {
+                    if !null_arm_record_sources.contains(&v) && owned_keyed_source(v) {
+                        null_arm_record_sources.push(v);
+                    }
+                }
+            }
             if matches!(tp.base(), Type::Reference(_, _) | Type::Enum(_, true, _))
                 && return_has_non_source_arm(expr, &sources)
             {
@@ -5949,8 +6064,17 @@ impl Scopes {
         // `__work_N` buffer is alive but unused on a sibling arm MUST still be
         // freed, and short-circuiting the whole iteration on `return_sources`
         // would leak it (the enum-vector param-return `show()` regression).
+        //
+        // loft#1150 — `.base()`, because the block this set drives is *"Vector / Reference /
+        // Enum / keyed"* and a `τ?` IS one: `@FR-L-Null` gives it the same layout and the same
+        // store.  Asked bare, an `Optional(Hash)` arm buffer failed the suppression and took
+        // an UNCONDITIONAL scope-exit free on top of the conditional one loft#1142 emits — so
+        // the store being returned was freed and the caller read a dead record.  That is the
+        // fifth site where this same list has drifted short by the wrapper (`is_dbref` here
+        // and at D-own-13, `deps_mut`, `is_keyed`, `depend`); `is_dbref`'s own doc records
+        // that it drifts when restated, and it drifts when asked BARE too.
         let suppress_source = |function: &Function, v: u16| {
-            return_sources.contains(&v) && crate::data::is_dbref(function.tp(v))
+            return_sources.contains(&v) && crate::data::is_dbref(function.tp(v).base())
         };
         for v in vars {
             if v == ret_var || suppress_source(function, v) {
@@ -6345,6 +6469,60 @@ impl Scopes {
             }
         }
         ls
+    }
+
+    /// loft#1156 — the locals a LOOP first assigns that something AFTER it READS.
+    ///
+    /// A body local is scoped to the body block, so `get_free_vars` releases its store at the
+    /// end of each iteration.  A read after the loop is then a use-after-free — silent, and
+    /// invisible to `LOFT_STRICT_STORES=1` because the slot really is free by then; what the
+    /// read returns is whatever the allocator handed that slot next.  `--native` refuses the
+    /// program instead (`E0425`), which is the same decision made visible: the free analysis
+    /// already put the local's death at the block's end and native additionally scopes the
+    /// Rust `let` there.  One decision, expressed twice, half of it visible.
+    ///
+    /// ⚠ **Only a local READ AFTER the loop is taken**, and the exclusions are what keep this
+    /// from re-opening loft#1135.  A loop's own VARIABLE is read after the loop routinely
+    /// (`LOFT.md` documents it) and must NOT be hoisted: its header assigns it
+    /// unconditionally every iteration, and reserving a slot for it at the enclosing scope
+    /// registers it in a scope it does not live in — one orphaned store per program.
+    /// `was_loop_var` is the declared home for that question.  A local used INSIDE the loop
+    /// alone is correctly per-iteration and is left exactly as it is.
+    fn loop_locals_read_after(
+        &self,
+        op: &Value,
+        rest: &[Value],
+        function: &Function,
+        out: &mut Vec<u16>,
+    ) {
+        if rest.is_empty() || !contains_loop(op) {
+            return;
+        }
+        let mut assigned: Vec<u16> = Vec::new();
+        collect_loop_body_sets(op, &self.var_mapping, &mut assigned);
+        for v in assigned {
+            if self.var_scope.contains_key(&v)
+                || out.contains(&v)
+                || function.was_loop_var(v)
+                || !needs_pre_init(function.tp(v))
+            {
+                continue;
+            }
+            // Same guard as `find_first_ref_vars`: a BORROWED type may only be pre-inited
+            // once every dep is in scope, or the `OpCreateStack` emitted here reads an
+            // uninitialised slot.
+            if !function
+                .tp(v)
+                .depend()
+                .iter()
+                .all(|d| self.var_scope.contains_key(d))
+            {
+                continue;
+            }
+            if rest.iter().any(|r| mentions_var(r, v)) {
+                out.push(v);
+            }
+        }
     }
 
     /// Recursively collect variables that need a pre-init `Set(v, Null)` before an if/else.
@@ -7233,6 +7411,51 @@ impl Scopes {
             )
     }
 
+    /// Does EVERY arm of this `ncc` block yield a store the frame would own?
+    ///
+    /// ⚠ The keyed lift needs this and the reference arm does not, because for a keyed result
+    /// `bl.result.depend()` comes back EMPTY even when an arm is a bare local: `f() ?? d`
+    /// reads as owned and lifting it freed the caller's `d` — a use-after-free where the
+    /// defect was a leak, caught by the over-free cell rather than by reading (loft#1157).
+    ///
+    /// An arm the @P290 bracket can NAME is a view of something a variable still holds, which
+    /// is exactly the wrong thing to free; an arm it cannot name minted its own store.  The
+    /// SUBJECT reaches the tail as `Var(__ncc_N)`, so its own assignment is substituted in —
+    /// the temp is a name, and the question is about what the call behind it produced.
+    fn ncc_arms_are_all_owned(bl: &Block, data: &Data) -> bool {
+        let Some(last) = bl.operators.last() else {
+            return false;
+        };
+        let subject = bl.operators.iter().find_map(|op| match op.unspan() {
+            Value::Set(v, val) if !matches!(val.unspan(), Value::Null) => Some((*v, val.as_ref())),
+            _ => None,
+        });
+        let mut arms: Vec<&Value> = Vec::new();
+        Self::ncc_tail_arms(last, &mut arms);
+        if arms.len() < 2 {
+            return false;
+        }
+        arms.iter().all(|a| {
+            let effective = match (a.unspan(), subject) {
+                (Value::Var(v), Some((sv, val))) if *v == sv => val,
+                _ => *a,
+            };
+            crate::use_analysis::view_root_slots(data, effective).is_none()
+        })
+    }
+
+    /// The terminal value of each arm of an `ncc` block's tail `if`.
+    fn ncc_tail_arms<'a>(val: &'a Value, out: &mut Vec<&'a Value>) {
+        match val.unspan() {
+            Value::If(_, t, f) => {
+                Self::ncc_tail_arms(t, out);
+                Self::ncc_tail_arms(f, out);
+            }
+            Value::Block(b) if b.operators.len() == 1 => Self::ncc_tail_arms(&b.operators[0], out),
+            other => out.push(other),
+        }
+    }
+
     fn inline_struct_return(
         &self,
         val: &Value,
@@ -7299,6 +7522,26 @@ impl Scopes {
             && ((dep.is_empty() && !subject_is_call_ref) || self.ncc_join_is_witnessed(val, data))
         {
             return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
+        }
+        // loft#1157 — and the KEYED kinds, which that carve-out never named.  Its reasons are
+        // PER ITEM and both are about a mechanism that exists elsewhere: text is freed in place
+        // by the skip_free-orphan pass, a vector by its own delivery path.  A keyed `??` has
+        // NEITHER, so used inline its subject's store is owned by nothing — one retained record
+        // per evaluation, unbounded in a loop, while the bound spelling
+        // (`a = f() ?? []`) was clean all along because the `Set` gives the store an owner.
+        // Lifting rewrites the inline spelling into exactly that bound form.
+        //
+        // Same ownership gate as the reference arm: an EMPTY dep list is what says the value is
+        // owned, and a capturing fn-ref subject is excluded for the reason `subject_is_call_ref`
+        // gives — its empty dep list means nothing.
+        if let Value::Block(bl) = val.unspan()
+            && bl.name == "ncc"
+            && crate::parser::vectors::is_keyed(&bl.result)
+            && bl.result.depend().is_empty()
+            && !subject_is_call_ref
+            && Self::ncc_arms_are_all_owned(bl, data)
+        {
+            return Some(bl.result.without_deps());
         }
         // @P297 — a USER struct-returning call (`n_*` with a body) passed
         // directly as a call argument is wrapped in `Value::Span` by

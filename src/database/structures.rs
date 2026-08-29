@@ -221,7 +221,7 @@ impl Stores {
                     // number, so it is SKIPPED rather than treated as the end of
                     // the list: that is what lets a view maintain its siblings
                     // too, and an insert then means the same thing whichever of
-                    // the collections it is spelled through (loft#843).
+                    // the collections it is spelled through (@FR-Col-Group).
                     if *fld_nr == u16::MAX {
                         continue;
                     }
@@ -293,6 +293,80 @@ impl Stores {
             .iter()
             .find(|f| f.position == byte_off)
             .map(|f| f.content)
+    }
+
+    /// loft#1152 — insert every record the vector `primary` holds into the group member
+    /// `view`, whose collection type is `view_tp`.
+    ///
+    /// `Stores::record_finish` is the chokepoint that maintains a linked group: it walks the
+    /// field's `other_indexes` and inserts the record into every sibling, so every route that
+    /// adds records ONE AT A TIME keeps the members agreeing.  A whole-vector write does not
+    /// pass through it — `OpAppendVector` reaches `vector_add` → `vector_add_array`, which
+    /// moves the records in bulk — so the views stayed empty and nothing said so: `len`
+    /// answered `0` and a lookup answered `null`, both legal values for an empty group.
+    ///
+    /// The records are NOT copied.  A group is several routes to a SINGLE record set, so the
+    /// view is handed the primary's own element records by id, exactly as `record_finish`
+    /// hands them over — which is what makes a write through the vector visible through the
+    /// view.  `secondary: true` says so: the view indexes, and never frees.
+    ///
+    /// Reads the array through `is_linked`, not through the caller's word: a grouped element
+    /// type is promoted to `Parts::Array` (a u32 rec-id per slot) by `finish_type`, and on an
+    /// UNPROMOTED vector those same bytes are inline payload, so walking them as ids would
+    /// hand `insert_record` addresses built out of field data.
+    pub fn index_group_records(&mut self, primary: &DbRef, view: &DbRef, view_tp: u16) {
+        if (view_tp as usize) >= self.types.len() {
+            return;
+        }
+        let elem = self.content(view_tp);
+        if elem == u16::MAX || !self.is_linked(elem) {
+            return;
+        }
+        let length = vector::length_vector(primary, &self.allocations);
+        if length == 0 {
+            return;
+        }
+        let arr = keys::store(primary, &self.allocations).get_u32_raw(primary.rec, primary.pos);
+        if arr == 0 {
+            return;
+        }
+        for i in 0..length {
+            let rec = keys::store(primary, &self.allocations).get_u32_raw(arr, 8 + 4 * i);
+            // A null element stays out of the index: it is reachable in the vector by
+            // position and has no key to be found under.
+            if rec == 0 {
+                continue;
+            }
+            let elem_ref = DbRef {
+                store_nr: primary.store_nr,
+                rec,
+                pos: 8,
+            };
+            self.insert_record(view, &elem_ref, view_tp, true);
+        }
+    }
+
+    /// loft#1159 — the FIELD INDEX of the field at byte offset `byte_off` in the struct or
+    /// enum-value type `struct_tp`, or `None` when no field sits there.
+    ///
+    /// A field ref names a byte POSITION, while every group question — `other_indexes`, the
+    /// sibling walk in [`Self::record_finish`] — is asked by field NUMBER. The two are
+    /// related only through the field list, so the translation lives here beside the list
+    /// rather than being re-derived at each caller.
+    #[must_use]
+    pub fn field_index_at(&self, struct_tp: u16, byte_off: u16) -> Option<u16> {
+        if (struct_tp as usize) >= self.types.len() {
+            return None;
+        }
+        let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) =
+            &self.types[struct_tp as usize].parts
+        else {
+            return None;
+        };
+        fields
+            .iter()
+            .position(|f| f.position == byte_off)
+            .map(|i| i as u16)
     }
 
     /// loft#898 — the members of the linked collection group the keyed field at

@@ -44,12 +44,18 @@ pub type u32 = integer limit(0, 4294967294) size(4);
 
 // Types that support the `<` comparison operator.
 // Satisfied by integer, single, float, text, and any user type defining OpLt.
+//
+// ONE method is all a type has to define: inside a generic bounded by this, `>`, `<=` and
+// `>=` all derive from `<` — `a > b` is `b < a`, `a <= b` is `!(b < a)`, `a >= b` is
+// `!(a < b)`.  Each evaluates its operands exactly once.
 pub interface Ordered {
   op < (self: Self, other: Self) -> boolean
 }
 
 // Types that support the `==` equality operator.
 // Satisfied by integer, single, float, text, boolean, and user types defining OpEq.
+//
+// `!=` derives from it (`a != b` is `!(a == b)`), so a type defining `op ==` gets both.
 pub interface Equatable {
   op == (self: Self, other: Self) -> boolean
 }
@@ -1364,6 +1370,25 @@ fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
 // (the table / slot list / tree root) and leaves the records to their owner.
 fn OpClearKeyed(dest: reference, tp: const u16);
 #rust"s.database.remove_claims_keyed(&@dest, @tp);"
+// loft#1152 — index every record the vector `primary` holds into the linked-group
+// member `view` (collection type `tp`).  A whole-vector write (`s.v = rows()`,
+// `s.v += rows()`) moves its records in bulk through `vector_add` and so never reaches
+// `Stores::record_finish`, the walk that keeps a group's members agreeing; the sibling
+// views were left empty, with `len` answering 0 and a lookup answering null.
+//
+// Emitted per VIEW member beside the reset `OpClearKeyed` already emits (loft#898), so
+// the parser names the members — which it can, they are known at emit time — and the
+// per-RECORD loop lives here, where the records exist.
+fn OpIndexGroup(primary: reference, view: reference, tp: const u16);
+#rust"s.database.index_group_records(&@primary, &@view, @tp);"
+// loft#1159 — fill the keyed collection `dest` with a deep COPY of every record the plain
+// vector `src` holds, each placed by its own key.  A vector LITERAL in a keyed position is
+// parsed into per-element inserts; a vector VALUE (`h.a = rows()`, `h.a += rows()`) is one
+// expression, and there was no route from it to those same inserts — `=` walked the source
+// with the DESTINATION's kind through `OpReplaceKeyed` and `+=` emitted nothing at all.
+// `tp`'s `0x8000` bit frees the source store after the copy, as it does for OpReplaceKeyed.
+fn OpFillKeyed(parent: reference, src: reference, tp: const u16, parent_tp: const u16, field: const u16);
+#rust"s.database.fill_keyed_from_vector(&@parent, &@src, @tp, @parent_tp, @field);"
 // @P305 — `coll[key] = value` insert-or-replace into a keyed collection
 // (hash/sorted/index), deduped by value's key.  Updates an existing key
 // in place OR inserts a new one (the plain `OpCopyRecord` lowering could
@@ -1753,6 +1778,48 @@ pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T> {
   wk_order
 }
 #pure
+
+// --- Assertions that report both sides ---
+// Assert that two values are equal, naming BOTH of them when they are not.
+//
+// `assert(got == want, "…")` puts the expected value in the CONDITION, so a failure says
+// what was got and leaves the reader to recover what was wanted by reading the expression.
+// This says both.  Works on any type that is `Equatable` (op ==) and `Printable`
+// (to_text) — every built-in scalar, and a user type defining both.
+//
+// Failure behaves exactly as `assert` does, because it IS `assert`: the run aborts (and in
+// `--production` logs an error instead), and the reported position is the CALLER's, not
+// this function's.  The file and line are injected by the compiler; do not pass them
+// manually.
+//
+// The type variable is spelled `AssertValue` and NOT `T` on purpose.  A type variable's
+// bound stubs are keyed by its NAME (`t_1T_to_text`), so every generic in the program
+// spelling its variable `T` shares one namespace with a user `struct T` — and a bound
+// declaring a method as common as `to_text` or `op ==` then blocks that struct from
+// defining its own.  Measured: with these bounds on `T`, every user struct named `T`
+// formatted as EMPTY and could not declare `to_text` at all.  loft#1153 tracks the
+// collision itself; until it closes, a stdlib generic bound to a common method needs a
+// name no one would write.
+pub fn assert_eq < AssertValue: Equatable + Printable > (got: AssertValue, want: AssertValue, what: text, file: text, line: integer) {
+  if got != want {
+    if what == "" {
+      assert(false, "got {got.to_text()}, want {want.to_text()}", file, line);
+    } else {
+      assert(false, "{what}: got {got.to_text()}, want {want.to_text()}", file, line);
+    }
+  }
+}
+// Assert that two values DIFFER, naming the value both sides share when they do not.
+// The mirror of assert_eq; same bounds, same failure behaviour, same position injection.
+pub fn assert_ne < AssertValue: Equatable + Printable > (got: AssertValue, want: AssertValue, what: text, file: text, line: integer) {
+  if got == want {
+    if what == "" {
+      assert(false, "both sides are {got.to_text()}", file, line);
+    } else {
+      assert(false, "{what}: both sides are {got.to_text()}", file, line);
+    }
+  }
+}
 
 // --- Field iteration support types ---
 

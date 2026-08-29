@@ -120,6 +120,38 @@ fn a_handle_carrying_tuple_from_a_loop_body_is_refused_but_not_straight_line() {
     );
 }
 
+/// A refused type whose NAME carries quotes — a keyed collection renders its key list as
+/// `spatial<P,["x", "y"]>`, and the message splices that name into a Rust string literal.
+///
+/// Spliced raw, the first quote ends the literal and the comma becomes a second macro
+/// argument, so the author gets `compile_error! takes 1 argument` plus a suffix error rather
+/// than the refusal — the rustc noise this path exists to replace (loft#1149).
+#[test]
+fn a_refused_type_whose_name_contains_quotes_still_renders_one_message() {
+    let rs = emit(
+        "quoted_name",
+        "struct Pq { x: integer, y: integer, n: integer }\n\
+         fn g() -> iterator<(spatial<Pq[x,y]>, text)> {\n\
+         \x20 a: spatial<Pq[x,y]> = [Pq { x: 1, y: 2, n: 3 }];\n\
+         \x20 yield (a, \"hi\");\n\
+         }\n\
+         fn main() { for t in g() { print(\"{t.1}\\n\"); } }\n",
+    );
+    assert!(
+        rs.contains("has no native transport channel"),
+        "the refusal must still be emitted for a type whose name carries quotes"
+    );
+    assert!(
+        rs.contains("spatial<Pq,[\\\"x\\\", \\\"y\\\"]>"),
+        "and the name must be ESCAPED into the literal — an unescaped quote ends it early, \
+         which is what turned one message into two rustc errors"
+    );
+    assert!(
+        !rs.contains("[\"x\", \"y\"]>` has no native"),
+        "…so the raw, unescaped rendering must not appear inside the message literal"
+    );
+}
+
 /// The control that keeps the refusal from widening: a by-value tuple from a loop body is
 /// exactly what the eager buffer was taught to carry, so it must emit no refusal at all.
 #[test]

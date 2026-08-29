@@ -2358,18 +2358,22 @@ pub fn protectable_ref_args(data: &Data, call: &Value) -> (Vec<u16>, bool) {
 /// that is here without carrying a store would be worse: the set would read complete while
 /// protecting nothing, which is the loft#981 use-after-free.
 fn is_protectable_store_type(tp: &Type) -> bool {
-    // ⚠ Out of step with that `heap_dep` question on ONE shape, deliberately and for now:
-    // the caller peels (`tp.heap_dep().is_none() && tp.base().heap_dep().is_none()`) and
-    // this does not, so an `S?` parameter passes the filter and then fails here, leaving
-    // the witness set incomplete — the conservative never-free the comment above calls
-    // correct-but-leaking.  Peeling here is the rule-true reading (@FR-L-Null: a `τ?`
-    // value IS the same `DbRef`), and it is NOT inert: it changes emitted code in six
-    // corpus programs, every one of them a guard for this machinery (1021, 1029, 1105,
-    // 1106, 1107, 882).  It also does not cure the leak that raised the question
-    // (loft#1118, whose mechanism is the inline `ncc` lift in `scopes.rs`), so the change
-    // has no measurement asking for it and moves in the direction where a mistake is a
-    // use-after-free rather than a leak.  Left as it stands, with the map written down.
-    crate::data::is_dbref(tp)
+    // In step with the `heap_dep` question its caller asks — both peel — because
+    // `@FR-L-Null` says a `τ?` value IS the same `DbRef`.  Asked bare, a `τ?` parameter
+    // passed the caller's filter and then failed here, so the witness set read INCOMPLETE
+    // and the site kept the conservative never-free: correct, and leaking one store per
+    // call on the arm where the callee MINTS.
+    //
+    // ⚠ This peel was written down and deliberately deferred, on the ground that *"the
+    // change has no measurement asking for it"* — it was not inert (it moves emitted code
+    // in six corpus programs, every one a guard for this machinery: 1021, 1029, 1105, 1106,
+    // 1107, 882) and it moves in the direction where a mistake is a use-after-free rather
+    // than a leak.  loft#1150 is the measurement: `fn f(x: hash<T[k]>?, c) -> hash<T[k]>?
+    // { if c { x } else { [lit] } }` leaked its mint once per call, while the identical
+    // DENSE signature was clean — one program, two spellings, and only the wrapper between
+    // them.  All six named guards are green under `LOFT_STRICT_STORES=1` and `LOFT_POISON=1`
+    // on both backends with the peel in place, which is the check the deferral asked for.
+    crate::data::is_dbref(tp.base())
 }
 
 /// loft#1029 — the variable slots whose STORES an argument's value can lie in, or
@@ -2396,7 +2400,10 @@ fn is_protectable_store_type(tp: &Type) -> bool {
 /// nothing while reading as covered — trading this leak for a use-after-free. That
 /// shape is cured at the call site instead, by hoisting the construction
 /// (`Scopes::inline_built_borrow_source`).
-fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
+/// `pub` for loft#1154's join gate, which needs the SLOTS and not just the boolean
+/// [`bracket_can_name`] answers — a join's arms must be protected individually, and an arm the
+/// bracket cannot name is the one that vetoes the whole decision.
+pub fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
     // A SPAN is source position, not structure: the parser wraps a field access in one
     // and leaves a bare local unwrapped, which is why `pick(q, …)` was clean while
     // `pick(b.s, …)` leaked. Reading through it is safe because the bracket is emitted

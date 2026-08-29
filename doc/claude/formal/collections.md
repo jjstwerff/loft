@@ -187,6 +187,61 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
 ```
 *Anchors:* DATABASE.md:693,:704; VERIFICATION.md heap.md "H-Copy (keyed)" (oracle `16`).
 
+### 1.9 The linked GROUP — `Col-Group` (cross-link [DATABASE.md § Clearing one member](../DATABASE.md))
+
+```
+  (Col-Group)   two or more collections over ONE element type in ONE struct are several ROUTES
+                to a single record set, provided at least one of them is keyed.  A record
+                entering through any member is in every member, by any write route.  Membership
+                is a fact about the PAIR — not about declaration order, not about which member
+                is written first, and not about whether the element is dense (vector<E>) or
+                nullable (vector<E?>).
+                Two members neither of which is keyed (two plain vectors) are INDEPENDENT.
+```
+
+Five fixes are all instances of this one rule, which is why it is written here rather than left
+to the issues: `trie`/`spatial` were absent from the pairing test (loft#927); the `others` link
+ran one way, so which member maintained the rest depended on declaration order (loft#843); the
+test asked only whether the field being ADDED was keyed, so a plain `vector<E>` declared second
+formed no group (loft#1158); only `hash` had its element rewritten to a nullable sibling's
+`__nullable<E>`, so the other four kinds no longer matched by content; and a whole vector VALUE
+(`data = rows()`) reached only the member it was assigned to, because the bulk write never
+passed the per-record chokepoint that maintains the group (loft#1152, and loft#1159 for the
+same route into a KEYED member).
+
+Every one of them **failed silently** — the pairing was never refused, a second independent
+collection was built instead, and `len` of the empty view is a legal value.  That is the shape
+to test for: a group's failure mode is not an error, it is a zero.
+
+⚠ **Not settled by this rule: which member HOLDS the records.**  The first-declared member is
+the holder and the rest are views.  loft#1158 predicted that a keyed-first group would need the
+vector made holder regardless of order; measured, it does not — all four write routes
+(element-wise `+=`, whole vector value, keyed literal, keyed `+=`) read back complete through
+both members in both orders, on both backends, under `LOFT_STRICT_STORES=1`, with no holder
+machinery touched.  The holder choice is not observable through the rule, so the rule does not
+name one.
+
+*"By any write route"* is the clause the binding spellings broke and now hold to: a write
+through a variant's `match` / `is` payload binding is resolved back to the field it projects,
+so it reaches the group exactly as the direct spelling does (loft#1160, and loft#1161 for the
+`is` capture, whose write did not even reach the subject).  A capture spanning ALTERNATIVES is
+the one route still outside it, and not by omission — it picks its origin from the runtime tag,
+so there is no one field to resolve it to.
+
+*Anchors:* `Stores::field` (`src/database/types.rs`, the pairing test + `other_indexes`);
+`Parser::link_shared_nullable_views` (`src/parser/definitions.rs`, the nullable-element
+rewrite); `Stores::record_finish` (`src/database/structures.rs`, the per-record sibling
+insert); `Stores::insert_keyed_copy` (`src/database/search.rs`, the one keyed insert both the
+point write and the bulk fill take); DATABASE.md § Clearing one member of a linked group;
+tests/scripts/a-keyed-view-joins-a-nullable-element-vector.loft;
+tests/scripts/a-collection-group-does-not-depend-on-declaration-order.loft;
+tests/scripts/1158-a-group-forms-whichever-member-is-declared-first.loft;
+tests/scripts/1152-a-vector-value-into-a-group-reaches-every-member.loft;
+tests/scripts/1159-a-keyed-collection-filled-from-a-vector-value.loft;
+tests/scripts/1160-a-variant-binding-write-means-the-field-write.loft;
+tests/scripts/927-trie-spatial-linked-group.loft;
+tests/scripts/901-linked-group-fill.loft.
+
 ---
 
 ## 2. Invariants (the both-backends contracts this doc pins)

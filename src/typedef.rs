@@ -1201,7 +1201,13 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         fill_database(data, database, c_nr);
                         c_tp = data.def(c_nr).known_type;
                     }
-                    set_mutable(data, c_nr, &key_fields, (d_nr, a_nr));
+                    // @PLN25 E2 — for a synth `__nullable<S>` element the key fields live in
+                    // the `Some` payload, so resolve the key-bearing def (mirror the hash arm).
+                    let kd = key_bearing_def(data, c_nr);
+                    if data.def(kd).known_type == u16::MAX {
+                        fill_database(data, database, kd);
+                    }
+                    set_mutable(data, kd, &key_fields, (d_nr, a_nr));
                     database.spatial(c_tp, &key_fields)
                 }
                 Type::Trie(c_nr, key, _) => {
@@ -1210,7 +1216,11 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         fill_database(data, database, c_nr);
                         c_tp = data.def(c_nr).known_type;
                     }
-                    set_mutable(data, c_nr, std::slice::from_ref(&key), (d_nr, a_nr));
+                    let kd = key_bearing_def(data, c_nr);
+                    if data.def(kd).known_type == u16::MAX {
+                        fill_database(data, database, kd);
+                    }
+                    set_mutable(data, kd, std::slice::from_ref(&key), (d_nr, a_nr));
                     database.trie(c_tp, &key)
                 }
                 Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),

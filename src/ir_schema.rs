@@ -1297,6 +1297,7 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
     // are reconstructed here rather than stored.
     let variables = variables_from_parsed(field(p, "variables")?, &name, &position.file)?;
     Ok(Definition {
+        bound_holder: false,
         variables,
         attr_names,
         // codegen-derived: recomputed by byte_code_from on load.
@@ -2119,6 +2120,7 @@ mod tests {
     /// matching what `Data::add` / the parser produce for a type def.
     fn sample_struct_def() -> Definition {
         Definition {
+            bound_holder: false,
             name: "Point".to_string(),
             source: 1,
             def_type: DefType::Struct,
@@ -2232,6 +2234,7 @@ mod tests {
     #[test]
     fn definition_default_shape_round_trips() {
         let d = Definition {
+            bound_holder: false,
             name: "T".to_string(),
             source: 0,
             def_type: DefType::Type,

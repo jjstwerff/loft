@@ -142,6 +142,32 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 | `starts_with(self: text, value: text) -> boolean` | Returns true if `self` begins with `value`. |
 | `ends_with(self: text, value: text) -> boolean` | Returns true if `self` ends with `value`. |
 
+### Taking part of a text (substring / substr / slice)
+
+loft has no `substr` or `substring` function. A part of a text is a **slice**, written with
+a range:
+
+```loft
+s = "abcdef";
+s[1..3]                 // "bc" — from byte 1 up to, not including, byte 3
+s.char_slice(1, 3)      // "bc" — the same, counting CHARACTERS instead of bytes
+```
+
+Which one you want depends on where the numbers came from:
+
+| you have | use | why |
+|---|---|---|
+| numbers from `find`, `rfind`, `size`, `byte_at` | `s[a..b]` | those are byte positions, and so is the slice |
+| a count of CHARACTERS (a width to fit, a column, a caret) | `s.char_slice(a, b)` | `len` counts characters, and a character can be several bytes |
+
+Getting this the wrong way round is the commonest text bug in this stack, and it is silent
+on ASCII: a character count used as a byte range fits fewer characters than it measured, so
+the text comes back short. `"héllo"[0..4]` is `"hél"`; `"héllo".char_slice(0, 4)` is
+`"héll"`. See [`char_slice`](#bytes-and-code-points) for the full rule, and
+[`size` vs `len`](#length) for the two counts.
+
+Both ends clamp, a reversed range gives `""`, and a negative bound counts from the end.
+
 ### Transformation
 
 | Function | Description |
@@ -320,6 +346,20 @@ with a message that says so.
 |----------|-------------|
 | `sum<T: Addable>(v: vector<T>, init: T? = null) -> T` | Sum of all elements. `init` is the identity to start from; leave it out and the element type's own zero is used (`0`, `0.0`, `""`). |
 | `sum_of(v: vector<integer>) -> integer` | Superseded by `sum` — kept working. Sum of all elements; returns 0 for an empty vector. |
+**A bound declares the MINIMUM, and the rest derives.** `Ordered` declares `op <` alone and
+`Equatable` declares `op ==` alone, so a user type satisfies either by defining one method —
+and inside a generic all six comparisons work anyway:
+
+| written | resolved as |
+|---|---|
+| `a > b` | `b < a` |
+| `a <= b` | `!(b < a)` |
+| `a >= b` | `!(a < b)` |
+| `a != b` | `!(a == b)` |
+
+Each derivation evaluates every operand exactly once, and each agrees with the concrete
+operator on every value the bound's types can hold.
+
 | `min_of<T: Ordered>(v: vector<T>) -> T?` | Smallest element, or **null** when the vector is empty (the type is honest about the empty case — @PLN102). |
 | `max_of<T: Ordered>(v: vector<T>) -> T?` | Largest element, or **null** when the vector is empty (@PLN102). |
 
@@ -449,7 +489,26 @@ implementation.
 | `print(v: text)` | Writes `v` to standard output without a newline. |
 | `println(v: text)` | Writes `v` followed by a newline. |
 | `assert(test: boolean, message: text)` | Panics with `message` if `test` is false. In production mode (`--production` CLI flag), writes an `error` log entry instead of aborting. |
+| `assert_eq<T: Equatable + Printable>(got: T, want: T, what: text = "")` | Panics if the two differ, naming **both** sides: `what: got 4, want 5`. The label is optional. |
+| `assert_ne<T: Equatable + Printable>(got: T, want: T, what: text = "")` | Panics if the two are equal, naming the value they share: `what: both sides are 5`. |
 | `panic(message: text)` | Immediately terminates execution with `message`. In production mode, writes a `fatal` log entry instead of aborting. |
+
+**`assert_eq` says what `assert` cannot.** `assert(got == want, "…")` puts the expected value
+in the CONDITION, so a failure reports what was got and leaves the reader to recover what was
+wanted by reading the expression back. `assert_eq` reports both, on any type that is
+`Equatable` (defines `op ==`) and `Printable` (defines `to_text`) — every built-in scalar, and
+a user type defining the two:
+
+```loft
+assert_eq(total, 42, "the running total");
+// error: assertion failed: the running total: got 41, want 42
+//   --> game.loft:12:3
+```
+
+It IS `assert` underneath, so the halt behaves identically — same rendering, same
+`--production` demotion to an `error` log entry, same non-zero exit — and the position
+reported is the CALL SITE's, not the stdlib's. Drop the label where the two values and the
+source position already say enough: `assert_eq(total, 42)` reports `got 41, want 42`.
 
 **What a halt looks like.** `assert` and `panic` are the two explicit halt statements, and
 they render the same way as each other on every backend: the message and the program's own
