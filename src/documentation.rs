@@ -514,7 +514,17 @@ fn render_prose_lines(lines: &[String], body: &mut String) {
     flush_para(&mut para, body);
 }
 
-fn typst_escape(s: &str) -> String {
+/// Escape one run of plain text so Typst renders it literally.
+///
+/// Every character here opens something in Typst markup, and an unclosed one is a
+/// COMPILE error rather than a rendering blemish: a bare `_` in `log_*` reads as an
+/// emphasis delimiter that never closes, and the whole document fails to build.
+///
+/// The set must stay complete for that reason. It lives here as the ONE home — a second
+/// copy in the generator drifted from this one by exactly the `_` line, which is how a
+/// generated reference stopped compiling while every gate stayed green (nothing in CI runs
+/// `typst`; `tests/typst_compiles.rs` now does when it is installed).
+pub fn typst_escape(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('#', "\\#")
         .replace('@', "\\@")
@@ -524,6 +534,7 @@ fn typst_escape(s: &str) -> String {
         .replace('<', "\\<")
         .replace('>', "\\>")
         .replace('*', "\\*")
+        .replace('_', "\\_")
 }
 
 fn code_to_typst(code: &str) -> String {

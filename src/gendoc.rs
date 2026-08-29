@@ -5,6 +5,7 @@
 // Generate standard library HTML pages from the documented default/*.loft files.
 // Run with: cargo run --bin gendoc
 
+use loft::documentation::typst_escape;
 use loft::documentation::{
     StdlibSection, TopicSource, build_nav, gather_topic_info, generate_docs, get_topic_sources,
     page_html, render_topic_body, render_topic_typst,
@@ -487,19 +488,6 @@ fn sig_kind(sig: &str) -> &'static str {
     } else {
         "const"
     }
-}
-
-fn typst_escape(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('#', "\\#")
-        .replace('@', "\\@")
-        .replace('$', "\\$")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('<', "\\<")
-        .replace('>', "\\>")
-        .replace('*', "\\*")
-        .replace('_', "\\_")
 }
 
 /// Strip all HTML tags from `s`, returning only the text content.

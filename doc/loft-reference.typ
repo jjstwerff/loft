@@ -1203,7 +1203,7 @@ A 'for' loop over a text value visits one character at a time, even when charact
 
 === Searching inside text
 
-These built-in functions answer common "does this text contain…?" questions. 'starts_with' and 'ends_with' check the boundaries. 'find' returns the byte offset of the first match, or null if not found. 'contains' is true if the needle appears anywhere in the text. All positions are byte offsets, consistent with 'len()' and slicing.
+These built-in functions answer common "does this text contain…?" questions. 'starts\_with' and 'ends\_with' check the boundaries. 'find' returns the byte offset of the first match, or null if not found. 'contains' is true if the needle appears anywhere in the text. All positions are byte offsets, consistent with 'len()' and slicing.
 
 ```rust
   assert("something".starts_with("some"), "starts_with");
@@ -1662,7 +1662,7 @@ fn describe_text(v: text) -> text {
 
 === Function References
 
-'fn \<name\>' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param_types) -\> return_type' and can be:
+'fn \<name\>' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param\_types) -\> return\_type' and can be:
 
 ```
 - stored in a variable,
@@ -2009,7 +2009,7 @@ The same rule applies to slices: 'v\[2..5\]' passed to a function is a narrower 
   assert("{evens2}" == "[2,4]", "filter evens: {evens2}");
 ```
 
-'reduce' folds all elements into a single value, starting from an initial accumulator. Argument order: reduce(vector, initial_value, combiner).
+'reduce' folds all elements into a single value, starting from an initial accumulator. Argument order: reduce(vector, initial\_value, combiner).
 
 ```rust
   total = reduce(nums, 0,  sum_acc);
@@ -2053,7 +2053,7 @@ struct Colour {
 
 === Methods
 
-A method is a function whose first parameter is named 'self'. Loft uses the type of 'self' to decide which struct the method belongs to. Call it with dot notation: 'c.to_hex()'. A method can read fields via 'self.field' and return any type.
+A method is a function whose first parameter is named 'self'. Loft uses the type of 'self' to decide which struct the method belongs to. Call it with dot notation: 'c.to\_hex()'. A method can read fields via 'self.field' and return any type.
 
 ```rust
 fn to_hex(self: Colour) -> integer {
@@ -2410,7 +2410,7 @@ A stub returns null at runtime and suppresses the warning.
 
 === Match expressions on enums
 
-Match picks a code path based on the active variant. You must handle every variant, or include a `_` wildcard arm that catches the rest.
+Match picks a code path based on the active variant. You must handle every variant, or include a `\_` wildcard arm that catches the rest.
 
 ```rust
   axis = match d {
@@ -2432,7 +2432,7 @@ When a variant has fields, name them inside braces to use them in the arm body.
 
 === Guard clauses
 
-An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Because the guard can fail, a guarded arm alone does not prove the variant is handled — you still need a wildcard `_` or an unguarded arm for that variant.
+An arm can have an `if` guard after the pattern. If the guard fails, matching falls through to the next arm. Because the guard can fail, a guarded arm alone does not prove the variant is handled — you still need a wildcard `\_` or an unguarded arm for that variant.
 
 ```rust
   area = match c {
@@ -2444,7 +2444,7 @@ An arm can have an `if` guard after the pattern. If the guard fails, matching fa
 
 === Scalar match
 
-Match also works on integers, text, floats, booleans, and characters. Arms can be literals, ranges, `null`, or `_`.
+Match also works on integers, text, floats, booleans, and characters. Arms can be literals, ranges, `null`, or `\_`.
 
 ```rust
   grade = match 85 {
@@ -2654,7 +2654,7 @@ Note: '\#index' works on a sorted collection — it is a sequential counter that
 
 === Iterating a Key Range
 
-The range examples live in `main_ranges` below; run them here, because a file with a `main` runs only its `main`.
+The range examples live in `main\_ranges` below; run them here, because a file with a `main` runs only its `main`.
 
 ```rust
   main_ranges();
@@ -3166,7 +3166,7 @@ Reading a non-existent file produces an empty result, not a crash.
   assert(!move("any.txt", "../escape.txt").ok(), "move with a missing source fails");
 ```
 
-Writing to a read-only or invalid path also returns a FileResult. Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir_all`.
+Writing to a read-only or invalid path also returns a FileResult. Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir\_all`.
 
 ```rust
 }
@@ -3261,7 +3261,7 @@ A `for` loop over `img.data` visits every pixel in row order. Count how many pix
 
 === Building and Saving an Image
 
-You can also create an `Image` from scratch: fill a `vector\<Pixel\>`, wrap it in an `Image` with a matching width and height, and call `save_png`. Here we make a 2x2 swatch — red, green, blue, and grey — and write it to a scratch file.
+You can also create an `Image` from scratch: fill a `vector\<Pixel\>`, wrap it in an `Image` with a matching width and height, and call `save\_png`. Here we make a 2x2 swatch — red, green, blue, and grey — and write it to a scratch file.
 
 ```rust
   swatch = imaging::Image {
@@ -3321,7 +3321,7 @@ The lexer library breaks a text into tokens so your program can understand its s
 
 === Setting Up the Lexer
 
-Create a `lexer::Lexer` and register your language's rules before you parse anything. `set_tokens` ensures operators like `+=` or `\>\>` are scanned as one token instead of two separate characters. `set_keywords` prevents reserved words from being treated as ordinary names — the lexer will report them exactly as written so your parser can treat them specially.
+Create a `lexer::Lexer` and register your language's rules before you parse anything. `set\_tokens` ensures operators like `+=` or `\>\>` are scanned as one token instead of two separate characters. `set\_keywords` prevents reserved words from being treated as ordinary names — the lexer will report them exactly as written so your parser can treat them specially.
 
 ```rust
 use lexer;
@@ -3333,9 +3333,9 @@ fn main() {
 
 === Reading Tokens
 
-`parse_string(name, source)` feeds source text into the lexer. The name is used in error messages and position reports. After that, call the typed reader functions one by one to consume tokens in order.
+`parse\_string(name, source)` feeds source text into the lexer. The name is used in error messages and position reports. After that, call the typed reader functions one by one to consume tokens in order.
 
-`int()` consumes and returns the next integer token, or null if the current token is not an integer. `long_int()` does the same for integers suffixed with `l`. `matches(s)` consumes the next token only when it equals s and returns true; otherwise it leaves the token in place and returns false. `peek()` returns the next token as text without consuming it. `position()` returns the current location as `file:line:col`.
+`int()` consumes and returns the next integer token, or null if the current token is not an integer. `long\_int()` does the same for integers suffixed with `l`. `matches(s)` consumes the next token only when it equals s and returns true; otherwise it leaves the token in place and returns false. `peek()` returns the next token as text without consuming it. `position()` returns the current location as `file:line:col`.
 
 ```rust
   l.parse_string("Tokens", "12 += -2 * 3 >> 4");
@@ -3354,7 +3354,7 @@ fn main() {
 
 === String Literals and Comments
 
-`constant_text()` reads a double-quoted string and handles special codes like \\n (newline) and \\\\ (backslash). `constant_character()` reads a single-quoted character literal and returns it as text.
+`constant\_text()` reads a double-quoted string and handles special codes like \\n (newline) and \\\\ (backslash). `constant\_character()` reads a single-quoted character literal and returns it as text.
 
 ```rust
   l.parse_string("Texts", "\"123\" + '4'");
@@ -3362,7 +3362,7 @@ fn main() {
   assert(l.matches("+"), "Incorrect add");
 ```
 
-`constant_character()` returns a `character`, so compare it as one (`l.constant_character() == '4'`), not against the text "123". The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is_finished()` returns true once every token has been consumed.
+`constant\_character()` returns a `character`, so compare it as one (`l.constant\_character() == '4'`), not against the text "123". The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last\_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment\_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is\_finished()` returns true once every token has been consumed.
 
 ```rust
   l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
@@ -3379,7 +3379,7 @@ fn main() {
 
 === Embedded Format Expressions
 
-Loft string literals can embed expressions with `{expr}`. The lexer exposes a protocol that lets you parse these yourself. When `constant_text()` reaches a `{`, it returns the literal text before it and sets `is_formatting()` to true. At that point call `set_formatting(false)` and parse the embedded expression normally using the usual token readers. When the expression is done, call `set_formatting(true)` and consume the closing `}}`. Then `constant_text()` continues with the next segment of the string.
+Loft string literals can embed expressions with `{expr}`. The lexer exposes a protocol that lets you parse these yourself. When `constant\_text()` reaches a `{`, it returns the literal text before it and sets `is\_formatting()` to true. At that point call `set\_formatting(false)` and parse the embedded expression normally using the usual token readers. When the expression is done, call `set\_formatting(true)` and consume the closing `}}`. Then `constant\_text()` continues with the next segment of the string.
 
 ```rust
   l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
@@ -3802,7 +3802,7 @@ code path is mutating a value it should not touch, and you want the
 program to panic with a precise location rather than corrupt silently.
 ```
 
-get_store_lock() is the function form of the \#lock attribute. Both return the same boolean.
+get\_store\_lock() is the function form of the \#lock attribute. Both return the same boolean.
 
 ```rust
   e = Counter {value: 99 };
@@ -3815,7 +3815,7 @@ get_store_lock() is the function form of the \#lock attribute. Both return the s
 
 = Parallel execution
 
-The `par(b=worker_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.
+The `par(b=worker\_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.
 
 === Why parallel loops?
 
@@ -3834,8 +3834,8 @@ When you have a large collection and each element can be processed independently
 
 === Two call forms
 
-- \*\*Form 1\*\* — global function: `par(b=my_func(a), 4)`
-- \*\*Form 2\*\* — method on element: `par(b=a.my_method(), 4)`
+- \*\*Form 1\*\* — global function: `par(b=my\_func(a), 4)`
+- \*\*Form 2\*\* — method on element: `par(b=a.my\_method(), 4)`
 
 === Worker function rules
 
@@ -3907,7 +3907,7 @@ fn main() {
 
 === Global Function (Form 1)
 
-Each Score's value is doubled by `double_score` across 4 threads. The loop body sees `b` with the doubled value, in original order.
+Each Score's value is doubled by `double\_score` across 4 threads. The loop body sees `b` with the doubled value, in original order.
 
 ```rust
   q = make_scores();
@@ -3925,7 +3925,7 @@ Each Score's value is doubled by `double_score` across 4 threads. The loop body 
 
 === Extra Arguments
 
-The worker function can take extra arguments from the calling scope. Here `scale_score(a, factor)` passes `factor=3` to every worker.
+The worker function can take extra arguments from the calling scope. Here `scale\_score(a, factor)` passes `factor=3` to every worker.
 
 ```rust
   q1b = make_scores();
@@ -3957,7 +3957,7 @@ Workers can return a struct.  Text fields are deep-copied so they remain valid a
 
 === Method Call (Form 2)
 
-`b=a.get_value()` dispatches the method on each element in parallel. This is syntactic sugar — equivalent to `b=get_value(a)`.
+`b=a.get\_value()` dispatches the method on each element in parallel. This is syntactic sugar — equivalent to `b=get\_value(a)`.
 
 ```rust
   q3 = make_scores();
@@ -4004,27 +4004,27 @@ Printing everything to the console is fine during development, but in a real app
 
 Choose the level that matches how serious the event is:
 
-- 'log_info'  — routine progress; fine to see during development but often
+- 'log\_info'  — routine progress; fine to see during development but often
 
 ```
 silenced in production to keep log files small.
 Example: "processing file X", "connected to database".
 ```
 
-- 'log_warn'  — something unexpected happened but the program recovered.
+- 'log\_warn'  — something unexpected happened but the program recovered.
 
 ```
 Example: "config key missing, using default", "retrying after timeout".
 ```
 
-- 'log_error' — something went wrong and you need to investigate, but the
+- 'log\_error' — something went wrong and you need to investigate, but the
 
 ```
 program can continue (perhaps degraded).
 Example: "failed to save record", "unexpected null value".
 ```
 
-- 'log_fatal' — a condition so serious that normal operation is impossible.
+- 'log\_fatal' — a condition so serious that normal operation is impossible.
 
 ```
 Example: "cannot open database", "required config file not found".
@@ -4150,7 +4150,7 @@ rand_seed(seed)   seed the generator so a run is reproducible
 rand_indices(n)   a vector holding 0, 1, ..., n-1 in a random order
 ```
 
-The generator is thread-local and starts from a fixed default seed, so results are reproducible across runs unless you seed it with something varying (for example `rand_seed(now() as integer)`).
+The generator is thread-local and starts from a fixed default seed, so results are reproducible across runs unless you seed it with something varying (for example `rand\_seed(now() as integer)`).
 
 ```rust
 use random;
@@ -4162,7 +4162,7 @@ fn main() {
 
 === Basic Random Integers
 
-`rand(lo, hi)` returns a uniformly distributed integer between lo and hi, both included. Seed first with `rand_seed` when you want a repeatable sequence.
+`rand(lo, hi)` returns a uniformly distributed integer between lo and hi, both included. Seed first with `rand\_seed` when you want a repeatable sequence.
 
 ```rust
   rand_seed(42);
@@ -4187,9 +4187,9 @@ The same seed always produces the same sequence — essential for tests and for 
   assert(!rand(10, 5), "an inverted range returns null");
 ```
 
-=== Random Ordering: rand_indices
+=== Random Ordering: rand\_indices
 
-`rand_indices(n)` returns a vector containing 0, 1, ..., n-1 in a random order. Use it to visit another collection in random order without copying the data.
+`rand\_indices(n)` returns a vector containing 0, 1, ..., n-1 in a random order. Use it to visit another collection in random order without copying the data.
 
 ```rust
   rand_seed(7);
@@ -4509,7 +4509,7 @@ Text \#index is a byte offset, not a character count:
 
 === `??` evaluates the left side exactly once
 
-The `??` operator means "use this value, or if it is null, use the right side instead". The left-hand expression is evaluated exactly once regardless of whether the result is null. The example below uses `counted_call` (defined above) to verify this.
+The `??` operator means "use this value, or if it is null, use the right side instead". The left-hand expression is evaluated exactly once regardless of whether the result is null. The example below uses `counted\_call` (defined above) to verify this.
 
 ```rust
   calls = 0;
@@ -4518,7 +4518,7 @@ The `??` operator means "use this value, or if it is null, use the right side in
   assert(qq_result == 7, "result is the value from that single evaluation: {qq_result}");
 ```
 
-This means `result = expensive_call() ?? default` is safe: the function is called once. If it returns null, `default` is used. There is no double call.
+This means `result = expensive\_call() ?? default` is safe: the function is called once. If it returns null, `default` is used. There is no double call.
 
 === Text indexing and slicing return different types
 
@@ -4554,7 +4554,7 @@ Forgetting to escape braces in expected output is a common mistake in assertions
 
 === Hash collections cannot be iterated
 
-Hashes are lookup structures, not ordered collections. You cannot write `for item in my_hash { }`. If you need both fast lookup and ordered iteration, keep a vector and a hash pointing at the same record type. See the Hash documentation page for the recommended pattern.
+Hashes are lookup structures, not ordered collections. You cannot write `for item in my\_hash { }`. If you need both fast lookup and ordered iteration, keep a vector and a hash pointing at the same record type. See the Hash documentation page for the recommended pattern.
 
 === Mutation guard blocks appending during iteration
 
@@ -4566,7 +4566,7 @@ Using `if` as a value expression without an `else` clause is a compile error. Th
 
 === Match guards do not prove a variant is handled
 
-A guarded arm like `Red if cond =\> ...` does not count as handling the `Red` variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard `_` or an unguarded arm so the compiler knows every case is covered.
+A guarded arm like `Red if cond =\> ...` does not count as handling the `Red` variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard `\_` or an unguarded arm so the compiler knows every case is covered.
 
 === Ref-parameter semantics
 
@@ -4617,7 +4617,7 @@ struct MaybeUser {
 
 === Parsing — JSON to struct
 
-Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json_parse' internally.
+Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json\_parse' internally.
 
 A field the JSON does not mention — and a field written 'null' — gets the DECLARED type's absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field 'integer?' / 'float?' if you need to tell "absent" from "zero" apart:
 
@@ -4626,13 +4626,13 @@ struct Reading { id: integer, drift: float? }
 r = Reading.parse("{}")     // r.id == 0, r.drift == null
 ```
 
-Caveat (Q1): the auto-wrap form DROPS diagnostics — malformed input and schema mismatches leave the struct at its defaults with 'json_errors()' empty.  For error reporting, stage explicitly: 'User.parse(json_parse(text))' — that form pushes both parse and schema errors to 'json_errors()'.
+Caveat (Q1): the auto-wrap form DROPS diagnostics — malformed input and schema mismatches leave the struct at its defaults with 'json\_errors()' empty.  For error reporting, stage explicitly: 'User.parse(json\_parse(text))' — that form pushes both parse and schema errors to 'json\_errors()'.
 
 ```
 user = User.parse(json_text)
 ```
 
-to inspect 'json_errors()' between the two steps.
+to inspect 'json\_errors()' between the two steps.
 
 === Vectors
 
@@ -4650,7 +4650,7 @@ struct Score {
 
 === Parse Errors
 
-Call 'json_errors()' to see what went wrong with a malformed input.  Schema-level mismatches (e.g. a field declared integer but receiving a JSON string) currently land as the loft null sentinel in the struct; Q1 schema-side diagnostics will add path-qualified reports in a follow-up.
+Call 'json\_errors()' to see what went wrong with a malformed input.  Schema-level mismatches (e.g. a field declared integer but receiving a JSON string) currently land as the loft null sentinel in the struct; Q1 schema-side diagnostics will add path-qualified reports in a follow-up.
 
 ```
 data = MyType.parse(bad_json);
@@ -4696,7 +4696,7 @@ fn main() {
   assert(u2.name == u.name, "round-trip name");
 ```
 
-Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap abandons the record at its defaults; path-qualified diagnostics on the mismatch are collected in `json_errors`. `id` is declared plain, so its default is 0 — the mismatch is reported through `json_errors`, never by putting a null in a slot the declared type says cannot hold one. Here we verify the unwrap does not crash on mismatched shapes.
+Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap abandons the record at its defaults; path-qualified diagnostics on the mismatch are collected in `json\_errors`. `id` is declared plain, so its default is 0 — the mismatch is reported through `json\_errors`, never by putting a null in a slot the declared type says cannot hold one. Here we verify the unwrap does not crash on mismatched shapes.
 
 ```rust
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
@@ -4783,7 +4783,7 @@ fn first_element<T>(gen_v: vector<T>) -> T {
 }
 ```
 
-\@PLN25 index flip — a computed index `gen_v.len() - 1` is not provably in-bounds, so the read is nullable; a generic has no `?? default`, so the honest result type is `T?`.
+\@PLN25 index flip — a computed index `gen\_v.len() - 1` is not provably in-bounds, so the read is nullable; a generic has no `?? default`, so the honest result type is `T?`.
 
 ```rust
 fn last_element<T>(gen_v: vector<T>) -> T? {
@@ -4960,7 +4960,7 @@ Closures capture at definition time. 'base' is 10 when the lambda is written; re
 
 === Cross-scope closures
 
-make_adder returns a lambda that captured base_val from its parameter.
+make\_adder returns a lambda that captured base\_val from its parameter.
 
 ```rust
   add10 = make_adder(10);
@@ -5019,7 +5019,7 @@ A generator function may take any parameters, including text. Parameter values a
 
 === Delegation with yield from
 
-'yield from sub_gen()' forwards all values from another generator inline, as if each of its yields appeared at this point directly.
+'yield from sub\_gen()' forwards all values from another generator inline, as if each of its yields appeared at this point directly.
 
 === Early termination with break
 
@@ -5121,7 +5121,7 @@ One extra advance past the last element; exhausted() is true after that.
 
 === Generators with parameters
 
-'len_twice' takes a text parameter and yields its length twice. The text value is preserved across the yield.
+'len\_twice' takes a text parameter and yields its length twice. The text value is preserved across the yield.
 
 ```rust
   lt_total = 0;
@@ -5295,7 +5295,7 @@ The `match` expression lets you compare a value against a series of patterns and
 
 === Simple enum matching
 
-The most common use: branch on an enum variant.  Every variant must be covered or a `_` wildcard must appear — the compiler checks exhaustiveness.
+The most common use: branch on an enum variant.  Every variant must be covered or a `\_` wildcard must appear — the compiler checks exhaustiveness.
 
 ```rust
 enum Direction { North, South, East, West }
@@ -5374,9 +5374,9 @@ Add `if condition` after a pattern to restrict when the arm matches. The guard c
   assert(label == "normal", "guard: {label}");
 ```
 
-=== Wildcard `_`
+=== Wildcard `\_`
 
-The underscore `_` matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.
+The underscore `\_` matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.
 
 ```rust
   x = 7;
@@ -5501,7 +5501,7 @@ struct Query {
 fn lit(self: Query, s: text) { self.parts += [s]; }
 ```
 
-`hole_text` gets an interpolated value. It is never added to `parts`.
+`hole\_text` gets an interpolated value. It is never added to `parts`.
 
 ```rust
 fn hole_text(self: Query, v: text?) { self.values += [v ?? ""]; }
@@ -5658,7 +5658,7 @@ The `:\#` specifier expands a struct across a spaced, readable layout instead of
 
 Everything above joins the pieces into one `text`.  When the type you assign to says so, the format string \*\*builds that type instead\*\*, and the type is told which bytes you wrote and which came from a value.
 
-A type opts in by defining `lit` (for your bytes) and one `hole_…` method per value kind it accepts: `hole_text`, `hole_int`, `hole_float`, `hole_single`, `hole_boolean`, `hole_character`.  There is no new syntax — the type you assign to decides — and plain `text` is unchanged.
+A type opts in by defining `lit` (for your bytes) and one `hole\_…` method per value kind it accepts: `hole\_text`, `hole\_int`, `hole\_float`, `hole\_single`, `hole\_boolean`, `hole\_character`.  There is no new syntax — the type you assign to decides — and plain `text` is unchanged.
 
 ```rust
   who = "ada";
@@ -5712,7 +5712,7 @@ use p144_entry;
 fn main() {
 ```
 
-box_set_val calls box_ensure(b) internally — forwarding the & param.
+box\_set\_val calls box\_ensure(b) internally — forwarding the & param.
 
 ```rust
   b = Box { items: [] };
@@ -5736,7 +5736,7 @@ Multiple forwards: ensure is idempotent.
   assert(len(b2.items) == 1, "ensure idempotent");
 ```
 
-Set a second value via box_set_val on a pre-populated box.
+Set a second value via box\_set\_val on a pre-populated box.
 
 ```rust
   b3 = Box { items: [] };
@@ -5755,7 +5755,7 @@ Set a second value via box_set_val on a pre-populated box.
 
 The `time` library represents a point in time as a plain `integer` (i64) holding milliseconds since the Unix epoch — the same unit `now()` returns.  All calendar math is UTC and uses the proleptic Gregorian calendar, so results are identical on the interpreter, `--native`, and WebAssembly.  Import it with `use time;` and call its free functions with the `time::` prefix.
 
-Timezone model: field accessors and formatters are UTC.  For local-day bucketing pass a fixed UTC offset in minutes (`to_local` / `local_day` / `today`).  There is no timezone database and no daylight-saving handling — a fixed offset only.
+Timezone model: field accessors and formatters are UTC.  For local-day bucketing pass a fixed UTC offset in minutes (`to\_local` / `local\_day` / `today`).  There is no timezone database and no daylight-saving handling — a fixed offset only.
 
 ```rust
 use time;
@@ -5846,7 +5846,7 @@ Leap-day boundary.
 fn show_weeks() {
 ```
 
-start_of_week snaps back to Monday 00:00.
+start\_of\_week snaps back to Monday 00:00.
 
 ```rust
   wed = time::parse("2026-05-27");
@@ -5944,9 +5944,9 @@ The catalogue is generated from the `loft-lang/features` issue tracker, which is
 - \*\*\@F39\*\* — Math & trigonometry library
 - \*\*\@F40\*\* — File & directory I/O (+ durable-store binding)
 - \*\*\@F41\*\* — Environment & arguments (env vars, arguments(), program dirs, path resolution)
-- \*\*\@F42\*\* — JSON — json_parse, JsonValue, Type.parse, to_json
-- \*\*\@F43\*\* — Random numbers (rand_seed / rand / rand_indices)
-- \*\*\@F44\*\* — Logging & diagnostics API (log_\*, print, assert, panic)
+- \*\*\@F42\*\* — JSON — json\_parse, JsonValue, Type.parse, to\_json
+- \*\*\@F43\*\* — Random numbers (rand\_seed / rand / rand\_indices)
+- \*\*\@F44\*\* — Logging & diagnostics API (log\_\*, print, assert, panic)
 - \*\*\@F45\*\* — `sizeof()`
 - \*\*\@F46\*\* — Type aliases (`type X = …`)
 - \*\*\@F47\*\* — Library imports / module system (`use` forms, `pub`)
@@ -5959,8 +5959,8 @@ The catalogue is generated from the `loft-lang/features` issue tracker, which is
 - \*\*\@F54\*\* — Browser / WASM target (`--html` / `--native-wasm`)
 - \*\*\@F55\*\* — Package management (`loft install`, `loft.toml`, lockfile)
 - \*\*\@F56\*\* — Live code reload — patch a running program
-- \*\*\@F88\*\* — Stack traces (stack_trace)
-- \*\*\@F89\*\* — Test runner (fn test_\*, loft --tests / loft test)
+- \*\*\@F88\*\* — Stack traces (stack\_trace)
+- \*\*\@F89\*\* — Test runner (fn test\_\*, loft --tests / loft test)
 - \*\*\@F92\*\* — Direct C binding — `\#c "symbol" "signature"`, no rustc and no glue crate
 - \*\*\@F93\*\* — Paged & remote store loading — read part of a dataset over HTTP range
 - \*\*\@F94\*\* — Type-directed interpolation — a type receives the literal/hole boundary
@@ -5973,15 +5973,15 @@ The catalogue is generated from the `loft-lang/features` issue tracker, which is
 - \*\*\@F101\*\* — The build phase — `loft build`, declared targets, zero-config defaults
 - \*\*\@F102\*\* — Android target — `--native-android`, APK packaging, GL surface and touch input
 - \*\*\@F103\*\* — `deliver` / `expose` — hand a loft value to JavaScript with no copy
-- \*\*\@F104\*\* — `store_reclaim()` — give a store's unused file space back
-- \*\*\@F105\*\* — Custom `to_text` format hook — a type owns how it prints
+- \*\*\@F104\*\* — `store\_reclaim()` — give a store's unused file space back
+- \*\*\@F105\*\* — Custom `to\_text` format hook — a type owns how it prints
 - \*\*\@F106\*\* — Copy and move semantics — when two names share data, and when they do not
 - \*\*\@F107\*\* — Type reflection — the declared shape of a type, as data
 - \*\*\@F108\*\* — Lazy store binding — a collection fetches on a miss
 - \*\*\@F109\*\* — `\#superseded` — steer callers to a newer form without breaking the old one
 - \*\*\@F110\*\* — Diagnostic suggestions — what to write instead, checked by running it
 - \*\*\@F111\*\* — `for f in s\#fields` — a compile-time loop over a struct's scalar fields
-- \*\*\@F112\*\* — `store_release()` — say a record is finished, and stop holding it in memory
+- \*\*\@F112\*\* — `store\_release()` — say a record is finished, and stop holding it in memory
 - \*\*\@F113\*\* — Associated types — an interface names a companion type
 - \*\*\@F114\*\* — `x\[i\]` on a library type — `OpIndex` dispatch
 - \*\*\@F115\*\* — `OpDrop` — a type runs code when its scope lets it die

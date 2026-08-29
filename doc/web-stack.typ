@@ -357,6 +357,18 @@ $ curl -s http://127.0.0.1:18711/
 <h1>Notes</h1><ul><li>first</li><li>second</li></ul>
 ```
 
+Run three ways, because a pass on one backend is not a pass:
+
+#table(
+  columns: 2, stroke: 0.4pt + luma(200), inset: 5pt,
+  table.header([how], [result]),
+  [`--interpret`, both sides], [`1: first` \/ `2: second`, and `curl` gets the HTML],
+  [`--native`, both sides], [identical],
+  [`LOFT_STRICT_STORES=1`, both sides], [clean — no store outlives the run],
+)
+
+The strict\-stores row is the one that would not have been checked by hand. A request handler is a loop body that runs a million times, so a per\-request leak is the defect this stack is most likely to ship, and it is invisible to a functional test that serves one request. The existing gate answers it for free.
+
 *Three things this measurement settled, which reading the catalogue would not have.*
 
 + *The struct is the JSON.* `body.to_json()` on an ordinary struct produced the wire format, and `json_parse` \+ `field` read it back on the other side. No serialisation layer, no annotations, no code generation. This is the strongest single argument the guide has, and it needed no new library.
@@ -479,7 +491,11 @@ Publishing has its own rails, and this design uses them rather than adding relea
 
 == Its own PDF
 
-The guide is a *separate document from the language reference*. A reader deploying a web application does not want the type system, and a reader learning the language does not want ACME. Same pipeline, second output:
+Two documents, two pipelines, and they are not the same thing.
+
+*This design prints today.* `scripts/md2typ.py` renders any `doc/claude/` design document as Typst, and `make pdf-doc DOC=doc/claude/WEB_STACK.md OUT=doc/web-stack` compiles it. The Markdown stays the single source, so the page and the PDF cannot drift — the one\-home rule applied to a document rather than to code.
+
+*The user guide is generated from running code*, which is a different and stronger property, and it lands at stage 5. The guide is a *separate document from the language reference*. A reader deploying a web application does not want the type system, and a reader learning the language does not want ACME. Same pipeline, second output:
 
 ```
 tests/docs/web/*.loft   →  cargo run --bin gendoc  →  doc/loft-web.typ  →  doc/loft-web.pdf
