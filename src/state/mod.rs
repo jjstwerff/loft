@@ -319,7 +319,25 @@ pub struct State {
     pub(crate) debug: Option<Box<crate::debugger::Debugger>>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
-    /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
+    /// Raw pointer to the `Data` the running program was compiled from, or null before
+    /// any program has run.
+    ///
+    /// The frame walkers and the native-call paths need the definition table while the
+    /// interpreter is inside a call, where a `&Data` cannot be threaded through without
+    /// borrowing `self` for the whole run.
+    ///
+    /// **Set once, never cleared.** [`Self::execute_argv`] stores its `&Data` here and
+    /// nothing writes null again, so the pointer stays set after that call returns. The
+    /// `is_null()` guard every read carries therefore covers exactly two cases — no
+    /// program has run yet, and a parallel worker that was never given one. It says
+    /// nothing about whether the `Data` is still there.
+    ///
+    /// **Soundness is the caller's: a `State` must not outlive the `Data` it was run
+    /// against.** A caller holding both as locals gets that from drop order, by declaring
+    /// the `Data` FIRST so the `State` drops before it — `test_runner` and `repl` both do,
+    /// inside a per-test loop body, so each iteration gets a fresh pair. Keeping a `State`
+    /// somewhere its `Data` does not reach breaks every `unsafe` deref below at once, and
+    /// no check on this side can detect it.
     pub(crate) data_ptr: *const crate::data::Data,
     /// Fix #87: cached library index for `n_stack_trace`.  `u16::MAX` = not yet resolved.
     pub(crate) stack_trace_lib_nr: u16,
@@ -788,8 +806,7 @@ impl State {
             // alignment, not the raw 12) — pop exactly that per buffer.
             let buf_span = self.stack_step(size_ref()) as u16;
             if !self.data_ptr.is_null() && buf_span > 0 {
-                // SAFETY: data_ptr is valid throughout execution (same pattern as
-                // the hidden-buffer loop below and the call-stack snapshot path).
+                // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
                 let data = unsafe { &*self.data_ptr };
                 let def = data.def(d_nr as u32);
                 let visible = def
@@ -836,9 +853,7 @@ impl State {
         // `clear(db)` unconditionally → OOB on u16::MAX (allocation.rs:421).
         let mut hidden_bufs_size: u16 = 0;
         if !self.data_ptr.is_null() {
-            // SAFETY: data_ptr is set in execute_argv and valid throughout
-            // execution; same pattern as the call-stack snapshot path
-            // earlier in this file (line ~375) and drop_text_locals_in_bytes.
+            // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
             let data = unsafe { &*self.data_ptr };
             let attr_count = data.def(d_nr as u32).attributes().len();
             for a_idx in 0..attr_count {
@@ -928,7 +943,7 @@ impl State {
         // Fix #92: also works in parallel workers where data_ptr may be null;
         // frames with d_nr == u32::MAX (synthetic worker frame) get a placeholder name.
         if call == self.stack_trace_lib_nr && !self.call_stack.is_empty() {
-            // SAFETY: data_ptr is set in execute_argv and valid during execution.
+            // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
             let data_opt: Option<&Data> = if self.data_ptr.is_null() {
                 None
             } else {
@@ -1194,7 +1209,8 @@ impl State {
         if data_ptr.is_null() {
             return owned;
         }
-        // SAFETY: data_ptr is set in execute_argv and valid throughout execution.
+        // SAFETY: `data_ptr` is the caller's `State::data_ptr`, whose `Data` outlives
+        // that `State` — see the field.
         let data = unsafe { &*data_ptr };
         let Some(def) = data.definitions.get(d_nr as usize) else {
             return owned;
@@ -1252,7 +1268,8 @@ impl State {
         if data_ptr.is_null() {
             return 0;
         }
-        // SAFETY: data_ptr is set in execute_argv and valid throughout execution.
+        // SAFETY: `data_ptr` is the caller's `State::data_ptr`, whose `Data` outlives
+        // that `State` — see the field.
         let data = unsafe { &*data_ptr };
         let Some(def) = data.definitions.get(d_nr as usize) else {
             return 0;
@@ -1300,7 +1317,8 @@ impl State {
         if data_ptr.is_null() {
             return;
         }
-        // SAFETY: data_ptr is set in execute_argv and valid throughout execution.
+        // SAFETY: `data_ptr` is the caller's `State::data_ptr`, whose `Data` outlives
+        // that `State` — see the field.
         let data = unsafe { &*data_ptr };
         let Some(def) = data.definitions.get(d_nr as usize) else {
             return;
@@ -1388,8 +1406,8 @@ impl State {
         if self.data_ptr.is_null() {
             return Vec::new();
         }
-        // SAFETY: data_ptr is set in execute_argv and remains valid for the duration
-        // of execution.  coroutine_create is only called from fill.rs during execution.
+        // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
+        // `coroutine_create` is only reached from fill.rs during a run.
         let data = unsafe { &*self.data_ptr };
         if d_nr as usize >= data.definitions.len() {
             return Vec::new();
@@ -2265,10 +2283,9 @@ impl State {
                     // @PLN118 arc E — also name the freeing OP (recorded with the free site) so
                     // the report says WHICH free to fix, not just where; needs `Data`, valid
                     // throughout execution (null only in a parallel worker, tolerated below).
-                    // SAFETY: data_ptr is set in execute_argv and stays valid for the
-                    // run; `as_ref` folds the null a parallel worker leaves behind into
-                    // None instead of a hand-written null check beside a deref, so there
-                    // is no path here that dereferences an unchecked pointer.
+                    // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
+                    // `as_ref` folds the null a parallel worker leaves behind into None,
+                    // so no path here dereferences an unchecked pointer.
                     let data: Option<&Data> = unsafe { self.data_ptr.as_ref() };
                     let op_name = |opc: u16| -> String {
                         data.and_then(|d| d.operator_name(opc))
@@ -4741,8 +4758,7 @@ impl State {
         if self.data_ptr.is_null() {
             return Vec::new();
         }
-        // SAFETY: data_ptr is set at execute_argv start and cleared at exit; valid for
-        // the lifetime of this call.
+        // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
         let data = unsafe { &*self.data_ptr };
         self.call_stack
             .iter()
@@ -4808,8 +4824,7 @@ impl State {
         if self.data_ptr.is_null() {
             return None;
         }
-        // SAFETY: data_ptr is set at execute_argv start and cleared at exit; valid for
-        // the lifetime of this call.
+        // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
         let data = unsafe { &*self.data_ptr };
         let frame = self.call_stack.last()?;
         let declared = &data.def(frame.d_nr).position;
