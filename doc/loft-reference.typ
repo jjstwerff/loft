@@ -5945,6 +5945,7 @@ The catalogue is generated from the `loft-lang/features` issue tracker, which is
 - \*\*\@F40\*\* — File & directory I/O (+ durable-store binding)
 - \*\*\@F41\*\* — Environment & arguments (env vars, arguments(), program dirs, path resolution)
 - \*\*\@F42\*\* — JSON — json_parse, JsonValue, Type.parse, to_json
+- \*\*\@F43\*\* — Random numbers (rand_seed / rand / rand_indices)
 - \*\*\@F44\*\* — Logging & diagnostics API (log_\*, print, assert, panic)
 - \*\*\@F45\*\* — `sizeof()`
 - \*\*\@F46\*\* — Type aliases (`type X = …`)
