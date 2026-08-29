@@ -204,8 +204,24 @@ fn split_signature(sig: &str) -> Option<(Vec<String>, String)> {
 /// The distinction that matters is what a consumer may do with the type:
 /// * a **removed** member, or one whose type changed, breaks every existing use;
 /// * an added **method** (`name: fn`) is additive — nothing that compiled stops compiling;
-/// * an added **field** is NOT, because a consumer constructing the aggregate literally
-///   (`Server { … }`) must now supply it.
+/// * an added **field** is NOT, because it changes what a whole-record read answers:
+///   `{s:j}` gains a key, and so does any reflection walk.
+///
+/// ⚠ That last one is NOT "a literal must now supply it", which this comment used to say and
+/// which is false for **every** field in loft, not merely a defaulted one: a struct literal
+/// may omit anything. Measured — `S { }` compiles, and each omitted field takes its declared
+/// default or its type's zero. The reason matters because it is what a reader checks the
+/// verdict against, and checking against the false one leads to the conclusion that a
+/// defaulted field is additive (loft#1192, closed on this measurement).
+///
+/// The rules do not settle it cleanly, which is why the verdict stays where it is rather
+/// than moving on one reading. [COMPATIBILITY.md § Per-surface](../doc/claude/COMPATIBILITY.md)
+/// has two rows that point opposite ways for this exact change: under **Stdlib API** a
+/// *"different result for the same inputs"* is a regression, and the serialised form is
+/// different; under **On-disk + wire**, *"new optional fields with defaults"* is additive.
+/// Moving the verdict is a design decision about which surface a loft struct is, not a fix.
+/// Contrast the PARAMETER case, where one rule said "a new optional parameter" is additive
+/// with nothing against it — that one was unambiguous, and [`signature_break`] follows it.
 ///
 /// Anything whose shape this cannot parse falls back to "changed", so an unrecognised
 /// rendering is reported rather than waved through — the conservative direction for a check
