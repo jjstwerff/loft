@@ -1,0 +1,85 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `X ?? <call>` releases the store whichever arm minted it.
+//
+// `??` is a join in the LANGUAGE and not one in the IR: it lowers to a block named `ncc` that
+// holds the SUBJECT in a `skip_free` temp and then an `if` that chooses between that temp and
+// the default.  loft#1154's per-arm source-free gate reads `Value::If` arms, so it never saw
+// these, and the conservative never-free stood: one retained store per evaluation, on BOTH
+// arms.  `X ?? d` with a bare LOCAL default was clean throughout — the un-owned temp is the
+// axis, not `??`.
+//
+// ⚠ **The subject reaches that `if` as a plain `Var(__ncc_N)`, and taking it at face value is
+// wrong in the expensive direction.**  `view_root_slots` NAMES a var, so the @P290 bracket would
+// PROTECT the temp — and that temp is the one thing here nobody else owns, so protecting it is
+// exactly what keeps the present-path store alive forever.  The subject's own ASSIGNMENT is
+// what the decision is about, so it is substituted in and the gate sees the call.
+//
+// ⚠ **`local_default` is the OVER-FREE control** and it fails LOUDLY where this defect is
+// silent: on the local-default arm the source is the caller's own collection, and a gate that
+// freed it reads that local back empty.
+//
+// ⚠ Unlike loft#1155 next door, this one falsifies on BOTH backends — the retention is in the
+// emitted decision, not in one runtime's sweep.  The channel that moves is the LEAK: `exit` and
+// `asserts` read `0|0` on both trees, so a reader checking those alone would call the broken
+// build green.
+//
+// @falsified-at: 8eda1b4e — interpret leaked kt=81 hash<Cd1157H[cd_hk]>×9, kt=82 sorted<Cd1157S[cd_sk]>×3 -> clean, native leaked kt=81 hash<Cd1157H[cd_hk]>×9, kt=82 sorted<Cd1157S[cd_sk]>×3 -> clean
+
+struct Cd1157H { cd_hk: integer, cd_hv: integer }
+struct Cd1157S { cd_sk: integer, cd_sv: integer }
+
+fn cd_mk(cd_k: integer) -> hash<Cd1157H[cd_hk]> { [Cd1157H { cd_hk: cd_k, cd_hv: cd_k * 11 }] }
+fn cd_mk_s(cd_k: integer) -> sorted<Cd1157S[cd_sk]> { [Cd1157S { cd_sk: cd_k, cd_sv: cd_k * 11 }] }
+fn cd_maybe(cd_c: boolean) -> hash<Cd1157H[cd_hk]>? {
+  if cd_c { [Cd1157H { cd_hk: 1, cd_hv: 11 }] } else { null }
+}
+fn cd_ch(cd_x: hash<Cd1157H[cd_hk]>) -> integer { cd_n = 0; for cd_r in cd_x { cd_n += cd_r.cd_hv; } cd_n }
+fn cd_cs(cd_x: sorted<Cd1157S[cd_sk]>) -> integer { cd_n = 0; for cd_r in cd_x { cd_n += cd_r.cd_sv; } cd_n }
+
+fn main() {
+  // ---- the PRESENT arm: the subject's own store is the one retained ----
+  cd_o1 = "";
+  for cd_i in 0..3 {
+    cd_u = cd_maybe(true) ?? cd_mk(5);
+    cd_o1 = cd_o1 + "{cd_ch(cd_u)} ";
+  }
+  assert(cd_o1 == "11 11 11 ", "the present arm answers the subject; got `{cd_o1}`");
+
+  // ---- the DEFAULT arm: the default call's store is the one retained ----
+  cd_o2 = "";
+  for cd_i in 0..3 {
+    cd_v = cd_maybe(false) ?? cd_mk(5);
+    cd_o2 = cd_o2 + "{cd_ch(cd_v)} ";
+  }
+  assert(cd_o2 == "55 55 55 ", "the default arm answers the default; got `{cd_o2}`");
+
+  // ---- both arms CALLS, neither nullable ----
+  cd_o3 = "";
+  for cd_i in 0..3 {
+    cd_w = cd_mk(4) ?? cd_mk(5);
+    cd_o3 = cd_o3 + "{cd_ch(cd_w)} ";
+  }
+  assert(cd_o3 == "44 44 44 ", "both arms calls; got `{cd_o3}`");
+
+  // ---- another keyed kind ----
+  cd_o4 = "";
+  for cd_i in 0..3 {
+    cd_x = cd_mk_s(2) ?? cd_mk_s(3);
+    cd_o4 = cd_o4 + "{cd_cs(cd_x)} ";
+  }
+  assert(cd_o4 == "22 22 22 ", "sorted; got `{cd_o4}`");
+
+  // ---- OVER-FREE CONTROL: a bare LOCAL default belongs to the caller ----
+  cd_d: hash<Cd1157H[cd_hk]> = [Cd1157H { cd_hk: 9, cd_hv: 99 }];
+  cd_o5 = "";
+  for cd_i in 0..3 {
+    cd_y = cd_maybe(false) ?? cd_d;
+    cd_o5 = cd_o5 + "{cd_ch(cd_y)}/{cd_ch(cd_d)} ";
+  }
+  assert(cd_o5 == "99/99 99/99 99/99 ",
+    "CONTROL: the LOCAL default is not the callee's to free; got `{cd_o5}`");
+
+  println("1157 ok");
+}

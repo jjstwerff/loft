@@ -453,6 +453,36 @@ impl Parser {
                 Self::join_arms(t, out);
                 Self::join_arms(f, out);
             }
+            // loft#1157 — `??` is a join in the LANGUAGE and its IR is a block named `ncc`
+            // holding the SUBJECT in a temp and then the `if` that chooses.  The arms live in
+            // that tail `if`, so reaching them is a descent and not a special case; without it
+            // `X ?? mk(…)` kept the conservative never-free and retained the default arm's
+            // store.
+            //
+            // ⚠ The subject reaches that `if` as a plain `Var(__ncc_N)`, and taking it at face
+            // value is wrong in the expensive direction: `view_root_slots` NAMES a var, so the
+            // bracket would PROTECT the temp — and that temp is the one thing here nobody else
+            // owns, so protecting it is what keeps the present-path store alive forever.  The
+            // subject's own ASSIGNMENT is what the decision is about, so it is substituted in.
+            Value::Block(bl) if bl.name == "ncc" => {
+                let Some(last) = bl.operators.last() else {
+                    return;
+                };
+                let subject = bl.operators.iter().find_map(|op| match op.unspan() {
+                    Value::Set(v, val) if !matches!(val.unspan(), Value::Null) => {
+                        Some((*v, val.as_ref()))
+                    }
+                    _ => None,
+                });
+                let mut raw = Vec::new();
+                Self::join_arms(last, &mut raw);
+                for a in raw {
+                    match (a.unspan(), subject) {
+                        (Value::Var(v), Some((sv, val))) if *v == sv => out.push(val),
+                        _ => out.push(a),
+                    }
+                }
+            }
             Value::Block(bl) if bl.operators.len() == 1 => Self::join_arms(&bl.operators[0], out),
             other => out.push(other),
         }
