@@ -97,6 +97,18 @@ OPEN: **3** — a lambda's `??`-default store discarded INLINE leaks one store p
 D-clo-12, a forwarding function's return type cannot carry what its fn-ref ARGUMENT knows, so
 it frees the capture (loft#1185); and D-clo-13, a lambda whose tail JOINS a capture with a
 mint has one dep list for two ownerships and no reading serves both arms (loft#1186).
+
+⚠ **The three open entries have ONE cure between them, and it is not another ownership
+predicate.** Each is a call site that allocated a return buffer and cannot say whether what
+came back IS that buffer: D-clo-13 across the two arms of a `??`, D-clo-12 across the frame a
+forwarding function puts in the way, and loft#1183 across two assignments to one local. Every
+static reading is right for one case and wrong for the other, which is what says the question
+is not statically answerable at all. The cure is the one the DIRECT call route already has and
+the fn-ref route does not: **the call site owns its heap return buffer as a caller LOCAL**, the
+way `push_fnref_text_buffers` already gives it its `&text` ones, with
+`Data::fnref_text_buffers`' widest-candidate-then-trim shape as the precedent for the adaptive
+ABI. With the buffer owned by a local, whichever store comes back has an owner and none of the
+three needs a predicate. Measured repairs that do NOT work are recorded on each issue.
 D-clo-11 — a captured STRUCT taken by the caller's bind — D-clo-10 — a captured collection
 taken the same way — D-clo-9 — a captured record FREED by a caller that lifted a fn-ref tail
 — and D-clo-8 — a captured `vector<(…)>` unpacked rather than shared — were opened and closed
