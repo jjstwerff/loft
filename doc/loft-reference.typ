@@ -6031,6 +6031,403 @@ fn main() {
 ```
 
 
+= Running your program
+
+The pages before this one show how to WRITE loft. This one shows how to RUN it. You need one command to start, and everything else is optional.
+
+=== Run a file
+
+Put your program in a file ending in '.loft' and pass it to loft:
+
+```
+  $ loft hello.loft
+  hello, world!
+```
+
+That is the whole thing. There is no build step to run first and no project to set up. A single file is a complete program.
+
+=== Try something without making a file
+
+Type 'loft' on its own and you get a prompt where you can type one line at a time and see the answer straight away:
+
+```
+  $ printf '2 + 3\n' | loft repl --fresh
+  5
+```
+
+Typed by hand it looks like this — start it, then type at the prompt:
+
+```
+  loft
+  loft> 2 + 3
+  5
+```
+
+This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea. Your session is remembered, so you can close it and come back later — '--fresh' is how you ask for a clean one instead.
+
+=== Two ways to run, and why you usually ignore this
+
+loft can run your program in two ways. It compiles your program to a fast program first when it can, and otherwise it reads and runs your program directly. The second way is called interpreting.
+
+You do not have to choose. loft picks for you, and the ANSWER is the same either way — that is a rule the language holds itself to, not a hope. You can ask for one on purpose when you want to:
+
+```
+  $ loft --interpret hello.loft
+  hello, world!
+```
+
+A downloaded loft always interprets. That is normal and not something to fix.
+
+=== Stop a program that runs too long
+
+A loop with a mistake in it can run forever. Give loft a time limit and it stops the program for you:
+
+```
+  $ loft --timeout 10 hello.loft
+  hello, world!
+```
+
+This is worth using whenever you run something for the first time.
+
+=== Check your work without running it
+
+Sometimes you only want to know whether the program is correct so far:
+
+```
+  $ loft check hello.loft
+  ok
+```
+
+This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing.
+
+=== When loft tells you something is wrong
+
+A message from loft names the file, the line, and what to do. Some messages can also show you the exact replacement to write:
+
+```
+  $ loft --explain --interpret hello.loft
+  hello, world!
+```
+
+That prints the suggested fix under each message. It only shows you the fix; it changes nothing, so it is always safe to run.
+
+```rust
+fn main() {
+```
+
+A program is just a file with a `main` function in it, like this one. Everything above is how you would run this file.
+
+```rust
+  greeting = "hello";
+  who = "world";
+  message = "{greeting}, {who}!";
+  assert(message == "hello, world!", "string interpolation builds the message");
+  println(message);
+}
+```
+
+
+= Testing your code
+
+A test is a function that checks your code still does what you meant. You do not install anything to write one, and there is no special syntax.
+
+=== Write a test
+
+Give a function a name starting with 'test' and put an 'assert' in it. That is all a test is:
+
+```
+  fn double(n: integer) -> integer { n * 2 }
+```
+
+```
+  fn test_double_doubles() {
+    assert(double(4) == 8, "double(4) should be 8");
+  }
+```
+
+'assert' takes something that should be true, and a message. If it is true, nothing happens. If it is not, the message is what you will read, so write the message for the person who has to fix it — usually you, later.
+
+=== Run your tests
+
+Point loft at the file:
+
+```
+  $ loft --tests calc.loft
+  test result: ok. 2 passed; 1 file
+```
+
+and it finds every 'test' function and runs it, naming the file and the functions it found.
+
+Give it a directory instead of a file and it looks in every '.loft' file underneath. Give it nothing and it starts from where you are:
+
+```
+  $ loft --tests calc.loft::test_double_doubles
+  test result: ok. 1 passed; 1 file
+```
+
+=== Run just one test
+
+While you are fixing one thing, run only that one. Put '::' and the test's name after the file:
+
+```
+  $ loft --tests calc.loft::test_double_of_zero
+  test result: ok. 1 passed; 1 file
+```
+
+=== When a test fails
+
+A failure names the test and shows your message:
+
+```
+  FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+  test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+```
+
+The message is the part you wrote, which is why a vague message like "it works" costs you time and a specific one saves it.
+
+=== Read the line after the result
+
+The end of the report says what the run did NOT do, in square brackets — for example that it ran on the interpreter and did not try the compiled build. That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all.
+
+To also run your tests the compiled way:
+
+```
+  $ loft --tests --native calc.loft
+  test result: ok. 2 passed; 1 file
+```
+
+=== Once you have a project
+
+When your code grows into a project with a 'loft.toml' file (the next page), tests live in a 'tests/' folder and you run them with:
+
+```
+  $ cd greeter && loft test
+  test result: ok. 1 passed; 1 file
+```
+
+```rust
+fn double(n: integer) -> integer { n * 2 }
+```
+
+This page is itself run as a test, so the example below really does pass.
+
+```rust
+fn main() {
+  assert(double(4) == 8, "double(4) should be 8");
+  assert(double(0) == 0, "double(0) should be 0");
+```
+
+An assert that holds produces no output at all — silence is success.
+
+```rust
+  println("both checks passed");
+}
+```
+
+
+= Debugging
+
+When a program does the wrong thing, the usual reaction is to add printing to it, run it, read the output, and take the printing out again. loft gives you a better tool: stop the program on the line you care about and look around.
+
+The program used below is 'count.loft'. It adds 1, 2 and 3 into a total.
+
+=== Stop on a line
+
+Say 'debug', then your file, then a colon and a line number:
+
+```
+  $ printf ':continue\n' | loft debug count.loft:4
+  paused in main | total = 0, i = 1
+```
+
+The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what every local variable holds right now.
+
+Line 4 is inside a loop that goes round three times, so the program stops there three times. ':continue' means "carry on until you reach this line again", not "run to the end" — which is why the examples below say ':continue' more than once when they want the program to finish.
+
+=== Look at a value
+
+Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused:
+
+```
+  $ printf 'total\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  0
+```
+
+This is the part that replaces printing. You do not have to guess in advance which values you will want; ask for them when you are there.
+
+=== Move one step at a time
+
+Four commands move the program forward:
+
+- ':step' runs the next line, going INTO any function it calls
+- ':next' runs the next line, going OVER any function it calls
+- ':finish' runs until the current function returns
+- ':continue' carries on to the next time this line is reached
+
+```
+  $ printf ':step\ntotal\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  1
+```
+
+After that single ':step' the total is 1, because the loop has now added its first number. Each stop prints the same "paused" line, so you can watch a value change as the loop goes round.
+
+=== Change a value while it is running
+
+You can write to a local, not only read it. This answers "would it work if this were right?" without editing the file and starting again:
+
+```
+  $ printf 'total = 100\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  total=106
+  run finished
+```
+
+The program carries on with the value you gave it. It finished with 106 instead of 6, because the loop still had 2 and 3 to add after the change.
+
+=== Getting out
+
+':continue' carries on. ':quit' stops right away. ':help' lists every command if you forget one.
+
+=== Typing, or feeding it a script
+
+Every example here pipes its commands in, which is how they are checked automatically — the output you see above is compared against what the command really prints. Run 'loft debug count.loft:4' on its own and you get the '(dbg)' prompt to type at instead. The commands are the same either way.
+
+```rust
+fn main() {
+```
+
+This is what `count.loft` does — the program the examples above debug.
+
+```rust
+  total = 0;
+  for i in 1..4 {
+    total += i;
+  }
+  assert(total == 6, "1 + 2 + 3 is 6, which is what the debugger shows you");
+  println("total={total}");
+}
+```
+
+
+= Projects and libraries
+
+One file is a complete loft program, and for a long time that is all you need. When you want to share code between programs, or keep tests beside it, you turn the folder into a package.
+
+=== What a package looks like
+
+A package is a folder with a 'loft.toml' file in it and two sub-folders:
+
+```
+  greeter/
+    loft.toml          what this package is called
+    src/greeter.loft   the code
+    tests/greet.loft   the tests
+```
+
+'src' is where your code lives and 'tests' is where your tests live. The names matter — loft looks in exactly those places.
+
+=== The manifest
+
+'loft.toml' names the package and says which file is its front door:
+
+```
+  [package]
+  name    = "greeter"
+  version = "0.1.0"
+```
+
+```
+  [library]
+  entry = "src/greeter.loft"
+```
+
+The 'entry' file is the one that other code sees. Anything you want to share from it is marked 'pub':
+
+```
+  pub fn greet(who: text) -> text { "hello, {who}!" }
+```
+
+Without 'pub' a function is private to the package, which is the default.
+
+=== Testing a package
+
+Inside the package folder, 'loft test' finds and runs everything in 'tests':
+
+```
+  $ cd greeter && loft test
+  test result: ok. 1 passed; 1 file
+```
+
+The tests reach your code by importing the package by name:
+
+```
+  use greeter::*;
+  fn test_greet_names_the_person() {
+    assert(greet("Ada") == "hello, Ada!", "greet builds the sentence");
+  }
+```
+
+'use greeter::\*;' brings in everything public. Write 'use greeter;' instead and you call it as 'greeter::greet(...)', which is longer but says where each name came from — useful once you import several packages.
+
+=== Running one test while you work
+
+Give 'loft test' the file, or the file and one function:
+
+```
+  $ cd greeter && loft test greet
+  test result: ok. 1 passed; 1 file
+```
+
+=== Check it compiles, without running anything
+
+Inside the package, 'loft check' compiles everything and reports problems:
+
+```
+  $ cd greeter && loft check
+  loft build: `native` ✓
+```
+
+A package that is only a library has no program to start, so there is nothing to run — 'check' still tells you the code compiles, which is what you wanted to know.
+
+=== Coverage — what the tests did not reach
+
+After the result, 'loft test' tells you which of your functions no test ever entered:
+
+```
+  $ cd greeter && loft test
+  coverage: all 1 functions were entered by these tests
+```
+
+It is a list, never a percentage and never a gate. A percentage becomes a target, and tests written to move a number check nothing.
+
+=== Using someone else's package
+
+Add it to the manifest under '\[dependencies\]' and install:
+
+```
+  [dependencies]
+  math = ">=0.1"
+```
+
+```
+  loft install
+```
+
+Then 'use math;' in your code. 'loft install' also writes a lock file that records the exact versions, so the same code builds the same way later.
+
+```rust
+fn main() {
+```
+
+The package these examples describe is `greeter`, and this is its one function — a `pub fn` in `src/greeter.loft` that its tests import.
+
+```rust
+  greeting = "hello, Ada!";
+  assert(greeting == "hello, Ada!", "what greet(\"Ada\") returns");
+  println(greeting);
+}
+```
+
+
 = Standard Library
 
 == Types

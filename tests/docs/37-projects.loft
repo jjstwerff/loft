@@ -1,0 +1,91 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Projects and libraries
+// @TITLE: Growing from one file into a package other code can use.
+// One file is a complete loft program, and for a long time that is all you need.
+// When you want to share code between programs, or keep tests beside it, you
+// turn the folder into a package.
+// ## What a package looks like
+// A package is a folder with a 'loft.toml' file in it and two sub-folders:
+//
+//     greeter/
+//       loft.toml          what this package is called
+//       src/greeter.loft   the code
+//       tests/greet.loft   the tests
+//
+// 'src' is where your code lives and 'tests' is where your tests live. The
+// names matter — loft looks in exactly those places.
+// ## The manifest
+// 'loft.toml' names the package and says which file is its front door:
+//
+//     [package]
+//     name    = "greeter"
+//     version = "0.1.0"
+//
+//     [library]
+//     entry = "src/greeter.loft"
+//
+// The 'entry' file is the one that other code sees. Anything you want to share
+// from it is marked 'pub':
+//
+//     pub fn greet(who: text) -> text { "hello, {who}!" }
+//
+// Without 'pub' a function is private to the package, which is the default.
+// ## Testing a package
+// Inside the package folder, 'loft test' finds and runs everything in 'tests':
+//
+//     $ cd greeter && loft test
+//     test result: ok. 1 passed; 1 file
+//
+// The tests reach your code by importing the package by name:
+//
+//     use greeter::*;
+//     fn test_greet_names_the_person() {
+//       assert(greet("Ada") == "hello, Ada!", "greet builds the sentence");
+//     }
+//
+// 'use greeter::*;' brings in everything public. Write 'use greeter;' instead
+// and you call it as 'greeter::greet(...)', which is longer but says where each
+// name came from — useful once you import several packages.
+// ## Running one test while you work
+// Give 'loft test' the file, or the file and one function:
+//
+//     $ cd greeter && loft test greet
+//     test result: ok. 1 passed; 1 file
+//
+// ## Check it compiles, without running anything
+// Inside the package, 'loft check' compiles everything and reports problems:
+//
+//     $ cd greeter && loft check
+//     loft build: `native` ✓
+//
+// A package that is only a library has no program to start, so there is nothing
+// to run — 'check' still tells you the code compiles, which is what you wanted
+// to know.
+// ## Coverage — what the tests did not reach
+// After the result, 'loft test' tells you which of your functions no test ever
+// entered:
+//
+//     $ cd greeter && loft test
+//     coverage: all 1 functions were entered by these tests
+//
+// It is a list, never a percentage and never a gate. A percentage becomes a
+// target, and tests written to move a number check nothing.
+// ## Using someone else's package
+// Add it to the manifest under '[dependencies]' and install:
+//
+//     [dependencies]
+//     math = ">=0.1"
+//
+//     loft install
+//
+// Then 'use math;' in your code. 'loft install' also writes a lock file that
+// records the exact versions, so the same code builds the same way later.
+
+fn main() {
+  // The package these examples describe is `greeter`, and this is its one
+  // function — a `pub fn` in `src/greeter.loft` that its tests import.
+  greeting = "hello, Ada!";
+  assert(greeting == "hello, Ada!", "what greet(\"Ada\") returns");
+  println(greeting);
+}

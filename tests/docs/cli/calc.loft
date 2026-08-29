@@ -1,0 +1,9 @@
+fn double(n: integer) -> integer { n * 2 }
+
+fn test_double_doubles() {
+  assert(double(4) == 8, "double(4) should be 8");
+}
+
+fn test_double_of_zero() {
+  assert(double(0) == 0, "double(0) should be 0");
+}

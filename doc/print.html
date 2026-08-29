@@ -52,6 +52,10 @@
 <li><a href="#31-ref-forward">Reference parameter forwarding</a> — <span class="toc-desc">Forwarding &amp; parameters between functions</span></li>
 <li><a href="#32-time">Time library</a> — <span class="toc-desc">The time library — dates and times as epoch milliseconds.</span></li>
 <li><a href="#33-features">Feature catalogue</a> — <span class="toc-desc">Every language and tooling feature, with what each one is for.</span></li>
+<li><a href="#34-running">Running your program</a> — <span class="toc-desc">How to run loft — one file, the REPL, and checking your work.</span></li>
+<li><a href="#35-testing">Testing your code</a> — <span class="toc-desc">How to write and run tests — a function whose name starts with test.</span></li>
+<li><a href="#36-debugging">Debugging</a> — <span class="toc-desc">Stop your program on a line and look at what it is really doing.</span></li>
+<li><a href="#37-projects">Projects and libraries</a> — <span class="toc-desc">Growing from one file into a package other code can use.</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
@@ -2816,6 +2820,231 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </ul>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"the feature catalogue is generated from the issue tracker"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="34-running">
+<h1>Running your program</h1>
+<p>The pages before this one show how to WRITE loft. This one shows how to RUN it. You need one command to start, and everything else is optional.</p>
+<h2 id="run-a-file">Run a file</h2>
+<p>Put your program in a file ending in <code>.loft</code> and pass it to loft:</p>
+<pre><code>  $ loft hello.loft
+  hello, world!
+</code></pre>
+<p>That is the whole thing. There is no build step to run first and no project to set up. A single file is a complete program.</p>
+<h2 id="try-something-without-making-a-file">Try something without making a file</h2>
+<p>Type <code>loft</code> on its own and you get a prompt where you can type one line at a time and see the answer straight away:</p>
+<pre><code>  $ printf '2 + 3\n' | loft repl --fresh
+  5
+</code></pre>
+<p>Typed by hand it looks like this — start it, then type at the prompt:</p>
+<pre><code>  loft
+  loft&gt; 2 + 3
+  5
+</code></pre>
+<p>This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea. Your session is remembered, so you can close it and come back later — <code>--fresh</code> is how you ask for a clean one instead.</p>
+<h2 id="two-ways-to-run-and-why-you-usually-ignore-this">Two ways to run, and why you usually ignore this</h2>
+<p>loft can run your program in two ways. It compiles your program to a fast program first when it can, and otherwise it reads and runs your program directly. The second way is called interpreting.</p>
+<p>You do not have to choose. loft picks for you, and the ANSWER is the same either way — that is a rule the language holds itself to, not a hope. You can ask for one on purpose when you want to:</p>
+<pre><code>  $ loft --interpret hello.loft
+  hello, world!
+</code></pre>
+<p>A downloaded loft always interprets. That is normal and not something to fix.</p>
+<h2 id="stop-a-program-that-runs-too-long">Stop a program that runs too long</h2>
+<p>A loop with a mistake in it can run forever. Give loft a time limit and it stops the program for you:</p>
+<pre><code>  $ loft --timeout 10 hello.loft
+  hello, world!
+</code></pre>
+<p>This is worth using whenever you run something for the first time.</p>
+<h2 id="check-your-work-without-running-it">Check your work without running it</h2>
+<p>Sometimes you only want to know whether the program is correct so far:</p>
+<pre><code>  $ loft check hello.loft
+  ok
+</code></pre>
+<p>This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing.</p>
+<h2 id="when-loft-tells-you-something-is-wrong">When loft tells you something is wrong</h2>
+<p>A message from loft names the file, the line, and what to do. Some messages can also show you the exact replacement to write:</p>
+<pre><code>  $ loft --explain --interpret hello.loft
+  hello, world!
+</code></pre>
+<p>That prints the suggested fix under each message. It only shows you the fix; it changes nothing, so it is always safe to run.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>A program is just a file with a <code>main</code> function in it, like this one. Everything above is how you would run this file.</p>
+<pre><code>  greeting = <span class="st">"hello"</span>;
+  who = <span class="st">"world"</span>;
+  message = <span class="st">"{greeting}, {who}!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(message == <span class="st">"hello, world!"</span>, <span class="st">"string interpolation builds the message"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(message);
+}</code></pre>
+</section>
+<section class="print-section" id="35-testing">
+<h1>Testing your code</h1>
+<p>A test is a function that checks your code still does what you meant. You do not install anything to write one, and there is no special syntax.</p>
+<h2 id="write-a-test">Write a test</h2>
+<p>Give a function a name starting with <code>test</code> and put an <code>assert</code> in it. That is all a test is:</p>
+<pre><code>  fn double(n: integer) -&gt; integer { n * 2 }
+</code></pre>
+<pre><code>  fn test_double_doubles() {
+    assert(double(4) == 8, "double(4) should be 8");
+  }
+</code></pre>
+<p><code>assert</code> takes something that should be true, and a message. If it is true, nothing happens. If it is not, the message is what you will read, so write the message for the person who has to fix it — usually you, later.</p>
+<h2 id="run-your-tests">Run your tests</h2>
+<p>Point loft at the file:</p>
+<pre><code>  $ loft --tests calc.loft
+  test result: ok. 2 passed; 1 file
+</code></pre>
+<p>and it finds every <code>test</code> function and runs it, naming the file and the functions it found.</p>
+<p>Give it a directory instead of a file and it looks in every <code>.loft</code> file underneath. Give it nothing and it starts from where you are:</p>
+<pre><code>  $ loft --tests calc.loft::test_double_doubles
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="run-just-one-test">Run just one test</h2>
+<p>While you are fixing one thing, run only that one. Put <code>::</code> and the test's name after the file:</p>
+<pre><code>  $ loft --tests calc.loft::test_double_of_zero
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="when-a-test-fails">When a test fails</h2>
+<p>A failure names the test and shows your message:</p>
+<pre><code>  FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+  test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+</code></pre>
+<p>The message is the part you wrote, which is why a vague message like "it works" costs you time and a specific one saves it.</p>
+<h2 id="read-the-line-after-the-result">Read the line after the result</h2>
+<p>The end of the report says what the run did NOT do, in square brackets — for example that it ran on the interpreter and did not try the compiled build. That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all.</p>
+<p>To also run your tests the compiled way:</p>
+<pre><code>  $ loft --tests --native calc.loft
+  test result: ok. 2 passed; 1 file
+</code></pre>
+<h2 id="once-you-have-a-project">Once you have a project</h2>
+<p>When your code grows into a project with a <code>loft.toml</code> file (the next page), tests live in a <code>tests/</code> folder and you run them with:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">double</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { n * <span class="nm">2</span> }</code></pre>
+<p>This page is itself run as a test, so the example below really does pass.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">double</span>(<span class="nm">4</span>) == <span class="nm">8</span>, <span class="st">"double(4) should be 8"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">double</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"double(0) should be 0"</span>);</code></pre>
+<p>An assert that holds produces no output at all — silence is success.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"both checks passed"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="36-debugging">
+<h1>Debugging</h1>
+<p>When a program does the wrong thing, the usual reaction is to add printing to it, run it, read the output, and take the printing out again. loft gives you a better tool: stop the program on the line you care about and look around.</p>
+<p>The program used below is <code>count.loft</code>. It adds 1, 2 and 3 into a total.</p>
+<h2 id="stop-on-a-line">Stop on a line</h2>
+<p>Say <code>debug</code>, then your file, then a colon and a line number:</p>
+<pre><code>  $ printf ':continue\n' | loft debug count.loft:4
+  paused in main | total = 0, i = 1
+</code></pre>
+<p>The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what every local variable holds right now.</p>
+<p>Line 4 is inside a loop that goes round three times, so the program stops there three times. <code>:continue</code> means "carry on until you reach this line again", not "run to the end" — which is why the examples below say <code>:continue</code> more than once when they want the program to finish.</p>
+<h2 id="look-at-a-value">Look at a value</h2>
+<p>Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused:</p>
+<pre><code>  $ printf 'total\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  0
+</code></pre>
+<p>This is the part that replaces printing. You do not have to guess in advance which values you will want; ask for them when you are there.</p>
+<h2 id="move-one-step-at-a-time">Move one step at a time</h2>
+<p>Four commands move the program forward:</p>
+<ul>
+<li><code>:step</code> runs the next line, going INTO any function it calls</li>
+<li><code>:next</code> runs the next line, going OVER any function it calls</li>
+<li><code>:finish</code> runs until the current function returns</li>
+<li><code>:continue</code> carries on to the next time this line is reached</li>
+</ul>
+<pre><code>  $ printf ':step\ntotal\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  1
+</code></pre>
+<p>After that single <code>:step</code> the total is 1, because the loop has now added its first number. Each stop prints the same "paused" line, so you can watch a value change as the loop goes round.</p>
+<h2 id="change-a-value-while-it-is-running">Change a value while it is running</h2>
+<p>You can write to a local, not only read it. This answers "would it work if this were right?" without editing the file and starting again:</p>
+<pre><code>  $ printf 'total = 100\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  total=106
+  run finished
+</code></pre>
+<p>The program carries on with the value you gave it. It finished with 106 instead of 6, because the loop still had 2 and 3 to add after the change.</p>
+<h2 id="getting-out">Getting out</h2>
+<p><code>:continue</code> carries on. <code>:quit</code> stops right away. <code>:help</code> lists every command if you forget one.</p>
+<h2 id="typing-or-feeding-it-a-script">Typing, or feeding it a script</h2>
+<p>Every example here pipes its commands in, which is how they are checked automatically — the output you see above is compared against what the command really prints. Run <code>loft debug count.loft:4</code> on its own and you get the <code>(dbg)</code> prompt to type at instead. The commands are the same either way.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>This is what <code>count.loft</code> does — the program the examples above debug.</p>
+<pre><code>  total = <span class="nm">0</span>;
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..4</span> {
+    total += i;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">6</span>, <span class="st">"1 + 2 + 3 is 6, which is what the debugger shows you"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"total={total}"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="37-projects">
+<h1>Projects and libraries</h1>
+<p>One file is a complete loft program, and for a long time that is all you need. When you want to share code between programs, or keep tests beside it, you turn the folder into a package.</p>
+<h2 id="what-a-package-looks-like">What a package looks like</h2>
+<p>A package is a folder with a <code>loft.toml</code> file in it and two sub-folders:</p>
+<pre><code>  greeter/
+    loft.toml          what this package is called
+    src/greeter.loft   the code
+    tests/greet.loft   the tests
+</code></pre>
+<p><code>src</code> is where your code lives and <code>tests</code> is where your tests live. The names matter — loft looks in exactly those places.</p>
+<h2 id="the-manifest">The manifest</h2>
+<p><code>loft.toml</code> names the package and says which file is its front door:</p>
+<pre><code>  [package]
+  name    = "greeter"
+  version = "0.1.0"
+</code></pre>
+<pre><code>  [library]
+  entry = "src/greeter.loft"
+</code></pre>
+<p>The <code>entry</code> file is the one that other code sees. Anything you want to share from it is marked <code>pub</code>:</p>
+<pre><code>  pub fn greet(who: text) -&gt; text { "hello, {who}!" }
+</code></pre>
+<p>Without <code>pub</code> a function is private to the package, which is the default.</p>
+<h2 id="testing-a-package">Testing a package</h2>
+<p>Inside the package folder, <code>loft test</code> finds and runs everything in <code>tests</code>:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<p>The tests reach your code by importing the package by name:</p>
+<pre><code>  use greeter::*;
+  fn test_greet_names_the_person() {
+    assert(greet("Ada") == "hello, Ada!", "greet builds the sentence");
+  }
+</code></pre>
+<p><code>use greeter::*;</code> brings in everything public. Write <code>use greeter;</code> instead and you call it as <code>greeter::greet(...)</code>, which is longer but says where each name came from — useful once you import several packages.</p>
+<h2 id="running-one-test-while-you-work">Running one test while you work</h2>
+<p>Give <code>loft test</code> the file, or the file and one function:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test greet
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="check-it-compiles-without-running-anything">Check it compiles, without running anything</h2>
+<p>Inside the package, <code>loft check</code> compiles everything and reports problems:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft check
+  loft build: `native` ✓
+</code></pre>
+<p>A package that is only a library has no program to start, so there is nothing to run — <code>check</code> still tells you the code compiles, which is what you wanted to know.</p>
+<h2 id="coverage-what-the-tests-did-not-reach">Coverage — what the tests did not reach</h2>
+<p>After the result, <code>loft test</code> tells you which of your functions no test ever entered:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  coverage: all 1 functions were entered by these tests
+</code></pre>
+<p>It is a list, never a percentage and never a gate. A percentage becomes a target, and tests written to move a number check nothing.</p>
+<h2 id="using-someone-else-s-package">Using someone else's package</h2>
+<p>Add it to the manifest under <code>[dependencies]</code> and install:</p>
+<pre><code>  [dependencies]
+  math = "&gt;=0.1"
+</code></pre>
+<pre><code>  loft install
+</code></pre>
+<p>Then <code>use math;</code> in your code. <code>loft install</code> also writes a lock file that records the exact versions, so the same code builds the same way later.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>The package these examples describe is <code>greeter</code>, and this is its one function — a <code>pub fn</code> in <code>src/greeter.loft</code> that its tests import.</p>
+<pre><code>  greeting = <span class="st">"hello, Ada!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(greeting == <span class="st">"hello, Ada!"</span>, <span class="st">"what greet(\"</span><span class="en">Ada</span>\<span class="st">") returns"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(greeting);
 }</code></pre>
 </section>
 <section class="print-section" id="00-performance">

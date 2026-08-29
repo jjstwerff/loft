@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Testing your code
+// @TITLE: How to write and run tests — a function whose name starts with test.
+// A test is a function that checks your code still does what you meant.
+// You do not install anything to write one, and there is no special syntax.
+// ## Write a test
+// Give a function a name starting with 'test' and put an 'assert' in it.
+// That is all a test is:
+//
+//     fn double(n: integer) -> integer { n * 2 }
+//
+//     fn test_double_doubles() {
+//       assert(double(4) == 8, "double(4) should be 8");
+//     }
+//
+// 'assert' takes something that should be true, and a message. If it is true,
+// nothing happens. If it is not, the message is what you will read, so write
+// the message for the person who has to fix it — usually you, later.
+// ## Run your tests
+// Point loft at the file:
+//
+//     $ loft --tests calc.loft
+//     test result: ok. 2 passed; 1 file
+//
+// and it finds every 'test' function and runs it, naming the file and the
+// functions it found.
+//
+// Give it a directory instead of a file and it looks in every '.loft' file
+// underneath. Give it nothing and it starts from where you are:
+//
+//     $ loft --tests calc.loft::test_double_doubles
+//     test result: ok. 1 passed; 1 file
+//
+// ## Run just one test
+// While you are fixing one thing, run only that one. Put '::' and the test's
+// name after the file:
+//
+//     $ loft --tests calc.loft::test_double_of_zero
+//     test result: ok. 1 passed; 1 file
+//
+// ## When a test fails
+// A failure names the test and shows your message:
+//
+//     FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+//     test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+//
+// The message is the part you wrote, which is why a vague message like "it
+// works" costs you time and a specific one saves it.
+// ## Read the line after the result
+// The end of the report says what the run did NOT do, in square brackets —
+// for example that it ran on the interpreter and did not try the compiled
+// build. That is deliberate. A run that says only "ok" cannot tell you
+// whether the other half was checked or never ran at all.
+//
+// To also run your tests the compiled way:
+//
+//     $ loft --tests --native calc.loft
+//     test result: ok. 2 passed; 1 file
+//
+// ## Once you have a project
+// When your code grows into a project with a 'loft.toml' file (the next page),
+// tests live in a 'tests/' folder and you run them with:
+//
+//     $ cd greeter && loft test
+//     test result: ok. 1 passed; 1 file
+
+fn double(n: integer) -> integer { n * 2 }
+
+// This page is itself run as a test, so the example below really does pass.
+fn main() {
+  assert(double(4) == 8, "double(4) should be 8");
+  assert(double(0) == 0, "double(0) should be 0");
+  // An assert that holds produces no output at all — silence is success.
+  println("both checks passed");
+}

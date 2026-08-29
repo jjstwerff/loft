@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects and libraries — Loft, a programming language for small browser games</title>
+  <meta name="description" content="Growing from one file into a package other code can use.">
+<link rel="canonical" href="https://loft-lang.org/loft/37-projects.html">
+<meta property="og:title" content="Projects and libraries — Loft, a programming language for small browser games">
+<meta property="og:description" content="Growing from one file into a package other code can use.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/37-projects.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Projects and libraries — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="Growing from one file into a package other code can use.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <span class="cur">Projects and libraries</span> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Projects and libraries</h1>
+<article>
+<p>One file is a complete loft program, and for a long time that is all you need. When you want to share code between programs, or keep tests beside it, you turn the folder into a package.</p>
+<h2 id="what-a-package-looks-like">What a package looks like</h2>
+<p>A package is a folder with a <code>loft.toml</code> file in it and two sub-folders:</p>
+<pre><code>  greeter/
+    loft.toml          what this package is called
+    src/greeter.loft   the code
+    tests/greet.loft   the tests
+</code></pre>
+<p><code>src</code> is where your code lives and <code>tests</code> is where your tests live. The names matter — loft looks in exactly those places.</p>
+<h2 id="the-manifest">The manifest</h2>
+<p><code>loft.toml</code> names the package and says which file is its front door:</p>
+<pre><code>  [package]
+  name    = "greeter"
+  version = "0.1.0"
+</code></pre>
+<pre><code>  [library]
+  entry = "src/greeter.loft"
+</code></pre>
+<p>The <code>entry</code> file is the one that other code sees. Anything you want to share from it is marked <code>pub</code>:</p>
+<pre><code>  pub fn greet(who: text) -&gt; text { "hello, {who}!" }
+</code></pre>
+<p>Without <code>pub</code> a function is private to the package, which is the default.</p>
+<h2 id="testing-a-package">Testing a package</h2>
+<p>Inside the package folder, <code>loft test</code> finds and runs everything in <code>tests</code>:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<p>The tests reach your code by importing the package by name:</p>
+<pre><code>  use greeter::*;
+  fn test_greet_names_the_person() {
+    assert(greet("Ada") == "hello, Ada!", "greet builds the sentence");
+  }
+</code></pre>
+<p><code>use greeter::*;</code> brings in everything public. Write <code>use greeter;</code> instead and you call it as <code>greeter::greet(...)</code>, which is longer but says where each name came from — useful once you import several packages.</p>
+<h2 id="running-one-test-while-you-work">Running one test while you work</h2>
+<p>Give <code>loft test</code> the file, or the file and one function:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test greet
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="check-it-compiles-without-running-anything">Check it compiles, without running anything</h2>
+<p>Inside the package, <code>loft check</code> compiles everything and reports problems:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft check
+  loft build: `native` ✓
+</code></pre>
+<p>A package that is only a library has no program to start, so there is nothing to run — <code>check</code> still tells you the code compiles, which is what you wanted to know.</p>
+<h2 id="coverage-what-the-tests-did-not-reach">Coverage — what the tests did not reach</h2>
+<p>After the result, <code>loft test</code> tells you which of your functions no test ever entered:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  coverage: all 1 functions were entered by these tests
+</code></pre>
+<p>It is a list, never a percentage and never a gate. A percentage becomes a target, and tests written to move a number check nothing.</p>
+<h2 id="using-someone-else-s-package">Using someone else's package</h2>
+<p>Add it to the manifest under <code>[dependencies]</code> and install:</p>
+<pre><code>  [dependencies]
+  math = "&gt;=0.1"
+</code></pre>
+<pre><code>  loft install
+</code></pre>
+<p>Then <code>use math;</code> in your code. <code>loft install</code> also writes a lock file that records the exact versions, so the same code builds the same way later.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>The package these examples describe is <code>greeter</code>, and this is its one function — a <code>pub fn</code> in <code>src/greeter.loft</code> that its tests import.</p>
+<pre><code>  greeting = <span class="st">"hello, Ada!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(greeting == <span class="st">"hello, Ada!"</span>, <span class="st">"what greet(\"</span><span class="en">Ada</span>\<span class="st">") returns"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(greeting);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>
