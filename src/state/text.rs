@@ -654,17 +654,9 @@ impl State {
         // interpolation in the same format string.
         let tag = self.database.take_format_fault();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
-        if val == i64::MIN
-            && let Some(label_str) = tag
-        {
-            let label = format!("null({label_str})");
-            let s = self.string_mut(pos - 16);
-            text_tl_fmt(tl_fn, s, |s| ops::format_text(s, &label, width, 1, token));
-            return;
-        }
         let s = self.string_mut(pos - 16);
         text_tl_fmt(tl_fn, s, |s| {
-            ops::format_long(s, val, radix, width, token, plus, note, dir)
+            ops::format_long_with_tag(s, val, tag, radix, width, token, plus, note, dir)
         });
     }
 
@@ -679,17 +671,9 @@ impl State {
         let val = *self.get_stack::<i64>();
         let tag = self.database.take_format_fault();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
-        if val == i64::MIN
-            && let Some(label_str) = tag
-        {
-            let label = format!("null({label_str})");
-            let s = self.string_ref_mut(pos - 16);
-            text_tl_fmt(tl_fn, s, |s| ops::format_text(s, &label, width, 1, token));
-            return;
-        }
         let s = self.string_ref_mut(pos - 16);
         text_tl_fmt(tl_fn, s, |s| {
-            ops::format_long(s, val, radix, width, token, plus, note, dir)
+            ops::format_long_with_tag(s, val, tag, radix, width, token, plus, note, dir)
         });
     }
 

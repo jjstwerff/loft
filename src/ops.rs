@@ -643,9 +643,10 @@ pub fn op_shift_right_int(v1: i64, v2: i64) -> i64 {
 /// `OpFormatInt` emits a call to this helper preceded by
 /// `let _tag = stores.take_format_fault();` so the same per-fault
 /// nudge from `OpTagFault` (4e.1's format-scope swap sibling) reaches
-/// the native binary.  The interpreter's `State::format_int` uses
-/// the same logic inline (no separate call to keep the hot path
-/// tight).
+/// the native binary.  The interpreter's `State::format_int` and
+/// `State::format_stack_int` call this same function, so the tagged
+/// and bare null render identically on both backends by construction
+/// rather than by three copies agreeing.
 ///
 /// # Panics
 /// Inherits `format_long`'s panic on unknown radix values.
@@ -664,8 +665,13 @@ pub fn format_long_with_tag(
     if val == i64::MIN
         && let Some(label_str) = tag
     {
+        // @FR-F-Spec — the tagged null obeys the SAME alignment the bare one does.  `dir == 2` is
+        // the parser's "unset", which numbers resolve to right-align; an explicit
+        // `<` / `^` / `>` is honoured.  Passing a literal `1` here made `{a / b:<12}`
+        // right-align while `{n:<12}` on a plain null left-aligned, so the alignment
+        // a hole was given depended on whether its null carried a fault cause.
         let label = format!("null({label_str})");
-        format_text(s, &label, width, 1, token);
+        format_text(s, &label, width, if dir == 2 { 1 } else { dir }, token);
         return;
     }
     format_long(s, val, radix, width, token, plus, note, dir);

@@ -907,7 +907,44 @@ static OPERATORS: &[&[&str]] = &[
 ];
 
 static SKIP_TOKEN: [&str; 8] = ["}", ".", "<", ">", "^", "+", "-", "#"];
-static SKIP_WIDTH: [&str; 10] = ["}", ".", "x", "X", "o", "b", "e", "j", "d", "f"];
+/// Tokens that END a `{x:…}` spec rather than starting its WIDTH expression.  The radix
+/// LETTERS are deliberately absent: [`radix_for`] is their one home, and this list plus
+/// that function is the whole domain.
+static SKIP_WIDTH: [&str; 2] = ["}", "."];
+
+/// Which radix does the letter closing a `{x:…}` spec select — and, by the same answer,
+/// is there a radix letter here at all?  `None` means the token starts a WIDTH expression.
+///
+/// @FR-F-Spec — the one home for the radix half of a spec.
+///
+/// One function because it is one question asked twice: the spec parser must decide
+/// whether to parse a width before it can read the radix.  While those two decisions came
+/// from two lists they disagreed — the radix reader accepted `J`, `json` and any case of
+/// either, and the skip list named only `j`.  So the width expression consumed the rest:
+/// `{p:json}` reported *"Unknown variable 'json'"*, and with a variable of that name in
+/// scope it silently took that variable's value as the WIDTH and rendered the loft form
+/// instead of the JSON the author asked for.
+///
+/// `-1` is the JSON pseudo-radix (`OutputState::db_format` reads its sign); `1` is
+/// scientific notation.
+pub(crate) fn radix_for(id: &str) -> Option<i32> {
+    let lower = id.to_lowercase();
+    if lower == "j" || lower == "json" {
+        Some(-1)
+    } else if id == "x" || id == "X" {
+        Some(16)
+    } else if id == "b" {
+        Some(2)
+    } else if id == "o" {
+        Some(8)
+    } else if id == "e" {
+        Some(1)
+    } else if id == "d" || id == "f" {
+        Some(10)
+    } else {
+        None
+    }
+}
 
 pub(crate) struct OutputState<'a> {
     pub(crate) radix: i32,

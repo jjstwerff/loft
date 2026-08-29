@@ -2055,7 +2055,21 @@ use #count instead"
         if !self.first_pass {
             let is_text = matches!(tp, Type::Text(_));
             let is_bool = matches!(tp, Type::Boolean);
-            if state.radix != 10 && (is_text || is_bool) {
+            // @FR-F-Spec — an integer renders through `ops::format_long`, which implements
+            // the four radixes the rule lists (`b` 2, `o` 8, decimal 10, `x`/`X` 16) and
+            // ends in `panic!("Unknown radix")` for anything else.  `get_radix` answers two
+            // more: `e` (scientific, 1) and `j` (JSON, -1).  Neither means anything for an
+            // integer and both reached that panic, so `println("{n:e}")` — a plain source
+            // program — aborted the interpreter.  Refuse them here, where the value's type
+            // is known, instead of at a renderer that has only the radix number left.
+            if matches!(tp, Type::Integer(_)) && !matches!(state.radix, 2 | 8 | 10 | 16) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`{}` is not an integer format — use `x`, `X`, `b`, `o` or `d`",
+                    if state.radix == -1 { "j" } else { "e" }
+                );
+            } else if state.radix != 10 && (is_text || is_bool) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,

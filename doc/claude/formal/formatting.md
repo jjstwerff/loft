@@ -124,6 +124,16 @@ is a compact `{field:value}` form, and the `:j` spec switches it to JSON with qu
                                   (a sentinel, not a number) takes none
              width counts Unicode CODEPOINTS, not bytes.
              The flags may be written in any ORDER (`+<8.3` and `<+8.3` are the same spec).
+  (F-Spec-Fill)  a spec may open with a FILL character, which pads instead of a space
+                 (`{s:*>6}` is `**​**ab`).  It comes FIRST, before the flags, and it is a
+                 single token that is not itself a flag — so a DIGIT can never be one, and
+                 `0>5` is not fill-`0` right-align-5 but the comparison `0 > 5`.  `0N`
+                 (F-Spec above) is how a number is zero-padded.
+  (F-Spec-Exec)  every part of a spec reaches the renderer for the hole's type, or the
+                 program is REFUSED.  A part that type cannot execute — a radix on a
+                 non-number, `e` or `j` on an integer — is a static error naming the part;
+                 it is never dropped, because a dropped part is a wrong rendering that
+                 nothing reports.
 ```
 
 **In words.** `{1:03}` is `001`, `{42:#x}` is `0x2a`, `{334.1:.2}` is `334.10`, `{"abc":>7}` is
@@ -149,7 +159,58 @@ index, …) names *why* the value is null, which is exactly what a `"{x}"` in a 
 
 ## Deviations
 
-OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
+OPEN: **2** — `D-fmt-2` and `D-fmt-3` below, both opened 2026-08-29.
+
+⚠ **This doc read `OPEN: 0` for its whole life, and the walk that first asked found four
+defects.** The line was never a measurement: it said *"a rules doc adds no code deviation"*,
+which is a claim about the doc's GENRE rather than about the code, so no oracle stood under it.
+The four are `D-fmt-1` (closed) and the two open entries; what they have in common is that a
+neighbouring spelling of each was already correct, which is what a differential oracle is
+blindest to — both backends agreed, and agreed on the wrong answer.
+
+### D-fmt-1 — OPENED AND CLOSED (2026-08-29): four ways a spec did not reach its renderer
+
+Found by walking `@FR-F-Spec`; all four fixed in the same pass, guards in
+`tests/scripts/a-format-spec-is-honoured-not-dropped.loft`,
+`a-json-spec-spelling-is-one-decision.loft` and
+`a-format-spec-the-renderer-cannot-execute-is-refused.loft`.
+
+1. **A tagged null ignored its alignment.** `{a / b:<12}` right-aligned `null(/0)` while
+   `{n:<12}` left-aligned a bare `null`, so the alignment a hole got depended on whether its
+   null carried a fault cause. Six lines existed in THREE copies — `ops::format_long_with_tag`
+   and the interpreter's `State::format_int` / `format_stack_int` — each passing a literal `1`
+   where `format_long`'s bare-null path resolves `dir`. The two interpreter copies now call the
+   shared one, so the question has a single place to be answered.
+2. **`{p:J}` and `{p:json}` were not `{p:j}`.** Whether a WIDTH expression starts here and which
+   radix a letter names are one question, and they were answered from two lists: the radix reader
+   lower-cased and accepted `json`, the skip list named only `j`. The width expression therefore
+   ate the letter — an "Unknown variable 'json'" where no such variable exists, and where one
+   does, that variable's value silently taken as the width with the rendering falling back to the
+   compact loft form. `Parser::radix_for` is now the one home both readings consult.
+3. **A width that is not a number was accepted.** `{n:0>5}` parses as `0 > 5`; the BOOLEAN
+   reached the width, rendering with no padding on `--interpret` and reaching rustc as
+   `E0308 expected i64, found bool` on `--native`. This is the residual of the fix that made
+   `string_states` order-independent — its own note says an out-of-order flag "was simply left in
+   the stream for the WIDTH expression to find", and a `0` fill is left there for the same reason,
+   because the fill branch can only claim a token and a digit lexes as an Integer. F-Spec-Fill
+   above now says why a digit cannot be a fill; the width slot now requires an integer.
+4. **`{n:e}` and `{n:j}` aborted the interpreter.** `ops::format_long` implements four radixes
+   and ends in `panic!("Unknown radix")`; the spec reader answers two more. An ordinary source
+   program reached that panic. Both are refused at the type dispatch now.
+
+### D-fmt-2 — OPEN (2026-08-29, loft#1165): a `character` hole drops its whole spec
+
+`{c:>5}` renders `x`. `Type::Character` emits `OpAppendCharacter`, which takes the accumulator
+and the value and has nowhere to put width, alignment or fill. Violates F-Spec-Exec: it neither
+honours the spec nor refuses it. Needs a cast-to-text op or a scratch-buffer lowering, plus the
+decision F-Render forces — a null character renders as nothing, and a width would pad that to a
+full field.
+
+### D-fmt-3 — OPEN (2026-08-29, loft#1166): a vector/struct hole drops width and alignment
+
+`{v:>12}` renders `[1,2]`. The record arms pass `OutputState::db_format()`, which is two bits
+(`#` and the JSON radix); width, alignment and fill are not passed at all. Violates F-Spec-Exec
+for the same reason and wants `OpFormatDatabase`'s signature widened on both backends.
 
 - **Conformance is differential** — formatting is enforced across the two backends by the @PLN89
   oracle (D-op-1) plus the dedicated `tests/scripts/14-formatting.loft` / `tests/docs/30-formatting.loft`

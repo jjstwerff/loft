@@ -3606,6 +3606,78 @@ rewrite worked.  Positions are now resolved by field NAME.
   rule and is correct.  Recorded on the issue so whoever takes the assign/append halves checks it
   against the same fix.
 
+#### B7d — `@FR-F-Spec` walked: a rules doc whose `OPEN: 0` was about its own genre (2026-08-29)
+
+Sixth rule walked, and the first in `formatting.md` — ten rules, no code citation, `OPEN: 0`, so
+it had never been walked at all. The walk found **four defects, two of them silent-wrong and one
+a backend divergence**, plus two more it filed rather than fixed (loft#1165, loft#1166).
+
+**The zero was never a measurement.** Its parenthetical said *"a rules doc — it shrinks
+operational.md's D-op-1, adds no code deviation"*, which is a claim about the DOC'''S GENRE, not
+about the code. No oracle stood under it, so nothing could have moved it off zero. That is a
+sharper version of the standing warning that an `OPEN: 0` is only as strong as its oracle: here
+there was no oracle to be weak, and the line still read like a result.
+
+**All four had a correct neighbour, which is what kept them invisible.** The conformance section
+already warns that *"a differential oracle cannot see a flag both backends drop"*; every one of
+these is the next case along — both backends agreed, and agreed on the wrong answer.
+
+| defect | the neighbour that was right |
+|---|---|
+| `{a / b:<12}` right-aligns `null(/0)` | `{n:<12}` left-aligns a bare `null` |
+| `{p:J}` / `{p:json}` are not `{p:j}` | `{p:j}` renders JSON correctly |
+| `{n:0>5}` — a comparison reaches the width | every FLAG is already order-independent |
+| `{n:e}` / `{n:j}` panic `"Unknown radix"` | the four radixes an integer has arms for |
+
+The first is [[keystone-claim-is-a-measurement]] in miniature: six lines existed in THREE copies,
+and a comment claimed the interpreter inlined them "to keep the hot path tight" — the inline body
+was a `format!` and a call, the same work. Folding the two copies onto the shared function fixed
+the bug and removed the place it could come back.
+
+**The third is a carve-out comment naming its own residual, for the second time this month.**
+`string_states` was rewritten to consume the flags in any order, and its note records the failure
+exactly: an out-of-order flag *"was simply left in the stream for the WIDTH expression to find"*.
+A `0` fill is left there for the identical reason — the fill branch can only claim a lexer TOKEN
+and a digit lexes as an Integer — so `{n:0>5}`, how a reader coming from Rust spells zero-pad,
+rendered unpadded on `--interpret` and reached rustc as `E0308 expected i64, found bool` on
+`--native`. [[carve-out-comment-is-a-map]]: grep the carve-out, not the symptom.
+
+**The rule wanted extending, not just enforcing.** F-Spec listed the flags and never mentioned
+the FILL character at all, though it is implemented and is the whole reason a digit in that
+position is ambiguous. An edge the rules cannot express is the rules asking to grow: `F-Spec-Fill`
+now says fill comes first and cannot be a digit, and `F-Spec-Exec` says a part the renderer
+cannot execute is refused rather than dropped — which is the L9 rule that was already written
+beside the code, and had only ever been asked about `text` and `boolean`.
+
+**A guard whose control fails by COMPILE ERROR scores its runtime cells vacuously.** The first
+version of the guard pinned everything in one file; `make falsify` reported `1|0` on the control
+— exit 1, **zero** assertion failures — because the `{p:J}` cells do not compile there, so the
+program never ran and the alignment cell it was written for was never reached. Split in two, each
+half fails on the control through its own channel: `1|1` for the runtime file, `1|0` for the
+spelling one, and the second file says in its header why its assert count is 0 on purpose. This is
+[[absent-warning-is-not-a-pass]] one level up — not the wrong channel, but a channel that cannot
+speak because an earlier one already stopped the run.
+
+**The side finding: the test harness dropped assertions.** Writing the refusal guard surfaced that
+`@EXPECT_ERROR` bound to nothing in some positions. `parse_annotations` states one rule — *"any
+pending annotations not followed by a fn → file-level"* — and had three sites implementing it, of
+which only the EOF one did; the `struct`/`enum` and non-comment arms **cleared** instead.
+Measured over `tests/scripts` + `tests/docs`: **7 annotations in 2 files were bound to nothing and
+never checked**, six of them in `102b-pass1-expected-errors.loft` in front of the very
+`struct integer` / `enum hash` declarations they describe. Falsified rather than assumed — the one
+in `persist-bind-field-store-757.loft` was given a warning text that exists nowhere and the file
+passed exactly as before; after the fix that same edit FAILS. All seven claims turn out to be
+true, so nothing was hiding behind them; they are simply live now.
+
+⚠ **A second shape from the same census is measured and NOT fixed.** An annotation in the file
+HEADER is routed to file-level even when a `fn` follows it immediately, which contradicts the
+binder'''s own comment (*"still binds the annotation to test_foo"*). It is uniform: **12 files have
+exactly one such annotation each, always the first**, including `36-parse-errors.loft` (34 other
+per-function annotations) and `102b` (15). Those annotations are not dead — they pass if ANY error
+in the file matches — but they cannot detect that their own function stopped producing the error.
+Fixing it makes 50 files strictly stricter and each red would need its own attribution check, so
+it wants its own pass rather than a ride on this one.
+
 #### C — process / skills
 
 | item | state |

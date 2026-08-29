@@ -2491,7 +2491,7 @@ impl Parser {
                     if match h {
                         LexItem::Token(st) | LexItem::Identifier(st) => {
                             let s: &str = &st;
-                            !SKIP_WIDTH.contains(&s)
+                            !SKIP_WIDTH.contains(&s) && crate::parser::radix_for(s).is_none()
                         }
                         LexItem::Integer(_, _) | LexItem::Float(_) => true,
                         _ => false,
@@ -2504,8 +2504,48 @@ impl Parser {
                             state.token = "0";
                         }
                         self.lexer.set_mode(Mode::Code);
-                        self.expression(&mut state.width);
+                        let w_tp = self.expression(&mut state.width);
                         self.lexer.set_mode(Mode::Formatting);
+                        // @FR-F-Spec — the width is a NUMBER.  The slot parses a full
+                        // expression so a variable can supply the width, and it used to
+                        // accept whatever that expression produced.  `{n:0>5}` — the
+                        // zero-pad-right spelling a Rust reader writes — parsed `0 > 5`
+                        // as a comparison and handed a BOOLEAN to the width: no padding
+                        // at all on `--interpret`, and `E0308 expected i64, found bool`
+                        // straight from rustc on `--native`.  Neither named the spec.
+                        //
+                        // It is the residual of the defect `string_states` closed for the
+                        // FLAGS.  A pad character is claimed before the flags, but only
+                        // when it lexes as a Token — a digit lexes as an Integer, so the
+                        // pad branch cannot claim it and it falls through to the width
+                        // exactly as an out-of-order flag used to.
+                        //
+                        // A dotted spec (`{f:8.3}`) legitimately arrives as a Float
+                        // LITERAL, which `append_data_fp` splits into width and
+                        // precision; a float VARIABLE is not that spelling and is refused
+                        // with the rest.
+                        let width_is_a_number = matches!(w_tp, Type::Integer(_) | Type::Unknown(_))
+                            || (matches!(w_tp, Type::Float)
+                                && matches!(state.width, Value::Float(_)));
+                        if !self.first_pass && !width_is_a_number {
+                            if matches!(w_tp, Type::Boolean) {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "a format width must be a number, and this one is a \
+                                     comparison — a digit before `<`, `>` or `^` reads as \
+                                     an operator (`0>5` is `0 > 5`); write `05` to \
+                                     zero-pad, or `*>5` to pad with a non-digit character"
+                                );
+                            } else {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "a format width must be a number, not {}",
+                                    w_tp.name(&self.data)
+                                );
+                            }
+                        }
                     }
                     state.radix = self.get_radix();
                 }
@@ -2748,25 +2788,17 @@ impl Parser {
         }
     }
 
+    /// Read the radix letter closing a `{x:…}` spec, defaulting to decimal when the spec
+    /// has none.  The letter set lives in [`crate::parser::radix_for`], which the width
+    /// decision above consults too, so the two cannot drift apart.
     pub(crate) fn get_radix(&mut self) -> i32 {
-        if let Some(id) = self.lexer.has_identifier() {
-            if id.to_lowercase() == "j" || id.to_lowercase() == "json" {
-                -1
-            } else if id == "x" || id == "X" {
-                16
-            } else if id == "b" {
-                2
-            } else if id == "o" {
-                8
-            } else if id == "e" {
-                1
-            } else if id == "d" || id == "f" {
-                10
-            } else {
-                diagnostic!(self.lexer, Level::Error, "Unexpected formatting type: {id}");
-                10
-            }
+        let Some(id) = self.lexer.has_identifier() else {
+            return 10;
+        };
+        if let Some(radix) = crate::parser::radix_for(&id) {
+            radix
         } else {
+            diagnostic!(self.lexer, Level::Error, "Unexpected formatting type: {id}");
             10
         }
     }
