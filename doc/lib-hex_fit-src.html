@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hex_fit source — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The loft source of the hex_fit library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-hex_fit-src.html">
+<meta property="og:title" content="hex_fit source — Loft, a programming language for small browser games">
+<meta property="og:description" content="The loft source of the hex_fit library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-hex_fit-src.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="hex_fit source — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The loft source of the hex_fit library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>hex_fit source</h1>
+<article>
+<p><a href="lib-hex_fit.html">← hex_fit</a> · <a href="lib-hex_fit-api.html">API reference</a> · version 0.1.0</p>
+<p class="lib-legend">4 file(s), 534 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
+<h2 id="items">Public items</h2>
+<p class="lib-legend">A <em>worked example</em> is a call site the author chose as the thing to read first. <em>Call sites</em> are every line naming the item, found mechanically over the source with comments excluded — so an item with no worked example is not an item nobody uses.</p>
+<table class="lib-table">
+<tr><th>Item</th><th>Defined</th><th>Worked example</th><th>Call sites</th></tr>
+<tr><td><code>Draft</code> <span class="search-kind">struct</span></td><td><a href="#src-hexdraft-loft-L41">41</a></td><td>—</td><td><a href="#src-hexdraft-loft-L49">49</a> <a href="#src-hexdraft-loft-L50">50</a> <a href="#src-hexdraft-loft-L53">53</a> <a href="#src-hexdraft-loft-L64">64</a> <a href="#src-hexdraft-loft-L72">72</a> <a href="#src-hexdraft-loft-L103">103</a> … (8 total)</td></tr>
+<tr><td><code>draft_new</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L49">49</a></td><td>—</td><td><a href="#src-hexdraft-loft-L87">87</a> <a href="#src-hexdraft-loft-L97">97</a> <a href="#src-hexdraft-loft-L98">98</a></td></tr>
+<tr><td><code>draft_has_run</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L53">53</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>draft_write</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L64">64</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>draft_read</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L72">72</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>draft_draw</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L103">103</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>draft_interior</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L133">133</a></td><td>—</td><td><a href="#src-hexdraft-loft-L159">159</a></td></tr>
+<tr><td><code>draft_rebuild_text</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L156">156</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>FIT_OK</code> <span class="search-kind">const</span></td><td><a href="#src-hexdraft-loft-L178">178</a></td><td>—</td><td><a href="#src-hexdraft-loft-L187">187</a> <a href="#src-hexdraft-loft-L225">225</a> <a href="#src-hexdraft-loft-L231">231</a> <a href="#src-hexfit-loft-L80">80</a> <a href="#src-hexfit-loft-L120">120</a> <a href="#src-hexfit-loft-L160">160</a> … (14 total)</td></tr>
+<tr><td><code>FIT_NO_FORM</code> <span class="search-kind">const</span></td><td><a href="#src-hexdraft-loft-L179">179</a></td><td>—</td><td><a href="#src-hexdraft-loft-L188">188</a> <a href="#src-hexdraft-loft-L224">224</a></td></tr>
+<tr><td><code>FIT_BAD_DIR</code> <span class="search-kind">const</span></td><td><a href="#src-hexdraft-loft-L180">180</a></td><td>—</td><td><a href="#src-hexdraft-loft-L189">189</a> <a href="#src-hexdraft-loft-L226">226</a></td></tr>
+<tr><td><code>FIT_BAD_P</code> <span class="search-kind">const</span></td><td><a href="#src-hexdraft-loft-L181">181</a></td><td>—</td><td><a href="#src-hexdraft-loft-L190">190</a> <a href="#src-hexdraft-loft-L227">227</a></td></tr>
+<tr><td><code>FIT_NO_VERTEX</code> <span class="search-kind">const</span></td><td><a href="#src-hexdraft-loft-L182">182</a></td><td>—</td><td><a href="#src-hexdraft-loft-L191">191</a> <a href="#src-hexdraft-loft-L228">228</a></td></tr>
+<tr><td><code>FIT_NOT_LEGAL</code> <span class="search-kind">const</span></td><td><a href="#src-hexdraft-loft-L183">183</a></td><td>—</td><td><a href="#src-hexdraft-loft-L192">192</a> <a href="#src-hexdraft-loft-L229">229</a></td></tr>
+<tr><td><code>FIT_OUTSIDE</code> <span class="search-kind">const</span></td><td><a href="#src-hexdraft-loft-L184">184</a></td><td>—</td><td><a href="#src-hexdraft-loft-L193">193</a> <a href="#src-hexdraft-loft-L230">230</a></td></tr>
+<tr><td><code>draft_fit_reason</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L186">186</a></td><td>—</td><td><a href="#src-hexfit-loft-L55">55</a></td></tr>
+<tr><td><code>draft_fits</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L223">223</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>draft_fit_p</code> <span class="search-kind">fn</span></td><td><a href="#src-hexdraft-loft-L237">237</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>FIT_NO_SIDE</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L32">32</a></td><td>—</td><td><a href="#src-hexfit-loft-L41">41</a> <a href="#src-hexfit-loft-L78">78</a></td></tr>
+<tr><td><code>FIT_BAD_T</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L33">33</a></td><td>—</td><td><a href="#src-hexfit-loft-L42">42</a> <a href="#src-hexfit-loft-L81">81</a></td></tr>
+<tr><td><code>FIT_BAD_SPAN</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L34">34</a></td><td>—</td><td><a href="#src-hexfit-loft-L45">45</a> <a href="#src-hexfit-loft-L79">79</a></td></tr>
+<tr><td><code>FIT_BAD_SHELL</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L35">35</a></td><td>—</td><td><a href="#src-hexfit-loft-L46">46</a> <a href="#src-hexfit-loft-L121">121</a></td></tr>
+<tr><td><code>FIT_BAD_HEIGHT</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L36">36</a></td><td>—</td><td><a href="#src-hexfit-loft-L49">49</a> <a href="#src-hexfit-loft-L218">218</a></td></tr>
+<tr><td><code>FIT_BAD_MAT</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L37">37</a></td><td>—</td><td><a href="#src-hexfit-loft-L52">52</a> <a href="#src-hexfit-loft-L182">182</a></td></tr>
+<tr><td><code>fit_reason</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L40">40</a></td><td>—</td><td><a href="#tests-01-hex-fit-loft-L19">19</a></td></tr>
+<tr><td><code>feature_grid</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L65">65</a></td><td>—</td><td><a href="#src-hexfit-loft-L76">76</a> <a href="#src-hexfit-loft-L88">88</a></td></tr>
+<tr><td><code>feature_fits</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L75">75</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>feature_fit_t</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L87">87</a></td><td>—</td><td><a href="#src-hexfit-loft-L102">102</a></td></tr>
+<tr><td><code>feature_fit_residual</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L101">101</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>arc_is_shell</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L112">112</a></td><td>—</td><td><a href="#src-hexfit-loft-L120">120</a> <a href="#tests-01-hex-fit-loft-L27">27</a></td></tr>
+<tr><td><code>arc_fits</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L119">119</a></td><td>—</td><td><a href="#tests-01-hex-fit-loft-L13">13</a> <a href="#tests-01-hex-fit-loft-L14">14</a> <a href="#tests-01-hex-fit-loft-L18">18</a></td></tr>
+<tr><td><code>arc_fit_n</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L129">129</a></td><td>—</td><td><a href="#src-hexfit-loft-L144">144</a> <a href="#tests-01-hex-fit-loft-L26">26</a></td></tr>
+<tr><td><code>arc_fit_residual</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L143">143</a></td><td>—</td><td><a href="#tests-01-hex-fit-loft-L28">28</a></td></tr>
+<tr><td><code>level_fits</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L159">159</a></td><td>—</td><td><a href="#tests-01-hex-fit-loft-L36">36</a> <a href="#tests-01-hex-fit-loft-L37">37</a></td></tr>
+<tr><td><code>MAT_MAX</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L173">173</a></td><td>—</td><td><a href="#src-hexfit-loft-L37">37</a> <a href="#src-hexfit-loft-L182">182</a></td></tr>
+<tr><td><code>mat_fits</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L181">181</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>HEIGHT_SCALE</code> <span class="search-kind">const</span></td><td><a href="#src-hexfit-loft-L202">202</a></td><td>—</td><td><a href="#src-hexfit-loft-L206">206</a> <a href="#src-hexfit-loft-L211">211</a></td></tr>
+<tr><td><code>height_units</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L205">205</a></td><td>—</td><td><a href="#src-hexfit-loft-L217">217</a> <a href="#src-hexfit-loft-L222">222</a> <a href="#tests-01-hex-fit-loft-L43">43</a></td></tr>
+<tr><td><code>height_from_units</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L211">211</a></td><td>—</td><td><a href="#src-hexfit-loft-L217">217</a> <a href="#src-hexfit-loft-L222">222</a> <a href="#tests-01-hex-fit-loft-L43">43</a></td></tr>
+<tr><td><code>seat_fits</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L216">216</a></td><td>—</td><td><a href="#src-hexfit-loft-L227">227</a></td></tr>
+<tr><td><code>seat_fit_z</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L222">222</a></td><td>—</td><td><a href="#src-hexfit-loft-L224">224</a></td></tr>
+<tr><td><code>seat_fit_residual</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L224">224</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>seat_is_integral</code> <span class="search-kind">fn</span></td><td><a href="#src-hexfit-loft-L227">227</a></td><td>—</td><td>none in this package</td></tr>
+</table>
+<h2 id="src-hex-fit-loft">src/hex_fit.loft</h2>
+<pre class="src"><code><span id="src-hex-fit-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-hex-fit-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-hex-fit-loft-L3"><span class="cm">// hex_fit — the doorstep — refuse at authoring time what would not round-trip.</span></span>
+<span id="src-hex-fit-loft-L4"><span class="cm">//</span></span>
+<span id="src-hex-fit-loft-L5"><span class="cm">// `fits?` and `snap`. A continuous model parameter must be quantised to what the field</span></span>
+<span id="src-hex-fit-loft-L6"><span class="cm">// distinguishes; off that grid a value is silently SNAPPED, not rejected, so the doorstep</span></span>
+<span id="src-hex-fit-loft-L7"><span class="cm">// refuses it up front with a named reason, an offer of the nearest fitting alternative, and the</span></span>
+<span id="src-hex-fit-loft-L8"><span class="cm">// residual. Also the `Draft` — a form carrying an embedded wall run.</span></span>
+<span id="src-hex-fit-loft-L9"><span class="cm">//</span></span>
+<span id="src-hex-fit-loft-L10"><span class="cm">// Entry point: re-exports `hexfit`, `hexdraft`.</span></span>
+<span id="src-hex-fit-loft-L11"><span class="kw">use</span> hexfit;</span>
+<span id="src-hex-fit-loft-L12"><span class="kw">use</span> hexdraft;</span>
+</code></pre>
+<h2 id="src-hexdraft-loft">src/hexdraft.loft</h2>
+<pre class="src"><code><span id="src-hexdraft-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-hexdraft-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-hexdraft-loft-L3"><span class="cm">// hexdraft — A STENCIL DESCRIPTION THAT CARRIES LINEWORK, AND A ROUND TRIP THAT NOTICES (`OD-13`).</span></span>
+<span id="src-hexdraft-loft-L4"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L5"><span class="cm">// `OD-13` is a standing requirement: *"a city/castle needs more directions to be believable so the</span></span>
+<span id="src-hexdraft-loft-L6"><span class="cm">// other 12 need to be first class."*  The geometry was gated first (`X56` accuracy and linking,</span></span>
+<span id="src-hexdraft-loft-L7"><span class="cm">// `X57` the orientations), then the carrying and the reader (`X60`).  What was still missing is the</span></span>
+<span id="src-hexdraft-loft-L8"><span class="cm">// half whose omission is **silent**:</span></span>
+<span id="src-hexdraft-loft-L9"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L10"><span class="cm">//   `rebuild` did not READ the embedded run, so it was dropped — and `rt_trip` did not notice.</span></span>
+<span id="src-hexdraft-loft-L11"><span class="cm">//   A round trip that cannot see a missing wall reports success on a model missing its content.</span></span>
+<span id="src-hexdraft-loft-L12"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L13"><span class="cm">// This module closes that.  A `Stencil` is a **form plus an embedded run**, it writes and reads as</span></span>
+<span id="src-hexdraft-loft-L14"><span class="cm">// one text, it draws as one field, and it rebuilds from that field **including the run** — so</span></span>
+<span id="src-hexdraft-loft-L15"><span class="cm">// dropping the run now fails the trip instead of passing it.</span></span>
+<span id="src-hexdraft-loft-L16"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L17"><span class="cm">// THE SLOT DISCIPLINE, unchanged from `X51`/`X58`/`X59`/`X60`: the run is a material on **interior**</span></span>
+<span id="src-hexdraft-loft-L18"><span class="cm">// edges (both cells in the footprint), so the footprint is untouched and the form recovery reads a</span></span>
+<span id="src-hexdraft-loft-L19"><span class="cm">// slot the run never writes.  The two recoveries read disjoint slots and compose without</span></span>
+<span id="src-hexdraft-loft-L20"><span class="cm">// interacting — which is why this is wiring rather than redesign.</span></span>
+<span id="src-hexdraft-loft-L21"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L22"><span class="cm">// ⚠ ONE NEIGHBOUR CONVENTION: `hex_neighbor` with `hex_edge_corners`, never `nb_q`/`nb_r`.  Mixing</span></span>
+<span id="src-hexdraft-loft-L23"><span class="cm">// them cost four separate failures before it was found (`SPEC` **L11**, `X26`'s mode).</span></span>
+<span id="src-hexdraft-loft-L24"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L25"><span class="cm">// ⚠ NAME: this is the **description** side — a `Form` plus linework, the thing a canonical text</span></span>
+<span id="src-hexdraft-loft-L26"><span class="cm">// spells.  `hex_field::Stencil` is the **field** side (cells, heights, edges, layers, with</span></span>
+<span id="src-hexdraft-loft-L27"><span class="cm">// rotate/mirror/stamp).  Both are legitimate and they are exactly `OD-6`'s two halves — *"is a</span></span>
+<span id="src-hexdraft-loft-L28"><span class="cm">// stencil a field or a generative description?"*, answered *"the foxel is the stored truth; a</span></span>
+<span id="src-hexdraft-loft-L29"><span class="cm">// description is admissible only if it draws into the schema exactly"*.  They must not share a</span></span>
+<span id="src-hexdraft-loft-L30"><span class="cm">// name, so this one is `Draft`.</span></span>
+<span id="src-hexdraft-loft-L31"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L32"><span class="cm">// SCOPE: **one** embedded run per stencil.  Several would need the interior edges split into</span></span>
+<span id="src-hexdraft-loft-L33"><span class="cm">// connected components first, which is a separate step and is not pretended here.</span></span>
+<span id="src-hexdraft-loft-L34"><span class="kw">use</span> hex_field;</span>
+<span id="src-hexdraft-loft-L35"><span class="kw">use</span> hex_grid;</span>
+<span id="src-hexdraft-loft-L36"><span class="kw">use</span> hex_form;</span>
+<span id="src-hexdraft-loft-L37"><span class="kw">use</span> hex_recover;</span>
+<span id="src-hexdraft-loft-L38"><span class="kw">use</span> hex_draw;</span>
+<span id="src-hexdraft-loft-L39"><span class="kw">use</span> hex_shape;</span>
+<span id="src-hexdraft-loft-L40"></span>
+<span id="src-hexdraft-loft-L41"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Draft</span> {</span>
+<span id="src-hexdraft-loft-L42">  df_form: <span class="en">Form</span>,</span>
+<span id="src-hexdraft-loft-L43">  df_d:    <span class="ty"><a href="stdlib-types.html">integer</a></span>,     <span class="cm">// embedded run direction, or -1 for none</span></span>
+<span id="src-hexdraft-loft-L44">  df_a:    <span class="ty"><a href="stdlib-types.html">integer</a></span>,     <span class="cm">// anchor, triangle coordinates</span></span>
+<span id="src-hexdraft-loft-L45">  df_b:    <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-hexdraft-loft-L46">  df_p:    <span class="ty"><a href="stdlib-types.html">integer</a></span>,     <span class="cm">// periods</span></span>
+<span id="src-hexdraft-loft-L47">}</span>
+<span id="src-hexdraft-loft-L48"></span>
+<span id="src-hexdraft-loft-L49"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_new</span>(f: <span class="en">Form</span>, d: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Draft</span> {</span>
+<span id="src-hexdraft-loft-L50">  <span class="en">Draft</span> { df_form: f, df_d: d, df_a: a, df_b: b, df_p: p }</span>
+<span id="src-hexdraft-loft-L51">}</span>
+<span id="src-hexdraft-loft-L52"></span>
+<span id="src-hexdraft-loft-L53"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_has_run</span>(s: <span class="en">Draft</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { s.df_d &gt;= <span class="nm">0</span> }</span>
+<span id="src-hexdraft-loft-L54"></span>
+<span id="src-hexdraft-loft-L55"><span class="kw">fn</span> <span class="fn-call">nth_word</span>(line: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-hexdraft-loft-L56">  ws = line.<span class="fn-call"><a href="stdlib-text.html">split</a></span>(<span class="ch">' '</span>);</span>
+<span id="src-hexdraft-loft-L57">  ws[i] ?? <span class="st">""</span></span>
+<span id="src-hexdraft-loft-L58">}</span>
+<span id="src-hexdraft-loft-L59"><span class="kw">fn</span> <span class="fn-call">word_int</span>(line: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">nth_word</span>(line, i) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> ?? <span class="nm">0</span> }</span>
+<span id="src-hexdraft-loft-L60"></span>
+<span id="src-hexdraft-loft-L61"><span class="cm">// The canonical text: the form's spelling, then — if there is one — a single `wall` line.</span></span>
+<span id="src-hexdraft-loft-L62"><span class="cm">// One line, one record, same shape as `side`: the reader refuses anything else rather than</span></span>
+<span id="src-hexdraft-loft-L63"><span class="cm">// repairing it (`X39`).</span></span>
+<span id="src-hexdraft-loft-L64"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_write</span>(s: <span class="en">Draft</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-hexdraft-loft-L65">  base = <span class="fn-call">form_write</span>(s.df_form, name);</span>
+<span id="src-hexdraft-loft-L66">  <span class="kw">if</span> s.df_d &lt; <span class="nm">0</span> { <span class="kw">return</span> base; }</span>
+<span id="src-hexdraft-loft-L67">  base + <span class="st">"\nwall d {s.df_d} a {s.df_a} b {s.df_b} p {s.df_p}"</span></span>
+<span id="src-hexdraft-loft-L68">}</span>
+<span id="src-hexdraft-loft-L69"></span>
+<span id="src-hexdraft-loft-L70"><span class="cm">// Parse.  The `side` lines go to `form_read` unchanged; a trailing `wall` line is this layer's.</span></span>
+<span id="src-hexdraft-loft-L71"><span class="cm">// A malformed record yields a stencil with an empty form — REFUSED, never repaired.</span></span>
+<span id="src-hexdraft-loft-L72"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_read</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Draft</span> {</span>
+<span id="src-hexdraft-loft-L73">  lines = t.<span class="fn-call"><a href="stdlib-text.html">split</a></span>(<span class="ch">'\n'</span>);</span>
+<span id="src-hexdraft-loft-L74">  nl = <span class="bi"><a href="stdlib-text.html">len</a></span>(lines);</span>
+<span id="src-hexdraft-loft-L75">  ftext = <span class="st">""</span>;</span>
+<span id="src-hexdraft-loft-L76">  d = <span class="nm">0</span> - <span class="nm">1</span>;</span>
+<span id="src-hexdraft-loft-L77">  a = <span class="nm">0</span>;</span>
+<span id="src-hexdraft-loft-L78">  b = <span class="nm">0</span>;</span>
+<span id="src-hexdraft-loft-L79">  p = <span class="nm">0</span>;</span>
+<span id="src-hexdraft-loft-L80">  nwall = <span class="nm">0</span>;</span>
+<span id="src-hexdraft-loft-L81">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..</span>nl {</span>
+<span id="src-hexdraft-loft-L82">    ln = lines[i] ?? <span class="st">""</span>;</span>
+<span id="src-hexdraft-loft-L83">    <span class="kw">if</span> <span class="fn-call">nth_word</span>(ln, <span class="nm">0</span>) == <span class="st">"wall"</span> {</span>
+<span id="src-hexdraft-loft-L84">      nwall = nwall + <span class="nm">1</span>;</span>
+<span id="src-hexdraft-loft-L85">      <span class="kw">if</span> <span class="fn-call">nth_word</span>(ln, <span class="nm">1</span>) != <span class="st">"d"</span> || <span class="fn-call">nth_word</span>(ln, <span class="nm">3</span>) != <span class="st">"a"</span> || <span class="fn-call">nth_word</span>(ln, <span class="nm">5</span>) != <span class="st">"b"</span></span>
+<span id="src-hexdraft-loft-L86">         || <span class="fn-call">nth_word</span>(ln, <span class="nm">7</span>) != <span class="st">"p"</span> {</span>
+<span id="src-hexdraft-loft-L87">        <span class="kw">return</span> <span class="fn-call">draft_new</span>(<span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []), <span class="nm">0</span> - <span class="nm">1</span>, <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>);</span>
+<span id="src-hexdraft-loft-L88">      }</span>
+<span id="src-hexdraft-loft-L89">      d = <span class="fn-call">word_int</span>(ln, <span class="nm">2</span>);</span>
+<span id="src-hexdraft-loft-L90">      a = <span class="fn-call">word_int</span>(ln, <span class="nm">4</span>);</span>
+<span id="src-hexdraft-loft-L91">      b = <span class="fn-call">word_int</span>(ln, <span class="nm">6</span>);</span>
+<span id="src-hexdraft-loft-L92">      p = <span class="fn-call">word_int</span>(ln, <span class="nm">8</span>);</span>
+<span id="src-hexdraft-loft-L93">    } <span class="kw">else</span> {</span>
+<span id="src-hexdraft-loft-L94">      <span class="kw">if</span> i == <span class="nm">0</span> { ftext = ln; } <span class="kw">else</span> { ftext = ftext + <span class="st">"\n"</span> + ln; }</span>
+<span id="src-hexdraft-loft-L95">    }</span>
+<span id="src-hexdraft-loft-L96">  }</span>
+<span id="src-hexdraft-loft-L97">  <span class="kw">if</span> nwall &gt; <span class="nm">1</span> { <span class="kw">return</span> <span class="fn-call">draft_new</span>(<span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []), <span class="nm">0</span> - <span class="nm">1</span>, <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>); }</span>
+<span id="src-hexdraft-loft-L98">  <span class="fn-call">draft_new</span>(<span class="fn-call">form_read</span>(ftext), d, a, b, p)</span>
+<span id="src-hexdraft-loft-L99">}</span>
+<span id="src-hexdraft-loft-L100"></span>
+<span id="src-hexdraft-loft-L101"><span class="cm">// Draw the whole stencil into one field: the fill, its own boundary walls, and the embedded run as</span></span>
+<span id="src-hexdraft-loft-L102"><span class="cm">// material on INTERIOR edges only.  Returns the number of interior edges the run marked.</span></span>
+<span id="src-hexdraft-loft-L103"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_draw</span>(s: <span class="en">Draft</span>, cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>,</span>
+<span id="src-hexdraft-loft-L104">                    wallmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>, embedmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexdraft-loft-L105">  <span class="fn-call">form_fill</span>(s.df_form, cq, cr, cells);</span>
+<span id="src-hexdraft-loft-L106">  <span class="fn-call">draw_walls</span>(cells, edges, wallmat);</span>
+<span id="src-hexdraft-loft-L107">  <span class="kw">if</span> s.df_d &lt; <span class="nm">0</span> { <span class="kw">return</span> <span class="nm">0</span>; }</span>
+<span id="src-hexdraft-loft-L108">  q0 = <span class="fn-call">hexset_q0</span>(cells);</span>
+<span id="src-hexdraft-loft-L109">  r0 = <span class="fn-call">hexset_r0</span>(cells);</span>
+<span id="src-hexdraft-loft-L110">  gw = <span class="fn-call">hexset_w</span>(cells);</span>
+<span id="src-hexdraft-loft-L111">  gh = <span class="fn-call">hexset_h</span>(cells);</span>
+<span id="src-hexdraft-loft-L112">  ew = <span class="fn-call">edgeset_new</span>(q0, r0, gw, gh);</span>
+<span id="src-hexdraft-loft-L113">  w = <span class="fn-call">wall_from_run</span>(s.df_d, s.df_a, s.df_b, s.df_p, embedmat);</span>
+<span id="src-hexdraft-loft-L114">  <span class="fn-call">wall_write</span>(w, ew, q0, r0, gw, gh);</span>
+<span id="src-hexdraft-loft-L115">  n = <span class="nm">0</span>;</span>
+<span id="src-hexdraft-loft-L116">  <span class="kw">for</span> r <span class="kw">in</span> r0..r0 + gh {</span>
+<span id="src-hexdraft-loft-L117">    <span class="kw">for</span> q <span class="kw">in</span> q0..q0 + gw {</span>
+<span id="src-hexdraft-loft-L118">      <span class="kw">for</span> dd <span class="kw">in</span> <span class="nm">0..3</span> {</span>
+<span id="src-hexdraft-loft-L119">        (nq, nr) = <span class="fn-call">hex_neighbor</span>(q, r, dd);</span>
+<span id="src-hexdraft-loft-L120">        <span class="kw">if</span> <span class="fn-call">edge_mat</span>(ew, q, r, nq, nr) != <span class="nm">0</span></span>
+<span id="src-hexdraft-loft-L121">           &amp;&amp; <span class="fn-call">hexset_get</span>(cells, q, r) &amp;&amp; <span class="fn-call">hexset_get</span>(cells, nq, nr) {</span>
+<span id="src-hexdraft-loft-L122">          <span class="fn-call">edge_set_mat</span>(edges, q, r, nq, nr, embedmat);</span>
+<span id="src-hexdraft-loft-L123">          n = n + <span class="nm">1</span>;</span>
+<span id="src-hexdraft-loft-L124">        }</span>
+<span id="src-hexdraft-loft-L125">      }</span>
+<span id="src-hexdraft-loft-L126">    }</span>
+<span id="src-hexdraft-loft-L127">  }</span>
+<span id="src-hexdraft-loft-L128">  n</span>
+<span id="src-hexdraft-loft-L129">}</span>
+<span id="src-hexdraft-loft-L130"></span>
+<span id="src-hexdraft-loft-L131"><span class="cm">// The INTERIOR edges carrying `embedmat`, isolated — what the run reader consumes.  Boundary edges</span></span>
+<span id="src-hexdraft-loft-L132"><span class="cm">// (one cell out) are the stencil's own walls and are never part of a run.</span></span>
+<span id="src-hexdraft-loft-L133"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_interior</span>(cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>, embedmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">EdgeSet</span> {</span>
+<span id="src-hexdraft-loft-L134">  q0 = <span class="fn-call">hexset_q0</span>(cells);</span>
+<span id="src-hexdraft-loft-L135">  r0 = <span class="fn-call">hexset_r0</span>(cells);</span>
+<span id="src-hexdraft-loft-L136">  gw = <span class="fn-call">hexset_w</span>(cells);</span>
+<span id="src-hexdraft-loft-L137">  gh = <span class="fn-call">hexset_h</span>(cells);</span>
+<span id="src-hexdraft-loft-L138">  ei = <span class="fn-call">edgeset_new</span>(q0, r0, gw, gh);</span>
+<span id="src-hexdraft-loft-L139">  <span class="kw">for</span> r <span class="kw">in</span> r0..r0 + gh {</span>
+<span id="src-hexdraft-loft-L140">    <span class="kw">for</span> q <span class="kw">in</span> q0..q0 + gw {</span>
+<span id="src-hexdraft-loft-L141">      <span class="kw">for</span> dd <span class="kw">in</span> <span class="nm">0..3</span> {</span>
+<span id="src-hexdraft-loft-L142">        (nq, nr) = <span class="fn-call">hex_neighbor</span>(q, r, dd);</span>
+<span id="src-hexdraft-loft-L143">        <span class="kw">if</span> <span class="fn-call">edge_mat</span>(edges, q, r, nq, nr) == embedmat</span>
+<span id="src-hexdraft-loft-L144">           &amp;&amp; <span class="fn-call">hexset_get</span>(cells, q, r) &amp;&amp; <span class="fn-call">hexset_get</span>(cells, nq, nr) {</span>
+<span id="src-hexdraft-loft-L145">          <span class="fn-call">edge_set_mat</span>(ei, q, r, nq, nr, embedmat);</span>
+<span id="src-hexdraft-loft-L146">        }</span>
+<span id="src-hexdraft-loft-L147">      }</span>
+<span id="src-hexdraft-loft-L148">    }</span>
+<span id="src-hexdraft-loft-L149">  }</span>
+<span id="src-hexdraft-loft-L150">  ei</span>
+<span id="src-hexdraft-loft-L151">}</span>
+<span id="src-hexdraft-loft-L152"></span>
+<span id="src-hexdraft-loft-L153"><span class="cm">// REBUILD, INCLUDING THE RUN.  The form comes from the cells (constructive recovery, `X45`); the</span></span>
+<span id="src-hexdraft-loft-L154"><span class="cm">// run comes from the interior edges (`wall_read_run`, `X60`) — two recoveries reading disjoint</span></span>
+<span id="src-hexdraft-loft-L155"><span class="cm">// slots.  An unreadable run is REFUSED, so it is dropped loudly by a text diff rather than silently.</span></span>
+<span id="src-hexdraft-loft-L156"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_rebuild_text</span>(cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, embedmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-hexdraft-loft-L157">  base = <span class="fn-call">rebuild_construct_text</span>(cells, name);</span>
+<span id="src-hexdraft-loft-L158">  <span class="kw">if</span> base == <span class="st">""</span> { <span class="kw">return</span> <span class="st">""</span>; }</span>
+<span id="src-hexdraft-loft-L159">  ei = <span class="fn-call">draft_interior</span>(cells, edges, embedmat);</span>
+<span id="src-hexdraft-loft-L160">  (d, a, b, p, ok) = <span class="fn-call">wall_read_run</span>(ei, <span class="fn-call">hexset_q0</span>(cells), <span class="fn-call">hexset_r0</span>(cells),</span>
+<span id="src-hexdraft-loft-L161">                                   <span class="fn-call">hexset_w</span>(cells), <span class="fn-call">hexset_h</span>(cells));</span>
+<span id="src-hexdraft-loft-L162">  <span class="kw">if</span> !ok { <span class="kw">return</span> base; }</span>
+<span id="src-hexdraft-loft-L163">  base + <span class="st">"\nwall d {d} a {a} b {b} p {p}"</span></span>
+<span id="src-hexdraft-loft-L164">}</span>
+<span id="src-hexdraft-loft-L165"></span>
+<span id="src-hexdraft-loft-L166"><span class="cm">// ── THE DOORSTEP (`fits?`, law C₁ / `K-FIT`) ───────────────────────────────</span></span>
+<span id="src-hexdraft-loft-L167"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L168"><span class="cm">// `X50`/`I-QUANT`: a value off the grid the field distinguishes is **silently snapped, not</span></span>
+<span id="src-hexdraft-loft-L169"><span class="cm">// rejected** — so the refusal has to happen at authoring time or the round trip reports success on</span></span>
+<span id="src-hexdraft-loft-L170"><span class="cm">// a model nobody wrote.  `K-FIT` also fixes the FORM of a refusal: it **names its restriction** and</span></span>
+<span id="src-hexdraft-loft-L171"><span class="cm">// **offers the nearest fitting alternative**; never a silent snap, never a blank no.</span></span>
+<span id="src-hexdraft-loft-L172"><span class="cm">//</span></span>
+<span id="src-hexdraft-loft-L173"><span class="cm">// An embedded run inherits the line doorstep (§10.10: anchor on a hex VERTEX, a whole number of</span></span>
+<span id="src-hexdraft-loft-L174"><span class="cm">// periods, endpoint also a vertex — `wall_run_ok`) and adds one requirement world linework does not</span></span>
+<span id="src-hexdraft-loft-L175"><span class="cm">// have: **it must lie wholly INSIDE the footprint**.  A run that pokes out is not an embedded wall</span></span>
+<span id="src-hexdraft-loft-L176"><span class="cm">// at all — part of it lands on boundary edges, which belong to the stencil's own outline, and the</span></span>
+<span id="src-hexdraft-loft-L177"><span class="cm">// reader would recover something the author did not write.</span></span>
+<span id="src-hexdraft-loft-L178"><span class="kw">pub</span> const <span class="en">FIT_OK</span>        = <span class="nm">0</span>;</span>
+<span id="src-hexdraft-loft-L179"><span class="kw">pub</span> const <span class="en">FIT_NO_FORM</span>   = <span class="nm">1</span>;   <span class="cm">// the form itself is not admissible (closed ∧ simple ∧ convex)</span></span>
+<span id="src-hexdraft-loft-L180"><span class="kw">pub</span> const <span class="en">FIT_BAD_DIR</span>   = <span class="nm">2</span>;   <span class="cm">// the direction is not one of the 24</span></span>
+<span id="src-hexdraft-loft-L181"><span class="kw">pub</span> const <span class="en">FIT_BAD_P</span>     = <span class="nm">3</span>;   <span class="cm">// a run of zero or negative periods</span></span>
+<span id="src-hexdraft-loft-L182"><span class="kw">pub</span> const <span class="en">FIT_NO_VERTEX</span> = <span class="nm">4</span>;   <span class="cm">// the anchor is a hex CENTRE, not a vertex</span></span>
+<span id="src-hexdraft-loft-L183"><span class="kw">pub</span> const <span class="en">FIT_NOT_LEGAL</span> = <span class="nm">5</span>;   <span class="cm">// whole periods, but the endpoint is not a vertex</span></span>
+<span id="src-hexdraft-loft-L184"><span class="kw">pub</span> const <span class="en">FIT_OUTSIDE</span>   = <span class="nm">6</span>;   <span class="cm">// the run leaves the footprint</span></span>
+<span id="src-hexdraft-loft-L185"></span>
+<span id="src-hexdraft-loft-L186"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_fit_reason</span>(code: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-hexdraft-loft-L187">  <span class="kw">if</span> code == <span class="en">FIT_OK</span> { <span class="kw">return</span> <span class="st">"ok"</span>; }</span>
+<span id="src-hexdraft-loft-L188">  <span class="kw">if</span> code == <span class="en">FIT_NO_FORM</span> { <span class="kw">return</span> <span class="st">"the form is not admissible (closed, simple, convex)"</span>; }</span>
+<span id="src-hexdraft-loft-L189">  <span class="kw">if</span> code == <span class="en">FIT_BAD_DIR</span> { <span class="kw">return</span> <span class="st">"the direction is not one of the 24"</span>; }</span>
+<span id="src-hexdraft-loft-L190">  <span class="kw">if</span> code == <span class="en">FIT_BAD_P</span> { <span class="kw">return</span> <span class="st">"a run needs at least one period"</span>; }</span>
+<span id="src-hexdraft-loft-L191">  <span class="kw">if</span> code == <span class="en">FIT_NO_VERTEX</span> { <span class="kw">return</span> <span class="st">"the anchor is a hex centre; a run must start on a vertex"</span>; }</span>
+<span id="src-hexdraft-loft-L192">  <span class="kw">if</span> code == <span class="en">FIT_NOT_LEGAL</span> { <span class="kw">return</span> <span class="st">"that many periods does not end on a vertex"</span>; }</span>
+<span id="src-hexdraft-loft-L193">  <span class="kw">if</span> code == <span class="en">FIT_OUTSIDE</span> { <span class="kw">return</span> <span class="st">"the run leaves the footprint; an embedded wall must be interior"</span>; }</span>
+<span id="src-hexdraft-loft-L194">  <span class="st">"unknown"</span></span>
+<span id="src-hexdraft-loft-L195">}</span>
+<span id="src-hexdraft-loft-L196"></span>
+<span id="src-hexdraft-loft-L197"><span class="cm">// Every marked edge of the run is interior to `cells` — the containment test, in one place so the</span></span>
+<span id="src-hexdraft-loft-L198"><span class="cm">// doorstep and the reader cannot disagree about what "inside" means.</span></span>
+<span id="src-hexdraft-loft-L199"><span class="kw">fn</span> <span class="fn-call">run_is_inside</span>(cells: <span class="en">HexSet</span>, d: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexdraft-loft-L200">  q0 = <span class="fn-call">hexset_q0</span>(cells);</span>
+<span id="src-hexdraft-loft-L201">  r0 = <span class="fn-call">hexset_r0</span>(cells);</span>
+<span id="src-hexdraft-loft-L202">  gw = <span class="fn-call">hexset_w</span>(cells);</span>
+<span id="src-hexdraft-loft-L203">  gh = <span class="fn-call">hexset_h</span>(cells);</span>
+<span id="src-hexdraft-loft-L204">  ew = <span class="fn-call">edgeset_new</span>(q0, r0, gw, gh);</span>
+<span id="src-hexdraft-loft-L205">  w = <span class="fn-call">wall_from_run</span>(d, a, b, p, <span class="nm">1</span>);</span>
+<span id="src-hexdraft-loft-L206">  n = <span class="fn-call">wall_write</span>(w, ew, q0, r0, gw, gh);</span>
+<span id="src-hexdraft-loft-L207">  <span class="kw">if</span> n &lt;= <span class="nm">0</span> { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-hexdraft-loft-L208">  ins = <span class="nm">0</span>;</span>
+<span id="src-hexdraft-loft-L209">  <span class="kw">for</span> r <span class="kw">in</span> r0..r0 + gh {</span>
+<span id="src-hexdraft-loft-L210">    <span class="kw">for</span> q <span class="kw">in</span> q0..q0 + gw {</span>
+<span id="src-hexdraft-loft-L211">      <span class="kw">for</span> dd <span class="kw">in</span> <span class="nm">0..3</span> {</span>
+<span id="src-hexdraft-loft-L212">        (nq, nr) = <span class="fn-call">hex_neighbor</span>(q, r, dd);</span>
+<span id="src-hexdraft-loft-L213">        <span class="kw">if</span> <span class="fn-call">edge_mat</span>(ew, q, r, nq, nr) != <span class="nm">0</span></span>
+<span id="src-hexdraft-loft-L214">           &amp;&amp; <span class="fn-call">hexset_get</span>(cells, q, r) &amp;&amp; <span class="fn-call">hexset_get</span>(cells, nq, nr) { ins = ins + <span class="nm">1</span>; }</span>
+<span id="src-hexdraft-loft-L215">      }</span>
+<span id="src-hexdraft-loft-L216">    }</span>
+<span id="src-hexdraft-loft-L217">  }</span>
+<span id="src-hexdraft-loft-L218">  ins == n</span>
+<span id="src-hexdraft-loft-L219">}</span>
+<span id="src-hexdraft-loft-L220"></span>
+<span id="src-hexdraft-loft-L221"><span class="cm">// THE DOORSTEP.  `cells` is the form's own footprint.  Returns a reason code — `FIT_OK` or the</span></span>
+<span id="src-hexdraft-loft-L222"><span class="cm">// specific restriction, never a bare false.</span></span>
+<span id="src-hexdraft-loft-L223"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_fits</span>(s: <span class="en">Draft</span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexdraft-loft-L224">  <span class="kw">if</span> !<span class="fn-call">form_admissible</span>(s.df_form) { <span class="kw">return</span> <span class="en">FIT_NO_FORM</span>; }</span>
+<span id="src-hexdraft-loft-L225">  <span class="kw">if</span> s.df_d &lt; <span class="nm">0</span> { <span class="kw">return</span> <span class="en">FIT_OK</span>; }</span>
+<span id="src-hexdraft-loft-L226">  <span class="kw">if</span> s.df_d &gt;= <span class="nm">24</span> { <span class="kw">return</span> <span class="en">FIT_BAD_DIR</span>; }</span>
+<span id="src-hexdraft-loft-L227">  <span class="kw">if</span> s.df_p &lt;= <span class="nm">0</span> { <span class="kw">return</span> <span class="en">FIT_BAD_P</span>; }</span>
+<span id="src-hexdraft-loft-L228">  <span class="kw">if</span> !<span class="fn-call">tri_is_vertex</span>(s.df_a, s.df_b) { <span class="kw">return</span> <span class="en">FIT_NO_VERTEX</span>; }</span>
+<span id="src-hexdraft-loft-L229">  <span class="kw">if</span> !<span class="fn-call">wall_run_ok</span>(s.df_d, s.df_a, s.df_b, s.df_p) { <span class="kw">return</span> <span class="en">FIT_NOT_LEGAL</span>; }</span>
+<span id="src-hexdraft-loft-L230">  <span class="kw">if</span> !<span class="fn-call">run_is_inside</span>(cells, s.df_d, s.df_a, s.df_b, s.df_p) { <span class="kw">return</span> <span class="en">FIT_OUTSIDE</span>; }</span>
+<span id="src-hexdraft-loft-L231">  <span class="en">FIT_OK</span></span>
+<span id="src-hexdraft-loft-L232">}</span>
+<span id="src-hexdraft-loft-L233"></span>
+<span id="src-hexdraft-loft-L234"><span class="cm">// AND THE ALTERNATIVE THE REFUSAL OWES (`K-FIT`): the longest run from this anchor, in this</span></span>
+<span id="src-hexdraft-loft-L235"><span class="cm">// direction, that IS admissible and fits — searching downward so the offer is never longer than</span></span>
+<span id="src-hexdraft-loft-L236"><span class="cm">// what was asked for.  0 when nothing fits, which is itself a usable answer: move the anchor.</span></span>
+<span id="src-hexdraft-loft-L237"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_fit_p</span>(s: <span class="en">Draft</span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexdraft-loft-L238">  <span class="kw">if</span> s.df_d &lt; <span class="nm">0</span> || s.df_d &gt;= <span class="nm">24</span> { <span class="kw">return</span> <span class="nm">0</span>; }</span>
+<span id="src-hexdraft-loft-L239">  <span class="kw">if</span> !<span class="fn-call">tri_is_vertex</span>(s.df_a, s.df_b) { <span class="kw">return</span> <span class="nm">0</span>; }</span>
+<span id="src-hexdraft-loft-L240">  want = s.df_p;</span>
+<span id="src-hexdraft-loft-L241">  <span class="kw">if</span> want &lt; <span class="nm">1</span> { want = <span class="nm">1</span>; }</span>
+<span id="src-hexdraft-loft-L242">  <span class="kw">for</span> k <span class="kw">in</span> <span class="nm">0..</span>want {</span>
+<span id="src-hexdraft-loft-L243">    try = want - k;</span>
+<span id="src-hexdraft-loft-L244">    <span class="kw">if</span> try &gt;= <span class="nm">1</span> &amp;&amp; <span class="fn-call">wall_run_ok</span>(s.df_d, s.df_a, s.df_b, try)</span>
+<span id="src-hexdraft-loft-L245">       &amp;&amp; <span class="fn-call">run_is_inside</span>(cells, s.df_d, s.df_a, s.df_b, try) {</span>
+<span id="src-hexdraft-loft-L246">      <span class="kw">return</span> try;</span>
+<span id="src-hexdraft-loft-L247">    }</span>
+<span id="src-hexdraft-loft-L248">  }</span>
+<span id="src-hexdraft-loft-L249">  <span class="nm">0</span></span>
+<span id="src-hexdraft-loft-L250">}</span>
+</code></pre>
+<h2 id="src-hexfit-loft">src/hexfit.loft</h2>
+<pre class="src"><code><span id="src-hexfit-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-hexfit-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-hexfit-loft-L3"><span class="cm">// hexfit — THE DOORSTEP, for the parameters `draft_fits` does not cover.</span></span>
+<span id="src-hexfit-loft-L4"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L5"><span class="cm">// `SPEC` **K-FIT**: *"`fits?(m)` and `snap(m)` are ONE chokepoint, consulted by the round-trip gate</span></span>
+<span id="src-hexfit-loft-L6"><span class="cm">// AND by the editor. The limit sits at the doorstep: the editor refuses at authoring time — never a</span></span>
+<span id="src-hexfit-loft-L7"><span class="cm">// warning, never a downstream check. A refusal NAMES its restriction and offers the nearest fitting</span></span>
+<span id="src-hexfit-loft-L8"><span class="cm">// alternative with its residual — never a silent snap, never a blank rejection."*</span></span>
+<span id="src-hexfit-loft-L9"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L10"><span class="cm">// `hexdraft::draft_fits` implements that for the turtle form and one embedded run (`X60`).  This</span></span>
+<span id="src-hexfit-loft-L11"><span class="cm">// module completes it for the four that were measured but never refused — features, arcs, levels</span></span>
+<span id="src-hexfit-loft-L12"><span class="cm">// and terrain — so `I-QUANT` (`X50`) has a doorstep everywhere it has a grid.</span></span>
+<span id="src-hexfit-loft-L13"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L14"><span class="cm">// THE RULE THIS MODULE IS BUILT ON, and it is not the obvious one: **the admissible set is READ OFF</span></span>
+<span id="src-hexfit-loft-L15"><span class="cm">// THE FIELD, never computed from a formula.**  `X48` recorded a feature's grid as the edge centres</span></span>
+<span id="src-hexfit-loft-L16"><span class="cm">// `(2i+1)/2n`.  Measured, that is true for only ONE of the two side families: the sides whose edges</span></span>
+<span id="src-hexfit-loft-L17"><span class="cm">// tile the whole side.  On the other family the edges are INSET — they span exactly `√3/2` of the</span></span>
+<span id="src-hexfit-loft-L18"><span class="cm">// side, uniformly spaced by `(√3/2)/(n−1)` — so `(2i+1)/2n` would refuse every legal position and</span></span>
+<span id="src-hexfit-loft-L19"><span class="cm">// offer illegal ones.  Consulting `side_edges` cannot make that mistake, and it is the same lesson</span></span>
+<span id="src-hexfit-loft-L20"><span class="cm">// as `SPEC` **L11**: consult the table that owns the answer, never keep a private copy of it.</span></span>
+<span id="src-hexfit-loft-L21"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L22"><span class="cm">// AND WHERE THERE IS NO GRID, THIS MODULE SAYS SO.  A doorstep that refuses more than the field</span></span>
+<span id="src-hexfit-loft-L23"><span class="cm">// distinguishes is worse than none — it makes legal models unauthorable.  Levels and terrain are</span></span>
+<span id="src-hexfit-loft-L24"><span class="cm">// measured to have nothing to refuse, and `level_fits` / `seat_fits` say that in code rather than</span></span>
+<span id="src-hexfit-loft-L25"><span class="cm">// inventing a restriction to look thorough.</span></span>
+<span id="src-hexfit-loft-L26"><span class="kw">use</span> hex_field;</span>
+<span id="src-hexfit-loft-L27"><span class="kw">use</span> hex_draw;</span>
+<span id="src-hexfit-loft-L28"><span class="kw">use</span> hex_shape;</span>
+<span id="src-hexfit-loft-L29"><span class="kw">use</span> hexdraft;</span>
+<span id="src-hexfit-loft-L30"></span>
+<span id="src-hexfit-loft-L31"><span class="cm">// Continuing `hexdraft`'s codes (0..6), so one `fit_reason` covers the whole doorstep.</span></span>
+<span id="src-hexfit-loft-L32"><span class="kw">pub</span> const <span class="en">FIT_NO_SIDE</span>    = <span class="nm">7</span>;    <span class="cm">// the side index is not a side, or carries no edges</span></span>
+<span id="src-hexfit-loft-L33"><span class="kw">pub</span> const <span class="en">FIT_BAD_T</span>      = <span class="nm">8</span>;    <span class="cm">// a feature `t` that is not one of that side's edge centres</span></span>
+<span id="src-hexfit-loft-L34"><span class="kw">pub</span> const <span class="en">FIT_BAD_SPAN</span>   = <span class="nm">9</span>;    <span class="cm">// a feature covering zero edges, or more than the side has</span></span>
+<span id="src-hexfit-loft-L35"><span class="kw">pub</span> const <span class="en">FIT_BAD_SHELL</span>  = <span class="nm">10</span>;   <span class="cm">// an arc radius that is not a realisable shell (3k^2 + m^2)</span></span>
+<span id="src-hexfit-loft-L36"><span class="kw">pub</span> const <span class="en">FIT_BAD_HEIGHT</span> = <span class="nm">11</span>;   <span class="cm">// a height off the voxel's integer grid — it would truncate</span></span>
+<span id="src-hexfit-loft-L37"><span class="kw">pub</span> const <span class="en">FIT_BAD_MAT</span>    = <span class="nm">12</span>;   <span class="cm">// a material id the slot cannot hold (see MAT_MAX)</span></span>
+<span id="src-hexfit-loft-L38"></span>
+<span id="src-hexfit-loft-L39"><span class="cm">// One reason table for the whole doorstep — `hexdraft`'s codes and these.</span></span>
+<span id="src-hexfit-loft-L40"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fit_reason</span>(code: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-hexfit-loft-L41">  <span class="kw">if</span> code == <span class="en">FIT_NO_SIDE</span> { <span class="kw">return</span> <span class="st">"that side has no edges to carry a feature"</span>; }</span>
+<span id="src-hexfit-loft-L42">  <span class="kw">if</span> code == <span class="en">FIT_BAD_T</span> {</span>
+<span id="src-hexfit-loft-L43">    <span class="kw">return</span> <span class="st">"a feature sits at an edge centre; that t is between two edges and would snap"</span>;</span>
+<span id="src-hexfit-loft-L44">  }</span>
+<span id="src-hexfit-loft-L45">  <span class="kw">if</span> code == <span class="en">FIT_BAD_SPAN</span> { <span class="kw">return</span> <span class="st">"a feature covers at least one edge and at most the side"</span>; }</span>
+<span id="src-hexfit-loft-L46">  <span class="kw">if</span> code == <span class="en">FIT_BAD_SHELL</span> {</span>
+<span id="src-hexfit-loft-L47">    <span class="kw">return</span> <span class="st">"that radius is not a realisable shell; the disk would be the next shell down"</span>;</span>
+<span id="src-hexfit-loft-L48">  }</span>
+<span id="src-hexfit-loft-L49">  <span class="kw">if</span> code == <span class="en">FIT_BAD_HEIGHT</span> {</span>
+<span id="src-hexfit-loft-L50">    <span class="kw">return</span> <span class="st">"the voxel stores height as a whole unit of 0.25 wu; that value would truncate"</span>;</span>
+<span id="src-hexfit-loft-L51">  }</span>
+<span id="src-hexfit-loft-L52">  <span class="kw">if</span> code == <span class="en">FIT_BAD_MAT</span> {</span>
+<span id="src-hexfit-loft-L53">    <span class="kw">return</span> <span class="st">"that material id is outside the wall slot's range and would erase the wall"</span>;</span>
+<span id="src-hexfit-loft-L54">  }</span>
+<span id="src-hexfit-loft-L55">  <span class="fn-call">draft_fit_reason</span>(code)</span>
+<span id="src-hexfit-loft-L56">}</span>
+<span id="src-hexfit-loft-L57"></span>
+<span id="src-hexfit-loft-L58"><span class="cm">// ── FEATURES ────────────────────────────────────────────────────────────────</span></span>
+<span id="src-hexfit-loft-L59"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L60"><span class="cm">// `X48`: the model stores `(side, t)`; the field stores a material on an EDGE.  So `t` is</span></span>
+<span id="src-hexfit-loft-L61"><span class="cm">// recoverable only where an edge centre already is, and every other `t` snaps silently.</span></span>
+<span id="src-hexfit-loft-L62"></span>
+<span id="src-hexfit-loft-L63"><span class="cm">// The admissible positions on a side, in the order the run stores them — which is NOT t order</span></span>
+<span id="src-hexfit-loft-L64"><span class="cm">// (`A5`: index a feature by its exact `t`, never by its position in the `SideRun`).</span></span>
+<span id="src-hexfit-loft-L65"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_grid</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt; {</span>
+<span id="src-hexfit-loft-L66">  out: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt; = [];</span>
+<span id="src-hexfit-loft-L67">  <span class="kw">if</span> side &lt; <span class="nm">0</span> || side &gt;= <span class="nm">4</span> { <span class="kw">return</span> out; }</span>
+<span id="src-hexfit-loft-L68">  sr = <span class="fn-call">side_edges</span>(p, cells, side);</span>
+<span id="src-hexfit-loft-L69">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..</span><span class="fn-call">side_run_len</span>(sr) { out += [sr.sr_t[i] ?? <span class="nm">0.0</span>]; }</span>
+<span id="src-hexfit-loft-L70">  out</span>
+<span id="src-hexfit-loft-L71">}</span>
+<span id="src-hexfit-loft-L72"></span>
+<span id="src-hexfit-loft-L73"><span class="cm">// THE DOORSTEP.  `t` must be exactly an edge centre of this side — no tolerance (`P4`), because in</span></span>
+<span id="src-hexfit-loft-L74"><span class="cm">// regime R1 an epsilon is a defect signal and not a knob.</span></span>
+<span id="src-hexfit-loft-L75"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_fits</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>, nedges: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L76">  g = <span class="fn-call">feature_grid</span>(p, cells, side);</span>
+<span id="src-hexfit-loft-L77">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(g);</span>
+<span id="src-hexfit-loft-L78">  <span class="kw">if</span> n &lt;= <span class="nm">0</span> { <span class="kw">return</span> <span class="en">FIT_NO_SIDE</span>; }</span>
+<span id="src-hexfit-loft-L79">  <span class="kw">if</span> nedges &lt;= <span class="nm">0</span> || nedges &gt; n { <span class="kw">return</span> <span class="en">FIT_BAD_SPAN</span>; }</span>
+<span id="src-hexfit-loft-L80">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..</span>n { <span class="kw">if</span> (g[i] ?? -<span class="nm">1.0</span>) == t { <span class="kw">return</span> <span class="en">FIT_OK</span>; } }</span>
+<span id="src-hexfit-loft-L81">  <span class="en">FIT_BAD_T</span></span>
+<span id="src-hexfit-loft-L82">}</span>
+<span id="src-hexfit-loft-L83"></span>
+<span id="src-hexfit-loft-L84"><span class="cm">// AND THE ALTERNATIVE THE REFUSAL OWES: the nearest admissible `t`.  This is what an editor calls</span></span>
+<span id="src-hexfit-loft-L85"><span class="cm">// with a raw mouse position — the snap is EXPLICIT and returns a value the author can see, rather</span></span>
+<span id="src-hexfit-loft-L86"><span class="cm">// than happening silently inside `place_opening`.</span></span>
+<span id="src-hexfit-loft-L87"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_fit_t</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-hexfit-loft-L88">  g = <span class="fn-call">feature_grid</span>(p, cells, side);</span>
+<span id="src-hexfit-loft-L89">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(g);</span>
+<span id="src-hexfit-loft-L90">  <span class="kw">if</span> n &lt;= <span class="nm">0</span> { <span class="kw">return</span> t; }</span>
+<span id="src-hexfit-loft-L91">  best = g[<span class="nm">0</span>] ?? <span class="nm">0.0</span>;</span>
+<span id="src-hexfit-loft-L92">  bestd = <span class="bi"><a href="stdlib-math.html">abs</a></span>((g[<span class="nm">0</span>] ?? <span class="nm">0.0</span>) - t);</span>
+<span id="src-hexfit-loft-L93">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>n {</span>
+<span id="src-hexfit-loft-L94">    d = <span class="bi"><a href="stdlib-math.html">abs</a></span>((g[i] ?? <span class="nm">0.0</span>) - t);</span>
+<span id="src-hexfit-loft-L95">    <span class="kw">if</span> d &lt; bestd { bestd = d; best = g[i] ?? <span class="nm">0.0</span>; }</span>
+<span id="src-hexfit-loft-L96">  }</span>
+<span id="src-hexfit-loft-L97">  best</span>
+<span id="src-hexfit-loft-L98">}</span>
+<span id="src-hexfit-loft-L99"></span>
+<span id="src-hexfit-loft-L100"><span class="cm">// The residual the editor must SHOW (`K-FIT`): how far the offer is from what was asked.</span></span>
+<span id="src-hexfit-loft-L101"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_fit_residual</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-hexfit-loft-L102">  <span class="bi"><a href="stdlib-math.html">abs</a></span>(<span class="fn-call">feature_fit_t</span>(p, cells, side, t) - t)</span>
+<span id="src-hexfit-loft-L103">}</span>
+<span id="src-hexfit-loft-L104"></span>
+<span id="src-hexfit-loft-L105"><span class="cm">// ── ARCS ────────────────────────────────────────────────────────────────────</span></span>
+<span id="src-hexfit-loft-L106"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L107"><span class="cm">// `X49`: an arc's CENTRE is exact but its RADIUS is not — it quantises to SHELLS, the realisable</span></span>
+<span id="src-hexfit-loft-L108"><span class="cm">// values of `3k^2 + m^2`.  Out to 64 those are 0, 12, 36, 48.  A radius between two shells draws</span></span>
+<span id="src-hexfit-loft-L109"><span class="cm">// the same disk as the shell BELOW it, so it round-trips as a different model with rho = 0 — the</span></span>
+<span id="src-hexfit-loft-L110"><span class="cm">// exact `I-QUANT` failure this doorstep exists to prevent.</span></span>
+<span id="src-hexfit-loft-L111"></span>
+<span id="src-hexfit-loft-L112"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_is_shell</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexfit-loft-L113">  <span class="kw">if</span> n24 &lt; <span class="nm">0</span> { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-hexfit-loft-L114">  sh = <span class="fn-call">arc_shells_upto</span>(n24);</span>
+<span id="src-hexfit-loft-L115">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(sh) { <span class="kw">if</span> (sh[i] ?? -<span class="nm">1</span>) == n24 { <span class="kw">return</span> <span class="kw">true</span>; } }</span>
+<span id="src-hexfit-loft-L116">  <span class="kw">false</span></span>
+<span id="src-hexfit-loft-L117">}</span>
+<span id="src-hexfit-loft-L118"></span>
+<span id="src-hexfit-loft-L119"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_fits</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L120">  <span class="kw">if</span> <span class="fn-call">arc_is_shell</span>(n24) { <span class="kw">return</span> <span class="en">FIT_OK</span>; }</span>
+<span id="src-hexfit-loft-L121">  <span class="en">FIT_BAD_SHELL</span></span>
+<span id="src-hexfit-loft-L122">}</span>
+<span id="src-hexfit-loft-L123"></span>
+<span id="src-hexfit-loft-L124"><span class="cm">// The nearest realisable shell — `K-FIT` says *nearest*, so this can offer a LARGER disk than the</span></span>
+<span id="src-hexfit-loft-L125"><span class="cm">// author asked for (N = 11 is offered 12, not 0).  That is deliberate and differs from what the</span></span>
+<span id="src-hexfit-loft-L126"><span class="cm">// unrefused value would have drawn: an off-grid N silently draws the shell BELOW it, so `arc_fill`</span></span>
+<span id="src-hexfit-loft-L127"><span class="cm">// would have given 0.  Offering the nearest and showing the residual is the point — the author sees</span></span>
+<span id="src-hexfit-loft-L128"><span class="cm">// both candidates' cost instead of being quietly rounded down.  Ties go DOWN, to the smaller shell.</span></span>
+<span id="src-hexfit-loft-L129"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_fit_n</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L130">  <span class="kw">if</span> n24 &lt;= <span class="nm">0</span> { <span class="kw">return</span> <span class="nm">0</span>; }</span>
+<span id="src-hexfit-loft-L131">  sh = <span class="fn-call">arc_shells_upto</span>(n24 * <span class="nm">2</span> + <span class="nm">4</span>);</span>
+<span id="src-hexfit-loft-L132">  best = <span class="nm">0</span>;</span>
+<span id="src-hexfit-loft-L133">  bestd = n24;</span>
+<span id="src-hexfit-loft-L134">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(sh) {</span>
+<span id="src-hexfit-loft-L135">    v = sh[i] ?? <span class="nm">0</span>;</span>
+<span id="src-hexfit-loft-L136">    d = v - n24;</span>
+<span id="src-hexfit-loft-L137">    <span class="kw">if</span> d &lt; <span class="nm">0</span> { d = <span class="nm">0</span> - d; }</span>
+<span id="src-hexfit-loft-L138">    <span class="kw">if</span> d &lt; bestd { bestd = d; best = v; }</span>
+<span id="src-hexfit-loft-L139">  }</span>
+<span id="src-hexfit-loft-L140">  best</span>
+<span id="src-hexfit-loft-L141">}</span>
+<span id="src-hexfit-loft-L142"></span>
+<span id="src-hexfit-loft-L143"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_fit_residual</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L144">  d = <span class="fn-call">arc_fit_n</span>(n24) - n24;</span>
+<span id="src-hexfit-loft-L145">  <span class="kw">if</span> d &lt; <span class="nm">0</span> { <span class="kw">return</span> <span class="nm">0</span> - d; }</span>
+<span id="src-hexfit-loft-L146">  d</span>
+<span id="src-hexfit-loft-L147">}</span>
+<span id="src-hexfit-loft-L148"></span>
+<span id="src-hexfit-loft-L149"><span class="cm">// ── LEVELS — MEASURED TO HAVE NOTHING TO REFUSE ─────────────────────────────</span></span>
+<span id="src-hexfit-loft-L150"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L151"><span class="cm">// A level is the topological SHEET (`X58`), stored as an integer (`ha_cy` / `ck_cy`) and used as a</span></span>
+<span id="src-hexfit-loft-L152"><span class="cm">// FILTER BEFORE THE CUT.  There is no continuous parameter here, so `I-QUANT` has nothing to say:</span></span>
+<span id="src-hexfit-loft-L153"><span class="cm">// nothing exists *between* two levels to be snapped to one of them.  Measured over the full range</span></span>
+<span id="src-hexfit-loft-L154"><span class="cm">// an integer holds — the behaviour at ±10^6 is identical to the behaviour at 0.</span></span>
+<span id="src-hexfit-loft-L155"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L156"><span class="cm">// This returns `FIT_OK` unconditionally, and that is a RESULT, not an omission.  `tests/fit.loft`</span></span>
+<span id="src-hexfit-loft-L157"><span class="cm">// keeps it honest the only way an always-true predicate can be kept honest: by showing that the</span></span>
+<span id="src-hexfit-loft-L158"><span class="cm">// SAME doorstep refuses the other parameters, so "accepts every level" is not "accepts everything".</span></span>
+<span id="src-hexfit-loft-L159"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">level_fits</span>(lv: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L160">  <span class="kw">if</span> lv == lv { <span class="kw">return</span> <span class="en">FIT_OK</span>; }</span>
+<span id="src-hexfit-loft-L161">  <span class="en">FIT_OK</span></span>
+<span id="src-hexfit-loft-L162">}</span>
+<span id="src-hexfit-loft-L163"></span>
+<span id="src-hexfit-loft-L164"><span class="cm">// ── MATERIAL IDS — hexbody's OWN slot is narrower than moros's ──────────────</span></span>
+<span id="src-hexfit-loft-L165"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L166"><span class="cm">// moros's `h_wall_n/ne/se` are full integers.  hexbody's `EdgeSet.eg_mat` is a **`u8`**, and the</span></span>
+<span id="src-hexfit-loft-L167"><span class="cm">// HXF `EDGE` section is one byte per slot — so a wall material of 256 does not merely quantise, it</span></span>
+<span id="src-hexfit-loft-L168"><span class="cm">// becomes **0, which means NO WALL**.  Measured: `edge_set_mat(e, .., 256)` reads back `0` in</span></span>
+<span id="src-hexfit-loft-L169"><span class="cm">// memory, before storage is involved at all.  Silent deletion, not a snap.</span></span>
+<span id="src-hexfit-loft-L170"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L171"><span class="cm">// Being NARROWER than moros is allowed — the rule is never to carry MORE world information than the</span></span>
+<span id="src-hexfit-loft-L172"><span class="cm">// voxel holds — but silently dropping a wall is not, so the doorstep names the bound.</span></span>
+<span id="src-hexfit-loft-L173"><span class="kw">pub</span> const <span class="en">MAT_MAX</span> = <span class="nm">255</span>;</span>
+<span id="src-hexfit-loft-L174"></span>
+<span id="src-hexfit-loft-L175"><span class="cm">// ⚠ NO OFFER, AND THAT IS THE POINT.  `K-FIT` says a refusal offers *the nearest fitting</span></span>
+<span id="src-hexfit-loft-L176"><span class="cm">// alternative* — which presumes an ORDINAL parameter, where "nearest" means "almost what you</span></span>
+<span id="src-hexfit-loft-L177"><span class="cm">// asked for".  A material id is NOMINAL: it is a name, not a magnitude.  The nearest admissible id</span></span>
+<span id="src-hexfit-loft-L178"><span class="cm">// to 256 is 255, and 255 is a *different material* — offering it would be worse than a blank no,</span></span>
+<span id="src-hexfit-loft-L179"><span class="cm">// because it looks like a small correction and is not.  So this refusal names its restriction and</span></span>
+<span id="src-hexfit-loft-L180"><span class="cm">// stops there.  The author must pick a material, not accept a rounding.</span></span>
+<span id="src-hexfit-loft-L181"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat_fits</span>(m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L182">  <span class="kw">if</span> m &lt;= <span class="nm">0</span> || m &gt; <span class="en">MAT_MAX</span> { <span class="kw">return</span> <span class="en">FIT_BAD_MAT</span>; }</span>
+<span id="src-hexfit-loft-L183">  <span class="en">FIT_OK</span></span>
+<span id="src-hexfit-loft-L184">}</span>
+<span id="src-hexfit-loft-L185"></span>
+<span id="src-hexfit-loft-L186"><span class="cm">// ── TERRAIN — THE GRID moros FIXES, and the fork it closes ──────────────────</span></span>
+<span id="src-hexfit-loft-L187"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L188"><span class="cm">// **THE FORK IS CLOSED** (user, 2026-07-24): *"I will never want to add more world information than</span></span>
+<span id="src-hexfit-loft-L189"><span class="cm">// in the limited moros voxels."*  So moros's `Hex` is the storage of record, and there</span></span>
+<span id="src-hexfit-loft-L190"><span class="cm">// `h_height` is an **integer** — hexbody's f64 is the wider slot, and the narrower one binds.</span></span>
+<span id="src-hexfit-loft-L191"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L192"><span class="cm">// moros already fixes the unit, so this is not a choice hexbody gets to make:</span></span>
+<span id="src-hexfit-loft-L193"><span class="cm">// `moros_render::HEIGHT_SCALE = 0.25` world units per height unit, used as</span></span>
+<span id="src-hexfit-loft-L194"><span class="cm">// `h_height as float * HEIGHT_SCALE` in `moros_sim::collide`.  With `SPEC` **L8** (1 wu = 0.866 m)</span></span>
+<span id="src-hexfit-loft-L195"><span class="cm">// that is **0.2165 m** per unit, and moros's own comment puts a storey at 12 units = 3.0 wu.</span></span>
+<span id="src-hexfit-loft-L196"><span class="cm">//</span></span>
+<span id="src-hexfit-loft-L197"><span class="cm">// ⚠ **TIER.** The *mechanism* below is T1 — gated in `tests/fit.loft`, where a height off the grid</span></span>
+<span id="src-hexfit-loft-L198"><span class="cm">// is shown NOT to survive a voxel round trip while an on-grid one does.  The *value* `0.25` is</span></span>
+<span id="src-hexfit-loft-L199"><span class="cm">// **T4**: it is moros's constant, read off untested code.  hexbody cannot verify it is the right</span></span>
+<span id="src-hexfit-loft-L200"><span class="cm">// quantum, only that it is the one moros uses — so it lives here, named once, and a change to it is</span></span>
+<span id="src-hexfit-loft-L201"><span class="cm">// a one-line change with a gate behind it.</span></span>
+<span id="src-hexfit-loft-L202"><span class="kw">pub</span> const <span class="en">HEIGHT_SCALE</span> = <span class="nm">0.25</span>;</span>
+<span id="src-hexfit-loft-L203"></span>
+<span id="src-hexfit-loft-L204"><span class="cm">// The voxel's own value for a height: what `h_height` would hold.</span></span>
+<span id="src-hexfit-loft-L205"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">height_units</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L206">  k = z / <span class="en">HEIGHT_SCALE</span> ?? <span class="nm">0.0</span>;</span>
+<span id="src-hexfit-loft-L207">  <span class="kw">if</span> k &lt; <span class="nm">0.0</span> { <span class="kw">return</span> (k - <span class="nm">0.5</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>; }</span>
+<span id="src-hexfit-loft-L208">  (k + <span class="nm">0.5</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span></span>
+<span id="src-hexfit-loft-L209">}</span>
+<span id="src-hexfit-loft-L210"></span>
+<span id="src-hexfit-loft-L211"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">height_from_units</span>(u: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { (u <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) * <span class="en">HEIGHT_SCALE</span> }</span>
+<span id="src-hexfit-loft-L212"></span>
+<span id="src-hexfit-loft-L213"><span class="cm">// THE DOORSTEP.  A height must land exactly on the voxel's grid; off it, the store truncates and</span></span>
+<span id="src-hexfit-loft-L214"><span class="cm">// `X59`'s returned residual would be wrong by the truncation — which is the one thing `SPEC` **G5**</span></span>
+<span id="src-hexfit-loft-L215"><span class="cm">// says must never happen silently.</span></span>
+<span id="src-hexfit-loft-L216"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fits</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexfit-loft-L217">  <span class="kw">if</span> <span class="fn-call">height_from_units</span>(<span class="fn-call">height_units</span>(z)) == z { <span class="kw">return</span> <span class="en">FIT_OK</span>; }</span>
+<span id="src-hexfit-loft-L218">  <span class="en">FIT_BAD_HEIGHT</span></span>
+<span id="src-hexfit-loft-L219">}</span>
+<span id="src-hexfit-loft-L220"></span>
+<span id="src-hexfit-loft-L221"><span class="cm">// The offer, and the residual the editor must show — in world units.</span></span>
+<span id="src-hexfit-loft-L222"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fit_z</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { <span class="fn-call">height_from_units</span>(<span class="fn-call">height_units</span>(z)) }</span>
+<span id="src-hexfit-loft-L223"></span>
+<span id="src-hexfit-loft-L224"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fit_residual</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { <span class="bi"><a href="stdlib-math.html">abs</a></span>(<span class="fn-call">seat_fit_z</span>(z) - z) }</span>
+<span id="src-hexfit-loft-L225"></span>
+<span id="src-hexfit-loft-L226"><span class="cm">// Kept from before the fork closed, now meaning exactly "on the voxel's grid".</span></span>
+<span id="src-hexfit-loft-L227"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_is_integral</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { <span class="fn-call">seat_fits</span>(z) == <span class="en">FIT_OK</span> }</span>
+</code></pre>
+<h2 id="tests-01-hex-fit-loft">tests/01-hex-fit.loft</h2>
+<pre class="src"><code><span id="tests-01-hex-fit-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-01-hex-fit-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-01-hex-fit-loft-L3"><span class="cm">// hex_fit — the conformance tests: the doorstep refuses at authoring time what would not</span></span>
+<span id="tests-01-hex-fit-loft-L4"><span class="cm">// round-trip, with a named reason, an offer, and a residual.</span></span>
+<span id="tests-01-hex-fit-loft-L5"><span class="cm">//</span></span>
+<span id="tests-01-hex-fit-loft-L6"><span class="cm">// Contract only; the exhaustive measurement is hexbody's `tests/fit.loft`.</span></span>
+<span id="tests-01-hex-fit-loft-L7"><span class="kw">use</span> hex_fit;</span>
+<span id="tests-01-hex-fit-loft-L8"><span class="kw">use</span> hex_field;</span>
+<span id="tests-01-hex-fit-loft-L9"></span>
+<span id="tests-01-hex-fit-loft-L10"></span>
+<span id="tests-01-hex-fit-loft-L11"><span class="kw">fn</span> <span class="fn-call">main</span>() {</span>
+<span id="tests-01-hex-fit-loft-L12">  <span class="cm">// a valid arc shell is admitted, an off-shell radius is refused -- the doorstep DISTINGUISHES.</span></span>
+<span id="tests-01-hex-fit-loft-L13">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">arc_fits</span>(<span class="nm">36</span>) == <span class="en">FIT_OK</span>, <span class="st">"shell 36 is admitted"</span>);</span>
+<span id="tests-01-hex-fit-loft-L14">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">arc_fits</span>(<span class="nm">37</span>) != <span class="en">FIT_OK</span>, <span class="st">"off-shell 37 is refused"</span>);</span>
+<span id="tests-01-hex-fit-loft-L15">}</span>
+<span id="tests-01-hex-fit-loft-L16"></span>
+<span id="tests-01-hex-fit-loft-L17"><span class="kw">fn</span> <span class="fn-call">test_a_refusal_names_its_reason</span>() {</span>
+<span id="tests-01-hex-fit-loft-L18">  code = <span class="fn-call">arc_fits</span>(<span class="nm">37</span>);</span>
+<span id="tests-01-hex-fit-loft-L19">  reason = <span class="fn-call">fit_reason</span>(code);</span>
+<span id="tests-01-hex-fit-loft-L20">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reason.<span class="bi"><a href="stdlib-text.html">len</a></span>() &gt; <span class="nm">0</span>, <span class="st">"a refusal carries a named reason, not a blank no"</span>);</span>
+<span id="tests-01-hex-fit-loft-L21">}</span>
+<span id="tests-01-hex-fit-loft-L22"></span>
+<span id="tests-01-hex-fit-loft-L23"><span class="kw">fn</span> <span class="fn-call">test_an_off_shell_radius_offers_the_nearest_that_fits</span>() {</span>
+<span id="tests-01-hex-fit-loft-L24">  <span class="cm">// K-FIT: a refusal offers the nearest admissible alternative. For an ORDINAL parameter (a</span></span>
+<span id="tests-01-hex-fit-loft-L25">  <span class="cm">// radius) an offer is owed -- unlike a material id, which is nominal (X68).</span></span>
+<span id="tests-01-hex-fit-loft-L26">  n = <span class="fn-call">arc_fit_n</span>(<span class="nm">37</span>);</span>
+<span id="tests-01-hex-fit-loft-L27">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">arc_is_shell</span>(n), <span class="st">"the offered radius is itself a shell, got {n}"</span>);</span>
+<span id="tests-01-hex-fit-loft-L28">  res = <span class="fn-call">arc_fit_residual</span>(<span class="nm">37</span>);</span>
+<span id="tests-01-hex-fit-loft-L29">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(res &gt;= <span class="nm">0</span>, <span class="st">"and the residual is reported, got {res}"</span>);</span>
+<span id="tests-01-hex-fit-loft-L30">}</span>
+<span id="tests-01-hex-fit-loft-L31"></span>
+<span id="tests-01-hex-fit-loft-L32"><span class="kw">fn</span> <span class="fn-call">test_a_level_has_nothing_to_refuse_and_that_is_the_result</span>() {</span>
+<span id="tests-01-hex-fit-loft-L33">  <span class="cm">// A level is an integer index -- nothing exists between two levels to snap to -- so the</span></span>
+<span id="tests-01-hex-fit-loft-L34">  <span class="cm">// doorstep accepts every level. A doorstep that refused more than the field distinguishes</span></span>
+<span id="tests-01-hex-fit-loft-L35">  <span class="cm">// would make legal models unauthorable (X66).</span></span>
+<span id="tests-01-hex-fit-loft-L36">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">level_fits</span>(<span class="nm">0</span>) == <span class="en">FIT_OK</span>, <span class="st">"level 0 fits"</span>);</span>
+<span id="tests-01-hex-fit-loft-L37">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">level_fits</span>(<span class="nm">1000000</span>) == <span class="en">FIT_OK</span>, <span class="st">"and so does level 1e6 -- levels are identical at any n"</span>);</span>
+<span id="tests-01-hex-fit-loft-L38">}</span>
+<span id="tests-01-hex-fit-loft-L39"></span>
+<span id="tests-01-hex-fit-loft-L40"><span class="kw">fn</span> <span class="fn-call">test_the_height_slot_is_an_integer_grid</span>() {</span>
+<span id="tests-01-hex-fit-loft-L41">  <span class="cm">// moros's h_height is an integer at HEIGHT_SCALE wu (X67). A height off that grid truncates</span></span>
+<span id="tests-01-hex-fit-loft-L42">  <span class="cm">// silently, so the doorstep refuses it -- and an on-grid height round-trips.</span></span>
+<span id="tests-01-hex-fit-loft-L43">  u = <span class="fn-call">height_units</span>(<span class="fn-call">height_from_units</span>(<span class="nm">3</span>));</span>
+<span id="tests-01-hex-fit-loft-L44">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u == <span class="nm">3</span>, <span class="st">"an on-grid height round-trips through the voxel, got {u}"</span>);</span>
+<span id="tests-01-hex-fit-loft-L45">}</span>
+</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

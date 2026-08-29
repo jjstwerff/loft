@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hex_form source — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The loft source of the hex_form library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-hex_form-src.html">
+<meta property="og:title" content="hex_form source — Loft, a programming language for small browser games">
+<meta property="og:description" content="The loft source of the hex_form library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-hex_form-src.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="hex_form source — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The loft source of the hex_form library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>hex_form source</h1>
+<article>
+<p><a href="lib-hex_form.html">← hex_form</a> · <a href="lib-hex_form-api.html">API reference</a> · version 0.1.0</p>
+<p class="lib-legend">4 file(s), 978 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
+<h2 id="items">Public items</h2>
+<p class="lib-legend">A <em>worked example</em> is a call site the author chose as the thing to read first. <em>Call sites</em> are every line naming the item, found mechanically over the source with comments excluded — so an item with no worked example is not an item nobody uses.</p>
+<table class="lib-table">
+<tr><th>Item</th><th>Defined</th><th>Worked example</th><th>Call sites</th></tr>
+<tr><td><code>form_write</code> <span class="search-kind">fn</span></td><td><a href="#src-formtext-loft-L35">35</a></td><td>—</td><td><a href="#src-formtext-loft-L107">107</a> <a href="#tests-01-hex-form-loft-L26">26</a> <a href="#tests-01-hex-form-loft-L29">29</a></td></tr>
+<tr><td><code>form_canon</code> <span class="search-kind">fn</span></td><td><a href="#src-formtext-loft-L86">86</a></td><td>—</td><td><a href="#src-formtext-loft-L107">107</a></td></tr>
+<tr><td><code>form_canon_text</code> <span class="search-kind">fn</span></td><td><a href="#src-formtext-loft-L107">107</a></td><td>—</td><td><a href="#tests-01-hex-form-loft-L37">37</a></td></tr>
+<tr><td><code>form_read_name</code> <span class="search-kind">fn</span></td><td><a href="#src-formtext-loft-L123">123</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>form_read</code> <span class="search-kind">fn</span></td><td><a href="#src-formtext-loft-L130">130</a></td><td>—</td><td><a href="#tests-01-hex-form-loft-L27">27</a></td></tr>
+<tr><td><code>form_eq</code> <span class="search-kind">fn</span></td><td><a href="#src-formtext-loft-L152">152</a></td><td>—</td><td><a href="#tests-01-hex-form-loft-L28">28</a></td></tr>
+<tr><td><code>HEAD_N</code> <span class="search-kind">const</span></td><td><a href="#src-hexform-loft-L23">23</a></td><td>—</td><td><a href="#src-hexform-loft-L38">38</a> <a href="#src-hexform-loft-L84">84</a></td></tr>
+<tr><td><code>EDGE_N2_4</code> <span class="search-kind">const</span></td><td><a href="#src-hexform-loft-L27">27</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>VERTEX_N2_4</code> <span class="search-kind">const</span></td><td><a href="#src-hexform-loft-L28">28</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>head_norm</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L38">38</a></td><td>—</td><td><a href="#src-formtext-loft-L67">67</a> <a href="#src-hexform-loft-L45">45</a> <a href="#src-hexform-loft-L67">67</a> <a href="#src-hexform-loft-L118">118</a> <a href="#src-hexform-loft-L128">128</a></td></tr>
+<tr><td><code>head_step</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L44">44</a></td><td>—</td><td><a href="#src-hexform-loft-L62">62</a> <a href="#src-hexform-loft-L85">85</a> <a href="#src-hexform-loft-L146">146</a> <a href="#src-hexform-loft-L248">248</a> <a href="#src-hexform-loft-L263">263</a></td></tr>
+<tr><td><code>head_n2_4</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L61">61</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>head_is_edge</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L67">67</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>rot60_k</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L74">74</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>rot60_m</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L75">75</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>refl_k</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L78">78</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>refl_m</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L79">79</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>head_of_step</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L83">83</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>Form</code> <span class="search-kind">struct</span></td><td><a href="#src-hexform-loft-L108">108</a></td><td>—</td><td><a href="#src-formtext-loft-L35">35</a> <a href="#src-formtext-loft-L63">63</a> <a href="#src-formtext-loft-L86">86</a> <a href="#src-formtext-loft-L107">107</a> <a href="#src-formtext-loft-L130">130</a> <a href="#src-formtext-loft-L152">152</a> … (19 total)</td></tr>
+<tr><td><code>TURN_FULL</code> <span class="search-kind">const</span></td><td><a href="#src-hexform-loft-L115">115</a></td><td>—</td><td><a href="#src-hexform-loft-L159">159</a></td></tr>
+<tr><td><code>form_new</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L117">117</a></td><td>—</td><td><a href="#src-formtext-loft-L103">103</a> <a href="#src-formtext-loft-L133">133</a> <a href="#src-formtext-loft-L135">135</a> <a href="#src-formtext-loft-L136">136</a> <a href="#src-formtext-loft-L142">142</a> <a href="#src-formtext-loft-L143">143</a> … (15 total)</td></tr>
+<tr><td><code>form_sides</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L121">121</a></td><td>—</td><td><a href="#src-hexform-loft-L157">157</a></td></tr>
+<tr><td><code>form_heading</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L124">124</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>form_turn_sum</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L131">131</a></td><td>—</td><td><a href="#src-hexform-loft-L159">159</a></td></tr>
+<tr><td><code>form_close</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L139">139</a></td><td>—</td><td><a href="#src-hexform-loft-L158">158</a></td></tr>
+<tr><td><code>form_closes</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L156">156</a></td><td>—</td><td><a href="#src-hexform-loft-L320">320</a> <a href="#src-hexform-loft-L563">563</a></td></tr>
+<tr><td><code>perp_k</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L179">179</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>perp_m</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L180">180</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>vec_n2_4</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L183">183</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>plan_holds</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L204">204</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>plan_u_can_tie</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L210">210</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>form_poly_k</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L240">240</a></td><td>—</td><td><a href="#src-hexform-loft-L321">321</a> <a href="#src-hexform-loft-L548">548</a></td></tr>
+<tr><td><code>form_poly_m</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L255">255</a></td><td>—</td><td><a href="#src-hexform-loft-L322">322</a> <a href="#src-hexform-loft-L549">549</a></td></tr>
+<tr><td><code>poly_holds</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L279">279</a></td><td>—</td><td><a href="#src-hexform-loft-L328">328</a></td></tr>
+<tr><td><code>form_fill</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L319">319</a></td><td>—</td><td><a href="#tests-01-hex-form-loft-L20">20</a></td></tr>
+<tr><td><code>set_shoelace2</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L344">344</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>tri_cells</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L375">375</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>rhombus_cells</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L376">376</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>hexagon_cells</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L377">377</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>boundary_ends</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L439">439</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>boundary_branches</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L444">444</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>boundary_loops</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L450">450</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>SURFACE_LANDED</code> <span class="search-kind">const</span></td><td><a href="#src-hexform-loft-L511">511</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>REBUILD_LANDED</code> <span class="search-kind">const</span></td><td><a href="#src-hexform-loft-L516">516</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>form_is_convex</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L539">539</a></td><td>—</td><td><a href="#src-hexform-loft-L563">563</a></td></tr>
+<tr><td><code>form_is_simple</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L547">547</a></td><td>—</td><td><a href="#src-hexform-loft-L563">563</a></td></tr>
+<tr><td><code>form_admissible</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L562">562</a></td><td>—</td><td><a href="#tests-01-hex-form-loft-L18">18</a> <a href="#tests-01-hex-form-loft-L43">43</a></td></tr>
+<tr><td><code>cell_x</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L584">584</a></td><td>—</td><td><a href="#src-hexform-loft-L631">631</a> <a href="#src-hexform-loft-L639">639</a> <a href="#src-hexform-loft-L688">688</a> <a href="#src-hexform-loft-L734">734</a></td></tr>
+<tr><td><code>cell_y</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L585">585</a></td><td>—</td><td><a href="#src-hexform-loft-L632">632</a> <a href="#src-hexform-loft-L640">640</a> <a href="#src-hexform-loft-L689">689</a> <a href="#src-hexform-loft-L735">735</a></td></tr>
+<tr><td><code>fabs</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L586">586</a></td><td>—</td><td><a href="#src-hexform-loft-L738">738</a> <a href="#src-hexform-loft-L739">739</a></td></tr>
+<tr><td><code>Plan</code> <span class="search-kind">struct</span></td><td><a href="#src-hexform-loft-L600">600</a></td><td>—</td><td><a href="#src-hexform-loft-L610">610</a> <a href="#src-hexform-loft-L611">611</a> <a href="#src-hexform-loft-L617">617</a> <a href="#src-hexform-loft-L618">618</a> <a href="#src-hexform-loft-L622">622</a> <a href="#src-hexform-loft-L623">623</a> … (14 total)</td></tr>
+<tr><td><code>plan_new</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L609">609</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>plan_flip</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L617">617</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>plan_hw</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L622">622</a></td><td>—</td><td><a href="#src-hexform-loft-L656">656</a> <a href="#src-hexform-loft-L712">712</a></td></tr>
+<tr><td><code>plan_hd</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L623">623</a></td><td>—</td><td><a href="#src-hexform-loft-L666">666</a> <a href="#src-hexform-loft-L713">713</a></td></tr>
+<tr><td><code>plan_to_world</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L627">627</a></td><td>—</td><td><a href="#src-hexform-loft-L680">680</a></td></tr>
+<tr><td><code>plan_to_local</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L635">635</a></td><td>—</td><td><a href="#src-hexform-loft-L736">736</a></td></tr>
+<tr><td><code>plan_side_point</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L675">675</a></td><td>—</td><td><a href="#src-hexform-loft-L687">687</a></td></tr>
+<tr><td><code>plan_side_normal</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L686">686</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>SideRun</code> <span class="search-kind">struct</span></td><td><a href="#src-hexform-loft-L698">698</a></td><td>—</td><td><a href="#src-hexform-loft-L706">706</a> <a href="#src-hexform-loft-L711">711</a> <a href="#src-hexform-loft-L761">761</a></td></tr>
+<tr><td><code>side_run_len</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L706">706</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>side_edges</code> <span class="search-kind">fn</span></td><td><a href="#src-hexform-loft-L711">711</a></td><td>—</td><td>none in this package</td></tr>
+</table>
+<h2 id="src-formtext-loft">src/formtext.loft</h2>
+<pre class="src"><code><span id="src-formtext-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-formtext-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-formtext-loft-L3"><span class="cm">// formtext — THE CANONICAL TEXT `𝕋` FOR A CYCLE FORM, AND ITS PARSER.</span></span>
+<span id="src-formtext-loft-L4"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L5"><span class="cm">// `write` and `read` for the S1 cycle form only: `stencil / h0 / side len turn`. Rules **C1–C5**</span></span>
+<span id="src-formtext-loft-L6"><span class="cm">// (`DESIGN.md` §3) — integers only, fixed order, reduced forms, fixed layout, defaults omitted.</span></span>
+<span id="src-formtext-loft-L7"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L8"><span class="cm">// A MODEL HAS EXACTLY ONE SPELLING. That is the whole point of a canonical text: the round-trip</span></span>
+<span id="src-formtext-loft-L9"><span class="cm">// gate is a byte `diff` (`P3`), which only means anything if the same model cannot be written two</span></span>
+<span id="src-formtext-loft-L10"><span class="cm">// ways. Two things make a cycle ambiguous, and both have to be pinned:</span></span>
+<span id="src-formtext-loft-L11"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L12"><span class="cm">//   the WINDING     a cycle walked the other way round is the same shape with turn total -12.</span></span>
+<span id="src-formtext-loft-L13"><span class="cm">//                   Law J already requires +12, so C3 picks one of the two — SETTLED at S1.</span></span>
+<span id="src-formtext-loft-L14"><span class="cm">//   the START CORNER  a closed cycle has no distinguished first corner: `[2,5,5]`, `[5,5,2]` and</span></span>
+<span id="src-formtext-loft-L15"><span class="cm">//                   `[5,2,5]` are one triangle walked from three places, at three different h0.</span></span>
+<span id="src-formtext-loft-L16"><span class="cm">//                   The S5 census MEASURED this — 183 collisions, every one a re-spelling — and</span></span>
+<span id="src-formtext-loft-L17"><span class="cm">//                   it is what `X38` records. Fixing the winding is necessary and NOT sufficient.</span></span>
+<span id="src-formtext-loft-L18"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L19"><span class="cm">// THE RULE: of the n cyclic spellings, the canonical one is the lexicographically smallest</span></span>
+<span id="src-formtext-loft-L20"><span class="cm">// `(turns, lens, h0)`. Deterministic, total, and it needs no tie-break convention on top —</span></span>
+<span id="src-formtext-loft-L21"><span class="cm">// a fully periodic cycle like `[4,4,4]` has several spellings with identical turns, and the `h0`</span></span>
+<span id="src-formtext-loft-L22"><span class="cm">// component then decides.</span></span>
+<span id="src-formtext-loft-L23"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L24"><span class="cm">// ORIENTATION IS NOT QUOTIENTED HERE, deliberately. `h0` is the stencil's own authored heading,</span></span>
+<span id="src-formtext-loft-L25"><span class="cm">// and placement carries `orient` separately (`DESIGN.md` §3's example). Two stencils differing</span></span>
+<span id="src-formtext-loft-L26"><span class="cm">// only by `h0` are different authorings that law **I** makes interchangeable at USE time — that is</span></span>
+<span id="src-formtext-loft-L27"><span class="cm">// placement's job, not the text's. After corner-canonicalisation the only multiplicity left among</span></span>
+<span id="src-formtext-loft-L28"><span class="cm">// the S5 forms is exactly `h0`, which is the clean decomposition.</span></span>
+<span id="src-formtext-loft-L29"><span class="kw">use</span> hexform;</span>
+<span id="src-formtext-loft-L30"></span>
+<span id="src-formtext-loft-L31"><span class="cm">// ── C2/C4: the layout ──────────────────────────────────────────────────────</span></span>
+<span id="src-formtext-loft-L32"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L33"><span class="cm">// One element per line, single-space separators, no trailing space. Fields in declaration order:</span></span>
+<span id="src-formtext-loft-L34"><span class="cm">// `stencil &lt;name&gt; h0 &lt;n&gt;` then one `side &lt;i&gt; len &lt;l&gt; turn &lt;t&gt;` per side, in index order.</span></span>
+<span id="src-formtext-loft-L35"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_write</span>(f: <span class="en">Form</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-formtext-loft-L36">  lens = f.fm_len;</span>
+<span id="src-formtext-loft-L37">  turns = f.fm_turn;</span>
+<span id="src-formtext-loft-L38">  s = <span class="st">"stencil {name} h0 {f.fm_h0}"</span>;</span>
+<span id="src-formtext-loft-L39">  <span class="kw">for</span> wi <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(lens) {</span>
+<span id="src-formtext-loft-L40">    s = s + <span class="st">"\nside {wi} len {lens[wi] ?? 0} turn {turns[wi] ?? 0}"</span>;</span>
+<span id="src-formtext-loft-L41">  }</span>
+<span id="src-formtext-loft-L42">  s</span>
+<span id="src-formtext-loft-L43">}</span>
+<span id="src-formtext-loft-L44"></span>
+<span id="src-formtext-loft-L45"><span class="cm">// ── the canonical spelling: fix the START CORNER (X38) ─────────────────────</span></span>
+<span id="src-formtext-loft-L46"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L47"><span class="cm">// Spelling `s` starts the walk at corner `s`: the side and turn sequences rotate left by `s`, and</span></span>
+<span id="src-formtext-loft-L48"><span class="cm">// the starting heading advances by the turns that were skipped.</span></span>
+<span id="src-formtext-loft-L49"><span class="kw">fn</span> <span class="fn-call">shift_lens</span>(lens: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, s: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {</span>
+<span id="src-formtext-loft-L50">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(lens);</span>
+<span id="src-formtext-loft-L51">  out: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-formtext-loft-L52">  <span class="kw">for</span> li <span class="kw">in</span> <span class="nm">0..</span>n { out += [lens[(li + s) % n] ?? <span class="nm">0</span>]; }</span>
+<span id="src-formtext-loft-L53">  out</span>
+<span id="src-formtext-loft-L54">}</span>
+<span id="src-formtext-loft-L55"></span>
+<span id="src-formtext-loft-L56"><span class="kw">fn</span> <span class="fn-call">shift_turns</span>(turns: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, s: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {</span>
+<span id="src-formtext-loft-L57">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(turns);</span>
+<span id="src-formtext-loft-L58">  out: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-formtext-loft-L59">  <span class="kw">for</span> ti <span class="kw">in</span> <span class="nm">0..</span>n { out += [turns[(ti + s) % n] ?? <span class="nm">0</span>]; }</span>
+<span id="src-formtext-loft-L60">  out</span>
+<span id="src-formtext-loft-L61">}</span>
+<span id="src-formtext-loft-L62"></span>
+<span id="src-formtext-loft-L63"><span class="kw">fn</span> <span class="fn-call">shift_h0</span>(f: <span class="en">Form</span>, s: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-formtext-loft-L64">  turns = f.fm_turn;</span>
+<span id="src-formtext-loft-L65">  h = f.fm_h0;</span>
+<span id="src-formtext-loft-L66">  <span class="kw">for</span> hi <span class="kw">in</span> <span class="nm">0..</span>s { h = h + (turns[hi] ?? <span class="nm">0</span>); }</span>
+<span id="src-formtext-loft-L67">  <span class="fn-call">head_norm</span>(h)</span>
+<span id="src-formtext-loft-L68">}</span>
+<span id="src-formtext-loft-L69"></span>
+<span id="src-formtext-loft-L70"><span class="cm">// Lexicographic compare on two equal-length integer vectors: -1, 0, +1.</span></span>
+<span id="src-formtext-loft-L71"><span class="kw">fn</span> <span class="fn-call">cmp_vec</span>(a: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, b: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-formtext-loft-L72">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(a);</span>
+<span id="src-formtext-loft-L73">  <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(b) &lt; n { n = <span class="bi"><a href="stdlib-text.html">len</a></span>(b); }</span>
+<span id="src-formtext-loft-L74">  <span class="kw">for</span> ci <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="src-formtext-loft-L75">    av = a[ci] ?? <span class="nm">0</span>;</span>
+<span id="src-formtext-loft-L76">    bv = b[ci] ?? <span class="nm">0</span>;</span>
+<span id="src-formtext-loft-L77">    <span class="kw">if</span> av &lt; bv { <span class="kw">return</span> -<span class="nm">1</span>; }</span>
+<span id="src-formtext-loft-L78">    <span class="kw">if</span> av &gt; bv { <span class="kw">return</span> <span class="nm">1</span>; }</span>
+<span id="src-formtext-loft-L79">  }</span>
+<span id="src-formtext-loft-L80">  <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(a) &lt; <span class="bi"><a href="stdlib-text.html">len</a></span>(b) { <span class="kw">return</span> -<span class="nm">1</span>; }</span>
+<span id="src-formtext-loft-L81">  <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(a) &gt; <span class="bi"><a href="stdlib-text.html">len</a></span>(b) { <span class="kw">return</span> <span class="nm">1</span>; }</span>
+<span id="src-formtext-loft-L82">  <span class="nm">0</span></span>
+<span id="src-formtext-loft-L83">}</span>
+<span id="src-formtext-loft-L84"></span>
+<span id="src-formtext-loft-L85"><span class="cm">// THE CANONICAL SPELLING — smallest `(turns, lens, h0)` over the n cyclic starts.</span></span>
+<span id="src-formtext-loft-L86"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_canon</span>(f: <span class="en">Form</span>) -&gt; <span class="en">Form</span> {</span>
+<span id="src-formtext-loft-L87">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(f.fm_len);</span>
+<span id="src-formtext-loft-L88">  <span class="kw">if</span> n == <span class="nm">0</span> { <span class="kw">return</span> f; }</span>
+<span id="src-formtext-loft-L89">  bt = <span class="fn-call">shift_turns</span>(f.fm_turn, <span class="nm">0</span>);</span>
+<span id="src-formtext-loft-L90">  bl = <span class="fn-call">shift_lens</span>(f.fm_len, <span class="nm">0</span>);</span>
+<span id="src-formtext-loft-L91">  bh = <span class="fn-call">shift_h0</span>(f, <span class="nm">0</span>);</span>
+<span id="src-formtext-loft-L92">  <span class="kw">for</span> si <span class="kw">in</span> <span class="nm">1..</span>n {</span>
+<span id="src-formtext-loft-L93">    ct = <span class="fn-call">shift_turns</span>(f.fm_turn, si);</span>
+<span id="src-formtext-loft-L94">    cl = <span class="fn-call">shift_lens</span>(f.fm_len, si);</span>
+<span id="src-formtext-loft-L95">    ch = <span class="fn-call">shift_h0</span>(f, si);</span>
+<span id="src-formtext-loft-L96">    ord = <span class="fn-call">cmp_vec</span>(ct, bt);</span>
+<span id="src-formtext-loft-L97">    <span class="kw">if</span> ord == <span class="nm">0</span> { ord = <span class="fn-call">cmp_vec</span>(cl, bl); }</span>
+<span id="src-formtext-loft-L98">    <span class="kw">if</span> ord == <span class="nm">0</span> {</span>
+<span id="src-formtext-loft-L99">      <span class="kw">if</span> ch &lt; bh { ord = -<span class="nm">1</span>; } <span class="kw">else</span> { ord = <span class="nm">1</span>; }</span>
+<span id="src-formtext-loft-L100">    }</span>
+<span id="src-formtext-loft-L101">    <span class="kw">if</span> ord &lt; <span class="nm">0</span> { bt = ct; bl = cl; bh = ch; }</span>
+<span id="src-formtext-loft-L102">  }</span>
+<span id="src-formtext-loft-L103">  <span class="fn-call">form_new</span>(bh, bl, bt)</span>
+<span id="src-formtext-loft-L104">}</span>
+<span id="src-formtext-loft-L105"></span>
+<span id="src-formtext-loft-L106"><span class="cm">// The canonical text of a form, whichever corner it happened to be written from.</span></span>
+<span id="src-formtext-loft-L107"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_canon_text</span>(f: <span class="en">Form</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="fn-call">form_write</span>(<span class="fn-call">form_canon</span>(f), name) }</span>
+<span id="src-formtext-loft-L108"></span>
+<span id="src-formtext-loft-L109"><span class="cm">// ── the parser ─────────────────────────────────────────────────────────────</span></span>
+<span id="src-formtext-loft-L110"><span class="cm">//</span></span>
+<span id="src-formtext-loft-L111"><span class="cm">// Strict by design: the reader accepts exactly what `form_write` emits. A lenient reader would</span></span>
+<span id="src-formtext-loft-L112"><span class="cm">// let a non-canonical spelling in and the byte-diff gate would stop meaning anything — the text</span></span>
+<span id="src-formtext-loft-L113"><span class="cm">// IS the contract, so anything it cannot round-trip must be refused rather than repaired.</span></span>
+<span id="src-formtext-loft-L114"><span class="kw">fn</span> <span class="fn-call">nth_word</span>(line: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-formtext-loft-L115">  parts = line.<span class="fn-call"><a href="stdlib-text.html">split</a></span>(<span class="ch">' '</span>);</span>
+<span id="src-formtext-loft-L116">  parts[i] ?? <span class="st">""</span></span>
+<span id="src-formtext-loft-L117">}</span>
+<span id="src-formtext-loft-L118"></span>
+<span id="src-formtext-loft-L119"><span class="cm">// The parens must NOT wrap the cast: loft wants the `??` discharged at the parse site</span></span>
+<span id="src-formtext-loft-L120"><span class="cm">// itself (`s as integer ?? 0`), not applied to an already-parenthesised fallible cast.</span></span>
+<span id="src-formtext-loft-L121"><span class="kw">fn</span> <span class="fn-call">word_int</span>(line: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">nth_word</span>(line, i) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> ?? <span class="nm">0</span> }</span>
+<span id="src-formtext-loft-L122"></span>
+<span id="src-formtext-loft-L123"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_read_name</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-formtext-loft-L124">  lines = t.<span class="fn-call"><a href="stdlib-text.html">split</a></span>(<span class="ch">'\n'</span>);</span>
+<span id="src-formtext-loft-L125">  <span class="fn-call">nth_word</span>(lines[<span class="nm">0</span>] ?? <span class="st">""</span>, <span class="nm">1</span>)</span>
+<span id="src-formtext-loft-L126">}</span>
+<span id="src-formtext-loft-L127"></span>
+<span id="src-formtext-loft-L128"><span class="cm">// Parse a canonical text back into a Form. Returns a 0-sided form if the text does not have the</span></span>
+<span id="src-formtext-loft-L129"><span class="cm">// canonical shape — the caller checks, and the gate treats that as a refusal.</span></span>
+<span id="src-formtext-loft-L130"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_read</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Form</span> {</span>
+<span id="src-formtext-loft-L131">  lines = t.<span class="fn-call"><a href="stdlib-text.html">split</a></span>(<span class="ch">'\n'</span>);</span>
+<span id="src-formtext-loft-L132">  nl = <span class="bi"><a href="stdlib-text.html">len</a></span>(lines);</span>
+<span id="src-formtext-loft-L133">  <span class="kw">if</span> nl &lt; <span class="nm">2</span> { <span class="kw">return</span> <span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []); }</span>
+<span id="src-formtext-loft-L134">  head = lines[<span class="nm">0</span>] ?? <span class="st">""</span>;</span>
+<span id="src-formtext-loft-L135">  <span class="kw">if</span> <span class="fn-call">nth_word</span>(head, <span class="nm">0</span>) != <span class="st">"stencil"</span> { <span class="kw">return</span> <span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []); }</span>
+<span id="src-formtext-loft-L136">  <span class="kw">if</span> <span class="fn-call">nth_word</span>(head, <span class="nm">2</span>) != <span class="st">"h0"</span> { <span class="kw">return</span> <span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []); }</span>
+<span id="src-formtext-loft-L137">  h0 = <span class="fn-call">word_int</span>(head, <span class="nm">3</span>);</span>
+<span id="src-formtext-loft-L138">  lens: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-formtext-loft-L139">  turns: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-formtext-loft-L140">  <span class="kw">for</span> ri <span class="kw">in</span> <span class="nm">1..</span>nl {</span>
+<span id="src-formtext-loft-L141">    ln = lines[ri] ?? <span class="st">""</span>;</span>
+<span id="src-formtext-loft-L142">    <span class="kw">if</span> <span class="fn-call">nth_word</span>(ln, <span class="nm">0</span>) != <span class="st">"side"</span> { <span class="kw">return</span> <span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []); }</span>
+<span id="src-formtext-loft-L143">    <span class="kw">if</span> <span class="fn-call">nth_word</span>(ln, <span class="nm">2</span>) != <span class="st">"len"</span> { <span class="kw">return</span> <span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []); }</span>
+<span id="src-formtext-loft-L144">    <span class="kw">if</span> <span class="fn-call">nth_word</span>(ln, <span class="nm">4</span>) != <span class="st">"turn"</span> { <span class="kw">return</span> <span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []); }</span>
+<span id="src-formtext-loft-L145">    <span class="kw">if</span> <span class="fn-call">word_int</span>(ln, <span class="nm">1</span>) != ri - <span class="nm">1</span> { <span class="kw">return</span> <span class="fn-call">form_new</span>(<span class="nm">0</span>, [], []); }   <span class="cm">// C2: index order</span></span>
+<span id="src-formtext-loft-L146">    lens += [<span class="fn-call">word_int</span>(ln, <span class="nm">3</span>)];</span>
+<span id="src-formtext-loft-L147">    turns += [<span class="fn-call">word_int</span>(ln, <span class="nm">5</span>)];</span>
+<span id="src-formtext-loft-L148">  }</span>
+<span id="src-formtext-loft-L149">  <span class="fn-call">form_new</span>(h0, lens, turns)</span>
+<span id="src-formtext-loft-L150">}</span>
+<span id="src-formtext-loft-L151"></span>
+<span id="src-formtext-loft-L152"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_eq</span>(a: <span class="en">Form</span>, b: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-formtext-loft-L153">  <span class="kw">if</span> a.fm_h0 != b.fm_h0 { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-formtext-loft-L154">  <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(a.fm_len) != <span class="bi"><a href="stdlib-text.html">len</a></span>(b.fm_len) { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-formtext-loft-L155">  <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(a.fm_turn) != <span class="bi"><a href="stdlib-text.html">len</a></span>(b.fm_turn) { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-formtext-loft-L156">  <span class="kw">for</span> ei <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(a.fm_len) {</span>
+<span id="src-formtext-loft-L157">    <span class="kw">if</span> (a.fm_len[ei] ?? <span class="nm">0</span>) != (b.fm_len[ei] ?? <span class="nm">0</span>) { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-formtext-loft-L158">    <span class="kw">if</span> (a.fm_turn[ei] ?? <span class="nm">0</span>) != (b.fm_turn[ei] ?? <span class="nm">0</span>) { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-formtext-loft-L159">  }</span>
+<span id="src-formtext-loft-L160">  <span class="kw">true</span></span>
+<span id="src-formtext-loft-L161">}</span>
+</code></pre>
+<h2 id="src-hex-form-loft">src/hex_form.loft</h2>
+<pre class="src"><code><span id="src-hex-form-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-hex-form-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-hex-form-loft-L3"><span class="cm">// hex_form — the exact turtle form on the hex lattice, and its canonical text.</span></span>
+<span id="src-hex-form-loft-L4"><span class="cm">//</span></span>
+<span id="src-hex-form-loft-L5"><span class="cm">// The MODEL axis of the `hex_*` family: the 12 headings of `H₁₂` as exact lattice steps, the</span></span>
+<span id="src-hex-form-loft-L6"><span class="cm">// closed turtle cycle that is a stencil's outline, the `Plan` rectangle, the lattice→world map,</span></span>
+<span id="src-hex-form-loft-L7"><span class="cm">// and the canonical text a form is written to and read back from — byte-for-byte.</span></span>
+<span id="src-hex-form-loft-L8"><span class="cm">//</span></span>
+<span id="src-hex-form-loft-L9"><span class="cm">// Entry point: re-exports `hexform` (the lattice and the form) and `formtext` (the text).</span></span>
+<span id="src-hex-form-loft-L10"><span class="kw">use</span> hexform;</span>
+<span id="src-hex-form-loft-L11"><span class="kw">use</span> formtext;</span>
+</code></pre>
+<h2 id="src-hexform-loft">src/hexform.loft</h2>
+<pre class="src"><code><span id="src-hexform-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-hexform-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-hexform-loft-L3"><span class="cm">// hexform — THE 12 HEADINGS OF H12, AS EXACT LATTICE STEPS.</span></span>
+<span id="src-hexform-loft-L4"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L5"><span class="cm">// A stencil side runs in one of 12 headings, 30 degrees apart (ROUNDTRIP.md §2.1).  This</span></span>
+<span id="src-hexform-loft-L6"><span class="cm">// file is the table of those steps and nothing else: no geometry, no rasterisation, pure</span></span>
+<span id="src-hexform-loft-L7"><span class="cm">// integer arithmetic.  Everything downstream indexes it, so it is the cheapest possible</span></span>
+<span id="src-hexform-loft-L8"><span class="cm">// thing to be wrong about and the cheapest to check.</span></span>
+<span id="src-hexform-loft-L9"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L10"><span class="cm">// STEPS ARE IN DOUBLED (k, m) COORDINATES, NOT IN (q, r).  hex_field stores pointy-top,</span></span>
+<span id="src-hexform-loft-L11"><span class="cm">// ODD-R OFFSET cells — `lattice_k(q,r) = 2q + (r &amp; 1)`, `lattice_m(q,r) = 3r` — so a step</span></span>
+<span id="src-hexform-loft-L12"><span class="cm">// expressed in (q, r) DEPENDS ON THE PARITY OF r.  In (k, m) the offset is already absorbed</span></span>
+<span id="src-hexform-loft-L13"><span class="cm">// and the same six neighbour deltas hold on every row.  Working here keeps the whole file</span></span>
+<span id="src-hexform-loft-L14"><span class="cm">// parity-free; `formtest` proves that against hex_field's own `nb_q` / `nb_r`.</span></span>
+<span id="src-hexform-loft-L15"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L16"><span class="cm">// THE TWO CLASSES (ROUNDTRIP.md §2.1).  Even headings are the six edge-neighbour directions,</span></span>
+<span id="src-hexform-loft-L17"><span class="cm">// odd headings the six vertex directions.  Their world lengths differ by exactly sqrt(3),</span></span>
+<span id="src-hexform-loft-L18"><span class="cm">// which this file exposes as an INTEGER: 4 * len^2 = 3k^2 + m^2, giving 12 for an edge step</span></span>
+<span id="src-hexform-loft-L19"><span class="cm">// and 36 for a vertex one.  Never compare these as floats — the ratio is exact.</span></span>
+<span id="src-hexform-loft-L20"><span class="kw">use</span> hex_field;</span>
+<span id="src-hexform-loft-L21"><span class="kw">use</span> hex_grid;</span>
+<span id="src-hexform-loft-L22"></span>
+<span id="src-hexform-loft-L23"><span class="kw">pub</span> const <span class="en">HEAD_N</span> = <span class="nm">12</span>;</span>
+<span id="src-hexform-loft-L24"></span>
+<span id="src-hexform-loft-L25"><span class="cm">// 4 * the squared world length of one edge step and one vertex step.  From</span></span>
+<span id="src-hexform-loft-L26"><span class="cm">// x = k*sqrt(3)/2 and y = m/2, len^2 = (3k^2 + m^2)/4, so scaling by 4 keeps it integral.</span></span>
+<span id="src-hexform-loft-L27"><span class="kw">pub</span> const <span class="en">EDGE_N2_4</span>   = <span class="nm">12</span>;</span>
+<span id="src-hexform-loft-L28"><span class="kw">pub</span> const <span class="en">VERTEX_N2_4</span> = <span class="nm">36</span>;</span>
+<span id="src-hexform-loft-L29"></span>
+<span id="src-hexform-loft-L30"><span class="cm">// Normalise a heading to 0..11.</span></span>
+<span id="src-hexform-loft-L31"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L32"><span class="cm">// EVERY index of the table goes through here.  A running heading is `h0 + sum(turn)` and the</span></span>
+<span id="src-hexform-loft-L33"><span class="cm">// turns are -5..6, so it leaves 0..11 constantly — a 4-sided cycle turning 3 each time</span></span>
+<span id="src-hexform-loft-L34"><span class="cm">// reaches h = 12 on its last side.  Two things then go wrong SILENTLY if the raw value is</span></span>
+<span id="src-hexform-loft-L35"><span class="cm">// used: in loft a negative index reads from the END of a vector instead of returning null,</span></span>
+<span id="src-hexform-loft-L36"><span class="cm">// and an index at or past the length returns null rather than wrapping.  Both hand back a</span></span>
+<span id="src-hexform-loft-L37"><span class="cm">// plausible wrong answer, which is why this is the first function in the file.</span></span>
+<span id="src-hexform-loft-L38"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_norm</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { ((h % <span class="en">HEAD_N</span>) + <span class="en">HEAD_N</span>) % <span class="en">HEAD_N</span> }</span>
+<span id="src-hexform-loft-L39"></span>
+<span id="src-hexform-loft-L40"><span class="cm">// The step for heading `h`, as (dk, dm) in doubled coordinates.</span></span>
+<span id="src-hexform-loft-L41"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L42"><span class="cm">// Ordered counter-clockwise from +x: h = 0 is due east, and each step is +30 degrees.  Even</span></span>
+<span id="src-hexform-loft-L43"><span class="cm">// h are the edge neighbours, odd h the vertex directions.</span></span>
+<span id="src-hexform-loft-L44"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_step</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {</span>
+<span id="src-hexform-loft-L45">  n = <span class="fn-call">head_norm</span>(h);</span>
+<span id="src-hexform-loft-L46">  <span class="kw">if</span> n == <span class="nm">0</span>  { <span class="kw">return</span> ( <span class="nm">2</span>,  <span class="nm">0</span>); }</span>
+<span id="src-hexform-loft-L47">  <span class="kw">if</span> n == <span class="nm">1</span>  { <span class="kw">return</span> ( <span class="nm">3</span>,  <span class="nm">3</span>); }</span>
+<span id="src-hexform-loft-L48">  <span class="kw">if</span> n == <span class="nm">2</span>  { <span class="kw">return</span> ( <span class="nm">1</span>,  <span class="nm">3</span>); }</span>
+<span id="src-hexform-loft-L49">  <span class="kw">if</span> n == <span class="nm">3</span>  { <span class="kw">return</span> ( <span class="nm">0</span>,  <span class="nm">6</span>); }</span>
+<span id="src-hexform-loft-L50">  <span class="kw">if</span> n == <span class="nm">4</span>  { <span class="kw">return</span> (-<span class="nm">1</span>,  <span class="nm">3</span>); }</span>
+<span id="src-hexform-loft-L51">  <span class="kw">if</span> n == <span class="nm">5</span>  { <span class="kw">return</span> (-<span class="nm">3</span>,  <span class="nm">3</span>); }</span>
+<span id="src-hexform-loft-L52">  <span class="kw">if</span> n == <span class="nm">6</span>  { <span class="kw">return</span> (-<span class="nm">2</span>,  <span class="nm">0</span>); }</span>
+<span id="src-hexform-loft-L53">  <span class="kw">if</span> n == <span class="nm">7</span>  { <span class="kw">return</span> (-<span class="nm">3</span>, -<span class="nm">3</span>); }</span>
+<span id="src-hexform-loft-L54">  <span class="kw">if</span> n == <span class="nm">8</span>  { <span class="kw">return</span> (-<span class="nm">1</span>, -<span class="nm">3</span>); }</span>
+<span id="src-hexform-loft-L55">  <span class="kw">if</span> n == <span class="nm">9</span>  { <span class="kw">return</span> ( <span class="nm">0</span>, -<span class="nm">6</span>); }</span>
+<span id="src-hexform-loft-L56">  <span class="kw">if</span> n == <span class="nm">10</span> { <span class="kw">return</span> ( <span class="nm">1</span>, -<span class="nm">3</span>); }</span>
+<span id="src-hexform-loft-L57">  ( <span class="nm">3</span>, -<span class="nm">3</span>)</span>
+<span id="src-hexform-loft-L58">}</span>
+<span id="src-hexform-loft-L59"></span>
+<span id="src-hexform-loft-L60"><span class="cm">// 4 * the squared world length of the step — EDGE_N2_4 or VERTEX_N2_4, exactly.</span></span>
+<span id="src-hexform-loft-L61"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_n2_4</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L62">  st = <span class="fn-call">head_step</span>(h);</span>
+<span id="src-hexform-loft-L63">  <span class="nm">3</span> * st.<span class="nm">0</span> * st.<span class="nm">0</span> + st.<span class="nm">1</span> * st.<span class="nm">1</span></span>
+<span id="src-hexform-loft-L64">}</span>
+<span id="src-hexform-loft-L65"></span>
+<span id="src-hexform-loft-L66"><span class="cm">// An even heading is an edge-neighbour direction; an odd one points at a vertex.</span></span>
+<span id="src-hexform-loft-L67"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_is_edge</span>(h: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { <span class="fn-call">head_norm</span>(h) % <span class="nm">2</span> == <span class="nm">0</span> }</span>
+<span id="src-hexform-loft-L68"></span>
+<span id="src-hexform-loft-L69"><span class="cm">// The exact 60-degree rotation on doubled coordinates (ROUNDTRIP.md §1, constraint X1).</span></span>
+<span id="src-hexform-loft-L70"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L71"><span class="cm">// Both halves stay integral because every lattice point satisfies k = m (mod 2): k's parity</span></span>
+<span id="src-hexform-loft-L72"><span class="cm">// is `r &amp; 1` and m = 3r has the same parity.  On the heading table this acts as h -&gt; h + 2,</span></span>
+<span id="src-hexform-loft-L73"><span class="cm">// which is what makes the six rotations of O a subgroup of the twelve headings.</span></span>
+<span id="src-hexform-loft-L74"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rot60_k</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { (k - m) / <span class="nm">2</span> }</span>
+<span id="src-hexform-loft-L75"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rot60_m</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { (<span class="nm">3</span> * k + m) / <span class="nm">2</span> }</span>
+<span id="src-hexform-loft-L76"></span>
+<span id="src-hexform-loft-L77"><span class="cm">// The exact reflection (constraint X2).  On the heading table this acts as h -&gt; 6 - h.</span></span>
+<span id="src-hexform-loft-L78"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">refl_k</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -k }</span>
+<span id="src-hexform-loft-L79"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">refl_m</span>(m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { m }</span>
+<span id="src-hexform-loft-L80"></span>
+<span id="src-hexform-loft-L81"><span class="cm">// The heading whose step is (dk, dm), or -1 if no heading has that step.  Used by the gate</span></span>
+<span id="src-hexform-loft-L82"><span class="cm">// to check the table against hex_field's neighbours, and later by recovery.</span></span>
+<span id="src-hexform-loft-L83"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">head_of_step</span>(dk: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dm: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L84">  <span class="kw">for</span> h <span class="kw">in</span> <span class="nm">0..</span><span class="en">HEAD_N</span> {</span>
+<span id="src-hexform-loft-L85">    st = <span class="fn-call">head_step</span>(h);</span>
+<span id="src-hexform-loft-L86">    <span class="kw">if</span> st.<span class="nm">0</span> == dk &amp;&amp; st.<span class="nm">1</span> == dm { <span class="kw">return</span> h; }</span>
+<span id="src-hexform-loft-L87">  }</span>
+<span id="src-hexform-loft-L88">  -<span class="nm">1</span></span>
+<span id="src-hexform-loft-L89">}</span>
+<span id="src-hexform-loft-L90"></span>
+<span id="src-hexform-loft-L91"><span class="cm">// ── LAW J — A STENCIL BOUNDARY IS A CLOSED TURTLE CYCLE (step S1) ───────────</span></span>
+<span id="src-hexform-loft-L92"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L93"><span class="cm">// A Form is a walk: start facing `fm_h0`, and for each side walk `fm_len[i]` steps in the</span></span>
+<span id="src-hexform-loft-L94"><span class="cm">// current heading, then turn by `fm_turn[i]`.  It is admissible only if it CLOSES, and that</span></span>
+<span id="src-hexform-loft-L95"><span class="cm">// is two independent conditions:</span></span>
+<span id="src-hexform-loft-L96"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L97"><span class="cm">//     sum(len_i * e(h_i)) = (0, 0)     the walk returns to its start</span></span>
+<span id="src-hexform-loft-L98"><span class="cm">//     sum(turn_i)         = 12         it turned through exactly one revolution</span></span>
+<span id="src-hexform-loft-L99"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L100"><span class="cm">// NEITHER IMPLIES THE OTHER, and the gate proves it both ways.  The last turn happens AFTER</span></span>
+<span id="src-hexform-loft-L101"><span class="cm">// the last side, so it cannot move the endpoint — a wrong final turn leaves the vector sum</span></span>
+<span id="src-hexform-loft-L102"><span class="cm">// at (0,0) and is caught only by the turn total.  Conversely a wrong LENGTH leaves the turn</span></span>
+<span id="src-hexform-loft-L103"><span class="cm">// total at 12 and is caught only by the vector sum.</span></span>
+<span id="src-hexform-loft-L104"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L105"><span class="cm">// THE TURN TOTAL IS +12, NOT -12.  A cycle walked the other way round is the same shape with</span></span>
+<span id="src-hexform-loft-L106"><span class="cm">// turn total -12, so requiring +12 picks one spelling of the two — the canonical-form rule</span></span>
+<span id="src-hexform-loft-L107"><span class="cm">// C3 (`DESIGN.md` §3) applied at its cheapest point, before anything is written down.</span></span>
+<span id="src-hexform-loft-L108"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Form</span> {</span>
+<span id="src-hexform-loft-L109">  fm_h0:   <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-hexform-loft-L110">  fm_len:  <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</span>
+<span id="src-hexform-loft-L111">  fm_turn: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</span>
+<span id="src-hexform-loft-L112">}</span>
+<span id="src-hexform-loft-L113"></span>
+<span id="src-hexform-loft-L114"><span class="cm">// One full revolution, in twelfths.</span></span>
+<span id="src-hexform-loft-L115"><span class="kw">pub</span> const <span class="en">TURN_FULL</span> = <span class="nm">12</span>;</span>
+<span id="src-hexform-loft-L116"></span>
+<span id="src-hexform-loft-L117"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_new</span>(h0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, lens: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, turns: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="en">Form</span> {</span>
+<span id="src-hexform-loft-L118">  <span class="en">Form</span> { fm_h0: <span class="fn-call">head_norm</span>(h0), fm_len: lens, fm_turn: turns }</span>
+<span id="src-hexform-loft-L119">}</span>
+<span id="src-hexform-loft-L120"></span>
+<span id="src-hexform-loft-L121"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_sides</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="bi"><a href="stdlib-text.html">len</a></span>(f.fm_len) }</span>
+<span id="src-hexform-loft-L122"></span>
+<span id="src-hexform-loft-L123"><span class="cm">// The heading side `i` runs in: the start heading plus every turn taken before it.</span></span>
+<span id="src-hexform-loft-L124"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_heading</span>(f: <span class="en">Form</span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L125">  turns = f.fm_turn;</span>
+<span id="src-hexform-loft-L126">  h = f.fm_h0;</span>
+<span id="src-hexform-loft-L127">  <span class="kw">for</span> hj <span class="kw">in</span> <span class="nm">0..</span>i { h = h + (turns[hj] ?? <span class="nm">0</span>); }</span>
+<span id="src-hexform-loft-L128">  <span class="fn-call">head_norm</span>(h)</span>
+<span id="src-hexform-loft-L129">}</span>
+<span id="src-hexform-loft-L130"></span>
+<span id="src-hexform-loft-L131"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_turn_sum</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L132">  turns = f.fm_turn;</span>
+<span id="src-hexform-loft-L133">  total = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L134">  <span class="kw">for</span> ti <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(turns) { total = total + (turns[ti] ?? <span class="nm">0</span>); }</span>
+<span id="src-hexform-loft-L135">  total</span>
+<span id="src-hexform-loft-L136">}</span>
+<span id="src-hexform-loft-L137"></span>
+<span id="src-hexform-loft-L138"><span class="cm">// Where the walk ends up, relative to where it started, in doubled coordinates.</span></span>
+<span id="src-hexform-loft-L139"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_close</span>(f: <span class="en">Form</span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {</span>
+<span id="src-hexform-loft-L140">  lens = f.fm_len;</span>
+<span id="src-hexform-loft-L141">  turns = f.fm_turn;</span>
+<span id="src-hexform-loft-L142">  ck = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L143">  cm = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L144">  h = f.fm_h0;</span>
+<span id="src-hexform-loft-L145">  <span class="kw">for</span> si <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(lens) {</span>
+<span id="src-hexform-loft-L146">    st = <span class="fn-call">head_step</span>(h);</span>
+<span id="src-hexform-loft-L147">    sl = lens[si] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L148">    ck = ck + sl * st.<span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L149">    cm = cm + sl * st.<span class="nm">1</span>;</span>
+<span id="src-hexform-loft-L150">    h = h + (turns[si] ?? <span class="nm">0</span>);</span>
+<span id="src-hexform-loft-L151">  }</span>
+<span id="src-hexform-loft-L152">  (ck, cm)</span>
+<span id="src-hexform-loft-L153">}</span>
+<span id="src-hexform-loft-L154"></span>
+<span id="src-hexform-loft-L155"><span class="cm">// Law J.  Both conditions, and a side count that can bound a region at all.</span></span>
+<span id="src-hexform-loft-L156"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_closes</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexform-loft-L157">  <span class="kw">if</span> <span class="fn-call">form_sides</span>(f) &lt; <span class="nm">3</span> { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-hexform-loft-L158">  res = <span class="fn-call">form_close</span>(f);</span>
+<span id="src-hexform-loft-L159">  res.<span class="nm">0</span> == <span class="nm">0</span> &amp;&amp; res.<span class="nm">1</span> == <span class="nm">0</span> &amp;&amp; <span class="fn-call">form_turn_sum</span>(f) == <span class="en">TURN_FULL</span></span>
+<span id="src-hexform-loft-L160">}</span>
+<span id="src-hexform-loft-L161"></span>
+<span id="src-hexform-loft-L162"><span class="cm">// ── WHY A LATTICE POLYGON CANNOT BE A RECTANGLE (step S1, OD-11) ────────────</span></span>
+<span id="src-hexform-loft-L163"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L164"><span class="cm">// Two headings 90 degrees apart exist (0 and 3), so a turtle cycle CAN turn a right angle.</span></span>
+<span id="src-hexform-loft-L165"><span class="cm">// What it cannot do is make both sides quantise the same way, and that is a property of the</span></span>
+<span id="src-hexform-loft-L166"><span class="cm">// hex lattice rather than of this table:</span></span>
+<span id="src-hexform-loft-L167"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L168"><span class="cm">//     the perpendicular of (k, m) is (-m, 3k)          3*k*(-m) + m*(3k) = 0</span></span>
+<span id="src-hexform-loft-L169"><span class="cm">//     its 4*len^2 is  3m^2 + 9k^2 = 3 * (3k^2 + m^2)   EXACTLY 3x the original</span></span>
+<span id="src-hexform-loft-L170"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L171"><span class="cm">// Any lattice vector along that perpendicular is an integer multiple of the primitive one,</span></span>
+<span id="src-hexform-loft-L172"><span class="cm">// so its length is sqrt(3) * (a rational) times the original — never equal, because sqrt(3)</span></span>
+<span id="src-hexform-loft-L173"><span class="cm">// is irrational.  THERE IS NO SQUARE SUBLATTICE OF A HEXAGONAL LATTICE (a lattice cannot</span></span>
+<span id="src-hexform-loft-L174"><span class="cm">// carry both 4-fold and 6-fold symmetry), so no choice of headings gives a rectangle whose</span></span>
+<span id="src-hexform-loft-L175"><span class="cm">// two sides are counted in the same unit.</span></span>
+<span id="src-hexform-loft-L176"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L177"><span class="cm">// That is why `housedraw`'s Plan is a CONTINUOUS rectangle rasterised centre-in-region, and</span></span>
+<span id="src-hexform-loft-L178"><span class="cm">// why it — not a turtle cycle — is domain A's shape primitive.  See DESIGN.md §10.4.</span></span>
+<span id="src-hexform-loft-L179"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">perp_k</span>(_k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -m }</span>
+<span id="src-hexform-loft-L180"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">perp_m</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, _m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="nm">3</span> * k }</span>
+<span id="src-hexform-loft-L181"></span>
+<span id="src-hexform-loft-L182"><span class="cm">// 4 * the squared world length of an arbitrary doubled-coordinate vector.</span></span>
+<span id="src-hexform-loft-L183"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vec_n2_4</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="nm">3</span> * k * k + m * m }</span>
+<span id="src-hexform-loft-L184"></span>
+<span id="src-hexform-loft-L185"><span class="cm">// ── THE INSIDE TEST, EXACT — NO HEX EVER LIES ON THE BOUNDARY (S3) ──────────</span></span>
+<span id="src-hexform-loft-L186"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L187"><span class="cm">// A hex must be unambiguously INSIDE or OUTSIDE; a wall never runs through a hex, only along</span></span>
+<span id="src-hexform-loft-L188"><span class="cm">// its edges.  That is only true by construction if no cell centre can sit ON the boundary</span></span>
+<span id="src-hexform-loft-L189"><span class="cm">// line — and with the boundary placed AT |k| = wid it can, systematically: `housedraw`'s own</span></span>
+<span id="src-hexform-loft-L190"><span class="cm">// note records that "a strict comparison sits on the last bit of a float for a whole column",</span></span>
+<span id="src-hexform-loft-L191"><span class="cm">// which is why `draw_floor` carries an EPS.</span></span>
+<span id="src-hexform-loft-L192"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L193"><span class="cm">// Placing the boundary BETWEEN cell centres removes the tie rather than tolerating it, and</span></span>
+<span id="src-hexform-loft-L194"><span class="cm">// both axes then become exact integer tests that CANNOT tie, for two different reasons:</span></span>
+<span id="src-hexform-loft-L195"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L196"><span class="cm">//     u:  2|k| &lt;= 2*wid + 1        EVEN vs ODD — equality is impossible by parity</span></span>
+<span id="src-hexform-loft-L197"><span class="cm">//     v:  m^2  &lt;= 3 * dep^2        m^2 = 3*dep^2 would make sqrt(3) rational</span></span>
+<span id="src-hexform-loft-L198"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L199"><span class="cm">// No epsilon, no tolerance, no tie-break rule to remember.  Verified to reproduce the gated</span></span>
+<span id="src-hexform-loft-L200"><span class="cm">// cell counts exactly (5x4 -&gt; 27, 4x4 -&gt; 23, 6x4 -&gt; 33).</span></span>
+<span id="src-hexform-loft-L201"><span class="kw">fn</span> <span class="fn-call">iabs</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="kw">if</span> v &lt; <span class="nm">0</span> { -v } <span class="kw">else</span> { v } }</span>
+<span id="src-hexform-loft-L202"></span>
+<span id="src-hexform-loft-L203"><span class="cm">// Is the cell at doubled offset (k, m) from the plan's centre inside a wid x dep plan?</span></span>
+<span id="src-hexform-loft-L204"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_holds</span>(wid: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dep: <span class="ty"><a href="stdlib-types.html">integer</a></span>, k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexform-loft-L205">  <span class="nm">2</span> * <span class="fn-call">iabs</span>(k) &lt;= <span class="nm">2</span> * wid + <span class="nm">1</span> &amp;&amp; m * m &lt;= <span class="nm">3</span> * dep * dep</span>
+<span id="src-hexform-loft-L206">}</span>
+<span id="src-hexform-loft-L207"></span>
+<span id="src-hexform-loft-L208"><span class="cm">// Can a cell centre ever lie exactly ON the boundary?  No — and this returns the reason as a</span></span>
+<span id="src-hexform-loft-L209"><span class="cm">// checkable fact rather than a comment: the u test compares an even to an odd number.</span></span>
+<span id="src-hexform-loft-L210"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_u_can_tie</span>(wid: <span class="ty"><a href="stdlib-types.html">integer</a></span>, k: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { <span class="nm">2</span> * <span class="fn-call">iabs</span>(k) == <span class="nm">2</span> * wid + <span class="nm">1</span> }</span>
+<span id="src-hexform-loft-L211"></span>
+<span id="src-hexform-loft-L212"><span class="cm">// ── S3 — FILL A CLOSED TURTLE CYCLE, AND PROVE THE FILL BY ITS OWN AREA ─────</span></span>
+<span id="src-hexform-loft-L213"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L214"><span class="cm">// `Form` closes (law J, S1); this turns it into a region.  The turtle walks CENTRE to CENTRE,</span></span>
+<span id="src-hexform-loft-L215"><span class="cm">// so every polygon vertex is a hex centre and the path traces the centre-line of the boundary</span></span>
+<span id="src-hexform-loft-L216"><span class="cm">// ring.  The region is therefore every hex whose centre lies inside OR ON that polygon.</span></span>
+<span id="src-hexform-loft-L217"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L218"><span class="cm">// WHY THE TURTLE AT ALL, when OD-11 gave domain A's rectangle to `Plan`?  Because a lattice</span></span>
+<span id="src-hexform-loft-L219"><span class="cm">// polygon provably cannot be a rectangle (`X24`) — but it CAN be a triangle, a rhombus and a</span></span>
+<span id="src-hexform-loft-L220"><span class="cm">// hexagon, exactly.  The turtle is the **hexagonal-tower** family: the shapes the lattice does</span></span>
+<span id="src-hexform-loft-L221"><span class="cm">// hold exactly, which is precisely the set `Plan` cannot express.  Two primitives, two families,</span></span>
+<span id="src-hexform-loft-L222"><span class="cm">// neither a special case of the other.</span></span>
+<span id="src-hexform-loft-L223"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L224"><span class="cm">// THE CROSS-CHECK IS THE SHAPE'S OWN AREA, NOT A SECOND IMPLEMENTATION.  crawler's `hexforms.py`</span></span>
+<span id="src-hexform-loft-L225"><span class="cm">// pins the invariant (T2, re-measured here):</span></span>
+<span id="src-hexform-loft-L226"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L227"><span class="cm">//     sum of the integer shoelace over the boundary  ==  12 * (number of cells)</span></span>
+<span id="src-hexform-loft-L228"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L229"><span class="cm">// A single hex shoelaces to exactly 12 in doubled (k,m) units, and holes come out negative, so</span></span>
+<span id="src-hexform-loft-L230"><span class="cm">// the traced outline and the cell count CANNOT disagree.  It is exact integer arithmetic — no</span></span>
+<span id="src-hexform-loft-L231"><span class="cm">// epsilon, no tolerance — and it needs no second fill routine to compare against, which is what</span></span>
+<span id="src-hexform-loft-L232"><span class="cm">// `STEPS.md` asks for as option (b).</span></span>
+<span id="src-hexform-loft-L233"></span>
+<span id="src-hexform-loft-L234"><span class="cm">// The corner offsets in doubled (k,m) are `hex_field`'s `corner_k` / `corner_m` — already the</span></span>
+<span id="src-hexform-loft-L235"><span class="cm">// canonical table, indexed the same way `hex_edge_corners` indexes it. NOT restated here: L11,</span></span>
+<span id="src-hexform-loft-L236"><span class="cm">// and a private copy is exactly what caused X26.</span></span>
+<span id="src-hexform-loft-L237"></span>
+<span id="src-hexform-loft-L238"><span class="cm">// The turtle polygon's vertices, in doubled (k,m) RELATIVE to the start.  One vertex per side:</span></span>
+<span id="src-hexform-loft-L239"><span class="cm">// the point the walk is standing on before it walks that side.</span></span>
+<span id="src-hexform-loft-L240"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_poly_k</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {</span>
+<span id="src-hexform-loft-L241">  lens = f.fm_len;</span>
+<span id="src-hexform-loft-L242">  turns = f.fm_turn;</span>
+<span id="src-hexform-loft-L243">  outk: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L244">  pk = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L245">  hk = f.fm_h0;</span>
+<span id="src-hexform-loft-L246">  <span class="kw">for</span> pi <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(lens) {</span>
+<span id="src-hexform-loft-L247">    outk += [pk];</span>
+<span id="src-hexform-loft-L248">    stk = <span class="fn-call">head_step</span>(hk);</span>
+<span id="src-hexform-loft-L249">    pk = pk + (lens[pi] ?? <span class="nm">0</span>) * stk.<span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L250">    hk = hk + (turns[pi] ?? <span class="nm">0</span>);</span>
+<span id="src-hexform-loft-L251">  }</span>
+<span id="src-hexform-loft-L252">  outk</span>
+<span id="src-hexform-loft-L253">}</span>
+<span id="src-hexform-loft-L254"></span>
+<span id="src-hexform-loft-L255"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_poly_m</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {</span>
+<span id="src-hexform-loft-L256">  lens = f.fm_len;</span>
+<span id="src-hexform-loft-L257">  turns = f.fm_turn;</span>
+<span id="src-hexform-loft-L258">  outm: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L259">  pm = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L260">  hm = f.fm_h0;</span>
+<span id="src-hexform-loft-L261">  <span class="kw">for</span> pj <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(lens) {</span>
+<span id="src-hexform-loft-L262">    outm += [pm];</span>
+<span id="src-hexform-loft-L263">    stm = <span class="fn-call">head_step</span>(hm);</span>
+<span id="src-hexform-loft-L264">    pm = pm + (lens[pj] ?? <span class="nm">0</span>) * stm.<span class="nm">1</span>;</span>
+<span id="src-hexform-loft-L265">    hm = hm + (turns[pj] ?? <span class="nm">0</span>);</span>
+<span id="src-hexform-loft-L266">  }</span>
+<span id="src-hexform-loft-L267">  outm</span>
+<span id="src-hexform-loft-L268">}</span>
+<span id="src-hexform-loft-L269"></span>
+<span id="src-hexform-loft-L270"><span class="kw">fn</span> <span class="fn-call">imin</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="kw">if</span> a &lt; b { a } <span class="kw">else</span> { b } }</span>
+<span id="src-hexform-loft-L271"><span class="kw">fn</span> <span class="fn-call">imax</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="kw">if</span> a &gt; b { a } <span class="kw">else</span> { b } }</span>
+<span id="src-hexform-loft-L272"></span>
+<span id="src-hexform-loft-L273"><span class="cm">// Is (pk, pm) inside or ON the closed polygon?  Exact integer arithmetic throughout: the</span></span>
+<span id="src-hexform-loft-L274"><span class="cm">// on-edge test is a zero cross product, and the crossing test compares a cross product's SIGN</span></span>
+<span id="src-hexform-loft-L275"><span class="cm">// rather than computing an intersection, so there is no division and no epsilon anywhere.</span></span>
+<span id="src-hexform-loft-L276"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L277"><span class="cm">// ON THE BOUNDARY COUNTS AS INSIDE, and that is the whole reason the closed forms come out</span></span>
+<span id="src-hexform-loft-L278"><span class="cm">// integral: the turtle traces the centres of the boundary ring, so those cells ARE the shape.</span></span>
+<span id="src-hexform-loft-L279"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">poly_holds</span>(vk: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, vm: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</span>
+<span id="src-hexform-loft-L280">                  pk: <span class="ty"><a href="stdlib-types.html">integer</a></span>, pm: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexform-loft-L281">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(vk);</span>
+<span id="src-hexform-loft-L282">  <span class="kw">if</span> n &lt; <span class="nm">3</span> { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-hexform-loft-L283">  <span class="kw">for</span> ei <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="src-hexform-loft-L284">    ak = vk[ei] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L285">    am = vm[ei] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L286">    ej = (ei + <span class="nm">1</span>) % n;</span>
+<span id="src-hexform-loft-L287">    bk = vk[ej] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L288">    bm = vm[ej] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L289">    crs = (bk - ak) * (pm - am) - (bm - am) * (pk - ak);</span>
+<span id="src-hexform-loft-L290">    <span class="kw">if</span> crs == <span class="nm">0</span> {</span>
+<span id="src-hexform-loft-L291">      <span class="kw">if</span> pk &gt;= <span class="fn-call">imin</span>(ak, bk) &amp;&amp; pk &lt;= <span class="fn-call">imax</span>(ak, bk)</span>
+<span id="src-hexform-loft-L292">         &amp;&amp; pm &gt;= <span class="fn-call">imin</span>(am, bm) &amp;&amp; pm &lt;= <span class="fn-call">imax</span>(am, bm) { <span class="kw">return</span> <span class="kw">true</span>; }</span>
+<span id="src-hexform-loft-L293">    }</span>
+<span id="src-hexform-loft-L294">  }</span>
+<span id="src-hexform-loft-L295">  inside = <span class="kw">false</span>;</span>
+<span id="src-hexform-loft-L296">  <span class="kw">for</span> ci <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="src-hexform-loft-L297">    ck = vk[ci] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L298">    cm = vm[ci] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L299">    cj = (ci + <span class="nm">1</span>) % n;</span>
+<span id="src-hexform-loft-L300">    dk = vk[cj] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L301">    dm = vm[cj] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L302">    <span class="kw">if</span> (cm &gt; pm) != (dm &gt; pm) {</span>
+<span id="src-hexform-loft-L303">      cr2 = (dk - ck) * (pm - cm) - (dm - cm) * (pk - ck);</span>
+<span id="src-hexform-loft-L304">      <span class="kw">if</span> dm &gt; cm {</span>
+<span id="src-hexform-loft-L305">        <span class="kw">if</span> cr2 &gt; <span class="nm">0</span> { inside = !inside; }</span>
+<span id="src-hexform-loft-L306">      } <span class="kw">else</span> {</span>
+<span id="src-hexform-loft-L307">        <span class="kw">if</span> cr2 &lt; <span class="nm">0</span> { inside = !inside; }</span>
+<span id="src-hexform-loft-L308">      }</span>
+<span id="src-hexform-loft-L309">    }</span>
+<span id="src-hexform-loft-L310">  }</span>
+<span id="src-hexform-loft-L311">  inside</span>
+<span id="src-hexform-loft-L312">}</span>
+<span id="src-hexform-loft-L313"></span>
+<span id="src-hexform-loft-L314"><span class="cm">// THE ROUTINE: fill a closed Form into `cells`, anchored so the walk starts at cell (cq, cr).</span></span>
+<span id="src-hexform-loft-L315"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L316"><span class="cm">// A NON-CLOSING FORM IS REFUSED, NOT PATCHED (the control).  Law J is the admission test; a walk</span></span>
+<span id="src-hexform-loft-L317"><span class="cm">// that does not return to its start bounds no region, and silently filling "what it would have</span></span>
+<span id="src-hexform-loft-L318"><span class="cm">// enclosed" would invent a shape the author never wrote.</span></span>
+<span id="src-hexform-loft-L319"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_fill</span>(f: <span class="en">Form</span>, cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L320">  <span class="kw">if</span> !<span class="fn-call">form_closes</span>(f) { <span class="kw">return</span> -<span class="nm">1</span>; }</span>
+<span id="src-hexform-loft-L321">  vk = <span class="fn-call">form_poly_k</span>(f);</span>
+<span id="src-hexform-loft-L322">  vm = <span class="fn-call">form_poly_m</span>(f);</span>
+<span id="src-hexform-loft-L323">  bk = <span class="fn-call">lattice_k</span>(cq, cr);</span>
+<span id="src-hexform-loft-L324">  bm = <span class="fn-call">lattice_m</span>(cq, cr);</span>
+<span id="src-hexform-loft-L325">  n = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L326">  <span class="kw">for</span> fr <span class="kw">in</span> <span class="fn-call">hexset_r0</span>(cells)..<span class="fn-call">hexset_r0</span>(cells) + <span class="fn-call">hexset_h</span>(cells) {</span>
+<span id="src-hexform-loft-L327">    <span class="kw">for</span> fq <span class="kw">in</span> <span class="fn-call">hexset_q0</span>(cells)..<span class="fn-call">hexset_q0</span>(cells) + <span class="fn-call">hexset_w</span>(cells) {</span>
+<span id="src-hexform-loft-L328">      <span class="kw">if</span> <span class="fn-call">poly_holds</span>(vk, vm, <span class="fn-call">lattice_k</span>(fq, fr) - bk, <span class="fn-call">lattice_m</span>(fq, fr) - bm) {</span>
+<span id="src-hexform-loft-L329">        <span class="fn-call">hexset_set</span>(cells, fq, fr, <span class="kw">true</span>);</span>
+<span id="src-hexform-loft-L330">        n = n + <span class="nm">1</span>;</span>
+<span id="src-hexform-loft-L331">      }</span>
+<span id="src-hexform-loft-L332">    }</span>
+<span id="src-hexform-loft-L333">  }</span>
+<span id="src-hexform-loft-L334">  n</span>
+<span id="src-hexform-loft-L335">}</span>
+<span id="src-hexform-loft-L336"></span>
+<span id="src-hexform-loft-L337"><span class="cm">// TWICE THE SIGNED AREA of the set's boundary, in doubled (k,m) units — summed over every</span></span>
+<span id="src-hexform-loft-L338"><span class="cm">// boundary edge directly, so it needs no loop tracing: the shoelace of a closed loop is the sum</span></span>
+<span id="src-hexform-loft-L339"><span class="cm">// over its edges, and summing over all loops is summing over all edges.</span></span>
+<span id="src-hexform-loft-L340"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L341"><span class="cm">// `hex_edge_corners(dir)` gives the edge's two corners in the winding order that makes the outer</span></span>
+<span id="src-hexform-loft-L342"><span class="cm">// boundary positive and an enclosed hole negative, which is what makes `= 12 * cells` a real</span></span>
+<span id="src-hexform-loft-L343"><span class="cm">// check on enclosure and not just on count.</span></span>
+<span id="src-hexform-loft-L344"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_shoelace2</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L345">  s = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L346">  <span class="kw">for</span> sr <span class="kw">in</span> <span class="fn-call">hexset_r0</span>(cells)..<span class="fn-call">hexset_r0</span>(cells) + <span class="fn-call">hexset_h</span>(cells) {</span>
+<span id="src-hexform-loft-L347">    <span class="kw">for</span> sq <span class="kw">in</span> <span class="fn-call">hexset_q0</span>(cells)..<span class="fn-call">hexset_q0</span>(cells) + <span class="fn-call">hexset_w</span>(cells) {</span>
+<span id="src-hexform-loft-L348">      <span class="kw">if</span> <span class="fn-call">hexset_get</span>(cells, sq, sr) {</span>
+<span id="src-hexform-loft-L349">        <span class="kw">for</span> sd <span class="kw">in</span> <span class="nm">0..6</span> {</span>
+<span id="src-hexform-loft-L350">          (nq, nr) = <span class="fn-call">hex_neighbor</span>(sq, sr, sd);</span>
+<span id="src-hexform-loft-L351">          <span class="kw">if</span> !<span class="fn-call">hexset_get</span>(cells, nq, nr) {</span>
+<span id="src-hexform-loft-L352">            (c1, c2) = <span class="fn-call">hex_edge_corners</span>(sd);</span>
+<span id="src-hexform-loft-L353">            ak = <span class="fn-call">lattice_k</span>(sq, sr) + <span class="fn-call">corner_k</span>(c1);</span>
+<span id="src-hexform-loft-L354">            am = <span class="fn-call">lattice_m</span>(sq, sr) + <span class="fn-call">corner_m</span>(c1);</span>
+<span id="src-hexform-loft-L355">            b2k = <span class="fn-call">lattice_k</span>(sq, sr) + <span class="fn-call">corner_k</span>(c2);</span>
+<span id="src-hexform-loft-L356">            b2m = <span class="fn-call">lattice_m</span>(sq, sr) + <span class="fn-call">corner_m</span>(c2);</span>
+<span id="src-hexform-loft-L357">            s = s + ak * b2m - b2k * am;</span>
+<span id="src-hexform-loft-L358">          }</span>
+<span id="src-hexform-loft-L359">        }</span>
+<span id="src-hexform-loft-L360">      }</span>
+<span id="src-hexform-loft-L361">    }</span>
+<span id="src-hexform-loft-L362">  }</span>
+<span id="src-hexform-loft-L363">  s</span>
+<span id="src-hexform-loft-L364">}</span>
+<span id="src-hexform-loft-L365"></span>
+<span id="src-hexform-loft-L366"><span class="cm">// ── THE CLOSED FORMS — predicted, not read off the fill ────────────────────</span></span>
+<span id="src-hexform-loft-L367"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L368"><span class="cm">// Each is the count of lattice points inside-or-on the shape in the CENTRE basis (spanned by one</span></span>
+<span id="src-hexform-loft-L369"><span class="cm">// edge step and the next-but-one), so each is a plain combinatorial identity rather than a</span></span>
+<span id="src-hexform-loft-L370"><span class="cm">// measurement:</span></span>
+<span id="src-hexform-loft-L371"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L372"><span class="cm">//   triangle side n   the lattice points of a right triangle (n+1)(n+2)/2</span></span>
+<span id="src-hexform-loft-L373"><span class="cm">//   rhombus a x b     a box in the centre basis, (a+1)(b+1)</span></span>
+<span id="src-hexform-loft-L374"><span class="cm">//   hexagon side n    the hex region of radius n, 3n^2 + 3n + 1</span></span>
+<span id="src-hexform-loft-L375"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tri_cells</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { ((n + <span class="nm">1</span>) * (n + <span class="nm">2</span>) / <span class="nm">2</span>) ?? <span class="nm">0</span> }</span>
+<span id="src-hexform-loft-L376"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rhombus_cells</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { (a + <span class="nm">1</span>) * (b + <span class="nm">1</span>) }</span>
+<span id="src-hexform-loft-L377"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hexagon_cells</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="nm">3</span> * n * n + <span class="nm">3</span> * n + <span class="nm">1</span> }</span>
+<span id="src-hexform-loft-L378"></span>
+<span id="src-hexform-loft-L379"><span class="cm">// ── S4 — THE BOUNDARY OF A FILLED REGION, AND WHETHER ITS CORNERS ARE PRECISE ─</span></span>
+<span id="src-hexform-loft-L380"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L381"><span class="cm">// The wall is the boundary of the fill (`I3`), taken as EDGES — `housedraw::draw_walls` already</span></span>
+<span id="src-hexform-loft-L382"><span class="cm">// does that and is reused unchanged.  What was never checked anywhere is what happens WHERE TWO</span></span>
+<span id="src-hexform-loft-L383"><span class="cm">// RUNS MEET (`DESIGN.md` §10.4): the corner.  These are the topology primitives parts 1 and 3</span></span>
+<span id="src-hexform-loft-L384"><span class="cm">// need, over the cell set directly, so no EdgeSet has to be threaded through.</span></span>
+<span id="src-hexform-loft-L385"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L386"><span class="cm">// A vertex is keyed by its exact doubled-(k,m) integer position, so "the same corner" is integer</span></span>
+<span id="src-hexform-loft-L387"><span class="cm">// equality — no float quantisation, the same discipline as the OD-12 chain check.</span></span>
+<span id="src-hexform-loft-L388">const <span class="en">VKEY_OFF</span> = <span class="nm">500</span>;</span>
+<span id="src-hexform-loft-L389">const <span class="en">VKEY_SPAN</span> = <span class="nm">2000</span>;</span>
+<span id="src-hexform-loft-L390"></span>
+<span id="src-hexform-loft-L391"><span class="kw">fn</span> <span class="fn-call">vkey</span>(k: <span class="ty"><a href="stdlib-types.html">integer</a></span>, m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { (k + <span class="en">VKEY_OFF</span>) * <span class="en">VKEY_SPAN</span> + (m + <span class="en">VKEY_OFF</span>) }</span>
+<span id="src-hexform-loft-L392"></span>
+<span id="src-hexform-loft-L393"><span class="cm">// The two endpoint keys of boundary edge `dir` of cell (q,r), as a pair.</span></span>
+<span id="src-hexform-loft-L394"><span class="kw">fn</span> <span class="fn-call">bedge_a</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dir: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L395">  (c1, c2) = <span class="fn-call">hex_edge_corners</span>(dir);</span>
+<span id="src-hexform-loft-L396">  <span class="fn-call">vkey</span>(<span class="fn-call">lattice_k</span>(q, r) + <span class="fn-call">corner_k</span>(c1), <span class="fn-call">lattice_m</span>(q, r) + <span class="fn-call">corner_m</span>(c1))</span>
+<span id="src-hexform-loft-L397">}</span>
+<span id="src-hexform-loft-L398"></span>
+<span id="src-hexform-loft-L399"><span class="kw">fn</span> <span class="fn-call">bedge_b</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dir: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L400">  (c1, c2) = <span class="fn-call">hex_edge_corners</span>(dir);</span>
+<span id="src-hexform-loft-L401">  <span class="fn-call">vkey</span>(<span class="fn-call">lattice_k</span>(q, r) + <span class="fn-call">corner_k</span>(c2), <span class="fn-call">lattice_m</span>(q, r) + <span class="fn-call">corner_m</span>(c2))</span>
+<span id="src-hexform-loft-L402">}</span>
+<span id="src-hexform-loft-L403"></span>
+<span id="src-hexform-loft-L404"><span class="cm">// Every boundary vertex of the region, one entry per incident edge — so an entry's multiplicity</span></span>
+<span id="src-hexform-loft-L405"><span class="cm">// IS that vertex's degree.</span></span>
+<span id="src-hexform-loft-L406"><span class="kw">fn</span> <span class="fn-call">boundary_vertices</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {</span>
+<span id="src-hexform-loft-L407">  vs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L408">  <span class="kw">for</span> br <span class="kw">in</span> <span class="fn-call">hexset_r0</span>(cells)..<span class="fn-call">hexset_r0</span>(cells) + <span class="fn-call">hexset_h</span>(cells) {</span>
+<span id="src-hexform-loft-L409">    <span class="kw">for</span> bq <span class="kw">in</span> <span class="fn-call">hexset_q0</span>(cells)..<span class="fn-call">hexset_q0</span>(cells) + <span class="fn-call">hexset_w</span>(cells) {</span>
+<span id="src-hexform-loft-L410">      <span class="kw">if</span> <span class="fn-call">hexset_get</span>(cells, bq, br) {</span>
+<span id="src-hexform-loft-L411">        <span class="kw">for</span> bd <span class="kw">in</span> <span class="nm">0..6</span> {</span>
+<span id="src-hexform-loft-L412">          (nq, nr) = <span class="fn-call">hex_neighbor</span>(bq, br, bd);</span>
+<span id="src-hexform-loft-L413">          <span class="kw">if</span> !<span class="fn-call">hexset_get</span>(cells, nq, nr) {</span>
+<span id="src-hexform-loft-L414">            vs += [<span class="fn-call">bedge_a</span>(bq, br, bd)];</span>
+<span id="src-hexform-loft-L415">            vs += [<span class="fn-call">bedge_b</span>(bq, br, bd)];</span>
+<span id="src-hexform-loft-L416">          }</span>
+<span id="src-hexform-loft-L417">        }</span>
+<span id="src-hexform-loft-L418">      }</span>
+<span id="src-hexform-loft-L419">    }</span>
+<span id="src-hexform-loft-L420">  }</span>
+<span id="src-hexform-loft-L421">  vs</span>
+<span id="src-hexform-loft-L422">}</span>
+<span id="src-hexform-loft-L423"></span>
+<span id="src-hexform-loft-L424"><span class="kw">fn</span> <span class="fn-call">degree_count</span>(vs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, want_lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, want_hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L425">  n = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L426">  <span class="kw">for</span> di <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(vs) {</span>
+<span id="src-hexform-loft-L427">    firstd = <span class="kw">true</span>;</span>
+<span id="src-hexform-loft-L428">    <span class="kw">for</span> dk <span class="kw">in</span> <span class="nm">0..</span>di { <span class="kw">if</span> (vs[dk] ?? <span class="nm">0</span>) == (vs[di] ?? <span class="nm">0</span>) { firstd = <span class="kw">false</span>; } }</span>
+<span id="src-hexform-loft-L429">    <span class="kw">if</span> firstd {</span>
+<span id="src-hexform-loft-L430">      deg = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L431">      <span class="kw">for</span> dj <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(vs) { <span class="kw">if</span> (vs[dj] ?? <span class="nm">0</span>) == (vs[di] ?? <span class="nm">0</span>) { deg = deg + <span class="nm">1</span>; } }</span>
+<span id="src-hexform-loft-L432">      <span class="kw">if</span> deg &gt;= want_lo &amp;&amp; deg &lt;= want_hi { n = n + <span class="nm">1</span>; }</span>
+<span id="src-hexform-loft-L433">    }</span>
+<span id="src-hexform-loft-L434">  }</span>
+<span id="src-hexform-loft-L435">  n</span>
+<span id="src-hexform-loft-L436">}</span>
+<span id="src-hexform-loft-L437"></span>
+<span id="src-hexform-loft-L438"><span class="cm">// PART 1a — dangling ends.  A closed loop has NONE: every boundary vertex is entered and left.</span></span>
+<span id="src-hexform-loft-L439"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">boundary_ends</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">degree_count</span>(<span class="fn-call">boundary_vertices</span>(cells), <span class="nm">1</span>, <span class="nm">1</span>) }</span>
+<span id="src-hexform-loft-L440"></span>
+<span id="src-hexform-loft-L441"><span class="cm">// PART 1b — pinches.  crawler's tracer relies on a hex boundary never pinching at a vertex</span></span>
+<span id="src-hexform-loft-L442"><span class="cm">// (each vertex touches exactly 3 mutually adjacent cells), verified there over 412 forms — a T2</span></span>
+<span id="src-hexform-loft-L443"><span class="cm">// claim, re-measured here as a gate rather than assumed.</span></span>
+<span id="src-hexform-loft-L444"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">boundary_branches</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">degree_count</span>(<span class="fn-call">boundary_vertices</span>(cells), <span class="nm">3</span>, <span class="nm">99</span>) }</span>
+<span id="src-hexform-loft-L445"></span>
+<span id="src-hexform-loft-L446"><span class="cm">// PART 1c — how many separate closed loops the boundary forms.  ONE means the region is a single</span></span>
+<span id="src-hexform-loft-L447"><span class="cm">// simply-connected shape; TWO means it has a hole (the outer loop plus the hole's), which is `I3`'s</span></span>
+<span id="src-hexform-loft-L448"><span class="cm">// named failure.  Label propagation over the edge graph — the edge count is small and this needs</span></span>
+<span id="src-hexform-loft-L449"><span class="cm">// no auxiliary structure.</span></span>
+<span id="src-hexform-loft-L450"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">boundary_loops</span>(cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-hexform-loft-L451">  ea: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L452">  eb: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L453">  <span class="kw">for</span> lr <span class="kw">in</span> <span class="fn-call">hexset_r0</span>(cells)..<span class="fn-call">hexset_r0</span>(cells) + <span class="fn-call">hexset_h</span>(cells) {</span>
+<span id="src-hexform-loft-L454">    <span class="kw">for</span> lq <span class="kw">in</span> <span class="fn-call">hexset_q0</span>(cells)..<span class="fn-call">hexset_q0</span>(cells) + <span class="fn-call">hexset_w</span>(cells) {</span>
+<span id="src-hexform-loft-L455">      <span class="kw">if</span> <span class="fn-call">hexset_get</span>(cells, lq, lr) {</span>
+<span id="src-hexform-loft-L456">        <span class="kw">for</span> ld <span class="kw">in</span> <span class="nm">0..6</span> {</span>
+<span id="src-hexform-loft-L457">          (nq, nr) = <span class="fn-call">hex_neighbor</span>(lq, lr, ld);</span>
+<span id="src-hexform-loft-L458">          <span class="kw">if</span> !<span class="fn-call">hexset_get</span>(cells, nq, nr) {</span>
+<span id="src-hexform-loft-L459">            ea += [<span class="fn-call">bedge_a</span>(lq, lr, ld)];</span>
+<span id="src-hexform-loft-L460">            eb += [<span class="fn-call">bedge_b</span>(lq, lr, ld)];</span>
+<span id="src-hexform-loft-L461">          }</span>
+<span id="src-hexform-loft-L462">        }</span>
+<span id="src-hexform-loft-L463">      }</span>
+<span id="src-hexform-loft-L464">    }</span>
+<span id="src-hexform-loft-L465">  }</span>
+<span id="src-hexform-loft-L466">  ne = <span class="bi"><a href="stdlib-text.html">len</a></span>(ea);</span>
+<span id="src-hexform-loft-L467">  <span class="kw">if</span> ne == <span class="nm">0</span> { <span class="kw">return</span> <span class="nm">0</span>; }</span>
+<span id="src-hexform-loft-L468">  comp: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L469">  <span class="kw">for</span> ci <span class="kw">in</span> <span class="nm">0..</span>ne { comp += [ci]; }</span>
+<span id="src-hexform-loft-L470">  changed = <span class="kw">true</span>;</span>
+<span id="src-hexform-loft-L471">  while changed {</span>
+<span id="src-hexform-loft-L472">    changed = <span class="kw">false</span>;</span>
+<span id="src-hexform-loft-L473">    <span class="kw">for</span> pi <span class="kw">in</span> <span class="nm">0..</span>ne {</span>
+<span id="src-hexform-loft-L474">      <span class="kw">for</span> pj <span class="kw">in</span> <span class="nm">0..</span>ne {</span>
+<span id="src-hexform-loft-L475">        <span class="kw">if</span> pi != pj {</span>
+<span id="src-hexform-loft-L476">          shares = (ea[pi] ?? <span class="nm">0</span>) == (ea[pj] ?? <span class="nm">0</span>) || (ea[pi] ?? <span class="nm">0</span>) == (eb[pj] ?? <span class="nm">0</span>)</span>
+<span id="src-hexform-loft-L477">                || (eb[pi] ?? <span class="nm">0</span>) == (ea[pj] ?? <span class="nm">0</span>) || (eb[pi] ?? <span class="nm">0</span>) == (eb[pj] ?? <span class="nm">0</span>);</span>
+<span id="src-hexform-loft-L478">          <span class="kw">if</span> shares &amp;&amp; (comp[pj] ?? <span class="nm">0</span>) &lt; (comp[pi] ?? <span class="nm">0</span>) {</span>
+<span id="src-hexform-loft-L479">            comp[pi] = comp[pj] ?? <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L480">            changed = <span class="kw">true</span>;</span>
+<span id="src-hexform-loft-L481">          }</span>
+<span id="src-hexform-loft-L482">        }</span>
+<span id="src-hexform-loft-L483">      }</span>
+<span id="src-hexform-loft-L484">    }</span>
+<span id="src-hexform-loft-L485">  }</span>
+<span id="src-hexform-loft-L486">  nloops = <span class="nm">0</span>;</span>
+<span id="src-hexform-loft-L487">  <span class="kw">for</span> qi <span class="kw">in</span> <span class="nm">0..</span>ne {</span>
+<span id="src-hexform-loft-L488">    firstq = <span class="kw">true</span>;</span>
+<span id="src-hexform-loft-L489">    <span class="kw">for</span> qk <span class="kw">in</span> <span class="nm">0..</span>qi { <span class="kw">if</span> (comp[qk] ?? <span class="nm">0</span>) == (comp[qi] ?? <span class="nm">0</span>) { firstq = <span class="kw">false</span>; } }</span>
+<span id="src-hexform-loft-L490">    <span class="kw">if</span> firstq { nloops = nloops + <span class="nm">1</span>; }</span>
+<span id="src-hexform-loft-L491">  }</span>
+<span id="src-hexform-loft-L492">  nloops</span>
+<span id="src-hexform-loft-L493">}</span>
+<span id="src-hexform-loft-L494"></span>
+<span id="src-hexform-loft-L495"><span class="cm">// ── PARTS 2 AND 4 — WRITTEN NOW, ENFORCED LATER ────────────────────────────</span></span>
+<span id="src-hexform-loft-L496"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L497"><span class="cm">// CASHED IN.  The corner ANGLE (part 2) and the MITER POINT (part 4) needed the fitted analytic</span></span>
+<span id="src-hexform-loft-L498"><span class="cm">// surface; it landed at S4b (`X47`) and gained its extent at `G2` (`X61`), so `tests/form.loft` §17</span></span>
+<span id="src-hexform-loft-L499"><span class="cm">// now CHECKS them.  Part 4's original wording — *"the miter sits on the exact model corner"* — turned</span></span>
+<span id="src-hexform-loft-L500"><span class="cm">// out to be wrong: `Plan` is continuous-then-rasterised, so the continuous corner is quantised away</span></span>
+<span id="src-hexform-loft-L501"><span class="cm">// (I-QUANT) and what the miter recovers exactly is the CELL-REGION corner.  History kept below.</span></span>
+<span id="src-hexform-loft-L502"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L503"><span class="cm">// (was) The corner ANGLE (part 2) and the MITER POINT (part 4) need the fitted analytic surface, which</span></span>
+<span id="src-hexform-loft-L504"><span class="cm">// does not exist until S8.  `DESIGN.md` §10.4 says to write them into the gate red at S4.</span></span>
+<span id="src-hexform-loft-L505"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L506"><span class="cm">// A PERMANENTLY RED SUITE IS NOT A SIGNAL, so instead of failing every run from here to S8 they</span></span>
+<span id="src-hexform-loft-L507"><span class="cm">// are a TRIPWIRE: while `SURFACE_LANDED` is false the gate prints them as PENDING and asserts</span></span>
+<span id="src-hexform-loft-L508"><span class="cm">// nothing about them; flipping this to true at S8 makes the gate FAIL until the real checks are</span></span>
+<span id="src-hexform-loft-L509"><span class="cm">// written.  They cannot be forgotten, and `make test` stays a live signal in the meantime.</span></span>
+<span id="src-hexform-loft-L510"><span class="cm">// (If a red suite is wanted instead, flip this today — the gate section is already written.)</span></span>
+<span id="src-hexform-loft-L511"><span class="kw">pub</span> const <span class="en">SURFACE_LANDED</span> = <span class="kw">true</span>;</span>
+<span id="src-hexform-loft-L512"></span>
+<span id="src-hexform-loft-L513"><span class="cm">// The same discipline for `rebuild` (S8), which `tests/trip.loft` is written against BEFORE it</span></span>
+<span id="src-hexform-loft-L514"><span class="cm">// exists (`DESIGN.md` §8.0).  While this is false the trip gate is legitimately RED, and the</span></span>
+<span id="src-hexform-loft-L515"><span class="cm">// runner asserts that redness; flipping it at S8 makes the runner demand a GREEN trip gate.</span></span>
+<span id="src-hexform-loft-L516"><span class="kw">pub</span> const <span class="en">REBUILD_LANDED</span> = <span class="kw">true</span>;</span>
+<span id="src-hexform-loft-L517"></span>
+<span id="src-hexform-loft-L518"><span class="cm">// ── A4 — LAW J IS NOT A SUFFICIENT ADMISSION RULE ──────────────────────────</span></span>
+<span id="src-hexform-loft-L519"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L520"><span class="cm">// Law J asks only that the walk CLOSES: `Σ turn = 12` and the vector sum is zero.  Rung A4 grew</span></span>
+<span id="src-hexform-loft-L521"><span class="cm">// the space to unequal sides and REFLEX corners, and found law J admits two things it must not:</span></span>
+<span id="src-hexform-loft-L522"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L523"><span class="cm">//   NON-SIMPLE walks — a repeated vertex, so the "polygon" crosses or touches itself and has no</span></span>
+<span id="src-hexform-loft-L524"><span class="cm">//                      well-defined inside.</span></span>
+<span id="src-hexform-loft-L525"><span class="cm">//   NON-CONVEX forms — which VIOLATE LAW F.  Measured over the 70 simple non-convex 4-sided</span></span>
+<span id="src-hexform-loft-L526"><span class="cm">//                      forms: 62 of 70 at unit scale, and still 36 of 70 grown five times, draw</span></span>
+<span id="src-hexform-loft-L527"><span class="cm">//                      a field that some OTHER form also draws.  `draw` is not injective there,</span></span>
+<span id="src-hexform-loft-L528"><span class="cm">//                      so no recovery — hull, tracing, or anything else — can tell them apart.</span></span>
+<span id="src-hexform-loft-L529"><span class="cm">//                      Scaling shrinks the failure but never removes it.</span></span>
+<span id="src-hexform-loft-L530"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L531"><span class="cm">// THAT IS A MODEL-SPACE LIMIT, NOT A METHOD LIMIT, and it is why the fix is at the DOORSTEP</span></span>
+<span id="src-hexform-loft-L532"><span class="cm">// (`K-FIT`): the editor refuses a non-convex stencil at authoring time rather than letting one be</span></span>
+<span id="src-hexform-loft-L533"><span class="cm">// drawn and fail to come back.  `DESIGN.md` §5.2 — a restriction the census finds is a fact to</span></span>
+<span id="src-hexform-loft-L534"><span class="cm">// record, not a defect to engineer away.</span></span>
+<span id="src-hexform-loft-L535"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L536"><span class="cm">// A convex form is exactly one whose turns are all POSITIVE: every exterior angle turning the same</span></span>
+<span id="src-hexform-loft-L537"><span class="cm">// way, summing to one revolution.  A turn of 0 is a straight join, which is a re-spelling of a</span></span>
+<span id="src-hexform-loft-L538"><span class="cm">// longer side rather than a corner, so it is refused too.</span></span>
+<span id="src-hexform-loft-L539"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_is_convex</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexform-loft-L540">  turns = f.fm_turn;</span>
+<span id="src-hexform-loft-L541">  <span class="kw">for</span> ci <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(turns) { <span class="kw">if</span> (turns[ci] ?? <span class="nm">0</span>) &lt;= <span class="nm">0</span> { <span class="kw">return</span> <span class="kw">false</span>; } }</span>
+<span id="src-hexform-loft-L542">  <span class="kw">true</span></span>
+<span id="src-hexform-loft-L543">}</span>
+<span id="src-hexform-loft-L544"></span>
+<span id="src-hexform-loft-L545"><span class="cm">// Does the walk visit any point twice?  A repeated vertex means the boundary is not a simple</span></span>
+<span id="src-hexform-loft-L546"><span class="cm">// closed curve, so "inside" is not defined and the fill is meaningless.</span></span>
+<span id="src-hexform-loft-L547"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_is_simple</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexform-loft-L548">  vk = <span class="fn-call">form_poly_k</span>(f);</span>
+<span id="src-hexform-loft-L549">  vm = <span class="fn-call">form_poly_m</span>(f);</span>
+<span id="src-hexform-loft-L550">  n = <span class="bi"><a href="stdlib-text.html">len</a></span>(vk);</span>
+<span id="src-hexform-loft-L551">  <span class="kw">for</span> ai <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="src-hexform-loft-L552">    <span class="kw">for</span> aj <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="src-hexform-loft-L553">      <span class="kw">if</span> ai &lt; aj &amp;&amp; (vk[ai] ?? <span class="nm">0</span>) == (vk[aj] ?? <span class="nm">0</span>) &amp;&amp; (vm[ai] ?? <span class="nm">0</span>) == (vm[aj] ?? <span class="nm">0</span>) {</span>
+<span id="src-hexform-loft-L554">        <span class="kw">return</span> <span class="kw">false</span>;</span>
+<span id="src-hexform-loft-L555">      }</span>
+<span id="src-hexform-loft-L556">    }</span>
+<span id="src-hexform-loft-L557">  }</span>
+<span id="src-hexform-loft-L558">  <span class="kw">true</span></span>
+<span id="src-hexform-loft-L559">}</span>
+<span id="src-hexform-loft-L560"></span>
+<span id="src-hexform-loft-L561"><span class="cm">// THE ADMISSION RULE, as A4 leaves it: closed (law J), simple, and convex.</span></span>
+<span id="src-hexform-loft-L562"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">form_admissible</span>(f: <span class="en">Form</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-hexform-loft-L563">  <span class="fn-call">form_closes</span>(f) &amp;&amp; <span class="fn-call">form_is_simple</span>(f) &amp;&amp; <span class="fn-call">form_is_convex</span>(f)</span>
+<span id="src-hexform-loft-L564">}</span>
+<span id="src-hexform-loft-L565"></span>
+<span id="src-hexform-loft-L566"><span class="cm">// ── THE PLAN, AND THE LATTICE→WORLD MAP ─────────────────────────────────────</span></span>
+<span id="src-hexform-loft-L567"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L568"><span class="cm">// Moved here from `housedraw` on 2026-07-24 (`plans/lib-split/` phase 1).  `OD-11` resolved</span></span>
+<span id="src-hexform-loft-L569"><span class="cm">// *"what IS a house?"* to **`Plan`, not the turtle cycle** — so `Plan` is a member of `𝕄*`, an</span></span>
+<span id="src-hexform-loft-L570"><span class="cm">// OBJECT, and it had been living inside the `draw` map's module.  With it went `cell_x`/`cell_y`</span></span>
+<span id="src-hexform-loft-L571"><span class="cm">// (the lattice→world map), `HEX_LEN`, and `side_edges` (which READS the field for a Plan's side</span></span>
+<span id="src-hexform-loft-L572"><span class="cm">// and is used by the surface fitter, not only by the drawer).</span></span>
+<span id="src-hexform-loft-L573"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L574"><span class="cm">// Measured before moving: `hexbox` used only `HEX_LEN`/`cell_x`/`cell_y` from `housedraw`, and</span></span>
+<span id="src-hexform-loft-L575"><span class="cm">// `hexsurf` only `Plan`/`SideRun`/`side_run_len`/`side_edges` — every other apparent use was a</span></span>
+<span id="src-hexform-loft-L576"><span class="cm">// COMMENT.  So this removes both `shape → draw` edges outright rather than softening them.</span></span>
+<span id="src-hexform-loft-L577"><span class="cm">// ⚠ `HEX_LEN` IS NOT DECLARED HERE — it is `hex_grid`'s (`= SQRT3 * HEX_SIZE`, one hex step,</span></span>
+<span id="src-hexform-loft-L578"><span class="cm">// 1.5 m by `SPEC` L8).  `housedraw` carried a private copy of the identical value, and the</span></span>
+<span id="src-hexform-loft-L579"><span class="cm">// duplicate was INVISIBLE while `housedraw` did not import `hex_grid`; moving the constant into</span></span>
+<span id="src-hexform-loft-L580"><span class="cm">// this module, which does, made the compiler refuse it.  That is `SPEC` **L11** — the library owns</span></span>
+<span id="src-hexform-loft-L581"><span class="cm">// the shared table — and it is `X26`'s class of defect, found by a move rather than by a gate.</span></span>
+<span id="src-hexform-loft-L582">const <span class="en">SQ3_2</span> = <span class="nm">0.8660254037844386</span>;         <span class="cm">// sqrt(3)/2 — half a hex step; also metres per wu</span></span>
+<span id="src-hexform-loft-L583">const <span class="en">EPS</span> = <span class="nm">0.000000001</span>;                  <span class="cm">// a float sign-test guard, not a P4 tolerance</span></span>
+<span id="src-hexform-loft-L584"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cell_x</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { (<span class="fn-call">lattice_k</span>(q, r) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) * <span class="en">SQ3_2</span> }</span>
+<span id="src-hexform-loft-L585"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cell_y</span>(q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { (<span class="fn-call">lattice_m</span>(q, r) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) * <span class="nm">0.5</span> }</span>
+<span id="src-hexform-loft-L586"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fabs</span>(v: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { <span class="kw">if</span> v &lt; <span class="nm">0.0</span> { -v } <span class="kw">else</span> { v } }</span>
+<span id="src-hexform-loft-L587"></span>
+<span id="src-hexform-loft-L588"><span class="cm">// The 6 rotations are exact on the lattice, so use the exact table rather than trig:</span></span>
+<span id="src-hexform-loft-L589"><span class="cm">// no rounding, and no fallible float math to discharge.</span></span>
+<span id="src-hexform-loft-L590"><span class="kw">fn</span> <span class="fn-call">rot_cos</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-hexform-loft-L591">  <span class="kw">if</span> n == <span class="nm">0</span> { <span class="nm">1.0</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">1</span> { <span class="nm">0.5</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">2</span> { -<span class="nm">0.5</span> }</span>
+<span id="src-hexform-loft-L592">  <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">3</span> { -<span class="nm">1.0</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">4</span> { -<span class="nm">0.5</span> } <span class="kw">else</span> { <span class="nm">0.5</span> }</span>
+<span id="src-hexform-loft-L593">}</span>
+<span id="src-hexform-loft-L594"><span class="kw">fn</span> <span class="fn-call">rot_sin</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-hexform-loft-L595">  <span class="kw">if</span> n == <span class="nm">0</span> { <span class="nm">0.0</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">1</span> { <span class="en">SQ3_2</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">2</span> { <span class="en">SQ3_2</span> }</span>
+<span id="src-hexform-loft-L596">  <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">3</span> { <span class="nm">0.0</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="nm">4</span> { -<span class="en">SQ3_2</span> } <span class="kw">else</span> { -<span class="en">SQ3_2</span> }</span>
+<span id="src-hexform-loft-L597">}</span>
+<span id="src-hexform-loft-L598"></span>
+<span id="src-hexform-loft-L599"><span class="cm">// ── the plan: a rectangle in its own frame ──────────────────────────────────</span></span>
+<span id="src-hexform-loft-L600"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Plan</span> {</span>
+<span id="src-hexform-loft-L601">  pl_cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>,     <span class="cm">// anchor cell</span></span>
+<span id="src-hexform-loft-L602">  pl_cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-hexform-loft-L603">  pl_wid: <span class="ty"><a href="stdlib-types.html">integer</a></span>,    <span class="cm">// extent along local u, in hex steps (1.5 m each)</span></span>
+<span id="src-hexform-loft-L604">  pl_dep: <span class="ty"><a href="stdlib-types.html">integer</a></span>,    <span class="cm">// extent along local v</span></span>
+<span id="src-hexform-loft-L605">  pl_rot: <span class="ty"><a href="stdlib-types.html">integer</a></span>,    <span class="cm">// 0..5, 60 degree steps</span></span>
+<span id="src-hexform-loft-L606">  pl_mir: <span class="ty"><a href="stdlib-types.html">boolean</a></span>,    <span class="cm">// the 12th orientation: (rot, mir) is the D6 the lattice has</span></span>
+<span id="src-hexform-loft-L607">}</span>
+<span id="src-hexform-loft-L608"></span>
+<span id="src-hexform-loft-L609"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_new</span>(cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, wid: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dep: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-hexform-loft-L610">                rot: <span class="ty"><a href="stdlib-types.html">integer</a></span>, mir: <span class="ty"><a href="stdlib-types.html">boolean</a></span>) -&gt; <span class="en">Plan</span> {</span>
+<span id="src-hexform-loft-L611">  <span class="en">Plan</span> { pl_cq: cq, pl_cr: cr, pl_wid: wid, pl_dep: dep,</span>
+<span id="src-hexform-loft-L612">         pl_rot: ((rot % <span class="nm">6</span>) + <span class="nm">6</span>) % <span class="nm">6</span>, pl_mir: mir }</span>
+<span id="src-hexform-loft-L613">}</span>
+<span id="src-hexform-loft-L614"></span>
+<span id="src-hexform-loft-L615"><span class="cm">// A flip toggles the chirality and NOTHING else — no side remapping, no t -&gt; 1-t.</span></span>
+<span id="src-hexform-loft-L616"><span class="cm">// If an implementation finds itself remapping, the frame rule above is wrong somewhere.</span></span>
+<span id="src-hexform-loft-L617"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_flip</span>(p: <span class="en">Plan</span>) -&gt; <span class="en">Plan</span> {</span>
+<span id="src-hexform-loft-L618">  <span class="en">Plan</span> { pl_cq: p.pl_cq, pl_cr: p.pl_cr, pl_wid: p.pl_wid, pl_dep: p.pl_dep,</span>
+<span id="src-hexform-loft-L619">         pl_rot: p.pl_rot, pl_mir: !p.pl_mir }</span>
+<span id="src-hexform-loft-L620">}</span>
+<span id="src-hexform-loft-L621"></span>
+<span id="src-hexform-loft-L622"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_hw</span>(p: <span class="en">Plan</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { (p.pl_wid <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) * <span class="en">HEX_LEN</span> * <span class="nm">0.5</span> }</span>
+<span id="src-hexform-loft-L623"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_hd</span>(p: <span class="en">Plan</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { (p.pl_dep <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) * <span class="en">HEX_LEN</span> * <span class="nm">0.5</span> }</span>
+<span id="src-hexform-loft-L624"></span>
+<span id="src-hexform-loft-L625"><span class="kw">fn</span> <span class="fn-call">frame_s</span>(p: <span class="en">Plan</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> { <span class="kw">if</span> p.pl_mir { -<span class="nm">1.0</span> } <span class="kw">else</span> { <span class="nm">1.0</span> } }</span>
+<span id="src-hexform-loft-L626"></span>
+<span id="src-hexform-loft-L627"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_to_world</span>(p: <span class="en">Plan</span>, lu: <span class="ty"><a href="stdlib-types.html">float</a></span>, lv: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>) {</span>
+<span id="src-hexform-loft-L628">  co = <span class="fn-call">rot_cos</span>(p.pl_rot);</span>
+<span id="src-hexform-loft-L629">  si = <span class="fn-call">rot_sin</span>(p.pl_rot);</span>
+<span id="src-hexform-loft-L630">  s = <span class="fn-call">frame_s</span>(p);</span>
+<span id="src-hexform-loft-L631">  ( <span class="fn-call">cell_x</span>(p.pl_cq, p.pl_cr) + lu * s * co - lv * si,</span>
+<span id="src-hexform-loft-L632">    <span class="fn-call">cell_y</span>(p.pl_cq, p.pl_cr) + lu * s * si + lv * co )</span>
+<span id="src-hexform-loft-L633">}</span>
+<span id="src-hexform-loft-L634"></span>
+<span id="src-hexform-loft-L635"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_to_local</span>(p: <span class="en">Plan</span>, px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>) {</span>
+<span id="src-hexform-loft-L636">  co = <span class="fn-call">rot_cos</span>(p.pl_rot);</span>
+<span id="src-hexform-loft-L637">  si = <span class="fn-call">rot_sin</span>(p.pl_rot);</span>
+<span id="src-hexform-loft-L638">  s = <span class="fn-call">frame_s</span>(p);</span>
+<span id="src-hexform-loft-L639">  dx = px - <span class="fn-call">cell_x</span>(p.pl_cq, p.pl_cr);</span>
+<span id="src-hexform-loft-L640">  dy = py - <span class="fn-call">cell_y</span>(p.pl_cq, p.pl_cr);</span>
+<span id="src-hexform-loft-L641">  ( dx * s * co + dy * s * si, -dx * si + dy * co )</span>
+<span id="src-hexform-loft-L642">}</span>
+<span id="src-hexform-loft-L643"></span>
+<span id="src-hexform-loft-L644"><span class="cm">// ── sides ───────────────────────────────────────────────────────────────────</span></span>
+<span id="src-hexform-loft-L645"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L646"><span class="cm">// Sides run 0..3 as a loop, each A -&gt; B, with the outward normal 90 degrees clockwise</span></span>
+<span id="src-hexform-loft-L647"><span class="cm">// from B - A.  t runs A -&gt; B, which is what an observer standing OUTSIDE reads</span></span>
+<span id="src-hexform-loft-L648"><span class="cm">// left to right.  Under a mirror the endpoints EXCHANGE (rule 1 above).</span></span>
+<span id="src-hexform-loft-L649"><span class="cm">//</span></span>
+<span id="src-hexform-loft-L650"><span class="cm">//    side 0  (+u face)   A (+hw,-hd)  B (+hw,+hd)</span></span>
+<span id="src-hexform-loft-L651"><span class="cm">//    side 1  (+v face)   A (+hw,+hd)  B (-hw,+hd)</span></span>
+<span id="src-hexform-loft-L652"><span class="cm">//    side 2  (-u face)   A (-hw,+hd)  B (-hw,-hd)</span></span>
+<span id="src-hexform-loft-L653"><span class="cm">//    side 3  (-v face)   A (-hw,-hd)  B (+hw,-hd)</span></span>
+<span id="src-hexform-loft-L654"></span>
+<span id="src-hexform-loft-L655"><span class="kw">fn</span> <span class="fn-call">side_u</span>(p: <span class="en">Plan</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, which: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-hexform-loft-L656">  hw = <span class="fn-call">plan_hw</span>(p);</span>
+<span id="src-hexform-loft-L657">  e = which;</span>
+<span id="src-hexform-loft-L658">  <span class="kw">if</span> p.pl_mir { e = <span class="nm">1</span> - which; }          <span class="cm">// the exchange, applied once</span></span>
+<span id="src-hexform-loft-L659">  <span class="kw">if</span> side == <span class="nm">0</span> { hw }</span>
+<span id="src-hexform-loft-L660">  <span class="kw">else</span> <span class="kw">if</span> side == <span class="nm">1</span> { <span class="kw">if</span> e == <span class="nm">0</span> { hw } <span class="kw">else</span> { -hw } }</span>
+<span id="src-hexform-loft-L661">  <span class="kw">else</span> <span class="kw">if</span> side == <span class="nm">2</span> { -hw }</span>
+<span id="src-hexform-loft-L662">  <span class="kw">else</span> { <span class="kw">if</span> e == <span class="nm">0</span> { -hw } <span class="kw">else</span> { hw } }</span>
+<span id="src-hexform-loft-L663">}</span>
+<span id="src-hexform-loft-L664"></span>
+<span id="src-hexform-loft-L665"><span class="kw">fn</span> <span class="fn-call">side_v</span>(p: <span class="en">Plan</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, which: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-hexform-loft-L666">  hd = <span class="fn-call">plan_hd</span>(p);</span>
+<span id="src-hexform-loft-L667">  e = which;</span>
+<span id="src-hexform-loft-L668">  <span class="kw">if</span> p.pl_mir { e = <span class="nm">1</span> - which; }</span>
+<span id="src-hexform-loft-L669">  <span class="kw">if</span> side == <span class="nm">0</span> { <span class="kw">if</span> e == <span class="nm">0</span> { -hd } <span class="kw">else</span> { hd } }</span>
+<span id="src-hexform-loft-L670">  <span class="kw">else</span> <span class="kw">if</span> side == <span class="nm">1</span> { hd }</span>
+<span id="src-hexform-loft-L671">  <span class="kw">else</span> <span class="kw">if</span> side == <span class="nm">2</span> { <span class="kw">if</span> e == <span class="nm">0</span> { hd } <span class="kw">else</span> { -hd } }</span>
+<span id="src-hexform-loft-L672">  <span class="kw">else</span> { -hd }</span>
+<span id="src-hexform-loft-L673">}</span>
+<span id="src-hexform-loft-L674"></span>
+<span id="src-hexform-loft-L675"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_side_point</span>(p: <span class="en">Plan</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>) {</span>
+<span id="src-hexform-loft-L676">  au = <span class="fn-call">side_u</span>(p, side, <span class="nm">0</span>);</span>
+<span id="src-hexform-loft-L677">  av = <span class="fn-call">side_v</span>(p, side, <span class="nm">0</span>);</span>
+<span id="src-hexform-loft-L678">  bu = <span class="fn-call">side_u</span>(p, side, <span class="nm">1</span>);</span>
+<span id="src-hexform-loft-L679">  bv = <span class="fn-call">side_v</span>(p, side, <span class="nm">1</span>);</span>
+<span id="src-hexform-loft-L680">  <span class="fn-call">plan_to_world</span>(p, au + t * (bu - au), av + t * (bv - av))</span>
+<span id="src-hexform-loft-L681">}</span>
+<span id="src-hexform-loft-L682"></span>
+<span id="src-hexform-loft-L683"><span class="cm">// Outward, unit — taken from the MASSING (centre -&gt; side midpoint), never from the</span></span>
+<span id="src-hexform-loft-L684"><span class="cm">// endpoint order.  Reading it off B - A lets a broken endpoint rule supply its own</span></span>
+<span id="src-hexform-loft-L685"><span class="cm">// definition of outward, and the facade gate can then never fire.</span></span>
+<span id="src-hexform-loft-L686"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plan_side_normal</span>(p: <span class="en">Plan</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>) {</span>
+<span id="src-hexform-loft-L687">  (mx, my) = <span class="fn-call">plan_side_point</span>(p, side, <span class="nm">0.5</span>);</span>
+<span id="src-hexform-loft-L688">  ox = <span class="fn-call">cell_x</span>(p.pl_cq, p.pl_cr);</span>
+<span id="src-hexform-loft-L689">  oy = <span class="fn-call">cell_y</span>(p.pl_cq, p.pl_cr);</span>
+<span id="src-hexform-loft-L690">  dx = mx - ox;</span>
+<span id="src-hexform-loft-L691">  dy = my - oy;</span>
+<span id="src-hexform-loft-L692">  ln = <span class="bi"><a href="stdlib-math.html">sqrt</a></span>(dx * dx + dy * dy) ?? <span class="nm">0.0</span>;</span>
+<span id="src-hexform-loft-L693">  <span class="kw">if</span> ln &lt; <span class="en">EPS</span> { <span class="kw">return</span> (<span class="nm">0.0</span>, <span class="nm">0.0</span>); }</span>
+<span id="src-hexform-loft-L694">  (dx / ln ?? <span class="nm">0.0</span>, dy / ln ?? <span class="nm">0.0</span>)</span>
+<span id="src-hexform-loft-L695">}</span>
+<span id="src-hexform-loft-L696"></span>
+<span id="src-hexform-loft-L697"><span class="cm">// ── the boundary edges lying on one side, with their reading parameter ──────</span></span>
+<span id="src-hexform-loft-L698"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">SideRun</span> {</span>
+<span id="src-hexform-loft-L699">  sr_qa: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</span>
+<span id="src-hexform-loft-L700">  sr_ra: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</span>
+<span id="src-hexform-loft-L701">  sr_qb: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</span>
+<span id="src-hexform-loft-L702">  sr_rb: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;,</span>
+<span id="src-hexform-loft-L703">  sr_t:  <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;,     <span class="cm">// 0..1 along the side, A -&gt; B, as read from OUTSIDE</span></span>
+<span id="src-hexform-loft-L704">}</span>
+<span id="src-hexform-loft-L705"></span>
+<span id="src-hexform-loft-L706"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">side_run_len</span>(sr: <span class="en">SideRun</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="bi"><a href="stdlib-text.html">len</a></span>(sr.sr_t) }</span>
+<span id="src-hexform-loft-L707"></span>
+<span id="src-hexform-loft-L708"><span class="cm">// Which side an edge lies on, and where along it.  An edge's midpoint is the midpoint</span></span>
+<span id="src-hexform-loft-L709"><span class="cm">// of the two cell centres it separates — the shared edge bisects that line — so no</span></span>
+<span id="src-hexform-loft-L710"><span class="cm">// corner table is needed.</span></span>
+<span id="src-hexform-loft-L711"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">side_edges</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">SideRun</span> {</span>
+<span id="src-hexform-loft-L712">  hw = <span class="fn-call">plan_hw</span>(p);</span>
+<span id="src-hexform-loft-L713">  hd = <span class="fn-call">plan_hd</span>(p);</span>
+<span id="src-hexform-loft-L714">  half = hw;</span>
+<span id="src-hexform-loft-L715">  <span class="kw">if</span> side == <span class="nm">0</span> || side == <span class="nm">2</span> { half = hd; }</span>
+<span id="src-hexform-loft-L716">  <span class="cm">// reading direction along the side, before the mirror</span></span>
+<span id="src-hexform-loft-L717">  sgn = <span class="nm">1.0</span>;</span>
+<span id="src-hexform-loft-L718">  <span class="kw">if</span> side == <span class="nm">1</span> || side == <span class="nm">2</span> { sgn = -<span class="nm">1.0</span>; }</span>
+<span id="src-hexform-loft-L719">  <span class="kw">if</span> p.pl_mir { sgn = -sgn; }</span>
+<span id="src-hexform-loft-L720"></span>
+<span id="src-hexform-loft-L721">  qa: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L722">  ra: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L723">  qb: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L724">  rb: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L725">  ts: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt; = [];</span>
+<span id="src-hexform-loft-L726"></span>
+<span id="src-hexform-loft-L727">  <span class="kw">for</span> er <span class="kw">in</span> <span class="fn-call">hexset_r0</span>(cells)..<span class="fn-call">hexset_r0</span>(cells) + <span class="fn-call">hexset_h</span>(cells) {</span>
+<span id="src-hexform-loft-L728">    <span class="kw">for</span> eq <span class="kw">in</span> <span class="fn-call">hexset_q0</span>(cells)..<span class="fn-call">hexset_q0</span>(cells) + <span class="fn-call">hexset_w</span>(cells) {</span>
+<span id="src-hexform-loft-L729">      <span class="kw">if</span> <span class="fn-call">hexset_get</span>(cells, eq, er) {</span>
+<span id="src-hexform-loft-L730">        <span class="kw">for</span> ed <span class="kw">in</span> <span class="nm">0..6</span> {</span>
+<span id="src-hexform-loft-L731">          mq = <span class="fn-call">nb_q</span>(eq, er, ed);</span>
+<span id="src-hexform-loft-L732">          mr = <span class="fn-call">nb_r</span>(eq, er, ed);</span>
+<span id="src-hexform-loft-L733">          <span class="kw">if</span> !<span class="fn-call">hexset_get</span>(cells, mq, mr) {</span>
+<span id="src-hexform-loft-L734">            mx = (<span class="fn-call">cell_x</span>(eq, er) + <span class="fn-call">cell_x</span>(mq, mr)) * <span class="nm">0.5</span>;</span>
+<span id="src-hexform-loft-L735">            my = (<span class="fn-call">cell_y</span>(eq, er) + <span class="fn-call">cell_y</span>(mq, mr)) * <span class="nm">0.5</span>;</span>
+<span id="src-hexform-loft-L736">            (lu, lv) = <span class="fn-call">plan_to_local</span>(p, mx, my);</span>
+<span id="src-hexform-loft-L737">            <span class="cm">// classify by which local coordinate is furthest outside the massing</span></span>
+<span id="src-hexform-loft-L738">            ex_u = <span class="fn-call">fabs</span>(lu) - hw;</span>
+<span id="src-hexform-loft-L739">            ex_v = <span class="fn-call">fabs</span>(lv) - hd;</span>
+<span id="src-hexform-loft-L740">            got = -<span class="nm">1</span>;</span>
+<span id="src-hexform-loft-L741">            along = <span class="nm">0.0</span>;</span>
+<span id="src-hexform-loft-L742">            <span class="kw">if</span> ex_u &gt; ex_v {</span>
+<span id="src-hexform-loft-L743">              <span class="kw">if</span> lu &gt; <span class="nm">0.0</span> { got = <span class="nm">0</span>; } <span class="kw">else</span> { got = <span class="nm">2</span>; }</span>
+<span id="src-hexform-loft-L744">              along = lv;</span>
+<span id="src-hexform-loft-L745">            } <span class="kw">else</span> {</span>
+<span id="src-hexform-loft-L746">              <span class="kw">if</span> lv &gt; <span class="nm">0.0</span> { got = <span class="nm">1</span>; } <span class="kw">else</span> { got = <span class="nm">3</span>; }</span>
+<span id="src-hexform-loft-L747">              along = lu;</span>
+<span id="src-hexform-loft-L748">            }</span>
+<span id="src-hexform-loft-L749">            <span class="kw">if</span> got == side {</span>
+<span id="src-hexform-loft-L750">              qa += [eq];</span>
+<span id="src-hexform-loft-L751">              ra += [er];</span>
+<span id="src-hexform-loft-L752">              qb += [mq];</span>
+<span id="src-hexform-loft-L753">              rb += [mr];</span>
+<span id="src-hexform-loft-L754">              ts += [<span class="nm">0.5</span> + sgn * along / (<span class="nm">2.0</span> * half) ?? <span class="nm">0.0</span>];</span>
+<span id="src-hexform-loft-L755">            }</span>
+<span id="src-hexform-loft-L756">          }</span>
+<span id="src-hexform-loft-L757">        }</span>
+<span id="src-hexform-loft-L758">      }</span>
+<span id="src-hexform-loft-L759">    }</span>
+<span id="src-hexform-loft-L760">  }</span>
+<span id="src-hexform-loft-L761">  <span class="en">SideRun</span> { sr_qa: qa, sr_ra: ra, sr_qb: qb, sr_rb: rb, sr_t: ts }</span>
+<span id="src-hexform-loft-L762">}</span>
+</code></pre>
+<h2 id="tests-01-hex-form-loft">tests/01-hex-form.loft</h2>
+<pre class="src"><code><span id="tests-01-hex-form-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-01-hex-form-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-01-hex-form-loft-L3"><span class="cm">// hex_form — the conformance tests: the turtle form, its canonical text, and the byte round trip.</span></span>
+<span id="tests-01-hex-form-loft-L4"><span class="cm">//</span></span>
+<span id="tests-01-hex-form-loft-L5"><span class="cm">// These assert the library's CONTRACT.  The exhaustive measurement lives in hexbody's gates</span></span>
+<span id="tests-01-hex-form-loft-L6"><span class="cm">// (`tests/form.loft`, `tests/text.loft`), which print their evidence and carry a control that must</span></span>
+<span id="tests-01-hex-form-loft-L7"><span class="cm">// fire.  This is what CI runs under `LOFT_DENY_WARNINGS=1`.</span></span>
+<span id="tests-01-hex-form-loft-L8"><span class="kw">use</span> hex_form;</span>
+<span id="tests-01-hex-form-loft-L9"><span class="kw">use</span> hex_field;</span>
+<span id="tests-01-hex-form-loft-L10"></span>
+<span id="tests-01-hex-form-loft-L11"><span class="kw">fn</span> <span class="fn-call">main</span>() {</span>
+<span id="tests-01-hex-form-loft-L12">  f = <span class="fn-call">form_new</span>(<span class="nm">0</span>, [<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">1</span>], [<span class="nm">4</span>, <span class="nm">4</span>, <span class="nm">4</span>]);            <span class="cm">// an equilateral triangle</span></span>
+<span id="tests-01-hex-form-loft-L13">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(f.fm_len) == <span class="nm">3</span>, <span class="st">"a triangle has three sides"</span>);</span>
+<span id="tests-01-hex-form-loft-L14">}</span>
+<span id="tests-01-hex-form-loft-L15"></span>
+<span id="tests-01-hex-form-loft-L16"><span class="kw">fn</span> <span class="fn-call">test_a_closed_form_is_admissible_and_fills</span>() {</span>
+<span id="tests-01-hex-form-loft-L17">  f = <span class="fn-call">form_new</span>(<span class="nm">0</span>, [<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">1</span>], [<span class="nm">4</span>, <span class="nm">4</span>, <span class="nm">4</span>]);</span>
+<span id="tests-01-hex-form-loft-L18">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">form_admissible</span>(f), <span class="st">"the equilateral triangle is admissible"</span>);</span>
+<span id="tests-01-hex-form-loft-L19">  cells = <span class="fn-call">hexset_chunk</span>(-<span class="nm">10</span>, -<span class="nm">10</span>, <span class="nm">21</span>, <span class="nm">21</span>);</span>
+<span id="tests-01-hex-form-loft-L20">  n = <span class="fn-call">form_fill</span>(f, <span class="nm">0</span>, <span class="nm">0</span>, cells);</span>
+<span id="tests-01-hex-form-loft-L21">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n == <span class="nm">3</span>, <span class="st">"the len-1 triangle fills 3 cells, got {n}"</span>);</span>
+<span id="tests-01-hex-form-loft-L22">}</span>
+<span id="tests-01-hex-form-loft-L23"></span>
+<span id="tests-01-hex-form-loft-L24"><span class="kw">fn</span> <span class="fn-call">test_the_text_round_trips_byte_for_byte</span>() {</span>
+<span id="tests-01-hex-form-loft-L25">  f = <span class="fn-call">form_new</span>(<span class="nm">0</span>, [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">1</span>, <span class="nm">2</span>], [<span class="nm">3</span>, <span class="nm">3</span>, <span class="nm">3</span>, <span class="nm">3</span>]);</span>
+<span id="tests-01-hex-form-loft-L26">  t = <span class="fn-call">form_write</span>(f, <span class="st">"house"</span>);</span>
+<span id="tests-01-hex-form-loft-L27">  g = <span class="fn-call">form_read</span>(t);</span>
+<span id="tests-01-hex-form-loft-L28">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">form_eq</span>(f, g), <span class="st">"read(write(f)) = f"</span>);</span>
+<span id="tests-01-hex-form-loft-L29">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">form_write</span>(g, <span class="st">"house"</span>) == t, <span class="st">"and the bytes match exactly"</span>);</span>
+<span id="tests-01-hex-form-loft-L30">}</span>
+<span id="tests-01-hex-form-loft-L31"></span>
+<span id="tests-01-hex-form-loft-L32"><span class="kw">fn</span> <span class="fn-call">test_the_canonical_text_is_start_corner_invariant</span>() {</span>
+<span id="tests-01-hex-form-loft-L33">  <span class="cm">// The same cycle written from three corners collapses to one canonical text -- this is what</span></span>
+<span id="tests-01-hex-form-loft-L34">  <span class="cm">// makes a project file diffable: two authors of the same shape produce the same bytes.</span></span>
+<span id="tests-01-hex-form-loft-L35">  a = <span class="fn-call">form_new</span>(<span class="nm">0</span>, [<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">1</span>], [<span class="nm">4</span>, <span class="nm">4</span>, <span class="nm">4</span>]);</span>
+<span id="tests-01-hex-form-loft-L36">  b = <span class="fn-call">form_new</span>(<span class="nm">0</span>, [<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">1</span>], [<span class="nm">4</span>, <span class="nm">4</span>, <span class="nm">4</span>]);</span>
+<span id="tests-01-hex-form-loft-L37">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">form_canon_text</span>(a, <span class="st">"s"</span>) == <span class="fn-call">form_canon_text</span>(b, <span class="st">"s"</span>), <span class="st">"one shape, one canonical text"</span>);</span>
+<span id="tests-01-hex-form-loft-L38">}</span>
+<span id="tests-01-hex-form-loft-L39"></span>
+<span id="tests-01-hex-form-loft-L40"><span class="kw">fn</span> <span class="fn-call">test_a_non_closing_walk_is_refused</span>() {</span>
+<span id="tests-01-hex-form-loft-L41">  <span class="cm">// turns that do not sum to a full revolution do not close -- and an open walk is not a form.</span></span>
+<span id="tests-01-hex-form-loft-L42">  f = <span class="fn-call">form_new</span>(<span class="nm">0</span>, [<span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">1</span>], [<span class="nm">4</span>, <span class="nm">4</span>, <span class="nm">5</span>]);</span>
+<span id="tests-01-hex-form-loft-L43">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">form_admissible</span>(f), <span class="st">"a walk whose turns miss closure is refused"</span>);</span>
+<span id="tests-01-hex-form-loft-L44">}</span>
+</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

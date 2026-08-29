@@ -521,3 +521,19 @@ article h3 {
 .lib-card td { white-space: normal; }
 .lib-card td:nth-child(2) { font-family: inherit; font-size: inherit; color: inherit; }
 .lib-legend { color: var(--dim); font-size: 0.85em; margin: 0 0 1.4em; }
+
+/* ── Library source browser ─────────────────────────────────────────────── */
+
+/* Line numbers are a counter rather than markup: a 6,000-line library would
+   otherwise carry half a megabyte of per-line boilerplate saying nothing. */
+pre.src { counter-reset: srcline; overflow-x: auto; line-height: 1.45; }
+pre.src > code > span { counter-increment: srcline; display: block; }
+pre.src > code > span::before {
+  content: counter(srcline);
+  display: inline-block; width: 3.5em; margin-right: 1em;
+  text-align: right; color: var(--dim); opacity: 0.55;
+  border-right: 1px solid var(--border); padding-right: 0.6em;
+  user-select: none;
+}
+/* The line a fragment link just jumped to, so an anchor from the item table lands visibly. */
+pre.src > code > span:target { background: var(--nav-bg); outline: 1px solid var(--border); }

@@ -533,6 +533,12 @@ fn generate_libraries_page<S: std::hash::BuildHasher>(
         "Generated {rendered} library API references ({unrecorded} package(s) predate the \
          registry's `api` field and say so)"
     );
+    let (src_pages, uncached) =
+        generate_library_source_pages(index, stdlib_sections, topic_info, link_map)?;
+    println!(
+        "Generated {src_pages} library source browsers ({uncached} package(s) not in the \
+         local registry cache and say so)"
+    );
     Ok(index.packages.len())
 }
 
@@ -689,8 +695,16 @@ fn generate_library_cards(
                 &format!("{ys} \u{2014} do not pin these"),
             );
         }
+        row(
+            "Source",
+            &format!(
+                "<a href=\"lib-{0}-src.html\">read it here</a> \u{2014} the libraries are \
+                 written in loft",
+                esc(name)
+            ),
+        );
         if let Some(url) = pkg.homepage.as_deref().filter(|u| !u.is_empty()) {
-            row("Source", &format!("<a href=\"{0}\">{0}</a>", esc(url)));
+            row("Repository", &format!("<a href=\"{0}\">{0}</a>", esc(url)));
         }
         body.push_str("</table>\n");
 
@@ -861,6 +875,400 @@ fn generate_library_api_pages<S: std::hash::BuildHasher>(
         fs::write(format!("doc/lib-{name}-api.html"), html)?;
     }
     Ok((rendered, unrecorded))
+}
+
+/// One `.loft` source file of a package, ready to render.
+struct SourceFile {
+    /// Package-relative path, e.g. `src/regex.loft`.
+    rel: String,
+    /// `rel` reduced to an HTML id prefix, so every line gets a stable anchor.
+    slug: String,
+    text: String,
+}
+
+/// Where a name or a worked-example tag lives: which file, which line.
+type Site = (String, usize);
+
+/// One page per library — Tier 3, *how does it actually work?*
+///
+/// The libraries are written IN loft, so this is at the same time the largest body of
+/// idiomatic loft in existence and the thing a reader who has finished the tutorial most
+/// wants. Until now it existed only on GitHub.
+///
+/// Rendered from the package in the registry cache — the same source `loft api` reads — so
+/// it is the code that version actually ships. Returns `(rendered, uncached)`.
+///
+/// **Two signals, labelled apart.** A *worked example* is a `// Example: @AAA-###` citation
+/// an author chose as the thing to read first (@PLN141); *call sites* are every line that
+/// names the item, found mechanically. Showing only the first would make an untagged
+/// function look unused, which is false — the convention deliberately refuses a retroactive
+/// sweep, so most functions carry no citation and never will.
+fn generate_library_source_pages<S: std::hash::BuildHasher>(
+    index: &loft::registry_index::RegistryIndex,
+    stdlib_sections: &[StdlibSection],
+    topic_info: &[(String, String)],
+    link_map: &HashMap<String, String, S>,
+) -> std::io::Result<(usize, usize)> {
+    let mut rendered = 0usize;
+    let mut uncached = 0usize;
+    for (name, pkg) in &index.packages {
+        let Some(v) = loft::registry_index::find_best_version(pkg, "*", false) else {
+            continue;
+        };
+        let dir = loft::registry_index::extract_dir(name, &v.semver);
+        let files = collect_sources(&dir);
+
+        let mut body = String::new();
+        let _ = writeln!(
+            body,
+            "<p><a href=\"lib-{0}.html\">\u{2190} {0}</a> \u{b7} <a href=\"lib-{0}-api.html\">API reference</a> \u{b7} version {1}</p>",
+            esc(name),
+            esc(&v.semver)
+        );
+
+        if files.is_empty() {
+            // The package is not in this box's registry cache, so there is no source to
+            // show.  Say which of the two it is rather than rendering an empty page: an
+            // absent library and a library with no code look identical otherwise.
+            uncached += 1;
+            let _ = writeln!(
+                body,
+                "<p>The source for <code>{0}</code> {1} is not on this build box, so this page \
+                 could not be rendered from it. <code>loft install {0}</code> fetches the \
+                 package, and the repository is the other route.</p>",
+                esc(name),
+                esc(&v.semver)
+            );
+            if let Some(url) = pkg.homepage.as_deref().filter(|u| !u.is_empty()) {
+                let _ = writeln!(body, "<p><a href=\"{0}\">{0}</a></p>", esc(url));
+            }
+        } else {
+            rendered += 1;
+            let total: usize = files.iter().map(|f| f.text.lines().count()).sum();
+            let _ = writeln!(
+                body,
+                "<p class=\"lib-legend\">{} file(s), {} lines. This is the source the \
+                 published version ships, and it is loft \u{2014} the library is written in \
+                 the same language you call it from.</p>",
+                files.len(),
+                total
+            );
+
+            let tags = tag_definitions(&files);
+            body.push_str(&public_item_table(&files, &tags, link_map));
+
+            for f in &files {
+                let _ = writeln!(body, "<h2 id=\"{}\">{}</h2>", f.slug, esc(&f.rel));
+                body.push_str(&numbered_source(f, link_map));
+            }
+        }
+
+        let nav = build_nav(topic_info, stdlib_sections, "libraries");
+        let desc = format!(
+            "The loft source of the {name} library \u{2014} every file it ships, \
+                     highlighted, with each public item linked to its definition, its worked \
+                     example and its call sites."
+        );
+        let slug = format!("lib-{name}-src");
+        let meta = loft::documentation::PageMeta {
+            slug: &slug,
+            description: &desc,
+        };
+        let title = format!("{name} source");
+        let html = page_html(&title, &nav, &title, &body, &meta);
+        fs::write(format!("doc/lib-{name}-src.html"), html)?;
+    }
+    Ok((rendered, uncached))
+}
+
+/// Every `.loft` file a package ships, `src/` before `tests/`.
+///
+/// The tests are included deliberately: they are where the worked examples live, so leaving
+/// them out would make every `// Example:` citation point at a page that does not exist.
+/// They are also the best-explained calls in the package.
+fn collect_sources(dir: &std::path::Path) -> Vec<SourceFile> {
+    let mut out: Vec<SourceFile> = Vec::new();
+    for sub in ["src", "tests"] {
+        let mut found: Vec<std::path::PathBuf> = Vec::new();
+        collect_loft_files(&dir.join(sub), &mut found);
+        found.sort();
+        for path in found {
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let rel = path
+                .strip_prefix(dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let slug: String = rel
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            out.push(SourceFile { rel, slug, text });
+        }
+    }
+    out
+}
+
+fn collect_loft_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_loft_files(&p, out);
+        } else if p.extension().is_some_and(|x| x == "loft") {
+            out.push(p);
+        }
+    }
+}
+
+/// Where each worked-example tag is DEFINED.
+///
+/// The convention (@PLN141, LIBRARY_AUTHORING § 2a): a comment block above a `fn` defines the
+/// first tag it names — unless the block carries an `// Example:` line, which makes the whole
+/// block a citation that defines nothing. Both halves matter; keying on the tag alone would
+/// make every citation define the tag it cites.
+fn tag_definitions(files: &[SourceFile]) -> std::collections::BTreeMap<String, Site> {
+    let mut defs: std::collections::BTreeMap<String, Site> = std::collections::BTreeMap::new();
+    for f in files {
+        for (start, block) in comment_blocks(&f.text) {
+            if block.contains("Example:") {
+                continue;
+            }
+            if let Some(tag) = first_tag(&block) {
+                defs.entry(tag).or_insert((f.slug.clone(), start));
+            }
+        }
+    }
+    defs
+}
+
+/// Runs of `//` lines, each with the 1-based line number it starts at.
+fn comment_blocks(text: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut cur: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    for (i, line) in text.lines().enumerate() {
+        if line.trim_start().starts_with("//") {
+            if cur.is_empty() {
+                start = i + 1;
+            }
+            cur.push(line);
+        } else if !cur.is_empty() {
+            out.push((start, cur.join("\n")));
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        out.push((start, cur.join("\n")));
+    }
+    out
+}
+
+/// The first `@AAA-###` in a comment block, if any. Three uppercase letters, a hyphen and
+/// three digits — the shape that cannot collide with loft's `@P` / `@PLN` / `@F` families.
+fn first_tag(block: &str) -> Option<String> {
+    let bytes: Vec<char> = block.chars().collect();
+    for i in 0..bytes.len() {
+        if bytes[i] != '@' || i + 7 >= bytes.len() {
+            continue;
+        }
+        let w: String = bytes[i + 1..i + 8].iter().collect();
+        let ok = w.len() == 7
+            && w[0..3].chars().all(|c| c.is_ascii_uppercase())
+            && w.as_bytes()[3] == b'-'
+            && w[4..7].chars().all(|c| c.is_ascii_digit());
+        if ok {
+            return Some(w);
+        }
+    }
+    None
+}
+
+/// The navigation that makes a few thousand lines usable: one row per `pub` item, with where
+/// it is defined, the worked example that teaches it, and the lines that call it.
+fn public_item_table<S: std::hash::BuildHasher>(
+    files: &[SourceFile],
+    tags: &std::collections::BTreeMap<String, Site>,
+    link_map: &HashMap<String, String, S>,
+) -> String {
+    let mut items: Vec<(String, String, Site, Option<String>)> = Vec::new();
+    for f in files {
+        let lines: Vec<&str> = f.text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if let Some((kind, nm)) = public_item(line) {
+                items.push((
+                    kind.to_string(),
+                    nm,
+                    (f.slug.clone(), i + 1),
+                    cited_example(&lines, i),
+                ));
+            }
+        }
+    }
+    if items.is_empty() {
+        return String::new();
+    }
+    let _ = link_map;
+
+    let mut out = String::new();
+    out.push_str("<h2 id=\"items\">Public items</h2>\n");
+    out.push_str(
+        "<p class=\"lib-legend\">A <em>worked example</em> is a call site the author chose as \
+         the thing to read first. <em>Call sites</em> are every line naming the item, found \
+         mechanically over the source with comments excluded \u{2014} so an item with no \
+         worked example is not an item nobody uses.</p>\n",
+    );
+    out.push_str("<table class=\"lib-table\">\n");
+    out.push_str(
+        "<tr><th>Item</th><th>Defined</th><th>Worked example</th><th>Call sites</th></tr>\n",
+    );
+    for (kind, nm, (slug, line), tag) in &items {
+        let example = match tag.as_ref().and_then(|t| tags.get(t).map(|s| (t, s))) {
+            Some((t, (ts, tl))) => format!("<a href=\"#{ts}-L{tl}\">{}</a>", esc(t)),
+            // A citation whose tag is defined in ANOTHER repo — an application's source, which
+            // this package does not ship.  Naming it is still worth more than a blank: the tag
+            // is greppable, which is the whole point of the convention.
+            None => tag
+                .as_ref()
+                .map_or_else(|| "\u{2014}".to_string(), |t| esc(t)),
+        };
+        let sites = call_sites(files, nm, &(slug.clone(), *line));
+        let shown = sites
+            .iter()
+            .take(6)
+            .map(|(s, l)| format!("<a href=\"#{s}-L{l}\">{l}</a>"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cell = if sites.is_empty() {
+            "none in this package".to_string()
+        } else if sites.len() > 6 {
+            format!("{shown} \u{2026} ({} total)", sites.len())
+        } else {
+            shown
+        };
+        let _ = writeln!(
+            out,
+            "<tr><td><code>{}</code> <span class=\"search-kind\">{}</span></td>\
+             <td><a href=\"#{slug}-L{line}\">{line}</a></td><td>{example}</td><td>{cell}</td></tr>",
+            esc(nm),
+            esc(kind)
+        );
+    }
+    out.push_str("</table>\n");
+    out
+}
+
+/// `pub fn name(` \u{2192} `("fn", "name")`. Only the declaration forms a reader navigates by.
+fn public_item(line: &str) -> Option<(&'static str, String)> {
+    let t = line.trim_start();
+    let rest = t.strip_prefix("pub ")?;
+    let (kind, after) = ["fn", "struct", "enum", "const", "type"]
+        .iter()
+        .find_map(|k| rest.strip_prefix(k).map(|a| (*k, a)))?;
+    let after = after.strip_prefix(' ')?;
+    let nm: String = after
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if nm.is_empty() {
+        return None;
+    }
+    let kind = match kind {
+        "fn" => "fn",
+        "struct" => "struct",
+        "enum" => "enum",
+        "const" => "const",
+        _ => "type",
+    };
+    Some((kind, nm))
+}
+
+/// The `// Example: @AAA-###` in the comment block directly above line `idx`, if there is one.
+fn cited_example(lines: &[&str], idx: usize) -> Option<String> {
+    let mut block: Vec<&str> = Vec::new();
+    let mut i = idx;
+    while i > 0 {
+        let prev = lines[i - 1].trim_start();
+        if prev.starts_with("//") {
+            block.push(prev);
+            i -= 1;
+        } else {
+            break;
+        }
+    }
+    let joined = block.join("\n");
+    if !joined.contains("Example:") {
+        return None;
+    }
+    first_tag(&joined)
+}
+
+/// Every line naming `nm`, excluding its own declaration and excluding comment lines.
+///
+/// A text scan, not a resolver: it matches the identifier on word boundaries, so it finds
+/// uses the citation convention was never going to cover. Comments are excluded because a
+/// name discussed in prose is not a call, and their inclusion is what would turn this from a
+/// useful signal into noise.
+fn call_sites(files: &[SourceFile], nm: &str, def: &Site) -> Vec<Site> {
+    let mut out = Vec::new();
+    for f in files {
+        for (i, line) in f.text.lines().enumerate() {
+            let ln = i + 1;
+            if f.slug == def.0 && ln == def.1 {
+                continue;
+            }
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if names_identifier(line, nm) {
+                out.push((f.slug.clone(), ln));
+            }
+        }
+    }
+    out
+}
+
+/// Does `line` contain `nm` as a whole identifier?
+fn names_identifier(line: &str, nm: &str) -> bool {
+    let bytes = line.as_bytes();
+    let n = nm.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut from = 0;
+    while let Some(rel) = line[from..].find(nm) {
+        let at = from + rel;
+        let before_ok = at == 0 || !ident(bytes[at - 1]);
+        let end = at + n.len();
+        let after_ok = end >= bytes.len() || !ident(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
+}
+
+/// One file as highlighted, line-anchored source.
+///
+/// `highlight_loft` closes every span at the end of each line, so its output splits on
+/// newlines safely and each line can carry its own anchor.
+fn numbered_source<S: std::hash::BuildHasher>(
+    f: &SourceFile,
+    link_map: &HashMap<String, String, S>,
+) -> String {
+    let highlighted = loft::documentation::highlight_loft(&f.text, link_map);
+    let mut out = String::from("<pre class=\"src\"><code>");
+    for (i, line) in highlighted.lines().enumerate() {
+        // The line NUMBER is a CSS counter, not markup. Written out per line it was ~60
+        // bytes of boilerplate each, which on the largest library is half a megabyte of
+        // page weight carrying no information the stylesheet cannot derive.
+        let _ = writeln!(out, "<span id=\"{}-L{}\">{line}</span>", f.slug, i + 1);
+    }
+    out.push_str("</code></pre>\n");
+    out
 }
 
 /// A doc comment from the registry, as HTML paragraphs.

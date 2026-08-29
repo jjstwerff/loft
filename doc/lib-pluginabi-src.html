@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pluginabi source — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The loft source of the pluginabi library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-pluginabi-src.html">
+<meta property="og:title" content="pluginabi source — Loft, a programming language for small browser games">
+<meta property="og:description" content="The loft source of the pluginabi library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-pluginabi-src.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="pluginabi source — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The loft source of the pluginabi library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>pluginabi source</h1>
+<article>
+<p><a href="lib-pluginabi.html">← pluginabi</a> · <a href="lib-pluginabi-api.html">API reference</a> · version 0.1.2</p>
+<p class="lib-legend">2 file(s), 352 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
+<h2 id="items">Public items</h2>
+<p class="lib-legend">A <em>worked example</em> is a call site the author chose as the thing to read first. <em>Call sites</em> are every line naming the item, found mechanically over the source with comments excluded — so an item with no worked example is not an item nobody uses.</p>
+<table class="lib-table">
+<tr><th>Item</th><th>Defined</th><th>Worked example</th><th>Call sites</th></tr>
+<tr><td><code>OP_INITIAL_STATE</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L76">76</a></td><td>—</td><td><a href="#src-pluginabi-loft-L84">84</a> <a href="#tests-pluginabi-loft-L43">43</a> <a href="#tests-pluginabi-loft-L45">45</a> <a href="#tests-pluginabi-loft-L102">102</a> <a href="#tests-pluginabi-loft-L108">108</a> <a href="#tests-pluginabi-loft-L135">135</a> … (7 total)</td></tr>
+<tr><td><code>OP_APPLY_OP</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L77">77</a></td><td>—</td><td><a href="#src-pluginabi-loft-L84">84</a> <a href="#src-pluginabi-loft-L92">92</a> <a href="#tests-pluginabi-loft-L35">35</a> <a href="#tests-pluginabi-loft-L37">37</a> <a href="#tests-pluginabi-loft-L78">78</a> <a href="#tests-pluginabi-loft-L102">102</a> … (10 total)</td></tr>
+<tr><td><code>OP_MAKE_OP</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L78">78</a></td><td>—</td><td><a href="#src-pluginabi-loft-L84">84</a> <a href="#src-pluginabi-loft-L92">92</a> <a href="#tests-pluginabi-loft-L102">102</a> <a href="#tests-pluginabi-loft-L107">107</a> <a href="#tests-pluginabi-loft-L137">137</a> <a href="#tests-pluginabi-loft-L157">157</a> … (7 total)</td></tr>
+<tr><td><code>OP_RENDER</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L79">79</a></td><td>—</td><td><a href="#src-pluginabi-loft-L85">85</a> <a href="#tests-pluginabi-loft-L63">63</a> <a href="#tests-pluginabi-loft-L102">102</a> <a href="#tests-pluginabi-loft-L138">138</a> <a href="#tests-pluginabi-loft-L164">164</a></td></tr>
+<tr><td><code>OP_SNAPSHOT</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L80">80</a></td><td>—</td><td><a href="#src-pluginabi-loft-L85">85</a> <a href="#tests-pluginabi-loft-L90">90</a> <a href="#tests-pluginabi-loft-L102">102</a> <a href="#tests-pluginabi-loft-L108">108</a> <a href="#tests-pluginabi-loft-L139">139</a> <a href="#tests-pluginabi-loft-L168">168</a></td></tr>
+<tr><td><code>OP_LOAD_SNAPSHOT</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L81">81</a></td><td>—</td><td><a href="#src-pluginabi-loft-L85">85</a> <a href="#tests-pluginabi-loft-L102">102</a> <a href="#tests-pluginabi-loft-L140">140</a> <a href="#tests-pluginabi-loft-L169">169</a> <a href="#tests-pluginabi-loft-L174">174</a></td></tr>
+<tr><td><code>valid_op</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L83">83</a></td><td>—</td><td><a href="#src-pluginabi-loft-L162">162</a> <a href="#tests-pluginabi-loft-L103">103</a> <a href="#tests-pluginabi-loft-L106">106</a></td></tr>
+<tr><td><code>takes_arg</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L91">91</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L107">107</a> <a href="#tests-pluginabi-loft-L108">108</a></td></tr>
+<tr><td><code>request</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L101">101</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L35">35</a> <a href="#tests-pluginabi-loft-L43">43</a> <a href="#tests-pluginabi-loft-L63">63</a> <a href="#tests-pluginabi-loft-L78">78</a> <a href="#tests-pluginabi-loft-L90">90</a> <a href="#tests-pluginabi-loft-L97">97</a> … (8 total)</td></tr>
+<tr><td><code>req_op</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L109">109</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L37">37</a> <a href="#tests-pluginabi-loft-L45">45</a> <a href="#tests-pluginabi-loft-L131">131</a></td></tr>
+<tr><td><code>req_state_b64</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L110">110</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L38">38</a> <a href="#tests-pluginabi-loft-L44">44</a> <a href="#tests-pluginabi-loft-L79">79</a> <a href="#tests-pluginabi-loft-L132">132</a></td></tr>
+<tr><td><code>req_arg_b64</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L111">111</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L39">39</a> <a href="#tests-pluginabi-loft-L44">44</a> <a href="#tests-pluginabi-loft-L80">80</a> <a href="#tests-pluginabi-loft-L133">133</a></td></tr>
+<tr><td><code>reply_ok</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L120">120</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L50">50</a> <a href="#tests-pluginabi-loft-L82">82</a> <a href="#tests-pluginabi-loft-L135">135</a> <a href="#tests-pluginabi-loft-L136">136</a> <a href="#tests-pluginabi-loft-L137">137</a> <a href="#tests-pluginabi-loft-L138">138</a> … (8 total)</td></tr>
+<tr><td><code>reply_err</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L127">127</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L54">54</a> <a href="#tests-pluginabi-loft-L130">130</a> <a href="#tests-pluginabi-loft-L141">141</a> <a href="#tests-pluginabi-loft-L144">144</a></td></tr>
+<tr><td><code>reply_is_ok</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L136">136</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L51">51</a> <a href="#tests-pluginabi-loft-L55">55</a> <a href="#tests-pluginabi-loft-L61">61</a> <a href="#tests-pluginabi-loft-L62">62</a> <a href="#tests-pluginabi-loft-L63">63</a> <a href="#tests-pluginabi-loft-L83">83</a> … (11 total)</td></tr>
+<tr><td><code>reply_out_b64</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L144">144</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L52">52</a> <a href="#tests-pluginabi-loft-L84">84</a> <a href="#tests-pluginabi-loft-L153">153</a> <a href="#tests-pluginabi-loft-L157">157</a> <a href="#tests-pluginabi-loft-L158">158</a> <a href="#tests-pluginabi-loft-L159">159</a> … (10 total)</td></tr>
+<tr><td><code>reply_err_code</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L145">145</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L56">56</a> <a href="#tests-pluginabi-loft-L175">175</a> <a href="#tests-pluginabi-loft-L180">180</a></td></tr>
+<tr><td><code>ERR_UNKNOWN_OP</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L151">151</a></td><td>—</td><td><a href="#src-pluginabi-loft-L162">162</a> <a href="#tests-pluginabi-loft-L98">98</a> <a href="#tests-pluginabi-loft-L144">144</a> <a href="#tests-pluginabi-loft-L180">180</a></td></tr>
+<tr><td><code>ERR_MALFORMED</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L152">152</a></td><td>—</td><td><a href="#src-pluginabi-loft-L160">160</a> <a href="#tests-pluginabi-loft-L93">93</a> <a href="#tests-pluginabi-loft-L94">94</a></td></tr>
+<tr><td><code>ERR_PLUGIN</code> <span class="search-kind">const</span></td><td><a href="#src-pluginabi-loft-L153">153</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L54">54</a> <a href="#tests-pluginabi-loft-L56">56</a> <a href="#tests-pluginabi-loft-L141">141</a> <a href="#tests-pluginabi-loft-L175">175</a></td></tr>
+<tr><td><code>check_request</code> <span class="search-kind">fn</span></td><td><a href="#src-pluginabi-loft-L159">159</a></td><td>—</td><td><a href="#tests-pluginabi-loft-L91">91</a> <a href="#tests-pluginabi-loft-L93">93</a> <a href="#tests-pluginabi-loft-L94">94</a> <a href="#tests-pluginabi-loft-L98">98</a> <a href="#tests-pluginabi-loft-L129">129</a></td></tr>
+</table>
+<h2 id="src-pluginabi-loft">src/pluginabi.loft</h2>
+<pre class="src"><code><span id="src-pluginabi-loft-L1"><span class="cm">// pluginabi — the §9c.2 plugin call protocol (Track L4, step 1).</span></span>
+<span id="src-pluginabi-loft-L2"><span class="cm">//</span></span>
+<span id="src-pluginabi-loft-L3"><span class="cm">// WHAT THIS IS. A plugin implements six pure functions (§9c.2). The host does NOT call them as</span></span>
+<span id="src-pluginabi-loft-L4"><span class="cm">// six named wasm exports — that would need a codegen feature loft does not have, and inventing a</span></span>
+<span id="src-pluginabi-loft-L5"><span class="cm">// per-plugin `(ptr,len)` ABI beside loft's own was the mistake the first two design drafts made.</span></span>
+<span id="src-pluginabi-loft-L6"><span class="cm">// Instead the host drives the plugin over the byte channel loft ALREADY exposes on every wasm it</span></span>
+<span id="src-pluginabi-loft-L7"><span class="cm">// compiles (`loft_io.loft_host_input_len` / `loft_host_input_copy` in, `loft_host_print` out,</span></span>
+<span id="src-pluginabi-loft-L8"><span class="cm">// pumped by the host) — exactly the shape `tools/wasm_debug_client.mjs` drives the debugger with.</span></span>
+<span id="src-pluginabi-loft-L9"><span class="cm">//</span></span>
+<span id="src-pluginabi-loft-L10"><span class="cm">// So the six operations are FRAMES on one channel, and this file is that frame vocabulary. It is</span></span>
+<span id="src-pluginabi-loft-L11"><span class="cm">// the only thing either side needs to agree on: no ABI, no shim, no runtime. See</span></span>
+<span id="src-pluginabi-loft-L12"><span class="cm">// doc/PLUGIN_RUNTIME.md § "P3 results".</span></span>
+<span id="src-pluginabi-loft-L13"><span class="cm">//</span></span>
+<span id="src-pluginabi-loft-L14"><span class="cm">// WHY CBOR AND NOT A TEXT PROTOCOL. The debugger's `D!:` frames are text because breakpoints and</span></span>
+<span id="src-pluginabi-loft-L15"><span class="cm">// expressions are text. Plugin payloads are opaque BYTES (state, ops, snapshots — §9c.2 says the</span></span>
+<span id="src-pluginabi-loft-L16"><span class="cm">// plugin owns their meaning), and they must survive a round-trip unchanged; canonical CBOR</span></span>
+<span id="src-pluginabi-loft-L17"><span class="cm">// already carries byte strings losslessly here and is what every other record in this project</span></span>
+<span id="src-pluginabi-loft-L18"><span class="cm">// uses. Reusing it means the §8.15 determinism story needs no second encoding to reason about.</span></span>
+<span id="src-pluginabi-loft-L19"><span class="cm">//</span></span>
+<span id="src-pluginabi-loft-L20"><span class="cm">// Run: `loft test`.</span></span>
+<span id="src-pluginabi-loft-L21"><span class="kw">use</span> cbor;     <span class="cm">// the published canonical-CBOR codec</span></span>
+<span id="src-pluginabi-loft-L22"><span class="kw">use</span> crypto;   <span class="cm">// base64 &lt;-&gt; bytes</span></span>
+<span id="src-pluginabi-loft-L23"></span>
+<span id="src-pluginabi-loft-L24"><span class="cm">// ---------- CBOR helpers ----------</span></span>
+<span id="src-pluginabi-loft-L25"><span class="cm">// Inlined rather than depending on a project-local CBOR wrapper: a published protocol library</span></span>
+<span id="src-pluginabi-loft-L26"><span class="cm">// must stand on published deps alone.</span></span>
+<span id="src-pluginabi-loft-L27"><span class="cm">//</span></span>
+<span id="src-pluginabi-loft-L28"><span class="cm">// ALL PREFIXED `pa_`, and that is not cosmetic. A library's PRIVATE helpers still share a name</span></span>
+<span id="src-pluginabi-loft-L29"><span class="cm">// space with every other library in a consumer's program, so a plain `decode_value` here collides</span></span>
+<span id="src-pluginabi-loft-L30"><span class="cm">// with a consumer's own `decode_value` — which is exactly what happened: the collision was</span></span>
+<span id="src-pluginabi-loft-L31"><span class="cm">// invisible in this package's own tests and in a minimal consumer, and only surfaced in a program</span></span>
+<span id="src-pluginabi-loft-L32"><span class="cm">// that used both. A published library must not impose names a consumer cannot see coming.</span></span>
+<span id="src-pluginabi-loft-L33"><span class="kw">fn</span> <span class="fn-call">pa_ctext</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">CborValue</span>        { <span class="kw">return</span> <span class="en">CText</span> { value: s }; }</span>
+<span id="src-pluginabi-loft-L34"><span class="kw">fn</span> <span class="fn-call">pa_cbool</span>(b: <span class="ty"><a href="stdlib-types.html">boolean</a></span>) -&gt; <span class="en">CborValue</span>     { <span class="kw">return</span> <span class="en">CBool</span> { value: b }; }</span>
+<span id="src-pluginabi-loft-L35"><span class="kw">fn</span> <span class="fn-call">pa_cbytes</span>(b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">CborValue</span> { <span class="kw">return</span> <span class="en">CBytes</span> { value: <span class="fn-call">base64_to_bytes</span>(b64) }; }</span>
+<span id="src-pluginabi-loft-L36"><span class="kw">fn</span> <span class="fn-call">pa_te</span>(k: <span class="ty"><a href="stdlib-types.html">text</a></span>, v: <span class="en">CborValue</span>) -&gt; <span class="en">CborEntry</span> { <span class="kw">return</span> <span class="en">CborEntry</span> { key: <span class="en">CText</span> { value: k }, value: v }; }</span>
+<span id="src-pluginabi-loft-L37"></span>
+<span id="src-pluginabi-loft-L38"><span class="kw">fn</span> <span class="fn-call">pa_decode</span>(bytes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="en">CborValue</span> {</span>
+<span id="src-pluginabi-loft-L39">  d = <span class="fn-call">decode</span>(bytes);</span>
+<span id="src-pluginabi-loft-L40">  v = d.value;      <span class="cm">// local copy — returning d.value directly corrupts native (loft #425)</span></span>
+<span id="src-pluginabi-loft-L41">  <span class="kw">return</span> v;</span>
+<span id="src-pluginabi-loft-L42">}</span>
+<span id="src-pluginabi-loft-L43"><span class="kw">fn</span> <span class="fn-call">pa_decode_ok</span>(bytes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { d = <span class="fn-call">decode</span>(bytes); <span class="kw">return</span> d.ok; }</span>
+<span id="src-pluginabi-loft-L44"></span>
+<span id="src-pluginabi-loft-L45"><span class="kw">fn</span> <span class="fn-call">pa_get</span>(m: <span class="en">CborValue</span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">CborValue</span> {</span>
+<span id="src-pluginabi-loft-L46">  <span class="cm">// The `match` is the function's final EXPRESSION (fallback `CNull` in the arm tails), NOT a</span></span>
+<span id="src-pluginabi-loft-L47">  <span class="cm">// statement followed by `return CNull`. Those two forms are logically identical, but the</span></span>
+<span id="src-pluginabi-loft-L48">  <span class="cm">// statement form corrupts the early-returned `r` once its embedded vector is large enough</span></span>
+<span id="src-pluginabi-loft-L49">  <span class="cm">// (~54 bytes) — on interpret AND native — because `r` is a heap CborValue and the fall-through</span></span>
+<span id="src-pluginabi-loft-L50">  <span class="cm">// path frees it while it is still the live return value. See loft#651. The expression form is</span></span>
+<span id="src-pluginabi-loft-L51">  <span class="cm">// the workaround until that is fixed; every plugin frame read funnels through here.</span></span>
+<span id="src-pluginabi-loft-L52">  match m {</span>
+<span id="src-pluginabi-loft-L53">    <span class="en">CMap</span> { entries } =&gt; {</span>
+<span id="src-pluginabi-loft-L54">      <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(entries) {</span>
+<span id="src-pluginabi-loft-L55">        e = entries[i] ?? <span class="en">CborEntry</span> { key: <span class="en">CNull</span>, value: <span class="en">CNull</span> };</span>
+<span id="src-pluginabi-loft-L56">        match e.key { <span class="en">CText</span> { value } =&gt; { <span class="kw">if</span> value == key { r = e.value; <span class="kw">return</span> r; } }, _ =&gt; {} }</span>
+<span id="src-pluginabi-loft-L57">      }</span>
+<span id="src-pluginabi-loft-L58">      <span class="en">CNull</span></span>
+<span id="src-pluginabi-loft-L59">    },</span>
+<span id="src-pluginabi-loft-L60">    _ =&gt; <span class="en">CNull</span>,</span>
+<span id="src-pluginabi-loft-L61">  }</span>
+<span id="src-pluginabi-loft-L62">}</span>
+<span id="src-pluginabi-loft-L63"><span class="kw">fn</span> <span class="fn-call">pa_text</span>(m: <span class="en">CborValue</span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-pluginabi-loft-L64">  match <span class="fn-call">pa_get</span>(m, key) { <span class="en">CText</span> { value } =&gt; { <span class="kw">return</span> <span class="st">"{value}"</span>; }, _ =&gt; {} }</span>
+<span id="src-pluginabi-loft-L65">  <span class="kw">return</span> <span class="st">""</span>;</span>
+<span id="src-pluginabi-loft-L66">}</span>
+<span id="src-pluginabi-loft-L67"><span class="kw">fn</span> <span class="fn-call">pa_bytes</span>(m: <span class="en">CborValue</span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-pluginabi-loft-L68">  match <span class="fn-call">pa_get</span>(m, key) { <span class="en">CBytes</span> { value } =&gt; { <span class="kw">return</span> <span class="fn-call">bytes_to_base64</span>(value); }, _ =&gt; {} }</span>
+<span id="src-pluginabi-loft-L69">  <span class="kw">return</span> <span class="st">""</span>;</span>
+<span id="src-pluginabi-loft-L70">}</span>
+<span id="src-pluginabi-loft-L71"></span>
+<span id="src-pluginabi-loft-L72"><span class="cm">// ---------- the operation vocabulary (§9c.2) ----------</span></span>
+<span id="src-pluginabi-loft-L73"><span class="cm">// The six, and only these six. `valid_op` is the gate: a host that receives an unknown op must</span></span>
+<span id="src-pluginabi-loft-L74"><span class="cm">// reject rather than guess, because a plugin and host disagreeing about the vocabulary is a</span></span>
+<span id="src-pluginabi-loft-L75"><span class="cm">// version skew, not a request to be interpreted.</span></span>
+<span id="src-pluginabi-loft-L76"><span class="kw">pub</span> const <span class="en">OP_INITIAL_STATE</span>: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"initial_state"</span>;</span>
+<span id="src-pluginabi-loft-L77"><span class="kw">pub</span> const <span class="en">OP_APPLY_OP</span>:      <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"apply_op"</span>;</span>
+<span id="src-pluginabi-loft-L78"><span class="kw">pub</span> const <span class="en">OP_MAKE_OP</span>:       <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"make_op"</span>;</span>
+<span id="src-pluginabi-loft-L79"><span class="kw">pub</span> const <span class="en">OP_RENDER</span>:        <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"render"</span>;</span>
+<span id="src-pluginabi-loft-L80"><span class="kw">pub</span> const <span class="en">OP_SNAPSHOT</span>:      <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"snapshot"</span>;</span>
+<span id="src-pluginabi-loft-L81"><span class="kw">pub</span> const <span class="en">OP_LOAD_SNAPSHOT</span>: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"load_snapshot"</span>;</span>
+<span id="src-pluginabi-loft-L82"></span>
+<span id="src-pluginabi-loft-L83"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">valid_op</span>(op: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-pluginabi-loft-L84">  <span class="kw">return</span> (op == <span class="en">OP_INITIAL_STATE</span>) || (op == <span class="en">OP_APPLY_OP</span>) || (op == <span class="en">OP_MAKE_OP</span>)</span>
+<span id="src-pluginabi-loft-L85">      || (op == <span class="en">OP_RENDER</span>) || (op == <span class="en">OP_SNAPSHOT</span>) || (op == <span class="en">OP_LOAD_SNAPSHOT</span>);</span>
+<span id="src-pluginabi-loft-L86">}</span>
+<span id="src-pluginabi-loft-L87"></span>
+<span id="src-pluginabi-loft-L88"><span class="cm">// Which operations read the `arg` slot. Recorded here rather than in each host so the two sides</span></span>
+<span id="src-pluginabi-loft-L89"><span class="cm">// cannot drift: a host that sends `arg` for `snapshot` is confused about the contract, and a</span></span>
+<span id="src-pluginabi-loft-L90"><span class="cm">// plugin that reads it would be reading whatever the host happened to leave there.</span></span>
+<span id="src-pluginabi-loft-L91"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">takes_arg</span>(op: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-pluginabi-loft-L92">  <span class="kw">return</span> (op == <span class="en">OP_APPLY_OP</span>) || (op == <span class="en">OP_MAKE_OP</span>);</span>
+<span id="src-pluginabi-loft-L93">}</span>
+<span id="src-pluginabi-loft-L94"></span>
+<span id="src-pluginabi-loft-L95"><span class="cm">// ---------- request frames ----------</span></span>
+<span id="src-pluginabi-loft-L96"><span class="cm">// { "op": text, "state": bytes, "arg": bytes }</span></span>
+<span id="src-pluginabi-loft-L97"><span class="cm">//</span></span>
+<span id="src-pluginabi-loft-L98"><span class="cm">// `state` is always present (the empty byte string for `initial_state`), so the plugin never has</span></span>
+<span id="src-pluginabi-loft-L99"><span class="cm">// to distinguish "absent" from "empty" — an absent-vs-empty ambiguity across a wire is exactly</span></span>
+<span id="src-pluginabi-loft-L100"><span class="cm">// the kind of thing that produces a plausible wrong answer instead of an error.</span></span>
+<span id="src-pluginabi-loft-L101"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">request</span>(op: <span class="ty"><a href="stdlib-types.html">text</a></span>, state_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, arg_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt; {</span>
+<span id="src-pluginabi-loft-L102">  es: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">CborEntry</span>&gt; = [];</span>
+<span id="src-pluginabi-loft-L103">  es += [ <span class="fn-call">pa_te</span>(<span class="st">"op"</span>, <span class="fn-call">pa_ctext</span>(op)) ];</span>
+<span id="src-pluginabi-loft-L104">  es += [ <span class="fn-call">pa_te</span>(<span class="st">"state"</span>, <span class="fn-call">pa_cbytes</span>(state_b64)) ];</span>
+<span id="src-pluginabi-loft-L105">  es += [ <span class="fn-call">pa_te</span>(<span class="st">"arg"</span>, <span class="fn-call">pa_cbytes</span>(arg_b64)) ];</span>
+<span id="src-pluginabi-loft-L106">  <span class="kw">return</span> <span class="fn-call">encode</span>(<span class="en">CMap</span> { entries: es });</span>
+<span id="src-pluginabi-loft-L107">}</span>
+<span id="src-pluginabi-loft-L108"></span>
+<span id="src-pluginabi-loft-L109"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">req_op</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span>        { <span class="kw">return</span> <span class="fn-call">pa_text</span>(<span class="fn-call">pa_decode</span>(frame), <span class="st">"op"</span>); }</span>
+<span id="src-pluginabi-loft-L110"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">req_state_b64</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="kw">return</span> <span class="fn-call">pa_bytes</span>(<span class="fn-call">pa_decode</span>(frame), <span class="st">"state"</span>); }</span>
+<span id="src-pluginabi-loft-L111"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">req_arg_b64</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span>   { <span class="kw">return</span> <span class="fn-call">pa_bytes</span>(<span class="fn-call">pa_decode</span>(frame), <span class="st">"arg"</span>); }</span>
+<span id="src-pluginabi-loft-L112"></span>
+<span id="src-pluginabi-loft-L113"><span class="cm">// ---------- reply frames ----------</span></span>
+<span id="src-pluginabi-loft-L114"><span class="cm">// success: { "ok": true,  "out": bytes }</span></span>
+<span id="src-pluginabi-loft-L115"><span class="cm">// failure: { "ok": false, "err": text }</span></span>
+<span id="src-pluginabi-loft-L116"><span class="cm">//</span></span>
+<span id="src-pluginabi-loft-L117"><span class="cm">// A failure carries a CODE, not a message: the host shows it to a person, and a free-form string</span></span>
+<span id="src-pluginabi-loft-L118"><span class="cm">// from the plugin would be the one channel out of the sandbox that is neither bytes-the-host-</span></span>
+<span id="src-pluginabi-loft-L119"><span class="cm">// inspects (render) nor a value it asked for. §9c.5 keeps render output the only rich channel.</span></span>
+<span id="src-pluginabi-loft-L120"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">reply_ok</span>(out_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt; {</span>
+<span id="src-pluginabi-loft-L121">  es: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">CborEntry</span>&gt; = [];</span>
+<span id="src-pluginabi-loft-L122">  es += [ <span class="fn-call">pa_te</span>(<span class="st">"ok"</span>, <span class="fn-call">pa_cbool</span>(<span class="kw">true</span>)) ];</span>
+<span id="src-pluginabi-loft-L123">  es += [ <span class="fn-call">pa_te</span>(<span class="st">"out"</span>, <span class="fn-call">pa_cbytes</span>(out_b64)) ];</span>
+<span id="src-pluginabi-loft-L124">  <span class="kw">return</span> <span class="fn-call">encode</span>(<span class="en">CMap</span> { entries: es });</span>
+<span id="src-pluginabi-loft-L125">}</span>
+<span id="src-pluginabi-loft-L126"></span>
+<span id="src-pluginabi-loft-L127"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">reply_err</span>(code: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt; {</span>
+<span id="src-pluginabi-loft-L128">  es: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">CborEntry</span>&gt; = [];</span>
+<span id="src-pluginabi-loft-L129">  es += [ <span class="fn-call">pa_te</span>(<span class="st">"ok"</span>, <span class="fn-call">pa_cbool</span>(<span class="kw">false</span>)) ];</span>
+<span id="src-pluginabi-loft-L130">  es += [ <span class="fn-call">pa_te</span>(<span class="st">"err"</span>, <span class="fn-call">pa_ctext</span>(code)) ];</span>
+<span id="src-pluginabi-loft-L131">  <span class="kw">return</span> <span class="fn-call">encode</span>(<span class="en">CMap</span> { entries: es });</span>
+<span id="src-pluginabi-loft-L132">}</span>
+<span id="src-pluginabi-loft-L133"></span>
+<span id="src-pluginabi-loft-L134"><span class="cm">// true only for a well-formed success reply. A frame that does not decode, or whose `ok` is not</span></span>
+<span id="src-pluginabi-loft-L135"><span class="cm">// the boolean true, reads as failure — the fail-closed direction.</span></span>
+<span id="src-pluginabi-loft-L136"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">reply_is_ok</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {</span>
+<span id="src-pluginabi-loft-L137">  <span class="kw">if</span> !<span class="fn-call">pa_decode_ok</span>(frame) { <span class="kw">return</span> <span class="kw">false</span>; }</span>
+<span id="src-pluginabi-loft-L138">  match <span class="fn-call">pa_get</span>(<span class="fn-call">pa_decode</span>(frame), <span class="st">"ok"</span>) {</span>
+<span id="src-pluginabi-loft-L139">    <span class="en">CBool</span> { value } =&gt; { <span class="kw">return</span> value; },</span>
+<span id="src-pluginabi-loft-L140">    _ =&gt; { <span class="kw">return</span> <span class="kw">false</span>; },</span>
+<span id="src-pluginabi-loft-L141">  }</span>
+<span id="src-pluginabi-loft-L142">}</span>
+<span id="src-pluginabi-loft-L143"></span>
+<span id="src-pluginabi-loft-L144"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">reply_out_b64</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="kw">return</span> <span class="fn-call">pa_bytes</span>(<span class="fn-call">pa_decode</span>(frame), <span class="st">"out"</span>); }</span>
+<span id="src-pluginabi-loft-L145"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">reply_err_code</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="kw">return</span> <span class="fn-call">pa_text</span>(<span class="fn-call">pa_decode</span>(frame), <span class="st">"err"</span>); }</span>
+<span id="src-pluginabi-loft-L146"></span>
+<span id="src-pluginabi-loft-L147"><span class="cm">// ---------- the error codes a host may produce ----------</span></span>
+<span id="src-pluginabi-loft-L148"><span class="cm">// Closed set, so a host and a UI cannot drift. `ERR_UNKNOWN_OP` is the version-skew case above;</span></span>
+<span id="src-pluginabi-loft-L149"><span class="cm">// `ERR_MALFORMED` is a frame that did not decode; `ERR_PLUGIN` is the plugin reporting it could</span></span>
+<span id="src-pluginabi-loft-L150"><span class="cm">// not satisfy a well-formed request (§9c.2 permits that — e.g. load_snapshot on foreign bytes).</span></span>
+<span id="src-pluginabi-loft-L151"><span class="kw">pub</span> const <span class="en">ERR_UNKNOWN_OP</span>: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"unknown-op"</span>;</span>
+<span id="src-pluginabi-loft-L152"><span class="kw">pub</span> const <span class="en">ERR_MALFORMED</span>:  <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"malformed-frame"</span>;</span>
+<span id="src-pluginabi-loft-L153"><span class="kw">pub</span> const <span class="en">ERR_PLUGIN</span>:     <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"plugin-error"</span>;</span>
+<span id="src-pluginabi-loft-L154"></span>
+<span id="src-pluginabi-loft-L155"><span class="cm">// Validate an inbound request frame the way a host must, BEFORE dispatching it: decode, then</span></span>
+<span id="src-pluginabi-loft-L156"><span class="cm">// check the vocabulary. Returns "" when the frame is acceptable, else the error code to reply</span></span>
+<span id="src-pluginabi-loft-L157"><span class="cm">// with. Centralised so every host does the same two checks in the same order rather than each</span></span>
+<span id="src-pluginabi-loft-L158"><span class="cm">// re-deriving them — the §9c.2 contract has one front door.</span></span>
+<span id="src-pluginabi-loft-L159"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">check_request</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-pluginabi-loft-L160">  <span class="kw">if</span> !<span class="fn-call">pa_decode_ok</span>(frame) { <span class="kw">return</span> <span class="en">ERR_MALFORMED</span>; }</span>
+<span id="src-pluginabi-loft-L161">  op = <span class="fn-call">pa_text</span>(<span class="fn-call">pa_decode</span>(frame), <span class="st">"op"</span>);</span>
+<span id="src-pluginabi-loft-L162">  <span class="kw">if</span> !<span class="fn-call">valid_op</span>(op) { <span class="kw">return</span> <span class="en">ERR_UNKNOWN_OP</span>; }</span>
+<span id="src-pluginabi-loft-L163">  <span class="kw">return</span> <span class="st">""</span>;</span>
+<span id="src-pluginabi-loft-L164">}</span>
+</code></pre>
+<h2 id="tests-pluginabi-loft">tests/pluginabi.loft</h2>
+<pre class="src"><code><span id="tests-pluginabi-loft-L1"><span class="cm">// Tests for pluginabi — the §9c.2 plugin call protocol. Run: `loft test`.</span></span>
+<span id="tests-pluginabi-loft-L2"><span class="cm">//</span></span>
+<span id="tests-pluginabi-loft-L3"><span class="cm">// The load-bearing test is the last one: a COMPLETE six-operation plugin driven end to end over</span></span>
+<span id="tests-pluginabi-loft-L4"><span class="cm">// nothing but frames. If the protocol were missing something a real plugin needs, that test could</span></span>
+<span id="tests-pluginabi-loft-L5"><span class="cm">// not be written — which is the point of writing it here rather than asserting field-by-field.</span></span>
+<span id="tests-pluginabi-loft-L6"><span class="kw">use</span> pluginabi;</span>
+<span id="tests-pluginabi-loft-L7"><span class="kw">use</span> cbor;</span>
+<span id="tests-pluginabi-loft-L8"><span class="kw">use</span> crypto;</span>
+<span id="tests-pluginabi-loft-L9"></span>
+<span id="tests-pluginabi-loft-L10"><span class="cm">// Fixture helpers. The library keeps its CBOR shims PRIVATE — exporting them is not a protocol</span></span>
+<span id="tests-pluginabi-loft-L11"><span class="cm">// library's job — so a test that builds its own payloads brings its own, exactly as a real plugin</span></span>
+<span id="tests-pluginabi-loft-L12"><span class="cm">// author would.</span></span>
+<span id="tests-pluginabi-loft-L13"><span class="kw">fn</span> <span class="fn-call">t_te</span>(k: <span class="ty"><a href="stdlib-types.html">text</a></span>, v: <span class="en">CborValue</span>) -&gt; <span class="en">CborEntry</span> { <span class="kw">return</span> <span class="en">CborEntry</span> { key: <span class="en">CText</span> { value: k }, value: v }; }</span>
+<span id="tests-pluginabi-loft-L14"><span class="kw">fn</span> <span class="fn-call">t_cuint</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">CborValue</span> { <span class="kw">return</span> <span class="en">CInt</span> { value: n }; }</span>
+<span id="tests-pluginabi-loft-L15"><span class="kw">fn</span> <span class="fn-call">t_decode</span>(bytes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="en">CborValue</span> { d = <span class="fn-call">decode</span>(bytes); v = d.value; <span class="kw">return</span> v; }</span>
+<span id="tests-pluginabi-loft-L16"><span class="kw">fn</span> <span class="fn-call">t_decode_ok</span>(bytes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { d = <span class="fn-call">decode</span>(bytes); <span class="kw">return</span> d.ok; }</span>
+<span id="tests-pluginabi-loft-L17"><span class="kw">fn</span> <span class="fn-call">t_uint</span>(m: <span class="en">CborValue</span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="tests-pluginabi-loft-L18">  match m {</span>
+<span id="tests-pluginabi-loft-L19">    <span class="en">CMap</span> { entries } =&gt; {</span>
+<span id="tests-pluginabi-loft-L20">      <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..l</span><span class="fn-call">en</span>(entries) {</span>
+<span id="tests-pluginabi-loft-L21">        e = entries[i] ?? <span class="en">CborEntry</span> { key: <span class="en">CNull</span>, value: <span class="en">CNull</span> };</span>
+<span id="tests-pluginabi-loft-L22">        match e.key { <span class="en">CText</span> { value } =&gt; {</span>
+<span id="tests-pluginabi-loft-L23">          <span class="kw">if</span> value == key { match e.value { <span class="en">CInt</span> { value } =&gt; { <span class="kw">return</span> value; }, _ =&gt; {} } }</span>
+<span id="tests-pluginabi-loft-L24">        }, _ =&gt; {} }</span>
+<span id="tests-pluginabi-loft-L25">      }</span>
+<span id="tests-pluginabi-loft-L26">    },</span>
+<span id="tests-pluginabi-loft-L27">    _ =&gt; {},</span>
+<span id="tests-pluginabi-loft-L28">  }</span>
+<span id="tests-pluginabi-loft-L29">  <span class="kw">return</span> <span class="nm">0</span>;</span>
+<span id="tests-pluginabi-loft-L30">}</span>
+<span id="tests-pluginabi-loft-L31"></span>
+<span id="tests-pluginabi-loft-L32"><span class="kw">fn</span> <span class="fn-call">test_request_round_trip</span>() {</span>
+<span id="tests-pluginabi-loft-L33">  st = <span class="fn-call">bytes_to_base64</span>([<span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">2</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">255</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>]);   <span class="cm">// binary, incl. a non-UTF-8 byte</span></span>
+<span id="tests-pluginabi-loft-L34">  ar = <span class="fn-call">bytes_to_base64</span>([<span class="nm">0</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">7</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>]);</span>
+<span id="tests-pluginabi-loft-L35">  f = <span class="fn-call">request</span>(<span class="en">OP_APPLY_OP</span>, st, ar);</span>
+<span id="tests-pluginabi-loft-L36"></span>
+<span id="tests-pluginabi-loft-L37">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">req_op</span>(f) == <span class="en">OP_APPLY_OP</span>, <span class="st">"op round-trips"</span>);</span>
+<span id="tests-pluginabi-loft-L38">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">req_state_b64</span>(f) == st, <span class="st">"state round-trips byte-exactly"</span>);</span>
+<span id="tests-pluginabi-loft-L39">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">req_arg_b64</span>(f) == ar, <span class="st">"arg round-trips byte-exactly"</span>);</span>
+<span id="tests-pluginabi-loft-L40"></span>
+<span id="tests-pluginabi-loft-L41">  <span class="cm">// the empty-state case: `initial_state` sends "" rather than omitting the field, so a plugin</span></span>
+<span id="tests-pluginabi-loft-L42">  <span class="cm">// never has to tell absent from empty</span></span>
+<span id="tests-pluginabi-loft-L43">  e = <span class="fn-call">request</span>(<span class="en">OP_INITIAL_STATE</span>, <span class="st">""</span>, <span class="st">""</span>);</span>
+<span id="tests-pluginabi-loft-L44">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">req_state_b64</span>(e) == <span class="st">""</span> &amp;&amp; <span class="fn-call">req_arg_b64</span>(e) == <span class="st">""</span>, <span class="st">"empty state/arg survive as empty"</span>);</span>
+<span id="tests-pluginabi-loft-L45">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">req_op</span>(e) == <span class="en">OP_INITIAL_STATE</span>, <span class="st">"op survives alongside empty payloads"</span>);</span>
+<span id="tests-pluginabi-loft-L46">}</span>
+<span id="tests-pluginabi-loft-L47"></span>
+<span id="tests-pluginabi-loft-L48"><span class="kw">fn</span> <span class="fn-call">test_reply_round_trip_and_fails_closed</span>() {</span>
+<span id="tests-pluginabi-loft-L49">  out = <span class="fn-call">bytes_to_base64</span>([<span class="nm">9</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">9</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>]);</span>
+<span id="tests-pluginabi-loft-L50">  ok = <span class="fn-call">reply_ok</span>(out);</span>
+<span id="tests-pluginabi-loft-L51">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_is_ok</span>(ok), <span class="st">"a success reply reads as ok"</span>);</span>
+<span id="tests-pluginabi-loft-L52">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_out_b64</span>(ok) == out, <span class="st">"its payload round-trips"</span>);</span>
+<span id="tests-pluginabi-loft-L53"></span>
+<span id="tests-pluginabi-loft-L54">  er = <span class="fn-call">reply_err</span>(<span class="en">ERR_PLUGIN</span>);</span>
+<span id="tests-pluginabi-loft-L55">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">reply_is_ok</span>(er), <span class="st">"a failure reply does NOT read as ok"</span>);</span>
+<span id="tests-pluginabi-loft-L56">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_err_code</span>(er) == <span class="en">ERR_PLUGIN</span>, <span class="st">"its code round-trips"</span>);</span>
+<span id="tests-pluginabi-loft-L57"></span>
+<span id="tests-pluginabi-loft-L58">  <span class="cm">// FAIL-CLOSED: anything that is not a well-formed success must read as failure, never as ok.</span></span>
+<span id="tests-pluginabi-loft-L59">  <span class="cm">// This is the direction that matters — a garbled frame optimistically read as success would</span></span>
+<span id="tests-pluginabi-loft-L60">  <span class="cm">// hand the host whatever bytes happened to decode.</span></span>
+<span id="tests-pluginabi-loft-L61">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">reply_is_ok</span>([]), <span class="st">"an empty frame is not ok"</span>);</span>
+<span id="tests-pluginabi-loft-L62">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">reply_is_ok</span>([<span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">2</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">3</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>]), <span class="st">"garbage bytes are not ok"</span>);</span>
+<span id="tests-pluginabi-loft-L63">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">reply_is_ok</span>(<span class="fn-call">request</span>(<span class="en">OP_RENDER</span>, <span class="st">""</span>, <span class="st">""</span>)), <span class="st">"a REQUEST frame is not a success reply"</span>);</span>
+<span id="tests-pluginabi-loft-L64">}</span>
+<span id="tests-pluginabi-loft-L65"></span>
+<span id="tests-pluginabi-loft-L66"><span class="cm">// Large-payload coverage (loft#651). Every other test used 2-3 byte payloads; a real `merge3`</span></span>
+<span id="tests-pluginabi-loft-L67"><span class="cm">// frame carries a whole serialized document, so large fields are the COMMON case. This asserts the</span></span>
+<span id="tests-pluginabi-loft-L68"><span class="cm">// contract holds to 300 bytes. NOTE: loft#651 (the crash where `pa_get`'s old statement-form</span></span>
+<span id="tests-pluginabi-loft-L69"><span class="cm">// `match` corrupted a heap CborValue past ~54 bytes) is CONTEXT-SENSITIVE — it fires reliably as a</span></span>
+<span id="tests-pluginabi-loft-L70"><span class="cm">// standalone program but NOT inside this test harness, so this test does not by itself distinguish</span></span>
+<span id="tests-pluginabi-loft-L71"><span class="cm">// the buggy `pa_get` from the fixed one. The reliable repro is a program (see the zero-trust repo's</span></span>
+<span id="tests-pluginabi-loft-L72"><span class="cm">// upstream/match-stmt-return-heap-repro.loft); this test guards the contract and documents intent.</span></span>
+<span id="tests-pluginabi-loft-L73"><span class="kw">fn</span> <span class="fn-call">test_large_payload_round_trip</span>() {</span>
+<span id="tests-pluginabi-loft-L74">  <span class="kw">for</span> sz <span class="kw">in</span> [<span class="nm">1</span>, <span class="nm">40</span>, <span class="nm">53</span>, <span class="nm">54</span>, <span class="nm">100</span>, <span class="nm">300</span>] {</span>
+<span id="tests-pluginabi-loft-L75">    raw: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt; = []; <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..</span>sz { raw += [ ((i * <span class="nm">7</span> + <span class="nm">3</span>) &amp; <span class="nm">255</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span> ]; }</span>
+<span id="tests-pluginabi-loft-L76">    b64 = <span class="fn-call">bytes_to_base64</span>(raw);</span>
+<span id="tests-pluginabi-loft-L77">    <span class="cm">// request: state AND arg both large; both must survive the read path (arg is the LAST field).</span></span>
+<span id="tests-pluginabi-loft-L78">    f = <span class="fn-call">request</span>(<span class="en">OP_APPLY_OP</span>, b64, b64);</span>
+<span id="tests-pluginabi-loft-L79">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">req_state_b64</span>(f) == b64, <span class="st">"large state round-trips byte-exactly (sz={sz})"</span>);</span>
+<span id="tests-pluginabi-loft-L80">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">req_arg_b64</span>(f) == b64, <span class="st">"large arg round-trips byte-exactly (sz={sz})"</span>);</span>
+<span id="tests-pluginabi-loft-L81">    <span class="cm">// reply: a large `out` must survive reply_out_b64, and reply_is_ok must not choke on it.</span></span>
+<span id="tests-pluginabi-loft-L82">    r = <span class="fn-call">reply_ok</span>(b64);</span>
+<span id="tests-pluginabi-loft-L83">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_is_ok</span>(r), <span class="st">"a large success reply reads as ok (sz={sz})"</span>);</span>
+<span id="tests-pluginabi-loft-L84">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_out_b64</span>(r) == b64, <span class="st">"large reply out round-trips byte-exactly (sz={sz})"</span>);</span>
+<span id="tests-pluginabi-loft-L85">  }</span>
+<span id="tests-pluginabi-loft-L86">  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"plugins: pluginabi — large frame payloads (to 300 bytes) round-trip byte-exactly"</span>);</span>
+<span id="tests-pluginabi-loft-L87">}</span>
+<span id="tests-pluginabi-loft-L88"></span>
+<span id="tests-pluginabi-loft-L89"><span class="kw">fn</span> <span class="fn-call">test_check_request_is_the_front_door</span>() {</span>
+<span id="tests-pluginabi-loft-L90">  good = <span class="fn-call">request</span>(<span class="en">OP_SNAPSHOT</span>, <span class="st">""</span>, <span class="st">""</span>);</span>
+<span id="tests-pluginabi-loft-L91">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">check_request</span>(good) == <span class="st">""</span>, <span class="st">"a well-formed known op passes"</span>);</span>
+<span id="tests-pluginabi-loft-L92"></span>
+<span id="tests-pluginabi-loft-L93">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">check_request</span>([<span class="nm">7</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">7</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>]) == <span class="en">ERR_MALFORMED</span>, <span class="st">"undecodable -&gt; malformed"</span>);</span>
+<span id="tests-pluginabi-loft-L94">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">check_request</span>([]) == <span class="en">ERR_MALFORMED</span>, <span class="st">"empty -&gt; malformed"</span>);</span>
+<span id="tests-pluginabi-loft-L95"></span>
+<span id="tests-pluginabi-loft-L96">  <span class="cm">// version skew: an op this host does not know must be REJECTED, not guessed at</span></span>
+<span id="tests-pluginabi-loft-L97">  unknown = <span class="fn-call">request</span>(<span class="st">"apply_ops"</span>, <span class="st">""</span>, <span class="st">""</span>);            <span class="cm">// note the typo/newer name</span></span>
+<span id="tests-pluginabi-loft-L98">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">check_request</span>(unknown) == <span class="en">ERR_UNKNOWN_OP</span>, <span class="st">"an unknown op is rejected, not interpreted"</span>);</span>
+<span id="tests-pluginabi-loft-L99"></span>
+<span id="tests-pluginabi-loft-L100">  <span class="cm">// the vocabulary is exactly six</span></span>
+<span id="tests-pluginabi-loft-L101">  n = <span class="nm">0</span>;</span>
+<span id="tests-pluginabi-loft-L102">  <span class="kw">for</span> o <span class="kw">in</span> [<span class="en">OP_INITIAL_STATE</span>, <span class="en">OP_APPLY_OP</span>, <span class="en">OP_MAKE_OP</span>, <span class="en">OP_RENDER</span>, <span class="en">OP_SNAPSHOT</span>, <span class="en">OP_LOAD_SNAPSHOT</span>] {</span>
+<span id="tests-pluginabi-loft-L103">    <span class="kw">if</span> <span class="fn-call">valid_op</span>(o) { n = n + <span class="nm">1</span>; }</span>
+<span id="tests-pluginabi-loft-L104">  }</span>
+<span id="tests-pluginabi-loft-L105">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n == <span class="nm">6</span>, <span class="st">"all six operations are in the vocabulary"</span>);</span>
+<span id="tests-pluginabi-loft-L106">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">valid_op</span>(<span class="st">""</span>) &amp;&amp; !<span class="fn-call">valid_op</span>(<span class="st">"eval"</span>) &amp;&amp; !<span class="fn-call">valid_op</span>(<span class="st">"exec"</span>), <span class="st">"nothing else is"</span>);</span>
+<span id="tests-pluginabi-loft-L107">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">takes_arg</span>(<span class="en">OP_APPLY_OP</span>) &amp;&amp; <span class="fn-call">takes_arg</span>(<span class="en">OP_MAKE_OP</span>), <span class="st">"apply_op/make_op read arg"</span>);</span>
+<span id="tests-pluginabi-loft-L108">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">takes_arg</span>(<span class="en">OP_SNAPSHOT</span>) &amp;&amp; !<span class="fn-call">takes_arg</span>(<span class="en">OP_INITIAL_STATE</span>), <span class="st">"the others do not"</span>);</span>
+<span id="tests-pluginabi-loft-L109">}</span>
+<span id="tests-pluginabi-loft-L110"></span>
+<span id="tests-pluginabi-loft-L111"><span class="cm">// ---------- a complete plugin, driven only by frames ----------</span></span>
+<span id="tests-pluginabi-loft-L112"><span class="cm">// A counter: state is CBOR { "n": uint }; an op is CBOR { "d": uint } (a delta). The plugin owns</span></span>
+<span id="tests-pluginabi-loft-L113"><span class="cm">// that encoding — the protocol only carries bytes, which is the §9c.2 contract.</span></span>
+<span id="tests-pluginabi-loft-L114"><span class="kw">fn</span> <span class="fn-call">plug_state</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="tests-pluginabi-loft-L115">  es: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">CborEntry</span>&gt; = []; es += [ <span class="fn-call">t_te</span>(<span class="st">"n"</span>, <span class="fn-call">t_cuint</span>(n)) ];</span>
+<span id="tests-pluginabi-loft-L116">  <span class="kw">return</span> <span class="fn-call">bytes_to_base64</span>(<span class="fn-call">encode</span>(<span class="en">CMap</span> { entries: es }));</span>
+<span id="tests-pluginabi-loft-L117">}</span>
+<span id="tests-pluginabi-loft-L118"><span class="kw">fn</span> <span class="fn-call">plug_n</span>(state_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="tests-pluginabi-loft-L119">  <span class="kw">if</span> state_b64 == <span class="st">""</span> { <span class="kw">return</span> <span class="nm">0</span>; }</span>
+<span id="tests-pluginabi-loft-L120">  <span class="kw">return</span> <span class="fn-call">t_uint</span>(<span class="fn-call">t_decode</span>(<span class="fn-call">base64_to_bytes</span>(state_b64)), <span class="st">"n"</span>);</span>
+<span id="tests-pluginabi-loft-L121">}</span>
+<span id="tests-pluginabi-loft-L122"><span class="kw">fn</span> <span class="fn-call">plug_delta</span>(arg_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="tests-pluginabi-loft-L123">  <span class="kw">if</span> arg_b64 == <span class="st">""</span> { <span class="kw">return</span> <span class="nm">0</span>; }</span>
+<span id="tests-pluginabi-loft-L124">  <span class="kw">return</span> <span class="fn-call">t_uint</span>(<span class="fn-call">t_decode</span>(<span class="fn-call">base64_to_bytes</span>(arg_b64)), <span class="st">"d"</span>);</span>
+<span id="tests-pluginabi-loft-L125">}</span>
+<span id="tests-pluginabi-loft-L126"></span>
+<span id="tests-pluginabi-loft-L127"><span class="cm">// THE PLUGIN: one entry point, frame in -&gt; frame out. This is what the wasm pump calls.</span></span>
+<span id="tests-pluginabi-loft-L128"><span class="kw">fn</span> <span class="fn-call">plugin_dispatch</span>(frame: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt; {</span>
+<span id="tests-pluginabi-loft-L129">  bad = <span class="fn-call">check_request</span>(frame);</span>
+<span id="tests-pluginabi-loft-L130">  <span class="kw">if</span> bad != <span class="st">""</span> { <span class="kw">return</span> <span class="fn-call">reply_err</span>(bad); }</span>
+<span id="tests-pluginabi-loft-L131">  op = <span class="fn-call">req_op</span>(frame);</span>
+<span id="tests-pluginabi-loft-L132">  st = <span class="fn-call">req_state_b64</span>(frame);</span>
+<span id="tests-pluginabi-loft-L133">  ar = <span class="fn-call">req_arg_b64</span>(frame);</span>
+<span id="tests-pluginabi-loft-L134"></span>
+<span id="tests-pluginabi-loft-L135">  <span class="kw">if</span> op == <span class="en">OP_INITIAL_STATE</span> { <span class="kw">return</span> <span class="fn-call">reply_ok</span>(<span class="fn-call">plug_state</span>(<span class="nm">0</span>)); }</span>
+<span id="tests-pluginabi-loft-L136">  <span class="kw">if</span> op == <span class="en">OP_APPLY_OP</span>      { <span class="kw">return</span> <span class="fn-call">reply_ok</span>(<span class="fn-call">plug_state</span>(<span class="fn-call">plug_n</span>(st) + <span class="fn-call">plug_delta</span>(ar))); }</span>
+<span id="tests-pluginabi-loft-L137">  <span class="kw">if</span> op == <span class="en">OP_MAKE_OP</span>       { <span class="kw">return</span> <span class="fn-call">reply_ok</span>(ar); }</span>
+<span id="tests-pluginabi-loft-L138">  <span class="kw">if</span> op == <span class="en">OP_RENDER</span>        { <span class="kw">return</span> <span class="fn-call">reply_ok</span>(<span class="fn-call">base64_encode</span>(<span class="st">"count={plug_n(st)}"</span>)); }</span>
+<span id="tests-pluginabi-loft-L139">  <span class="kw">if</span> op == <span class="en">OP_SNAPSHOT</span>      { <span class="kw">return</span> <span class="fn-call">reply_ok</span>(st); }</span>
+<span id="tests-pluginabi-loft-L140">  <span class="kw">if</span> op == <span class="en">OP_LOAD_SNAPSHOT</span> {</span>
+<span id="tests-pluginabi-loft-L141">    <span class="kw">if</span> !<span class="fn-call">t_decode_ok</span>(<span class="fn-call">base64_to_bytes</span>(st)) { <span class="kw">return</span> <span class="fn-call">reply_err</span>(<span class="en">ERR_PLUGIN</span>); }   <span class="cm">// foreign bytes</span></span>
+<span id="tests-pluginabi-loft-L142">    <span class="kw">return</span> <span class="fn-call">reply_ok</span>(st);</span>
+<span id="tests-pluginabi-loft-L143">  }</span>
+<span id="tests-pluginabi-loft-L144">  <span class="kw">return</span> <span class="fn-call">reply_err</span>(<span class="en">ERR_UNKNOWN_OP</span>);</span>
+<span id="tests-pluginabi-loft-L145">}</span>
+<span id="tests-pluginabi-loft-L146"></span>
+<span id="tests-pluginabi-loft-L147"><span class="kw">fn</span> <span class="fn-call">call</span>(op: <span class="ty"><a href="stdlib-types.html">text</a></span>, st: <span class="ty"><a href="stdlib-types.html">text</a></span>, ar: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt; { <span class="kw">return</span> <span class="fn-call">plugin_dispatch</span>(<span class="fn-call">request</span>(op, st, ar)); }</span>
+<span id="tests-pluginabi-loft-L148"></span>
+<span id="tests-pluginabi-loft-L149"><span class="kw">fn</span> <span class="fn-call">test_a_whole_plugin_over_frames</span>() {</span>
+<span id="tests-pluginabi-loft-L150">  <span class="cm">// initial_state</span></span>
+<span id="tests-pluginabi-loft-L151">  r = <span class="fn-call">call</span>(<span class="en">OP_INITIAL_STATE</span>, <span class="st">""</span>, <span class="st">""</span>);</span>
+<span id="tests-pluginabi-loft-L152">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_is_ok</span>(r), <span class="st">"initial_state succeeds"</span>);</span>
+<span id="tests-pluginabi-loft-L153">  st = <span class="fn-call">reply_out_b64</span>(r);</span>
+<span id="tests-pluginabi-loft-L154">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">plug_n</span>(st) == <span class="nm">0</span>, <span class="st">"a fresh state counts zero"</span>);</span>
+<span id="tests-pluginabi-loft-L155"></span>
+<span id="tests-pluginabi-loft-L156">  <span class="cm">// make_op then apply_op, twice — the host never touches the plugin's encoding</span></span>
+<span id="tests-pluginabi-loft-L157">  d5 = <span class="fn-call">reply_out_b64</span>(<span class="fn-call">call</span>(<span class="en">OP_MAKE_OP</span>, st, <span class="fn-call">plug_delta_arg</span>(<span class="nm">5</span>)));</span>
+<span id="tests-pluginabi-loft-L158">  st = <span class="fn-call">reply_out_b64</span>(<span class="fn-call">call</span>(<span class="en">OP_APPLY_OP</span>, st, d5));</span>
+<span id="tests-pluginabi-loft-L159">  d7 = <span class="fn-call">reply_out_b64</span>(<span class="fn-call">call</span>(<span class="en">OP_MAKE_OP</span>, st, <span class="fn-call">plug_delta_arg</span>(<span class="nm">7</span>)));</span>
+<span id="tests-pluginabi-loft-L160">  st = <span class="fn-call">reply_out_b64</span>(<span class="fn-call">call</span>(<span class="en">OP_APPLY_OP</span>, st, d7));</span>
+<span id="tests-pluginabi-loft-L161">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">plug_n</span>(st) == <span class="nm">12</span>, <span class="st">"5 + 7 folded through frames = 12"</span>);</span>
+<span id="tests-pluginabi-loft-L162"></span>
+<span id="tests-pluginabi-loft-L163">  <span class="cm">// render — the host-visible channel</span></span>
+<span id="tests-pluginabi-loft-L164">  rr = <span class="fn-call">call</span>(<span class="en">OP_RENDER</span>, st, <span class="st">""</span>);</span>
+<span id="tests-pluginabi-loft-L165">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_is_ok</span>(rr) &amp;&amp; <span class="fn-call">base64_decode</span>(<span class="fn-call">reply_out_b64</span>(rr)) == <span class="st">"count=12"</span>, <span class="st">"render reflects state"</span>);</span>
+<span id="tests-pluginabi-loft-L166"></span>
+<span id="tests-pluginabi-loft-L167">  <span class="cm">// snapshot -&gt; load_snapshot round-trips to the SAME state (the §9c.1 rollover contract)</span></span>
+<span id="tests-pluginabi-loft-L168">  snap = <span class="fn-call">reply_out_b64</span>(<span class="fn-call">call</span>(<span class="en">OP_SNAPSHOT</span>, st, <span class="st">""</span>));</span>
+<span id="tests-pluginabi-loft-L169">  back = <span class="fn-call">call</span>(<span class="en">OP_LOAD_SNAPSHOT</span>, snap, <span class="st">""</span>);</span>
+<span id="tests-pluginabi-loft-L170">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">reply_is_ok</span>(back), <span class="st">"a snapshot loads"</span>);</span>
+<span id="tests-pluginabi-loft-L171">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">plug_n</span>(<span class="fn-call">reply_out_b64</span>(back)) == <span class="nm">12</span>, <span class="st">"and restores the same count"</span>);</span>
+<span id="tests-pluginabi-loft-L172"></span>
+<span id="tests-pluginabi-loft-L173">  <span class="cm">// a plugin may refuse a well-formed request — foreign snapshot bytes</span></span>
+<span id="tests-pluginabi-loft-L174">  bad = <span class="fn-call">call</span>(<span class="en">OP_LOAD_SNAPSHOT</span>, <span class="fn-call">bytes_to_base64</span>([<span class="nm">200</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>, <span class="nm">201</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>]), <span class="st">""</span>);</span>
+<span id="tests-pluginabi-loft-L175">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">reply_is_ok</span>(bad) &amp;&amp; <span class="fn-call">reply_err_code</span>(bad) == <span class="en">ERR_PLUGIN</span>,</span>
+<span id="tests-pluginabi-loft-L176">    <span class="st">"load_snapshot on foreign bytes is a plugin error, not a protocol error"</span>);</span>
+<span id="tests-pluginabi-loft-L177"></span>
+<span id="tests-pluginabi-loft-L178">  <span class="cm">// and the host rejects an op the plugin never sees</span></span>
+<span id="tests-pluginabi-loft-L179">  sk = <span class="fn-call">plugin_dispatch</span>(<span class="fn-call">request</span>(<span class="st">"teleport"</span>, st, <span class="st">""</span>));</span>
+<span id="tests-pluginabi-loft-L180">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">reply_is_ok</span>(sk) &amp;&amp; <span class="fn-call">reply_err_code</span>(sk) == <span class="en">ERR_UNKNOWN_OP</span>, <span class="st">"an unknown op never reaches the plugin body"</span>);</span>
+<span id="tests-pluginabi-loft-L181"></span>
+<span id="tests-pluginabi-loft-L182">  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"plugins: pluginabi — §9c.2 frame protocol + a whole plugin driven over frames OK"</span>);</span>
+<span id="tests-pluginabi-loft-L183">}</span>
+<span id="tests-pluginabi-loft-L184"></span>
+<span id="tests-pluginabi-loft-L185"><span class="kw">fn</span> <span class="fn-call">plug_delta_arg</span>(d: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="tests-pluginabi-loft-L186">  es: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">CborEntry</span>&gt; = []; es += [ <span class="fn-call">t_te</span>(<span class="st">"d"</span>, <span class="fn-call">t_cuint</span>(d)) ];</span>
+<span id="tests-pluginabi-loft-L187">  <span class="kw">return</span> <span class="fn-call">bytes_to_base64</span>(<span class="fn-call">encode</span>(<span class="en">CMap</span> { entries: es }));</span>
+<span id="tests-pluginabi-loft-L188">}</span>
+</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

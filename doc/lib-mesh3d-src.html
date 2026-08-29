@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mesh3d source — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The loft source of the mesh3d library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-mesh3d-src.html">
+<meta property="og:title" content="mesh3d source — Loft, a programming language for small browser games">
+<meta property="og:description" content="The loft source of the mesh3d library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-mesh3d-src.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="mesh3d source — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The loft source of the mesh3d library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>mesh3d source</h1>
+<article>
+<p><a href="lib-mesh3d.html">← mesh3d</a> · <a href="lib-mesh3d-api.html">API reference</a> · version 0.1.1</p>
+<p class="lib-legend">7 file(s), 783 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
+<h2 id="items">Public items</h2>
+<p class="lib-legend">A <em>worked example</em> is a call site the author chose as the thing to read first. <em>Call sites</em> are every line naming the item, found mechanically over the source with comments excluded — so an item with no worked example is not an item nobody uses.</p>
+<table class="lib-table">
+<tr><th>Item</th><th>Defined</th><th>Worked example</th><th>Call sites</th></tr>
+<tr><td><code>Vec2</code> <span class="search-kind">struct</span></td><td><a href="#src-math-loft-L9">9</a></td><td>—</td><td><a href="#src-math-loft-L14">14</a> <a href="#src-math-loft-L15">15</a> <a href="#src-mesh-loft-L13">13</a> <a href="#src-mesh-loft-L16">16</a></td></tr>
+<tr><td><code>vec2</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L14">14</a></td><td>—</td><td><a href="#src-mesh-loft-L64">64</a> <a href="#src-mesh-loft-L65">65</a> <a href="#src-mesh-loft-L66">66</a> <a href="#src-mesh-loft-L67">67</a> <a href="#src-mesh-loft-L70">70</a> <a href="#src-mesh-loft-L71">71</a> … (31 total)</td></tr>
+<tr><td><code>Vec3</code> <span class="search-kind">struct</span></td><td><a href="#src-math-loft-L19">19</a></td><td>—</td><td><a href="#src-math-loft-L25">25</a> <a href="#src-math-loft-L26">26</a> <a href="#src-math-loft-L43">43</a> <a href="#src-math-loft-L44">44</a> <a href="#src-math-loft-L47">47</a> <a href="#src-math-loft-L48">48</a> … (26 total)</td></tr>
+<tr><td><code>vec3</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L25">25</a></td><td>—</td><td><a href="#src-mesh-loft-L64">64</a> <a href="#src-mesh-loft-L65">65</a> <a href="#src-mesh-loft-L66">66</a> <a href="#src-mesh-loft-L67">67</a> <a href="#src-mesh-loft-L70">70</a> <a href="#src-mesh-loft-L71">71</a> … (52 total)</td></tr>
+<tr><td><code>Vec4</code> <span class="search-kind">struct</span></td><td><a href="#src-math-loft-L30">30</a></td><td>—</td><td><a href="#src-math-loft-L37">37</a> <a href="#src-math-loft-L38">38</a></td></tr>
+<tr><td><code>vec4</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L37">37</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>add3</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L43">43</a></td><td>—</td><td><a href="#tests-math-loft-L16">16</a></td></tr>
+<tr><td><code>sub3</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L47">47</a></td><td>—</td><td><a href="#src-math-loft-L157">157</a></td></tr>
+<tr><td><code>scale3</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L51">51</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>dot3</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L55">55</a></td><td>—</td><td><a href="#src-math-loft-L164">164</a> <a href="#tests-math-loft-L25">25</a> <a href="#tests-math-loft-L27">27</a></td></tr>
+<tr><td><code>cross</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L59">59</a></td><td>—</td><td><a href="#src-math-loft-L158">158</a> <a href="#src-math-loft-L159">159</a> <a href="#tests-math-loft-L33">33</a> <a href="#tests-math-loft-L34">34</a> <a href="#tests-math-loft-L35">35</a> <a href="#tests-math-loft-L36">36</a></td></tr>
+<tr><td><code>length3</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L67">67</a></td><td>—</td><td><a href="#src-math-loft-L72">72</a></td></tr>
+<tr><td><code>normalize3</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L71">71</a></td><td>—</td><td><a href="#src-math-loft-L157">157</a> <a href="#src-math-loft-L158">158</a> <a href="#src-mesh-loft-L138">138</a> <a href="#tests-math-loft-L41">41</a></td></tr>
+<tr><td><code>Mat4</code> <span class="search-kind">struct</span></td><td><a href="#src-math-loft-L82">82</a></td><td>—</td><td><a href="#src-math-loft-L87">87</a> <a href="#src-math-loft-L88">88</a> <a href="#src-math-loft-L97">97</a> <a href="#src-math-loft-L98">98</a> <a href="#src-math-loft-L107">107</a> <a href="#src-math-loft-L108">108</a> … (23 total)</td></tr>
+<tr><td><code>mat4_identity</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L87">87</a></td><td>—</td><td><a href="#src-scene-loft-L62">62</a> <a href="#tests-math-loft-L48">48</a></td></tr>
+<tr><td><code>mat4_translate</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L97">97</a></td><td>—</td><td><a href="#tests-math-loft-L57">57</a> <a href="#tests-math-loft-L75">75</a></td></tr>
+<tr><td><code>mat4_scale</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L107">107</a></td><td>—</td><td><a href="#tests-math-loft-L66">66</a> <a href="#tests-math-loft-L76">76</a></td></tr>
+<tr><td><code>mat4_mul</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L117">117</a></td><td>—</td><td><a href="#tests-math-loft-L77">77</a></td></tr>
+<tr><td><code>mat4_transform</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L135">135</a></td><td>—</td><td><a href="#tests-math-loft-L59">59</a> <a href="#tests-math-loft-L68">68</a> <a href="#tests-math-loft-L79">79</a></td></tr>
+<tr><td><code>mat4_perspective</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L145">145</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>mat4_look_at</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L156">156</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>mat4_rotate_y</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L169">169</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>mat4_rotate_x</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L181">181</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>mat4_ortho</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L194">194</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>mat4_trs</code> <span class="search-kind">fn</span></td><td><a href="#src-math-loft-L204">204</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>Vertex</code> <span class="search-kind">struct</span></td><td><a href="#src-mesh-loft-L10">10</a></td><td>—</td><td><a href="#src-mesh-loft-L16">16</a> <a href="#src-mesh-loft-L17">17</a> <a href="#src-mesh-loft-L30">30</a> <a href="#src-mesh-loft-L39">39</a></td></tr>
+<tr><td><code>vertex</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L16">16</a></td><td>—</td><td><a href="#src-mesh-loft-L64">64</a> <a href="#src-mesh-loft-L65">65</a> <a href="#src-mesh-loft-L66">66</a> <a href="#src-mesh-loft-L67">67</a> <a href="#src-mesh-loft-L70">70</a> <a href="#src-mesh-loft-L71">71</a> … (35 total)</td></tr>
+<tr><td><code>Triangle</code> <span class="search-kind">struct</span></td><td><a href="#src-mesh-loft-L21">21</a></td><td>—</td><td><a href="#src-mesh-loft-L31">31</a> <a href="#src-mesh-loft-L47">47</a></td></tr>
+<tr><td><code>Mesh</code> <span class="search-kind">struct</span></td><td><a href="#src-mesh-loft-L28">28</a></td><td>—</td><td><a href="#src-mesh-loft-L34">34</a> <a href="#src-mesh-loft-L35">35</a> <a href="#src-mesh-loft-L39">39</a> <a href="#src-mesh-loft-L46">46</a> <a href="#src-mesh-loft-L52">52</a> <a href="#src-mesh-loft-L61">61</a> … (12 total)</td></tr>
+<tr><td><code>mesh</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L34">34</a></td><td>—</td><td><a href="#src-mesh-loft-L62">62</a> <a href="#src-mesh-loft-L105">105</a> <a href="#src-mesh-loft-L121">121</a> <a href="#src-mesh3d-loft-L26">26</a> <a href="#src-scene-loft-L6">6</a> <a href="#src-scene-loft-L126">126</a> … (22 total)</td></tr>
+<tr><td><code>add_vertex</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L39">39</a></td><td>—</td><td><a href="#src-mesh-loft-L64">64</a> <a href="#src-mesh-loft-L65">65</a> <a href="#src-mesh-loft-L66">66</a> <a href="#src-mesh-loft-L67">67</a> <a href="#src-mesh-loft-L70">70</a> <a href="#src-mesh-loft-L71">71</a> … (33 total)</td></tr>
+<tr><td><code>add_triangle</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L46">46</a></td><td>—</td><td><a href="#src-mesh-loft-L53">53</a> <a href="#src-mesh-loft-L54">54</a> <a href="#tests-mesh-loft-L28">28</a></td></tr>
+<tr><td><code>add_quad</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L52">52</a></td><td>—</td><td><a href="#src-mesh-loft-L68">68</a> <a href="#src-mesh-loft-L74">74</a> <a href="#src-mesh-loft-L80">80</a> <a href="#src-mesh-loft-L86">86</a> <a href="#src-mesh-loft-L92">92</a> <a href="#src-mesh-loft-L98">98</a> … (8 total)</td></tr>
+<tr><td><code>cube</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L61">61</a></td><td>—</td><td><a href="#src-mesh-loft-L62">62</a> <a href="#tests-mesh-loft-L36">36</a> <a href="#tests-mesh-loft-L37">37</a> <a href="#tests-mesh-loft-L38">38</a> <a href="#tests-mesh-loft-L39">39</a> <a href="#tests-scene-loft-L17">17</a></td></tr>
+<tr><td><code>plane</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L104">104</a></td><td>—</td><td><a href="#tests-mesh-loft-L43">43</a> <a href="#tests-mesh-loft-L44">44</a> <a href="#tests-mesh-loft-L45">45</a> <a href="#tests-mesh-loft-L46">46</a></td></tr>
+<tr><td><code>sphere</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L120">120</a></td><td>—</td><td><a href="#tests-mesh-loft-L53">53</a> <a href="#tests-mesh-loft-L54">54</a> <a href="#tests-mesh-loft-L56">56</a> <a href="#tests-mesh-loft-L58">58</a></td></tr>
+<tr><td><code>mesh_to_floats_uv</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L161">161</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>mesh_to_floats</code> <span class="search-kind">fn</span></td><td><a href="#src-mesh-loft-L177">177</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>Material</code> <span class="search-kind">struct</span></td><td><a href="#src-scene-loft-L11">11</a></td><td>—</td><td><a href="#src-scene-loft-L21">21</a> <a href="#src-scene-loft-L22">22</a> <a href="#src-scene-loft-L30">30</a> <a href="#src-scene-loft-L31">31</a> <a href="#src-scene-loft-L38">38</a> <a href="#src-scene-loft-L39">39</a> … (9 total)</td></tr>
+<tr><td><code>material</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L21">21</a></td><td>—</td><td><a href="#tests-scene-loft-L25">25</a> <a href="#tests-scene-loft-L28">28</a> <a href="#tests-scene-loft-L36">36</a></td></tr>
+<tr><td><code>material_color</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L30">30</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>material_metal</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L38">38</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>set_color</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L45">45</a></td><td>—</td><td><a href="#tests-scene-loft-L26">26</a></td></tr>
+<tr><td><code>Node</code> <span class="search-kind">struct</span></td><td><a href="#src-scene-loft-L54">54</a></td><td>—</td><td><a href="#src-scene-loft-L61">61</a> <a href="#src-scene-loft-L62">62</a> <a href="#src-scene-loft-L66">66</a> <a href="#src-scene-loft-L67">67</a> <a href="#src-scene-loft-L128">128</a> <a href="#src-scene-loft-L152">152</a></td></tr>
+<tr><td><code>node</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L61">61</a></td><td>—</td><td><a href="#tests-scene-loft-L37">37</a> <a href="#tests-scene-loft-L39">39</a> <a href="#tests-scene-loft-L40">40</a></td></tr>
+<tr><td><code>node_at</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L66">66</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>Camera</code> <span class="search-kind">struct</span></td><td><a href="#src-scene-loft-L72">72</a></td><td>—</td><td><a href="#src-scene-loft-L81">81</a> <a href="#src-scene-loft-L82">82</a> <a href="#src-scene-loft-L129">129</a> <a href="#src-scene-loft-L157">157</a></td></tr>
+<tr><td><code>camera</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L81">81</a></td><td>—</td><td><a href="#tests-scene-loft-L44">44</a> <a href="#tests-scene-loft-L48">48</a></td></tr>
+<tr><td><code>LightType</code> <span class="search-kind">enum</span></td><td><a href="#src-scene-loft-L92">92</a></td><td>—</td><td><a href="#src-scene-loft-L96">96</a></td></tr>
+<tr><td><code>Light</code> <span class="search-kind">struct</span></td><td><a href="#src-scene-loft-L94">94</a></td><td>—</td><td><a href="#src-scene-loft-L105">105</a> <a href="#src-scene-loft-L106">106</a> <a href="#src-scene-loft-L113">113</a> <a href="#src-scene-loft-L114">114</a> <a href="#src-scene-loft-L130">130</a> <a href="#src-scene-loft-L161">161</a></td></tr>
+<tr><td><code>directional_light</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L105">105</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>point_light</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L113">113</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>Scene</code> <span class="search-kind">struct</span></td><td><a href="#src-scene-loft-L124">124</a></td><td>—</td><td><a href="#src-scene-loft-L133">133</a> <a href="#src-scene-loft-L134">134</a> <a href="#src-scene-loft-L138">138</a> <a href="#src-scene-loft-L145">145</a> <a href="#src-scene-loft-L152">152</a> <a href="#src-scene-loft-L157">157</a> … (7 total)</td></tr>
+<tr><td><code>scene</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L133">133</a></td><td>—</td><td><a href="#src-mesh3d-loft-L27">27</a> <a href="#tests-scene-loft-L5">5</a> <a href="#tests-scene-loft-L8">8</a> <a href="#tests-scene-loft-L9">9</a> <a href="#tests-scene-loft-L16">16</a> <a href="#tests-scene-loft-L24">24</a> … (11 total)</td></tr>
+<tr><td><code>add_mesh</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L138">138</a></td><td>—</td><td><a href="#tests-scene-loft-L18">18</a> <a href="#tests-scene-loft-L35">35</a></td></tr>
+<tr><td><code>add_material</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L145">145</a></td><td>—</td><td><a href="#tests-scene-loft-L27">27</a> <a href="#tests-scene-loft-L36">36</a></td></tr>
+<tr><td><code>add_node</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L152">152</a></td><td>—</td><td><a href="#tests-scene-loft-L38">38</a></td></tr>
+<tr><td><code>add_camera</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L157">157</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>add_light</code> <span class="search-kind">fn</span></td><td><a href="#src-scene-loft-L161">161</a></td><td>—</td><td>none in this package</td></tr>
+</table>
+<h2 id="src-math-loft">src/math.loft</h2>
+<pre class="src"><code><span id="src-math-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-math-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-math-loft-L3"><span class="cm">// 3D math types for the graphics package.</span></span>
+<span id="src-math-loft-L4"><span class="cm">// Uses float (64-bit) for precision in transforms and projections.</span></span>
+<span id="src-math-loft-L5"></span>
+<span id="src-math-loft-L6"><span class="cm">// --- Vectors ---</span></span>
+<span id="src-math-loft-L7"></span>
+<span id="src-math-loft-L8"><span class="cm">// A 2D vector / point.</span></span>
+<span id="src-math-loft-L9"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Vec2</span> {</span>
+<span id="src-math-loft-L10">  x: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-math-loft-L11">  y: <span class="ty"><a href="stdlib-types.html">float</a></span></span>
+<span id="src-math-loft-L12">}</span>
+<span id="src-math-loft-L13"></span>
+<span id="src-math-loft-L14"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vec2</span>(vx: <span class="ty"><a href="stdlib-types.html">float</a></span>, vy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Vec2</span> {</span>
+<span id="src-math-loft-L15">  <span class="en">Vec2</span> { x: vx, y: vy }</span>
+<span id="src-math-loft-L16">}</span>
+<span id="src-math-loft-L17"></span>
+<span id="src-math-loft-L18"><span class="cm">// A 3D vector / point.</span></span>
+<span id="src-math-loft-L19"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L20">  x: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-math-loft-L21">  y: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-math-loft-L22">  z: <span class="ty"><a href="stdlib-types.html">float</a></span></span>
+<span id="src-math-loft-L23">}</span>
+<span id="src-math-loft-L24"></span>
+<span id="src-math-loft-L25"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vec3</span>(vx: <span class="ty"><a href="stdlib-types.html">float</a></span>, vy: <span class="ty"><a href="stdlib-types.html">float</a></span>, vz: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L26">  <span class="en">Vec3</span> { x: vx, y: vy, z: vz }</span>
+<span id="src-math-loft-L27">}</span>
+<span id="src-math-loft-L28"></span>
+<span id="src-math-loft-L29"><span class="cm">// A 4D vector (homogeneous coordinates).</span></span>
+<span id="src-math-loft-L30"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Vec4</span> {</span>
+<span id="src-math-loft-L31">  x: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-math-loft-L32">  y: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-math-loft-L33">  z: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-math-loft-L34">  w: <span class="ty"><a href="stdlib-types.html">float</a></span></span>
+<span id="src-math-loft-L35">}</span>
+<span id="src-math-loft-L36"></span>
+<span id="src-math-loft-L37"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vec4</span>(vx: <span class="ty"><a href="stdlib-types.html">float</a></span>, vy: <span class="ty"><a href="stdlib-types.html">float</a></span>, vz: <span class="ty"><a href="stdlib-types.html">float</a></span>, vw: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Vec4</span> {</span>
+<span id="src-math-loft-L38">  <span class="en">Vec4</span> { x: vx, y: vy, z: vz, w: vw }</span>
+<span id="src-math-loft-L39">}</span>
+<span id="src-math-loft-L40"></span>
+<span id="src-math-loft-L41"><span class="cm">// --- Vec3 operations ---</span></span>
+<span id="src-math-loft-L42"></span>
+<span id="src-math-loft-L43"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add3</span>(va: const <span class="en">Vec3</span>, vb: const <span class="en">Vec3</span>) -&gt; <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L44">  <span class="en">Vec3</span> { x: va.x + vb.x, y: va.y + vb.y, z: va.z + vb.z }</span>
+<span id="src-math-loft-L45">}</span>
+<span id="src-math-loft-L46"></span>
+<span id="src-math-loft-L47"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sub3</span>(va: const <span class="en">Vec3</span>, vb: const <span class="en">Vec3</span>) -&gt; <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L48">  <span class="en">Vec3</span> { x: va.x - vb.x, y: va.y - vb.y, z: va.z - vb.z }</span>
+<span id="src-math-loft-L49">}</span>
+<span id="src-math-loft-L50"></span>
+<span id="src-math-loft-L51"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">scale3</span>(sv: const <span class="en">Vec3</span>, ss: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L52">  <span class="en">Vec3</span> { x: sv.x * ss, y: sv.y * ss, z: sv.z * ss }</span>
+<span id="src-math-loft-L53">}</span>
+<span id="src-math-loft-L54"></span>
+<span id="src-math-loft-L55"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">dot3</span>(da: const <span class="en">Vec3</span>, db: const <span class="en">Vec3</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-math-loft-L56">  da.x * db.x + da.y * db.y + da.z * db.z</span>
+<span id="src-math-loft-L57">}</span>
+<span id="src-math-loft-L58"></span>
+<span id="src-math-loft-L59"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cross</span>(ca: const <span class="en">Vec3</span>, cb: const <span class="en">Vec3</span>) -&gt; <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L60">  <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L61">    x: ca.y * cb.z - ca.z * cb.y,</span>
+<span id="src-math-loft-L62">    y: ca.z * cb.x - ca.x * cb.z,</span>
+<span id="src-math-loft-L63">    z: ca.x * cb.y - ca.y * cb.x</span>
+<span id="src-math-loft-L64">  }</span>
+<span id="src-math-loft-L65">}</span>
+<span id="src-math-loft-L66"></span>
+<span id="src-math-loft-L67"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">length3</span>(lv: const <span class="en">Vec3</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span> {</span>
+<span id="src-math-loft-L68">  <span class="bi"><a href="stdlib-math.html">sqrt</a></span>(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z)</span>
+<span id="src-math-loft-L69">}</span>
+<span id="src-math-loft-L70"></span>
+<span id="src-math-loft-L71"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">normalize3</span>(nv: const <span class="en">Vec3</span>) -&gt; <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L72">  nl = <span class="fn-call">length3</span>(nv);</span>
+<span id="src-math-loft-L73">  <span class="cm">// `/ nl ?? 0.0` yields a zero vector for a zero-length input — same</span></span>
+<span id="src-math-loft-L74">  <span class="cm">// result the explicit guard gave, but defended in the analyzer's eyes.</span></span>
+<span id="src-math-loft-L75">  <span class="en">Vec3</span> { x: nv.x / nl ?? <span class="nm">0.0</span>, y: nv.y / nl ?? <span class="nm">0.0</span>, z: nv.z / nl ?? <span class="nm">0.0</span> }</span>
+<span id="src-math-loft-L76">}</span>
+<span id="src-math-loft-L77"></span>
+<span id="src-math-loft-L78"><span class="cm">// --- 4x4 Matrix (column-major, matching OpenGL/GLB convention) ---</span></span>
+<span id="src-math-loft-L79"></span>
+<span id="src-math-loft-L80"><span class="cm">// A 4x4 transformation matrix stored as 16 floats in column-major order.</span></span>
+<span id="src-math-loft-L81"><span class="cm">// m[0..3] = column 0, m[4..7] = column 1, m[8..11] = column 2, m[12..15] = column 3.</span></span>
+<span id="src-math-loft-L82"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L83">  m: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;</span>
+<span id="src-math-loft-L84">}</span>
+<span id="src-math-loft-L85"></span>
+<span id="src-math-loft-L86"><span class="cm">// Create an identity matrix.</span></span>
+<span id="src-math-loft-L87"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_identity</span>() -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L88">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L89">    <span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L90">    <span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L91">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L92">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span></span>
+<span id="src-math-loft-L93">  ] }</span>
+<span id="src-math-loft-L94">}</span>
+<span id="src-math-loft-L95"></span>
+<span id="src-math-loft-L96"><span class="cm">// Create a translation matrix.</span></span>
+<span id="src-math-loft-L97"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_translate</span>(tx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ty: <span class="ty"><a href="stdlib-types.html">float</a></span>, tz: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L98">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L99">    <span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L100">    <span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L101">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L102">    tx,  ty,  tz,  <span class="nm">1.0</span></span>
+<span id="src-math-loft-L103">  ] }</span>
+<span id="src-math-loft-L104">}</span>
+<span id="src-math-loft-L105"></span>
+<span id="src-math-loft-L106"><span class="cm">// Create a uniform scale matrix.</span></span>
+<span id="src-math-loft-L107"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_scale</span>(sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>, sz: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L108">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L109">    sx,  <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L110">    <span class="nm">0.0</span>, sy,  <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L111">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, sz,  <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L112">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span></span>
+<span id="src-math-loft-L113">  ] }</span>
+<span id="src-math-loft-L114">}</span>
+<span id="src-math-loft-L115"></span>
+<span id="src-math-loft-L116"><span class="cm">// Multiply two 4x4 matrices (A * B). Result = A applied after B.</span></span>
+<span id="src-math-loft-L117"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_mul</span>(ma: const <span class="en">Mat4</span>, mb: const <span class="en">Mat4</span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L118">  mul_r = <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L119">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L120">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span></span>
+<span id="src-math-loft-L121">  ] };</span>
+<span id="src-math-loft-L122">  <span class="kw">for</span> mul_col <span class="kw">in</span> <span class="nm">0..4</span> {</span>
+<span id="src-math-loft-L123">    <span class="kw">for</span> mul_row <span class="kw">in</span> <span class="nm">0..4</span> {</span>
+<span id="src-math-loft-L124">      mul_sum = <span class="nm">0.0</span>;</span>
+<span id="src-math-loft-L125">      <span class="kw">for</span> mul_k <span class="kw">in</span> <span class="nm">0..4</span> {</span>
+<span id="src-math-loft-L126">        mul_sum += ma.m[mul_k * <span class="nm">4</span> + mul_row] * mb.m[mul_col * <span class="nm">4</span> + mul_k];</span>
+<span id="src-math-loft-L127">      }</span>
+<span id="src-math-loft-L128">      mul_r.m[mul_col * <span class="nm">4</span> + mul_row] = mul_sum;</span>
+<span id="src-math-loft-L129">    }</span>
+<span id="src-math-loft-L130">  }</span>
+<span id="src-math-loft-L131">  mul_r</span>
+<span id="src-math-loft-L132">}</span>
+<span id="src-math-loft-L133"></span>
+<span id="src-math-loft-L134"><span class="cm">// Transform a Vec3 by a Mat4 (as a point, w=1).</span></span>
+<span id="src-math-loft-L135"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_transform</span>(tm: const <span class="en">Mat4</span>, tv: const <span class="en">Vec3</span>) -&gt; <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L136">  <span class="en">Vec3</span> {</span>
+<span id="src-math-loft-L137">    x: tm.m[<span class="nm">0</span>] * tv.x + tm.m[<span class="nm">4</span>] * tv.y + tm.m[<span class="nm">8</span>]  * tv.z + tm.m[<span class="nm">12</span>],</span>
+<span id="src-math-loft-L138">    y: tm.m[<span class="nm">1</span>] * tv.x + tm.m[<span class="nm">5</span>] * tv.y + tm.m[<span class="nm">9</span>]  * tv.z + tm.m[<span class="nm">13</span>],</span>
+<span id="src-math-loft-L139">    z: tm.m[<span class="nm">2</span>] * tv.x + tm.m[<span class="nm">6</span>] * tv.y + tm.m[<span class="nm">10</span>] * tv.z + tm.m[<span class="nm">14</span>]</span>
+<span id="src-math-loft-L140">  }</span>
+<span id="src-math-loft-L141">}</span>
+<span id="src-math-loft-L142"></span>
+<span id="src-math-loft-L143"><span class="cm">// Perspective projection matrix.</span></span>
+<span id="src-math-loft-L144"><span class="cm">// fov_y = vertical field of view in radians, aspect = width/height.</span></span>
+<span id="src-math-loft-L145"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_perspective</span>(fov_y: <span class="ty"><a href="stdlib-types.html">float</a></span>, aspect: <span class="ty"><a href="stdlib-types.html">float</a></span>, near: <span class="ty"><a href="stdlib-types.html">float</a></span>, far: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L146">  per_f = <span class="nm">1.0</span> / <span class="fn-call"><a href="stdlib-math.html">tan</a></span>(fov_y / <span class="nm">2.0</span>) ?? <span class="nm">0.0</span>;</span>
+<span id="src-math-loft-L147">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L148">    per_f / aspect ?? <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L149">    <span class="nm">0.0</span>, per_f, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L150">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, (far + near) / (near - far) ?? <span class="nm">0.0</span>, -<span class="nm">1.0</span>,</span>
+<span id="src-math-loft-L151">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, (<span class="nm">2.0</span> * far * near) / (near - far) ?? <span class="nm">0.0</span>, <span class="nm">0.0</span></span>
+<span id="src-math-loft-L152">  ] }</span>
+<span id="src-math-loft-L153">}</span>
+<span id="src-math-loft-L154"></span>
+<span id="src-math-loft-L155"><span class="cm">// View matrix looking from eye towards target with up direction.</span></span>
+<span id="src-math-loft-L156"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_look_at</span>(eye: const <span class="en">Vec3</span>, target: const <span class="en">Vec3</span>, up: const <span class="en">Vec3</span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L157">  la_f = <span class="fn-call">normalize3</span>(<span class="fn-call">sub3</span>(target, eye));</span>
+<span id="src-math-loft-L158">  la_s = <span class="fn-call">normalize3</span>(<span class="fn-call">cross</span>(la_f, up));</span>
+<span id="src-math-loft-L159">  la_u = <span class="fn-call">cross</span>(la_s, la_f);</span>
+<span id="src-math-loft-L160">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L161">    la_s.x,  la_u.x,  -la_f.x, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L162">    la_s.y,  la_u.y,  -la_f.y, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L163">    la_s.z,  la_u.z,  -la_f.z, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L164">    -<span class="fn-call">dot3</span>(la_s, eye), -<span class="fn-call">dot3</span>(la_u, eye), <span class="fn-call">dot3</span>(la_f, eye), <span class="nm">1.0</span></span>
+<span id="src-math-loft-L165">  ] }</span>
+<span id="src-math-loft-L166">}</span>
+<span id="src-math-loft-L167"></span>
+<span id="src-math-loft-L168"><span class="cm">// Rotation around the Y axis by angle radians.</span></span>
+<span id="src-math-loft-L169"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_rotate_y</span>(angle: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L170">  ry_c = <span class="bi"><a href="stdlib-math.html">cos</a></span>(angle);</span>
+<span id="src-math-loft-L171">  ry_s = <span class="bi"><a href="stdlib-math.html">sin</a></span>(angle);</span>
+<span id="src-math-loft-L172">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L173">    ry_c,  <span class="nm">0.0</span>, ry_s, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L174">    <span class="nm">0.0</span>,   <span class="nm">1.0</span>, <span class="nm">0.0</span>,  <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L175">    -ry_s, <span class="nm">0.0</span>, ry_c, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L176">    <span class="nm">0.0</span>,   <span class="nm">0.0</span>, <span class="nm">0.0</span>,  <span class="nm">1.0</span></span>
+<span id="src-math-loft-L177">  ] }</span>
+<span id="src-math-loft-L178">}</span>
+<span id="src-math-loft-L179"></span>
+<span id="src-math-loft-L180"><span class="cm">// Rotation around the X axis by angle radians.</span></span>
+<span id="src-math-loft-L181"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_rotate_x</span>(angle: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L182">  rx_c = <span class="bi"><a href="stdlib-math.html">cos</a></span>(angle);</span>
+<span id="src-math-loft-L183">  rx_s = <span class="bi"><a href="stdlib-math.html">sin</a></span>(angle);</span>
+<span id="src-math-loft-L184">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L185">    <span class="nm">1.0</span>, <span class="nm">0.0</span>,   <span class="nm">0.0</span>,  <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L186">    <span class="nm">0.0</span>, rx_c, -rx_s, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L187">    <span class="nm">0.0</span>, rx_s,  rx_c, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L188">    <span class="nm">0.0</span>, <span class="nm">0.0</span>,   <span class="nm">0.0</span>,  <span class="nm">1.0</span></span>
+<span id="src-math-loft-L189">  ] }</span>
+<span id="src-math-loft-L190">}</span>
+<span id="src-math-loft-L191"></span>
+<span id="src-math-loft-L192"><span class="cm">// Orthographic projection matrix.</span></span>
+<span id="src-math-loft-L193"><span class="cm">// Maps the box [left,right] x [bottom,top] x [near,far] to the [-1,1] cube.</span></span>
+<span id="src-math-loft-L194"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_ortho</span>(left: <span class="ty"><a href="stdlib-types.html">float</a></span>, right: <span class="ty"><a href="stdlib-types.html">float</a></span>, bottom: <span class="ty"><a href="stdlib-types.html">float</a></span>, top: <span class="ty"><a href="stdlib-types.html">float</a></span>, near: <span class="ty"><a href="stdlib-types.html">float</a></span>, far: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L195">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L196">    <span class="nm">2.0</span> / (right - left) ?? <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L197">    <span class="nm">0.0</span>, <span class="nm">2.0</span> / (top - bottom) ?? <span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L198">    <span class="nm">0.0</span>, <span class="nm">0.0</span>, -<span class="nm">2.0</span> / (far - near) ?? <span class="nm">0.0</span>, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L199">    -(right + left) / (right - left) ?? <span class="nm">0.0</span>, -(top + bottom) / (top - bottom) ?? <span class="nm">0.0</span>, -(far + near) / (far - near) ?? <span class="nm">0.0</span>, <span class="nm">1.0</span></span>
+<span id="src-math-loft-L200">  ] }</span>
+<span id="src-math-loft-L201">}</span>
+<span id="src-math-loft-L202"></span>
+<span id="src-math-loft-L203"><span class="cm">// Combined translate + rotate_y + scale in one call.</span></span>
+<span id="src-math-loft-L204"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat4_trs</span>(tx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ty: <span class="ty"><a href="stdlib-types.html">float</a></span>, tz: <span class="ty"><a href="stdlib-types.html">float</a></span>, ry: <span class="ty"><a href="stdlib-types.html">float</a></span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>, sz: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mat4</span> {</span>
+<span id="src-math-loft-L205">  trs_c = <span class="bi"><a href="stdlib-math.html">cos</a></span>(ry);</span>
+<span id="src-math-loft-L206">  trs_s = <span class="bi"><a href="stdlib-math.html">sin</a></span>(ry);</span>
+<span id="src-math-loft-L207">  <span class="en">Mat4</span> { m: [</span>
+<span id="src-math-loft-L208">    trs_c * sx, <span class="nm">0.0</span>,     trs_s * sx, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L209">    <span class="nm">0.0</span>,        sy,      <span class="nm">0.0</span>,        <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L210">    -trs_s * sz, <span class="nm">0.0</span>,    trs_c * sz, <span class="nm">0.0</span>,</span>
+<span id="src-math-loft-L211">    tx,         ty,      tz,         <span class="nm">1.0</span></span>
+<span id="src-math-loft-L212">  ] }</span>
+<span id="src-math-loft-L213">}</span>
+</code></pre>
+<h2 id="src-mesh-loft">src/mesh.loft</h2>
+<pre class="src"><code><span id="src-mesh-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-mesh-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-mesh-loft-L3"><span class="cm">// Mesh types for the graphics package.</span></span>
+<span id="src-mesh-loft-L4"><span class="cm">// Vertex and triangle data structures for 3D geometry.</span></span>
+<span id="src-mesh-loft-L5"><span class="kw">use</span> math;</span>
+<span id="src-mesh-loft-L6"></span>
+<span id="src-mesh-loft-L7"><span class="cm">// --- Vertex and mesh ---</span></span>
+<span id="src-mesh-loft-L8"></span>
+<span id="src-mesh-loft-L9"><span class="cm">// A single vertex with position, normal, and texture coordinates.</span></span>
+<span id="src-mesh-loft-L10"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Vertex</span> {</span>
+<span id="src-mesh-loft-L11">  pos: math::<span class="en">Vec3</span>,</span>
+<span id="src-mesh-loft-L12">  normal: math::<span class="en">Vec3</span>,</span>
+<span id="src-mesh-loft-L13">  uv: math::<span class="en">Vec2</span></span>
+<span id="src-mesh-loft-L14">}</span>
+<span id="src-mesh-loft-L15"></span>
+<span id="src-mesh-loft-L16"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vertex</span>(vp: math::<span class="en">Vec3</span>, vn: math::<span class="en">Vec3</span>, vuv: math::<span class="en">Vec2</span>) -&gt; <span class="en">Vertex</span> {</span>
+<span id="src-mesh-loft-L17">  <span class="en">Vertex</span> { pos: vp, normal: vn, uv: vuv }</span>
+<span id="src-mesh-loft-L18">}</span>
+<span id="src-mesh-loft-L19"></span>
+<span id="src-mesh-loft-L20"><span class="cm">// A triangle defined by three vertex indices.</span></span>
+<span id="src-mesh-loft-L21"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Triangle</span> {</span>
+<span id="src-mesh-loft-L22">  a: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-mesh-loft-L23">  b: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-mesh-loft-L24">  c: <span class="ty"><a href="stdlib-types.html">integer</a></span></span>
+<span id="src-mesh-loft-L25">}</span>
+<span id="src-mesh-loft-L26"></span>
+<span id="src-mesh-loft-L27"><span class="cm">// A mesh: a collection of vertices and triangles.</span></span>
+<span id="src-mesh-loft-L28"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Mesh</span> {</span>
+<span id="src-mesh-loft-L29">  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,</span>
+<span id="src-mesh-loft-L30">  vertices: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Vertex</span>&gt;,</span>
+<span id="src-mesh-loft-L31">  triangles: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Triangle</span>&gt;</span>
+<span id="src-mesh-loft-L32">}</span>
+<span id="src-mesh-loft-L33"></span>
+<span id="src-mesh-loft-L34"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mesh</span>(mn: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Mesh</span> {</span>
+<span id="src-mesh-loft-L35">  <span class="en">Mesh</span> { name: mn }</span>
+<span id="src-mesh-loft-L36">}</span>
+<span id="src-mesh-loft-L37"></span>
+<span id="src-mesh-loft-L38"><span class="cm">// Add a vertex to the mesh and return its index.</span></span>
+<span id="src-mesh-loft-L39"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_vertex</span>(self: <span class="en">Mesh</span>, av: <span class="en">Vertex</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-mesh-loft-L40">  idx = self.vertices.<span class="bi"><a href="stdlib-text.html">len</a></span>();</span>
+<span id="src-mesh-loft-L41">  self.vertices += [av];</span>
+<span id="src-mesh-loft-L42">  idx</span>
+<span id="src-mesh-loft-L43">}</span>
+<span id="src-mesh-loft-L44"></span>
+<span id="src-mesh-loft-L45"><span class="cm">// Add a triangle by vertex indices.</span></span>
+<span id="src-mesh-loft-L46"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_triangle</span>(self: <span class="en">Mesh</span>, ti0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ti1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ti2: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {</span>
+<span id="src-mesh-loft-L47">  self.triangles += [<span class="en">Triangle</span> { a: ti0, b: ti1, c: ti2 }];</span>
+<span id="src-mesh-loft-L48">}</span>
+<span id="src-mesh-loft-L49"></span>
+<span id="src-mesh-loft-L50"><span class="cm">// Build a simple quad (two triangles) from 4 vertices.</span></span>
+<span id="src-mesh-loft-L51"><span class="cm">// Vertices should be in counter-clockwise order.</span></span>
+<span id="src-mesh-loft-L52"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_quad</span>(self: <span class="en">Mesh</span>, qi0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qi1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qi2: <span class="ty"><a href="stdlib-types.html">integer</a></span>, qi3: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {</span>
+<span id="src-mesh-loft-L53">  self.<span class="fn-call">add_triangle</span>(qi0, qi1, qi2);</span>
+<span id="src-mesh-loft-L54">  self.<span class="fn-call">add_triangle</span>(qi0, qi2, qi3);</span>
+<span id="src-mesh-loft-L55">}</span>
+<span id="src-mesh-loft-L56"></span>
+<span id="src-mesh-loft-L57"><span class="cm">// --- Primitive builders ---</span></span>
+<span id="src-mesh-loft-L58"></span>
+<span id="src-mesh-loft-L59"><span class="cm">// Create a unit cube centered at origin (side length 1).</span></span>
+<span id="src-mesh-loft-L60"><span class="cm">// 24 vertices (4 per face with correct per-face normals), 12 triangles.</span></span>
+<span id="src-mesh-loft-L61"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cube</span>() -&gt; <span class="en">Mesh</span> {</span>
+<span id="src-mesh-loft-L62">  cm = <span class="fn-call">mesh</span>(<span class="st">"cube"</span>);</span>
+<span id="src-mesh-loft-L63">  <span class="cm">// Front face (z = +0.5, normal = (0, 0, 1))</span></span>
+<span id="src-mesh-loft-L64">  cv0 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>, -<span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L65">  cv1 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>, -<span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L66">  cv2 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>,  <span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L67">  cv3 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>,  <span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L68">  cm.<span class="fn-call">add_quad</span>(cv0, cv1, cv2, cv3);</span>
+<span id="src-mesh-loft-L69">  <span class="cm">// Back face (z = -0.5, normal = (0, 0, -1))</span></span>
+<span id="src-mesh-loft-L70">  cv4 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>, -<span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, -<span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L71">  cv5 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>, -<span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, -<span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L72">  cv6 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>,  <span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, -<span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L73">  cv7 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>,  <span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, -<span class="nm">1.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L74">  cm.<span class="fn-call">add_quad</span>(cv4, cv5, cv6, cv7);</span>
+<span id="src-mesh-loft-L75">  <span class="cm">// Right face (x = +0.5, normal = (1, 0, 0))</span></span>
+<span id="src-mesh-loft-L76">  cv8  = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>, -<span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L77">  cv9  = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>, -<span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L78">  cv10 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>,  <span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L79">  cv11 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>,  <span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L80">  cm.<span class="fn-call">add_quad</span>(cv8, cv9, cv10, cv11);</span>
+<span id="src-mesh-loft-L81">  <span class="cm">// Left face (x = -0.5, normal = (-1, 0, 0))</span></span>
+<span id="src-mesh-loft-L82">  cv12 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>, -<span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(-<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L83">  cv13 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>, -<span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(-<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L84">  cv14 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>,  <span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(-<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L85">  cv15 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>,  <span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(-<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L86">  cm.<span class="fn-call">add_quad</span>(cv12, cv13, cv14, cv15);</span>
+<span id="src-mesh-loft-L87">  <span class="cm">// Top face (y = +0.5, normal = (0, 1, 0))</span></span>
+<span id="src-mesh-loft-L88">  cv16 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>,  <span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L89">  cv17 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>,  <span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L90">  cv18 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>,  <span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L91">  cv19 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>,  <span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L92">  cm.<span class="fn-call">add_quad</span>(cv16, cv17, cv18, cv19);</span>
+<span id="src-mesh-loft-L93">  <span class="cm">// Bottom face (y = -0.5, normal = (0, -1, 0))</span></span>
+<span id="src-mesh-loft-L94">  cv20 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>, -<span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, -<span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L95">  cv21 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>, -<span class="nm">0.5</span>, -<span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, -<span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L96">  cv22 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( <span class="nm">0.5</span>, -<span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, -<span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L97">  cv23 = cm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-<span class="nm">0.5</span>, -<span class="nm">0.5</span>,  <span class="nm">0.5</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, -<span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L98">  cm.<span class="fn-call">add_quad</span>(cv20, cv21, cv22, cv23);</span>
+<span id="src-mesh-loft-L99">  cm</span>
+<span id="src-mesh-loft-L100">}</span>
+<span id="src-mesh-loft-L101"></span>
+<span id="src-mesh-loft-L102"><span class="cm">// Create a flat horizontal plane centered at origin.</span></span>
+<span id="src-mesh-loft-L103"><span class="cm">// pw = width (x-axis), pd = depth (z-axis); normal = (0, 1, 0).</span></span>
+<span id="src-mesh-loft-L104"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">plane</span>(pn: <span class="ty"><a href="stdlib-types.html">text</a></span>, pw: <span class="ty"><a href="stdlib-types.html">float</a></span>, pd: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Mesh</span> {</span>
+<span id="src-mesh-loft-L105">  pm = <span class="fn-call">mesh</span>(pn);</span>
+<span id="src-mesh-loft-L106">  hw = pw / <span class="nm">2.0</span>;</span>
+<span id="src-mesh-loft-L107">  hd = pd / <span class="nm">2.0</span>;</span>
+<span id="src-mesh-loft-L108">  pn_v = math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>);</span>
+<span id="src-mesh-loft-L109">  pv0 = pm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-hw, <span class="nm">0.0</span>, -hd), pn_v, math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L110">  pv1 = pm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( hw, <span class="nm">0.0</span>, -hd), pn_v, math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>)));</span>
+<span id="src-mesh-loft-L111">  pv2 = pm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>( hw, <span class="nm">0.0</span>,  hd), pn_v, math::<span class="fn-call">vec2</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L112">  pv3 = pm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(-hw, <span class="nm">0.0</span>,  hd), pn_v, math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>)));</span>
+<span id="src-mesh-loft-L113">  pm.<span class="fn-call">add_quad</span>(pv0, pv3, pv2, pv1);</span>
+<span id="src-mesh-loft-L114">  pm</span>
+<span id="src-mesh-loft-L115">}</span>
+<span id="src-mesh-loft-L116"></span>
+<span id="src-mesh-loft-L117"><span class="cm">// Create a UV sphere centered at origin.</span></span>
+<span id="src-mesh-loft-L118"><span class="cm">// sr = radius, ss = longitudinal slices (≥3), st = latitudinal stacks (≥2).</span></span>
+<span id="src-mesh-loft-L119"><span class="cm">// Produces (ss+1)*(st+1) vertices and ss*st*2 triangles.</span></span>
+<span id="src-mesh-loft-L120"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sphere</span>(sn: <span class="ty"><a href="stdlib-types.html">text</a></span>, sr: <span class="ty"><a href="stdlib-types.html">float</a></span>, ss: <span class="ty"><a href="stdlib-types.html">integer</a></span>, st: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Mesh</span> {</span>
+<span id="src-mesh-loft-L121">  sm = <span class="fn-call">mesh</span>(sn);</span>
+<span id="src-mesh-loft-L122">  pi2 = <span class="nm">6.283185307179586</span>;  <span class="cm">// 2 * pi</span></span>
+<span id="src-mesh-loft-L123">  <span class="cm">// Generate rings from top (+y) to bottom (-y).  `?? 0` after each</span></span>
+<span id="src-mesh-loft-L124">  <span class="cm">// divisor is lint-suppression — `ss` and `st` are the segment counts</span></span>
+<span id="src-mesh-loft-L125">  <span class="cm">// passed by the caller; with sane input they're &gt; 0.  If a caller</span></span>
+<span id="src-mesh-loft-L126">  <span class="cm">// passes 0 the loop generates a degenerate mesh, not a crash.</span></span>
+<span id="src-mesh-loft-L127">  <span class="kw">for</span> row <span class="kw">in</span> <span class="nm">0..</span>st+<span class="nm">1</span> {</span>
+<span id="src-mesh-loft-L128">    v_phi = <span class="nm">3.141592653589793</span> * (row <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) / (st <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) ?? <span class="nm">0.0</span>;  <span class="cm">// 0..pi</span></span>
+<span id="src-mesh-loft-L129">    sy = sr * <span class="bi"><a href="stdlib-math.html">cos</a></span>(v_phi);</span>
+<span id="src-mesh-loft-L130">    ring_r = sr * <span class="bi"><a href="stdlib-math.html">sin</a></span>(v_phi);</span>
+<span id="src-mesh-loft-L131">    <span class="kw">for</span> col <span class="kw">in</span> <span class="nm">0..</span>ss+<span class="nm">1</span> {</span>
+<span id="src-mesh-loft-L132">      v_theta = pi2 * (col <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) / (ss <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) ?? <span class="nm">0.0</span>;  <span class="cm">// 0..2pi</span></span>
+<span id="src-mesh-loft-L133">      sx = ring_r * <span class="bi"><a href="stdlib-math.html">cos</a></span>(v_theta);</span>
+<span id="src-mesh-loft-L134">      sz = ring_r * <span class="bi"><a href="stdlib-math.html">sin</a></span>(v_theta);</span>
+<span id="src-mesh-loft-L135">      su = (col <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) / (ss <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) ?? <span class="nm">0.0</span>;</span>
+<span id="src-mesh-loft-L136">      sv = (row <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) / (st <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>) ?? <span class="nm">0.0</span>;</span>
+<span id="src-mesh-loft-L137">      spos = math::<span class="fn-call">vec3</span>(sx, sy, sz);</span>
+<span id="src-mesh-loft-L138">      snrm = math::<span class="fn-call">normalize3</span>(spos);</span>
+<span id="src-mesh-loft-L139">      sm.<span class="fn-call">add_vertex</span>(<span class="fn-call">vertex</span>(spos, snrm, math::<span class="fn-call">vec2</span>(su, sv)));</span>
+<span id="src-mesh-loft-L140">    }</span>
+<span id="src-mesh-loft-L141">  }</span>
+<span id="src-mesh-loft-L142">  <span class="cm">// Wire triangles.</span></span>
+<span id="src-mesh-loft-L143">  <span class="kw">for</span> row <span class="kw">in</span> <span class="nm">0..</span>st {</span>
+<span id="src-mesh-loft-L144">    <span class="kw">for</span> col <span class="kw">in</span> <span class="nm">0..</span>ss {</span>
+<span id="src-mesh-loft-L145">      i00 = row * (ss + <span class="nm">1</span>) + col;</span>
+<span id="src-mesh-loft-L146">      i01 = row * (ss + <span class="nm">1</span>) + col + <span class="nm">1</span>;</span>
+<span id="src-mesh-loft-L147">      i10 = (row + <span class="nm">1</span>) * (ss + <span class="nm">1</span>) + col;</span>
+<span id="src-mesh-loft-L148">      i11 = (row + <span class="nm">1</span>) * (ss + <span class="nm">1</span>) + col + <span class="nm">1</span>;</span>
+<span id="src-mesh-loft-L149">      sm.<span class="fn-call">add_quad</span>(i00, i01, i11, i10);</span>
+<span id="src-mesh-loft-L150">    }</span>
+<span id="src-mesh-loft-L151">  }</span>
+<span id="src-mesh-loft-L152">  sm</span>
+<span id="src-mesh-loft-L153">}</span>
+<span id="src-mesh-loft-L154"></span>
+<span id="src-mesh-loft-L155"><span class="cm">// Flatten a mesh to a vector&lt;single&gt; for GL upload.</span></span>
+<span id="src-mesh-loft-L156"><span class="cm">// Expands triangles: for each triangle, emits 3 vertices with pos+normal (stride=6).</span></span>
+<span id="src-mesh-loft-L157"><span class="cm">// Returns the flat buffer suitable for gl_upload_vertices(data, 6).</span></span>
+<span id="src-mesh-loft-L158"><span class="cm">// Flatten a mesh to a vector&lt;single&gt; with UV coords for GL upload.</span></span>
+<span id="src-mesh-loft-L159"><span class="cm">// Expands triangles: for each triangle, emits 3 vertices with pos+normal+uv (stride=8).</span></span>
+<span id="src-mesh-loft-L160"><span class="cm">// Returns the flat buffer suitable for gl_upload_vertices(data, 8).</span></span>
+<span id="src-mesh-loft-L161"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mesh_to_floats_uv</span>(mu: const <span class="en">Mesh</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; {</span>
+<span id="src-mesh-loft-L162">  mu_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [];</span>
+<span id="src-mesh-loft-L163">  <span class="kw">for</span> mu_tri <span class="kw">in</span> mu.triangles {</span>
+<span id="src-mesh-loft-L164">    <span class="kw">for</span> mu_idx <span class="kw">in</span> [mu_tri.a, mu_tri.b, mu_tri.c] {</span>
+<span id="src-mesh-loft-L165">      mu_v = mu.vertices[mu_idx];</span>
+<span id="src-mesh-loft-L166">      <span class="kw">if</span> mu_v != <span class="kw">null</span> {</span>
+<span id="src-mesh-loft-L167">        mu_buf += [mu_v.pos.x <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mu_v.pos.y <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mu_v.pos.z <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>];</span>
+<span id="src-mesh-loft-L168">        mu_buf += [mu_v.normal.x <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mu_v.normal.y <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mu_v.normal.z <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>];</span>
+<span id="src-mesh-loft-L169">        mu_buf += [mu_v.uv.x <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mu_v.uv.y <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>];</span>
+<span id="src-mesh-loft-L170">      }</span>
+<span id="src-mesh-loft-L171">    }</span>
+<span id="src-mesh-loft-L172">  }</span>
+<span id="src-mesh-loft-L173">  mu_buf</span>
+<span id="src-mesh-loft-L174">}</span>
+<span id="src-mesh-loft-L175"></span>
+<span id="src-mesh-loft-L176"><span class="cm">// Flatten a mesh to a vector&lt;single&gt; for GL upload.</span></span>
+<span id="src-mesh-loft-L177"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mesh_to_floats</span>(mf: const <span class="en">Mesh</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; {</span>
+<span id="src-mesh-loft-L178">  mf_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [];</span>
+<span id="src-mesh-loft-L179">  <span class="kw">for</span> mf_tri <span class="kw">in</span> mf.triangles {</span>
+<span id="src-mesh-loft-L180">    <span class="kw">for</span> mf_idx <span class="kw">in</span> [mf_tri.a, mf_tri.b, mf_tri.c] {</span>
+<span id="src-mesh-loft-L181">      mf_v = mf.vertices[mf_idx];</span>
+<span id="src-mesh-loft-L182">      <span class="kw">if</span> mf_v != <span class="kw">null</span> {</span>
+<span id="src-mesh-loft-L183">        mf_buf += [mf_v.pos.x <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mf_v.pos.y <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mf_v.pos.z <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>];</span>
+<span id="src-mesh-loft-L184">        mf_buf += [mf_v.normal.x <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mf_v.normal.y <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>, mf_v.normal.z <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>];</span>
+<span id="src-mesh-loft-L185">      }</span>
+<span id="src-mesh-loft-L186">    }</span>
+<span id="src-mesh-loft-L187">  }</span>
+<span id="src-mesh-loft-L188">  mf_buf</span>
+<span id="src-mesh-loft-L189">}</span>
+</code></pre>
+<h2 id="src-mesh3d-loft">src/mesh3d.loft</h2>
+<pre class="src"><code><span id="src-mesh3d-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-mesh3d-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-mesh3d-loft-L3"><span class="cm">//</span></span>
+<span id="src-mesh3d-loft-L4"><span class="cm">// mesh3d — 3D geometry primitives for loft.</span></span>
+<span id="src-mesh3d-loft-L5"><span class="cm">//</span></span>
+<span id="src-mesh3d-loft-L6"><span class="cm">// Aggregates three sub-modules that previously lived inside the</span></span>
+<span id="src-mesh3d-loft-L7"><span class="cm">// `graphics` package as internal submodules:</span></span>
+<span id="src-mesh3d-loft-L8"><span class="cm">//</span></span>
+<span id="src-mesh3d-loft-L9"><span class="cm">//   - math  — Vec2 / Vec3 / Vec4 + Mat4 + vector/matrix ops</span></span>
+<span id="src-mesh3d-loft-L10"><span class="cm">//   - mesh  — Vertex / Triangle / Mesh + sphere generation +</span></span>
+<span id="src-mesh3d-loft-L11"><span class="cm">//             flatten-to-floats helpers for GL upload</span></span>
+<span id="src-mesh3d-loft-L12"><span class="cm">//   - scene — Scene / Node / Material / Camera / Light + scene</span></span>
+<span id="src-mesh3d-loft-L13"><span class="cm">//             graph construction</span></span>
+<span id="src-mesh3d-loft-L14"><span class="cm">//</span></span>
+<span id="src-mesh3d-loft-L15"><span class="cm">// Promoting these into a standalone package lets non-rendering</span></span>
+<span id="src-mesh3d-loft-L16"><span class="cm">// consumers (asset processors, glb readers, headless physics)</span></span>
+<span id="src-mesh3d-loft-L17"><span class="cm">// use the types without pulling in `graphics`'s OpenGL stack.</span></span>
+<span id="src-mesh3d-loft-L18"><span class="cm">//</span></span>
+<span id="src-mesh3d-loft-L19"><span class="cm">// Public re-exports below — consumers do `use mesh3d;` and access</span></span>
+<span id="src-mesh3d-loft-L20"><span class="cm">// `Vec3`, `Mesh`, `Scene`, etc. at the top level.  Internally each</span></span>
+<span id="src-mesh3d-loft-L21"><span class="cm">// submodule is still importable individually</span></span>
+<span id="src-mesh3d-loft-L22"><span class="cm">// (`use math;` / `use mesh;` / `use scene;`) for cases where only</span></span>
+<span id="src-mesh3d-loft-L23"><span class="cm">// one sub-surface is needed.</span></span>
+<span id="src-mesh3d-loft-L24"></span>
+<span id="src-mesh3d-loft-L25"><span class="kw">use</span> math;</span>
+<span id="src-mesh3d-loft-L26"><span class="kw">use</span> mesh;</span>
+<span id="src-mesh3d-loft-L27"><span class="kw">use</span> scene;</span>
+</code></pre>
+<h2 id="src-scene-loft">src/scene.loft</h2>
+<pre class="src"><code><span id="src-scene-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-scene-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-scene-loft-L3"><span class="cm">// Scene graph types for the graphics package.</span></span>
+<span id="src-scene-loft-L4"><span class="cm">// Represents a 3D scene with nodes, cameras, lights, and materials.</span></span>
+<span id="src-scene-loft-L5"><span class="kw">use</span> math;</span>
+<span id="src-scene-loft-L6"><span class="kw">use</span> mesh;</span>
+<span id="src-scene-loft-L7"></span>
+<span id="src-scene-loft-L8"><span class="cm">// --- Materials ---</span></span>
+<span id="src-scene-loft-L9"></span>
+<span id="src-scene-loft-L10"><span class="cm">// A simple PBR-like material.</span></span>
+<span id="src-scene-loft-L11"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Material</span> {</span>
+<span id="src-scene-loft-L12">  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,</span>
+<span id="src-scene-loft-L13">  base_color_r: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L14">  base_color_g: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L15">  base_color_b: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L16">  base_color_a: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L17">  metallic: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L18">  roughness: <span class="ty"><a href="stdlib-types.html">float</a></span></span>
+<span id="src-scene-loft-L19">}</span>
+<span id="src-scene-loft-L20"></span>
+<span id="src-scene-loft-L21"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">material</span>(mname: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Material</span> {</span>
+<span id="src-scene-loft-L22">  <span class="en">Material</span> {</span>
+<span id="src-scene-loft-L23">    name: mname,</span>
+<span id="src-scene-loft-L24">    base_color_r: <span class="nm">0.8</span>, base_color_g: <span class="nm">0.8</span>, base_color_b: <span class="nm">0.8</span>, base_color_a: <span class="nm">1.0</span>,</span>
+<span id="src-scene-loft-L25">    metallic: <span class="nm">0.0</span>, roughness: <span class="nm">0.5</span></span>
+<span id="src-scene-loft-L26">  }</span>
+<span id="src-scene-loft-L27">}</span>
+<span id="src-scene-loft-L28"></span>
+<span id="src-scene-loft-L29"><span class="cm">// Shorthand: opaque dielectric material with the given color.</span></span>
+<span id="src-scene-loft-L30"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">material_color</span>(mname: <span class="ty"><a href="stdlib-types.html">text</a></span>, mr: <span class="ty"><a href="stdlib-types.html">float</a></span>, mg: <span class="ty"><a href="stdlib-types.html">float</a></span>, mb: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Material</span> {</span>
+<span id="src-scene-loft-L31">  <span class="en">Material</span> {</span>
+<span id="src-scene-loft-L32">    name: mname, base_color_r: mr, base_color_g: mg, base_color_b: mb,</span>
+<span id="src-scene-loft-L33">    base_color_a: <span class="nm">1.0</span>, metallic: <span class="nm">0.0</span>, roughness: <span class="nm">0.5</span></span>
+<span id="src-scene-loft-L34">  }</span>
+<span id="src-scene-loft-L35">}</span>
+<span id="src-scene-loft-L36"></span>
+<span id="src-scene-loft-L37"><span class="cm">// Shorthand: metallic material with the given color and roughness.</span></span>
+<span id="src-scene-loft-L38"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">material_metal</span>(mname: <span class="ty"><a href="stdlib-types.html">text</a></span>, mr: <span class="ty"><a href="stdlib-types.html">float</a></span>, mg: <span class="ty"><a href="stdlib-types.html">float</a></span>, mb: <span class="ty"><a href="stdlib-types.html">float</a></span>, mrough: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Material</span> {</span>
+<span id="src-scene-loft-L39">  <span class="en">Material</span> {</span>
+<span id="src-scene-loft-L40">    name: mname, base_color_r: mr, base_color_g: mg, base_color_b: mb,</span>
+<span id="src-scene-loft-L41">    base_color_a: <span class="nm">1.0</span>, metallic: <span class="nm">1.0</span>, roughness: mrough</span>
+<span id="src-scene-loft-L42">  }</span>
+<span id="src-scene-loft-L43">}</span>
+<span id="src-scene-loft-L44"></span>
+<span id="src-scene-loft-L45"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_color</span>(self: <span class="en">Material</span>, scr: <span class="ty"><a href="stdlib-types.html">float</a></span>, scg: <span class="ty"><a href="stdlib-types.html">float</a></span>, scb: <span class="ty"><a href="stdlib-types.html">float</a></span>) {</span>
+<span id="src-scene-loft-L46">  self.base_color_r = scr;</span>
+<span id="src-scene-loft-L47">  self.base_color_g = scg;</span>
+<span id="src-scene-loft-L48">  self.base_color_b = scb;</span>
+<span id="src-scene-loft-L49">}</span>
+<span id="src-scene-loft-L50"></span>
+<span id="src-scene-loft-L51"><span class="cm">// --- Scene nodes ---</span></span>
+<span id="src-scene-loft-L52"></span>
+<span id="src-scene-loft-L53"><span class="cm">// A node in the scene graph with a mesh, material, and transform.</span></span>
+<span id="src-scene-loft-L54"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Node</span> {</span>
+<span id="src-scene-loft-L55">  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,</span>
+<span id="src-scene-loft-L56">  mesh_idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-scene-loft-L57">  material_idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-scene-loft-L58">  transform: math::<span class="en">Mat4</span></span>
+<span id="src-scene-loft-L59">}</span>
+<span id="src-scene-loft-L60"></span>
+<span id="src-scene-loft-L61"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">node</span>(nn: <span class="ty"><a href="stdlib-types.html">text</a></span>, nm: <span class="ty"><a href="stdlib-types.html">integer</a></span>, nmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Node</span> {</span>
+<span id="src-scene-loft-L62">  <span class="en">Node</span> { name: nn, mesh_idx: nm, material_idx: nmat, transform: math::<span class="fn-call">mat4_identity</span>() }</span>
+<span id="src-scene-loft-L63">}</span>
+<span id="src-scene-loft-L64"></span>
+<span id="src-scene-loft-L65"><span class="cm">// Create a node with an explicit transform (avoids mutation of transform field).</span></span>
+<span id="src-scene-loft-L66"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">node_at</span>(nn: <span class="ty"><a href="stdlib-types.html">text</a></span>, nm: <span class="ty"><a href="stdlib-types.html">integer</a></span>, nmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>, xf: math::<span class="en">Mat4</span>) -&gt; <span class="en">Node</span> {</span>
+<span id="src-scene-loft-L67">  <span class="en">Node</span> { name: nn, mesh_idx: nm, material_idx: nmat, transform: xf }</span>
+<span id="src-scene-loft-L68">}</span>
+<span id="src-scene-loft-L69"></span>
+<span id="src-scene-loft-L70"><span class="cm">// --- Camera ---</span></span>
+<span id="src-scene-loft-L71"></span>
+<span id="src-scene-loft-L72"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Camera</span> {</span>
+<span id="src-scene-loft-L73">  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,</span>
+<span id="src-scene-loft-L74">  fov: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L75">  near: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L76">  far: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L77">  position: math::<span class="en">Vec3</span>,</span>
+<span id="src-scene-loft-L78">  target: math::<span class="en">Vec3</span></span>
+<span id="src-scene-loft-L79">}</span>
+<span id="src-scene-loft-L80"></span>
+<span id="src-scene-loft-L81"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">camera</span>(cname: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Camera</span> {</span>
+<span id="src-scene-loft-L82">  <span class="en">Camera</span> {</span>
+<span id="src-scene-loft-L83">    name: cname,</span>
+<span id="src-scene-loft-L84">    fov: <span class="nm">60.0</span>, near: <span class="nm">0.1</span>, far: <span class="nm">100.0</span>,</span>
+<span id="src-scene-loft-L85">    position: math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">5.0</span>),</span>
+<span id="src-scene-loft-L86">    target: math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>)</span>
+<span id="src-scene-loft-L87">  }</span>
+<span id="src-scene-loft-L88">}</span>
+<span id="src-scene-loft-L89"></span>
+<span id="src-scene-loft-L90"><span class="cm">// --- Lights (KHR_lights_punctual) ---</span></span>
+<span id="src-scene-loft-L91"></span>
+<span id="src-scene-loft-L92"><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">LightType</span> { <span class="en">Directional</span>, <span class="en">Point</span>, <span class="en">Spot</span> }</span>
+<span id="src-scene-loft-L93"></span>
+<span id="src-scene-loft-L94"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Light</span> {</span>
+<span id="src-scene-loft-L95">  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,</span>
+<span id="src-scene-loft-L96">  light_type: <span class="en">LightType</span>,</span>
+<span id="src-scene-loft-L97">  color_r: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L98">  color_g: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L99">  color_b: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L100">  intensity: <span class="ty"><a href="stdlib-types.html">float</a></span>,</span>
+<span id="src-scene-loft-L101">  position: math::<span class="en">Vec3</span>,</span>
+<span id="src-scene-loft-L102">  direction: math::<span class="en">Vec3</span></span>
+<span id="src-scene-loft-L103">}</span>
+<span id="src-scene-loft-L104"></span>
+<span id="src-scene-loft-L105"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">directional_light</span>(ln: <span class="ty"><a href="stdlib-types.html">text</a></span>, lr: <span class="ty"><a href="stdlib-types.html">float</a></span>, lg: <span class="ty"><a href="stdlib-types.html">float</a></span>, lb: <span class="ty"><a href="stdlib-types.html">float</a></span>, li: <span class="ty"><a href="stdlib-types.html">float</a></span>, ldir: math::<span class="en">Vec3</span>) -&gt; <span class="en">Light</span> {</span>
+<span id="src-scene-loft-L106">  <span class="en">Light</span> {</span>
+<span id="src-scene-loft-L107">    name: ln, light_type: <span class="en">Directional</span>,</span>
+<span id="src-scene-loft-L108">    color_r: lr, color_g: lg, color_b: lb, intensity: li,</span>
+<span id="src-scene-loft-L109">    position: math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), direction: ldir</span>
+<span id="src-scene-loft-L110">  }</span>
+<span id="src-scene-loft-L111">}</span>
+<span id="src-scene-loft-L112"></span>
+<span id="src-scene-loft-L113"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">point_light</span>(ln: <span class="ty"><a href="stdlib-types.html">text</a></span>, lr: <span class="ty"><a href="stdlib-types.html">float</a></span>, lg: <span class="ty"><a href="stdlib-types.html">float</a></span>, lb: <span class="ty"><a href="stdlib-types.html">float</a></span>, li: <span class="ty"><a href="stdlib-types.html">float</a></span>, lpos: math::<span class="en">Vec3</span>) -&gt; <span class="en">Light</span> {</span>
+<span id="src-scene-loft-L114">  <span class="en">Light</span> {</span>
+<span id="src-scene-loft-L115">    name: ln, light_type: <span class="en">Point</span>,</span>
+<span id="src-scene-loft-L116">    color_r: lr, color_g: lg, color_b: lb, intensity: li,</span>
+<span id="src-scene-loft-L117">    position: lpos, direction: math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, -<span class="nm">1.0</span>, <span class="nm">0.0</span>)</span>
+<span id="src-scene-loft-L118">  }</span>
+<span id="src-scene-loft-L119">}</span>
+<span id="src-scene-loft-L120"></span>
+<span id="src-scene-loft-L121"><span class="cm">// --- Scene ---</span></span>
+<span id="src-scene-loft-L122"></span>
+<span id="src-scene-loft-L123"><span class="cm">// A complete 3D scene.</span></span>
+<span id="src-scene-loft-L124"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Scene</span> {</span>
+<span id="src-scene-loft-L125">  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,</span>
+<span id="src-scene-loft-L126">  meshes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;mesh::<span class="en">Mesh</span>&gt;,</span>
+<span id="src-scene-loft-L127">  materials: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Material</span>&gt;,</span>
+<span id="src-scene-loft-L128">  nodes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Node</span>&gt;,</span>
+<span id="src-scene-loft-L129">  cameras: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Camera</span>&gt;,</span>
+<span id="src-scene-loft-L130">  lights: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Light</span>&gt;</span>
+<span id="src-scene-loft-L131">}</span>
+<span id="src-scene-loft-L132"></span>
+<span id="src-scene-loft-L133"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">scene</span>(sn: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Scene</span> {</span>
+<span id="src-scene-loft-L134">  <span class="en">Scene</span> { name: sn }</span>
+<span id="src-scene-loft-L135">}</span>
+<span id="src-scene-loft-L136"></span>
+<span id="src-scene-loft-L137"><span class="cm">// Add a mesh to the scene and return its index.</span></span>
+<span id="src-scene-loft-L138"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_mesh</span>(self: <span class="en">Scene</span>, sm: mesh::<span class="en">Mesh</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-scene-loft-L139">  si = self.meshes.<span class="bi"><a href="stdlib-text.html">len</a></span>();</span>
+<span id="src-scene-loft-L140">  self.meshes += [sm];</span>
+<span id="src-scene-loft-L141">  si</span>
+<span id="src-scene-loft-L142">}</span>
+<span id="src-scene-loft-L143"></span>
+<span id="src-scene-loft-L144"><span class="cm">// Add a material to the scene and return its index.</span></span>
+<span id="src-scene-loft-L145"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_material</span>(self: <span class="en">Scene</span>, smat: <span class="en">Material</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-scene-loft-L146">  si = self.materials.<span class="bi"><a href="stdlib-text.html">len</a></span>();</span>
+<span id="src-scene-loft-L147">  self.materials += [smat];</span>
+<span id="src-scene-loft-L148">  si</span>
+<span id="src-scene-loft-L149">}</span>
+<span id="src-scene-loft-L150"></span>
+<span id="src-scene-loft-L151"><span class="cm">// Add a node to the scene.</span></span>
+<span id="src-scene-loft-L152"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_node</span>(self: <span class="en">Scene</span>, sn: <span class="en">Node</span>) {</span>
+<span id="src-scene-loft-L153">  self.nodes += [sn];</span>
+<span id="src-scene-loft-L154">}</span>
+<span id="src-scene-loft-L155"></span>
+<span id="src-scene-loft-L156"><span class="cm">// Add a camera to the scene.</span></span>
+<span id="src-scene-loft-L157"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_camera</span>(self: <span class="en">Scene</span>, sc: <span class="en">Camera</span>) {</span>
+<span id="src-scene-loft-L158">  self.cameras += [sc];</span>
+<span id="src-scene-loft-L159">}</span>
+<span id="src-scene-loft-L160"></span>
+<span id="src-scene-loft-L161"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_light</span>(self: <span class="en">Scene</span>, sl: <span class="en">Light</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-scene-loft-L162">  si = self.lights.<span class="bi"><a href="stdlib-text.html">len</a></span>();</span>
+<span id="src-scene-loft-L163">  self.lights += [sl];</span>
+<span id="src-scene-loft-L164">  si</span>
+<span id="src-scene-loft-L165">}</span>
+</code></pre>
+<h2 id="tests-math-loft">tests/math.loft</h2>
+<pre class="src"><code><span id="tests-math-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-math-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-math-loft-L3"><span class="cm">// Tests for the math sub-module of mesh3d.</span></span>
+<span id="tests-math-loft-L4"><span class="kw">use</span> mesh3d;</span>
+<span id="tests-math-loft-L5"></span>
+<span id="tests-math-loft-L6"><span class="kw">fn</span> <span class="fn-call">test_vec3_create</span>() {</span>
+<span id="tests-math-loft-L7">  mv = math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">2.0</span>, <span class="nm">3.0</span>);</span>
+<span id="tests-math-loft-L8">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mv.x == <span class="nm">1.0</span>, <span class="st">"x"</span>);</span>
+<span id="tests-math-loft-L9">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mv.y == <span class="nm">2.0</span>, <span class="st">"y"</span>);</span>
+<span id="tests-math-loft-L10">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mv.z == <span class="nm">3.0</span>, <span class="st">"z"</span>);</span>
+<span id="tests-math-loft-L11">}</span>
+<span id="tests-math-loft-L12"></span>
+<span id="tests-math-loft-L13"><span class="kw">fn</span> <span class="fn-call">test_vec3_add</span>() {</span>
+<span id="tests-math-loft-L14">  ma = math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">2.0</span>, <span class="nm">3.0</span>);</span>
+<span id="tests-math-loft-L15">  mb = math::<span class="fn-call">vec3</span>(<span class="nm">4.0</span>, <span class="nm">5.0</span>, <span class="nm">6.0</span>);</span>
+<span id="tests-math-loft-L16">  mc = math::<span class="fn-call">add3</span>(ma, mb);</span>
+<span id="tests-math-loft-L17">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mc.x == <span class="nm">5.0</span>, <span class="st">"add x"</span>);</span>
+<span id="tests-math-loft-L18">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mc.y == <span class="nm">7.0</span>, <span class="st">"add y"</span>);</span>
+<span id="tests-math-loft-L19">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mc.z == <span class="nm">9.0</span>, <span class="st">"add z"</span>);</span>
+<span id="tests-math-loft-L20">}</span>
+<span id="tests-math-loft-L21"></span>
+<span id="tests-math-loft-L22"><span class="kw">fn</span> <span class="fn-call">test_vec3_dot</span>() {</span>
+<span id="tests-math-loft-L23">  da = math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L24">  db = math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L25">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(math::<span class="fn-call">dot3</span>(da, db) == <span class="nm">0.0</span>, <span class="st">"orthogonal dot"</span>);</span>
+<span id="tests-math-loft-L26">  dc = math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L27">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(math::<span class="fn-call">dot3</span>(da, dc) == <span class="nm">1.0</span>, <span class="st">"parallel dot"</span>);</span>
+<span id="tests-math-loft-L28">}</span>
+<span id="tests-math-loft-L29"></span>
+<span id="tests-math-loft-L30"><span class="kw">fn</span> <span class="fn-call">test_vec3_cross</span>() {</span>
+<span id="tests-math-loft-L31">  cx = math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L32">  cy = math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L33">  cz = math::<span class="fn-call">cross</span>(cx, cy);</span>
+<span id="tests-math-loft-L34">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cz.x == <span class="nm">0.0</span>, <span class="st">"cross x"</span>);</span>
+<span id="tests-math-loft-L35">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cz.y == <span class="nm">0.0</span>, <span class="st">"cross y"</span>);</span>
+<span id="tests-math-loft-L36">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cz.z == <span class="nm">1.0</span>, <span class="st">"cross z"</span>);</span>
+<span id="tests-math-loft-L37">}</span>
+<span id="tests-math-loft-L38"></span>
+<span id="tests-math-loft-L39"><span class="kw">fn</span> <span class="fn-call">test_vec3_normalize</span>() {</span>
+<span id="tests-math-loft-L40">  nv = math::<span class="fn-call">vec3</span>(<span class="nm">3.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L41">  nn = math::<span class="fn-call">normalize3</span>(nv);</span>
+<span id="tests-math-loft-L42">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(nn.x == <span class="nm">1.0</span>, <span class="st">"norm x"</span>);</span>
+<span id="tests-math-loft-L43">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(nn.y == <span class="nm">0.0</span>, <span class="st">"norm y"</span>);</span>
+<span id="tests-math-loft-L44">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(nn.z == <span class="nm">0.0</span>, <span class="st">"norm z"</span>);</span>
+<span id="tests-math-loft-L45">}</span>
+<span id="tests-math-loft-L46"></span>
+<span id="tests-math-loft-L47"><span class="kw">fn</span> <span class="fn-call">test_mat4_identity</span>() {</span>
+<span id="tests-math-loft-L48">  id_m = math::<span class="fn-call">mat4_identity</span>();</span>
+<span id="tests-math-loft-L49">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(id_m.m[<span class="nm">0</span>] == <span class="nm">1.0</span>, <span class="st">"m00"</span>);</span>
+<span id="tests-math-loft-L50">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(id_m.m[<span class="nm">5</span>] == <span class="nm">1.0</span>, <span class="st">"m11"</span>);</span>
+<span id="tests-math-loft-L51">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(id_m.m[<span class="nm">10</span>] == <span class="nm">1.0</span>, <span class="st">"m22"</span>);</span>
+<span id="tests-math-loft-L52">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(id_m.m[<span class="nm">15</span>] == <span class="nm">1.0</span>, <span class="st">"m33"</span>);</span>
+<span id="tests-math-loft-L53">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(id_m.m[<span class="nm">1</span>] == <span class="nm">0.0</span>, <span class="st">"m10"</span>);</span>
+<span id="tests-math-loft-L54">}</span>
+<span id="tests-math-loft-L55"></span>
+<span id="tests-math-loft-L56"><span class="kw">fn</span> <span class="fn-call">test_mat4_translate</span>() {</span>
+<span id="tests-math-loft-L57">  t4_m = math::<span class="fn-call">mat4_translate</span>(<span class="nm">10.0</span>, <span class="nm">20.0</span>, <span class="nm">30.0</span>);</span>
+<span id="tests-math-loft-L58">  t4_v = math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L59">  t4_r = math::<span class="fn-call">mat4_transform</span>(t4_m, t4_v);</span>
+<span id="tests-math-loft-L60">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t4_r.x == <span class="nm">10.0</span>, <span class="st">"translate x"</span>);</span>
+<span id="tests-math-loft-L61">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t4_r.y == <span class="nm">20.0</span>, <span class="st">"translate y"</span>);</span>
+<span id="tests-math-loft-L62">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t4_r.z == <span class="nm">30.0</span>, <span class="st">"translate z"</span>);</span>
+<span id="tests-math-loft-L63">}</span>
+<span id="tests-math-loft-L64"></span>
+<span id="tests-math-loft-L65"><span class="kw">fn</span> <span class="fn-call">test_mat4_scale</span>() {</span>
+<span id="tests-math-loft-L66">  s4_m = math::<span class="fn-call">mat4_scale</span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>, <span class="nm">4.0</span>);</span>
+<span id="tests-math-loft-L67">  s4_v = math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">1.0</span>, <span class="nm">1.0</span>);</span>
+<span id="tests-math-loft-L68">  s4_r = math::<span class="fn-call">mat4_transform</span>(s4_m, s4_v);</span>
+<span id="tests-math-loft-L69">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s4_r.x == <span class="nm">2.0</span>, <span class="st">"scale x"</span>);</span>
+<span id="tests-math-loft-L70">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s4_r.y == <span class="nm">3.0</span>, <span class="st">"scale y"</span>);</span>
+<span id="tests-math-loft-L71">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s4_r.z == <span class="nm">4.0</span>, <span class="st">"scale z"</span>);</span>
+<span id="tests-math-loft-L72">}</span>
+<span id="tests-math-loft-L73"></span>
+<span id="tests-math-loft-L74"><span class="kw">fn</span> <span class="fn-call">test_mat4_mul</span>() {</span>
+<span id="tests-math-loft-L75">  tma = math::<span class="fn-call">mat4_translate</span>(<span class="nm">5.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L76">  tmb = math::<span class="fn-call">mat4_scale</span>(<span class="nm">2.0</span>, <span class="nm">2.0</span>, <span class="nm">2.0</span>);</span>
+<span id="tests-math-loft-L77">  tmc = math::<span class="fn-call">mat4_mul</span>(tma, tmb);</span>
+<span id="tests-math-loft-L78">  tmv = math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-math-loft-L79">  tmres = math::<span class="fn-call">mat4_transform</span>(tmc, tmv);</span>
+<span id="tests-math-loft-L80">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tmres.x == <span class="nm">7.0</span>, <span class="st">"mul result x={tmres.x}"</span>);</span>
+<span id="tests-math-loft-L81">}</span>
+</code></pre>
+<h2 id="tests-mesh-loft">tests/mesh.loft</h2>
+<pre class="src"><code><span id="tests-mesh-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-mesh-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-mesh-loft-L3"><span class="cm">// Tests for the mesh sub-module of mesh3d.</span></span>
+<span id="tests-mesh-loft-L4"><span class="kw">use</span> mesh3d;</span>
+<span id="tests-mesh-loft-L5"></span>
+<span id="tests-mesh-loft-L6"><span class="kw">fn</span> <span class="fn-call">test_mesh_create</span>() {</span>
+<span id="tests-mesh-loft-L7">  mc_m = mesh::<span class="fn-call">mesh</span>(<span class="st">"test"</span>);</span>
+<span id="tests-mesh-loft-L8">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mc_m.name == <span class="st">"test"</span>, <span class="st">"mesh name"</span>);</span>
+<span id="tests-mesh-loft-L9">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mc_m.vertices.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">0</span>, <span class="st">"empty verts"</span>);</span>
+<span id="tests-mesh-loft-L10">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mc_m.triangles.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">0</span>, <span class="st">"empty tris"</span>);</span>
+<span id="tests-mesh-loft-L11">}</span>
+<span id="tests-mesh-loft-L12"></span>
+<span id="tests-mesh-loft-L13"><span class="kw">fn</span> <span class="fn-call">test_mesh_add_vertex</span>() {</span>
+<span id="tests-mesh-loft-L14">  mv_m = mesh::<span class="fn-call">mesh</span>(<span class="st">"v"</span>);</span>
+<span id="tests-mesh-loft-L15">  mv_v = mesh::<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">2.0</span>, <span class="nm">3.0</span>), math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>), math::<span class="fn-call">vec2</span>(<span class="nm">0.5</span>, <span class="nm">0.5</span>));</span>
+<span id="tests-mesh-loft-L16">  mv_i = mv_m.<span class="fn-call">add_vertex</span>(mv_v);</span>
+<span id="tests-mesh-loft-L17">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mv_i == <span class="nm">0</span>, <span class="st">"first vertex index"</span>);</span>
+<span id="tests-mesh-loft-L18">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mv_m.vertices.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">1</span>, <span class="st">"one vertex"</span>);</span>
+<span id="tests-mesh-loft-L19">}</span>
+<span id="tests-mesh-loft-L20"></span>
+<span id="tests-mesh-loft-L21"><span class="kw">fn</span> <span class="fn-call">test_mesh_add_triangle</span>() {</span>
+<span id="tests-mesh-loft-L22">  mt_m = mesh::<span class="fn-call">mesh</span>(<span class="st">"t"</span>);</span>
+<span id="tests-mesh-loft-L23">  mt_n = math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">1.0</span>);</span>
+<span id="tests-mesh-loft-L24">  mt_uv = math::<span class="fn-call">vec2</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-mesh-loft-L25">  mt_m.<span class="fn-call">add_vertex</span>(mesh::<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), mt_n, mt_uv));</span>
+<span id="tests-mesh-loft-L26">  mt_m.<span class="fn-call">add_vertex</span>(mesh::<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>), mt_n, mt_uv));</span>
+<span id="tests-mesh-loft-L27">  mt_m.<span class="fn-call">add_vertex</span>(mesh::<span class="fn-call">vertex</span>(math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">1.0</span>, <span class="nm">0.0</span>), mt_n, mt_uv));</span>
+<span id="tests-mesh-loft-L28">  mt_m.<span class="fn-call">add_triangle</span>(<span class="nm">0</span>, <span class="nm">1</span>, <span class="nm">2</span>);</span>
+<span id="tests-mesh-loft-L29">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mt_m.triangles.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">1</span>, <span class="st">"one triangle"</span>);</span>
+<span id="tests-mesh-loft-L30">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mt_m.triangles[<span class="nm">0</span>].a == <span class="nm">0</span>, <span class="st">"tri a"</span>);</span>
+<span id="tests-mesh-loft-L31">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mt_m.triangles[<span class="nm">0</span>].b == <span class="nm">1</span>, <span class="st">"tri b"</span>);</span>
+<span id="tests-mesh-loft-L32">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mt_m.triangles[<span class="nm">0</span>].c == <span class="nm">2</span>, <span class="st">"tri c"</span>);</span>
+<span id="tests-mesh-loft-L33">}</span>
+<span id="tests-mesh-loft-L34"></span>
+<span id="tests-mesh-loft-L35"><span class="kw">fn</span> <span class="fn-call">test_cube</span>() {</span>
+<span id="tests-mesh-loft-L36">  cb = mesh::<span class="fn-call">cube</span>();</span>
+<span id="tests-mesh-loft-L37">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cb.name == <span class="st">"cube"</span>, <span class="st">"cube name"</span>);</span>
+<span id="tests-mesh-loft-L38">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cb.vertices.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">24</span>, <span class="st">"cube has 24 verts (4 per face)"</span>);</span>
+<span id="tests-mesh-loft-L39">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cb.triangles.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">12</span>, <span class="st">"cube has 12 tris (2 per face * 6 faces)"</span>);</span>
+<span id="tests-mesh-loft-L40">}</span>
+<span id="tests-mesh-loft-L41"></span>
+<span id="tests-mesh-loft-L42"><span class="kw">fn</span> <span class="fn-call">test_plane</span>() {</span>
+<span id="tests-mesh-loft-L43">  pl = mesh::<span class="fn-call">plane</span>(<span class="st">"ground"</span>, <span class="nm">2.0</span>, <span class="nm">3.0</span>);</span>
+<span id="tests-mesh-loft-L44">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pl.name == <span class="st">"ground"</span>, <span class="st">"plane name"</span>);</span>
+<span id="tests-mesh-loft-L45">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pl.vertices.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">4</span>, <span class="st">"plane has 4 verts"</span>);</span>
+<span id="tests-mesh-loft-L46">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pl.triangles.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">2</span>, <span class="st">"plane has 2 tris"</span>);</span>
+<span id="tests-mesh-loft-L47">  <span class="cm">// Check normal is up (y = 1)</span></span>
+<span id="tests-mesh-loft-L48">  pln = pl.vertices[<span class="nm">0</span>].normal;</span>
+<span id="tests-mesh-loft-L49">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pln.y == <span class="nm">1.0</span>, <span class="st">"normal up"</span>);</span>
+<span id="tests-mesh-loft-L50">}</span>
+<span id="tests-mesh-loft-L51"></span>
+<span id="tests-mesh-loft-L52"><span class="kw">fn</span> <span class="fn-call">test_sphere</span>() {</span>
+<span id="tests-mesh-loft-L53">  sp = mesh::<span class="fn-call">sphere</span>(<span class="st">"ball"</span>, <span class="nm">1.0</span>, <span class="nm">8</span>, <span class="nm">6</span>);</span>
+<span id="tests-mesh-loft-L54">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sp.name == <span class="st">"ball"</span>, <span class="st">"sphere name"</span>);</span>
+<span id="tests-mesh-loft-L55">  <span class="cm">// (slices+1)*(stacks+1) = 9*7 = 63 verts</span></span>
+<span id="tests-mesh-loft-L56">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sp.vertices.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">63</span>, <span class="st">"sphere verts={sp.vertices.len()}"</span>);</span>
+<span id="tests-mesh-loft-L57">  <span class="cm">// slices*stacks*2 = 8*6*2 = 96 tris</span></span>
+<span id="tests-mesh-loft-L58">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sp.triangles.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">96</span>, <span class="st">"sphere tris={sp.triangles.len()}"</span>);</span>
+<span id="tests-mesh-loft-L59">}</span>
+</code></pre>
+<h2 id="tests-scene-loft">tests/scene.loft</h2>
+<pre class="src"><code><span id="tests-scene-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-scene-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-scene-loft-L3"><span class="cm">// Tests for the scene sub-module of mesh3d.</span></span>
+<span id="tests-scene-loft-L4"><span class="kw">use</span> mesh3d;</span>
+<span id="tests-scene-loft-L5"><span class="kw">use</span> scene;</span>
+<span id="tests-scene-loft-L6"></span>
+<span id="tests-scene-loft-L7"><span class="kw">fn</span> <span class="fn-call">test_scene_create</span>() {</span>
+<span id="tests-scene-loft-L8">  sc = scene::<span class="fn-call">scene</span>(<span class="st">"test scene"</span>);</span>
+<span id="tests-scene-loft-L9">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sc.name == <span class="st">"test scene"</span>, <span class="st">"scene name"</span>);</span>
+<span id="tests-scene-loft-L10">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sc.meshes.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">0</span>, <span class="st">"no meshes"</span>);</span>
+<span id="tests-scene-loft-L11">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sc.materials.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">0</span>, <span class="st">"no materials"</span>);</span>
+<span id="tests-scene-loft-L12">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sc.nodes.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">0</span>, <span class="st">"no nodes"</span>);</span>
+<span id="tests-scene-loft-L13">}</span>
+<span id="tests-scene-loft-L14"></span>
+<span id="tests-scene-loft-L15"><span class="kw">fn</span> <span class="fn-call">test_scene_add_mesh</span>() {</span>
+<span id="tests-scene-loft-L16">  sm_s = scene::<span class="fn-call">scene</span>(<span class="st">"s"</span>);</span>
+<span id="tests-scene-loft-L17">  sm_m = mesh::<span class="fn-call">cube</span>();</span>
+<span id="tests-scene-loft-L18">  sm_i = sm_s.<span class="fn-call">add_mesh</span>(sm_m);</span>
+<span id="tests-scene-loft-L19">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sm_i == <span class="nm">0</span>, <span class="st">"first mesh index"</span>);</span>
+<span id="tests-scene-loft-L20">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sm_s.meshes.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">1</span>, <span class="st">"one mesh"</span>);</span>
+<span id="tests-scene-loft-L21">}</span>
+<span id="tests-scene-loft-L22"></span>
+<span id="tests-scene-loft-L23"><span class="kw">fn</span> <span class="fn-call">test_scene_add_material</span>() {</span>
+<span id="tests-scene-loft-L24">  smat_s = scene::<span class="fn-call">scene</span>(<span class="st">"s"</span>);</span>
+<span id="tests-scene-loft-L25">  smat_m = scene::<span class="fn-call">material</span>(<span class="st">"red"</span>);</span>
+<span id="tests-scene-loft-L26">  smat_m.<span class="fn-call">set_color</span>(<span class="nm">1.0</span>, <span class="nm">0.0</span>, <span class="nm">0.0</span>);</span>
+<span id="tests-scene-loft-L27">  smat_i = smat_s.<span class="fn-call">add_material</span>(smat_m);</span>
+<span id="tests-scene-loft-L28">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(smat_i == <span class="nm">0</span>, <span class="st">"first material index"</span>);</span>
+<span id="tests-scene-loft-L29">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(smat_s.materials[<span class="nm">0</span>].base_color_r == <span class="nm">1.0</span>, <span class="st">"red"</span>);</span>
+<span id="tests-scene-loft-L30">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(smat_s.materials[<span class="nm">0</span>].base_color_g == <span class="nm">0.0</span>, <span class="st">"not green"</span>);</span>
+<span id="tests-scene-loft-L31">}</span>
+<span id="tests-scene-loft-L32"></span>
+<span id="tests-scene-loft-L33"><span class="kw">fn</span> <span class="fn-call">test_scene_with_node</span>() {</span>
+<span id="tests-scene-loft-L34">  sn_s = scene::<span class="fn-call">scene</span>(<span class="st">"complete"</span>);</span>
+<span id="tests-scene-loft-L35">  sn_mi = sn_s.<span class="fn-call">add_mesh</span>(mesh::<span class="fn-call">mesh</span>(<span class="st">"simple"</span>));</span>
+<span id="tests-scene-loft-L36">  sn_mati = sn_s.<span class="fn-call">add_material</span>(scene::<span class="fn-call">material</span>(<span class="st">"default"</span>));</span>
+<span id="tests-scene-loft-L37">  sn_n = scene::<span class="fn-call">node</span>(<span class="st">"cube1"</span>, sn_mi, sn_mati);</span>
+<span id="tests-scene-loft-L38">  sn_s.<span class="fn-call">add_node</span>(sn_n);</span>
+<span id="tests-scene-loft-L39">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sn_s.nodes.<span class="bi"><a href="stdlib-text.html">len</a></span>() == <span class="nm">1</span>, <span class="st">"one node"</span>);</span>
+<span id="tests-scene-loft-L40">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sn_s.nodes[<span class="nm">0</span>].name == <span class="st">"cube1"</span>, <span class="st">"node name"</span>);</span>
+<span id="tests-scene-loft-L41">}</span>
+<span id="tests-scene-loft-L42"></span>
+<span id="tests-scene-loft-L43"><span class="kw">fn</span> <span class="fn-call">test_camera</span>() {</span>
+<span id="tests-scene-loft-L44">  cam = scene::<span class="fn-call">camera</span>(<span class="st">"main"</span>);</span>
+<span id="tests-scene-loft-L45">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cam.fov == <span class="nm">60.0</span>, <span class="st">"default fov"</span>);</span>
+<span id="tests-scene-loft-L46">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cam.near == <span class="nm">0.1</span>, <span class="st">"default near"</span>);</span>
+<span id="tests-scene-loft-L47">  cam.position = math::<span class="fn-call">vec3</span>(<span class="nm">0.0</span>, <span class="nm">5.0</span>, <span class="nm">10.0</span>);</span>
+<span id="tests-scene-loft-L48">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cam.position.y == <span class="nm">5.0</span>, <span class="st">"camera y"</span>);</span>
+<span id="tests-scene-loft-L49">}</span>
+</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

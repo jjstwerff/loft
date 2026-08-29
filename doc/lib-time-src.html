@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>time source — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The loft source of the time library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-time-src.html">
+<meta property="og:title" content="time source — Loft, a programming language for small browser games">
+<meta property="og:description" content="The loft source of the time library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-time-src.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="time source — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The loft source of the time library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>time source</h1>
+<article>
+<p><a href="lib-time.html">← time</a> · <a href="lib-time-api.html">API reference</a> · version 0.3.0</p>
+<p class="lib-legend">3 file(s), 728 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
+<h2 id="items">Public items</h2>
+<p class="lib-legend">A <em>worked example</em> is a call site the author chose as the thing to read first. <em>Call sites</em> are every line naming the item, found mechanically over the source with comments excluded — so an item with no worked example is not an item nobody uses.</p>
+<table class="lib-table">
+<tr><th>Item</th><th>Defined</th><th>Worked example</th><th>Call sites</th></tr>
+<tr><td><code>from_ymd</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L82">82</a></td><td>—</td><td><a href="#src-time-loft-L124">124</a> <a href="#src-time-loft-L349">349</a> <a href="#src-time-loft-L353">353</a> <a href="#tests-01-basics-loft-L37">37</a></td></tr>
+<tr><td><code>from_millis</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L87">87</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>from_unix_seconds</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L91">91</a></td><td>—</td><td><a href="#tests-01-basics-loft-L100">100</a> <a href="#tests-01-basics-loft-L101">101</a> <a href="#tests-01-basics-loft-L105">105</a></td></tr>
+<tr><td><code>to_unix_seconds</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L92">92</a></td><td>—</td><td><a href="#tests-01-basics-loft-L102">102</a> <a href="#tests-01-basics-loft-L105">105</a></td></tr>
+<tr><td><code>parse</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L117">117</a></td><td>—</td><td><a href="#src-time-loft-L448">448</a> <a href="#tests-01-basics-loft-L10">10</a> <a href="#tests-01-basics-loft-L21">21</a> <a href="#tests-01-basics-loft-L25">25</a> <a href="#tests-01-basics-loft-L30">30</a> <a href="#tests-01-basics-loft-L32">32</a> … (23 total)</td></tr>
+<tr><td><code>year</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L141">141</a></td><td>—</td><td><a href="#src-time-loft-L365">365</a> <a href="#tests-01-basics-loft-L11">11</a> <a href="#tests-02-datetime-loft-L20">20</a> <a href="#tests-02-datetime-loft-L136">136</a></td></tr>
+<tr><td><code>month</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L146">146</a></td><td>—</td><td><a href="#src-time-loft-L302">302</a> <a href="#src-time-loft-L366">366</a> <a href="#src-time-loft-L427">427</a> <a href="#tests-01-basics-loft-L12">12</a> <a href="#tests-02-datetime-loft-L21">21</a> <a href="#tests-02-datetime-loft-L40">40</a> … (8 total)</td></tr>
+<tr><td><code>day</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L151">151</a></td><td>—</td><td><a href="#src-time-loft-L367">367</a> <a href="#tests-01-basics-loft-L13">13</a> <a href="#tests-02-datetime-loft-L22">22</a> <a href="#tests-02-datetime-loft-L70">70</a> <a href="#tests-02-datetime-loft-L103">103</a> <a href="#tests-02-datetime-loft-L138">138</a></td></tr>
+<tr><td><code>hour</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L158">158</a></td><td>—</td><td><a href="#src-time-loft-L265">265</a> <a href="#src-time-loft-L271">271</a> <a href="#src-time-loft-L368">368</a> <a href="#tests-01-basics-loft-L22">22</a> <a href="#tests-02-datetime-loft-L23">23</a></td></tr>
+<tr><td><code>minute</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L159">159</a></td><td>—</td><td><a href="#src-time-loft-L266">266</a> <a href="#src-time-loft-L272">272</a> <a href="#src-time-loft-L369">369</a> <a href="#tests-01-basics-loft-L23">23</a> <a href="#tests-02-datetime-loft-L24">24</a></td></tr>
+<tr><td><code>second</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L160">160</a></td><td>—</td><td><a href="#src-time-loft-L273">273</a> <a href="#src-time-loft-L370">370</a> <a href="#tests-01-basics-loft-L24">24</a> <a href="#tests-02-datetime-loft-L25">25</a></td></tr>
+<tr><td><code>weekday</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L163">163</a></td><td>—</td><td><a href="#src-time-loft-L188">188</a> <a href="#src-time-loft-L218">218</a> <a href="#src-time-loft-L290">290</a> <a href="#src-time-loft-L371">371</a> <a href="#src-time-loft-L426">426</a> <a href="#tests-01-basics-loft-L15">15</a> … (8 total)</td></tr>
+<tr><td><code>add_days</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L167">167</a></td><td>—</td><td><a href="#tests-01-basics-loft-L48">48</a> <a href="#tests-01-basics-loft-L51">51</a></td></tr>
+<tr><td><code>add_weeks</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L168">168</a></td><td>—</td><td><a href="#tests-01-basics-loft-L46">46</a> <a href="#tests-01-basics-loft-L47">47</a></td></tr>
+<tr><td><code>add_seconds</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L169">169</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>days_between</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L174">174</a></td><td>—</td><td><a href="#tests-01-basics-loft-L58">58</a></td></tr>
+<tr><td><code>seconds_between</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L178">178</a></td><td>—</td><td><a href="#tests-01-basics-loft-L59">59</a> <a href="#tests-01-basics-loft-L61">61</a></td></tr>
+<tr><td><code>start_of_day</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L184">184</a></td><td>—</td><td><a href="#src-time-loft-L188">188</a> <a href="#src-time-loft-L193">193</a> <a href="#src-time-loft-L246">246</a> <a href="#tests-01-basics-loft-L66">66</a> <a href="#tests-01-basics-loft-L67">67</a></td></tr>
+<tr><td><code>start_of_week</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L187">187</a></td><td>—</td><td><a href="#tests-01-basics-loft-L69">69</a> <a href="#tests-01-basics-loft-L70">70</a> <a href="#tests-01-basics-loft-L73">73</a> <a href="#tests-01-basics-loft-L74">74</a></td></tr>
+<tr><td><code>at_time</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L192">192</a></td><td>—</td><td><a href="#src-time-loft-L209">209</a> <a href="#src-time-loft-L353">353</a> <a href="#tests-01-basics-loft-L115">115</a> <a href="#tests-01-basics-loft-L116">116</a></td></tr>
+<tr><td><code>combine</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L198">198</a></td><td>—</td><td><a href="#tests-01-basics-loft-L110">110</a> <a href="#tests-01-basics-loft-L111">111</a> <a href="#tests-01-basics-loft-L112">112</a> <a href="#tests-01-basics-loft-L113">113</a> <a href="#tests-01-basics-loft-L114">114</a> <a href="#tests-01-basics-loft-L117">117</a> … (7 total)</td></tr>
+<tr><td><code>iso_year</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L227">227</a></td><td>—</td><td><a href="#src-time-loft-L372">372</a> <a href="#tests-01-basics-loft-L80">80</a> <a href="#tests-01-basics-loft-L84">84</a> <a href="#tests-02-datetime-loft-L110">110</a></td></tr>
+<tr><td><code>iso_week</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L232">232</a></td><td>—</td><td><a href="#src-time-loft-L373">373</a> <a href="#tests-01-basics-loft-L81">81</a> <a href="#tests-01-basics-loft-L85">85</a> <a href="#tests-02-datetime-loft-L111">111</a> <a href="#tests-02-datetime-loft-L112">112</a></td></tr>
+<tr><td><code>to_local</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L240">240</a></td><td>—</td><td><a href="#src-time-loft-L246">246</a> <a href="#tests-01-basics-loft-L91">91</a></td></tr>
+<tr><td><code>local_day</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L245">245</a></td><td>—</td><td><a href="#src-time-loft-L251">251</a> <a href="#tests-01-basics-loft-L93">93</a> <a href="#tests-01-basics-loft-L94">94</a></td></tr>
+<tr><td><code>today</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L250">250</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>format_date</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L256">256</a></td><td>—</td><td><a href="#src-time-loft-L278">278</a> <a href="#src-time-loft-L284">284</a> <a href="#src-time-loft-L422">422</a> <a href="#tests-01-basics-loft-L38">38</a> <a href="#tests-01-basics-loft-L47">47</a> <a href="#tests-01-basics-loft-L49">49</a> … (13 total)</td></tr>
+<tr><td><code>format_time</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L264">264</a></td><td>—</td><td><a href="#src-time-loft-L279">279</a> <a href="#src-time-loft-L423">423</a></td></tr>
+<tr><td><code>format_seconds</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L270">270</a></td><td>—</td><td><a href="#src-time-loft-L285">285</a> <a href="#src-time-loft-L424">424</a> <a href="#tests-01-basics-loft-L113">113</a></td></tr>
+<tr><td><code>format_datetime</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L277">277</a></td><td>—</td><td><a href="#src-time-loft-L428">428</a> <a href="#tests-01-basics-loft-L41">41</a> <a href="#tests-01-basics-loft-L92">92</a> <a href="#tests-01-basics-loft-L111">111</a> <a href="#tests-01-basics-loft-L116">116</a></td></tr>
+<tr><td><code>format_iso</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L283">283</a></td><td>—</td><td><a href="#src-time-loft-L425">425</a> <a href="#tests-01-basics-loft-L40">40</a> <a href="#tests-01-basics-loft-L67">67</a></td></tr>
+<tr><td><code>weekday_name</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L289">289</a></td><td>—</td><td><a href="#src-time-loft-L374">374</a> <a href="#src-time-loft-L426">426</a> <a href="#tests-01-basics-loft-L16">16</a> <a href="#tests-02-datetime-loft-L29">29</a></td></tr>
+<tr><td><code>month_name</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L301">301</a></td><td>—</td><td><a href="#src-time-loft-L375">375</a> <a href="#src-time-loft-L427">427</a> <a href="#tests-01-basics-loft-L17">17</a> <a href="#tests-02-datetime-loft-L30">30</a></td></tr>
+<tr><td><code>date</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L348">348</a></td><td>—</td><td><a href="#src-time-loft-L422">422</a> <a href="#tests-01-basics-loft-L30">30</a> <a href="#tests-01-basics-loft-L114">114</a> <a href="#tests-02-datetime-loft-L15">15</a> <a href="#tests-02-datetime-loft-L27">27</a> <a href="#tests-02-datetime-loft-L35">35</a> … (10 total)</td></tr>
+<tr><td><code>datetime</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L351">351</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L11">11</a> <a href="#tests-02-datetime-loft-L13">13</a> <a href="#tests-02-datetime-loft-L19">19</a> <a href="#tests-02-datetime-loft-L34">34</a> <a href="#tests-02-datetime-loft-L44">44</a> <a href="#tests-02-datetime-loft-L45">45</a> … (18 total)</td></tr>
+<tr><td><code>milliseconds</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L357">357</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>seconds</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L358">358</a></td><td>—</td><td><a href="#src-time-loft-L424">424</a> <a href="#tests-02-datetime-loft-L37">37</a></td></tr>
+<tr><td><code>minutes</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L359">359</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L58">58</a> <a href="#tests-02-datetime-loft-L61">61</a> <a href="#tests-02-datetime-loft-L63">63</a> <a href="#tests-02-datetime-loft-L69">69</a> <a href="#tests-02-datetime-loft-L73">73</a> <a href="#tests-02-datetime-loft-L74">74</a> … (9 total)</td></tr>
+<tr><td><code>hours</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L360">360</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L68">68</a> <a href="#tests-02-datetime-loft-L69">69</a> <a href="#tests-02-datetime-loft-L72">72</a> <a href="#tests-02-datetime-loft-L75">75</a> <a href="#tests-02-datetime-loft-L117">117</a> <a href="#tests-02-datetime-loft-L118">118</a> … (9 total)</td></tr>
+<tr><td><code>days</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L361">361</a></td><td>—</td><td><a href="#src-time-loft-L167">167</a> <a href="#tests-02-datetime-loft-L70">70</a> <a href="#tests-02-datetime-loft-L102">102</a></td></tr>
+<tr><td><code>weeks</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L362">362</a></td><td>—</td><td><a href="#src-time-loft-L168">168</a> <a href="#tests-02-datetime-loft-L71">71</a></td></tr>
+<tr><td><code>year</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L365">365</a></td><td>—</td><td><a href="#src-time-loft-L141">141</a> <a href="#tests-01-basics-loft-L11">11</a> <a href="#tests-02-datetime-loft-L20">20</a> <a href="#tests-02-datetime-loft-L136">136</a></td></tr>
+<tr><td><code>month</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L366">366</a></td><td>—</td><td><a href="#src-time-loft-L146">146</a> <a href="#src-time-loft-L302">302</a> <a href="#src-time-loft-L427">427</a> <a href="#tests-01-basics-loft-L12">12</a> <a href="#tests-02-datetime-loft-L21">21</a> <a href="#tests-02-datetime-loft-L40">40</a> … (8 total)</td></tr>
+<tr><td><code>day</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L367">367</a></td><td>—</td><td><a href="#src-time-loft-L151">151</a> <a href="#tests-01-basics-loft-L13">13</a> <a href="#tests-02-datetime-loft-L22">22</a> <a href="#tests-02-datetime-loft-L70">70</a> <a href="#tests-02-datetime-loft-L103">103</a> <a href="#tests-02-datetime-loft-L138">138</a></td></tr>
+<tr><td><code>hour</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L368">368</a></td><td>—</td><td><a href="#src-time-loft-L158">158</a> <a href="#src-time-loft-L265">265</a> <a href="#src-time-loft-L271">271</a> <a href="#tests-01-basics-loft-L22">22</a> <a href="#tests-02-datetime-loft-L23">23</a></td></tr>
+<tr><td><code>minute</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L369">369</a></td><td>—</td><td><a href="#src-time-loft-L159">159</a> <a href="#src-time-loft-L266">266</a> <a href="#src-time-loft-L272">272</a> <a href="#tests-01-basics-loft-L23">23</a> <a href="#tests-02-datetime-loft-L24">24</a></td></tr>
+<tr><td><code>second</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L370">370</a></td><td>—</td><td><a href="#src-time-loft-L160">160</a> <a href="#src-time-loft-L273">273</a> <a href="#tests-01-basics-loft-L24">24</a> <a href="#tests-02-datetime-loft-L25">25</a></td></tr>
+<tr><td><code>weekday</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L371">371</a></td><td>—</td><td><a href="#src-time-loft-L163">163</a> <a href="#src-time-loft-L188">188</a> <a href="#src-time-loft-L218">218</a> <a href="#src-time-loft-L290">290</a> <a href="#src-time-loft-L426">426</a> <a href="#tests-01-basics-loft-L15">15</a> … (8 total)</td></tr>
+<tr><td><code>iso_year</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L372">372</a></td><td>—</td><td><a href="#src-time-loft-L227">227</a> <a href="#tests-01-basics-loft-L80">80</a> <a href="#tests-01-basics-loft-L84">84</a> <a href="#tests-02-datetime-loft-L110">110</a></td></tr>
+<tr><td><code>iso_week</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L373">373</a></td><td>—</td><td><a href="#src-time-loft-L232">232</a> <a href="#tests-01-basics-loft-L81">81</a> <a href="#tests-01-basics-loft-L85">85</a> <a href="#tests-02-datetime-loft-L111">111</a> <a href="#tests-02-datetime-loft-L112">112</a></td></tr>
+<tr><td><code>weekday_name</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L374">374</a></td><td>—</td><td><a href="#src-time-loft-L289">289</a> <a href="#src-time-loft-L426">426</a> <a href="#tests-01-basics-loft-L16">16</a> <a href="#tests-02-datetime-loft-L29">29</a></td></tr>
+<tr><td><code>month_name</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L375">375</a></td><td>—</td><td><a href="#src-time-loft-L301">301</a> <a href="#src-time-loft-L427">427</a> <a href="#tests-01-basics-loft-L17">17</a> <a href="#tests-02-datetime-loft-L30">30</a></td></tr>
+<tr><td><code>to_millis</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L376">376</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L113">113</a> <a href="#tests-02-datetime-loft-L143">143</a></td></tr>
+<tr><td><code>total_millis</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L379">379</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L122">122</a></td></tr>
+<tr><td><code>total_seconds</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L380">380</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L60">60</a></td></tr>
+<tr><td><code>total_minutes</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L381">381</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L59">59</a> <a href="#tests-02-datetime-loft-L69">69</a> <a href="#tests-02-datetime-loft-L73">73</a></td></tr>
+<tr><td><code>total_hours</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L382">382</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L70">70</a></td></tr>
+<tr><td><code>total_days</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L383">383</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L71">71</a></td></tr>
+<tr><td><code>OpLt</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L386">386</a></td><td>—</td><td><a href="#src-time-loft-L403">403</a></td></tr>
+<tr><td><code>OpLe</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L387">387</a></td><td>—</td><td><a href="#src-time-loft-L404">404</a></td></tr>
+<tr><td><code>OpGt</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L388">388</a></td><td>—</td><td><a href="#src-time-loft-L405">405</a></td></tr>
+<tr><td><code>OpGe</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L389">389</a></td><td>—</td><td><a href="#src-time-loft-L406">406</a></td></tr>
+<tr><td><code>OpEq</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L390">390</a></td><td>—</td><td><a href="#src-time-loft-L407">407</a></td></tr>
+<tr><td><code>OpNe</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L391">391</a></td><td>—</td><td><a href="#src-time-loft-L408">408</a></td></tr>
+<tr><td><code>OpMin</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L392">392</a></td><td>—</td><td><a href="#src-time-loft-L401">401</a></td></tr>
+<tr><td><code>OpAdd</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L393">393</a></td><td>—</td><td><a href="#src-time-loft-L400">400</a></td></tr>
+<tr><td><code>minus</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L396">396</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L63">63</a> <a href="#tests-02-datetime-loft-L64">64</a></td></tr>
+<tr><td><code>negate</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L397">397</a></td><td>—</td><td><a href="#tests-02-datetime-loft-L73">73</a></td></tr>
+<tr><td><code>OpAdd</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L400">400</a></td><td>—</td><td><a href="#src-time-loft-L393">393</a></td></tr>
+<tr><td><code>OpMin</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L401">401</a></td><td>—</td><td><a href="#src-time-loft-L392">392</a></td></tr>
+<tr><td><code>OpMul</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L402">402</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>OpLt</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L403">403</a></td><td>—</td><td><a href="#src-time-loft-L386">386</a></td></tr>
+<tr><td><code>OpLe</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L404">404</a></td><td>—</td><td><a href="#src-time-loft-L387">387</a></td></tr>
+<tr><td><code>OpGt</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L405">405</a></td><td>—</td><td><a href="#src-time-loft-L388">388</a></td></tr>
+<tr><td><code>OpGe</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L406">406</a></td><td>—</td><td><a href="#src-time-loft-L389">389</a></td></tr>
+<tr><td><code>OpEq</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L407">407</a></td><td>—</td><td><a href="#src-time-loft-L390">390</a></td></tr>
+<tr><td><code>OpNe</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L408">408</a></td><td>—</td><td><a href="#src-time-loft-L391">391</a></td></tr>
+<tr><td><code>to_text</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L413">413</a></td><td>—</td><td><a href="#src-time-loft-L432">432</a></td></tr>
+<tr><td><code>to_text</code> <span class="search-kind">fn</span></td><td><a href="#src-time-loft-L432">432</a></td><td>—</td><td><a href="#src-time-loft-L413">413</a></td></tr>
+</table>
+<h2 id="src-time-loft">src/time.loft</h2>
+<pre class="src"><code><span id="src-time-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-time-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-time-loft-L3"><span class="cm">//</span></span>
+<span id="src-time-loft-L4"><span class="cm">// time — basic date/time operations for loft.</span></span>
+<span id="src-time-loft-L5"><span class="cm">//</span></span>
+<span id="src-time-loft-L6"><span class="cm">// A point in time is a plain `integer` (i64) holding milliseconds since</span></span>
+<span id="src-time-loft-L7"><span class="cm">// the Unix epoch (1970-01-01T00:00:00 UTC) — the same unit `now()`</span></span>
+<span id="src-time-loft-L8"><span class="cm">// returns and the same model as JavaScript's `Date`.  All calendar math</span></span>
+<span id="src-time-loft-L9"><span class="cm">// uses the proleptic Gregorian calendar (Howard Hinnant's</span></span>
+<span id="src-time-loft-L10"><span class="cm">// days_from_civil / civil_from_days), so results match `js_sys::Date`</span></span>
+<span id="src-time-loft-L11"><span class="cm">// field-for-field; the library is pure loft and runs identically on the</span></span>
+<span id="src-time-loft-L12"><span class="cm">// interpreter, `--native`, and wasm.</span></span>
+<span id="src-time-loft-L13"><span class="cm">//</span></span>
+<span id="src-time-loft-L14"><span class="cm">// Timezone model: formatting and field extraction are in UTC.  For</span></span>
+<span id="src-time-loft-L15"><span class="cm">// local-day bucketing pass a fixed UTC offset in minutes</span></span>
+<span id="src-time-loft-L16"><span class="cm">// (`local_day` / `to_local` / `today`).  There is NO timezone database</span></span>
+<span id="src-time-loft-L17"><span class="cm">// and NO daylight-saving handling — a fixed offset only.</span></span>
+<span id="src-time-loft-L18"><span class="cm">//</span></span>
+<span id="src-time-loft-L19"><span class="cm">// Public API:</span></span>
+<span id="src-time-loft-L20"><span class="cm">//   Construct/parse: from_ymd, from_millis, parse, today</span></span>
+<span id="src-time-loft-L21"><span class="cm">//   Fields:          year, month, day, hour, minute, second,</span></span>
+<span id="src-time-loft-L22"><span class="cm">//                    weekday (0=Mon..6=Sun), iso_year, iso_week</span></span>
+<span id="src-time-loft-L23"><span class="cm">//   Step:            add_days, add_weeks, add_seconds</span></span>
+<span id="src-time-loft-L24"><span class="cm">//   Difference:      days_between, seconds_between</span></span>
+<span id="src-time-loft-L25"><span class="cm">//   Boundaries:      start_of_day, start_of_week (Monday)</span></span>
+<span id="src-time-loft-L26"><span class="cm">//   Local:           to_local, local_day, today</span></span>
+<span id="src-time-loft-L27"><span class="cm">//   Format:          format_date, format_time, format_seconds,</span></span>
+<span id="src-time-loft-L28"><span class="cm">//                    format_datetime, format_iso, weekday_name,</span></span>
+<span id="src-time-loft-L29"><span class="cm">//                    month_name</span></span>
+<span id="src-time-loft-L30"><span class="cm">//   Parse failure returns null (i64::MIN) — test with `!result`.</span></span>
+<span id="src-time-loft-L31"></span>
+<span id="src-time-loft-L32">const <span class="en">MS_PER_DAY</span>    = <span class="nm">86400000</span>;</span>
+<span id="src-time-loft-L33">const <span class="en">MS_PER_HOUR</span>   = <span class="nm">3600000</span>;</span>
+<span id="src-time-loft-L34">const <span class="en">MS_PER_MINUTE</span> = <span class="nm">60000</span>;</span>
+<span id="src-time-loft-L35">const <span class="en">MS_PER_SECOND</span> = <span class="nm">1000</span>;</span>
+<span id="src-time-loft-L36"></span>
+<span id="src-time-loft-L37"><span class="cm">// ── floor division / modulo (correct for pre-1970 negatives) ──</span></span>
+<span id="src-time-loft-L38"><span class="cm">// loft `/` and `%` truncate toward zero; the calendar math needs floor.</span></span>
+<span id="src-time-loft-L39"></span>
+<span id="src-time-loft-L40"><span class="kw">fn</span> <span class="fn-call">floor_div</span>(fa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L41">    q = fa / fb ?? <span class="nm">0</span>;</span>
+<span id="src-time-loft-L42">    r = fa % fb ?? <span class="nm">0</span>;</span>
+<span id="src-time-loft-L43">    <span class="kw">if</span> (r != <span class="nm">0</span>) &amp;&amp; ((fa &lt; <span class="nm">0</span>) != (fb &lt; <span class="nm">0</span>)) { q - <span class="nm">1</span> } <span class="kw">else</span> { q }</span>
+<span id="src-time-loft-L44">}</span>
+<span id="src-time-loft-L45"></span>
+<span id="src-time-loft-L46"><span class="cm">// Days since the Unix epoch for this instant (floored to the UTC day).</span></span>
+<span id="src-time-loft-L47"><span class="kw">fn</span> <span class="fn-call">epoch_day</span>(ed_t: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">floor_div</span>(ed_t, <span class="en">MS_PER_DAY</span>) }</span>
+<span id="src-time-loft-L48"></span>
+<span id="src-time-loft-L49"><span class="cm">// ── civil calendar (Hinnant) ──────────────────────────────────</span></span>
+<span id="src-time-loft-L50"></span>
+<span id="src-time-loft-L51"><span class="cm">// (year, month, day) for a day number `z` counted from 1970-01-01.</span></span>
+<span id="src-time-loft-L52"><span class="kw">fn</span> <span class="fn-call">civil_from_days</span>(z: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {</span>
+<span id="src-time-loft-L53">    zz  = z + <span class="nm">719468</span>;</span>
+<span id="src-time-loft-L54">    eshift = <span class="kw">if</span> zz &gt;= <span class="nm">0</span> { zz } <span class="kw">else</span> { zz - <span class="nm">146096</span> };</span>
+<span id="src-time-loft-L55">    era = <span class="fn-call">floor_div</span>(eshift, <span class="nm">146097</span>);</span>
+<span id="src-time-loft-L56">    doe = zz - era * <span class="nm">146097</span>;                                  <span class="cm">// [0, 146096]</span></span>
+<span id="src-time-loft-L57">    yoe = (doe - doe / <span class="nm">1460</span> + doe / <span class="nm">36524</span> - doe / <span class="nm">146096</span>) / <span class="nm">365</span>;  <span class="cm">// [0, 399]</span></span>
+<span id="src-time-loft-L58">    y   = yoe + era * <span class="nm">400</span>;</span>
+<span id="src-time-loft-L59">    doy = doe - (<span class="nm">365</span> * yoe + yoe / <span class="nm">4</span> - yoe / <span class="nm">100</span>);            <span class="cm">// [0, 365]</span></span>
+<span id="src-time-loft-L60">    mp  = (<span class="nm">5</span> * doy + <span class="nm">2</span>) / <span class="nm">153</span>;                                <span class="cm">// [0, 11]</span></span>
+<span id="src-time-loft-L61">    d   = doy - (<span class="nm">153</span> * mp + <span class="nm">2</span>) / <span class="nm">5</span> + <span class="nm">1</span>;                       <span class="cm">// [1, 31]</span></span>
+<span id="src-time-loft-L62">    m   = <span class="kw">if</span> mp &lt; <span class="nm">10</span> { mp + <span class="nm">3</span> } <span class="kw">else</span> { mp - <span class="nm">9</span> };              <span class="cm">// [1, 12]</span></span>
+<span id="src-time-loft-L63">    yr  = <span class="kw">if</span> m &lt;= <span class="nm">2</span> { y + <span class="nm">1</span> } <span class="kw">else</span> { y };</span>
+<span id="src-time-loft-L64">    (yr, m, d)</span>
+<span id="src-time-loft-L65">}</span>
+<span id="src-time-loft-L66"></span>
+<span id="src-time-loft-L67"><span class="cm">// Day number counted from 1970-01-01 for a (year, month, day).</span></span>
+<span id="src-time-loft-L68"><span class="kw">fn</span> <span class="fn-call">days_from_civil</span>(cy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cm: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cd: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L69">    yy  = <span class="kw">if</span> cm &lt;= <span class="nm">2</span> { cy - <span class="nm">1</span> } <span class="kw">else</span> { cy };</span>
+<span id="src-time-loft-L70">    yshift = <span class="kw">if</span> yy &gt;= <span class="nm">0</span> { yy } <span class="kw">else</span> { yy - <span class="nm">399</span> };</span>
+<span id="src-time-loft-L71">    era = <span class="fn-call">floor_div</span>(yshift, <span class="nm">400</span>);</span>
+<span id="src-time-loft-L72">    yoe = yy - era * <span class="nm">400</span>;                                     <span class="cm">// [0, 399]</span></span>
+<span id="src-time-loft-L73">    mpart = <span class="kw">if</span> cm &gt; <span class="nm">2</span> { cm - <span class="nm">3</span> } <span class="kw">else</span> { cm + <span class="nm">9</span> };</span>
+<span id="src-time-loft-L74">    doy = (<span class="nm">153</span> * mpart + <span class="nm">2</span>) / <span class="nm">5</span> + cd - <span class="nm">1</span>;                     <span class="cm">// [0, 365]</span></span>
+<span id="src-time-loft-L75">    doe = yoe * <span class="nm">365</span> + yoe / <span class="nm">4</span> - yoe / <span class="nm">100</span> + doy;              <span class="cm">// [0, 146096]</span></span>
+<span id="src-time-loft-L76">    era * <span class="nm">146097</span> + doe - <span class="nm">719468</span></span>
+<span id="src-time-loft-L77">}</span>
+<span id="src-time-loft-L78"></span>
+<span id="src-time-loft-L79"><span class="cm">// ── construction / parsing ────────────────────────────────────</span></span>
+<span id="src-time-loft-L80"></span>
+<span id="src-time-loft-L81"><span class="cm">// Epoch-ms at UTC midnight of the given calendar date.</span></span>
+<span id="src-time-loft-L82"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">from_ymd</span>(fy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fmo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fd: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L83">    <span class="fn-call">days_from_civil</span>(fy, fmo, fd) * <span class="en">MS_PER_DAY</span></span>
+<span id="src-time-loft-L84">}</span>
+<span id="src-time-loft-L85"></span>
+<span id="src-time-loft-L86"><span class="cm">// Identity wrapper — for readability where a raw ms count becomes a time.</span></span>
+<span id="src-time-loft-L87"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">from_millis</span>(ms: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { ms }</span>
+<span id="src-time-loft-L88"></span>
+<span id="src-time-loft-L89"><span class="cm">// Epoch-SECONDS boundary.  Garmin / Strava REST APIs speak Unix seconds</span></span>
+<span id="src-time-loft-L90"><span class="cm">// (`.timestamp()`), while loft times are milliseconds — convert at the edge.</span></span>
+<span id="src-time-loft-L91"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">from_unix_seconds</span>(secs: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { secs * <span class="en">MS_PER_SECOND</span> }</span>
+<span id="src-time-loft-L92"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">to_unix_seconds</span>(uts: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">floor_div</span>(uts, <span class="en">MS_PER_SECOND</span>) }</span>
+<span id="src-time-loft-L93"></span>
+<span id="src-time-loft-L94"><span class="kw">fn</span> <span class="fn-call">digit_value</span>(dc: <span class="ty"><a href="stdlib-types.html">character</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L95">    <span class="kw">if</span> dc &gt;= <span class="ch">'0'</span> &amp;&amp; dc &lt;= <span class="ch">'9'</span> { (dc <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>) - (<span class="ch">'0'</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>) } <span class="kw">else</span> { -<span class="nm">1</span> }</span>
+<span id="src-time-loft-L96">}</span>
+<span id="src-time-loft-L97"></span>
+<span id="src-time-loft-L98"><span class="cm">// Parse `count` decimal digits beginning at character index `start`.</span></span>
+<span id="src-time-loft-L99"><span class="cm">// Returns -1 if any character in the span is not a digit.</span></span>
+<span id="src-time-loft-L100"><span class="kw">fn</span> <span class="fn-call">digits_at</span>(ds: <span class="ty"><a href="stdlib-types.html">text</a></span>, start: <span class="ty"><a href="stdlib-types.html">integer</a></span>, count: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L101">    val  = <span class="nm">0</span>;</span>
+<span id="src-time-loft-L102">    seen = <span class="nm">0</span>;</span>
+<span id="src-time-loft-L103">    <span class="kw">for</span> dch <span class="kw">in</span> ds {</span>
+<span id="src-time-loft-L104">        <span class="kw">if</span> dch#<span class="ty">index</span> &gt;= start &amp;&amp; dch#<span class="ty">index</span> &lt; start + count {</span>
+<span id="src-time-loft-L105">            dv = <span class="fn-call">digit_value</span>(dch);</span>
+<span id="src-time-loft-L106">            <span class="kw">if</span> dv &lt; <span class="nm">0</span> { <span class="kw">return</span> -<span class="nm">1</span>; }</span>
+<span id="src-time-loft-L107">            val = val * <span class="nm">10</span> + dv;</span>
+<span id="src-time-loft-L108">            seen += <span class="nm">1</span>;</span>
+<span id="src-time-loft-L109">        }</span>
+<span id="src-time-loft-L110">    }</span>
+<span id="src-time-loft-L111">    <span class="kw">if</span> seen == count { val } <span class="kw">else</span> { -<span class="nm">1</span> }</span>
+<span id="src-time-loft-L112">}</span>
+<span id="src-time-loft-L113"></span>
+<span id="src-time-loft-L114"><span class="cm">// Parse an ISO date "YYYY-MM-DD", optionally followed by " HH:MM[:SS]"</span></span>
+<span id="src-time-loft-L115"><span class="cm">// or "THH:MM[:SS]" with an optional trailing "Z".  Returns null on any</span></span>
+<span id="src-time-loft-L116"><span class="cm">// malformed input (test with `!result`).</span></span>
+<span id="src-time-loft-L117"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">parse</span>(ps: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>? {</span>
+<span id="src-time-loft-L118">    n = <span class="fn-call"><a href="stdlib-text.html">size</a></span>(ps);</span>
+<span id="src-time-loft-L119">    <span class="kw">if</span> n &lt; <span class="nm">10</span> { <span class="kw">return</span> <span class="kw">null</span>; }</span>
+<span id="src-time-loft-L120">    py  = <span class="fn-call">digits_at</span>(ps, <span class="nm">0</span>, <span class="nm">4</span>);</span>
+<span id="src-time-loft-L121">    pmo = <span class="fn-call">digits_at</span>(ps, <span class="nm">5</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L122">    pd  = <span class="fn-call">digits_at</span>(ps, <span class="nm">8</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L123">    <span class="kw">if</span> py &lt; <span class="nm">0</span> || pmo &lt; <span class="nm">0</span> || pd &lt; <span class="nm">0</span> { <span class="kw">return</span> <span class="kw">null</span>; }</span>
+<span id="src-time-loft-L124">    pt = <span class="fn-call">from_ymd</span>(py, pmo, pd);</span>
+<span id="src-time-loft-L125">    <span class="kw">if</span> n &gt;= <span class="nm">16</span> {</span>
+<span id="src-time-loft-L126">        ph = <span class="fn-call">digits_at</span>(ps, <span class="nm">11</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L127">        pmi = <span class="fn-call">digits_at</span>(ps, <span class="nm">14</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L128">        <span class="kw">if</span> ph &gt;= <span class="nm">0</span> &amp;&amp; pmi &gt;= <span class="nm">0</span> {</span>
+<span id="src-time-loft-L129">            pt += ph * <span class="en">MS_PER_HOUR</span> + pmi * <span class="en">MS_PER_MINUTE</span>;</span>
+<span id="src-time-loft-L130">            <span class="kw">if</span> n &gt;= <span class="nm">19</span> {</span>
+<span id="src-time-loft-L131">                psec = <span class="fn-call">digits_at</span>(ps, <span class="nm">17</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L132">                <span class="kw">if</span> psec &gt;= <span class="nm">0</span> { pt += psec * <span class="en">MS_PER_SECOND</span>; }</span>
+<span id="src-time-loft-L133">            }</span>
+<span id="src-time-loft-L134">        }</span>
+<span id="src-time-loft-L135">    }</span>
+<span id="src-time-loft-L136">    pt</span>
+<span id="src-time-loft-L137">}</span>
+<span id="src-time-loft-L138"></span>
+<span id="src-time-loft-L139"><span class="cm">// ── field accessors ───────────────────────────────────────────</span></span>
+<span id="src-time-loft-L140"></span>
+<span id="src-time-loft-L141"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">year</span>(yt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L142">    yc = <span class="fn-call">civil_from_days</span>(<span class="fn-call">epoch_day</span>(yt));</span>
+<span id="src-time-loft-L143">    yc.<span class="nm">0</span></span>
+<span id="src-time-loft-L144">}</span>
+<span id="src-time-loft-L145"></span>
+<span id="src-time-loft-L146"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">month</span>(mt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L147">    mc = <span class="fn-call">civil_from_days</span>(<span class="fn-call">epoch_day</span>(mt));</span>
+<span id="src-time-loft-L148">    mc.<span class="nm">1</span></span>
+<span id="src-time-loft-L149">}</span>
+<span id="src-time-loft-L150"></span>
+<span id="src-time-loft-L151"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">day</span>(dt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L152">    dc = <span class="fn-call">civil_from_days</span>(<span class="fn-call">epoch_day</span>(dt));</span>
+<span id="src-time-loft-L153">    dc.<span class="nm">2</span></span>
+<span id="src-time-loft-L154">}</span>
+<span id="src-time-loft-L155"></span>
+<span id="src-time-loft-L156"><span class="kw">fn</span> <span class="fn-call">ms_of_day</span>(mt2: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call"><a href="stdlib-math.html">floor_mod</a></span>(mt2, <span class="en">MS_PER_DAY</span>) ?? <span class="nm">0</span> }</span>
+<span id="src-time-loft-L157"></span>
+<span id="src-time-loft-L158"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hour</span>(ht: <span class="ty"><a href="stdlib-types.html">integer</a></span>)   -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">ms_of_day</span>(ht) / <span class="en">MS_PER_HOUR</span> }</span>
+<span id="src-time-loft-L159"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">minute</span>(mit: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { (<span class="fn-call">ms_of_day</span>(mit) / <span class="en">MS_PER_MINUTE</span>) % <span class="nm">60</span> }</span>
+<span id="src-time-loft-L160"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">second</span>(st: <span class="ty"><a href="stdlib-types.html">integer</a></span>)  -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { (<span class="fn-call">ms_of_day</span>(st) / <span class="en">MS_PER_SECOND</span>) % <span class="nm">60</span> }</span>
+<span id="src-time-loft-L161"></span>
+<span id="src-time-loft-L162"><span class="cm">// 0 = Monday .. 6 = Sunday.  1970-01-01 was a Thursday (weekday 3).</span></span>
+<span id="src-time-loft-L163"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">weekday</span>(wt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call"><a href="stdlib-math.html">floor_mod</a></span>(<span class="fn-call">epoch_day</span>(wt) + <span class="nm">3</span>, <span class="nm">7</span>) ?? <span class="nm">0</span> }</span>
+<span id="src-time-loft-L164"></span>
+<span id="src-time-loft-L165"><span class="cm">// ── stepping ──────────────────────────────────────────────────</span></span>
+<span id="src-time-loft-L166"></span>
+<span id="src-time-loft-L167"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_days</span>(adt: <span class="ty"><a href="stdlib-types.html">integer</a></span>, days: <span class="ty"><a href="stdlib-types.html">integer</a></span>)     -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { adt + days * <span class="en">MS_PER_DAY</span> }</span>
+<span id="src-time-loft-L168"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_weeks</span>(awt: <span class="ty"><a href="stdlib-types.html">integer</a></span>, weeks: <span class="ty"><a href="stdlib-types.html">integer</a></span>)   -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { awt + weeks * <span class="nm">7</span> * <span class="en">MS_PER_DAY</span> }</span>
+<span id="src-time-loft-L169"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_seconds</span>(ast: <span class="ty"><a href="stdlib-types.html">integer</a></span>, secs: <span class="ty"><a href="stdlib-types.html">integer</a></span>)  -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { ast + secs * <span class="en">MS_PER_SECOND</span> }</span>
+<span id="src-time-loft-L170"></span>
+<span id="src-time-loft-L171"><span class="cm">// ── differences ───────────────────────────────────────────────</span></span>
+<span id="src-time-loft-L172"></span>
+<span id="src-time-loft-L173"><span class="cm">// Whole calendar days from `a` to `b` (b later → positive).</span></span>
+<span id="src-time-loft-L174"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">days_between</span>(da: <span class="ty"><a href="stdlib-types.html">integer</a></span>, db: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L175">    <span class="fn-call">epoch_day</span>(db) - <span class="fn-call">epoch_day</span>(da)</span>
+<span id="src-time-loft-L176">}</span>
+<span id="src-time-loft-L177"></span>
+<span id="src-time-loft-L178"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seconds_between</span>(sa: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L179">    (sb - sa) / <span class="en">MS_PER_SECOND</span></span>
+<span id="src-time-loft-L180">}</span>
+<span id="src-time-loft-L181"></span>
+<span id="src-time-loft-L182"><span class="cm">// ── boundaries ────────────────────────────────────────────────</span></span>
+<span id="src-time-loft-L183"></span>
+<span id="src-time-loft-L184"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">start_of_day</span>(sdt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">epoch_day</span>(sdt) * <span class="en">MS_PER_DAY</span> }</span>
+<span id="src-time-loft-L185"></span>
+<span id="src-time-loft-L186"><span class="cm">// Monday 00:00 UTC of the week containing `t`.</span></span>
+<span id="src-time-loft-L187"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">start_of_week</span>(swt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L188">    <span class="fn-call">start_of_day</span>(swt) - <span class="fn-call">weekday</span>(swt) * <span class="en">MS_PER_DAY</span></span>
+<span id="src-time-loft-L189">}</span>
+<span id="src-time-loft-L190"></span>
+<span id="src-time-loft-L191"><span class="cm">// Combine a date with a time-of-day given as components (datetime.combine).</span></span>
+<span id="src-time-loft-L192"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">at_time</span>(atd: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hh: <span class="ty"><a href="stdlib-types.html">integer</a></span>, mm: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ss: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L193">    <span class="fn-call">start_of_day</span>(atd) + hh * <span class="en">MS_PER_HOUR</span> + mm * <span class="en">MS_PER_MINUTE</span> + ss * <span class="en">MS_PER_SECOND</span></span>
+<span id="src-time-loft-L194">}</span>
+<span id="src-time-loft-L195"></span>
+<span id="src-time-loft-L196"><span class="cm">// Combine a date with an "HH:MM" or "HH:MM:SS" time string.  Mirrors</span></span>
+<span id="src-time-loft-L197"><span class="cm">// `datetime.combine(date, time.fromisoformat(s))`.  Null on a malformed time.</span></span>
+<span id="src-time-loft-L198"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">combine</span>(cmd: <span class="ty"><a href="stdlib-types.html">integer</a></span>, time_text: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>? {</span>
+<span id="src-time-loft-L199">    cn = <span class="fn-call"><a href="stdlib-text.html">size</a></span>(time_text);</span>
+<span id="src-time-loft-L200">    <span class="kw">if</span> cn &lt; <span class="nm">5</span> { <span class="kw">return</span> <span class="kw">null</span>; }</span>
+<span id="src-time-loft-L201">    chh = <span class="fn-call">digits_at</span>(time_text, <span class="nm">0</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L202">    cmm = <span class="fn-call">digits_at</span>(time_text, <span class="nm">3</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L203">    <span class="kw">if</span> chh &lt; <span class="nm">0</span> || cmm &lt; <span class="nm">0</span> { <span class="kw">return</span> <span class="kw">null</span>; }</span>
+<span id="src-time-loft-L204">    css = <span class="nm">0</span>;</span>
+<span id="src-time-loft-L205">    <span class="kw">if</span> cn &gt;= <span class="nm">8</span> {</span>
+<span id="src-time-loft-L206">        css = <span class="fn-call">digits_at</span>(time_text, <span class="nm">6</span>, <span class="nm">2</span>);</span>
+<span id="src-time-loft-L207">        <span class="kw">if</span> css &lt; <span class="nm">0</span> { css = <span class="nm">0</span>; }</span>
+<span id="src-time-loft-L208">    }</span>
+<span id="src-time-loft-L209">    <span class="fn-call">at_time</span>(cmd, chh, cmm, css)</span>
+<span id="src-time-loft-L210">}</span>
+<span id="src-time-loft-L211"></span>
+<span id="src-time-loft-L212"><span class="cm">// ── ISO week numbering ────────────────────────────────────────</span></span>
+<span id="src-time-loft-L213"></span>
+<span id="src-time-loft-L214"><span class="cm">// (iso_year, iso_week) — weeks start Monday; week 1 contains the year's</span></span>
+<span id="src-time-loft-L215"><span class="cm">// first Thursday.</span></span>
+<span id="src-time-loft-L216"><span class="kw">fn</span> <span class="fn-call">iso_calendar</span>(it: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {</span>
+<span id="src-time-loft-L217">    iday = <span class="fn-call">epoch_day</span>(it);</span>
+<span id="src-time-loft-L218">    iwd  = <span class="fn-call">weekday</span>(it);                       <span class="cm">// 0=Mon..6=Sun</span></span>
+<span id="src-time-loft-L219">    thursday = iday - iwd + <span class="nm">3</span>;                <span class="cm">// Thursday of this week</span></span>
+<span id="src-time-loft-L220">    tc = <span class="fn-call">civil_from_days</span>(thursday);</span>
+<span id="src-time-loft-L221">    iy = tc.<span class="nm">0</span>;</span>
+<span id="src-time-loft-L222">    jan1 = <span class="fn-call">days_from_civil</span>(iy, <span class="nm">1</span>, <span class="nm">1</span>);</span>
+<span id="src-time-loft-L223">    week = (thursday - jan1) / <span class="nm">7</span> + <span class="nm">1</span>;</span>
+<span id="src-time-loft-L224">    (iy, week)</span>
+<span id="src-time-loft-L225">}</span>
+<span id="src-time-loft-L226"></span>
+<span id="src-time-loft-L227"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">iso_year</span>(iyt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L228">    iyc = <span class="fn-call">iso_calendar</span>(iyt);</span>
+<span id="src-time-loft-L229">    iyc.<span class="nm">0</span></span>
+<span id="src-time-loft-L230">}</span>
+<span id="src-time-loft-L231"></span>
+<span id="src-time-loft-L232"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">iso_week</span>(iwt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L233">    iwc = <span class="fn-call">iso_calendar</span>(iwt);</span>
+<span id="src-time-loft-L234">    iwc.<span class="nm">1</span></span>
+<span id="src-time-loft-L235">}</span>
+<span id="src-time-loft-L236"></span>
+<span id="src-time-loft-L237"><span class="cm">// ── local time (fixed offset, no DST) ─────────────────────────</span></span>
+<span id="src-time-loft-L238"></span>
+<span id="src-time-loft-L239"><span class="cm">// Shift so that the field accessors / formatters yield local values.</span></span>
+<span id="src-time-loft-L240"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">to_local</span>(lt: <span class="ty"><a href="stdlib-types.html">integer</a></span>, offset_min: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L241">    lt + offset_min * <span class="en">MS_PER_MINUTE</span></span>
+<span id="src-time-loft-L242">}</span>
+<span id="src-time-loft-L243"></span>
+<span id="src-time-loft-L244"><span class="cm">// UTC-midnight key of the local calendar day containing `t`.</span></span>
+<span id="src-time-loft-L245"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">local_day</span>(ldt: <span class="ty"><a href="stdlib-types.html">integer</a></span>, offset_min: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L246">    <span class="fn-call">start_of_day</span>(<span class="fn-call">to_local</span>(ldt, offset_min))</span>
+<span id="src-time-loft-L247">}</span>
+<span id="src-time-loft-L248"></span>
+<span id="src-time-loft-L249"><span class="cm">// The local calendar day for "now" at the given offset.</span></span>
+<span id="src-time-loft-L250"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">today</span>(offset_min: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-time-loft-L251">    <span class="fn-call">local_day</span>(<span class="fn-call"><a href="stdlib-time.html">now</a></span>(), offset_min)</span>
+<span id="src-time-loft-L252">}</span>
+<span id="src-time-loft-L253"></span>
+<span id="src-time-loft-L254"><span class="cm">// ── formatting ────────────────────────────────────────────────</span></span>
+<span id="src-time-loft-L255"></span>
+<span id="src-time-loft-L256"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">format_date</span>(fdt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L257">    fc = <span class="fn-call">civil_from_days</span>(<span class="fn-call">epoch_day</span>(fdt));</span>
+<span id="src-time-loft-L258">    fyy = fc.<span class="nm">0</span>;</span>
+<span id="src-time-loft-L259">    fmm = fc.<span class="nm">1</span>;</span>
+<span id="src-time-loft-L260">    fdd = fc.<span class="nm">2</span>;</span>
+<span id="src-time-loft-L261">    <span class="st">"{fyy:04}-{fmm:02}-{fdd:02}"</span></span>
+<span id="src-time-loft-L262">}</span>
+<span id="src-time-loft-L263"></span>
+<span id="src-time-loft-L264"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">format_time</span>(ftt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L265">    fth = <span class="fn-call">hour</span>(ftt);</span>
+<span id="src-time-loft-L266">    ftm = <span class="fn-call">minute</span>(ftt);</span>
+<span id="src-time-loft-L267">    <span class="st">"{fth:02}:{ftm:02}"</span></span>
+<span id="src-time-loft-L268">}</span>
+<span id="src-time-loft-L269"></span>
+<span id="src-time-loft-L270"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">format_seconds</span>(fst: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L271">    fsh = <span class="fn-call">hour</span>(fst);</span>
+<span id="src-time-loft-L272">    fsm = <span class="fn-call">minute</span>(fst);</span>
+<span id="src-time-loft-L273">    fss = <span class="fn-call">second</span>(fst);</span>
+<span id="src-time-loft-L274">    <span class="st">"{fsh:02}:{fsm:02}:{fss:02}"</span></span>
+<span id="src-time-loft-L275">}</span>
+<span id="src-time-loft-L276"></span>
+<span id="src-time-loft-L277"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">format_datetime</span>(fdtt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L278">    fdd2 = <span class="fn-call">format_date</span>(fdtt);</span>
+<span id="src-time-loft-L279">    ftt2 = <span class="fn-call">format_time</span>(fdtt);</span>
+<span id="src-time-loft-L280">    <span class="st">"{fdd2} {ftt2}"</span></span>
+<span id="src-time-loft-L281">}</span>
+<span id="src-time-loft-L282"></span>
+<span id="src-time-loft-L283"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">format_iso</span>(fit: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L284">    fid = <span class="fn-call">format_date</span>(fit);</span>
+<span id="src-time-loft-L285">    fis = <span class="fn-call">format_seconds</span>(fit);</span>
+<span id="src-time-loft-L286">    <span class="st">"{fid}T{fis}Z"</span></span>
+<span id="src-time-loft-L287">}</span>
+<span id="src-time-loft-L288"></span>
+<span id="src-time-loft-L289"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">weekday_name</span>(wnt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L290">    match <span class="fn-call">weekday</span>(wnt) {</span>
+<span id="src-time-loft-L291">        <span class="nm">0</span> =&gt; <span class="st">"Mon"</span>,</span>
+<span id="src-time-loft-L292">        <span class="nm">1</span> =&gt; <span class="st">"Tue"</span>,</span>
+<span id="src-time-loft-L293">        <span class="nm">2</span> =&gt; <span class="st">"Wed"</span>,</span>
+<span id="src-time-loft-L294">        <span class="nm">3</span> =&gt; <span class="st">"Thu"</span>,</span>
+<span id="src-time-loft-L295">        <span class="nm">4</span> =&gt; <span class="st">"Fri"</span>,</span>
+<span id="src-time-loft-L296">        <span class="nm">5</span> =&gt; <span class="st">"Sat"</span>,</span>
+<span id="src-time-loft-L297">        _ =&gt; <span class="st">"Sun"</span>,</span>
+<span id="src-time-loft-L298">    }</span>
+<span id="src-time-loft-L299">}</span>
+<span id="src-time-loft-L300"></span>
+<span id="src-time-loft-L301"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">month_name</span>(mnt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L302">    match <span class="fn-call">month</span>(mnt) {</span>
+<span id="src-time-loft-L303">        <span class="nm">1</span>  =&gt; <span class="st">"Jan"</span>,</span>
+<span id="src-time-loft-L304">        <span class="nm">2</span>  =&gt; <span class="st">"Feb"</span>,</span>
+<span id="src-time-loft-L305">        <span class="nm">3</span>  =&gt; <span class="st">"Mar"</span>,</span>
+<span id="src-time-loft-L306">        <span class="nm">4</span>  =&gt; <span class="st">"Apr"</span>,</span>
+<span id="src-time-loft-L307">        <span class="nm">5</span>  =&gt; <span class="st">"May"</span>,</span>
+<span id="src-time-loft-L308">        <span class="nm">6</span>  =&gt; <span class="st">"Jun"</span>,</span>
+<span id="src-time-loft-L309">        <span class="nm">7</span>  =&gt; <span class="st">"Jul"</span>,</span>
+<span id="src-time-loft-L310">        <span class="nm">8</span>  =&gt; <span class="st">"Aug"</span>,</span>
+<span id="src-time-loft-L311">        <span class="nm">9</span>  =&gt; <span class="st">"Sep"</span>,</span>
+<span id="src-time-loft-L312">        <span class="nm">10</span> =&gt; <span class="st">"Oct"</span>,</span>
+<span id="src-time-loft-L313">        <span class="nm">11</span> =&gt; <span class="st">"Nov"</span>,</span>
+<span id="src-time-loft-L314">        _  =&gt; <span class="st">"Dec"</span>,</span>
+<span id="src-time-loft-L315">    }</span>
+<span id="src-time-loft-L316">}</span>
+<span id="src-time-loft-L317"></span>
+<span id="src-time-loft-L318"><span class="cm">// ══════════════════════════════════════════════════════════════</span></span>
+<span id="src-time-loft-L319"><span class="cm">//  DateTime / Duration — first-grade value types (0.2.0)</span></span>
+<span id="src-time-loft-L320"><span class="cm">// ══════════════════════════════════════════════════════════════</span></span>
+<span id="src-time-loft-L321"><span class="cm">//</span></span>
+<span id="src-time-loft-L322"><span class="cm">// `DateTime` and `Duration` are zero-cost `value struct`s wrapping the same</span></span>
+<span id="src-time-loft-L323"><span class="cm">// epoch-millisecond `integer` the functions above use — so they add NO heap</span></span>
+<span id="src-time-loft-L324"><span class="cm">// allocation as a record field or vector element (a `vector&lt;DateTime&gt;` costs</span></span>
+<span id="src-time-loft-L325"><span class="cm">// the same as `vector&lt;integer&gt;`), yet they are a DISTINCT type: `dt + 5` is a</span></span>
+<span id="src-time-loft-L326"><span class="cm">// compile error, only `dt + hours(2)` steps a time.  They layer on top of the</span></span>
+<span id="src-time-loft-L327"><span class="cm">// integer API above (which stays exactly as it was — the 0.1.0 surface still</span></span>
+<span id="src-time-loft-L328"><span class="cm">// works); pick whichever fits the call site.</span></span>
+<span id="src-time-loft-L329"><span class="cm">//</span></span>
+<span id="src-time-loft-L330"><span class="cm">//   Construct:  date(y,mo,d) · datetime(y,mo,d,h,mi,s) · ms as DateTime ·</span></span>
+<span id="src-time-loft-L331"><span class="cm">//               "2026-07-08T12:00:00Z" as DateTime · now() as DateTime</span></span>
+<span id="src-time-loft-L332"><span class="cm">//   Read:       dt.year() … dt.second(), dt.weekday(), dt.weekday_name(), …</span></span>
+<span id="src-time-loft-L333"><span class="cm">//   Compare:    dt1 &lt; dt2 · dt1 == dt2  (all six)</span></span>
+<span id="src-time-loft-L334"><span class="cm">//   Span:       dt2 - dt1 -&gt; Duration ;  dt + hours(2) -&gt; DateTime</span></span>
+<span id="src-time-loft-L335"><span class="cm">//   Format:     "{dt}" (YYYY-MM-DD HH:MM) · "{dt:date}" · "{dt:iso}" · "{dt:time}"</span></span>
+<span id="src-time-loft-L336"><span class="cm">//</span></span>
+<span id="src-time-loft-L337"><span class="cm">// FALLIBILITY: a `value struct` has no null, so a fallible parse cannot return</span></span>
+<span id="src-time-loft-L338"><span class="cm">// a `DateTime` AND signal failure.  Keep failure at the integer level — `parse`</span></span>
+<span id="src-time-loft-L339"><span class="cm">// above returns null on bad input — then wrap the checked value:</span></span>
+<span id="src-time-loft-L340"><span class="cm">//     ms = parse(s); if !ms { …handle… } else { dt = ms as DateTime }</span></span>
+<span id="src-time-loft-L341"><span class="cm">// The `"…" as DateTime` conversion is a TOTAL best-effort parse (bad input →</span></span>
+<span id="src-time-loft-L342"><span class="cm">// epoch) for the ergonomic path where an invalid date need not be caught.</span></span>
+<span id="src-time-loft-L343"></span>
+<span id="src-time-loft-L344"><span class="kw">pub</span> value <span class="kw">struct</span> <span class="en">DateTime</span> { ms: <span class="ty"><a href="stdlib-types.html">integer</a></span> }</span>
+<span id="src-time-loft-L345"><span class="kw">pub</span> value <span class="kw">struct</span> <span class="en">Duration</span> { ms: <span class="ty"><a href="stdlib-types.html">integer</a></span> }</span>
+<span id="src-time-loft-L346"></span>
+<span id="src-time-loft-L347"><span class="cm">// ── DateTime construction ──</span></span>
+<span id="src-time-loft-L348"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">date</span>(dcy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dcmo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dcd: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">DateTime</span> {</span>
+<span id="src-time-loft-L349">    <span class="en">DateTime</span> { ms: <span class="fn-call">from_ymd</span>(dcy, dcmo, dcd) }</span>
+<span id="src-time-loft-L350">}</span>
+<span id="src-time-loft-L351"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">datetime</span>(tcy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tcmo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tcd: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</span>
+<span id="src-time-loft-L352">                tch: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tcmi: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tcs: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">DateTime</span> {</span>
+<span id="src-time-loft-L353">    <span class="en">DateTime</span> { ms: <span class="fn-call">at_time</span>(<span class="fn-call">from_ymd</span>(tcy, tcmo, tcd), tch, tcmi, tcs) }</span>
+<span id="src-time-loft-L354">}</span>
+<span id="src-time-loft-L355"></span>
+<span id="src-time-loft-L356"><span class="cm">// ── Duration construction ──</span></span>
+<span id="src-time-loft-L357"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">milliseconds</span>(nms: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: nms } }</span>
+<span id="src-time-loft-L358"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seconds</span>(nsec: <span class="ty"><a href="stdlib-types.html">integer</a></span>)     -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: nsec * <span class="en">MS_PER_SECOND</span> } }</span>
+<span id="src-time-loft-L359"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">minutes</span>(nmin: <span class="ty"><a href="stdlib-types.html">integer</a></span>)     -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: nmin * <span class="en">MS_PER_MINUTE</span> } }</span>
+<span id="src-time-loft-L360"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hours</span>(nhr: <span class="ty"><a href="stdlib-types.html">integer</a></span>)        -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: nhr * <span class="en">MS_PER_HOUR</span> } }</span>
+<span id="src-time-loft-L361"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">days</span>(nday: <span class="ty"><a href="stdlib-types.html">integer</a></span>)        -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: nday * <span class="en">MS_PER_DAY</span> } }</span>
+<span id="src-time-loft-L362"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">weeks</span>(nwk: <span class="ty"><a href="stdlib-types.html">integer</a></span>)        -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: nwk * <span class="nm">7</span> * <span class="en">MS_PER_DAY</span> } }</span>
+<span id="src-time-loft-L363"></span>
+<span id="src-time-loft-L364"><span class="cm">// ── DateTime field accessors (methods; delegate to the integer API above) ──</span></span>
+<span id="src-time-loft-L365"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">year</span>(self: <span class="en">DateTime</span>)         -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">year</span>(self.ms) }</span>
+<span id="src-time-loft-L366"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">month</span>(self: <span class="en">DateTime</span>)        -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">month</span>(self.ms) }</span>
+<span id="src-time-loft-L367"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">day</span>(self: <span class="en">DateTime</span>)          -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">day</span>(self.ms) }</span>
+<span id="src-time-loft-L368"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hour</span>(self: <span class="en">DateTime</span>)         -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">hour</span>(self.ms) }</span>
+<span id="src-time-loft-L369"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">minute</span>(self: <span class="en">DateTime</span>)       -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">minute</span>(self.ms) }</span>
+<span id="src-time-loft-L370"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">second</span>(self: <span class="en">DateTime</span>)       -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">second</span>(self.ms) }</span>
+<span id="src-time-loft-L371"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">weekday</span>(self: <span class="en">DateTime</span>)      -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">weekday</span>(self.ms) }</span>
+<span id="src-time-loft-L372"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">iso_year</span>(self: <span class="en">DateTime</span>)     -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">iso_year</span>(self.ms) }</span>
+<span id="src-time-loft-L373"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">iso_week</span>(self: <span class="en">DateTime</span>)     -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { <span class="fn-call">iso_week</span>(self.ms) }</span>
+<span id="src-time-loft-L374"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">weekday_name</span>(self: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span>    { <span class="fn-call">weekday_name</span>(self.ms) }</span>
+<span id="src-time-loft-L375"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">month_name</span>(self: <span class="en">DateTime</span>)   -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span>    { <span class="fn-call">month_name</span>(self.ms) }</span>
+<span id="src-time-loft-L376"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">to_millis</span>(self: <span class="en">DateTime</span>)    -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { self.ms }</span>
+<span id="src-time-loft-L377"></span>
+<span id="src-time-loft-L378"><span class="cm">// ── Duration accessors ──</span></span>
+<span id="src-time-loft-L379"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">total_millis</span>(self: <span class="en">Duration</span>)  -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { self.ms }</span>
+<span id="src-time-loft-L380"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">total_seconds</span>(self: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { self.ms / <span class="en">MS_PER_SECOND</span> }</span>
+<span id="src-time-loft-L381"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">total_minutes</span>(self: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { self.ms / <span class="en">MS_PER_MINUTE</span> }</span>
+<span id="src-time-loft-L382"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">total_hours</span>(self: <span class="en">Duration</span>)   -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { self.ms / <span class="en">MS_PER_HOUR</span> }</span>
+<span id="src-time-loft-L383"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">total_days</span>(self: <span class="en">Duration</span>)    -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { self.ms / <span class="en">MS_PER_DAY</span> }</span>
+<span id="src-time-loft-L384"></span>
+<span id="src-time-loft-L385"><span class="cm">// ── DateTime operators (comparison + typed arithmetic) ──</span></span>
+<span id="src-time-loft-L386"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpLt</span>(self: <span class="en">DateTime</span>, other: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &lt; other.ms }</span>
+<span id="src-time-loft-L387"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpLe</span>(self: <span class="en">DateTime</span>, other: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &lt;= other.ms }</span>
+<span id="src-time-loft-L388"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpGt</span>(self: <span class="en">DateTime</span>, other: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &gt; other.ms }</span>
+<span id="src-time-loft-L389"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpGe</span>(self: <span class="en">DateTime</span>, other: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &gt;= other.ms }</span>
+<span id="src-time-loft-L390"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpEq</span>(self: <span class="en">DateTime</span>, other: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms == other.ms }</span>
+<span id="src-time-loft-L391"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpNe</span>(self: <span class="en">DateTime</span>, other: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms != other.ms }</span>
+<span id="src-time-loft-L392"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpMin</span>(self: <span class="en">DateTime</span>, other: <span class="en">DateTime</span>) -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: self.ms - other.ms } }</span>
+<span id="src-time-loft-L393"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpAdd</span>(self: <span class="en">DateTime</span>, span: <span class="en">Duration</span>)  -&gt; <span class="en">DateTime</span> { <span class="en">DateTime</span> { ms: self.ms + span.ms } }</span>
+<span id="src-time-loft-L394"><span class="cm">// `-` on a DateTime is the difference `dt - dt` (above); operators key on the</span></span>
+<span id="src-time-loft-L395"><span class="cm">// receiver type, so subtracting a Duration is the `minus` method (or `dt + (-span)`).</span></span>
+<span id="src-time-loft-L396"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">minus</span>(self: <span class="en">DateTime</span>, span: <span class="en">Duration</span>) -&gt; <span class="en">DateTime</span> { <span class="en">DateTime</span> { ms: self.ms - span.ms } }</span>
+<span id="src-time-loft-L397"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">negate</span>(self: <span class="en">Duration</span>) -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: <span class="nm">0</span> - self.ms } }</span>
+<span id="src-time-loft-L398"></span>
+<span id="src-time-loft-L399"><span class="cm">// ── Duration operators ──</span></span>
+<span id="src-time-loft-L400"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpAdd</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: self.ms + other.ms } }</span>
+<span id="src-time-loft-L401"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpMin</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: self.ms - other.ms } }</span>
+<span id="src-time-loft-L402"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpMul</span>(self: <span class="en">Duration</span>, factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Duration</span> { <span class="en">Duration</span> { ms: self.ms * factor } }</span>
+<span id="src-time-loft-L403"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpLt</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &lt; other.ms }</span>
+<span id="src-time-loft-L404"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpLe</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &lt;= other.ms }</span>
+<span id="src-time-loft-L405"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpGt</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &gt; other.ms }</span>
+<span id="src-time-loft-L406"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpGe</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms &gt;= other.ms }</span>
+<span id="src-time-loft-L407"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpEq</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms == other.ms }</span>
+<span id="src-time-loft-L408"><span class="kw">pub</span> <span class="kw">fn</span> <span class="en">OpNe</span>(self: <span class="en">Duration</span>, other: <span class="en">Duration</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.ms != other.ms }</span>
+<span id="src-time-loft-L409"></span>
+<span id="src-time-loft-L410"><span class="cm">// ── custom formatting (the per-type to_text hook) ──</span></span>
+<span id="src-time-loft-L411"><span class="cm">// "" / "datetime" -&gt; YYYY-MM-DD HH:MM · "date" -&gt; YYYY-MM-DD · "time" -&gt; HH:MM</span></span>
+<span id="src-time-loft-L412"><span class="cm">// "seconds" -&gt; HH:MM:SS · "iso" -&gt; …THH:MM:SSZ · "wday" -&gt; Mon · "month" -&gt; May</span></span>
+<span id="src-time-loft-L413"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-field-iteration-support-types.html">to_text</a></span>(self: <span class="en">DateTime</span>, spec: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L414">    <span class="cm">// The if-chain is bound to `r` and returned, NOT left as the tail expression:</span></span>
+<span id="src-time-loft-L415">    <span class="cm">// a tail `if` inside a format-hook `to_text(self, spec)` mis-selects its branch</span></span>
+<span id="src-time-loft-L416">    <span class="cm">// on both backends (a loft format-hook bug — repro filed upstream). Binding the</span></span>
+<span id="src-time-loft-L417">    <span class="cm">// result to a local sidesteps it.</span></span>
+<span id="src-time-loft-L418">    <span class="cm">// Each branch is wrapped in "{…}" so every arm is an owned text: on native a</span></span>
+<span id="src-time-loft-L419">    <span class="cm">// bare `text`-returning call whose body is a match of string literals (weekday_name /</span></span>
+<span id="src-time-loft-L420">    <span class="cm">// month_name → &amp;str) does NOT unify with a String-returning arm (format_* interpolate),</span></span>
+<span id="src-time-loft-L421">    <span class="cm">// giving rustc E0308. Interpolating each arm normalises them (a second loft bug, filed).</span></span>
+<span id="src-time-loft-L422">    r = <span class="kw">if</span> spec == <span class="st">"date"</span> { <span class="st">"{format_date(self.ms)}"</span> }</span>
+<span id="src-time-loft-L423">        <span class="kw">else</span> <span class="kw">if</span> spec == <span class="st">"time"</span> { <span class="st">"{format_time(self.ms)}"</span> }</span>
+<span id="src-time-loft-L424">        <span class="kw">else</span> <span class="kw">if</span> spec == <span class="st">"seconds"</span> || spec == <span class="st">"secs"</span> { <span class="st">"{format_seconds(self.ms)}"</span> }</span>
+<span id="src-time-loft-L425">        <span class="kw">else</span> <span class="kw">if</span> spec == <span class="st">"iso"</span> { <span class="st">"{format_iso(self.ms)}"</span> }</span>
+<span id="src-time-loft-L426">        <span class="kw">else</span> <span class="kw">if</span> spec == <span class="st">"wday"</span> || spec == <span class="st">"weekday"</span> { <span class="st">"{weekday_name(self.ms)}"</span> }</span>
+<span id="src-time-loft-L427">        <span class="kw">else</span> <span class="kw">if</span> spec == <span class="st">"month"</span> { <span class="st">"{month_name(self.ms)}"</span> }</span>
+<span id="src-time-loft-L428">        <span class="kw">else</span> { <span class="st">"{format_datetime(self.ms)}"</span> };</span>
+<span id="src-time-loft-L429">    r</span>
+<span id="src-time-loft-L430">}</span>
+<span id="src-time-loft-L431"><span class="cm">// A Duration renders as [-]H:MM:SS (hours may exceed 24).</span></span>
+<span id="src-time-loft-L432"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-field-iteration-support-types.html">to_text</a></span>(self: <span class="en">Duration</span>, _spec: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {</span>
+<span id="src-time-loft-L433">    neg = self.ms &lt; <span class="nm">0</span>;</span>
+<span id="src-time-loft-L434">    tot = <span class="kw">if</span> neg { <span class="nm">0</span> - self.ms } <span class="kw">else</span> { self.ms };</span>
+<span id="src-time-loft-L435">    ss = (tot / <span class="en">MS_PER_SECOND</span>) % <span class="nm">60</span>;</span>
+<span id="src-time-loft-L436">    mm = (tot / <span class="en">MS_PER_MINUTE</span>) % <span class="nm">60</span>;</span>
+<span id="src-time-loft-L437">    hh = tot / <span class="en">MS_PER_HOUR</span>;</span>
+<span id="src-time-loft-L438">    sign = <span class="kw">if</span> neg { <span class="st">"-"</span> } <span class="kw">else</span> { <span class="st">""</span> };</span>
+<span id="src-time-loft-L439">    <span class="st">"{sign}{hh}:{mm:02}:{ss:02}"</span></span>
+<span id="src-time-loft-L440">}</span>
+<span id="src-time-loft-L441"></span>
+<span id="src-time-loft-L442"><span class="cm">// ── conversions (`as`) ──</span></span>
+<span id="src-time-loft-L443"><span class="kw">fn</span> <span class="en">OpConvIntFromDateTime</span>(civ: <span class="en">DateTime</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { civ.ms }</span>
+<span id="src-time-loft-L444"><span class="kw">fn</span> <span class="en">OpConvDateTimeFromInt</span>(civ: <span class="ty"><a href="stdlib-types.html">integer</a></span>)  -&gt; <span class="en">DateTime</span> { <span class="en">DateTime</span> { ms: civ } }</span>
+<span id="src-time-loft-L445"><span class="cm">// text -&gt; DateTime: a TOTAL best-effort parse (bad input -&gt; epoch); see the</span></span>
+<span id="src-time-loft-L446"><span class="cm">// FALLIBILITY note above for the checked path via `parse`.</span></span>
+<span id="src-time-loft-L447"><span class="kw">fn</span> <span class="en">OpConvDateTimeFromText</span>(civ: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">DateTime</span> {</span>
+<span id="src-time-loft-L448">    <span class="en">DateTime</span> { ms: <span class="fn-call">parse</span>(civ) ?? <span class="nm">0</span> }</span>
+<span id="src-time-loft-L449">}</span>
+</code></pre>
+<h2 id="tests-01-basics-loft">tests/01-basics.loft</h2>
+<pre class="src"><code><span id="tests-01-basics-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-01-basics-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-01-basics-loft-L3"><span class="cm">//</span></span>
+<span id="tests-01-basics-loft-L4"><span class="cm">// Basic date/time operation tests — run on interpreter, --native, and</span></span>
+<span id="tests-01-basics-loft-L5"><span class="cm">// wasm.  All goldens are hand-computed against the proleptic Gregorian</span></span>
+<span id="tests-01-basics-loft-L6"><span class="cm">// calendar so they pin cross-backend parity.</span></span>
+<span id="tests-01-basics-loft-L7"><span class="kw">use</span> time;</span>
+<span id="tests-01-basics-loft-L8"></span>
+<span id="tests-01-basics-loft-L9"><span class="kw">fn</span> <span class="fn-call">test_parse_and_fields</span>() {</span>
+<span id="tests-01-basics-loft-L10">    t = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L11">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">year</span>(t) == <span class="nm">2026</span>, <span class="st">"year {time::year(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L12">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month</span>(t) == <span class="nm">5</span>, <span class="st">"month {time::month(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L13">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">day</span>(t) == <span class="nm">25</span>, <span class="st">"day {time::day(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L14">    <span class="cm">// 2026-05-25 is a Monday.</span></span>
+<span id="tests-01-basics-loft-L15">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday</span>(t) == <span class="nm">0</span>, <span class="st">"weekday {time::weekday(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L16">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday_name</span>(t) == <span class="st">"Mon"</span>, <span class="st">"wname {time::weekday_name(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L17">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month_name</span>(t) == <span class="st">"May"</span>, <span class="st">"mname {time::month_name(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L18">}</span>
+<span id="tests-01-basics-loft-L19"></span>
+<span id="tests-01-basics-loft-L20"><span class="kw">fn</span> <span class="fn-call">test_parse_datetime</span>() {</span>
+<span id="tests-01-basics-loft-L21">    t = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L22">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hour</span>(t) == <span class="nm">14</span>, <span class="st">"hour {time::hour(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L23">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">minute</span>(t) == <span class="nm">30</span>, <span class="st">"minute {time::minute(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L24">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">second</span>(t) == <span class="nm">7</span>, <span class="st">"second {time::second(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L25">    iso = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25T14:30:07Z"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L26">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(iso == t, <span class="st">"T/Z form equals space form"</span>);</span>
+<span id="tests-01-basics-loft-L27">}</span>
+<span id="tests-01-basics-loft-L28"></span>
+<span id="tests-01-basics-loft-L29"><span class="kw">fn</span> <span class="fn-call">test_parse_failure</span>() {</span>
+<span id="tests-01-basics-loft-L30">    bad = time::<span class="fn-call">parse</span>(<span class="st">"not-a-date"</span>);</span>
+<span id="tests-01-basics-loft-L31">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"garbage parses to null"</span>);</span>
+<span id="tests-01-basics-loft-L32">    short = time::<span class="fn-call">parse</span>(<span class="st">"2026-05"</span>);</span>
+<span id="tests-01-basics-loft-L33">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!short, <span class="st">"too-short parses to null"</span>);</span>
+<span id="tests-01-basics-loft-L34">}</span>
+<span id="tests-01-basics-loft-L35"></span>
+<span id="tests-01-basics-loft-L36"><span class="kw">fn</span> <span class="fn-call">test_roundtrip_format</span>() {</span>
+<span id="tests-01-basics-loft-L37">    t = time::<span class="fn-call">from_ymd</span>(<span class="nm">1999</span>, <span class="nm">12</span>, <span class="nm">31</span>);</span>
+<span id="tests-01-basics-loft-L38">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(t) == <span class="st">"1999-12-31"</span>, <span class="st">"fmt {time::format_date(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L39">    dt = (time::<span class="fn-call">parse</span>(<span class="st">"2000-01-01 00:00:00"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L40">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_iso</span>(dt) == <span class="st">"2000-01-01T00:00:00Z"</span>, <span class="st">"iso {time::format_iso(dt)}"</span>);</span>
+<span id="tests-01-basics-loft-L41">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(dt) == <span class="st">"2000-01-01 00:00"</span>, <span class="st">"dtfmt {time::format_datetime(dt)}"</span>);</span>
+<span id="tests-01-basics-loft-L42">}</span>
+<span id="tests-01-basics-loft-L43"></span>
+<span id="tests-01-basics-loft-L44"><span class="kw">fn</span> <span class="fn-call">test_arithmetic</span>() {</span>
+<span id="tests-01-basics-loft-L45">    t = (time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L46">    wk = time::<span class="fn-call">add_weeks</span>(t, <span class="nm">1</span>);</span>
+<span id="tests-01-basics-loft-L47">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(wk) == <span class="st">"2026-01-08"</span>, <span class="st">"add_weeks {time::format_date(wk)}"</span>);</span>
+<span id="tests-01-basics-loft-L48">    dd = time::<span class="fn-call">add_days</span>(t, <span class="nm">365</span>);</span>
+<span id="tests-01-basics-loft-L49">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(dd) == <span class="st">"2027-01-01"</span>, <span class="st">"add 365 {time::format_date(dd)}"</span>);</span>
+<span id="tests-01-basics-loft-L50">    <span class="cm">// leap-year boundary: 2024-02-28 + 1 day = 2024-02-29</span></span>
+<span id="tests-01-basics-loft-L51">    leap = time::<span class="fn-call">add_days</span>((time::<span class="fn-call">parse</span>(<span class="st">"2024-02-28"</span>) ?? <span class="nm">0</span>), <span class="nm">1</span>);</span>
+<span id="tests-01-basics-loft-L52">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(leap) == <span class="st">"2024-02-29"</span>, <span class="st">"leap {time::format_date(leap)}"</span>);</span>
+<span id="tests-01-basics-loft-L53">}</span>
+<span id="tests-01-basics-loft-L54"></span>
+<span id="tests-01-basics-loft-L55"><span class="kw">fn</span> <span class="fn-call">test_differences</span>() {</span>
+<span id="tests-01-basics-loft-L56">    a = (time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L57">    b = (time::<span class="fn-call">parse</span>(<span class="st">"2026-12-31"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L58">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">days_between</span>(a, b) == <span class="nm">364</span>, <span class="st">"days_between {time::days_between(a, b)}"</span>);</span>
+<span id="tests-01-basics-loft-L59">    s = time::<span class="fn-call">seconds_between</span>((time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 00:00:00"</span>) ?? <span class="nm">0</span>),</span>
+<span id="tests-01-basics-loft-L60">                              (time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 01:00:00"</span>) ?? <span class="nm">0</span>));</span>
+<span id="tests-01-basics-loft-L61">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">3600</span>, <span class="st">"seconds_between {s}"</span>);</span>
+<span id="tests-01-basics-loft-L62">}</span>
+<span id="tests-01-basics-loft-L63"></span>
+<span id="tests-01-basics-loft-L64"><span class="kw">fn</span> <span class="fn-call">test_boundaries</span>() {</span>
+<span id="tests-01-basics-loft-L65">    t = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L66">    sod = time::<span class="fn-call">start_of_day</span>(t);</span>
+<span id="tests-01-basics-loft-L67">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_iso</span>(sod) == <span class="st">"2026-05-25T00:00:00Z"</span>, <span class="st">"start_of_day {time::format_iso(sod)}"</span>);</span>
+<span id="tests-01-basics-loft-L68">    <span class="cm">// 2026-05-25 is a Monday, so start_of_week == start_of_day.</span></span>
+<span id="tests-01-basics-loft-L69">    sow = time::<span class="fn-call">start_of_week</span>(t);</span>
+<span id="tests-01-basics-loft-L70">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(sow) == <span class="st">"2026-05-25"</span>, <span class="st">"start_of_week {time::format_date(sow)}"</span>);</span>
+<span id="tests-01-basics-loft-L71">    <span class="cm">// Wednesday 2026-05-27 -&gt; week start Monday 2026-05-25.</span></span>
+<span id="tests-01-basics-loft-L72">    wed = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-27"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L73">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">start_of_week</span>(wed)) == <span class="st">"2026-05-25"</span>,</span>
+<span id="tests-01-basics-loft-L74">           <span class="st">"wed week start {time::format_date(time::start_of_week(wed))}"</span>);</span>
+<span id="tests-01-basics-loft-L75">}</span>
+<span id="tests-01-basics-loft-L76"></span>
+<span id="tests-01-basics-loft-L77"><span class="kw">fn</span> <span class="fn-call">test_iso_week</span>() {</span>
+<span id="tests-01-basics-loft-L78">    <span class="cm">// 2026-01-01 is a Thursday -&gt; ISO week 1 of 2026.</span></span>
+<span id="tests-01-basics-loft-L79">    a = (time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L80">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(a) == <span class="nm">2026</span>, <span class="st">"iso_year {time::iso_year(a)}"</span>);</span>
+<span id="tests-01-basics-loft-L81">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(a) == <span class="nm">1</span>, <span class="st">"iso_week {time::iso_week(a)}"</span>);</span>
+<span id="tests-01-basics-loft-L82">    <span class="cm">// 2021-01-01 is a Friday -&gt; belongs to ISO week 53 of 2020.</span></span>
+<span id="tests-01-basics-loft-L83">    b = (time::<span class="fn-call">parse</span>(<span class="st">"2021-01-01"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L84">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(b) == <span class="nm">2020</span>, <span class="st">"iso_year2 {time::iso_year(b)}"</span>);</span>
+<span id="tests-01-basics-loft-L85">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(b) == <span class="nm">53</span>, <span class="st">"iso_week2 {time::iso_week(b)}"</span>);</span>
+<span id="tests-01-basics-loft-L86">}</span>
+<span id="tests-01-basics-loft-L87"></span>
+<span id="tests-01-basics-loft-L88"><span class="kw">fn</span> <span class="fn-call">test_local_offset</span>() {</span>
+<span id="tests-01-basics-loft-L89">    <span class="cm">// 23:30 UTC at +120 min becomes 01:30 the next local day.</span></span>
+<span id="tests-01-basics-loft-L90">    t = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 23:30:00"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L91">    loc = time::<span class="fn-call">to_local</span>(t, <span class="nm">120</span>);</span>
+<span id="tests-01-basics-loft-L92">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(loc) == <span class="st">"2026-05-26 01:30"</span>, <span class="st">"local {time::format_datetime(loc)}"</span>);</span>
+<span id="tests-01-basics-loft-L93">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">local_day</span>(t, <span class="nm">120</span>)) == <span class="st">"2026-05-26"</span>,</span>
+<span id="tests-01-basics-loft-L94">           <span class="st">"local_day {time::format_date(time::local_day(t, 120))}"</span>);</span>
+<span id="tests-01-basics-loft-L95">}</span>
+<span id="tests-01-basics-loft-L96"></span>
+<span id="tests-01-basics-loft-L97"><span class="kw">fn</span> <span class="fn-call">test_epoch_seconds</span>() {</span>
+<span id="tests-01-basics-loft-L98">    <span class="cm">// Garmin/Strava boundary: Unix seconds &lt;-&gt; loft ms.</span></span>
+<span id="tests-01-basics-loft-L99">    secs = <span class="nm">1748000000</span>;</span>
+<span id="tests-01-basics-loft-L100">    t = time::<span class="fn-call">from_unix_seconds</span>(secs);</span>
+<span id="tests-01-basics-loft-L101">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">1748000000000</span>, <span class="st">"from_unix_seconds {t}"</span>);</span>
+<span id="tests-01-basics-loft-L102">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">to_unix_seconds</span>(t) == secs, <span class="st">"to_unix_seconds {time::to_unix_seconds(t)}"</span>);</span>
+<span id="tests-01-basics-loft-L103">    <span class="cm">// round-trip through a parsed datetime.</span></span>
+<span id="tests-01-basics-loft-L104">    dt = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L105">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">from_unix_seconds</span>(time::<span class="fn-call">to_unix_seconds</span>(dt)) == dt, <span class="st">"secs round-trip"</span>);</span>
+<span id="tests-01-basics-loft-L106">}</span>
+<span id="tests-01-basics-loft-L107"></span>
+<span id="tests-01-basics-loft-L108"><span class="kw">fn</span> <span class="fn-call">test_combine</span>() {</span>
+<span id="tests-01-basics-loft-L109">    d = (time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L110">    e = (time::<span class="fn-call">combine</span>(d, <span class="st">"14:30"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L111">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(e) == <span class="st">"2026-05-25 14:30"</span>, <span class="st">"combine HH:MM {time::format_datetime(e)}"</span>);</span>
+<span id="tests-01-basics-loft-L112">    e2 = (time::<span class="fn-call">combine</span>(d, <span class="st">"09:05:42"</span>) ?? <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L113">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_seconds</span>(e2) == <span class="st">"09:05:42"</span>, <span class="st">"combine HH:MM:SS {time::format_seconds(e2)}"</span>);</span>
+<span id="tests-01-basics-loft-L114">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(e2) == <span class="st">"2026-05-25"</span>, <span class="st">"combine keeps date"</span>);</span>
+<span id="tests-01-basics-loft-L115">    at = time::<span class="fn-call">at_time</span>(d, <span class="nm">23</span>, <span class="nm">59</span>, <span class="nm">0</span>);</span>
+<span id="tests-01-basics-loft-L116">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(at) == <span class="st">"2026-05-25 23:59"</span>, <span class="st">"at_time {time::format_datetime(at)}"</span>);</span>
+<span id="tests-01-basics-loft-L117">    bad = time::<span class="fn-call">combine</span>(d, <span class="st">"xx"</span>);</span>
+<span id="tests-01-basics-loft-L118">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"combine bad time -&gt; null"</span>);</span>
+<span id="tests-01-basics-loft-L119">}</span>
+<span id="tests-01-basics-loft-L120"></span>
+<span id="tests-01-basics-loft-L121"><span class="kw">fn</span> <span class="fn-call">main</span>() {</span>
+<span id="tests-01-basics-loft-L122">    <span class="fn-call">test_epoch_seconds</span>();</span>
+<span id="tests-01-basics-loft-L123">    <span class="fn-call">test_combine</span>();</span>
+<span id="tests-01-basics-loft-L124">    <span class="fn-call">test_parse_and_fields</span>();</span>
+<span id="tests-01-basics-loft-L125">    <span class="fn-call">test_parse_datetime</span>();</span>
+<span id="tests-01-basics-loft-L126">    <span class="fn-call">test_parse_failure</span>();</span>
+<span id="tests-01-basics-loft-L127">    <span class="fn-call">test_roundtrip_format</span>();</span>
+<span id="tests-01-basics-loft-L128">    <span class="fn-call">test_arithmetic</span>();</span>
+<span id="tests-01-basics-loft-L129">    <span class="fn-call">test_differences</span>();</span>
+<span id="tests-01-basics-loft-L130">    <span class="fn-call">test_boundaries</span>();</span>
+<span id="tests-01-basics-loft-L131">    <span class="fn-call">test_iso_week</span>();</span>
+<span id="tests-01-basics-loft-L132">    <span class="fn-call">test_local_offset</span>();</span>
+<span id="tests-01-basics-loft-L133">    <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"all time tests passed"</span>);</span>
+<span id="tests-01-basics-loft-L134">}</span>
+</code></pre>
+<h2 id="tests-02-datetime-loft">tests/02-datetime.loft</h2>
+<pre class="src"><code><span id="tests-02-datetime-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-02-datetime-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-02-datetime-loft-L3"><span class="cm">//</span></span>
+<span id="tests-02-datetime-loft-L4"><span class="cm">// DateTime / Duration value-type tests (0.2.0).  Goldens hand-computed</span></span>
+<span id="tests-02-datetime-loft-L5"><span class="cm">// against the proleptic Gregorian calendar; every case must agree on the</span></span>
+<span id="tests-02-datetime-loft-L6"><span class="cm">// interpreter and --native (and wasm).</span></span>
+<span id="tests-02-datetime-loft-L7"><span class="kw">use</span> time;</span>
+<span id="tests-02-datetime-loft-L8"></span>
+<span id="tests-02-datetime-loft-L9"><span class="kw">fn</span> <span class="fn-call">test_construct_and_epoch</span>() {</span>
+<span id="tests-02-datetime-loft-L10">    <span class="cm">// absolute anchors — catch a systematic offset the round-trips would hide</span></span>
+<span id="tests-02-datetime-loft-L11">    e0 = time::<span class="fn-call">datetime</span>(<span class="nm">1970</span>, <span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L12">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((e0 <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">0</span>, <span class="st">"unix epoch is ms 0"</span>);</span>
+<span id="tests-02-datetime-loft-L13">    y2k = time::<span class="fn-call">datetime</span>(<span class="nm">2000</span>, <span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L14">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((y2k <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">946684800000</span>, <span class="st">"2000-01-01 known epoch ms"</span>);</span>
+<span id="tests-02-datetime-loft-L15">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((time::<span class="fn-call">date</span>(<span class="nm">2000</span>, <span class="nm">1</span>, <span class="nm">1</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">946684800000</span>, <span class="st">"date() midnight matches"</span>);</span>
+<span id="tests-02-datetime-loft-L16">}</span>
+<span id="tests-02-datetime-loft-L17"></span>
+<span id="tests-02-datetime-loft-L18"><span class="kw">fn</span> <span class="fn-call">test_fields</span>() {</span>
+<span id="tests-02-datetime-loft-L19">    d = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">13</span>, <span class="nm">30</span>, <span class="nm">7</span>);</span>
+<span id="tests-02-datetime-loft-L20">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">year</span>() == <span class="nm">2026</span>,  <span class="st">"year {d.year()}"</span>);</span>
+<span id="tests-02-datetime-loft-L21">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">month</span>() == <span class="nm">7</span>,    <span class="st">"month {d.month()}"</span>);</span>
+<span id="tests-02-datetime-loft-L22">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">day</span>() == <span class="nm">8</span>,      <span class="st">"day {d.day()}"</span>);</span>
+<span id="tests-02-datetime-loft-L23">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">hour</span>() == <span class="nm">13</span>,    <span class="st">"hour {d.hour()}"</span>);</span>
+<span id="tests-02-datetime-loft-L24">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">minute</span>() == <span class="nm">30</span>,  <span class="st">"minute {d.minute()}"</span>);</span>
+<span id="tests-02-datetime-loft-L25">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">second</span>() == <span class="nm">7</span>,   <span class="st">"second {d.second()}"</span>);</span>
+<span id="tests-02-datetime-loft-L26">    <span class="cm">// 2026-05-25 is a Monday (weekday 0)</span></span>
+<span id="tests-02-datetime-loft-L27">    mon = time::<span class="fn-call">date</span>(<span class="nm">2026</span>, <span class="nm">5</span>, <span class="nm">25</span>);</span>
+<span id="tests-02-datetime-loft-L28">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mon.<span class="fn-call">weekday</span>() == <span class="nm">0</span>, <span class="st">"weekday {mon.weekday()}"</span>);</span>
+<span id="tests-02-datetime-loft-L29">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mon.<span class="fn-call">weekday_name</span>() == <span class="st">"Mon"</span>, <span class="st">"wname {mon.weekday_name()}"</span>);</span>
+<span id="tests-02-datetime-loft-L30">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mon.<span class="fn-call">month_name</span>() == <span class="st">"May"</span>, <span class="st">"mname {mon.month_name()}"</span>);</span>
+<span id="tests-02-datetime-loft-L31">}</span>
+<span id="tests-02-datetime-loft-L32"></span>
+<span id="tests-02-datetime-loft-L33"><span class="kw">fn</span> <span class="fn-call">test_format</span>() {</span>
+<span id="tests-02-datetime-loft-L34">    d = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">13</span>, <span class="nm">30</span>, <span class="nm">7</span>);</span>
+<span id="tests-02-datetime-loft-L35">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{d:date}"</span> == <span class="st">"2026-07-08"</span>, <span class="st">"date {d:date}"</span>);</span>
+<span id="tests-02-datetime-loft-L36">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{d:time}"</span> == <span class="st">"13:30"</span>, <span class="st">"time {d:time}"</span>);</span>
+<span id="tests-02-datetime-loft-L37">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{d:seconds}"</span> == <span class="st">"13:30:07"</span>, <span class="st">"secs {d:seconds}"</span>);</span>
+<span id="tests-02-datetime-loft-L38">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{d:iso}"</span> == <span class="st">"2026-07-08T13:30:07Z"</span>, <span class="st">"iso {d:iso}"</span>);</span>
+<span id="tests-02-datetime-loft-L39">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{d}"</span> == <span class="st">"2026-07-08 13:30"</span>, <span class="st">"bare {d}"</span>);</span>
+<span id="tests-02-datetime-loft-L40">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{d:month}"</span> == <span class="st">"Jul"</span>, <span class="st">"month spec {d:month}"</span>);</span>
+<span id="tests-02-datetime-loft-L41">}</span>
+<span id="tests-02-datetime-loft-L42"></span>
+<span id="tests-02-datetime-loft-L43"><span class="kw">fn</span> <span class="fn-call">test_compare</span>() {</span>
+<span id="tests-02-datetime-loft-L44">    d1 = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">12</span>, <span class="nm">0</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L45">    d2 = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">13</span>, <span class="nm">30</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L46">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d1 &lt; d2, <span class="st">"op &lt;"</span>);</span>
+<span id="tests-02-datetime-loft-L47">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d2 &gt; d1, <span class="st">"op &gt;"</span>);</span>
+<span id="tests-02-datetime-loft-L48">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d1 &lt;= d1, <span class="st">"op &lt;="</span>);</span>
+<span id="tests-02-datetime-loft-L49">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d1 &gt;= d1, <span class="st">"op &gt;="</span>);</span>
+<span id="tests-02-datetime-loft-L50">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d1 == d1, <span class="st">"op =="</span>);</span>
+<span id="tests-02-datetime-loft-L51">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d1 != d2, <span class="st">"op !="</span>);</span>
+<span id="tests-02-datetime-loft-L52">}</span>
+<span id="tests-02-datetime-loft-L53"></span>
+<span id="tests-02-datetime-loft-L54"><span class="kw">fn</span> <span class="fn-call">test_arithmetic</span>() {</span>
+<span id="tests-02-datetime-loft-L55">    d1 = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">12</span>, <span class="nm">0</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L56">    d2 = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">13</span>, <span class="nm">30</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L57">    diff = d2 - d1;                     <span class="cm">// DateTime - DateTime -&gt; Duration</span></span>
+<span id="tests-02-datetime-loft-L58">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(diff == time::<span class="fn-call">minutes</span>(<span class="nm">90</span>), <span class="st">"diff is 90 minutes"</span>);</span>
+<span id="tests-02-datetime-loft-L59">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(diff.<span class="fn-call">total_minutes</span>() == <span class="nm">90</span>, <span class="st">"total_minutes {diff.total_minutes()}"</span>);</span>
+<span id="tests-02-datetime-loft-L60">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(diff.<span class="fn-call">total_seconds</span>() == <span class="nm">5400</span>, <span class="st">"total_seconds {diff.total_seconds()}"</span>);</span>
+<span id="tests-02-datetime-loft-L61">    d3 = d1 + time::<span class="fn-call">minutes</span>(<span class="nm">90</span>);         <span class="cm">// DateTime + Duration -&gt; DateTime</span></span>
+<span id="tests-02-datetime-loft-L62">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d3 == d2, <span class="st">"add duration reaches the later time"</span>);</span>
+<span id="tests-02-datetime-loft-L63">    back = d1.<span class="fn-call">minus</span>(time::<span class="fn-call">minutes</span>(<span class="nm">90</span>));  <span class="cm">// subtract a Duration (method)</span></span>
+<span id="tests-02-datetime-loft-L64">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(back == time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">10</span>, <span class="nm">30</span>, <span class="nm">0</span>), <span class="st">"minus a duration"</span>);</span>
+<span id="tests-02-datetime-loft-L65">}</span>
+<span id="tests-02-datetime-loft-L66"></span>
+<span id="tests-02-datetime-loft-L67"><span class="kw">fn</span> <span class="fn-call">test_duration</span>() {</span>
+<span id="tests-02-datetime-loft-L68">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hours</span>(<span class="nm">1</span>) &lt; time::<span class="fn-call">hours</span>(<span class="nm">2</span>), <span class="st">"duration compare"</span>);</span>
+<span id="tests-02-datetime-loft-L69">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((time::<span class="fn-call">hours</span>(<span class="nm">1</span>) + time::<span class="fn-call">minutes</span>(<span class="nm">30</span>)).<span class="fn-call">total_minutes</span>() == <span class="nm">90</span>, <span class="st">"add durations"</span>);</span>
+<span id="tests-02-datetime-loft-L70">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">days</span>(<span class="nm">1</span>).<span class="fn-call">total_hours</span>() == <span class="nm">24</span>, <span class="st">"day is 24h"</span>);</span>
+<span id="tests-02-datetime-loft-L71">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weeks</span>(<span class="nm">1</span>).<span class="fn-call">total_days</span>() == <span class="nm">7</span>, <span class="st">"week is 7d"</span>);</span>
+<span id="tests-02-datetime-loft-L72">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((time::<span class="fn-call">hours</span>(<span class="nm">2</span>) * <span class="nm">3</span>) == time::<span class="fn-call">hours</span>(<span class="nm">6</span>), <span class="st">"scale duration"</span>);</span>
+<span id="tests-02-datetime-loft-L73">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">minutes</span>(<span class="nm">90</span>).<span class="fn-call">negate</span>().<span class="fn-call">total_minutes</span>() == -<span class="nm">90</span>, <span class="st">"negate"</span>);</span>
+<span id="tests-02-datetime-loft-L74">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{time::minutes(90)}"</span> == <span class="st">"1:30:00"</span>, <span class="st">"dur fmt {time::minutes(90)}"</span>);</span>
+<span id="tests-02-datetime-loft-L75">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{time::hours(25)}"</span> == <span class="st">"25:00:00"</span>, <span class="st">"dur &gt;24h"</span>);</span>
+<span id="tests-02-datetime-loft-L76">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{time::minutes(-90)}"</span> == <span class="st">"-1:30:00"</span>, <span class="st">"negative dur fmt"</span>);</span>
+<span id="tests-02-datetime-loft-L77">}</span>
+<span id="tests-02-datetime-loft-L78"></span>
+<span id="tests-02-datetime-loft-L79"><span class="kw">fn</span> <span class="fn-call">test_conversions</span>() {</span>
+<span id="tests-02-datetime-loft-L80">    d1 = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">12</span>, <span class="nm">0</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L81">    epoch = d1 <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;              <span class="cm">// DateTime -&gt; integer</span></span>
+<span id="tests-02-datetime-loft-L82">    back = epoch <span class="kw">as</span> <span class="en">DateTime</span>;           <span class="cm">// integer  -&gt; DateTime</span></span>
+<span id="tests-02-datetime-loft-L83">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(back == d1, <span class="st">"int round-trip"</span>);</span>
+<span id="tests-02-datetime-loft-L84">    parsed = <span class="st">"2026-07-08"</span> <span class="kw">as</span> <span class="en">DateTime</span>;  <span class="cm">// text -&gt; DateTime (total)</span></span>
+<span id="tests-02-datetime-loft-L85">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parsed == time::<span class="fn-call">date</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>), <span class="st">"parse-on-cast date"</span>);</span>
+<span id="tests-02-datetime-loft-L86">    parsed2 = <span class="st">"2026-07-08T13:30:00"</span> <span class="kw">as</span> <span class="en">DateTime</span>;</span>
+<span id="tests-02-datetime-loft-L87">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parsed2 == time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">13</span>, <span class="nm">30</span>, <span class="nm">0</span>), <span class="st">"parse-on-cast datetime"</span>);</span>
+<span id="tests-02-datetime-loft-L88">}</span>
+<span id="tests-02-datetime-loft-L89"></span>
+<span id="tests-02-datetime-loft-L90"><span class="kw">fn</span> <span class="fn-call">test_now_and_vector</span>() {</span>
+<span id="tests-02-datetime-loft-L91">    <span class="cm">// now() is a real wall-clock DateTime (via the total int-&gt;DateTime cast)</span></span>
+<span id="tests-02-datetime-loft-L92">    cur = <span class="fn-call"><a href="stdlib-time.html">now</a></span>() <span class="kw">as</span> <span class="en">DateTime</span>;</span>
+<span id="tests-02-datetime-loft-L93">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cur &gt; time::<span class="fn-call">datetime</span>(<span class="nm">2020</span>, <span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>), <span class="st">"now is after 2020"</span>);</span>
+<span id="tests-02-datetime-loft-L94">    <span class="cm">// value structs are zero-cost as vector elements — read one back out</span></span>
+<span id="tests-02-datetime-loft-L95">    events = [time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">1</span>, <span class="nm">1</span>, <span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>),</span>
+<span id="tests-02-datetime-loft-L96">              time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">6</span>, <span class="nm">15</span>, <span class="nm">9</span>, <span class="nm">0</span>, <span class="nm">0</span>),</span>
+<span id="tests-02-datetime-loft-L97">              time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">12</span>, <span class="nm">31</span>, <span class="nm">23</span>, <span class="nm">59</span>, <span class="nm">59</span>)];</span>
+<span id="tests-02-datetime-loft-L98">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(events[<span class="nm">1</span>].<span class="fn-call">month</span>() == <span class="nm">6</span>, <span class="st">"vector element field read"</span>);</span>
+<span id="tests-02-datetime-loft-L99">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{events[2]:date}"</span> == <span class="st">"2026-12-31"</span>, <span class="st">"vector element format"</span>);</span>
+<span id="tests-02-datetime-loft-L100">    <span class="cm">// copy semantics: mutating a local copy leaves the source untouched</span></span>
+<span id="tests-02-datetime-loft-L101">    first = events[<span class="nm">0</span>];</span>
+<span id="tests-02-datetime-loft-L102">    first = first + time::<span class="fn-call">days</span>(<span class="nm">10</span>);</span>
+<span id="tests-02-datetime-loft-L103">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(events[<span class="nm">0</span>].<span class="fn-call">day</span>() == <span class="nm">1</span>, <span class="st">"value-struct copy: source element unchanged"</span>);</span>
+<span id="tests-02-datetime-loft-L104">}</span>
+<span id="tests-02-datetime-loft-L105"></span>
+<span id="tests-02-datetime-loft-L106"><span class="kw">fn</span> <span class="fn-call">test_iso_and_millis</span>() {</span>
+<span id="tests-02-datetime-loft-L107">    d = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">5</span>, <span class="nm">25</span>, <span class="nm">8</span>, <span class="nm">0</span>, <span class="nm">0</span>);   <span class="cm">// Monday</span></span>
+<span id="tests-02-datetime-loft-L108">    <span class="cm">// the value-struct methods delegate to the integer API — cross-check on the</span></span>
+<span id="tests-02-datetime-loft-L109">    <span class="cm">// same instant (01-basics pins the integer fns to hand-goldens)</span></span>
+<span id="tests-02-datetime-loft-L110">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">iso_year</span>() == time::<span class="fn-call">iso_year</span>(d <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>), <span class="st">"iso_year delegates"</span>);</span>
+<span id="tests-02-datetime-loft-L111">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">iso_week</span>() == time::<span class="fn-call">iso_week</span>(d <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>), <span class="st">"iso_week delegates"</span>);</span>
+<span id="tests-02-datetime-loft-L112">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">iso_week</span>() &gt;= <span class="nm">1</span> &amp;&amp; d.<span class="fn-call">iso_week</span>() &lt;= <span class="nm">53</span>, <span class="st">"iso_week range {d.iso_week()}"</span>);</span>
+<span id="tests-02-datetime-loft-L113">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.<span class="fn-call">to_millis</span>() == (d <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>), <span class="st">"to_millis == as integer"</span>);</span>
+<span id="tests-02-datetime-loft-L114">}</span>
+<span id="tests-02-datetime-loft-L115"></span>
+<span id="tests-02-datetime-loft-L116"><span class="kw">fn</span> <span class="fn-call">test_duration_full</span>() {</span>
+<span id="tests-02-datetime-loft-L117">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((time::<span class="fn-call">hours</span>(<span class="nm">2</span>) - time::<span class="fn-call">minutes</span>(<span class="nm">30</span>)) == time::<span class="fn-call">minutes</span>(<span class="nm">90</span>), <span class="st">"duration subtract"</span>);</span>
+<span id="tests-02-datetime-loft-L118">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hours</span>(<span class="nm">1</span>) &lt;= time::<span class="fn-call">hours</span>(<span class="nm">1</span>), <span class="st">"dur &lt;="</span>);</span>
+<span id="tests-02-datetime-loft-L119">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hours</span>(<span class="nm">2</span>) &gt;= time::<span class="fn-call">hours</span>(<span class="nm">1</span>), <span class="st">"dur &gt;="</span>);</span>
+<span id="tests-02-datetime-loft-L120">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hours</span>(<span class="nm">2</span>) &gt; time::<span class="fn-call">hours</span>(<span class="nm">1</span>), <span class="st">"dur &gt;"</span>);</span>
+<span id="tests-02-datetime-loft-L121">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hours</span>(<span class="nm">1</span>) != time::<span class="fn-call">hours</span>(<span class="nm">2</span>), <span class="st">"dur !="</span>);</span>
+<span id="tests-02-datetime-loft-L122">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">minutes</span>(<span class="nm">90</span>).<span class="fn-call">total_millis</span>() == <span class="nm">5400000</span>, <span class="st">"total_millis"</span>);</span>
+<span id="tests-02-datetime-loft-L123">}</span>
+<span id="tests-02-datetime-loft-L124"></span>
+<span id="tests-02-datetime-loft-L125"><span class="kw">fn</span> <span class="fn-call">test_format_aliases</span>() {</span>
+<span id="tests-02-datetime-loft-L126">    mon = time::<span class="fn-call">date</span>(<span class="nm">2026</span>, <span class="nm">5</span>, <span class="nm">25</span>);   <span class="cm">// Monday</span></span>
+<span id="tests-02-datetime-loft-L127">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{mon:wday}"</span> == <span class="st">"Mon"</span>, <span class="st">"wday spec {mon:wday}"</span>);</span>
+<span id="tests-02-datetime-loft-L128">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{mon:weekday}"</span> == <span class="st">"Mon"</span>, <span class="st">"weekday alias {mon:weekday}"</span>);</span>
+<span id="tests-02-datetime-loft-L129">    d = time::<span class="fn-call">datetime</span>(<span class="nm">2026</span>, <span class="nm">7</span>, <span class="nm">8</span>, <span class="nm">13</span>, <span class="nm">30</span>, <span class="nm">7</span>);</span>
+<span id="tests-02-datetime-loft-L130">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{d:secs}"</span> == <span class="st">"13:30:07"</span>, <span class="st">"secs alias {d:secs}"</span>);</span>
+<span id="tests-02-datetime-loft-L131">}</span>
+<span id="tests-02-datetime-loft-L132"></span>
+<span id="tests-02-datetime-loft-L133"><span class="kw">fn</span> <span class="fn-call">test_edge_cases</span>() {</span>
+<span id="tests-02-datetime-loft-L134">    <span class="cm">// pre-1970 (negative epoch ms) still fields + formats correctly</span></span>
+<span id="tests-02-datetime-loft-L135">    old = time::<span class="fn-call">datetime</span>(<span class="nm">1960</span>, <span class="nm">6</span>, <span class="nm">15</span>, <span class="nm">12</span>, <span class="nm">0</span>, <span class="nm">0</span>);</span>
+<span id="tests-02-datetime-loft-L136">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(old.<span class="fn-call">year</span>() == <span class="nm">1960</span>, <span class="st">"pre-1970 year {old.year()}"</span>);</span>
+<span id="tests-02-datetime-loft-L137">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(old.<span class="fn-call">month</span>() == <span class="nm">6</span>, <span class="st">"pre-1970 month"</span>);</span>
+<span id="tests-02-datetime-loft-L138">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(old.<span class="fn-call">day</span>() == <span class="nm">15</span>, <span class="st">"pre-1970 day"</span>);</span>
+<span id="tests-02-datetime-loft-L139">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((old <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>) &lt; <span class="nm">0</span>, <span class="st">"pre-1970 is negative ms"</span>);</span>
+<span id="tests-02-datetime-loft-L140">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{old:date}"</span> == <span class="st">"1960-06-15"</span>, <span class="st">"pre-1970 date fmt {old:date}"</span>);</span>
+<span id="tests-02-datetime-loft-L141">    <span class="cm">// garbage text -&gt; DateTime is a TOTAL best-effort cast (epoch 0); the fallible</span></span>
+<span id="tests-02-datetime-loft-L142">    <span class="cm">// integer parse is the checked path</span></span>
+<span id="tests-02-datetime-loft-L143">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="st">"garbage"</span> <span class="kw">as</span> <span class="en">DateTime</span>).<span class="fn-call">to_millis</span>() == <span class="nm">0</span>, <span class="st">"total cast of garbage -&gt; epoch"</span>);</span>
+<span id="tests-02-datetime-loft-L144">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!time::<span class="fn-call">parse</span>(<span class="st">"garbage"</span>), <span class="st">"checked parse returns null on garbage"</span>);</span>
+<span id="tests-02-datetime-loft-L145">}</span>
+</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>
