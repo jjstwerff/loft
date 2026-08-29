@@ -1291,10 +1291,15 @@ impl Output<'_> {
                 // both backends is what that fix set out to do.  The static test it replaces
                 // was an over-approximation in one direction only: it kept the buffer for
                 // every callee that DECLARED a delivery, filled or not.
+                //
+                // The KEPT one then needs an owner, and the destination's static type may
+                // say it owns nothing — a local that borrows on one assignment and receives
+                // this store on another (loft#1183).  `cr_fnref_buf` records it against the
+                // running frame and `FnRefBufGuard` releases it there, which is the
+                // interpreter's `release_fnref_bufs` on this side.
                 write!(
                     w,
-                    "; if __vc_r.store_nr != __vc_hbuf.store_nr {{ \
-                     OpFreeRef(cell, __vc_hbuf, \"__vc_hbuf\"); }} __vc_r }}"
+                    "; codegen_runtime::cr_fnref_buf(cell, __vc_r, __vc_hbuf); __vc_r }}"
                 )?;
             }
             if is_text_return {

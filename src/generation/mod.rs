@@ -4896,10 +4896,25 @@ extern crate loft;"
                 } else {
                     String::new()
                 };
+                // loft#1183 — a fn-ref dispatch arm that pre-allocates a vector return
+                // buffer hands the DELIVERED one to a destination whose static type may
+                // say it owns nothing, so the buffer needs the frame as its owner.  Every
+                // instrumented frame carries the guard, not only the ones that ALLOCATE a
+                // buffer: a heap-returning frame passes its buffers to its caller, so the
+                // frame that ends up releasing one is usually not the frame that made it,
+                // and a gap in the chain is a store nothing frees.  A frame with none pays
+                // two `Cell` reads (`codegen_runtime::FnRefBufGuard`).
+                let hands_up = matches!(
+                    def.returned().base(),
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                );
+                let fnref_guard = format!(
+                    "\n  let _fnref_guard = codegen_runtime::FnRefBufGuard::new(cell, {hands_up});"
+                );
                 self.call_stack_prefix = Some(format!(
                     "{live_check}  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
-                     let _call_guard = codegen_runtime::CallGuard;{vdb_prologue}"
+                     let _call_guard = codegen_runtime::CallGuard;{fnref_guard}{vdb_prologue}"
                 ));
                 self.output_block(w, body, returns_text, true)?;
                 self.call_stack_prefix = None;

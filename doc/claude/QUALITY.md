@@ -2291,7 +2291,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 658 | 297 | 5 | **356** |
+| 658 | 298 | 5 | **355** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2312,7 +2312,9 @@ and is counted opaque for want of a wrapper to see through, and 651 · 291 until
 the OTHER direction: it sees through by construction.  loft#1190 then moved it to 658 · 297 with
 `use_analysis::copy_allocates_nothing`'s inner walk, which asks *"does duplicating this allocate"*
 of a value struct's fields: it discriminates through `.base()`, so it lands on the seeing-through
-side and leaves the opaque column where it was.  B6w's four were: `needs_nullable_wrap`
+side and leaves the opaque column where it was, and loft#1183 to 658 · 298 by giving the native
+function prologue the heap-return test that arms `FnRefBufGuard` — asked through `.base()`, so a
+`τ?` heap return is read as the heap return it is.  B6w's four were: `needs_nullable_wrap`
 asks through `.base()` and sees through,
 while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are opaque ON
 PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored tuple

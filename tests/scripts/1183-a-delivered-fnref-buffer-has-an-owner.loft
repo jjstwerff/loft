@@ -17,15 +17,16 @@
 // call site mints its return buffer as a caller LOCAL that scope exit frees, so the delivery
 // has an owner whatever the destination's type says.
 //
-// @falsified-at: fbccdb67 — interpret leak `kt=23 main_vector<integer>×9` -> none; native
-// INERT at ×9 both sides, which is the remaining half this file names below rather than a gap
-// in it.  `make falsify`'s verdict is the conservative AND of the two rows.
+// `--native` reaches the same rule through `codegen_runtime::FnRefBufGuard`, and reads the
+// frame's declared RETURN TYPE where the interpreter reads the store that came back: a frame
+// that can hand a heap value on leaves its buffers to its caller, every other frame releases
+// them, and the chain terminates at `main`, whose return is `void`.  That difference is why
+// the forwarding cells below exist — a buffer delivered one or two frames down is released by
+// a frame that never saw the call site.
 //
-// ⚠ **`--native` still leaks these cells, and that half is loft#1183's remaining scope.**  Its
-// buffer is a block-local inside the dispatch arm (`__vc_hbuf`), freed there when the returned
-// store DIFFERS and kept when it does not — the same fact, with nowhere to hand it to.  The
-// cells below are scored on the interpreter's leak channel; running this file under
-// `LOFT_STRICT_STORES=1 loft --native` reports what is still open.
+// @falsified-at: fbccdb67 — interpret leak `kt=23 main_vector<integer>×9` -> none; native
+// `kt=23 main_vector<integer>×4` -> none.  `make falsify`'s verdict is the conservative AND of
+// the two rows.
 
 struct Q { xs: vector<integer> }
 
@@ -101,11 +102,64 @@ fn test_two_different_locals_are_unchanged() {
   }
 }
 
+fn forward_it(f: fn(integer) -> vector<integer>, v: integer) -> vector<integer> { f(v) }
+fn forward_twice(f: fn(integer) -> vector<integer>, v: integer) -> vector<integer> {
+  forward_it(f, v)
+}
+fn count_it(f: fn(integer) -> vector<integer>, v: integer) -> integer { len(f(v)) }
+
+fn test_a_forwarding_frame_hands_the_delivery_on() {
+  // The buffer is delivered in `forward_it`'s frame and READ in this one, so the frame that
+  // made it is not the frame that may release it.  Releasing at the maker's exit is a
+  // use-after-free; never releasing is the leak this file is about.
+  fresh = fn(v: integer) -> vector<integer> { [v, v + 1] };
+  for i in 0..4 {
+    r = forward_it(fresh, 7);
+    assert(len(r) == 2 && r[1] == 8, "one frame down {i}: got {len(r)}");
+  }
+}
+
+fn test_two_forwarding_frames() {
+  // Two frames in the way: the hand-up has to be a CHAIN, not one step.  With only the
+  // frames that allocate a buffer carrying the release, this row leaked four stores on
+  // `--native` while the one-frame row above was already clean.
+  fresh = fn(v: integer) -> vector<integer> { [v, v + 1] };
+  for i in 0..4 {
+    r = forward_twice(fresh, 7);
+    assert(len(r) == 2 && r[1] == 8, "two frames down {i}: got {len(r)}");
+  }
+}
+
+fn test_a_scalar_returning_holder_releases_its_own() {
+  // The opposite direction: this frame CANNOT hand a heap value on, so the buffer dies with
+  // it rather than travelling.  Eight calls, and the count must not grow with them.
+  fresh = fn(v: integer) -> vector<integer> { [v, v + 1] };
+  for i in 0..8 {
+    assert(count_it(fresh, 7) == 2, "scalar holder {i}");
+  }
+}
+
+fn test_a_lambda_that_hands_back_a_borrow() {
+  // The control for the arm's OTHER leg: the callee delivers nothing, so the buffer is
+  // unused and released at the call, and the source it borrowed must survive.
+  q = Q { xs: [1, 2, 3] };
+  peek = fn(z: Q) -> vector<integer> { z.xs };
+  for i in 0..4 {
+    r = peek(q);
+    assert(len(r) == 3, "borrowed delivery {i}: got {len(r)}");
+  }
+  assert(len(q.xs) == 3, "the source survives: got {len(q.xs)}");
+}
+
 fn main() {
   test_one_local_taking_an_owned_result_and_a_borrowed_one();
   test_the_borrow_loop_first();
   test_no_loop_at_all();
   test_the_plain_function_twin_is_unchanged();
   test_two_different_locals_are_unchanged();
+  test_a_forwarding_frame_hands_the_delivery_on();
+  test_two_forwarding_frames();
+  test_a_scalar_returning_holder_releases_its_own();
+  test_a_lambda_that_hands_back_a_borrow();
   print("1183-a-delivered-fnref-buffer-has-an-owner ok\n");
 }

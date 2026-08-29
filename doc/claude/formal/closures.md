@@ -106,10 +106,18 @@ static reading is right for one case and wrong for the other, which is what says
 is not statically answerable at all — so the answer is not to answer it. **The store is owned
 by the frame that HOLDS it, and ownership travels with the return value:** `fn_return` hands
 the delivered buffer up one frame instead of forgetting it, and the caller's own return
-releases it. The interpreter does that now (loft#1183's guard); `--native` still frees its
-`__vc_hbuf` inside the dispatch arm and keeps the delivered one with nowhere to hand it to,
-which is the remaining half of all three. Measured repairs that do NOT work are recorded on
-each issue.
+releases it. BOTH backends do that now — the interpreter through `release_fnref_bufs`, and
+`--native` through `codegen_runtime::FnRefBufGuard`, which reads the frame's declared return
+type where the interpreter reads the store that came back (loft#1183, closed).
+
+⚠ **That closed ONE of the three, not all three, and the difference is what the remaining two
+are about.** The hand-up answers for a store the CALL SITE allocated; D-clo-12 and D-clo-13
+hand back a store the call site never made — the closure's capture — and give it to a caller
+whose type reads it as owned. Measured after the hand-up landed on both backends: loft#1183's
+guard is clean on both, while loft#1185 still reports seven use-after-free reads and
+loft#1186's present arm six, unchanged on either backend. So the two open entries are a
+question about the CAPTURE, not about the buffer, and the buffer's cure cannot reach them.
+Measured repairs that do NOT work are recorded on each issue.
 D-clo-11 — a captured STRUCT taken by the caller's bind — D-clo-10 — a captured collection
 taken the same way — D-clo-9 — a captured record FREED by a caller that lifted a fn-ref tail
 — and D-clo-8 — a captured `vector<(…)>` unpacked rather than shared — were opened and closed
