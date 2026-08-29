@@ -40,8 +40,27 @@
 // unconditional and the rows that must NOT fill a buffer are what says the runtime free
 // carries them.
 //
+// The CAPTURE axis is the one the first eight cells hold fixed, and it carries two more rows.
+// A lambda's reserved buffer is BOUND, not renamed onto: a rename makes the work-ref pass 2
+// mints the argument, and that var comes after `__closure`, so the callee's argument slots stop
+// matching the attribute order the CALL SITE lowers against.  `CallRef` then wrote the closure
+// into the buffer's slot and a captured `base` read 0 — silently, and on the interpreter only,
+// since `--native` derives its argument list from the attributes alone.  And a capture-ROOTED
+// tail that nonetheless DELIVERS (`{ cap.v.map(…) }`) used to be carved out of the reservation
+// by a pass-1 read of the tail, which is this file's own sentence one more time: pass 1 does not
+// desugar a comprehension, so that body leaves the very tail `{ cap.v }` leaves.  The carve-out
+// is gone — `classify_ret_promotion` still answers `SkipCaptured` for a body that really hands
+// the capture back, so the buffer stays unfilled and out of the return deps, which is what lets
+// the runtime free release it (loft#1182's guard measures that half).
+//
 // @falsified-at: c7d4270c — interpret exit 101 -> 0, interpret panicked -> clean, native exit
 // 101 -> 0, native panicked -> clean.
+//
+// @falsified-at: 6ea0f6d7 — interpret exit 101 -> 0, interpret panicked -> clean, native exit
+// 101 -> 0, native panicked -> clean.  That control ABORTS on the capture-rooted map row, so it
+// cannot reach a value cell; the wrong-value half was falsified separately, on a copy of this
+// file with that one row removed — interpret 1 assertion failure -> 0, native INERT, which is
+// the backend split the row records rather than a gap in it.
 //
 // ⚠ Every cell binds to its OWN local.  Two lambda results sharing one local across sibling
 // loops loses a free (loft#1183, whose native half loses both), which would score this file on
@@ -120,6 +139,62 @@ fn test_a_map_tail_bound_before_the_return() {
   }
 }
 
+struct Held { v: vector<integer>, n: integer }
+
+fn test_a_map_tail_beside_a_captured_scalar() {
+  // The CAPTURE axis, which the two map cells above hold fixed at "parameter only".  The
+  // reserved buffer is BOUND, not renamed onto: a rename makes the work-ref pass 2 mints the
+  // argument, and it comes after `__closure`, so the callee's argument slots stop matching the
+  // attribute order the call site lowers against.  Measured, `CallRef` then wrote the closure
+  // into the buffer's slot and `base` read 0 — silently, and only on the interpreter, because
+  // `--native` derives its argument list from the attributes alone.
+  base = 5;
+  g = fn(v: integer) -> vector<integer> { xs = [base, 2]; xs.map(|x| { x + 1 }) };
+  for i in 0..4 {
+    n = g(7);
+    assert(len(n) == 2, "map beside a capture {i}: len {len(n)}, want 2");
+    assert(n[0] == 6 && n[1] == 3, "map beside a capture {i}: got {n[0]},{n[1]}, want 6,3");
+  }
+  assert(base == 5, "the capture is unchanged: {base}");
+}
+
+fn test_a_filter_tail_beside_a_captured_scalar() {
+  // The same, through the other comprehension — and it moved the LENGTH as well as the values,
+  // which is why every cell here asserts both.
+  base = 5;
+  g = fn(v: integer) -> vector<integer> { xs = [base, 2]; xs.filter(|x| { x > 1 }) };
+  for i in 0..4 {
+    o = g(7);
+    assert(len(o) == 2, "filter beside a capture {i}: len {len(o)}, want 2");
+    assert(o[0] == 5 && o[1] == 2, "filter beside a capture {i}: got {o[0]},{o[1]}, want 5,2");
+  }
+}
+
+fn test_a_comprehension_tail_reading_a_captured_scalar() {
+  base = 5;
+  g = fn(v: integer) -> vector<integer> { [for i in 0..2 { base + i }] };
+  for i in 0..4 {
+    p = g(0);
+    assert(len(p) == 2, "comprehension over a capture {i}: len {len(p)}, want 2");
+    assert(p[0] == 5 && p[1] == 6, "comprehension over a capture {i}: got {p[0]},{p[1]}");
+  }
+}
+
+fn test_a_map_applied_to_a_captured_collection() {
+  // A capture-ROOTED tail that nonetheless DELIVERS.  It used to be carved out of the
+  // reservation by a pass-1 read of the tail — and pass 1 does not desugar a comprehension, so
+  // `{ cap.v.map(…) }` leaves the very tail `{ cap.v }` leaves.  The carve-out could not tell
+  // them apart and this row aborted the compiler on the H5 contract.
+  cap = Held { v: [9, 8], n: 2 };
+  g = fn(v: integer) -> vector<integer> { cap.v.map(|x| { x * 2 }) };
+  for i in 0..4 {
+    q = g(0);
+    assert(len(q) == 2, "map over a captured collection {i}: len {len(q)}, want 2");
+    assert(q[0] == 18 && q[1] == 16, "map over a captured collection {i}: got {q[0]},{q[1]}");
+    assert(len(cap.v) == 2 && cap.v[0] == 9, "the capture survives {i}: {len(cap.v)}");
+  }
+}
+
 fn main() {
   test_a_minted_literal_tail();
   test_a_branch_join_tail();
@@ -129,5 +204,9 @@ fn main() {
   test_a_captured_collection_tail();
   test_a_map_tail_built_from_a_local();
   test_a_map_tail_bound_before_the_return();
+  test_a_map_tail_beside_a_captured_scalar();
+  test_a_filter_tail_beside_a_captured_scalar();
+  test_a_comprehension_tail_reading_a_captured_scalar();
+  test_a_map_applied_to_a_captured_collection();
   print("1178-a-declared-collection-lambda-gets-its-buffer ok\n");
 }

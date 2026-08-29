@@ -2333,12 +2333,17 @@ impl Parser {
             // the bodies that need no buffer, and pass 2 lowers the `map` into a fresh store
             // (loft#1178).  The two passes are not looking at the same tail.
             //
-            // A CAPTURE tail is the one exception, and it is a fact rather than a prediction:
-            // the store belongs to the frame that made it, so there is nothing to deliver and
-            // a buffer would be declared and ignored (loft#1182).
+            // A CAPTURE tail was carved out here as *"a fact rather than a prediction"*, and it
+            // is neither: it is the same pass-1 read this sweep exists to stop trusting.  Pass 1
+            // does not desugar a comprehension, so `{ cap.v.map(…) }` leaves the very tail
+            // `{ cap.xs }` leaves — a projection off the capture — while pass 2 lowers it into a
+            // fresh store and grows the attribute.  Reserving for the capture tail as well costs
+            // nothing: `classify_ret_promotion` still answers `SkipCaptured` for a body that
+            // really does hand back the capture, so the buffer stays unfilled and out of the
+            // return deps, which is what lets `State::fn_return` (loft#1179) and the native
+            // dispatch's same value-question release it.  loft#1182's guard measures that.
             let delivers_a_collection =
-                matches!(def.returned().ret_promo_base(), Type::Vector(_, _))
-                    && !self.tail_root_is_a_capture(def);
+                matches!(def.returned().ret_promo_base(), Type::Vector(_, _));
             // loft#1188 — a declared `-> S` / record-enum lambda is reserved for too, and for
             // the reason #675 gave: what pass 1 can classify is not a property of the
             // SPELLING but of what was RESOLVED when it read the body.  `fn(v: integer) -> P
@@ -11343,26 +11348,6 @@ impl Parser {
     /// of the closure record.
     fn tail_is_a_place(&self, def: &crate::data::Definition) -> bool {
         self.tail_place_root(def).is_some()
-    }
-
-    /// Is the tail's root variable a CAPTURE — an attribute of this lambda's closure record?
-    ///
-    /// The question `reserve_late_return_buffers` needs, and the one no test on the tail's
-    /// SHAPE can answer: `{ cap }` and `{ xs = [1, 2]; xs.map(…) }` both reach a bare `Var`
-    /// on pass 1, and only the first names something the frame outside already owns.  A
-    /// capture needs no buffer for the reason loft#1182 gives — there is nothing to place —
-    /// while the second builds its answer and must have one.
-    fn tail_root_is_a_capture(&self, def: &crate::data::Definition) -> bool {
-        let Some(root) = self.tail_place_root(def) else {
-            return false;
-        };
-        let rec = def.closure_record();
-        rec != u32::MAX
-            && self
-                .data
-                .def(rec)
-                .attr_names
-                .contains_key(def.variables().name(root))
     }
 
     /// The root variable of a PLACE tail — `None` when the tail is not a place.

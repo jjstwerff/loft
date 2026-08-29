@@ -12301,20 +12301,20 @@ impl Parser {
             || a1b_site
             || (ctx.site == RetSite::MidReturn
                 && matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))));
-        // loft#1188 — a LAMBDA whose RECORD buffer was reserved between the passes BINDS to
-        // it instead of renaming onto it.  The placeholder was minted before pass 2 appended
-        // the `__closure` argument, and the work-ref this tail mints comes after BOTH; the
-        // rename retires the placeholder and makes that later var the argument, which puts
-        // the callee's argument slots out of the attribute order the CALL SITE lowers
-        // against.  Measured: `CallRef` wrote the closure into the buffer's slot, the body
-        // read a null closure and every call answered a zeroed record.  Binding keeps the
-        // reserved var, so the geometry is the one a lambda whose types resolved in pass 1
-        // already has.  The collection lambdas #1178 reserves for keep the rename — their
-        // buffer is a `__vdb_N` the desugar mints, and the shape was measured on that path.
+        // loft#1188 — a LAMBDA whose buffer was RESERVED between the passes BINDS to it instead
+        // of renaming onto it.  The placeholder is minted before pass 2 appends the `__closure`
+        // argument, and the work-ref this tail mints comes after BOTH; the rename retires the
+        // placeholder and makes that later var the argument, which puts the callee's argument
+        // slots out of the attribute order the CALL SITE lowers against.  Measured on both
+        // legs: `CallRef` wrote the closure into the buffer's slot, so a record return answered
+        // a zeroed record, and a CAPTURE inside a comprehension-tailed collection lambda read
+        // its integer as 0 — silently, and only on the interpreter, because `--native` derives
+        // its argument list from the attributes alone.  Binding keeps the reserved var, so the
+        // geometry is the one a lambda whose types all resolved in pass 1 already has.
         let lambda_binds_reserved_buffer = !ctx.is_plain_fn
             && matches!(
                 ctx.ret.ret_promo_base(),
-                Type::Reference(_, _) | Type::Enum(_, true, _)
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
             )
             && self
                 .data
