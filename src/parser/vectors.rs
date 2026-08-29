@@ -2748,7 +2748,7 @@ impl Parser {
         let binding_origin = if self.first_pass || is_field {
             None
         } else {
-            self.mv_field_origin.get(&vec).cloned()
+            self.vars.mv_field_origin.get(&vec).cloned()
         };
         //
         // `vec` is deliberately KEPT — the binding is a real variable and everything below

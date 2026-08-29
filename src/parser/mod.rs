@@ -799,21 +799,6 @@ pub struct Parser {
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches.
     pub(crate) is_capture_bindings: Vec<Value>,
-    /// loft#1160 — the field access a variant's payload BINDING was projected from, by the
-    /// binding's variable number (`_mv_<field> = OpGetField(subject, off, tp)`).
-    ///
-    /// A write spelled through the binding must mean what the same write spelled through the
-    /// field means. `Stores::record_finish` maintains a linked collection group by walking
-    /// the FIELD's `other_indexes`, so it needs the field the write is spelled through; a
-    /// binding is a bare variable and carries none, so the append emitted
-    /// `OpNewRecord(binding, coll_tp, u16::MAX)` and the sibling walk was skipped — the
-    /// record reached the member named and no other, silently.
-    ///
-    /// Recording the projection lets the append resolve the binding back to the field access
-    /// and take the ordinary field path, rather than teaching each downstream site what a
-    /// binding is. Only single-variant bindings are entered: a capture spanning ALTERNATIVES
-    /// (`is A | B { f }`) selects its origin from the runtime tag, so it HAS no one field.
-    pub(crate) mv_field_origin: std::collections::HashMap<u16, (Value, Type)>,
     /// `--show-types --trace`: when `true`, `parse_part` appends one
     /// trace line per resolved sub-expression (after each `.field`,
     /// `.tuple_idx`, `[idx]` step).  Surfaces dep-tracking flow that
@@ -1157,7 +1142,6 @@ impl Parser {
             in_par_body: false,
             is_capture_aliases: Vec::new(),
             is_capture_bindings: Vec::new(),
-            mv_field_origin: std::collections::HashMap::new(),
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
             in_explicit_cast: false,

@@ -4853,7 +4853,7 @@ impl Parser {
                             // loft#1160 — remember which field this binding projects, so a
                             // write spelled through it can take the field path and reach the
                             // linked group the field belongs to.
-                            self.mv_field_origin.insert(
+                            self.vars.mv_field_origin.insert(
                                 v_nr,
                                 (
                                     field_read.clone(),
@@ -8953,7 +8953,7 @@ impl Parser {
                             self.vars.defined(v_nr);
                             // loft#1160 — the field this binding projects, so a write spelled
                             // through it takes the field path (see `mv_field_origin`).
-                            self.mv_field_origin.insert(
+                            self.vars.mv_field_origin.insert(
                                 v_nr,
                                 (
                                     field_read.clone(),
