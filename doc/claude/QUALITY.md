@@ -4017,6 +4017,27 @@ on both backends, and three of them were not clean.
   the one this issue was filed against was the safe half.  So the resolution now gates BOTH,
   ahead of every signature-carried fact: a `-> P` says the same thing whether the closure
   mints, hands back the caller's argument, or hands back a capture.
+- **loft#1179 — CLOSED, and it was the formal register's own open deviation.** A fn-ref call
+  site allocates one store per hidden return attribute, because it cannot know which function
+  the slot holds — and a callee that delivers its return some other way left it owned by
+  nobody.  `formal/closures.md` D-clo-7 had named the mechanism a month earlier and left it
+  open: *"a direct call site mints the return buffer as a caller LOCAL it frees at scope exit,
+  while the fn-ref path has `fn_call_ref` allocate a store the rebinding body never adopts"*.
+  Reading that sentence is what turned three separate-looking reports into one free in
+  `State::fn_return`, keeping the buffer the callee handed back — identified by STORE, since a
+  callee that delivered through it may answer a record inside it.
+  `--native` never had it, which is where the shape of the cure came from: its dispatch passes
+  the null sentinel for a Reference return and frees an unfilled `__vc_hbuf` for a vector one.
+  ⚠ **Two of the three reports it was supposed to close are only half-closed, and the guard
+  says which half.**  loft#1180's leak is gone and its SILENT WRONG is not — a lambda handing
+  back a captured collection has its capture ADOPTED by the bind and released at scope exit,
+  so the captured variable reads empty from the second call on, both backends.  That was
+  filed as a leak because the probe called it INLINE; binding the result is what shows it, and
+  [[print-inside-the-loop-is-vacuous]]'s lesson is the same one — the spelling you probe with
+  decides which channel can move.  loft#1178's reservation is safe to widen on `--interpret`
+  now and still refused, because `--native` cannot COMPILE the widened shape (the map desugar
+  declares `var__map_result_1` inside the comprehension block and `ref_return` returns it from
+  outside), and one backend accepting what the other refuses is worse than both refusing.
 
 ⚠ **And one measurement that read as a fourth and was not.** The `T = struct` fn-ref cell first
 looked like a pre-existing leak, because the "twin" beside it leaked too — but that twin applied

@@ -319,6 +319,22 @@ pub struct State {
     pub(crate) debug: Option<Box<crate::debugger::Debugger>>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
+    /// Return buffers [`State::fn_call_ref`] allocated for a callee's hidden attributes,
+    /// paired with the call-stack DEPTH of the frame they were pushed for — the store the
+    /// caller must free when the callee hands back something else.
+    ///
+    /// A direct call site mints its return buffer as a caller LOCAL and frees it at scope
+    /// exit.  A fn-ref call site cannot: it does not know which function the slot holds, so
+    /// the buffer is allocated HERE, and a callee that delivers its return some other way
+    /// (it minted its own store, or the delivery slot got rebound to a borrow) leaves it
+    /// owned by nobody — one store per call, unbounded in a loop
+    /// (`formal/closures.md` D-clo-7).  `--native` never had it because its dispatch passes
+    /// the null sentinel for a Reference return and frees an unfilled `__vc_hbuf` for a
+    /// vector one.
+    ///
+    /// Empty on every run that makes no fn-ref call to a buffer-taking callee, which is the
+    /// overwhelming majority — the cost when unused is one `is_empty` branch per return.
+    fnref_bufs: Vec<(u32, DbRef)>,
     /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
     pub(crate) data_ptr: *const crate::data::Data,
     /// Fix #87: cached library index for `n_stack_trace`.  `u16::MAX` = not yet resolved.
@@ -608,6 +624,7 @@ impl State {
             fn_positions: Vec::new(),
             debug: None,
             call_stack: Vec::new(),
+            fnref_bufs: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None], // index 0 = null sentinel
@@ -835,6 +852,7 @@ impl State {
         // here: bytecode VM's OpDatabase at src/state/io.rs:708 calls
         // `clear(db)` unconditionally → OOB on u16::MAX (allocation.rs:421).
         let mut hidden_bufs_size: u16 = 0;
+        let mut allocated_bufs: Vec<DbRef> = Vec::new();
         if !self.data_ptr.is_null() {
             // SAFETY: data_ptr is set in execute_argv and valid throughout
             // execution; same pattern as the call-stack snapshot path
@@ -888,6 +906,14 @@ impl State {
                 // misread, and with no hidden buffer the shift is zero.  It takes a
                 // capturing closure that ALSO returns a struct, and then the callee
                 // receives a garbage closure `DbRef` and faults.
+                // loft#1179 / `formal/closures.md` D-clo-7 — remember the store, because
+                // this call site is the only owner it will ever have.  A DIRECT call mints
+                // its return buffer as a caller local that scope exit frees; here the
+                // buffer is minted per call and handed to a callee that may deliver its
+                // return some other way (it minted its own store, or the delivery slot was
+                // rebound to a borrow), and then nothing frees it.  [`Self::fn_return`]
+                // does, against the value that actually came back.
+                allocated_bufs.push(buf);
                 let before = self.stack_pos;
                 self.put_stack(buf);
                 hidden_bufs_size += u16::try_from(self.stack_pos - before).unwrap_or(0);
@@ -913,6 +939,12 @@ impl State {
         let closure_span = u16::try_from(self.stack_pos - before_closure).unwrap_or(0);
         let total = arg_size + hidden_bufs_size + closure_span;
         let code_pos = i64::from(self.fn_positions[d_nr]);
+        // The depth the callee's frame is about to occupy, recorded BEFORE `fn_call` pushes
+        // it so the two agree by construction rather than by an off-by-one.
+        let frame_depth = u32::try_from(self.call_stack.len()).unwrap_or(u32::MAX);
+        for buf in allocated_bufs {
+            self.fnref_bufs.push((frame_depth, buf));
+        }
         self.fn_call(d_nr as u32, total, code_pos);
     }
 
@@ -1104,7 +1136,54 @@ impl State {
         self.stack_pos += u32::from(ret);
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
+        if !self.fnref_bufs.is_empty() {
+            self.release_fnref_bufs(value);
+        }
         self.call_stack.pop();
+    }
+
+    /// Free the return buffers [`Self::fn_call_ref`] allocated for the frame now returning,
+    /// keeping the one the callee actually handed back.
+    ///
+    /// The kept one is identified by STORE, not by the whole `DbRef`: a callee that
+    /// delivered through the buffer may answer a record or a position inside it, and that is
+    /// still the store the caller now owns as its result. Everything else this call site
+    /// allocated was never used for the delivery — the buffer variable is compiler-generated
+    /// and appears only in return-delivery code, so nothing outside the callee can be
+    /// holding it — and is released here.
+    ///
+    /// Entries left behind by a frame that unwound some other way (a coroutine truncation)
+    /// are DROPPED rather than freed: the value they name is no longer this frame's to
+    /// judge, and leaking is the recoverable direction.
+    fn release_fnref_bufs(&mut self, value: u8) {
+        let depth = u32::try_from(self.call_stack.len())
+            .unwrap_or(u32::MAX)
+            .saturating_sub(1);
+        let returned: Option<DbRef> = (usize::from(value) == size_of::<DbRef>()).then(|| {
+            let back = u16::try_from(self.stack_step(u32::from(value))).unwrap_or(0);
+            *self.get_var::<DbRef>(back)
+        });
+        while let Some(&(d, buf)) = self.fnref_bufs.last() {
+            if d < depth {
+                break;
+            }
+            self.fnref_bufs.pop();
+            if d != depth {
+                continue;
+            }
+            if returned.is_some_and(|r| r.store_nr == buf.store_nr) {
+                continue;
+            }
+            // A store the callee already released leaves a stale handle here; freeing it
+            // twice would hand a live slot back to the pool.
+            if buf.store_nr == COROUTINE_STORE
+                || (buf.store_nr as usize) >= self.database.allocations.len()
+                || self.database.allocations[buf.store_nr as usize].free
+            {
+                continue;
+            }
+            self.free_ref_db(buf);
+        }
     }
 
     // ── CO1.1 — Coroutine frame helpers ─────────────────────────────────────
@@ -6221,6 +6300,7 @@ impl State {
             fn_positions: Vec::new(),
             debug: None,
             call_stack: Vec::new(),
+            fnref_bufs: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None],

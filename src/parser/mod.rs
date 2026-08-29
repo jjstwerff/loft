@@ -2290,15 +2290,13 @@ impl Parser {
         }
     }
 
-    /// Would pass 2 promote a compiler MINT into this body's return buffer — or does the
-    /// body already hand back a store that a named slot owns?
+    /// Does this body MINT what it hands back, or does it already have a slot that owns it?
     ///
-    /// This is what makes a return buffer NEEDED rather than merely allowed.  Pass 2's
-    /// `ref_return` promotes a MINT — a compiler-generated slot that owns the store it
-    /// points at (`__vdb_N`, the backing a vector literal allocates) — into the hidden
-    /// return attribute.  A body whose tail is a user's named local, an argument, or a
-    /// capture has no such mint: the store already has an owner, both passes agree about
-    /// it, and reserving a buffer there only adds a copy that nothing frees.
+    /// Pass 2's `ref_return` promotes a MINT — a compiler-generated slot that owns the store
+    /// it points at (`__vdb_N`, the backing a vector literal allocates) — into the hidden
+    /// return attribute, and that promotion is what grows an attribute pass 1 never had.  A
+    /// body whose tail is a user's named local, an argument, or a capture has no such mint:
+    /// the store already has an owner and both passes agree about it.
     ///
     /// Measured with `LOFT_TRACE_RETPROMO=1`, which names the verdict per pass:
     ///
@@ -2308,25 +2306,12 @@ impl Parser {
     /// | `{ if c { [v] } else { [] } }` | no ENTER | `Grow` ×2 | needed |
     /// | `{ q = [v, v + 1]; q }` | `Grow q` | `MergeAttr` | already served |
     /// | `{ mk(v) }` | `Grow __ref_1` | `MergeAttr` | already served |
-    /// | `{ q = [x]; q += [x + 1]; q }` | `SkipReassigned` | `SkipReassigned` | NOT needed |
-    /// | `{ captured_vector }` | no ENTER | `MergeAttr __closure` | NOT needed |
+    /// | `{ q = [x]; q += [x + 1]; q }` | `SkipReassigned` | `SkipReassigned` | not needed |
+    /// | `{ captured_vector }` | no ENTER | `MergeAttr __closure` | not needed |
     ///
-    /// The last two are the ones a buffer HURTS: the body returns its own store and never
-    /// fills the buffer, which `--native` frees after the call (`__vc_hbuf`) and the
-    /// interpreter does not — one store leaked per call, the shape
-    /// `85-fnref-lambda-return-ownership.loft` pins.  A bare `Var` tail is where the
-    /// measurement puts the line, and the mint test is the reading that puts it there: the
-    /// same [`var_is_mint`](Self::var_is_mint) view of @FR-O-Proxy that keeps the two
-    /// passes agreeing about an owned literal.
-    ///
-    /// ⚠ **It does not reach a tail whose pass-1 spelling is a `Var` that pass 2
-    /// REPLACES.** `fn(v: integer) -> vector<integer> { xs = [1, 2]; xs.map(…) }` reads
-    /// `Var(xs)` here and lowers to a fresh `__vdb_2` in pass 2, which grows and aborts —
-    /// pass 1 never enters the promotion at all for it, so the two passes are not looking
-    /// at the same tail. That is loft#1178, and the cure it wants is the interpreter-side
-    /// free of an unfilled buffer rather than a sharper prediction here: with the buffer
-    /// reserved for every declared-collection lambda, `--native` is clean and only
-    /// `--interpret` leaks.
+    /// A bare `Var` tail is where that measurement puts the line, and
+    /// [`var_is_mint`](Self::var_is_mint)'s @FR-O-Proxy reading is what puts it there — the
+    /// same view that keeps the two passes agreeing about an owned literal.
     fn body_mints_its_return(def: &crate::data::Definition) -> bool {
         let Value::Block(bl) = def.code() else {
             return true;
@@ -2365,17 +2350,36 @@ impl Parser {
             // signature-time path already served it, and a second buffer is one store leaked
             // per closure — `717-closure-struct-return.loft` caught exactly that.
             //
-            // loft#1177 — a DECLARED `-> vector<…>` is included when its body MINTS what it
-            // hands back, and the sentence above needed correcting to say so: the
-            // signature-time path does not serve a lambda at all (it excludes them by name,
-            // *"separate parse path, no earlier callers"*), so *"already served"* was only
-            // ever true of the returns that need no buffer.  A struct and a record-enum are
-            // those — a declared `-> P` lambda carries no hidden attribute and answers
-            // correctly — while a VECTOR is delivered through a backing store the caller
-            // supplies, so pass 2 GREW `__vdb_1` and `fn(v: integer) -> vector<integer> {
-            // [v] }` aborted the compiler on the H5 contract.  `Vector` because that is the
-            // former measured to grow one; a second buffer on the others is the leak per
-            // closure that `717-closure-struct-return.loft` pins.
+            // loft#1177 / loft#1178 — a DECLARED `-> vector<…>` is included too, and the
+            // sentence above needed correcting to say so: the signature-time path does not
+            // serve a lambda at all (it excludes them by name, *"separate parse path, no
+            // earlier callers"*), so *"already served"* was only ever true of the returns
+            // that need no buffer.  A struct and a record-enum are those — a declared
+            // `-> P` lambda carries no hidden attribute and answers correctly — while a
+            // VECTOR is delivered through a backing store the caller supplies, so pass 2
+            // GREW `__vdb_1` and `fn(v: integer) -> vector<integer> { [v] }` aborted the
+            // compiler on the H5 contract.  `Vector` because that is the former measured to
+            // grow one; a second buffer on the others is the leak per closure that
+            // `717-closure-struct-return.loft` pins.
+            //
+            // ⚠ **Narrowed to the bodies that MINT what they hand back, and the row it
+            // does not reach is loft#1178.**  `LOFT_TRACE_RETPROMO=1` gives the promotion
+            // verdict per pass and separates the bodies cleanly — `{ [v, v + 1] }` and
+            // `{ if c { [v] } else { [] } }` have no pass-1 ENTER and `Grow` in pass 2,
+            // while `{ q = [x]; q += [x + 1]; q }` and `{ captured_vector }` agree across
+            // both passes and need nothing.  What no predicate over the PASS-1 tail can
+            // separate is `{ xs = [1, 2]; xs.map(…) }`, whose tail reads `Var(xs)` here —
+            // the spelling of the rows that must NOT get a buffer — and lowers to a fresh
+            // `__vdb_2` in pass 2.  The two passes are not looking at the same tail.
+            //
+            // Reserving for ALL of them compiles that row too, and was tried: with
+            // `formal/closures.md` D-clo-7's unowned buffer now freed, `--interpret` runs it
+            // clean.  It is still not shipped, because `--native` then fails to COMPILE it —
+            // the map desugar declares `var__map_result_1` inside the comprehension block
+            // and `ref_return` returns it from outside — and a shape one backend accepts and
+            // the other refuses is worse than one both refuse (@FR-D-op-1).  loft#1178 wants
+            // that top-level hoist, the same repair `patch_tret_callers` performs for a
+            // buffer minted after the parse.
             if def.name().starts_with("n___lambda_")
                 && !self.adopted_ret_defs.contains(&d)
                 && !(matches!(def.returned().ret_promo_base(), Type::Vector(_, _))

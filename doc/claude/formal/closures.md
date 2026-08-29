@@ -92,8 +92,9 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **1** — a lambda that BINDS its return value to a local first leaks one store
-(D-clo-7, below; the value half of that entry is closed). D-clo-9 — a captured record FREED
+OPEN: **1** — a lambda's `??`-default store discarded INLINE leaks one store per call
+(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed).
+D-clo-9 — a captured record FREED
 by a caller that lifted a fn-ref tail — and D-clo-8 — a captured `vector<(…)>` unpacked
 rather than shared — were opened and closed on 2026-08-29 and 2026-08-28. Closed: both
 lambda forms capture identically (D-clo-1), the
@@ -241,11 +242,33 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > does not arrive owned: **a dep dropped as uninteresting is not a dep that was never there.**
 > The lift now declines for a CAPTURING fn-ref and still fires for one that captures nothing.
 >
-> **OPEN: the leak.** A lambda that BINDS its return to a local (`d = q ?? P{}; d`) leaks one
-> store, as does a lambda's `??`-default store discarded inline. Neither needs a capture and
-> the NAMED twin is clean for both, which is what separates them from this entry: a direct
-> call site mints the return buffer as a caller LOCAL it frees at scope exit, while the
-> fn-ref path has `fn_call_ref` allocate a store the rebinding body never adopts.
+> **The leak — first half CLOSED (2026-08-29, loft#1179), second half OPEN.** Both halves
+> are the same sentence: *a direct call site mints the return buffer as a caller LOCAL it
+> frees at scope exit, and the fn-ref path had no equivalent.*
+>
+> CLOSED — a lambda that BINDS its return to a local (`d = q ?? P{}; d`) leaked one store per
+> call. `fn_call_ref` allocates one store per hidden return attribute because it cannot know
+> which function the slot holds, and a callee that delivers its return some other way — it
+> minted its own store, or the delivery slot was rebound to a borrow — left that store owned
+> by nobody. `--native` never had it: its dispatch passes the null sentinel for a Reference
+> return and frees an unfilled `__vc_hbuf` for a vector one, which is the same fact this side
+> was missing. `State::fn_return` now releases every buffer the returning frame's call site
+> allocated, keeping the one the callee handed back — identified by STORE, because a callee
+> that delivered through the buffer may answer a record or a position inside it.
+>
+> That one free also closed loft#1180 (a lambda returning a captured struct's vector FIELD,
+> both spellings) and made loft#1178's reservation safe to widen: reserving a return buffer
+> for EVERY declared-collection lambda was already correct on `--native`, and the only thing
+> wrong with it here was the unowned buffer.
+>
+> **OPEN: a lambda's `??`-default store discarded INLINE.** `g = fn(q: P?) -> P { q ?? P{} }`
+> called as `g(null).n` leaks the default arm's store, one per call, on BOTH backends; the
+> BOUND spelling is clean, and so is the named twin. The lambda's return dep names its
+> parameter on the subject arm, so `returns_borrowed_view` calls the whole thing a borrow and
+> `callref_owned_return` declines — the mint arm pays for the borrow arm's caution. It is a
+> JOIN, and the direct-call branch beside it already knows what to do with one
+> (`use_analysis::ownership_of`, lifting a `Join` only where the following bind is the runtime
+> guard); the `CallRef` route does not ask.
 >
 > Guarded by `tests/scripts/1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft`.
 
