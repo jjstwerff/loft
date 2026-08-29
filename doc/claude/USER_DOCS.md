@@ -115,16 +115,24 @@ work. What does not exist is any path from a reader to their output.
 | …with a hand-written guide in their own repo | **2** — `graphics`, `random` |
 | …with any `doc/` directory | **0** |
 | …with any examples | **3** — `game_protocol` (17), `drawing` (1), `graphics` (1) |
-| …with no `README.md` at all | **3** — `cbor`, `pluginabi`, `hex_grid` |
-| …whose README is nine lines of boilerplate | **2** — `html`, `markdown` |
+| …with no `README.md` at all | **2** — `pluginabi`, `hex_grid` |
+| …whose README is nine lines of boilerplate | **3** — `html`, `markdown`, `input` |
 | Library pages on the doc site | **0** |
 | Links from the doc site to any library repo | **0** |
 | Libraries named anywhere on the doc site | **2** (`imaging`, `random`, in an install line) |
 | `@F` catalogue entries covering a library | **0 of 117** — the catalogue is core-only by construction |
 
-`html` and `markdown` are the two with no real README, and both are load-bearing for the
-better-PHP direction [WEB_STACK.md](WEB_STACK.md) designs. `stage` and `graphics` carry 136
-public items each, documented by one README apiece.
+`html` and `markdown` had no real README, and both are load-bearing for the better-PHP
+direction [WEB_STACK.md](WEB_STACK.md) designs. `stage` and `graphics` carry 136 public items
+each, documented by one README apiece.
+
+⚠ **Every count here is read from `origin/main`, and that is not a detail.** A first pass
+measured the local sibling checkouts and got two of these rows wrong in both directions:
+`cbor` was reported as having no README when `origin/main` carries 55 lines, and `input` was
+reported as fine on the strength of an 84-line README that exists only on an unmerged branch
+— on `origin/main` it is the nine-line scaffold. `LIBRARIES.md`'s own header says to read a
+library from `origin/main` rather than from a clone; this is what ignoring it costs, and the
+same rule applies to deciding which library needs work at all.
 
 ### The plan of record is stale
 
@@ -459,10 +467,15 @@ library. The guide becomes a checklist row there rather than a new process.
 A consequence of the design, not the design. Ordered by value-per-unit-work; each step is
 independently shippable and none blocks the next except where marked.
 
-1. **Baseline the missing text.** READMEs for `cbor`, `pluginabi`, `hex_grid`; real content
-   for `html` and `markdown`. Five files, no mechanism, and it closes the worst holes.
-2. **`doc/libraries.html` from the registry index**, in the nav and the sitemap. Needs no
-   library change and turns 0 discoverable libraries into 42.
+1. **Baseline the missing text.** ~~READMEs for `pluginabi` and `hex_grid`; real content for
+   `html`, `markdown` and `input`.~~ **Three of five landed** — `hex_grid`, `html`,
+   `markdown`. `input` and `pluginabi` are left alone deliberately: a sibling checkout has
+   unmerged work in both right now (`loft-libs-game` and `loft-libs-plugins`, branch
+   `worked-examples`), and `input`'s README is already rewritten there. Writing into a
+   package under active edit on someone else's branch is how two people's work collides.
+2. ~~**`doc/libraries.html` from the registry index**, in the nav and the sitemap.~~
+   **Landed** — 42 packages in 15 categories, in the nav on every page, a featured index card,
+   and the sitemap by rule (74 → 75 pages).
 3. ~~**The new README.**~~ **Landed** — it was independent of everything above, which is why
    it went first.
 4. **The library card** on each Tier 0 entry. Every field but two is already declared, so this
@@ -483,7 +496,7 @@ independently shippable and none blocks the next except where marked.
 10. **Retire [DOC.md § Two tiers](DOC.md)**, replacing it with a pointer here.
 
 Steps 1, 2 and 4 are each under a day and together change what a new user experiences more
-than everything below them combined. Step 6 is the largest single piece of work in the
+than everything below them combined. Step 4 is now the next one. Step 6 is the largest single piece of work in the
 document and the only one that is not mostly wiring — it is also the one with no substitute,
 because 42 packages of idiomatic loft currently have no reader.
 
