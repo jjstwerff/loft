@@ -1163,6 +1163,15 @@ impl State {
             let back = u16::try_from(self.stack_step(u32::from(value))).unwrap_or(0);
             *self.get_var::<DbRef>(back)
         });
+        // The buffer the callee HANDED BACK moves up one frame rather than being forgotten.
+        // The call site is the only owner it will ever have, and the caller's static type may
+        // say it owns nothing — a local that borrows on one assignment and receives this store
+        // on another (loft#1183), a `??` whose other arm hands back the capture (loft#1186), a
+        // forwarding frame in the way (loft#1185).  None of those can be answered statically,
+        // and none has to be: the store is owned by the frame that currently HOLDS it, and
+        // ownership travels with the return value.  A caller that goes on to free it itself
+        // leaves the handle stale, which the already-free guard below skips.
+        let mut handed_up: Vec<DbRef> = Vec::new();
         while let Some(&(d, buf)) = self.fnref_bufs.last() {
             if d < depth {
                 break;
@@ -1172,6 +1181,7 @@ impl State {
                 continue;
             }
             if returned.is_some_and(|r| r.store_nr == buf.store_nr) {
+                handed_up.push(buf);
                 continue;
             }
             // A store the callee already released leaves a stale handle here; freeing it
@@ -1183,6 +1193,11 @@ impl State {
                 continue;
             }
             self.free_ref_db(buf);
+        }
+        if depth > 0 {
+            for buf in handed_up {
+                self.fnref_bufs.push((depth - 1, buf));
+            }
         }
     }
 

@@ -103,12 +103,13 @@ predicate.** Each is a call site that allocated a return buffer and cannot say w
 came back IS that buffer: D-clo-13 across the two arms of a `??`, D-clo-12 across the frame a
 forwarding function puts in the way, and loft#1183 across two assignments to one local. Every
 static reading is right for one case and wrong for the other, which is what says the question
-is not statically answerable at all. The cure is the one the DIRECT call route already has and
-the fn-ref route does not: **the call site owns its heap return buffer as a caller LOCAL**, the
-way `push_fnref_text_buffers` already gives it its `&text` ones, with
-`Data::fnref_text_buffers`' widest-candidate-then-trim shape as the precedent for the adaptive
-ABI. With the buffer owned by a local, whichever store comes back has an owner and none of the
-three needs a predicate. Measured repairs that do NOT work are recorded on each issue.
+is not statically answerable at all — so the answer is not to answer it. **The store is owned
+by the frame that HOLDS it, and ownership travels with the return value:** `fn_return` hands
+the delivered buffer up one frame instead of forgetting it, and the caller's own return
+releases it. The interpreter does that now (loft#1183's guard); `--native` still frees its
+`__vc_hbuf` inside the dispatch arm and keeps the delivered one with nowhere to hand it to,
+which is the remaining half of all three. Measured repairs that do NOT work are recorded on
+each issue.
 D-clo-11 — a captured STRUCT taken by the caller's bind — D-clo-10 — a captured collection
 taken the same way — D-clo-9 — a captured record FREED by a caller that lifted a fn-ref tail
 — and D-clo-8 — a captured `vector<(…)>` unpacked rather than shared — were opened and closed
