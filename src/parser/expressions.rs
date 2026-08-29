@@ -3292,7 +3292,10 @@ use a separate collection or add after the loop"
             // arm is protected so the runtime refuses its free.  Without it the gate asked
             // *is the RHS a call*, a `Value::If` is not one, and the store the taken arm's
             // callee minted was copied out of and abandoned.
-            #[cfg(not(feature = "wasm"))]
+            // NOT feature-gated, for the reason `is_struct_returning_call` gives about itself:
+            // the free bit's BEHAVIOUR differs under wasm, the query does not.  Gating the
+            // binding and not its use below broke the wasm build alone — which `make ci`
+            // catches and no targeted suite does.
             let join_witnesses = self.join_source_frees(code);
             #[cfg(not(feature = "wasm"))]
             let tp_val = if (self.is_struct_returning_call(code)
