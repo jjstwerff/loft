@@ -533,6 +533,8 @@ fn generate_libraries_page<S: std::hash::BuildHasher>(
         "Generated {rendered} library API references ({unrecorded} package(s) predate the \
          registry's `api` field and say so)"
     );
+    let (guides, no_guide) = generate_library_guides(index, stdlib_sections, topic_info, link_map)?;
+    println!("Generated {guides} library guides ({no_guide} package(s) ship none yet)");
     let (src_pages, uncached) =
         generate_library_source_pages(index, stdlib_sections, topic_info, link_map)?;
     println!(
@@ -594,6 +596,28 @@ fn generate_library_cards(
             let _ = writeln!(body, "<tr><th>{k}</th><td>{val}</td></tr>");
         };
 
+        // The guide comes first: a reader who has decided to look at a library wants the
+        // introduction before the facts about it. A package that ships none says so and
+        // names the cure, because "no link" and "no guide" look identical.
+        let mut guide_files: Vec<std::path::PathBuf> = Vec::new();
+        collect_loft_files(
+            &loft::registry_index::extract_dir(name, &v.semver).join("docs"),
+            &mut guide_files,
+        );
+        if guide_files.is_empty() {
+            row(
+                "Guide",
+                "none yet \u{2014} the API reference and the source below are what there is",
+            );
+        } else {
+            row(
+                "Guide",
+                &format!(
+                    "<a href=\"lib-{0}-guide.html\">getting started with {0}</a>",
+                    esc(name)
+                ),
+            );
+        }
         row(
             "Version",
             &format!(
@@ -875,6 +899,87 @@ fn generate_library_api_pages<S: std::hash::BuildHasher>(
         fs::write(format!("doc/lib-{name}-api.html"), html)?;
     }
     Ok((rendered, unrecorded))
+}
+
+/// One guide page per library that ships one — Tier 1, *how do I start?*
+///
+/// The guide is a `.loft` file in the package's `docs/`, in the same `@NAME` / `@TITLE`
+/// topic format the language pages use, so it is a RUNNING PROGRAM whose prose is its
+/// comments: an example that stops working stops compiling, in the library's own CI, which
+/// is the property that makes a guide worth trusting.
+///
+/// Rendered with `render_topic_body` — the same renderer the language topics go through, so
+/// a library guide and a language page are the same artefact pointed at a different file.
+///
+/// Returns `(rendered, without)`. A library with no guide gets no page and its card says so
+/// rather than linking at an empty one; writing `docs/01-getting-started.loft` in the
+/// package is the whole of what it takes to appear here.
+fn generate_library_guides<S: std::hash::BuildHasher>(
+    index: &loft::registry_index::RegistryIndex,
+    stdlib_sections: &[StdlibSection],
+    topic_info: &[(String, String)],
+    link_map: &HashMap<String, String, S>,
+) -> std::io::Result<(usize, usize)> {
+    let mut rendered = 0usize;
+    let mut without = 0usize;
+    for (name, pkg) in &index.packages {
+        let Some(v) = loft::registry_index::find_best_version(pkg, "*", false) else {
+            continue;
+        };
+        let mut guides: Vec<std::path::PathBuf> = Vec::new();
+        collect_loft_files(
+            &loft::registry_index::extract_dir(name, &v.semver).join("docs"),
+            &mut guides,
+        );
+        guides.sort();
+        if guides.is_empty() {
+            without += 1;
+            continue;
+        }
+        rendered += 1;
+
+        let mut body = String::new();
+        let _ = writeln!(
+            body,
+            "<p><a href=\"lib-{0}.html\">\u{2190} {0}</a> \u{b7} <a href=\"lib-{0}-api.html\">API reference</a> \u{b7} <a href=\"lib-{0}-src.html\">source</a></p>",
+            esc(name)
+        );
+        for g in &guides {
+            let Ok(source) = fs::read_to_string(g) else {
+                continue;
+            };
+            if guides.len() > 1
+                && let Some(t) = topic_title(&source)
+            {
+                let _ = writeln!(body, "<h2>{}</h2>", esc(&t));
+            }
+            body.push_str(&render_topic_body(&source, link_map));
+        }
+
+        let nav = build_nav(topic_info, stdlib_sections, "libraries");
+        let desc = format!(
+            "Getting started with the loft library {name} \u{2014} a runnable guide that is \
+             itself a loft program, so every example in it compiles."
+        );
+        let slug = format!("lib-{name}-guide");
+        let meta = loft::documentation::PageMeta {
+            slug: &slug,
+            description: &desc,
+        };
+        let title = format!("{name} guide");
+        let html = page_html(&title, &nav, &title, &body, &meta);
+        fs::write(format!("doc/lib-{name}-guide.html"), html)?;
+    }
+    Ok((rendered, without))
+}
+
+/// The `@TITLE:` a topic file declares, used only to head one guide among several.
+fn topic_title(source: &str) -> Option<String> {
+    source.lines().find_map(|l| {
+        l.trim_start()
+            .strip_prefix("// @TITLE:")
+            .map(|t| t.trim().to_string())
+    })
 }
 
 /// One `.loft` source file of a package, ready to render.

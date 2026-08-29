@@ -146,6 +146,10 @@ off until *its* text changes (content-hash ledger).
 - [ ] README: purpose + a copy-paste quick-start + the "fun-on-pickup" first path.
 - [ ] A doc comment on **every** `pub fn` / `pub struct`: present-tense, says **why to use it** (not its history), in plain language readable by entry-level and non-native-English readers.
 - [ ] An `examples/` dir with runnable programs.
+- [ ] **A guide at `docs/01-getting-started.loft`** — the five-part shape in
+      [LIBRARY_AUTHORING.md § 2c](LIBRARY_AUTHORING.md). It is a running loft program, so its
+      examples cannot rot, and it is what the published site links from the library's card.
+      A package without one says "none yet" there, which is honest and is not the goal.
 - [ ] No dead plan-tag / date narration in comments; only live pointers (issues / plans).
 
 ---

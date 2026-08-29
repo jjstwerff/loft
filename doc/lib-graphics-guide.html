@@ -3,46 +3,53 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>crypto — Loft, a programming language for small browser games</title>
-  <meta name="description" content="Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.">
-<link rel="canonical" href="https://loft-lang.org/loft/lib-crypto.html">
-<meta property="og:title" content="crypto — Loft, a programming language for small browser games">
-<meta property="og:description" content="Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.">
+<title>graphics guide — Loft, a programming language for small browser games</title>
+  <meta name="description" content="Getting started with the loft library graphics — a runnable guide that is itself a loft program, so every example in it compiles.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-graphics-guide.html">
+<meta property="og:title" content="graphics guide — Loft, a programming language for small browser games">
+<meta property="og:description" content="Getting started with the loft library graphics — a runnable guide that is itself a loft program, so every example in it compiles.">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://loft-lang.org/loft/lib-crypto.html">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-graphics-guide.html">
 <meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
 <meta property="og:site_name" content="Loft">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="crypto — Loft, a programming language for small browser games">
-<meta name="twitter:description" content="Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.">
+<meta name="twitter:title" content="graphics guide — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="Getting started with the loft library graphics — a runnable guide that is itself a loft program, so every example in it compiles.">
 <meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
 <link rel="stylesheet" href="style.css">
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
-<h1>crypto</h1>
+<h1>graphics guide</h1>
 <article>
-<p class="lib-lede">Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.</p>
-<pre><code>loft install crypto
-</code></pre>
-<pre><code>use crypto;
-</code></pre>
-<table class="lib-table lib-card">
-<tr><th>Guide</th><td>none yet — the API reference and the source below are what there is</td></tr>
-<tr><th>Version</th><td>0.3.8 — published 2026-08-18</td></tr>
-<tr><th>Categories</th><td><a href="libraries.html#crypto">Cryptography</a></td></tr>
-<tr><th>Requires</th><td>loft <code>&gt;=0.8</code></td></tr>
-<tr><th>Compatibility</th><td>API: drop-in for 0.3.2 and later · stored data: drop-in for 0.3.2 and later</td></tr>
-<tr><th>Download</th><td>61 kB</td></tr>
-<tr><th>Public API</th><td><a href="lib-crypto-api.html">28 items, with their documentation</a></td></tr>
-<tr><th>Dependencies</th><td>none</td></tr>
-<tr><th>Used by</th><td><a href="lib-pluginabi.html"><code>pluginabi</code></a></td></tr>
-<tr><th>Source</th><td><a href="lib-crypto-src.html">read it here</a> — the libraries are written in loft</td></tr>
-<tr><th>Repository</th><td><a href="https://github.com/loft-lang/loft-libs-core/tree/main/crypto">https://github.com/loft-lang/loft-libs-core/tree/main/crypto</a></td></tr>
-</table>
-<p class="lib-legend">A <em>drop-in</em> floor is the oldest release of this package the current one still replaces without a source change. <em>Not declared</em> means exactly that — the package has made no promise, which is the honest state for one published before the compatibility contract existed.</p>
-<p><a href="libraries.html">← All libraries</a></p>
+<p><a href="lib-graphics.html">← graphics</a> · <a href="lib-graphics-api.html">API reference</a> · <a href="lib-graphics-src.html">source</a></p>
+<h2 id="creating-a-canvas">Creating a canvas</h2>
+<p>A canvas is a 2D pixel buffer. Create one with a width, height, and fill color:</p>
+<pre><code><span class="kw">use</span> graphics;</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  cv = graphics::<span class="fn-call">canvas</span>(<span class="nm">100</span>, <span class="nm">100</span>, graphics::<span class="fn-call">rgb</span>(<span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">0</span>));
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cv.width == <span class="nm">100</span>, <span class="st">"canvas width"</span>);
+}</code></pre>
+<p>The canvas stores pixels as packed RGBA integers. Use <code>rgb()</code> for opaque colors and <code>rgba()</code> when you need transparency.</p>
+<h2 id="drawing-shapes">Drawing shapes</h2>
+<p>Draw lines, rectangles, circles, and more:</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">drawing_shapes</span>() {
+  sh_cv = graphics::<span class="fn-call">canvas</span>(<span class="nm">50</span>, <span class="nm">50</span>, <span class="nm">0</span>);
+  sh_red = graphics::<span class="fn-call">rgb</span>(<span class="nm">255</span>, <span class="nm">0</span>, <span class="nm">0</span>);</code></pre>
+<p>Draw a filled rectangle</p>
+<pre><code>  sh_cv.<span class="fn-call">fill_rect</span>(<span class="nm">5</span>, <span class="nm">5</span>, <span class="nm">20</span>, <span class="nm">10</span>, sh_red);</code></pre>
+<p>Draw a circle outline</p>
+<pre><code>  sh_cv.<span class="fn-call">draw_circle</span>(<span class="nm">25</span>, <span class="nm">25</span>, <span class="nm">10</span>, graphics::<span class="fn-call">rgb</span>(<span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">255</span>));</code></pre>
+<p>Draw a line</p>
+<pre><code>  sh_cv.<span class="fn-call">draw_line</span>(<span class="nm">0</span>, <span class="nm">0</span>, <span class="nm">49</span>, <span class="nm">49</span>, graphics::<span class="fn-call">rgb</span>(<span class="nm">255</span>, <span class="nm">255</span>, <span class="nm">255</span>));
+}</code></pre>
+<h2 id="anti-aliased-lines">Anti-aliased lines</h2>
+<p>For smoother lines, use <code>draw_aa_line()</code> which uses Xiaolin Wu's algorithm:</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">aa_example</span>() {
+  aa_cv = graphics::<span class="fn-call">canvas</span>(<span class="nm">100</span>, <span class="nm">100</span>, <span class="nm">0</span>);
+  aa_cv.<span class="fn-call">draw_aa_line</span>(<span class="nm">10</span>, <span class="nm">10</span>, <span class="nm">90</span>, <span class="nm">50</span>, graphics::<span class="fn-call">rgb</span>(<span class="nm">255</span>, <span class="nm">255</span>, <span class="nm">0</span>));
+}</code></pre>
 
   </article>
 <script src="search-index.js"></script>

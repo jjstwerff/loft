@@ -242,7 +242,12 @@ The contract for a guide, in order — the shape the good language pages already
    `rgb()` and a hand-written hex literal differ in the alpha byte.
 5. **Where to go next** — the API reference, and the library's own tests as examples.
 
-Executed by the **library's** CI, because the library owns it. This is what removes the
+Executed by the **library's** CI, because the library owns it — and **`main` has to call
+every section**, or the assertions do not run at all. A zero-parameter function nobody calls
+still compiles, so a renamed API is still caught while the half that checks the example is
+*right* rather than merely *spelled correctly* silently does nothing. Measured: `graphics`'s
+guide defines `drawing_shapes()` and `aa_example()` and calls neither, so two of its three
+sections read as verified and are not. This is what removes the
 hardcoded delegation list: `tests/wrap.rs:52` and `tests/doc_lib_examples.rs:63` name
 `14-image.loft` and `21-random.loft` as string literals, so a new library page is silently
 uncovered until someone edits both. A guide that lives in its library is run by that library's
@@ -519,9 +524,14 @@ independently shippable and none blocks the next except where marked.
    **not** need `examples-index.tsv` (96 of 99 resolve inside the package's own `tests/`,
    which ship in the tarball), and the source **does** need the registry cache — it is the one
    tier the index cannot serve.
-7. **The guide contract** — the five-part shape into `LIBRARY_AUTHORING.md` and
-   `LIBRARY_CHECKLIST.md`, then guides for the six that carry the most weight: `graphics`,
-   `stage`, `server`, `web`, `html`, `markdown`.
+7. **The guide contract** — **the contract and the rendering have landed**; two of the six
+   guides are written. `LIBRARY_AUTHORING.md § 2c` carries the five-part shape and the rule
+   the build found (⚠ **`main` must call every section** — `graphics`'s guide defines two
+   sections `main` never calls, so their assertions have never run), `LIBRARY_CHECKLIST.md`
+   carries the row, and `doc/lib-<name>-guide.html` renders any guide a package ships.
+   `html` and `markdown` are written and verified; `graphics` has one already (with the
+   defect above, in a repo currently on an active branch); `stage`, `server` and `web` need
+   an environment their examples can be run in and are not written.
 8. **The REPL and debug panel**, plus `38-call-it-yourself.loft`. Independent of 1–7; the
    only step whose value is not library documentation at all.
 9. **Move the three guides home** — `14-image`, `32-time`, `21-random` — and delete the
