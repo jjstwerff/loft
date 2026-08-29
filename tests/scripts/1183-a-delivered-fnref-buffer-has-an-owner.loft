@@ -24,9 +24,12 @@
 // the forwarding cells below exist — a buffer delivered one or two frames down is released by
 // a frame that never saw the call site.
 //
-// @falsified-at: fbccdb67 — interpret leak `kt=23 main_vector<integer>×9` -> none; native
-// `kt=23 main_vector<integer>×4` -> none.  `make falsify`'s verdict is the conservative AND of
-// the two rows.
+// @falsified-at: fbccdb67 (interpret leak `kt=23 main_vector<integer>×9` -> none) and e754ccfd
+// (native leak `kt=23 main_vector<integer>×25` -> none, interpret INERT — its half had already
+// landed there).  The defect was closed one backend at a time, so NEITHER ref moves both rows
+// and `make falsify`'s verdict — the conservative AND of the two — reads NOT falsified against
+// either one.  Read the rows, not the verdict: each backend's half is falsified at the ref that
+// still carried it.
 
 struct Q { xs: vector<integer> }
 
