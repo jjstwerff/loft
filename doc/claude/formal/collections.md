@@ -221,11 +221,12 @@ both members in both orders, on both backends, under `LOFT_STRICT_STORES=1`, wit
 machinery touched.  The holder choice is not observable through the rule, so the rule does not
 name one.
 
-⚠ **OPEN (loft#1160):** *"by any write route"* does not yet hold for a write spelled through an
-enum variant's `match` / `is` field BINDING.  The binding is a view of the field, so the write
-lands in the member it names and reaches no sibling — measured in both declaration orders, on
-both backends.  `record_finish` maintains a group only when it is given the FIELD the write is
-spelled through, and the binding does not carry it.
+*"By any write route"* is the clause the binding spellings broke and now hold to: a write
+through a variant's `match` / `is` payload binding is resolved back to the field it projects,
+so it reaches the group exactly as the direct spelling does (loft#1160, and loft#1161 for the
+`is` capture, whose write did not even reach the subject).  A capture spanning ALTERNATIVES is
+the one route still outside it, and not by omission — it picks its origin from the runtime tag,
+so there is no one field to resolve it to.
 
 *Anchors:* `Stores::field` (`src/database/types.rs`, the pairing test + `other_indexes`);
 `Parser::link_shared_nullable_views` (`src/parser/definitions.rs`, the nullable-element
@@ -237,6 +238,7 @@ tests/scripts/a-collection-group-does-not-depend-on-declaration-order.loft;
 tests/scripts/1158-a-group-forms-whichever-member-is-declared-first.loft;
 tests/scripts/1152-a-vector-value-into-a-group-reaches-every-member.loft;
 tests/scripts/1159-a-keyed-collection-filled-from-a-vector-value.loft;
+tests/scripts/1160-a-variant-binding-write-means-the-field-write.loft;
 tests/scripts/927-trie-spatial-linked-group.loft;
 tests/scripts/901-linked-group-fill.loft.
 
