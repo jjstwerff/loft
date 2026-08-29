@@ -187,6 +187,7 @@ below for the full rationale and when NOT to use this shape.
 - [`tests/scripts/` — standalone loft test suite](#testsscripts--standalone-loft-test-suite)
 - [Debugging failures in `tests/scripts/`](#debugging-failures-in-testsscripts)
 - [What a run did NOT check — scope, admission, coverage](#what-a-run-did-not-check--scope-admission-coverage)
+- [How a guard reads green while the defect stands](#how-a-guard-reads-green-while-the-defect-stands)
 
 ---
 
@@ -2736,6 +2737,78 @@ adequacy is a property of the tests, not of the backend.
 
 Guarded by `tests/function_coverage.rs`, which asserts the quiet directions as hard as
 the loud one.
+
+---
+
+---
+
+## How a guard reads green while the defect stands
+
+A guard that cannot fail is worse than no guard: it is a standing claim that the behaviour
+is checked. `make falsify` catches the commonest case — a guard that never failed on the
+build it was written to catch — but it only answers for the commit you name. These are the
+shapes that survive it, each one measured here rather than imagined.
+
+**The fallback has the same shape as the wrong answer.** `b.c ?? []` on a nullable
+collection field took the wrong branch and answered the empty field: length 0, which is
+exactly what the correct `[]` default answers too. Five guards covered that field shape
+(`909`, `917`, `920`, `922`, `936`) and every one of them writes `?? []`, so all five passed
+through the whole life of loft#1120. **Choose a default the wrong answer cannot imitate** —
+a default of length 2 separates an empty arm (0), a present arm (1) and the default (2) in
+one read. The natural default to reach for is the type's zero, and the zero is very often
+also what the bug returns.
+
+**The fixture is smaller than the quantum being measured.** @PLN146 F2 gates "a range read
+fetches only the pages the keys touch", and read green because the 19 720-byte pack is a
+third of one 64 KiB page — a paged read of it *is* a whole-file read, correctly, so the gate
+could not have failed whatever the code did. Every resource measurement has a quantum (a
+page, a block, a frame, a tick); a fixture below it reports the fixture's size, not the
+code's behaviour. Padding to ~4 MB took the same gate to 9 % of the file, 2 pages per key.
+
+**The control does not fire.** Removing `pick_in`'s viewport guard left every test green:
+the probe point sat where the camera missed the target anyway, so it answered `-1` with or
+without the guard. The cell asserted the right conclusion from a condition that was never
+load-bearing. **Assert the precondition first** — that the mark IS under the point — so the
+only thing left saying no is the guard under test.
+
+**The predicate has no reachable negative.** A predicate that cannot be false in your
+program cannot be wrong in a way anything notices. `document.fonts.check()` answers *true*
+for a family nothing declares (no unloaded face ⟹ vacuously satisfied), so the browser text
+bridge's "does this page have the font?" was inverted in exactly the case it existed for,
+for two years, silently.
+
+**A count is asserted where identity is meant.** Two entries and two entries naming ONE
+record have the same length. `901-linked-group-fill.loft` scores a key sum and a name-byte sum for that
+reason (`k == 3` for 1 + 2, which two entries naming one record cannot reach), and `1159-…`
+asserts length, key sum and a real lookup together — the defect it guards left `index` reading `len` 1 and iterating 1 over a
+structure in which no key was findable.
+
+**The oracle is a hand number where a working sibling exists.** Where one spelling of an
+operation is already correct, score the new one against IT, not against a number you wrote
+down: `1159-…` and `1160-…` compare the bulk and binding write routes to the element-wise
+and direct-field spellings cell for cell. A hand number freezes your model of the answer;
+the sibling spelling freezes the language's.
+
+**The guard's own harness never ran it.** A `tests/scripts/` file with no `main` runs
+nothing under `--interpret` and still exits 0 — read the assertion COUNT, not the exit code.
+The leak channel is scored only by the `wrap.rs` harness, so a leaking guard reads green
+under a bare `loft --tests`.
+
+**A hand-built matrix is not the adversarial gate.** A matrix tests the shapes you thought
+of. Relaxing `inline_struct_return`'s `dep.is_empty()` guard passed every hand-built cell —
+7 shapes, both backends, values and leak channel, a 1000-iteration use-after-free probe
+under `LOFT_POISON` + `LOFT_STRICT_STORES` — and `tests/ownership_fuzz_gate` failed it
+immediately, then falsified three successive narrowings of it (loft#1118). Run the
+project's generative gates before believing a lifetime change.
+
+**A lifetime matrix scored without `LOFT_STRICT_STORES=1` is not scored.** Three cells that
+read "ok" in loft#1143's matrix were use-after-frees reading freed bytes. Re-score every
+leak or lifetime matrix under it before believing a green.
+
+**Fixing a write can move the silence rather than remove it.** When a fix REDIRECTS a write,
+assert the read through the OLD name as well as the new one. loft#1160's first fix sent the
+record to the right field and every subject-side cell went green, while reading the binding
+back inside the block that wrote through it still answered 0.
 
 ---
 
