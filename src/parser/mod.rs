@@ -2550,7 +2550,8 @@ impl Parser {
         (0..self.data.definitions()).any(|g| {
             matches!(self.data.def_type(g), DefType::Generic)
                 && !self.data.def(g).attributes().is_empty()
-                && Self::extract_type_var(&self.data.def(g).attributes()[0].typedef) == type_nr
+                && Self::extract_type_var(&self.data, &self.data.def(g).attributes()[0].typedef)
+                    == type_nr
         })
     }
 
@@ -5739,7 +5740,7 @@ impl Parser {
         if attrs.is_empty() {
             return false;
         }
-        let tv_nr = Self::extract_type_var(&attrs[0].typedef);
+        let tv_nr = Self::extract_type_var(&self.data, &attrs[0].typedef);
         // `Type::contains_def` is the keystone-backed answer to "does this type mention
         // `d_nr`?" — `any_node` over `Type::for_each_child`, so it descends every
         // child-bearing variant and a new one extends ONE match.  The hand-rolled
@@ -5795,7 +5796,8 @@ impl Parser {
         if types.is_empty() || types[0].is_unknown() {
             return Type::Unknown(0);
         }
-        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes()[0].typedef);
+        let tv_nr =
+            Self::extract_type_var(&self.data, &self.data.def(g_nr).attributes()[0].typedef);
         if tv_nr == u32::MAX {
             return Type::Unknown(0);
         }
@@ -5918,7 +5920,8 @@ impl Parser {
             return u32::MAX;
         }
         // Find the type variable def_nr and resolve the concrete type T maps to.
-        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes()[0].typedef);
+        let tv_nr =
+            Self::extract_type_var(&self.data, &self.data.def(g_nr).attributes()[0].typedef);
         if tv_nr == u32::MAX {
             return u32::MAX;
         }
@@ -5953,6 +5956,49 @@ impl Parser {
                 );
             }
             return u32::MAX;
+        }
+        // A fn-ref whose RETURN is the type variable, instantiated at `text`.
+        //
+        // A call through a fn-typed slot pushes hidden `&text` work buffers, and how
+        // many is read off the return type where the call is LOWERED — inside the
+        // template, where the return is still `T` and the count is therefore zero.
+        // Substitution rewrites the type and leaves the count behind, so the `text`
+        // monomorph enters its callee one buffer short: a corrupt frame, which the
+        // interpreter faults on and `--native` (a different calling convention) does
+        // not — a backend divergence, which @FR-D-op-1 makes a definitional error.
+        //
+        // Refused rather than shipped, because the alternative is a crash in a program
+        // the parser accepted.  Every other instantiation of the same shape is correct
+        // and stays allowed; the cure is to defer the buffer count to the monomorph the
+        // way loft#1020 / loft#1028 defer a null test — loft#1175.
+        if matches!(concrete.base(), Type::Text(_)) {
+            let fnref_returns_tv = self
+                .data
+                .def(g_nr)
+                .attributes()
+                .iter()
+                .any(|a| Self::type_mentions_tv_under_fn_return(&a.typedef, tv_nr));
+            if fnref_returns_tv {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a generic taking a `fn(…) -> {}` cannot be instantiated at `text` \
+                         — the fn-ref call is lowered before `{}` is known, so a text return \
+                         enters the callee one work buffer short (loft#1175).  Instantiate at \
+                         another type, or take a `fn(…) -> text` written concretely",
+                        self.data.def(tv_nr).name(),
+                        self.data.def(tv_nr).name()
+                    );
+                }
+                // `u32::MAX` is "no generic of this name", so the caller follows with
+                // `Unknown function <name>` about a function declared a few lines up.
+                // That cascade is the lesser evil, measured: answering the TEMPLATE
+                // instead — the escape hatch the self-recursive case above uses — parses
+                // the call against a parametric signature and produces THREE errors
+                // (`Unknown definition n_<name>`, then `Cannot format type null`).
+                return u32::MAX;
+            }
         }
         // Build the mangled name for the instantiated function.
         let type_nr = self.data.type_def_nr(&concrete);
@@ -6624,23 +6670,54 @@ impl Parser {
         ))
     }
 
-    /// Extract the type variable `def_nr` from a type tree.
-    /// Returns the `def_nr` of the first `Reference` that refers to the type variable,
-    /// or `u32::MAX` if not found.
-    pub(crate) fn type_var_of(tp: &Type) -> u32 {
-        Self::extract_type_var(tp)
+    /// The type VARIABLE a type mentions — the `def_nr` of the first type-var
+    /// placeholder anywhere in the tree, or `u32::MAX` when it names none.
+    ///
+    /// Enforces @FR-G-Gen's `fn f<T>(x: …T…)` ellipsis: `T` may sit anywhere inside a
+    /// parameter type, so this descends every former the keystone knows.
+    ///
+    /// The read half of the question the DECLARATION already answers with
+    /// `arguments[0].typedef.contains_def(tv_nr)`: *"does the first parameter carry
+    /// the type variable?"*.  Both descend through [`Type::for_each_child`], so a
+    /// declaration the parser accepts is one an instantiation can reach.  Asked with a
+    /// hand-rolled descent that knew only `vector<T>`, the two disagreed on five
+    /// formers — a legal `fn f<T>(x: T?, …)` was accepted at its declaration and
+    /// reported as *"Unknown function"* at every call.
+    ///
+    /// The leaf is a type-var PLACEHOLDER, not any `Reference`, so a first parameter
+    /// that also names a concrete struct — `(P, T)` — answers with `T` rather than
+    /// with whichever the walk reached first.
+    pub(crate) fn type_var_of(data: &Data, tp: &Type) -> u32 {
+        Self::extract_type_var(data, tp)
     }
 
-    fn extract_type_var(tp: &Type) -> u32 {
-        match tp {
-            Type::Reference(d, _) => *d,
-            Type::Vector(inner, _) => Self::extract_type_var(inner),
-            _ => u32::MAX,
-        }
+    /// Does `tp` carry a `fn(…) -> …T…` anywhere — a fn-ref whose RETURN mentions the
+    /// type variable?  That is the one position where monomorphization cannot yet
+    /// deliver, because the hidden `&text` work-buffer count is read off the return
+    /// type at the call's LOWERING and substitution never revisits it.
+    fn type_mentions_tv_under_fn_return(tp: &Type, tv_nr: u32) -> bool {
+        tp.any_node(&mut |t| matches!(t, Type::Function(_, ret, _) if ret.contains_def(tv_nr)))
+    }
+
+    fn extract_type_var(data: &Data, tp: &Type) -> u32 {
+        let mut found = u32::MAX;
+        tp.any_node(&mut |t| match t {
+            Type::Reference(d, _) if data.is_type_var_placeholder(*d) => {
+                found = *d;
+                true
+            }
+            _ => false,
+        });
+        found
     }
 
     /// Unify a template parameter type with a concrete argument type to extract
     /// what the type variable `tv_nr` resolves to.
+    ///
+    /// The binding half of @FR-G-Mono — *"a call `f(ā)` with concrete argument types C̄
+    /// specialises f"* — and the read twin of the declaration check that @FR-G-Gen's
+    /// `…T…` is satisfied.  Both descend `Type::for_each_child`, so a declaration the
+    /// parser accepts is one an instantiation can reach.
     /// E.g. template `vector<T>` + concrete `vector<integer>` → `integer`.
     fn resolve_type_var(template_tp: &Type, tv_nr: u32, concrete_tp: &Type) -> Type {
         // `Rewritten(T)` is a value-construction marker (e.g. `P { v: 99 }`
@@ -6666,14 +6743,28 @@ impl Parser {
                 Type::Text(_) => Type::Text(crate::data::Deps::none()),
                 other => other.clone(),
             },
-            Type::Vector(inner, _) => {
-                if let Type::Vector(c_inner, _) = concrete_tp {
-                    Self::resolve_type_var(inner, tv_nr, c_inner)
-                } else {
-                    Type::Unknown(0)
-                }
+            // A `T?` template against an argument that is not spelled `Optional`.
+            // @PLN25 gives `τ?` and `τ` one runtime layout and `Type::optional`
+            // normalises the wrapper away for a scalar, so a nullable `integer`
+            // argument arrives as `Integer(nullable)` rather than as
+            // `Optional(Integer)` — the same shape, one spelling apart.  Peel the
+            // template and unify against the base; the nullability of the binding is
+            // the template's to state, not the argument's to carry.
+            Type::Optional(inner) if !matches!(concrete_tp, Type::Optional(_)) => {
+                Self::resolve_type_var(inner, tv_nr, concrete_tp.base())
             }
-            _ => Type::Unknown(0),
+            // Every other former descends through the keystone pairing, so a type
+            // variable under a `(T, U)`, a `fn(T) -> T`, an `iterator<T>`, a `T?` or
+            // a `vector<T>` is found the same way.  `None` is "these two types do not
+            // relate", which is what an unbindable argument is.
+            _ => match template_tp.zip_children(concrete_tp) {
+                Some(pairs) => pairs
+                    .into_iter()
+                    .map(|(t, c)| Self::resolve_type_var(t, tv_nr, c))
+                    .find(|r| !r.is_unknown())
+                    .unwrap_or(Type::Unknown(0)),
+                None => Type::Unknown(0),
+            },
         }
     }
 
@@ -7207,49 +7298,19 @@ impl Parser {
         })
     }
 
+    /// `[T ↦ C]` over one type — @FR-G-Mono's *"applied throughout"*, for the signature
+    /// half.  Its twin for the variable table is `Function::subst_type`.
     fn substitute_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
         match tp {
             Type::Reference(d, _) if d == tv_nr => concrete.clone(),
-            Type::Vector(inner, deps) => Type::Vector(
-                Box::new(Self::substitute_type(*inner, tv_nr, concrete)),
-                deps,
-            ),
-            // Plan-17 phase 01 — substitute through tuple element types so a
-            // generic `<T: Bound>` returning `(T, T)` (or any tuple shape
-            // containing T) monomorphises correctly.  Without this, the
-            // signature stayed `(DbRef, DbRef)` (the parametric T form)
-            // even when params became `i64`, and native codegen rejected
-            // the body's tuple literal with E0308.
-            Type::Tuple(elems) => Type::Tuple(
-                elems
-                    .into_iter()
-                    .map(|e| Self::substitute_type(e, tv_nr, concrete))
-                    .collect(),
-            ),
-            // #493 — substitute through an `Optional` wrapper so a generic
-            // `<T>` returning `T?` (or with a `T?` param) monomorphises: without
-            // this arm `last_element<T>(…) -> T?` kept the parametric
-            // `Optional(Reference(tv))` return, typing the return slot as a 12 B
-            // DbRef while the body yields the 8 B scalar — a stale/garbage DbRef
-            // read on the interpreter (DA `get_stack<DbRef>` OOB) and an E0308 on
-            // native.  Mirrors the Vector/Tuple arms above; `Type::optional` is
-            // idempotent so it never double-wraps.
-            Type::Optional(inner) => Type::optional(Self::substitute_type(*inner, tv_nr, concrete)),
-            // loft#1032 — substitute through an iterator so a generic returning
-            // `iterator<T>` monomorphises, the way `vector<T>`, `(T, T)` and `T?`
-            // already do.  formal/interfaces.md `(G-Mono)` requires `[T ↦ C]` to reach
-            // "attribute, RETURN, and body types", so leaving this arm out was a
-            // deviation, not a boundary: the return stayed `iterator<Reference(tv)>`,
-            // which typed the caller's generator slot as a bare `DbRef` (native:
-            // `expected DbRef, found Box<dyn LoftCoroutine>`) and left the loop
-            // variable at `T`, so a yielded value could be neither summed nor
-            // formatted at a fully concrete instantiation.  Both halves of the type
-            // are rewritten — the STATE half mentions `T` whenever the step does.
-            Type::Iterator(step, state) => Type::Iterator(
-                Box::new(Self::substitute_type(*step, tv_nr, concrete)),
-                Box::new(Self::substitute_type(*state, tv_nr, concrete)),
-            ),
-            other => other,
+            // Every former descends through the keystone, so `[T ↦ C]` reaches a type
+            // variable wherever it sits — `vector<T>`, `(T, T)`, `T?`, `iterator<T>`,
+            // `fn(T) -> T`, and whatever the next `Type` variant is.  The four arms
+            // this replaces were added one defect at a time (Plan-17 for the tuple,
+            // #493 for the optional, loft#1032 for the iterator) and each was the same
+            // omission a former further out; `Type::map_children` is exhaustive, so
+            // the next variant fails the build here rather than staying parametric.
+            other => other.map_children(&mut |c| Self::substitute_type(c.clone(), tv_nr, concrete)),
         }
     }
 

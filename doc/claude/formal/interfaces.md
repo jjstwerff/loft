@@ -120,8 +120,82 @@ decided boundary, so it belongs here as a scope rule, not as a deviation to clos
 
 ## Deviations
 
-OPEN: **0** (a *rules* doc — the static satisfaction/monomorphization judgment; it adds no code
-deviation and shrinks operational.md's D-op-1 on the dispatch side).
+OPEN: **1** — `D-gen-2` below (loft#1175), opened 2026-08-29.  `D-gen-1` was opened and closed
+the same day.
+
+⚠ **This line read `OPEN: 0` because *"a rules doc adds no code deviation"* — a claim about the
+doc's GENRE, not a measurement, and the same sentence `formatting.md` carried for its whole life
+until the walk that first asked found four defects there.  It has now produced one here too.**
+The oracle under it (`86-interfaces.loft`, `48-generics.loft`, and the numbered scripts) is real,
+but it is an oracle for the shapes those files happen to write; `D-gen-1` is what it could not
+see.
+
+### D-gen-1 — OPENED AND CLOSED (2026-08-29): the type variable was only found under two formers
+
+`(G-Gen)` writes a generic's shape as `fn f<T>(x: …T…) -> …T…`, and the ellipsis is the rule:
+`T` may sit anywhere inside a parameter type.  The DECLARATION read it that way — the check that
+the first parameter carries the type variable is `arguments[0].typedef.contains_def(tv_nr)`, which
+descends `Type::for_each_child` and therefore knows all seven child-bearing formers.  **The two
+reads at the CALL did not.**  `Parser::extract_type_var` (*which* type variable) knew `Vector`;
+`Parser::resolve_type_var` (*what it binds to*) knew `Vector`.  So a declaration the parser
+accepted was one no call could reach:
+
+| first parameter | before | after |
+|---|---|---|
+| `T`, `vector<T>`, `vector<vector<T>>` | ✓ | ✓ |
+| `T?` | `Unknown function f` | ✓ |
+| `(T, T)`, `(T, integer)` | `Unknown function f` | ✓ |
+| `iterator<T>` | `Unknown function f` | ✓ |
+| `vector<T>?` | `Unknown function f` | ✓ |
+| `fn(T) -> …` | `Unknown function f` | ✓ (except `D-gen-2`) |
+
+The diagnostic is the tell: *"Unknown function"* about a function declared three lines above the
+call, at every instantiating type — `text`, a struct and every scalar alike, so the scalar axis
+this register leans on could not see it either.
+
+Two further homes rewrote `[T ↦ C]` over the same tree with FOUR formers each
+(`Parser::substitute_type`, `Function::subst_type`), so `fn(T) -> T` in a LATER parameter was
+refused with *"expected `fn(T) -> T`, got `fn(integer) -> integer`"* — the substitution the
+message itself asks for.  A third copy, `Data::rewrite_type_opt`, had all seven; a fourth,
+`Function::rewrite_unknown`, had five.  **One question, five homes, four different lists.**
+
+**The corpus is why no oracle could see it, and the number is the point.** Across
+`tests/scripts`, `tests/docs`, `default/` and `doc/`, **166 generic declarations put a bare `T`
+or a `vector<T>` in the first parameter and not one put anything else** — exactly the two arms
+the descent knew.  Implementation and tests were written against each other.  Every `T?` guard
+in the tree (`1020-*`, `1023-*`) writes `fn g<T>(v: vector<T>, a: T? = null)`, putting the
+carrier first; move the `T?` to the front and the same file will not compile.
+
+Closed by deriving all four from the keystone: `Type::map_children` (the SET twin of
+`for_each_child`) and `Type::zip_children` (the PAIR twin, for a walk that descends two type
+trees at once) are exhaustive, so a new `Type` variant fails the build rather than quietly
+staying parametric.  `extract_type_var`'s leaf also became precise — a type-var PLACEHOLDER
+rather than any `Reference` — so a first parameter that names a concrete struct beside the
+variable (`(P, T)`) answers with `T`.  Guard:
+`tests/scripts/a-type-variable-is-found-under-every-former.loft`.
+
+### D-gen-2 — OPEN (2026-08-29, loft#1175): a fn-ref returning `T`, instantiated at `text`
+
+`fn f<T>(x: T, g: fn(T) -> T)` is correct at every instantiation measured — `integer`,
+`boolean`, `character`, `float`, `vector<integer>`, a struct — and faults at `text` on
+`--interpret` while `--native` answers correctly.  A call through a fn-typed slot pushes hidden
+`&text` work buffers, and how many is read off the return type where the call is LOWERED, inside
+the template, where the return is still `T` and the count is zero.  This is `(G-Mono)`'s
+recurring class exactly: substitution rewrote the TYPE and left the COUNT behind.
+
+Refused at the instantiation rather than shipped, because a program the parser accepts must not
+fault; the refusal names the shape and the issue.  The cure is deferral — the `CallRef` site is
+already a named block whose `result` substitution rewrites to the concrete return type, so
+`rewrite_generic_type_defaults` can push the buffers there the way loft#1020 and loft#1028 answer
+their deferred sites.
+
+⚠ **The obvious cure was built and measured and is wrong.** `Data::fnref_text_buffers`' own doc
+says its candidate test is deliberately loose because *"being loose can only mint a buffer nothing
+uses, which the pop removes"* — so counting a PARAMETRIC return as a text candidate looks free.
+It cured `T = text` and made all six other instantiations abort: a non-text return has no
+`__retbuf` protocol for the pop to trim against, so the looseness is safe WITHIN the text family
+and not across its boundary.  Recorded here so the next attempt does not re-spend it.
+
 
 - **Conformance is differential + directly checkable** — satisfaction is a single static judgment,
   so accept/reject must agree across the drivers (D-op-1's driver-agreement facet). `G-Sat`/`G-Check`

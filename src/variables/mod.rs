@@ -1240,6 +1240,8 @@ impl Function {
         }
     }
 
+    /// `[T ↦ C]` over one type — @FR-G-Mono's *"applied throughout"*, for the variable
+    /// table.  Its twin for the signature is `Parser::substitute_type`.
     fn subst_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
         match tp {
             Type::Reference(d, deps) if d == tv_nr => {
@@ -1254,34 +1256,13 @@ impl Function {
                 }
                 result
             }
-            Type::Vector(inner, deps) => {
-                Type::Vector(Box::new(Self::subst_type(*inner, tv_nr, concrete)), deps)
-            }
-            // #493 — substitute through `Optional`/`Tuple` wrappers too, so a
-            // generic body with a `T?` / `(T, …)` local monomorphises like the
-            // signature does (mirrors `Parser::substitute_type`).  Missing this,
-            // such a local kept the parametric `Reference(tv)` form and read the
-            // wrong slot width at runtime.
-            Type::Optional(inner) => Type::optional(Self::subst_type(*inner, tv_nr, concrete)),
-            Type::Tuple(elems) => Type::Tuple(
-                elems
-                    .into_iter()
-                    .map(|e| Self::subst_type(e, tv_nr, concrete))
-                    .collect(),
-            ),
-            // loft#1032 — and through an iterator, so a generic body that binds a
-            // generator handle (`for y in inner(v)` inside another generic) records the
-            // CONCRETE `iterator<τ>` in its variable table.  Left out, the handle kept
-            // `iterator<Reference(tv)>` while the loop variable beside it was
-            // substituted, which is the pairing `retarget_parametric_coroutine_next`
-            // reads to re-decide the yield channel — so the accessor stayed on the
-            // 12-byte DbRef channel for an 8-byte scalar and walked off the store.
-            // The `Parser::substitute_type` twin this mirrors carries the same arm.
-            Type::Iterator(step, state) => Type::Iterator(
-                Box::new(Self::subst_type(*step, tv_nr, concrete)),
-                Box::new(Self::subst_type(*state, tv_nr, concrete)),
-            ),
-            _ => tp,
+            // The shape is the keystone's to decide; only the LEAF above differs from
+            // the `Parser::substitute_type` twin this mirrors (that one drops the deps,
+            // this one carries them).  Written as four hand-spelled formers the two
+            // twins drifted apart from a third copy that had all seven, so a `T` under
+            // a `fn(T) -> T` was rewritten in the type table and left parametric in the
+            // signature — the same variable with two types.
+            other => other.map_children(&mut |c| Self::subst_type(c.clone(), tv_nr, concrete)),
         }
     }
 

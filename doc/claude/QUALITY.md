@@ -149,6 +149,16 @@ real product: the `⇐` expected-type channel has **ten push sites carrying six 
 admission lists**, and `Type::Tuple` is in none of them — which is why the same shapes still
 fail in a `return` and in an argument, filed as **loft#1122**.  A `--native`-only silent wrong
 answer found beside it is **loft#1123**.
+**B7g walked `@FR-G-Mono`, picked because the bug review names generic/monomorph as the
+sharpest RISING class and because `formal/interfaces.md` carried the same unmeasured `OPEN: 0`
+sentence `formatting.md` had.** One question — relate a template type to a concrete one — had
+**five homes carrying four different lists** of which `Type` formers to descend, and the
+DECLARATION read the rule while the CALL did not: `fn f<T>(x: T?, d: T)` was accepted where it
+was written and reported as *"Unknown function"* at every call, at every type.  The corpus is
+why nothing saw it — **166 generic declarations in the tree and every one puts a bare `T` or a
+`vector<T>` first**.  Closed by deriving all four from the keystone; unlocking the refused
+shapes then produced three more (loft#1175, #1176, #1177), one of which is refused rather than
+shipped because its cure turns a refusal into a crash.
 **B6w walked the issue B6v had FILED (loft#1134) and found the report inverted**: the route it
 called broken was the only correct one, and the two it called correct were two mistakes
 cancelling.  The declared layout is what settles such a question — a `LOFT_DUMP_TYPES=1` dump,
@@ -2273,7 +2283,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 652 | 292 | 4 | **356** |
+| 654 | 292 | 6 | **356** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2297,6 +2307,14 @@ while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write
 PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored tuple
 attribute, or of the `Some` variant's `payload`), and a stored attribute is already the storage
 spelling, so an `Optional` cannot reach them.  That is the distinction the opaque column is for:
+The `(G-Mono)` walk (B7g) moved the KEYSTONE column rather than either of the other two:
+`Type::map_children` and `Type::zip_children` are the SET and PAIR twins of
+`Type::for_each_child`, so the two substituters and the unifier that used to hand-spell four
+formers, four formers and one now descend through it.  That is the column to watch — a site
+that derives from the keystone cannot be opaque to a wrapper the keystone knows about, so
+moving a body from `opaque` to `keystone` closes the question for every future variant rather
+than for `Optional` alone.
+
 a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
 every count here is a snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
@@ -3876,6 +3894,92 @@ written down now, each beside the rule it corrects —
 | a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, seven modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g); `optional` asks the same question over the TYPE former — who resolves a shape without peeling `τ?`, plus the caller-side `.base()` list (B6p). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
 | a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
 | the negative-control gate's LEAK channel | ⚠ **blind for the corpus's standard guard shape** — `falsify.sh` reads "stores not freed" off stderr, which only a `main`-ful `--interpret` run prints; `--tests` does not leak-check at all (that gate lives in `tests/wrap.rs`). So a leak guard written `main`-less scores INERT on both trees and is recorded as a LOCK. Measured on `a-nullable-return-joins-its-branch-arms.loft`, which `make ci` failed while falsify read `0|0|none|none` (B6p). Warning written into the tool's header; the cure — a leak check on `--tests` — is a decision about every library's `loft test` |
+
+#### B7g — `@FR-G-Mono` walked: the declaration read the rule and the call did not (2026-08-29)
+
+Picked because the bug review names **generic/monomorph** as the sharpest RISING class
+(+7.0 pp, 13 of this cycle's issues against a 1.4 % peak), and because `formal/interfaces.md`
+carried the same unmeasured `OPEN: 0` sentence `formatting.md` had — *"a rules doc … adds no
+code deviation"*, a claim about the doc's GENRE with no oracle under it.  Two independent
+signals at one doc.
+
+**The disagreement, found by reading before any probe.** One question — *"relate a template
+type and a concrete type"* — has five homes, and they carry four different lists of which
+`Type` formers to descend:
+
+| former | `for_each_child` (keystone) | `rewrite_type_opt` | `rewrite_unknown` | `substitute_type` ×2 | `resolve_type_var` | `extract_type_var` |
+|---|---|---|---|---|---|---|
+| Vector · Optional · Tuple | ✓ | ✓ | ✓ | ✓ | Vector only | Vector only |
+| Iterator | ✓ | ✓ | · | ✓ | · | · |
+| RefVar · Rewritten | ✓ | ✓ | ✓ | · | · | · |
+| Function | ✓ | ✓ | · | · | · | · |
+
+`Type::contains_def`'s own doc claims the GET side *"had drifted behind the SET side"* and names
+Function among the children *"that `substitute_type` DOES rewrite"*.  It does not, and has never
+— the GET side was derived from the keystone and the SET side never was, so the comment records
+the repair of one half as if it were both.
+
+**The defect the disagreement produced is a legal declaration no call can reach.**  The
+DECLARATION-side check that a generic's first parameter carries the type variable is
+`arguments[0].typedef.contains_def(tv_nr)` — keystone-derived, all seven formers.  The
+CALL-side reads were the two narrowest rows above.  So `fn f<T>(x: T?, d: T)` is accepted where
+it is written and reported as **`Unknown function f`** at every call, at every instantiating
+type.  Same for `(T, T)`, `(T, integer)`, `iterator<T>`, `vector<T>?` and `fn(T) -> …`; and
+`fn(T) -> T` in a LATER parameter was refused with *"expected `fn(T) -> T`, got
+`fn(integer) -> integer`"* — the substitution the message itself asks for.
+
+**Why no oracle saw it, measured rather than asserted.** Across `tests/scripts`, `tests/docs`,
+`default/` and `doc/`, **166 generic declarations put a bare `T` or a `vector<T>` in the first
+parameter and not one puts anything else** — exactly the two arms the descent knew.  The
+implementation and its corpus were written against each other.  This register's own axis list
+(TYPE for #1028, OPERATION for the `??` check, SPELLING for the write, RETURN TYPE for #1032,
+ARGUMENT SPELLING for #1029) had never included *which FORMER the first parameter wears*, and
+the `T?` guards are the sharpest illustration: every one of them writes
+`fn g<T>(v: vector<T>, a: T? = null)`, putting the carrier first, so the file that exists to
+test nullable type variables would not compile with the `T?` in front.
+
+Closed by deriving all four from the keystone — `Type::map_children` (the SET twin) and
+`Type::zip_children` (the PAIR twin, for a walk descending two type trees at once), both
+exhaustive.  `extract_type_var`'s LEAF also became precise, a type-var placeholder rather than
+any `Reference`, so `(P, T)` answers with `T` instead of with whichever the walk reached first.
+
+**Unlocking a refused shape is where the walk earned its next three findings**, which is the
+[[refusal-beats-backend-divergence]] rule paying out: every newly-reachable cell has to be run
+on both backends, and three of them were not clean.
+
+- **loft#1175** — `fn(T) -> T` at `T = text` enters its callee one hidden `&text` work buffer
+  short, because the count is read off the return type where the call is LOWERED and the return
+  is still `T` there.  `--interpret` faults on the corrupt frame, `--native` answers correctly.
+  **Refused at the instantiation rather than shipped** — a program the parser accepts must not
+  fault, and the other six instantiations of the same shape stay allowed.
+  ⚠ The obvious cure was built and measured: `fnref_text_buffers`' doc says its loose candidate
+  test can only *"mint a buffer nothing uses, which the pop removes"*, so counting a parametric
+  return as a text candidate looks free.  It cured `text` and made **all six other
+  instantiations abort** — a non-text return has no `__retbuf` protocol for the pop to trim
+  against.  The looseness is safe within the text family, not across its boundary; the site's
+  own claim was the thing to falsify.
+- **loft#1176** — a monomorph whose tail is a FN-REF call leaks its returned struct when used
+  inline, one record per call, both backends.  This is the arm loft#1066's fix does not reach,
+  and that commit names it in advance: `monomorph_return_is_fresh` is a positive proof read off
+  the body, and *"a `return` of a CALL is the callee's fact and answers false"*.  Checking
+  #1066's own repro first is what made this a sibling rather than a re-report — it is clean now,
+  so the fix landed and this is the shape it cannot read.
+- **loft#1177** — a lambda returning `vector<T>` aborts the compiler (H5 reports `__vdb_1` as a
+  pass-2-only attribute).  **Not a generic defect at all**: the concrete twin ICEs identically,
+  which is the loft#1029 lesson again — a generic corpus is where such a thing becomes visible,
+  not where it lives.
+
+⚠ **And one measurement that read as a fourth and was not.** The `T = struct` fn-ref cell first
+looked like a pre-existing leak, because the "twin" beside it leaked too — but that twin applied
+the function TWICE (`f(f(x))`) while the generic applied it once.  The one-application twin is
+clean, so the leak is monomorph-only and belongs to #1176.  A twin that differs from its subject
+in a second way is not a twin, and the leak channel cannot tell you which difference produced the
+warning.
+
+The `optional` table above moved on its KEYSTONE column for the first time (4 → 6): a body that
+derives from `for_each_child` cannot be opaque to a wrapper the keystone knows about, so moving
+a site from `opaque` to `keystone` closes the question for every future variant rather than for
+`Optional` alone.
 
 #### B2 — open, and the owner's call
 

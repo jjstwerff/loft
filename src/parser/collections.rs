@@ -3951,7 +3951,7 @@ use #count instead"
         let attrs = self.data.def(self.context).attributes();
         let tv = attrs
             .iter()
-            .map(|a| Self::type_var_of(&a.typedef))
+            .map(|a| Self::type_var_of(&self.data, &a.typedef))
             .find(|t| *t != u32::MAX)
             .unwrap_or(u32::MAX);
         if tv == u32::MAX {

@@ -1864,6 +1864,110 @@ impl Type {
         }
     }
 
+    /// The SET twin of [`Type::for_each_child`]: rebuild this type with every child
+    /// type replaced by `f(child)`.  Leaves come back unchanged.
+    ///
+    /// Exhaustive for the same reason its GET twin is — a new `Type` variant must
+    /// force a decision here, so that a rewrite which descends a type tree cannot
+    /// quietly stop at the variant nobody remembered.  Every hand-rolled descent this
+    /// replaces knew a different subset: the two `substitute_type` twins knew four
+    /// formers, the unifier knew one, and `Data::rewrite_type_opt` knew all seven —
+    /// so a type variable under a `fn(T) -> T` was rewritten by one of them and left
+    /// parametric by the others.
+    ///
+    /// `f` decides the LEAVES; this decides the SHAPE.  A caller that must also
+    /// rewrite a leaf (`Reference(tv) ↦ C`) tests for it before recursing.
+    #[must_use]
+    pub fn map_children(&self, f: &mut impl FnMut(&Type) -> Type) -> Type {
+        match self {
+            Type::RefVar(t) => Type::RefVar(Box::new(f(t))),
+            Type::Vector(t, deps) => Type::Vector(Box::new(f(t)), deps.clone()),
+            Type::Rewritten(t) => Type::Rewritten(Box::new(f(t))),
+            // `Type::optional` rather than the bare constructor: it is idempotent and
+            // normalises `Optional(Never|Null)`, so mapping a `τ?` cannot mint a
+            // double wrapper the rest of the compiler does not expect.
+            Type::Optional(t) => Type::optional(f(t)),
+            // BOTH halves of an iterator are mapped.  The state half mentions the same
+            // type the step half does, and `retarget_parametric_coroutine_next` reads the
+            // PAIR to decide a generator's yield channel — a step rewritten without its
+            // state leaves the accessor on the 12-byte DbRef channel for an 8-byte scalar.
+            Type::Iterator(a, b) => Type::Iterator(Box::new(f(a)), Box::new(f(b))),
+            Type::Function(args, ret, deps) => Type::Function(
+                args.iter().map(&mut *f).collect(),
+                Box::new(f(ret)),
+                deps.clone(),
+            ),
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(&mut *f).collect()),
+            // Leaves — def-nr heads carry no child `Type`.
+            Type::Unknown(_)
+            | Type::Null
+            | Type::Void
+            | Type::Never
+            | Type::Integer(_)
+            | Type::Boolean
+            | Type::Float
+            | Type::Single
+            | Type::Character
+            | Type::Text(_)
+            | Type::Keys
+            | Type::Enum(_, _, _)
+            | Type::Reference(_, _)
+            | Type::Routine(_)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Trie(_, _, _)
+            | Type::Hash(_, _, _) => self.clone(),
+        }
+    }
+
+    /// Pair this type's children with `other`'s, for a walk that descends TWO type
+    /// trees at once — the unifier's shape of the question `for_each_child` answers
+    /// for one tree.
+    ///
+    /// `None` when the two wear different formers, or the same former with a
+    /// different arity: there is nothing to pair, and a caller that unifies reads
+    /// that as *"these types do not relate"*.  A leaf pairs with anything and yields
+    /// an empty list, so a caller distinguishes *"no children"* from *"no match"*.
+    ///
+    /// Exhaustive on the same principle as its siblings.
+    pub fn zip_children<'a>(&'a self, other: &'a Type) -> Option<Vec<(&'a Type, &'a Type)>> {
+        match (self, other) {
+            (Type::RefVar(a), Type::RefVar(b))
+            | (Type::Vector(a, _), Type::Vector(b, _))
+            | (Type::Rewritten(a), Type::Rewritten(b))
+            | (Type::Optional(a), Type::Optional(b)) => Some(vec![(&**a, &**b)]),
+            (Type::Iterator(a1, a2), Type::Iterator(b1, b2)) => {
+                Some(vec![(&**a1, &**b1), (&**a2, &**b2)])
+            }
+            (Type::Function(a_args, a_ret, _), Type::Function(b_args, b_ret, _)) => {
+                (a_args.len() == b_args.len()).then(|| {
+                    a_args
+                        .iter()
+                        .zip(b_args.iter())
+                        .chain(std::iter::once((&**a_ret, &**b_ret)))
+                        .collect()
+                })
+            }
+            (Type::Tuple(a), Type::Tuple(b)) => {
+                (a.len() == b.len()).then(|| a.iter().zip(b.iter()).collect::<Vec<_>>())
+            }
+            // A leaf pairs with anything: it has no children to disagree about, and
+            // whether the two leaves are the same type is the caller's question.
+            _ if !self.has_child_types() => Some(Vec::new()),
+            // Same tree, different shape.
+            _ => None,
+        }
+    }
+
+    /// Does this type carry child types at all — the predicate
+    /// [`Type::zip_children`] uses to tell a LEAF from a former that failed to pair.
+    pub fn has_child_types(&self) -> bool {
+        let mut any = false;
+        self.for_each_child(&mut |_| any = true);
+        any
+    }
+
     /// Pre-order search: does `pred` hold on this type or any nested type?
     pub fn any_node(&self, pred: &mut impl FnMut(&Type) -> bool) -> bool {
         if pred(self) {
