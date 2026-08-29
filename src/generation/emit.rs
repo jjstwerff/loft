@@ -1205,20 +1205,14 @@ impl Output<'_> {
                 .map(|(i, _)| i)
                 .collect();
             let arm_allocs_buf = vec_hbuf_tp.is_some() && !hidden_heap_attrs.is_empty();
-            let arm_frees_buf = arm_allocs_buf
-                && !matches!(cand_def_pre.returned(),
-                    Type::Vector(_, d) | Type::Reference(_, d) | Type::Enum(_, true, d)
-                    if d.as_attr_indices().iter().any(|i| hidden_heap_attrs.contains(&(*i as usize))));
+            let _ = &cand_def_pre;
             if arm_allocs_buf {
                 let tp = vec_hbuf_tp.unwrap_or_default();
                 write!(
                     w,
                     "{{ let mut __vc_hbuf: DbRef = stores.null_named(\"__vc_hbuf\"); \
-                     __vc_hbuf = OpDatabase(cell, __vc_hbuf, {tp}_i32); "
+                     __vc_hbuf = OpDatabase(cell, __vc_hbuf, {tp}_i32); let __vc_r = "
                 )?;
-                if arm_frees_buf {
-                    write!(w, "let __vc_r = ")?;
-                }
             }
             // Build synthetic args matching this candidate's attribute list.
             // The candidate's attrs are interleaved: user params, then
@@ -1284,11 +1278,24 @@ impl Output<'_> {
             // registered for this candidate).
             self.output_call_user_fn(w, candidate_def, &synthetic)?;
             if arm_allocs_buf {
-                if arm_frees_buf {
-                    write!(w, "; OpFreeRef(cell, __vc_hbuf, \"__vc_hbuf\"); __vc_r }}")?;
-                } else {
-                    write!(w, " }}")?;
-                }
+                // The call site allocated this buffer, so the call site owns whatever it did
+                // not hand over — and WHICH of the two came back is a run-time fact, not a
+                // static one.  The callee's return deps naming the buffer says it MEANT to
+                // deliver through it, and a body whose delivery slot pass 2 rebound to a view
+                // (`r = xs.map(…); r`) declares that and hands back its own store instead.
+                // So ask the value: same store, the caller's result IS the buffer and freeing
+                // it would dangle; different store, nothing owns the buffer and it leaks.
+                //
+                // This is `State::fn_return`'s rule verbatim (loft#1179 — *"keep the one the
+                // callee handed back, identified by STORE"*), and reading it the same way on
+                // both backends is what that fix set out to do.  The static test it replaces
+                // was an over-approximation in one direction only: it kept the buffer for
+                // every callee that DECLARED a delivery, filled or not.
+                write!(
+                    w,
+                    "; if __vc_r.store_nr != __vc_hbuf.store_nr {{ \
+                     OpFreeRef(cell, __vc_hbuf, \"__vc_hbuf\"); }} __vc_r }}"
+                )?;
             }
             if is_text_return {
                 write!(w, ").to_string()")?;

@@ -149,6 +149,42 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-15 — OPENED AND CLOSED (2026-08-29, loft#1178): a declared-collection lambda whose
+> tail pass 2 REPLACES aborted the compiler.** `(L-Escape)` says a closure is an ordinary
+> value that may be stored, passed and returned, and `(L-Apply)` that calling one is a call;
+> `g = fn(v: integer) -> vector<integer> { xs = [1, 2]; xs.map(…) }` is both, and it did not
+> compile at all — `H5 two-pass contract: grew a pass-2-only attribute __vdb_2`.
+>
+> The reservation was read off the PASS-1 tail, and this body defeats that read outright: its
+> pass-1 tail is `Var(xs)`, a named local that already owns a store — the exact spelling of
+> the bodies that must NOT get a buffer — while pass 2 lowers the `map` into a fresh one. The
+> two passes are not looking at the same tail, so no predicate over the pass-1 one can
+> separate the rows. Reserving for EVERY declared-collection lambda is what compiles them
+> all, and the two things that blocked it are now closed: `State::fn_return` releases the
+> buffer a callee did not hand back (D-clo-7's fix) and the native dispatch now asks the same
+> question of the VALUE that came back rather than of the deps that declared an intent. The
+> one exception is a fact rather than a prediction — a CAPTURE tail has nothing to deliver
+> (D-clo-14).
+>
+> Two defects had to come out of the way, and each is its own sentence:
+>
+> - a lambda nested in another lambda's body left `last_closure_work_var` set, so the OUTER
+>   fn-ref was mapped to a closure variable living in the INNER lambda's table and `--native`
+>   emitted `var_??` for it. The named-function reset states the same rule one scope out
+>   (*"a lambda inside make_adder leaks last_closure_work_var into the next function
+>   parsed"*); a lambda inside a lambda is that leak within one body.
+> - `--native` could not compile the map row: the desugar's `_map_result_1` is built INSIDE
+>   the comprehension block and handed back from outside it, and a Rust `let` lives where the
+>   emission first reaches it. The interpreter cannot have that — a local is a frame slot
+>   wherever it is written — so it is a property of the EMISSION. Every VIEW a `return` names
+>   is now bound up front, the cure loft#731 gave the iteration scratch for the identical
+>   error. A view only: #354 measured the other half, and hoisting a heap local that OWNS its
+>   store re-inits a fresh one per call that the matched free no longer covers.
+>
+> Guard: `tests/scripts/1178-a-declared-collection-lambda-gets-its-buffer.loft`, which carries
+> all seven rows of the issue's table because the reservation is now unconditional and the
+> rows that must NOT fill a buffer are what says the runtime free carries them.
+
 > **D-clo-14 — OPENED AND CLOSED (2026-08-29, loft#1182): a lambda handing back a place read
 > out of a CAPTURE reserved a return buffer it then ignored.** `(L-CapHeap)` says the captured
 > store belongs to the frame that made it, so there is nothing for the callee to place — and

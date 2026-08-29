@@ -2290,65 +2290,6 @@ impl Parser {
         }
     }
 
-    /// Does this body MINT what it hands back, or does it already have a slot that owns it?
-    ///
-    /// Pass 2's `ref_return` promotes a MINT — a compiler-generated slot that owns the store
-    /// it points at (`__vdb_N`, the backing a vector literal allocates) — into the hidden
-    /// return attribute, and that promotion is what grows an attribute pass 1 never had.  A
-    /// body whose tail is a user's named local, an argument, or a capture has no such mint:
-    /// the store already has an owner and both passes agree about it.
-    ///
-    /// Measured with `LOFT_TRACE_RETPROMO=1`, which names the verdict per pass:
-    ///
-    /// | lambda body | pass 1 | pass 2 | buffer |
-    /// |---|---|---|---|
-    /// | `{ [v, v + 1] }` | no ENTER | `Grow __vdb_1` | needed |
-    /// | `{ if c { [v] } else { [] } }` | no ENTER | `Grow` ×2 | needed |
-    /// | `{ q = [v, v + 1]; q }` | `Grow q` | `MergeAttr` | already served |
-    /// | `{ mk(v) }` | `Grow __ref_1` | `MergeAttr` | already served |
-    /// | `{ q = [x]; q += [x + 1]; q }` | `SkipReassigned` | `SkipReassigned` | not needed |
-    /// | `{ captured_vector }` | no ENTER | `MergeAttr __closure` | not needed |
-    ///
-    /// A bare `Var` tail is where that measurement puts the line, and
-    /// [`var_is_mint`](Self::var_is_mint)'s @FR-O-Proxy reading is what puts it there — the
-    /// same view that keeps the two passes agreeing about an owned literal.
-    fn body_mints_its_return(&self, def: &crate::data::Definition) -> bool {
-        let Value::Block(bl) = def.code() else {
-            return true;
-        };
-        let Some(tail) = bl.operators.last() else {
-            return false;
-        };
-        let (get_field, get_vector) = (
-            self.data.def_nr("OpGetField"),
-            self.data.def_nr("OpGetVector"),
-        );
-        let vars = def.variables();
-        // A PLACE — a bare slot, or a field / element read out of one — is not a mint: the
-        // store belongs to whatever the chain is rooted at.  `{ q.xs }`, a captured struct's
-        // vector field, is the shape that made the field arm necessary: its tail is not a
-        // `Var`, so a bare-`Var` test reserved a buffer the body never fills, and
-        // `--native`'s dispatch allocates one per call and frees it only when the candidate's
-        // return deps do not name it — which they do, because the buffer exists.
-        let mut node = tail.unspan();
-        loop {
-            match node {
-                // `TupleGet` is the same notion in its other spelling — a projection that
-                // names its base directly rather than through an op — and a walk reading only
-                // the call form calls a tuple-member tail a mint.  @FR-O-Proxy is about the
-                // NOTION, not about which node carries it.
-                Value::Var(v) | Value::TupleGet(v, _) => {
-                    return vars.is_compiler_generated(*v) && vars.owns_store(*v);
-                }
-                Value::Call(d, args) if *d == get_field || *d == get_vector => match args.first() {
-                    Some(base) => node = base.unspan(),
-                    None => return true,
-                },
-                _ => return true,
-            }
-        }
-    }
-
     fn reserve_late_return_buffers(&mut self) {
         for d in 0..self.data.definitions.len() as u32 {
             let def = self.data.def(d);
@@ -2383,28 +2324,24 @@ impl Parser {
             // grow one; a second buffer on the others is the leak per closure that
             // `717-closure-struct-return.loft` pins.
             //
-            // ⚠ **Narrowed to the bodies that MINT what they hand back, and the row it
-            // does not reach is loft#1178.**  `LOFT_TRACE_RETPROMO=1` gives the promotion
-            // verdict per pass and separates the bodies cleanly — `{ [v, v + 1] }` and
-            // `{ if c { [v] } else { [] } }` have no pass-1 ENTER and `Grow` in pass 2,
-            // while `{ q = [x]; q += [x + 1]; q }` and `{ captured_vector }` agree across
-            // both passes and need nothing.  What no predicate over the PASS-1 tail can
-            // separate is `{ xs = [1, 2]; xs.map(…) }`, whose tail reads `Var(xs)` here —
-            // the spelling of the rows that must NOT get a buffer — and lowers to a fresh
-            // `__vdb_2` in pass 2.  The two passes are not looking at the same tail.
+            // Every declared-collection LAMBDA is reserved for, and the two things that
+            // stopped that from shipping are closed: `State::fn_return` releases the buffer a
+            // callee did not hand back (loft#1179) and the native dispatch now asks the same
+            // question of the value that came back, so a reservation nobody fills costs
+            // nothing on either backend.  Predicting which bodies fill it cannot work — the
+            // pass-1 tail of `{ xs = [1, 2]; xs.map(…) }` is `Var(xs)`, the exact spelling of
+            // the bodies that need no buffer, and pass 2 lowers the `map` into a fresh store
+            // (loft#1178).  The two passes are not looking at the same tail.
             //
-            // Reserving for ALL of them compiles that row too, and was tried: with
-            // `formal/closures.md` D-clo-7's unowned buffer now freed, `--interpret` runs it
-            // clean.  It is still not shipped, because `--native` then fails to COMPILE it —
-            // the map desugar declares `var__map_result_1` inside the comprehension block
-            // and `ref_return` returns it from outside — and a shape one backend accepts and
-            // the other refuses is worse than one both refuse (@FR-D-op-1).  loft#1178 wants
-            // that top-level hoist, the same repair `patch_tret_callers` performs for a
-            // buffer minted after the parse.
+            // A CAPTURE tail is the one exception, and it is a fact rather than a prediction:
+            // the store belongs to the frame that made it, so there is nothing to deliver and
+            // a buffer would be declared and ignored (loft#1182).
+            let delivers_a_collection =
+                matches!(def.returned().ret_promo_base(), Type::Vector(_, _))
+                    && !self.tail_root_is_a_capture(def);
             if def.name().starts_with("n___lambda_")
                 && !self.adopted_ret_defs.contains(&d)
-                && !(matches!(def.returned().ret_promo_base(), Type::Vector(_, _))
-                    && self.body_mints_its_return(def))
+                && !delivers_a_collection
             {
                 continue;
             }
@@ -11380,15 +11317,38 @@ impl Parser {
     /// the reading positive and UNDER-approximating, which is the direction every ownership
     /// proof in this file takes — a shape it cannot read keeps the behaviour it already had.
     ///
-    /// The inverse of [`body_mints_its_return`](Self::body_mints_its_return)'s walk, plus
-    /// `OpGetDbRef`, which is how a capture is read out of the closure record.
+    /// Reads through the projection ops and `OpGetDbRef`, which is how a capture is read out
+    /// of the closure record.
     fn tail_is_a_place(&self, def: &crate::data::Definition) -> bool {
+        self.tail_place_root(def).is_some()
+    }
+
+    /// Is the tail's root variable a CAPTURE — an attribute of this lambda's closure record?
+    ///
+    /// The question `reserve_late_return_buffers` needs, and the one no test on the tail's
+    /// SHAPE can answer: `{ cap }` and `{ xs = [1, 2]; xs.map(…) }` both reach a bare `Var`
+    /// on pass 1, and only the first names something the frame outside already owns.  A
+    /// capture needs no buffer for the reason loft#1182 gives — there is nothing to place —
+    /// while the second builds its answer and must have one.
+    fn tail_root_is_a_capture(&self, def: &crate::data::Definition) -> bool {
+        let Some(root) = self.tail_place_root(def) else {
+            return false;
+        };
+        let rec = def.closure_record();
+        rec != u32::MAX
+            && self
+                .data
+                .def(rec)
+                .attr_names
+                .contains_key(def.variables().name(root))
+    }
+
+    /// The root variable of a PLACE tail — `None` when the tail is not a place.
+    fn tail_place_root(&self, def: &crate::data::Definition) -> Option<u16> {
         let Value::Block(bl) = def.code() else {
-            return false;
+            return None;
         };
-        let Some(tail) = bl.operators.last() else {
-            return false;
-        };
+        let tail = bl.operators.last()?;
         let (get_field, get_vector, get_dbref) = (
             self.data.def_nr("OpGetField"),
             self.data.def_nr("OpGetVector"),
@@ -11402,18 +11362,12 @@ impl Parser {
                 // value actually handed back.  The LAST element is the answer — a body that
                 // clears a buffer and then returns a place is the shape loft#1182 names,
                 // where the buffer is declared and ignored.
-                Value::Insert(steps) => match steps.last() {
-                    Some(last) => node = last.unspan(),
-                    None => return false,
-                },
-                Value::Var(_) | Value::TupleGet(_, _) => return true,
+                Value::Insert(steps) => node = steps.last()?.unspan(),
+                Value::Var(v) | Value::TupleGet(v, _) => return Some(*v),
                 Value::Call(d, args) if *d == get_field || *d == get_vector || *d == get_dbref => {
-                    match args.first() {
-                        Some(base) => node = base.unspan(),
-                        None => return false,
-                    }
+                    node = args.first()?.unspan();
                 }
-                _ => return false,
+                _ => return None,
             }
         }
     }

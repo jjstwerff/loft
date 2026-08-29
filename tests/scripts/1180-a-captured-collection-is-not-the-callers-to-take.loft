@@ -35,17 +35,10 @@
 //
 // @falsified-at: 6409caec — interpret exit 0 -> 1 and 0 -> 1 assertion failures, native the
 // same on both channels.
-// ⚠ **`make falsify` still reports NOT falsified, and the reason is a live defect rather than
-// a gap in this file.** Its native row reads `THIS TREE IS NOT CLEAN` because the captured
-// FIELD cell leaks one store per call on `--native` — loft#1182, a different mechanism
-// (`ref_return` promotes the borrowed local into the return attribute, so the callee declares
-// it delivers through a buffer it then ignores).  The VALUE channel is what scores this file
-// and it moves on both backends; the leak channel is loft#1182's to move.
-// ⚠ **The captured-FIELD spelling (`{ q.xs }`) has no cell here.** Its VALUES are correct
-// after this fix, on both backends, but it still leaks one store per call — `ref_return`
-// promotes the borrowed local into the return attribute, so the callee declares it DELIVERS
-// through a buffer it then ignores.  That is loft#1182, a different mechanism, and a cell for
-// it would score this file on a channel it does not answer.
+// The native row read `THIS TREE IS NOT CLEAN` when this file was written, because the
+// captured-FIELD cell leaked one store per call on `--native`.  That was loft#1182 — a
+// capture read out of the closure record has nothing to place, so the promoted buffer was
+// declared and then ignored — and it is closed, so both rows are clean now.
 
 struct Q { xs: vector<integer> }
 struct P { n: integer }

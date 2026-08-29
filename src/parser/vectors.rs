@@ -1144,6 +1144,16 @@ impl Parser {
 
         self.data.def_used(d_nr);
 
+        // A lambda's own emit is the ONLY thing that may answer this question about it.
+        // `emit_lambda_code` sets `last_closure_work_var` for a CAPTURING lambda and leaves
+        // it alone for a non-capturing one, so a capturing lambda nested in the body just
+        // parsed would otherwise still be the answer — and the assignment site would map
+        // THIS fn-ref to a closure variable that lives in the inner lambda's table.  Native
+        // then emits `var_??` for the closure argument and the program does not compile.
+        // The named-function reset in `definitions.rs` states the same rule one scope out
+        // (*"a lambda inside make_adder leaks last_closure_work_var into the next function
+        // parsed"*); a lambda inside a lambda is the same leak within one body.
+        self.last_closure_work_var = u16::MAX;
         self.emit_lambda_code(code, d_nr);
 
         // Build the user-visible function type from the declared arguments only.
@@ -1433,6 +1443,8 @@ impl Parser {
 
         self.data.def_used(d_nr);
 
+        // See the twin in `parse_lambda`: only this lambda's own emit may answer.
+        self.last_closure_work_var = u16::MAX;
         self.emit_lambda_code(code, d_nr);
 
         // The public Function type is the DECLARED parameters only — the first

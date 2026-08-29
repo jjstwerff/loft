@@ -1,0 +1,133 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A lambda with a DECLARED collection return gets its return buffer, whatever its body's tail
+// turns out to be.
+//
+// The reservation used to be read off the PASS-1 tail — reserve for a body that MINTS what it
+// hands back — and one row defeats that read outright: `{ xs = [1, 2]; xs.map(…) }` has the
+// pass-1 tail `Var(xs)`, a named local that already owns a store, which is exactly the
+// spelling of the two rows that must NOT get a buffer; pass 2 then lowers the `map` into a
+// fresh `__vdb_2`.  The two passes are not looking at the same tail, so no predicate over the
+// pass-1 one can separate the rows — the compiler aborted on the H5 two-pass contract.
+//
+// Reserving for EVERY declared-collection lambda compiles all seven rows, and the two things
+// that stopped that from shipping are both closed now:
+//
+//   - `--interpret` leaked one store per call on the rows that do not FILL the buffer.
+//     `State::fn_return` releases every buffer the call site allocated, keeping the one the
+//     callee handed back (loft#1179) — a runtime check, so it covers a row no static
+//     prediction could.
+//   - `--native` could not COMPILE the map row: the desugar's `_map_result_1` is built INSIDE
+//     the comprehension block and handed back from outside it, and a Rust `let` lives where
+//     the emission first reaches it (`E0425: cannot find value var__map_result_1`).  The
+//     interpreter cannot have that — a local is a frame slot wherever it is written — so it
+//     is a property of the EMISSION.  Every local a `return` names is now bound up front, the
+//     same cure loft#731 gave the iteration scratch for the identical error.
+//
+// Two more defects had to come out of the way first, and each is its own sentence:
+//
+//   - a lambda nested in another lambda's body left `last_closure_work_var` set, so the OUTER
+//     fn-ref was mapped to a closure variable living in the INNER lambda's table and native
+//     emitted `var_??` for it.  The named-function reset states the same rule one scope out;
+//     a lambda inside a lambda is the same leak within one body.
+//   - native kept a fn-ref return buffer whenever the callee's deps DECLARED a delivery
+//     through it, filled or not — and a body whose delivery slot pass 2 rebound to a view
+//     (`r = xs.map(…); r`) declares exactly that.  Which store came back is a run-time fact,
+//     so the arm now asks the value, which is `State::fn_return`'s rule verbatim.
+//
+// All seven rows of the issue's table are cells here, because the reservation is now
+// unconditional and the rows that must NOT fill a buffer are what says the runtime free
+// carries them.
+//
+// @falsified-at: c7d4270c — interpret exit 101 -> 0, interpret panicked -> clean, native exit
+// 101 -> 0, native panicked -> clean.
+//
+// ⚠ Every cell binds to its OWN local.  Two lambda results sharing one local across sibling
+// loops loses a free (loft#1183, whose native half loses both), which would score this file on
+// a channel it does not answer.
+
+fn mk(v: integer) -> vector<integer> { [v, v * 2] }
+
+fn test_a_minted_literal_tail() {
+  g = fn(v: integer) -> vector<integer> { [v, v + 1] };
+  for i in 0..4 {
+    a = g(7);
+    assert(len(a) == 2 && a[1] == 8, "minted literal {i}: got {len(a)}");
+  }
+}
+
+fn test_a_branch_join_tail() {
+  g = fn(v: integer) -> vector<integer> { if v > 3 { [v] } else { [] } };
+  for i in 0..4 {
+    b = g(7);
+    assert(len(b) == 1 && b[0] == 7, "join taken {i}: got {len(b)}");
+    c = g(1);
+    assert(len(c) == 0, "join untaken {i}: got {len(c)}");
+  }
+}
+
+fn test_a_named_local_tail() {
+  g = fn(v: integer) -> vector<integer> { q = [v, v + 1]; q };
+  for i in 0..4 {
+    d = g(7);
+    assert(len(d) == 2 && d[1] == 8, "named local {i}: got {len(d)}");
+  }
+}
+
+fn test_a_call_tail() {
+  g = fn(v: integer) -> vector<integer> { mk(v) };
+  for i in 0..4 {
+    e = g(7);
+    assert(len(e) == 2 && e[1] == 14, "call tail {i}: got {len(e)}");
+  }
+}
+
+fn test_a_reassigned_local_tail() {
+  g = fn(v: integer) -> vector<integer> { q = [v]; q += [v + 1]; q };
+  for i in 0..4 {
+    f = g(7);
+    assert(len(f) == 2 && f[1] == 8, "reassigned local {i}: got {len(f)}");
+  }
+}
+
+fn test_a_captured_collection_tail() {
+  cap: vector<integer> = [3, 4, 5];
+  g = fn(v: integer) -> vector<integer> { cap };
+  for i in 0..4 {
+    h = g(7);
+    assert(len(h) == 3 && h[2] == 5, "capture tail {i}: got {len(h)}");
+    assert(len(cap) == 3, "the capture survives {i}: got {len(cap)}");
+  }
+}
+
+fn test_a_map_tail_built_from_a_local() {
+  // THE row.  Its pass-1 tail is `Var(xs)` and its pass-2 tail is a fresh `__vdb_2`.
+  g = fn(v: integer) -> vector<integer> { xs = [1, 2]; xs.map(|x| { x + v }) };
+  for i in 0..4 {
+    k = g(7);
+    assert(len(k) == 2 && k[0] == 8 && k[1] == 9, "map tail {i}: got {len(k)}");
+  }
+}
+
+fn test_a_map_tail_bound_before_the_return() {
+  // The workaround spelling the issue records, kept as the cell that says the unconditional
+  // reservation did not disturb the row that already compiled.
+  g = fn(v: integer) -> vector<integer> { xs = [1, 2]; r = xs.map(|x| { x + v }); r };
+  for i in 0..4 {
+    m = g(7);
+    assert(len(m) == 2 && m[1] == 9, "bound map tail {i}: got {len(m)}");
+  }
+}
+
+fn main() {
+  test_a_minted_literal_tail();
+  test_a_branch_join_tail();
+  test_a_named_local_tail();
+  test_a_call_tail();
+  test_a_reassigned_local_tail();
+  test_a_captured_collection_tail();
+  test_a_map_tail_built_from_a_local();
+  test_a_map_tail_bound_before_the_return();
+  print("1178-a-declared-collection-lambda-gets-its-buffer ok\n");
+}

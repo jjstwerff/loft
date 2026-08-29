@@ -1401,7 +1401,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 41 | **8** | 33 |
+| 40 | **7** | 33 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
