@@ -4159,14 +4159,22 @@ impl Definition {
                 .last()
                 .is_none_or(|tail| Self::site_is_fresh(tail, vars)),
             // A call THROUGH A FN-REF reaches the `_` arm below and answers "not proven",
-            // and loft#1176 measured why widening it here cannot work: the obvious
-            // discriminator — *"a fn-ref that CAPTURES nothing has nothing to borrow from"*,
-            // which `scopes::inline_struct_return` relies on for a `??` subject (loft#1114)
-            // — does not discriminate in THIS position.  There the fn-ref is a LOCAL whose
-            // type was inferred at the bind, so its deps name the closure record; here it is
-            // a PARAMETER whose type was DECLARED (`f: fn() -> T`), and a declared fn-type
-            // carries no deps whether the value passed captures or not.  Measured: a
-            // capturing lambda and a minting one both read "capture-free".
+            // and that is the honest answer HERE: the target is a runtime value, so this
+            // body cannot read the callee's fact.  It is readable one frame up, where the
+            // caller named the closure it passed —
+            // [`Self::monomorph_fnref_return_slots`] reports which argument positions to
+            // resolve and `scopes::monomorph_fnref_return_is_fresh` asks this same
+            // question of what they resolve to (loft#1176).
+            //
+            // ⚠ Not by reading the fn-ref's DEPS.  `scopes::inline_struct_return` decides
+            // the same question for a `??` subject with *"only a CAPTURING fn-ref can hand
+            // back a store the caller's scope owns"* (loft#1114), and that predicate is
+            // inert in THIS position: there the fn-ref is a LOCAL whose type was INFERRED
+            // at the bind, so its deps name the closure record, and here it is a PARAMETER
+            // whose type was DECLARED (`f: fn(T) -> T`), and a declared fn-type carries no
+            // deps whatever value is passed.  Measured: a capturing lambda and a minting
+            // one both read "capture-free".  The target's own BODY is what tells them
+            // apart, which is why the resolution goes to the definition and not the type.
             other => match Self::root_var(other) {
                 Some(n) => n < vars.count() && !vars.is_argument(n),
                 // No readable root (a call, a literal-built aggregate): not proven fresh.
@@ -4175,17 +4183,15 @@ impl Definition {
         }
     }
 
-    #[must_use]
-    pub fn monomorph_return_is_fresh(&self) -> bool {
-        let vars = &self.variables;
-        let mut seen_return = false;
-        let mut all_fresh = true;
-        // Every explicit `return`, PLUS the body's own tail. The tail matters most and is
-        // easy to miss: at the moment the caller's lift asks this question the callee's
-        // tail is still a bare expression — the `Return` wrapper is put on by the same
-        // scope pass, and whether that has run yet depends on which function it reached
-        // first. Reading only `Return` nodes therefore answered "no return sites" for the
-        // exact monomorph being asked about.
+    /// Every value this body can hand back: each explicit `return`, PLUS the body's own
+    /// tail.
+    ///
+    /// The tail matters most and is easy to miss: at the moment the caller's lift asks
+    /// about a callee, that callee's tail may still be a bare expression — the `Return`
+    /// wrapper is put on by the same scope pass, and whether that has run yet depends on
+    /// which function it reached first. Reading only `Return` nodes therefore answers
+    /// "no return sites" for the exact definition being asked about.
+    fn return_sites(&self) -> Vec<Value> {
         let mut sites: Vec<Value> = Vec::new();
         self.code.walk(&mut |v| {
             if let Value::Return(inner) = v {
@@ -4198,6 +4204,82 @@ impl Definition {
         {
             sites.push(tail.clone());
         }
+        sites
+    }
+
+    /// The fn-ref PARAMETER slots this body's return sites call THROUGH, when every site
+    /// is either already proven fresh or exactly such a call — loft#1176.
+    ///
+    /// [`Self::monomorph_return_is_fresh`] answers `false` for a tail like `f(x)` because
+    /// the ownership of what comes back is the callee's fact and `f` is a runtime value.
+    /// That fact is not unreachable, only unreachable FROM HERE: at the call site the
+    /// caller named the closure it passed, so it can resolve the target and ask the same
+    /// body-shaped question of it. This reports which argument positions have to be
+    /// resolved for that to be possible.
+    ///
+    /// `None` — nothing to resolve, because a site is neither fresh nor readable. The
+    /// slot must be an ARGUMENT: a call through a fn-ref LOCAL is a different question,
+    /// answerable inside this body rather than at the call site, and returning its slot
+    /// index would make the caller read its own unrelated argument at that position.
+    ///
+    /// Pair it with [`Self::has_fnref_return_site`], which asks only whether the answer
+    /// DEPENDS on a caller's closure. The two are different questions and a caller that
+    /// reads `None` as "no closure involved" gets the unsound half: a body with one
+    /// readable fn-ref site and one site this cannot read also answers `None`.
+    #[must_use]
+    pub fn monomorph_fnref_return_slots(&self) -> Option<Vec<u16>> {
+        let vars = &self.variables;
+        let sites = self.return_sites();
+        if sites.is_empty() {
+            return None;
+        }
+        let mut slots: Vec<u16> = Vec::new();
+        for site in &sites {
+            if Self::site_is_fresh(site.unspan(), vars) {
+                continue;
+            }
+            match site.unspan() {
+                Value::CallRef(v_nr, _)
+                    if vars.is_argument(*v_nr)
+                        && matches!(vars.tp(*v_nr).base(), Type::Function(_, _, _)) =>
+                {
+                    slots.push(*v_nr);
+                }
+                _ => return None,
+            }
+        }
+        if slots.is_empty() { None } else { Some(slots) }
+    }
+
+    /// Does ANY return site hand back what a fn-ref PARAMETER answered — loft#1176?
+    ///
+    /// That makes the ownership of this body's result the CALLER's closure's fact, which
+    /// no signature of this body can carry: `fn once(x: P, f: fn(P) -> P) -> P { f(x) }`
+    /// hands back a fresh store, the caller's own argument, or a record the closure
+    /// CAPTURED, and its declared `-> P` says the same thing in all three cases.
+    ///
+    /// So this is the question that must be asked BEFORE the ordinary deps proxy, not
+    /// after: `returns_borrowed_view` reads this body's empty return dep as "owned" and
+    /// licenses a lift that then frees the capture — measured, on both backends, with the
+    /// captured record answering another value on the next read and garbage after the
+    /// scope ends. Where this answers `true`, [`Self::monomorph_fnref_return_slots`] plus
+    /// the caller's `fnref_target` is the only thing that can settle it.
+    #[must_use]
+    pub fn has_fnref_return_site(&self) -> bool {
+        let vars = &self.variables;
+        self.return_sites().iter().any(|site| {
+            matches!(site.unspan(), Value::CallRef(v_nr, _)
+                if vars.is_argument(*v_nr)
+                    && matches!(vars.tp(*v_nr).base(), Type::Function(_, _, _)))
+        })
+    }
+
+    #[must_use]
+    pub fn monomorph_return_is_fresh(&self) -> bool {
+        let vars = &self.variables;
+        let mut seen_return = false;
+        let mut all_fresh = true;
+        let sites = self.return_sites();
         for inner in &sites {
             seen_return = true;
             let inner = inner.unspan();

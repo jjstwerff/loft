@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 331 | 313 | **18** |
+| 333 | 315 | **18** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2291,7 +2291,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 654 | 293 | 5 | **356** |
+| 656 | 295 | 5 | **356** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -3990,9 +3990,9 @@ on both backends, and three of them were not clean.
   leaked the same way and always had**, which is what says the `_` was short by the whole
   collection family rather than by the former the issue is named for — found only because the
   vector fix made a sibling cell worth running.
-- **loft#1176 — OPEN, and the measurement is the product.** A monomorph whose tail is a FN-REF
-  call leaks its returned struct when used inline.  This is the arm loft#1066's fix does not
-  reach, and that commit names it in advance: `monomorph_return_is_fresh` is a positive proof
+- **loft#1176 — CLOSED, and it took its opposite down with it.** A monomorph whose tail is a
+  FN-REF call leaked its returned struct when used inline: the arm loft#1066's fix does not
+  reach, and that commit names it in advance — `monomorph_return_is_fresh` is a positive proof
   read off the body, and *"a `return` of a CALL is the callee's fact and answers false"*.
   Checking #1066's own repro first is what made this a sibling rather than a re-report.
   ⚠ **The obvious discriminator was built, measured, and does not discriminate.**
@@ -4002,8 +4002,21 @@ on both backends, and three of them were not clean.
   minting one alike — because there the fn-ref is a LOCAL whose type was INFERRED at the bind,
   so its deps name the closure record, and here it is a PARAMETER whose type was DECLARED, and
   a declared fn-type carries no deps whatever is passed.  **The same predicate, sound in one
-  position and inert in the other, distinguished by where the type came from.**  Reverted with
-  the measurement written at the site.
+  position and inert in the other, distinguished by where the type came from.**
+  The fact is not unreachable, only unreachable from INSIDE the callee: at the CALL SITE the
+  caller named the closure it passed, so `fnref_target` resolves it and the target's own
+  body-shaped proof decides.  Both ownership reads are required and neither is redundant —
+  `returns_borrowed_view` catches a lambda handing back its own PARAMETER, and
+  `monomorph_return_is_fresh` catches one handing back a CAPTURE, which the deps proxy calls
+  owned because the dep names the hidden `__closure`.
+  ⚠ **And the reference route was the one that was silently wrong.** Scoring the broken
+  monomorph against the hand-written concrete twin — the [[reference-route-is-the-oracle]]
+  move — is what found it: the twin lifts on the deps proxy ALONE, so a capture-returning
+  closure had its record FREED, answering another value on the next iteration and garbage
+  after the scope, on both backends.  The two routes were wrong in opposite directions, and
+  the one this issue was filed against was the safe half.  So the resolution now gates BOTH,
+  ahead of every signature-carried fact: a `-> P` says the same thing whether the closure
+  mints, hands back the caller's argument, or hands back a capture.
 
 ⚠ **And one measurement that read as a fourth and was not.** The `T = struct` fn-ref cell first
 looked like a pre-existing leak, because the "twin" beside it leaked too — but that twin applied

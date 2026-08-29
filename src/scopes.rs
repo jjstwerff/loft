@@ -7260,6 +7260,62 @@ impl Scopes {
         }
     }
 
+    /// loft#1176 — does a monomorph whose tail is a call THROUGH A FN-REF hand back a
+    /// store this caller must own?
+    ///
+    /// [`Definition::monomorph_return_is_fresh`] reads the callee's body and answers
+    /// `false` for a tail like `f(x)`: what comes back is the fn-ref target's fact, and
+    /// inside the monomorph `f` is a runtime value with no definition to ask.  The fact
+    /// is not unreachable, only unreachable from THERE — at this call site the caller
+    /// wrote which closure it passed, so `fnref_target` resolves it and the same
+    /// body-shaped question is put to the definition that actually runs.
+    ///
+    /// **The resolved target must pass BOTH ownership reads, and the pair is not
+    /// redundant.**  `returns_borrowed_view` is the deps proxy and catches a lambda
+    /// handing back its own PARAMETER; it does not catch one handing back a CAPTURE,
+    /// because the dep then names the hidden `__closure` attribute and a hidden attr is
+    /// read as "not a borrow" (loft#1114).  `monomorph_return_is_fresh` is what closes
+    /// that: the capture arrives as a place read rooted at `__closure`, which is an
+    /// argument, so the body-shaped proof refuses it.  Measured — the concrete twin
+    /// `fn once_p(x: P, f: fn(P) -> P) -> P { f(x) }` lifted on the deps proxy alone and
+    /// CORRUPTED the captured record on both backends (`formal/closures.md` D-clo-9);
+    /// this route declines that same shape.
+    ///
+    /// Every unresolved position answers `false`, which leaves the leak that was already
+    /// there.  That is the direction this whole gate takes when it cannot name what it
+    /// would be freeing: a wrong `true` frees a store the caller still holds.
+    fn monomorph_fnref_return_is_fresh(
+        &self,
+        val: &Value,
+        data: &Data,
+        def: &crate::data::Definition,
+    ) -> bool {
+        let Some(slots) = def.monomorph_fnref_return_slots() else {
+            return false;
+        };
+        let Value::Call(_, args) = val.unspan() else {
+            return false;
+        };
+        slots.iter().all(|&slot| {
+            // A parameter's variable slot IS its argument position; a hidden argument the
+            // lowering appends sits after every visible one, so a slot in range names the
+            // value the caller wrote.
+            let Some(arg) = args.get(slot as usize) else {
+                return false;
+            };
+            let Value::Var(fn_var) = arg.unspan() else {
+                return false;
+            };
+            let target = match self.fnref_target.get(fn_var).copied() {
+                Some(d) if d != u32::MAX => data.def(d),
+                _ => return false,
+            };
+            target.code != Value::Null
+                && !target.returns_borrowed_view()
+                && target.monomorph_return_is_fresh()
+        })
+    }
+
     /// Check whether a scanned argument at position `arg_idx` is an inline
     /// struct-returning call that needs lifting to a temporary variable.
     /// Returns the struct definition number if lifting is needed, None
@@ -7601,10 +7657,26 @@ impl Scopes {
             // indistinguishable to `returns_borrowed_view` and lifting on that would double
             // free the first.  The proof is positive and under-approximating: a shape it
             // cannot read stays unlifted, which costs the leak that was already there.
-            let lift_owned_return = def.name.starts_with("n_")
-                || (def.name.starts_with("t_")
-                    && (def.attr_names.contains_key("__retbuf")
-                        || def.monomorph_return_is_fresh()));
+            // loft#1176 — a tail that is a call THROUGH A FN-REF is such a shape read from
+            // the wrong frame, and it is decided by [`Self::monomorph_fnref_return_is_fresh`]
+            // ALONE, ahead of every gate below.  That ordering is the fix rather than a
+            // tidy-up.  The gates below all read facts carried by THIS
+            // callee's signature, and none of them can carry the caller's closure: `-> P`
+            // says the same thing whether the closure mints, hands back the caller's own
+            // argument, or hands back a record it CAPTURED.  Reached through the `n_` arm
+            // the last of those was lifted and freed — the captured record answered
+            // another value on the next read and garbage once the scope ended, on both
+            // backends — while `__retbuf`'s exemption made it worse: `{ f(x) }` never
+            // delivers INTO that buffer, so the premise that the lifted temp is the
+            // caller's own allocation is simply false here.
+            let lift_owned_return = if def.has_fnref_return_site() {
+                self.monomorph_fnref_return_is_fresh(val, data, def)
+            } else {
+                def.name.starts_with("n_")
+                    || (def.name.starts_with("t_")
+                        && (def.attr_names.contains_key("__retbuf")
+                            || def.monomorph_return_is_fresh()))
+            };
             if lift_owned_return && def.code != Value::Null {
                 // The same `returns_borrowed_view()` question its struct-enum sibling below
                 // asks, and for the same reason: an EMPTY return dep (or one naming only a

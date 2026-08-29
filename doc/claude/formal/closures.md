@@ -93,8 +93,9 @@ with the closure's environment in scope.
 ## Deviations
 
 OPEN: **1** — a lambda that BINDS its return value to a local first leaks one store
-(D-clo-7, below; the value half of that entry is closed). D-clo-8 — a captured
-`vector<(…)>` unpacked rather than shared — was opened and closed 2026-08-28. Closed: both
+(D-clo-7, below; the value half of that entry is closed). D-clo-9 — a captured record FREED
+by a caller that lifted a fn-ref tail — and D-clo-8 — a captured `vector<(…)>` unpacked
+rather than shared — were opened and closed on 2026-08-29 and 2026-08-28. Closed: both
 lambda forms capture identically (D-clo-1), the
 stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
 2026-07-04 —
@@ -142,6 +143,39 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-9 — OPENED AND CLOSED (2026-08-29, loft#1176): a captured record was FREED by a
+> caller that lifted a fn-ref tail.** `(L-CapHeap)` says a captured heap value is SHARED, and
+> a value the outer scope still names cannot be released by somebody else's scope exit.
+>
+> `fn once(x: P, f: fn(P) -> P) -> P { f(x) }` hands back a fresh store, the caller's own
+> argument, or a record the closure CAPTURED, and its `-> P` reads the same in all three.
+> The caller decided from `returns_borrowed_view`, the DEPS proxy: a capture-returning
+> lambda's return dep names the hidden `__closure` attribute, and a hidden attr reads as
+> *"not a borrow"*. So the caller lifted the result and freed it — the captured record
+> answered another value on the next iteration and garbage once the scope ended, on BOTH
+> backends. This is D-clo-7's licence exactly (*"a dep dropped as uninteresting is not a dep
+> that was never there"*), in the direct-`Call` position rather than the `??` one that entry
+> closed, and the `__retbuf` exemption made it worse: `{ f(x) }` never delivers INTO that
+> buffer, so the premise that the lifted temp is the caller's own allocation is false there.
+>
+> The mirror image was live at the same time and is what the issue was filed for: the
+> GENERIC spelling of the same source under-lifted, because the freshness proof it uses is
+> read off the monomorph's body and a fn-ref's callee is a runtime value there — one leaked
+> record per inline call. **One resolution answers both.** The callee's fact is unreachable
+> from inside the callee and reachable at the CALL SITE, where the caller named the closure
+> it passed: `fnref_target` resolves the definition and its own body-shaped freshness proof
+> decides. Both ownership reads are needed and neither is redundant — the deps proxy catches
+> a lambda handing back its own PARAMETER, the body proof catches one handing back a CAPTURE.
+> An unresolved or ambiguous slot declines, which costs the leak that was already there.
+>
+> ⚠ **The fn-ref must be a caller LOCAL.** `fnref_target` maps variable slots, so one held in
+> a struct field (`once(P { n: 41 }, h.f)`) resolves to nothing and declines — one leaked
+> record per call, unchanged by this fix and recorded here rather than left implicit.
+>
+> Guard: `tests/scripts/1176-a-monomorph-whose-tail-is-a-fn-ref-call.loft`, whose two halves
+> fail on DIFFERENT channels (the over-lift on an assertion, the under-lift on the exit leak)
+> and whose header says which of them the falsification row can and cannot score.
 
 > **D-clo-8 — OPENED AND CLOSED (2026-08-28, loft#1131): a captured `vector<(…)>` was
 > UNPACKED instead of shared.** `(L-CapHeap)` says a captured heap value is SHARED, and the
