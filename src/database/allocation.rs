@@ -2096,6 +2096,7 @@ impl Stores {
             had_fatal: false,
             runtime_error: None,
             format_fault_tag: None,
+            format_fault_armed: false,
             // #255 / @PLN9: a parallel worker's file ops must resolve paths the
             // same way as the main thread — carry the anchor + mode.
             source_dir: self.source_dir.clone(),

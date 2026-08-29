@@ -357,6 +357,15 @@ impl Parser {
         if !self.convert(&mut second_code, &second_type, &Type::Boolean) && !self.first_pass {
             self.can_convert(&second_type, &Type::Boolean);
         }
+        // `&&`/`||` do not route through `call_op_as`, so its deferral counter cannot see an
+        // operand pass 1 failed to type — and `handle_operator` publishes `Type::Boolean` for
+        // this expression whatever the operands did, which ERASES the evidence for everything
+        // upstream.  An operand still `Unknown` here is that evidence, and this is the only
+        // place it exists.  Pass 2 re-parses and types it properly, so it matters only where
+        // the source is parsed once; see `Parser::unresolved_types` (loft#1170).
+        if self.first_pass && (tp.is_unknown() || second_type.is_unknown()) {
+            self.unresolved_types = self.unresolved_types.saturating_add(1);
+        }
         // Both operands of `&&`/`||` are TRUTHINESS positions, so the result is a definite
         // two-state boolean — C73 (`&&`/`||`/`!` coerce `null` to `false`), which is why the
         // caller types this expression the non-null `Type::Boolean`.  The left operand becomes

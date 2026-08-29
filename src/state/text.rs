@@ -371,21 +371,22 @@ impl State {
         let c = *self.get_stack::<char>();
         // @PLAN53 cluster 2 / S4: stepped char-pop span (4 off, 8 aligned).
         let n = self.stack_step(4) as u16;
-        // Plan-07 phase 4e.3 — when a fault tag is set on the
-        // preceding `OpTagFault` (4e.1 format-scope swap) AND the
-        // char is the null sentinel, render `null(<tag>)` so the
-        // developer sees what produced the missing character
-        // instead of an empty space.  Bare `'\0'` outside format
-        // scope (no tag) keeps the legacy "skip" behaviour so
-        // string concatenation with literal `'\0'` is unchanged.
-        let tag = self.database.take_format_fault();
+        // A null character renders as NOTHING — `@FR-F-Render` states that exception for
+        // every position, and states why: iterating text past its end must append no
+        // garbage.  So the fault tag is dropped here rather than rendered.
+        //
+        // This op used to render `null(<tag>)` for a tagged null character, to show what
+        // produced the missing character instead of an empty space.  That is a defensible
+        // thing to want, but it was never true of the language: only the INTERPRETER did
+        // it, so `"hi"[9]` read `null(oob)` here and empty under `--native`, and a
+        // disagreement between the backends is by definition a bug in whichever one
+        // disobeys (`@FR-D-op-1`).  The rule says nothing renders, so this is the side
+        // that moves.  Reversing it — carrying the cause on a character hole, on BOTH
+        // backends — is a change to F-Render and the owner's call, not this op's.
+        //
+        // The tag is still TAKEN, so it cannot leak into a later hole in the same string.
+        let _ = self.database.take_format_fault();
         if c as u32 == 0 {
-            if let Some(label) = tag {
-                let s = self.string_mut(pos - n);
-                s.push_str("null(");
-                s.push_str(label);
-                s.push(')');
-            }
             return;
         }
         self.string_mut(pos - n).push(c);

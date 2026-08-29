@@ -102,6 +102,14 @@ comparison, `??`) evaluates both operands under E-Left.
                                                 overflows the type, or op is `/`/`%` with
                                                 v₂ = 0.  The result is **null**; evaluation
                                                 CONTINUES (it never halts).
+                                                FLOAT and SINGLE are the exception, because
+                                                for them "not computable" is decided by IEEE
+                                                and not by this rule: `5.0 / 0.0` is `inf`, a
+                                                REPRESENTABLE value, so it is not null.  Only
+                                                what IEEE makes a NaN is — `0.0 / 0.0`, and
+                                                `x % 0.0` — since the float null IS the NaN
+                                                (E-Null).  Overflow follows the same line:
+                                                `1.0e308 * 10.0` keeps `inf`.
   (E-NullArg)   any op with a `null` operand produces `null` (null is CONTAGIOUS),
                 EXCEPT the two families below.
                 COMPARISONS are DEFINITE against the reserved pattern and UNIFORM across
@@ -154,6 +162,17 @@ chooses between ARMS, so a null silently reading as "skip this arm" picks a diff
 with nothing said, while an `if`'s two outcomes are both written at the site. The cure is
 spellable (`mb() ?? false`, `mb() == true`) and the diagnostic names it. Every listed position
 was verified on both backends; the guard's refusal was too.
+
+**Float division by zero is `inf`, and that is a decision, not an oversight.** `(E-Uncomp)`
+read as covering it for years and the code never did; the carve-out above was added by the
+`@FR-E-NullArg` walk (2026-08-29) after the rule sent it hunting a bug that was not there —
+the third time an incomplete rule in this family produced a false positive. The reason is
+recorded at `OpDivFloat` in `default/01_code.loft`: forcing NaN (loft#983) made ONE expression
+answer two things — `inf` inline, where the `*Nullable` peer is emitted, and `null` once bound
+or returned — split division from float OVERFLOW, which keeps `inf` in every position, and
+made `a / b ?? 0.0` select the peer that never yields null, so the idiom every numeric library
+uses to defend a divide guarded nothing. Integer `/0` stays null: an integer has no `inf` to
+answer with.
 
 **Under all of it is the spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)):
 a cell that can't compute shows null and never stops the other cells. A fault is *local* — it

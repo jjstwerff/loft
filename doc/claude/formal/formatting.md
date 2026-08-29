@@ -159,7 +159,8 @@ index, …) names *why* the value is null, which is exactly what a `"{x}"` in a 
 
 ## Deviations
 
-OPEN: **2** — `D-fmt-2` and `D-fmt-3` below, both opened 2026-08-29.
+OPEN: **2** — `D-fmt-2` and `D-fmt-3` below, both opened 2026-08-29. `D-fmt-4` was opened and
+closed the same day by the `@FR-E-NullArg` walk.
 
 ⚠ **This doc read `OPEN: 0` for its whole life, and the walk that first asked found four
 defects.** The line was never a measurement: it said *"a rules doc adds no code deviation"*,
@@ -197,6 +198,27 @@ Found by walking `@FR-F-Spec`; all four fixed in the same pass, guards in
 4. **`{n:e}` and `{n:j}` aborted the interpreter.** `ops::format_long` implements four radixes
    and ends in `panic!("Unknown radix")`; the spec reader answers two more. An ordinary source
    program reached that panic. Both are refused at the type dispatch now.
+
+### D-fmt-4 — OPENED AND CLOSED (2026-08-29): a null character carried a fault cause, on one backend
+
+- Was: a null `character` in a format hole rendered `null(<tag>)` when the fault tag was armed
+  — `"hi"[9]` read `null(oob)` — where `(F-Render)` says a null character renders as NOTHING,
+  and says why: iterating text past its end must append no garbage. Only the INTERPRETER did
+  it (`State::append_character`); `--native` rendered nothing, so the two backends disagreed
+  on an ordinary text overrun and `@FR-D-op-1` makes that a bug in whichever one disobeys.
+- The intent was good and is worth restating: it showed *what* produced the missing character
+  instead of an empty space. But a diagnostic that exists on one backend is not a language
+  feature, and no test pinned it (the four `fmt43_*` cases in `tests/runtime_warnings.rs` are
+  all INTEGER holes, and all still pass).
+- Fixed toward the rule and toward native: `append_character` drops the tag rather than
+  rendering it. The tag is still TAKEN, so it cannot leak into a later hole of the same
+  string. Guard `tests/scripts/a-fault-tag-names-the-fault-that-happened.loft`.
+- The cause itself is now written by the op that FAULTS (`Stores::note_format_fault`) rather
+  than armed from the op's shape, so `null(<reason>)` names what happened — loft#1169. A hole
+  may hold several fault-prone ops while only the outermost is armed, so a peer that inherits
+  a null LEAVES the tag alone: the cause travels with the null from wherever it was born.
+- **Reversing this is a change to `(F-Render)`, not to the op.** If a character hole should
+  carry its fault cause, the rule's character row says so and BOTH backends implement it.
 
 ### D-fmt-2 — OPEN (2026-08-29, loft#1165): a `character` hole drops its whole spec
 

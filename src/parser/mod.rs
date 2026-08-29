@@ -635,6 +635,20 @@ pub struct Parser {
     /// A COUNTER rather than a flag: what a caller wants to know is whether the stretch
     /// of source IT parsed contained one, which is the difference between two readings.
     unresolved_names: u32,
+    /// How many times pass 1 declined to TYPE something because an operand's type was not
+    /// linked yet — the sibling of [`Self::unresolved_names`], and the half it cannot see.
+    ///
+    /// A call to a function declared further down resolves its NAME (definitions are
+    /// recorded before bodies are parsed), so the counter above stays still; what is missing
+    /// is the callee's RETURN TYPE. `call_op_as` then defers and returns `Type::Unknown`
+    /// WITHOUT building the operator, so `1 + late(0)` is left as the bare `1`; the `&&`
+    /// path leaves the operand in place but mistyped. Either way pass 2 re-parses and gets
+    /// it right — unless the stretch of source is one that is parsed ONCE, which is what a
+    /// parameter default is (loft#1170, the same collapse loft#1086 closed for names).
+    ///
+    /// A COUNTER for the same reason as its sibling: the question is whether the stretch of
+    /// source a caller parsed contained one, which is a difference between two readings.
+    unresolved_types: u32,
     /// @PLN115 — record each resolved identifier occurrence during parse.  DEFAULT
     /// OFF (only the LSP parse sets it, S3); zero-cost when off.  See
     /// `doc/claude/plans/115-resolution-index/`.
@@ -1075,6 +1089,7 @@ impl Parser {
             parsed_sources: Vec::new(),
             speculative_type_refs: std::collections::HashSet::new(),
             unresolved_names: 0,
+            unresolved_types: 0,
             data,
             database: Stores::new(),
             lexer: Lexer::default(),
@@ -10297,6 +10312,12 @@ impl Parser {
         // behaviours are guarded (`pln102_*` in tests/issues.rs); widen this predicate and
         // that pair is what tells you whether the diagnostic path still works.
         if self.first_pass && !types.is_empty() && types.iter().any(Type::is_unknown) {
+            // Returning here leaves `code` as the bare LEFT operand — the operator is never
+            // built — which is invisible to every later reading of the tree.  Pass 2 rebuilds
+            // it, so this is only a collapse where the source is parsed once; record it so
+            // the one caller that is (a parameter default) can tell.  See
+            // `Parser::unresolved_types`.
+            self.unresolved_types = self.unresolved_types.saturating_add(1);
             return Type::Unknown(0);
         }
         // Comparing two tuples is decided element by element, BEFORE the `possible` loop —

@@ -3772,6 +3772,81 @@ path alone. Not fixed here because the missing fact lives in nine `#rust` bodies
 (`OpDivFloatNullable` is bare `@v1 / @v2` with no `s` in scope), and `src/parser/operators.rs`
 already carries a deferred note pointing at the shape the fix probably wants.
 
+#### B7f — the two the walk filed, closed (2026-08-29)
+
+Both roots B7e filed were then fixed in the same session, and closing them turned up a third
+thing plus one measurement that looked like a fourth and was not.
+
+**loft#1170 — a parameter default dropped its forward-declared call.** `= 1 + late(0)` stored
+the bare `1`; `= true && late(0)` answered `false` and left the interpreter a short stack that
+SIGSEGV'd on the way out. Nine spellings collapsed (`+ - * / % == >` and both short-circuits),
+both backends, silently.
+
+The cause is #1086's exactly one axis over, and its own carve-out named the spot: that fix
+hoists a default whenever pass 1 could not resolve something, and measures it with
+`unresolved_names` — a count of identifiers that resolved to NOTHING. A forward-declared CALL
+resolves its NAME (definitions are recorded before bodies are parsed); what is missing is the
+RETURN TYPE, so `call_op_as` defers, returns `Unknown` **without building the operator**, and
+leaves `code` as the bare left operand — with the counter reading zero the whole time.
+`unresolved_types` is its sibling, incremented at the two sites where pass 1 actually gives up,
+and the hoist is the cure that already existed.
+
+⚠ **`&&` erases the evidence, which is why the obvious detector fails.** `handle_operator`
+publishes `Type::Boolean` for a short-circuit whatever its operands did, so `dtype` — the
+default's own type, which the type-check three lines below already reads — is concrete even
+when an operand was never typed. That candidate was built and measured before being rejected;
+it is recorded in the issue so the next attempt does not re-spend it. **A type published by
+the construct is not evidence about its operands.**
+
+**loft#1169 — a null that passed THROUGH a fault-prone op wore its name.** The tag is armed at
+parse time from the op's SHAPE and consumed at run time from the VALUE, so *could fault* and
+*did fault* were one fact and none: `{v[1]}` on a genuinely-null element read `null(oob)` with
+the index in range, and `{n / a}` with `a == 5` read `null(/0)`. Cells A and B were then
+indistinguishable, and so were C and D — **a tag that cannot be wrong is also carrying no
+information**. `Stores::keep_format_fault_if` is the rule in one place and every fault-prone
+`*Nullable` peer calls it with its own answer; the peers err toward CLEARING where the two
+cases are not cheaply separable, because a missing tag is honest and a wrong one is not. The
+filed issue judged this needs-design on the grounds that the fact "lives in nine `#rust` bodies
+on the hot path" — true about the location, wrong about the cost: every one of those tests sits
+on a branch the op already takes, and the peers are emitted only at guarded sites, never on the
+common `v[i]` read. **A blocker written from the shape of a fix is a hypothesis** — see B6.
+
+⚠ **The first version of this fix had the peers CLEAR the tag when they had not faulted, and
+that broke a case the unfixed build got right.** Only the OUTERMOST op in a hole is armed, but
+every fault-prone op in it runs — so a clearing peer erases a cause an INNER op just recorded.
+`{v[0] / z}` — a genuine division by zero after a successful read — lost its `/0`. It was
+caught by asking *"what did this build answer that the old one got right?"*, which is the
+[[optimisation-guard-needs-a-control-cell]] question in a non-optimisation setting: **a fix
+that removes wrong output needs a cell where output must SURVIVE**, or "removed the tag
+entirely" passes every cell. Every inherited-null cell in the guard would have passed.
+The shape it forced is better than the one it replaced: `OpTagFault` now only ARMS the hole,
+`note_format_fault` is the single place a cause is written, and a peer that inherits a null
+LEAVES the tag — so `{v[9] / 2}` reports the overrun that actually produced its null, which no
+build before this one did. Arming is what confines it to format scope, since the same peers
+serve a `??` discharge.
+
+**A third defect, found by asserting the fix rather than the bug: `"hi"[9]` disagreed across
+backends.** Writing the guard cell for a REAL text overrun turned up `null(oob)` on
+`--interpret` and empty on `--native`. `(F-Render)` settles it in one line — a null character
+renders as nothing, *so that iterating text past its end appends no garbage* — so the
+interpreter's extra was the deviation, and `append_character` now drops the tag it still takes.
+`D-fmt-4`, opened and closed. Nothing pinned it: the four `fmt43_*` cases are all integer holes.
+
+⚠ **And one measurement that read exactly like a fourth defect and was correct behaviour.**
+`5.0 / 0.0` renders `inf`, not `null(/0)`, which `(E-Uncomp)` — "op is `/`/`%` with v₂ = 0, the
+result is null" — appears to forbid. It is deliberate: the float null IS the NaN, `inf` is a
+representable value rather than a missing one, and loft#983 reverted forcing NaN because it made
+one expression answer `inf` inline and `null` once bound, and made `a / b ?? 0.0` guard nothing.
+I had already written "want null" into a probe and a guard comment before reading the note at
+`OpDivFloat` that says all of this.
+
+**That is the third false positive this family of rules has produced, and it is the same shape
+as the defect the walk started from.** `(E-NullArg)` forbade what C73 ships; `(E-Uncomp)` forbade
+what loft#983 decided. An incomplete rule does not merely fail to catch bugs — it MANUFACTURES
+them, and each costs a probe, a hypothesis and very nearly a wrong fix. Both carve-outs are
+written down now, each beside the rule it corrects —
+[[incomplete-rules-doc-is-costlier-than-none]] for the earlier count.
+
 #### C — process / skills
 
 | item | state |

@@ -636,14 +636,24 @@ fn mul_int_nullable(s: &mut State) {
 fn div_int_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_div_int_nullable(v_v1, v_v2);
+    let new_value = {
+        let r = ops::op_div_int_nullable(v_v1, v_v2);
+        s.database
+            .note_format_fault(1, r == i64::MIN && v_v1 != i64::MIN && v_v2 != i64::MIN);
+        r
+    };
     s.put_stack(new_value);
 }
 
 fn rem_int_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_rem_int_nullable(v_v1, v_v2);
+    let new_value = {
+        let r = ops::op_rem_int_nullable(v_v1, v_v2);
+        s.database
+            .note_format_fault(2, r == i64::MIN && v_v1 != i64::MIN && v_v2 != i64::MIN);
+        r
+    };
     s.put_stack(new_value);
 }
 
@@ -855,14 +865,24 @@ fn rem_single(s: &mut State) {
 fn div_single_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = v_v1 / v_v2;
+    let new_value = {
+        let r = v_v1 / v_v2;
+        s.database
+            .note_format_fault(1, r.is_nan() && !v_v1.is_nan() && !v_v2.is_nan());
+        r
+    };
     s.put_stack(new_value);
 }
 
 fn rem_single_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = v_v1 % v_v2;
+    let new_value = {
+        let r = v_v1 % v_v2;
+        s.database
+            .note_format_fault(2, r.is_nan() && !v_v1.is_nan() && !v_v2.is_nan());
+        r
+    };
     s.put_stack(new_value);
 }
 
@@ -1103,14 +1123,24 @@ fn rem_float(s: &mut State) {
 fn div_float_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = v_v1 / v_v2;
+    let new_value = {
+        let r = v_v1 / v_v2;
+        s.database
+            .note_format_fault(1, r.is_nan() && !v_v1.is_nan() && !v_v2.is_nan());
+        r
+    };
     s.put_stack(new_value);
 }
 
 fn rem_float_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = v_v1 % v_v2;
+    let new_value = {
+        let r = v_v1 % v_v2;
+        s.database
+            .note_format_fault(2, r.is_nan() && !v_v1.is_nan() && !v_v2.is_nan());
+        r
+    };
     s.put_stack(new_value);
 }
 
@@ -1216,7 +1246,14 @@ fn text_character(s: &mut State) {
 fn text_character_nullable(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = s.string();
-    let new_value = ops::text_character(v_v1.str(), v_v2);
+    let new_value = {
+        let ch = ops::text_character(v_v1.str(), v_v2);
+        s.database.note_format_fault(
+            3,
+            ch == char::from(0) && v_v2 != i64::MIN && !v_v1.str().is_empty(),
+        );
+        ch
+    };
     s.put_stack(new_value);
 }
 
@@ -2050,7 +2087,10 @@ fn var_vector(s: &mut State) {
 
 fn tag_fault(s: &mut State) {
     let v_kind = s.code::<u8>();
-    s.database.set_format_fault(v_kind);
+    {
+        let _ = v_kind;
+        s.database.arm_format_fault();
+    }
 }
 
 fn length_vector(s: &mut State) {
@@ -2137,17 +2177,24 @@ fn get_vector_nullable(s: &mut State) {
     let v_size = s.code::<u16>();
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
+    let new_value = {
+        let el = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
+        s.database
+            .note_format_fault(3, el.rec == 0 && v_index != i64::MIN && !v_r.is_null());
+        el
+    };
     s.put_stack(new_value);
 }
 
 fn vector_ref_nullable(s: &mut State) {
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = s.database.get_ref(
-        &vector::get_vector(&v_r, 4, v_index, &s.database.allocations),
-        0,
-    );
+    let new_value = {
+        let el = vector::get_vector(&v_r, 4, v_index, &s.database.allocations);
+        s.database
+            .note_format_fault(3, el.rec == 0 && v_index != i64::MIN && !v_r.is_null());
+        s.database.get_ref(&el, 0)
+    };
     s.put_stack(new_value);
 }
 
