@@ -49,11 +49,17 @@ pub fn deadline_scale() -> u64 {
     if shared { 3 } else { 1 }
 }
 
-/// A server-test port, offset by `LOFT_TEST_PORT_OFFSET` (default 0).  The engine-host /
-/// wasm-relay tests bind FIXED ports; two suites run at once — e.g. two agents in sibling
-/// checkouts (`loft` and `loft2`) — collide on them and flake.  `find_problems.sh` exports a
-/// distinct offset per checkout so their port ranges never overlap.  A plain `cargo test` (no
-/// offset) keeps the base ports.
+/// A server-test port, isolated PER CHECKOUT.  The engine-host / wasm-relay tests bind FIXED
+/// ports; two suites run at once — e.g. two agents in sibling checkouts (`loft` and `loft2`) —
+/// collide on them and flake, and the red reads as a browser or kernel defect rather than as a
+/// port that belongs to someone else (loft#1193).
+///
+/// The offset is derived from THIS checkout's path, so every way of running the suite gets it:
+/// `make ci`, a bare `cargo test`, and `find_problems.sh` alike.  It used to be computed by
+/// `find_problems.sh` and exported, which left `make ci` — the gate two agents most often run
+/// at the same time — on the base ports with nothing separating the two runs.
+///
+/// `LOFT_TEST_PORT_OFFSET` still overrides it, for pinning a range by hand.
 /// A port this test can actually BIND — measured, not assumed.
 ///
 /// [`test_port`] computes the port a suite is SUPPOSED to use; this one guarantees the
@@ -260,8 +266,73 @@ pub fn test_port(base: u16) -> u16 {
     let offset = std::env::var("LOFT_TEST_PORT_OFFSET")
         .ok()
         .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
+        .unwrap_or_else(checkout_port_offset);
     base.saturating_add(offset)
+}
+
+/// This checkout's port band: `(cksum(path) % 6 + 1) * 2000`, derived from the checkout's own
+/// path.
+///
+/// **2000 is wider than the 1236 the suites' base ports span** (18087–19322), so two checkouts
+/// on different bands can never overlap.
+///
+/// **The multiplier stops at six because of the kernel's ephemeral range**
+/// (`ip_local_port_range`, 32768 on Linux): the top base port is 19322, so 19322 + 12000 =
+/// 31322 stays below it.  A port at or above that floor can be taken from under a test between
+/// the availability check and the server's bind by ANY outbound socket on the box — cargo,
+/// rustc, a browser a test launches — and that was the whole of the long-standing
+/// wasm_debug_relay / engine_host flake back when the multiplier allowed offsets up to 32000.
+///
+/// **Six bands is a spread, not a guarantee**, and saying so is the point: two checkouts can
+/// still hash to one band, and what covers that is [`bind_port`]'s pivot — it declines to kill
+/// a holder that is not ours and moves. The band is what makes reaching that path rare; it is
+/// not what makes a collision impossible.
+///
+/// The path is read at COMPILE time (`CARGO_MANIFEST_DIR`), which is what makes the band a
+/// property of the checkout rather than of whoever launched the run.
+#[allow(dead_code)]
+fn checkout_port_offset() -> u16 {
+    port_band_of(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// [`checkout_port_offset`] for an arbitrary path — the testable half, so the formula can be
+/// checked without moving this checkout.
+#[allow(dead_code)]
+#[must_use]
+pub fn port_band_of(path: &str) -> u16 {
+    u16::try_from(u64::from(posix_cksum(path.as_bytes())) % 6 + 1).unwrap_or(1) * 2000
+}
+
+/// POSIX `cksum` — CRC-32 over the bytes, then over the byte length, complemented.
+///
+/// This is the checksum `find_problems.sh` piped the checkout path through for as long as the
+/// per-checkout band has existed, and reproducing it exactly is deliberate: the bands the two
+/// tools hand out are then the SAME bands, so moving the formula here does not silently
+/// re-shuffle which checkout sits where.  It is also the one property of this function that can
+/// be asserted against something outside the repo — `cksum` itself.
+#[allow(dead_code)]
+fn posix_cksum(bytes: &[u8]) -> u32 {
+    fn feed(crc: u32, b: u8) -> u32 {
+        let mut c = crc ^ (u32::from(b) << 24);
+        for _ in 0..8 {
+            c = if c & 0x8000_0000 != 0 {
+                (c << 1) ^ 0x04c1_1db7
+            } else {
+                c << 1
+            };
+        }
+        c
+    }
+    let mut crc = 0_u32;
+    for b in bytes {
+        crc = feed(crc, *b);
+    }
+    let mut len = bytes.len() as u64;
+    while len != 0 {
+        crc = feed(crc, (len & 0xff) as u8);
+        len >>= 8;
+    }
+    !crc
 }
 
 use loft::data::Data;
