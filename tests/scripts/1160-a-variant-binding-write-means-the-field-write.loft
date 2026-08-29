@@ -24,6 +24,13 @@
 //                        picks its origin from the runtime tag, so it has no one field to be
 //                        resolved to and is deliberately not covered.
 //
+// **Two of the cells are in OTHER functions on purpose.**  A binding is resolved by its
+// variable NUMBER, and a variable number is only unique within one function, so a projection
+// held anywhere longer-lived than the function's own variable table makes an unrelated local
+// in the NEXT function look like a binding.  A single-function guard cannot fail on that —
+// `tests/leak_cases/clean/i490_enum_field_return_inline` is what caught it, and these cells
+// are it written down where the feature's own guard can see it.
+//
 // **Both reads are asserted, and that is the point.**  Fixing only the write direction swaps
 // one silent disagreement for another: the subject reads correct while the binding, still
 // bound to the store minted for it, reads 0 inside the very block that wrote through it.  The
@@ -32,10 +39,17 @@
 // The plain STRUCT field is the in-file oracle: the binding spellings are not being scored
 // against a hand number but against what the same write means when it is spelled directly.
 //
-// @falsified-at: 0168e42f — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native
-// exit 1 -> 0, native 1 assertion failures -> 0.  The count is 1 because a failed assert stops
-// the run: on the control the first `match arm, read through the subject` cell fires, and both
-// binding spellings are broken there in both declaration orders.
+// @falsified-at: 0168e42f — interpret exit 1 -> 0, interpret 1 assertion failures -> 0; and on
+// an earlier run of the same control, native exit 1 -> 0, native 1 assertion failures -> 0.
+// The count is 1 because a failed assert stops the run: the first `match arm, read through the
+// subject` cell fires, and both binding spellings are broken there in both declaration orders.
+//
+// ⚠ The native row now reports exit 1 with ZERO assertion failures, and that is the HARNESS,
+// not the program: stable moved under the cached control tree, so its runtime rlib no longer
+// matches and `--native` refuses to run there at all ("--native needs loft's runtime rlib,
+// built with your rustc").  An exit code is not the outcome you asked about — the native
+// falsification above is from the run before the toolchain moved, and re-running it needs the
+// control tree rebuilt.
 
 struct Vb { vb_k: integer, vb_nm: text }
 
@@ -47,6 +61,24 @@ enum VbEnum { VbKeyedFirst { vk_look: sorted<Vb[vb_k]>, vk_data: vector<Vb> },
 struct VbPlain { vp_data: vector<Vb>, vp_look: sorted<Vb[vb_k]> }
 
 fn vb_rows() -> vector<Vb> { [Vb { vb_k: 7, vb_nm: "seven" }, Vb { vb_k: 8, vb_nm: "eight" }] }
+
+// A binding is resolved by its VARIABLE NUMBER, and a variable number is only unique inside
+// one function.  These two run after the binding functions above and hold their own locals at
+// the same numbers: if the projection outlives the numbering it was written against, one of
+// these appends is redirected into a field it has nothing to do with.
+fn vb_plain_after_a_binding() -> integer {
+  local: vector<Vb> = [];
+  for r in vb_rows() { local += [r]; }
+  return len(local);
+}
+
+fn vb_other_after_a_binding() -> integer {
+  first: vector<Vb> = [];
+  second: vector<Vb> = [];
+  first += [Vb { vb_k: 1, vb_nm: "one" }];
+  second += [Vb { vb_k: 2, vb_nm: "two" }, Vb { vb_k: 3, vb_nm: "three" }];
+  return len(first) * 10 + len(second);
+}
 
 fn main() {
   // ---- the ORACLE: written through the field, read back through the field --------------
@@ -99,6 +131,12 @@ fn main() {
   match m3 { VbKeyedFirst { vk_data } => { for r in vb_rows() { vk_data += [r]; } }, _ => { } }
   m3_nm = match m3 { VbKeyedFirst { vk_look } => vk_look[8].vb_nm, _ => "", };
   assert(m3_nm == "eight", "the sibling view is a lookup route: {m3_nm}");
+
+  // ---- a plain local in ANOTHER function is not a binding ---------------------------------
+  assert(vb_plain_after_a_binding() == 2,
+    "a plain local after a binding function: {vb_plain_after_a_binding()}");
+  assert(vb_other_after_a_binding() == 12,
+    "two plain locals after a binding function: {vb_other_after_a_binding()}");
 
   println("1160 ok");
 }
