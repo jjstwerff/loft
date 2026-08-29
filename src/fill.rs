@@ -269,6 +269,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     bind_or_copy,
     replace_keyed,
     clear_keyed,
+    index_group,
     set_keyed,
     length_spatial,
     length_trie,
@@ -2322,6 +2323,13 @@ fn clear_keyed(s: &mut State) {
     let v_tp = s.code::<u16>();
     let v_dest = *s.get_stack::<DbRef>();
     s.database.remove_claims_keyed(&v_dest, v_tp);
+}
+
+fn index_group(s: &mut State) {
+    let v_tp = s.code::<u16>();
+    let v_view = *s.get_stack::<DbRef>();
+    let v_primary = *s.get_stack::<DbRef>();
+    s.database.index_group_records(&v_primary, &v_view, v_tp);
 }
 
 fn set_keyed(s: &mut State) {

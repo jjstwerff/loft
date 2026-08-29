@@ -1560,6 +1560,12 @@ use a separate collection or add after the loop"
                 Type::Reference(d, _) => *d,
                 _ => return None,
             },
+            // loft#1152 — an enum VARIANT's fields live in the variant's own
+            // `Parts::EnumValue`, not in the enum, so the enum's own type id names no
+            // field and every group question about a variant field answered "no group".
+            // The variant is named by the DISCRIMINANT in the guard the field read is
+            // already wrapped in.
+            Type::Enum(e, _, _) => return self.variant_field_site(*e, to, *byte_off as u16),
             _ => return None,
         };
         let struct_tp = self.data.def(d_nr).known_type();
@@ -1567,6 +1573,60 @@ use a separate collection or add after the loop"
             return None;
         }
         Some((struct_tp, *byte_off as u16))
+    }
+
+    /// [`Self::field_site`] for a field of an enum VARIANT: the variant's runtime type id
+    /// plus the byte offset, or `None` when the variant cannot be named.
+    ///
+    /// A variant field read is emitted as `OpGetField(if <disc == N> base else
+    /// OpNullRefSentinel(), off)` — the guard that makes reading the wrong variant answer
+    /// null rather than another variant's bytes. `N` is the only place the variant is
+    /// written down at this point, so it is read back out of it and mapped through the
+    /// enum's attribute order, which is where the discriminant came from.
+    ///
+    /// Unguarded shapes (an `is` / `match` binding, whose variant is already established)
+    /// yield `None` and keep the behaviour they had.
+    fn variant_field_site(&self, e_nr: u32, to: &Value, byte_off: u16) -> Option<(u16, u16)> {
+        let Value::Call(_, gf_args) = to.unspan() else {
+            return None;
+        };
+        let Value::If(test, _, _) = gf_args.first()?.unspan() else {
+            return None;
+        };
+        let Value::Call(test_nr, test_args) = test.unspan() else {
+            return None;
+        };
+        if self.data.def(*test_nr).name() != "OpEqInt" {
+            return None;
+        }
+        let Some(Value::Int(disc)) = test_args.get(1).map(Value::unspan) else {
+            return None;
+        };
+        for v in self.data.children_of(e_nr) {
+            if self.data.def_type(v) != crate::parser::DefType::EnumValue {
+                continue;
+            }
+            let vname = self.data.def(v).name().to_string();
+            let Some(idx) = self
+                .data
+                .def(e_nr)
+                .attributes()
+                .iter()
+                .position(|a| a.name == vname)
+            else {
+                continue;
+            };
+            if i32::try_from(idx).unwrap_or(-1) + 1 != *disc {
+                continue;
+            }
+            let tp = self.data.def(v).known_type();
+            return if tp == u16::MAX {
+                None
+            } else {
+                Some((tp, byte_off))
+            };
+        }
+        None
     }
 
     /// The database collection-type id behind a KEYED type — `sorted` / `hash` / `index` /
@@ -1674,6 +1734,104 @@ use a separate collection or add after the loop"
         ops
     }
 
+    /// loft#1152 — the group re-index that must FOLLOW a whole-vector write into a struct
+    /// field: one `OpIndexGroup` per VIEW member.
+    ///
+    /// The mirror of [`Self::keyed_sibling_view_resets`], and deliberately the same SHAPE.
+    /// `Stores::record_finish` keeps a group's members agreeing by walking `other_indexes`
+    /// per record, and every route that adds records one at a time reaches it. A whole-vector
+    /// write does not: `OpAppendVector` reaches `vector_add` → `vector_add_array`, which moves
+    /// the records in bulk. The views were left empty and nothing said so — `len` answered `0`
+    /// and a lookup answered `null`, both legal values for a group that happens to be empty.
+    ///
+    /// ⚠ **The obvious runtime fix is not available, and the reason decides this shape.**
+    /// `record_finish` can maintain a group because it is handed `(data, rec, parent_tp,
+    /// field)`. `vector_add_array` has only the vector field's `DbRef` and the element type;
+    /// `OpAppendVector` carries neither the parent type nor the field index, and recovering
+    /// them from the `DbRef` is not a route — `db.pos` is a byte offset into a record whose
+    /// type would be a guess.
+    ///
+    /// The unit of work is what makes the call site the right home anyway: the MEMBERS are
+    /// known at emit time, so the parser names them exactly as the clear does, while the
+    /// per-RECORD loop lives inside the op, where the records exist. Naming the members here
+    /// and looping there is the split loft#898 already made for the clear.
+    fn keyed_sibling_view_fills(&mut self, to: &Value, parent_tp: &Type) -> Vec<Value> {
+        let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
+            return Vec::new();
+        };
+        let members = self.database.keyed_group_members(struct_tp, byte_off);
+        let mut ops = Vec::new();
+        for (off, coll_tp, _is_view) in members {
+            // ⚠ Every OTHER member, not only the views — the filter the RESET beside this
+            // one uses answers a different question. A reset may touch only views, because
+            // a view owns nothing and the primary's records are released once, by the
+            // primary. A FILL has no such asymmetry: the members that need the records are
+            // all of them, and which one happens to hold them is not the question.
+            if off == byte_off {
+                continue;
+            }
+            let field = Self::field_at(to, off);
+            ops.push(self.cl(
+                "OpIndexGroup",
+                &[to.clone(), field, Value::Int(i32::from(coll_tp))],
+            ));
+        }
+        ops
+    }
+
+    /// loft#1152 — wrap a statement that wrote a whole VECTOR VALUE into a grouped struct
+    /// field with the group maintenance that write skipped.
+    ///
+    /// Runs on the finished IR of every assignment rather than at the individual arms,
+    /// because a vector field is written from several of them — `=` from an owned var, from
+    /// a borrowed var, from an arbitrary expression, `+=`, and the iterator
+    /// materialisations — and each builds its own op list. The question they all answer the
+    /// same way is *"did this statement `OpAppendVector` into that field?"*, which is a
+    /// property of the emitted code, so it is asked once, here.
+    ///
+    /// The RESET is conditional and the reason is duplicates: the re-index walks the whole
+    /// primary, so a view that still holds the previous records would be handed them twice.
+    /// A `=` already reset its views (`clear_vector_field`), and an `OpClearKeyed` in the
+    /// statement is exactly that receipt; a `+=` has none, so it gets one here. Resetting a
+    /// VIEW frees only its spine — its hash table, `Ordered` slot list, or b-tree root — and
+    /// never a record, so rebuilding it costs nothing the group owns.
+    fn group_reindex_after_vector_write(&mut self, code: &mut Value, to: &Value, parent_tp: &Type) {
+        let append_nr = self.data.def_nr("OpAppendVector");
+        let clear_keyed_nr = self.data.def_nr("OpClearKeyed");
+        let writes_field = |v: &Value| {
+            matches!(v.unspan(), Value::Call(d, args)
+                if *d == append_nr && args.len() == 3 && *args[0].unspan() == *to.unspan())
+        };
+        let (wrote, already_reset) = match &*code {
+            Value::Insert(ls) => (
+                ls.iter().any(writes_field),
+                ls.iter()
+                    .any(|o| matches!(o.unspan(), Value::Call(d, _) if *d == clear_keyed_nr)),
+            ),
+            other => (writes_field(other), false),
+        };
+        if !wrote {
+            return;
+        }
+        let fills = self.keyed_sibling_view_fills(to, parent_tp);
+        if fills.is_empty() {
+            return;
+        }
+        let resets = if already_reset {
+            Vec::new()
+        } else {
+            self.keyed_sibling_view_resets(to, parent_tp)
+        };
+        let body = match std::mem::replace(code, Value::Null) {
+            Value::Insert(ls) => ls,
+            other => vec![other],
+        };
+        let mut ops = resets;
+        ops.extend(body);
+        ops.extend(fills);
+        *code = Value::Insert(ops);
+    }
+
     /// `OpClearVector(to)` for a struct field, preceded by the sibling-view resets
     /// of [`Self::keyed_sibling_view_resets`] when that vector is the record
     /// holder of a linked collection group (loft#898).
@@ -1747,7 +1905,30 @@ use a separate collection or add after the loop"
     /// `code` into the assignment IR.  Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
     #[allow(clippy::too_many_arguments)]
+    /// Every assignment form routes through here; the body is
+    /// [`Self::parse_assign_op_inner`], and this wraps it with the linked-group
+    /// maintenance a whole-vector field write skips (loft#1152 — see
+    /// [`Self::group_reindex_after_vector_write`]).
+    #[allow(clippy::too_many_arguments)] // the inner fn's parameter list, forwarded
     pub(crate) fn parse_assign_op(
+        &mut self,
+        code: &mut Value,
+        op: &str,
+        f_type: &Type,
+        to: &Value,
+        parent_tp: Type,
+        var_nr: u16,
+        skip_validate: bool,
+    ) -> Type {
+        let group_parent = parent_tp.clone();
+        let group_to = to.clone();
+        let tp = self.parse_assign_op_inner(code, op, f_type, to, parent_tp, var_nr, skip_validate);
+        self.group_reindex_after_vector_write(code, &group_to, &group_parent);
+        tp
+    }
+
+    #[allow(clippy::too_many_arguments)] // the wrapper's list, unchanged from before the split
+    fn parse_assign_op_inner(
         &mut self,
         code: &mut Value,
         op: &str,

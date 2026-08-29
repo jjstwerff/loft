@@ -1051,6 +1051,50 @@ The clear is emitted by the KEYED assign and by the VECTOR assign, because the s
 DATABASE.md documents by name — `vector<T>` + `hash<T[k]>` — has the vector as its record
 holder. Both route through `Parser::keyed_sibling_view_resets`.
 
+### Filling one member with a whole VECTOR VALUE (loft#1152)
+
+`Stores::record_finish` is the chokepoint that maintains a group — it walks the field's
+`other_indexes` and inserts the record into every sibling — and every route that adds
+records ONE AT A TIME reaches it. A whole-vector write does not: `OpAppendVector` reaches
+`Stores::vector_add` → `vector_add_array`, which moves the records in bulk. So `s.v =
+rows()` and `s.v += rows()` filled the vector and left every sibling view EMPTY, on both
+backends, with `len` answering `0` and a lookup answering `null` — both legal values for a
+group that happens to be empty, which is the state this page says has no repair.
+
+The maintenance is emitted per VIEW member as `OpIndexGroup(primary, view, tp)`, beside the
+resets the clear already emits, through `Parser::keyed_sibling_view_fills`. **A runtime fix
+was not available**: `record_finish` can maintain a group because it is handed `(data, rec,
+parent_tp, field)`, while `vector_add_array` has only the vector field's `DbRef` and the
+element type, and `OpAppendVector` carries neither the parent type nor the field index —
+recovering them from the `DbRef` is not a route, since `db.pos` is a byte offset into a
+record whose type would be a guess. The call site is the right home anyway because the
+unit of work differs on the two halves: the MEMBERS are known at emit time, so the parser
+names them exactly as the clear does, while the per-RECORD loop lives inside the op.
+
+The records are **not copied**. The view is handed the primary's own element records by id,
+exactly as `record_finish` hands them over, which is what keeps a write through the vector
+visible through the view; a null element stays in the vector and out of the index, which is
+the same rule `record_finish` applies. The reset is emitted only where the statement does
+not already carry one — a `=` reset its views via `clear_vector_field`, a `+=` had none —
+because the re-index walks the whole primary and a view still holding the previous records
+would be handed them twice.
+
+An enum VARIANT's fields are a group on the same terms, and needed
+`Parser::field_site` extending: a variant's fields live in the variant's own
+`Parts::EnumValue`, so the enum's type id names no field and every group question about a
+variant field answered *"no group"* — including the clear's. The variant is read back out
+of the discriminant in the guard the field read is already wrapped in.
+
+⚠ **Writing through an `is` / `match` BINDING is not this.** `if h is F { a, b } { a = rows()
+}` leaves `h.a` empty: the binding COPIES (`@FR-B-Copy`), so the write never reaches the
+record and the sibling is right to be empty. Reading `len(a)` after it shows `2` and looks
+like a landed write; reading `h.a` back is what settles it.
+
+⚠ **Group FORMATION is still order-dependent** and deliberately so for now: the test is
+*"is the field being ADDED a keyed kind"*, so `vector` then `sorted` links while `sorted`
+then `vector` links nothing. `901-linked-group-fill.loft` c1 pins that, so widening it is a
+decision rather than a fix (loft#1152's second half, filed separately).
+
 ### Removing one entry of a linked group (loft#900)
 
 Removal follows the clear's verdict: **a removal spelled through any member removes the

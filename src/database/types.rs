@@ -288,15 +288,19 @@ impl Stores {
             // in through `data` were not in `look`, and nothing said so.  The kinds
             // already worked as group MEMBERS; what was missing was only the test that
             // forms the group, which is why `trie` first and `sorted` second did link.
-            let is_index_type = matches!(
-                self.types[content as usize].parts,
-                Parts::Sorted(_, _)
-                    | Parts::Ordered(_, _)
-                    | Parts::Hash(_, _)
-                    | Parts::Index(_, _, _)
-                    | Parts::Trie(_, _)
-                    | Parts::Radix(_, _)
-            );
+            //
+            // ⚠ The test is *"is the field being ADDED a keyed kind"*, which makes group
+            // formation depend on DECLARATION ORDER: `vector` then `sorted` links, and
+            // `sorted` then `vector` links nothing at all — the keyed field arrives first
+            // and finds no sibling, then the vector arrives and never runs the search.
+            // That asymmetry is pinned as the scope by `901-linked-group-fill.loft` c1
+            // ("a plain `vector` as the SECOND field is NOT linked"), so widening it is a
+            // decision and not a fix, and it is filed rather than taken here (loft#1152's
+            // second half). The reason the pin gives — *"widening that to any collection
+            // would make two independent vectors alias"* — is not what a both-sides test
+            // would do, since two vectors are still two non-keyed kinds; but c2 next to it
+            // shows this file has pinned a missing-shape defect as a boundary once already.
+            let is_index_type = Self::is_group_kind(&self.types[content as usize].parts);
             if is_index_type {
                 for (f_nr, f) in fld.iter().enumerate() {
                     let fld_content = self.content(f.content);
@@ -400,6 +404,25 @@ impl Stores {
     }
 
     #[must_use]
+    /// loft#1152 — is this collection a KEYED kind, the sort that can index a shared
+    /// record set?  The one home for the question the group test asks of BOTH sides.
+    ///
+    /// A `vector` is not one: two `vector<T>` fields must stay independent, because
+    /// inserting into one must not propagate to the other.  A vector may still JOIN a group
+    /// — it is the record holder in the shape DATABASE.md documents by name — but only
+    /// beside a member that is a keyed kind.
+    fn is_group_kind(parts: &Parts) -> bool {
+        matches!(
+            parts,
+            Parts::Sorted(_, _)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::Trie(_, _)
+                | Parts::Radix(_, _)
+        )
+    }
+
     pub fn is_linked(&self, tp: u16) -> bool {
         tp != u16::MAX && self.types[tp as usize].linked
     }

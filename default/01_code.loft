@@ -1370,6 +1370,17 @@ fn OpReplaceKeyed(src: reference, dest: reference, tp: const u16);
 // (the table / slot list / tree root) and leaves the records to their owner.
 fn OpClearKeyed(dest: reference, tp: const u16);
 #rust"s.database.remove_claims_keyed(&@dest, @tp);"
+// loft#1152 — index every record the vector `primary` holds into the linked-group
+// member `view` (collection type `tp`).  A whole-vector write (`s.v = rows()`,
+// `s.v += rows()`) moves its records in bulk through `vector_add` and so never reaches
+// `Stores::record_finish`, the walk that keeps a group's members agreeing; the sibling
+// views were left empty, with `len` answering 0 and a lookup answering null.
+//
+// Emitted per VIEW member beside the reset `OpClearKeyed` already emits (loft#898), so
+// the parser names the members — which it can, they are known at emit time — and the
+// per-RECORD loop lives here, where the records exist.
+fn OpIndexGroup(primary: reference, view: reference, tp: const u16);
+#rust"s.database.index_group_records(&@primary, &@view, @tp);"
 // @P305 — `coll[key] = value` insert-or-replace into a keyed collection
 // (hash/sorted/index), deduped by value's key.  Updates an existing key
 // in place OR inserts a new one (the plain `OpCopyRecord` lowering could
