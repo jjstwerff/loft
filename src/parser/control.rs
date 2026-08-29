@@ -4850,6 +4850,16 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
+                            // loft#1160 — remember which field this binding projects, so a
+                            // write spelled through it can take the field path and reach the
+                            // linked group the field belongs to.
+                            self.mv_field_origin.insert(
+                                v_nr,
+                                (
+                                    field_read.clone(),
+                                    Type::Reference(variant_def_nr, Deps::none()),
+                                ),
+                            );
                             arm_stmts.push(v_set(v_nr, field_read.clone()));
                             let old = self.vars.set_name(&field_name, v_nr);
                             name_aliases.push((field_name.clone(), old));
@@ -8941,6 +8951,15 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
+                            // loft#1160 — the field this binding projects, so a write spelled
+                            // through it takes the field path (see `mv_field_origin`).
+                            self.mv_field_origin.insert(
+                                v_nr,
+                                (
+                                    field_read.clone(),
+                                    Type::Reference(variant_def_nr, Deps::none()),
+                                ),
+                            );
                             // The capture binds a borrowed view into the
                             // subject's record — scope cleanup must not
                             // emit OpFreeRef for it (see the same

@@ -2728,6 +2728,39 @@ impl Parser {
         is_field: bool,
     ) -> (Type, Vec<Value>) {
         let mut ls = Vec::new();
+        // loft#1160 / loft#1161 — a write spelled through a variant's payload BINDING means
+        // what the same write spelled through the FIELD means, so resolve the binding back to
+        // the field access it was projected from and build the ordinary field append.
+        //
+        // It has to happen HERE rather than at `new_record` below, because the two halves that
+        // go wrong are decided on either side of that call.  Treated as a bare local, the
+        // binding gets a store of its own minted for it (`vector_db`, and `vector_needs_db`
+        // after) and is REBOUND to it, so the append landed in a fresh store the block threw
+        // away — the write never reached the subject at all (loft#1161).  And `new_record` was
+        // handed no field, so `Stores::record_finish` had no `other_indexes` to walk and the
+        // record reached the member the binding named and no sibling (loft#1160).  One
+        // substitution, above both, and everything downstream is on the path it already has
+        // for a field.
+        //
+        // A capture spanning ALTERNATIVES (`is A | B { f }`) is deliberately absent from
+        // `mv_field_origin`: it picks its origin from the runtime tag, so it has no one field
+        // to be resolved to.
+        let binding_origin = if self.first_pass || is_field {
+            None
+        } else {
+            self.mv_field_origin.get(&vec).cloned()
+        };
+        let mut owned_origin;
+        let mut owned_parent;
+        let (val, parent_tp, vec, is_var, is_field) = match binding_origin {
+            Some((origin, origin_parent)) => {
+                owned_origin = origin;
+                owned_parent = origin_parent;
+                (&mut owned_origin, &mut owned_parent, u16::MAX, false, true)
+            }
+            None => (val, &mut parent_tp.clone(), vec, is_var, is_field),
+        };
+        let parent_tp: &Type = parent_tp;
         // loft#944 — in pass 1 an element type naming a type declared LOWER in the file is
         // still a stub, so there is no record shape and every step below asks for one:
         // `new_record` reports Fatal, and the append path reaches `data.def(u32::MAX)`.

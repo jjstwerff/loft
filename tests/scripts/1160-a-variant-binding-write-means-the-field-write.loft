@@ -1,0 +1,104 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A write spelled through a variant's payload BINDING means the field write.
+//
+// @FR-Col-Group — a record entering through any member of a linked collection group is in
+// every member, BY ANY WRITE ROUTE.  `match c { V { f } => f += [r] }` and
+// `if c is V { f } { f += [r] }` are write routes to `c.f`, so they owe what `c.f += [r]`
+// gives, and they gave two different wrong answers instead (loft#1160, loft#1161).
+//
+// A binding is a bare variable and carries no FIELD, and the two halves that go wrong are
+// decided on either side of the record emission.  Treated as a local, the binding had a store
+// of its own minted and was REBOUND to it, so an `is` capture's append landed in a store the
+// block threw away — the write never reached the subject at all, and reading the binding back
+// inside the block still reported it, so nothing anywhere said so (loft#1161).  And the record
+// emission was handed no field, so `Stores::record_finish` had no `other_indexes` to walk and
+// a `match` arm's append reached the member the binding named and no sibling (loft#1160).
+//
+// Axes this file MOVES:  the binding spelling (`match` arm and `is` capture), where the read
+//                        is taken (through the BINDING inside the block, and through the
+//                        SUBJECT after it), which member is declared first, and the write
+//                        route (element-wise `+=` and a whole vector value).
+// Axes it HOLDS FIXED:   the binding names ONE variant.  A capture spanning alternatives
+//                        picks its origin from the runtime tag, so it has no one field to be
+//                        resolved to and is deliberately not covered.
+//
+// **Both reads are asserted, and that is the point.**  Fixing only the write direction swaps
+// one silent disagreement for another: the subject reads correct while the binding, still
+// bound to the store minted for it, reads 0 inside the very block that wrote through it.  The
+// first attempt at this did exactly that and every subject-side cell passed.
+//
+// The plain STRUCT field is the in-file oracle: the binding spellings are not being scored
+// against a hand number but against what the same write means when it is spelled directly.
+//
+// @falsified-at: 0168e42f — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native
+// exit 1 -> 0, native 1 assertion failures -> 0.  The count is 1 because a failed assert stops
+// the run: on the control the first `match arm, read through the subject` cell fires, and both
+// binding spellings are broken there in both declaration orders.
+
+struct Vb { vb_k: integer, vb_nm: text }
+
+enum VbEnum { VbKeyedFirst { vk_look: sorted<Vb[vb_k]>, vk_data: vector<Vb> },
+              VbVecFirst   { vv_data: vector<Vb>, vv_look: sorted<Vb[vb_k]> },
+              VbOther      { vb_tag: integer } }
+
+// The oracle: the same two members on a plain struct, written through the field.
+struct VbPlain { vp_data: vector<Vb>, vp_look: sorted<Vb[vb_k]> }
+
+fn vb_rows() -> vector<Vb> { [Vb { vb_k: 7, vb_nm: "seven" }, Vb { vb_k: 8, vb_nm: "eight" }] }
+
+fn main() {
+  // ---- the ORACLE: written through the field, read back through the field --------------
+  vp = VbPlain { };
+  for r in vb_rows() { vp.vp_data += [r]; }
+  assert(len(vp.vp_data) == 2 && len(vp.vp_look) == 2,
+    "oracle: the field write reaches the group: data={len(vp.vp_data)} look={len(vp.vp_look)}");
+
+  // ---- a `match` arm binding, vector member declared SECOND ------------------------------
+  m1: VbEnum = VbKeyedFirst { vk_look: [], vk_data: [] };
+  match m1 {
+    VbKeyedFirst { vk_data } => {
+      for r in vb_rows() { vk_data += [r]; }
+      // Read the BINDING back inside the arm that wrote through it.
+      assert(len(vk_data) == 2, "match arm, read through the binding: {len(vk_data)}");
+    },
+    _ => { }
+  }
+  m1_d = match m1 { VbKeyedFirst { vk_data } => len(vk_data), _ => -1, };
+  m1_l = match m1 { VbKeyedFirst { vk_look } => len(vk_look), _ => -1, };
+  assert(m1_d == 2 && m1_l == 2,
+    "match arm, read through the subject: data={m1_d} look={m1_l}");
+
+  // ---- an `is` capture, vector member declared FIRST --------------------------------------
+  i1: VbEnum = VbVecFirst { vv_data: [], vv_look: [] };
+  if i1 is VbVecFirst { vv_data } {
+    for r in vb_rows() { vv_data += [r]; }
+    assert(len(vv_data) == 2, "is capture, read through the binding: {len(vv_data)}");
+  }
+  i1_d = match i1 { VbVecFirst { vv_data } => len(vv_data), _ => -1, };
+  i1_l = match i1 { VbVecFirst { vv_look } => len(vv_look), _ => -1, };
+  assert(i1_d == 2 && i1_l == 2,
+    "is capture, read through the subject: data={i1_d} look={i1_l}");
+
+  // ---- the same two spellings the other way round -----------------------------------------
+  m2: VbEnum = VbVecFirst { vv_data: [], vv_look: [] };
+  match m2 { VbVecFirst { vv_data } => { for r in vb_rows() { vv_data += [r]; } }, _ => { } }
+  m2_d = match m2 { VbVecFirst { vv_data } => len(vv_data), _ => -1, };
+  m2_l = match m2 { VbVecFirst { vv_look } => len(vv_look), _ => -1, };
+  assert(m2_d == 2 && m2_l == 2, "match arm, vector first: data={m2_d} look={m2_l}");
+
+  i2: VbEnum = VbKeyedFirst { vk_look: [], vk_data: [] };
+  if i2 is VbKeyedFirst { vk_data } { for r in vb_rows() { vk_data += [r]; } }
+  i2_d = match i2 { VbKeyedFirst { vk_data } => len(vk_data), _ => -1, };
+  i2_l = match i2 { VbKeyedFirst { vk_look } => len(vk_look), _ => -1, };
+  assert(i2_d == 2 && i2_l == 2, "is capture, keyed first: data={i2_d} look={i2_l}");
+
+  // ---- the write reaches real RECORDS, not just a length -----------------------------------
+  m3: VbEnum = VbKeyedFirst { vk_look: [], vk_data: [] };
+  match m3 { VbKeyedFirst { vk_data } => { for r in vb_rows() { vk_data += [r]; } }, _ => { } }
+  m3_nm = match m3 { VbKeyedFirst { vk_look } => vk_look[8].vb_nm, _ => "", };
+  assert(m3_nm == "eight", "the sibling view is a lookup route: {m3_nm}");
+
+  println("1160 ok");
+}
