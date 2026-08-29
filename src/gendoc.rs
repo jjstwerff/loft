@@ -73,13 +73,14 @@ fn main() -> std::io::Result<()> {
     }
 
     generate_stdlib_toc(&sections, &stdlib_info, &topic_info)?;
-    generate_search_index(&sections, &stdlib_info)?;
+    let registry = load_registry_index()?;
+    generate_search_index(&sections, &stdlib_info, &registry)?;
 
     let topic_sources = get_topic_sources();
     generate_print_page(&topic_sources, &sections, &stdlib_info, &link_map, version)?;
     generate_typst(&topic_sources, &sections, version)?;
 
-    let libraries = generate_libraries_page(&stdlib_info, &topic_info)?;
+    let libraries = generate_libraries_page(&registry, &stdlib_info, &topic_info, &link_map)?;
 
     let sitemap_pages = loft::documentation::generate_sitemap()?;
     println!("Generated doc/sitemap.xml ({sitemap_pages} pages) + doc/robots.txt");
@@ -420,12 +421,15 @@ fn generate_stdlib_section(
 ///
 /// A package appears under each of its categories, the way the maintainer catalogue lists
 /// it: a reader arrives looking for *graphics*, not for a name they do not yet know.
-fn generate_libraries_page(
-    stdlib_sections: &[StdlibSection],
-    topic_info: &[(String, String)],
-) -> std::io::Result<usize> {
-    // Offline-tolerant on purpose: `load_index` falls back to the cached index, so a doc
-    // build does not need the network — only that the box has talked to the registry once.
+/// The registry index the library pages and the search index are all rendered from.
+///
+/// Offline-tolerant on purpose: `load_index` falls back to the cached index, so a doc build
+/// does not need the network — only that the box has talked to the registry once.
+///
+/// A failure here STOPS the build rather than skipping the library pages. The nav links them
+/// from every other page, and a site published without them is the exact hole they exist to
+/// close, so a missing registry must not turn into 100-odd links to a 404.
+fn load_registry_index() -> std::io::Result<loft::registry_index::RegistryIndex> {
     let opts = loft::install::InstallOptions {
         allow_unsigned: true,
         refresh: false,
@@ -434,21 +438,22 @@ fn generate_libraries_page(
         skip_lockfile: true,
         lock_path: None,
     };
-    let index = match loft::install::load_index(&opts) {
-        Ok(index) => index,
-        Err(e) => {
-            // Fail rather than skip.  The nav links this page from every other page, and a
-            // site published without it is the exact hole the page exists to close — so a
-            // missing registry has to stop the build, not quietly ship a 404.
-            eprintln!(
-                "gendoc: cannot build the Libraries page — the registry index is \
-                 unreachable and no cached copy is available: {e}\n\
-                 Run `loft api --registry` once to populate the cache, then re-run gendoc."
-            );
-            return Err(std::io::Error::other("registry index unavailable"));
-        }
-    };
+    loft::install::load_index(&opts).map_err(|e| {
+        eprintln!(
+            "gendoc: cannot build the library pages — the registry index is unreachable \
+             and no cached copy is available: {e}\n\
+             Run `loft api --registry` once to populate the cache, then re-run gendoc."
+        );
+        std::io::Error::other("registry index unavailable")
+    })
+}
 
+fn generate_libraries_page<S: std::hash::BuildHasher>(
+    index: &loft::registry_index::RegistryIndex,
+    stdlib_sections: &[StdlibSection],
+    topic_info: &[(String, String)],
+    link_map: &HashMap<String, String, S>,
+) -> std::io::Result<usize> {
     // Category → the packages carrying it.  A package with no category still has to be
     // reachable, so it lands under "Other" rather than vanishing from the one page whose
     // job is completeness.
@@ -521,7 +526,13 @@ fn generate_libraries_page(
     let html = page_html("Libraries", &nav, "Libraries", &body, &meta);
     fs::write("doc/libraries.html", html)?;
 
-    generate_library_cards(&index, stdlib_sections, topic_info)?;
+    generate_library_cards(index, stdlib_sections, topic_info)?;
+    let (rendered, unrecorded) =
+        generate_library_api_pages(index, stdlib_sections, topic_info, link_map)?;
+    println!(
+        "Generated {rendered} library API references ({unrecorded} package(s) predate the \
+         registry's `api` field and say so)"
+    );
     Ok(index.packages.len())
 }
 
@@ -610,13 +621,22 @@ fn generate_library_cards(
             ),
         );
         row("Download", &human_size(v.size));
-        if !v.api.is_empty() {
+        if v.api.is_empty() {
             row(
                 "Public API",
                 &format!(
-                    "{} items \u{2014} <code>loft api {}</code> prints them with their documentation",
-                    v.api.len(),
+                    "<a href=\"lib-{0}-api.html\">not recorded for this version</a> \u{2014} \
+                     <code>loft api {0}</code> reads it from the package itself",
                     esc(name)
+                ),
+            );
+        } else {
+            row(
+                "Public API",
+                &format!(
+                    "<a href=\"lib-{}-api.html\">{} items, with their documentation</a>",
+                    esc(name),
+                    v.api.len()
                 ),
             );
         }
@@ -753,6 +773,145 @@ fn short_date(stamp: &str) -> String {
     stamp.split('T').next().unwrap_or(stamp).to_string()
 }
 
+/// One API reference page per library — Tier 2, *what is the exact signature?*
+///
+/// Rendered from the registry index's own `api` array: every `pub` signature with its doc
+/// comment, re-derived from source by registry CI at publish time. So this needs no package
+/// installed and no clone, and it cannot drift from the version it describes — the two facts
+/// that make the reference the tier which already worked.
+///
+/// Returns `(rendered, unrecorded)`. **A version published before the `api` field existed
+/// carries none**, and that page says so and points at the two routes that do work, rather
+/// than rendering an empty list that reads as "this library has no public functions". The
+/// gap closes itself: the field is filled at a package's next release.
+fn generate_library_api_pages<S: std::hash::BuildHasher>(
+    index: &loft::registry_index::RegistryIndex,
+    stdlib_sections: &[StdlibSection],
+    topic_info: &[(String, String)],
+    link_map: &HashMap<String, String, S>,
+) -> std::io::Result<(usize, usize)> {
+    let mut rendered = 0usize;
+    let mut unrecorded = 0usize;
+    for (name, pkg) in &index.packages {
+        let Some(v) = loft::registry_index::find_best_version(pkg, "*", false) else {
+            continue;
+        };
+        let mut body = String::new();
+        let _ = writeln!(
+            body,
+            "<p><a href=\"lib-{0}.html\">\u{2190} {0}</a> \u{b7} version {1}</p>",
+            esc(name),
+            esc(&v.semver)
+        );
+
+        if v.api.is_empty() {
+            unrecorded += 1;
+            let _ = writeln!(
+                body,
+                "<p>The registry does not record a public surface for <code>{0}</code> {1}. \
+                 The field was added after this version was published, and it is filled from \
+                 source at a package's next release \u{2014} so this page fills itself in \
+                 when <code>{0}</code> ships again.</p>\n\
+                 <p>Both of these work today:</p>\n\
+                 <pre><code>loft api {0}\n</code></pre>\n\
+                 <p>prints the surface with its documentation, read from the package itself; \
+                 and the source is the other route.</p>",
+                esc(name),
+                esc(&v.semver)
+            );
+            if let Some(url) = pkg.homepage.as_deref().filter(|u| !u.is_empty()) {
+                let _ = writeln!(body, "<p><a href=\"{0}\">{0}</a></p>", esc(url));
+            }
+        } else {
+            rendered += 1;
+            let _ = writeln!(
+                body,
+                "<p class=\"lib-legend\">{} public items, in source order. Generated from the \
+                 registry index, which re-derives them from the package source at publish \
+                 time \u{2014} so a signature here is the one that version actually ships.</p>",
+                v.api.len()
+            );
+            for item in &v.api {
+                // The same wrapper the stdlib section pages use for a documented entry —
+                // one structure for "a signature and its doc", so a style applied later
+                // reaches both rather than only the half that was written second.
+                body.push_str("<div class=\"item\">\n");
+                let _ = writeln!(
+                    body,
+                    "<pre><code>{}</code></pre>",
+                    loft::documentation::highlight_loft(&item.sig, link_map)
+                );
+                body.push_str(&doc_paragraphs(&item.doc));
+                body.push_str("</div>\n");
+            }
+        }
+
+        let nav = build_nav(topic_info, stdlib_sections, "libraries");
+        let desc = format!(
+            "The public API of the loft library {name} \u{2014} every function, struct and enum \
+             it exports, with its documentation."
+        );
+        let slug = format!("lib-{name}-api");
+        let meta = loft::documentation::PageMeta {
+            slug: &slug,
+            description: &desc,
+        };
+        let title = format!("{name} API");
+        let html = page_html(&title, &nav, &title, &body, &meta);
+        fs::write(format!("doc/lib-{name}-api.html"), html)?;
+    }
+    Ok((rendered, unrecorded))
+}
+
+/// A doc comment from the registry, as HTML paragraphs.
+///
+/// The stored form is plain text: paragraphs separated by a blank line, wrapped with hard
+/// newlines inside a paragraph, and backtick spans for code. Rejoining the wrapped lines
+/// matters — kept as-is the text renders with the author's terminal width baked in, which
+/// is not a line break they chose for a browser.
+fn doc_paragraphs(doc: &str) -> String {
+    let mut out = String::new();
+    for para in doc.split("\n\n") {
+        let joined = para
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if joined.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "<p>{}</p>", inline_code(&joined));
+    }
+    out
+}
+
+/// Escape one paragraph, turning `` `spans` `` into `<code>`.
+///
+/// An unclosed backtick is left as a literal character rather than swallowing the rest of
+/// the paragraph into a code span — a doc comment is prose someone typed, and the failure
+/// mode of guessing is that the sentence disappears.
+fn inline_code(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('`') {
+        let (before, after) = rest.split_at(open);
+        out.push_str(&esc(before));
+        match after[1..].find('`') {
+            Some(close) => {
+                let _ = write!(out, "<code>{}</code>", esc(&after[1..=close]));
+                rest = &after[close + 2..];
+            }
+            None => {
+                out.push_str(&esc(after));
+                return out;
+            }
+        }
+    }
+    out.push_str(&esc(rest));
+    out
+}
+
 /// A download size a person can judge. Packages here run from 11 kB to 200 kB, so kB is the
 /// working unit and MB only appears if one ever grows into it.
 fn human_size(bytes: u64) -> String {
@@ -829,6 +988,7 @@ fn generate_stdlib_toc(
 fn generate_search_index(
     sections: &[SectionFull],
     stdlib_info: &[StdlibSection],
+    registry: &loft::registry_index::RegistryIndex,
 ) -> std::io::Result<()> {
     let mut entries: Vec<String> = Vec::new();
 
@@ -848,6 +1008,35 @@ fn generate_search_index(
             if let Some(name) = sig_name(sig) {
                 let kind = sig_kind(sig);
                 entries.push(format!("{{name:{:?},kind:{:?},url:{:?}}}", name, kind, url));
+            }
+        }
+    }
+
+    // The registry's public surfaces, so the site's search covers the DISTRIBUTION and not
+    // only the bundled stdlib.  A reference nobody can find is half-published, and the same
+    // `api` array the reference pages render already carries every name.
+    //
+    // Qualified `pkg::name`, for two reasons: a bare `render` would collide across packages
+    // with nothing in the result to tell them apart, and the match is a substring test — so
+    // the qualifier disambiguates the result without narrowing what finds it.
+    for (pkg_name, pkg) in &registry.packages {
+        let Some(v) = loft::registry_index::find_best_version(pkg, "*", false) else {
+            continue;
+        };
+        let url = format!("lib-{pkg_name}-api.html");
+        entries.push(format!(
+            "{{name:{:?},kind:\"library\",url:\"lib-{}.html\"}}",
+            pkg_name, pkg_name
+        ));
+        for item in &v.api {
+            if let Some(name) = sig_name(&item.sig) {
+                let kind = sig_kind(&item.sig);
+                entries.push(format!(
+                    "{{name:{:?},kind:{:?},url:{:?}}}",
+                    format!("{pkg_name}::{name}"),
+                    kind,
+                    url
+                ));
             }
         }
     }

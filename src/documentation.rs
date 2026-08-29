@@ -811,9 +811,14 @@ fn emit_span<S: std::hash::BuildHasher>(
     out.push_str("</span>");
 }
 
-/// Use this instead of raw HTML concatenation for code blocks; stdlib links are
-/// injected here so no separate post-processing pass over the HTML is needed.
-fn highlight_loft<S: std::hash::BuildHasher>(
+/// Render loft source as highlighted HTML, emitting the classes
+/// [`DOC.md` § Syntax highlighting classes](../doc/claude/DOC.md) documents.
+///
+/// Use this instead of raw HTML concatenation for any block of loft. An identifier that
+/// appears in `link_map` is wrapped in an `<a href>` as it is highlighted, so cross-linking
+/// needs no second pass over the output — and pointing a bigger map at it is how a library's
+/// signatures come to link at the types they mention.
+pub fn highlight_loft<S: std::hash::BuildHasher>(
     code: &str,
     link_map: &HashMap<String, String, S>,
 ) -> String {

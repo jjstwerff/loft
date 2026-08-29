@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hex_world API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library hex_world — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-hex_world-api.html">
+<meta property="og:title" content="hex_world API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library hex_world — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-hex_world-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="hex_world API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library hex_world — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>hex_world API</h1>
+<article>
+<p><a href="lib-hex_world.html">← hex_world</a> · version 0.2.0</p>
+<p class="lib-legend">17 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Cell</span></code></pre>
+<p>4-byte cell.  c_color uses the u8 typedef (integer limit(0,255) size(1)); c_age uses u16 (size(2)).  Storage packs to exactly 4 bytes per cell — the projector ships them through the binary surface in chunk-major order.</p>
+<p>c_color = 0 means &quot;empty&quot; (no crystal, no TTT mark).  Both clients treat 0 as background; non-zero as live content.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Chunk</span></code></pre>
+<p>32x32 grid at chunk coords (ck_cx, ck_cz).  Index into ck_cells: hx * 32 + hz where hx, hz ∈ [0, 31].  Same shape as moros_map's Chunk minus the cy layer (this world is single-layer).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">World</span></code></pre>
+<p>Top-level container.  Sparse: only chunks with at least one non-empty cell live in <code>chunks</code>; empty chunks are removed by the tick loop's GC pass.  <code>tick</code> is monotonic per server lifetime.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">chunk_idx_32</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>floor(v / 32) — handles negative v correctly (C-style <code>/</code> rounds toward zero, which silently maps cell (-1, 0) to chunk 0 instead of chunk -1).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hex_idx_32</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>v mod 32, always in [0, 31].</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cell_empty</span>() -&gt; <span class="en">Cell</span></code></pre>
+<p>Default empty cell.  All fields zero; serialises to four 0x00 bytes on the wire.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">build_chunk</span>(cx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cz: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Chunk</span></code></pre>
+<p>Build a 32x32 chunk filled with empty cells at chunk coords (cx, cz).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">world_empty</span>() -&gt; <span class="en">World</span></code></pre>
+<p>New empty world, tick 0, no chunks.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">has_chunk</span>(self: <span class="en">World</span>, q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>True iff a chunk exists at the global (q, r).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ensure_chunk</span>(self: &amp;<span class="en">World</span>, q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Ensure a chunk exists at the global (q, r); creates a 32x32 of empty cells if absent.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">get_cell</span>(self: <span class="en">World</span>, q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Cell</span></code></pre>
+<p>Read the cell at global (q, r).  Returns <code>cell_empty()</code> when the chunk does not exist (sparse-world convention — empty chunks are implicitly all-empty).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_cell</span>(self: &amp;<span class="en">World</span>, q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>, value: <span class="en">Cell</span>)</code></pre>
+<p>Write a cell at global (q, r).  Creates the containing chunk on demand; does NOT GC empty chunks (the tick loop's end-of-tick pass owns that).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cell_count</span>(self: <span class="en">World</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Total number of non-empty cells across every chunk.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">neighbour_count</span>(self: <span class="en">World</span>, q: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Count filled axial-hex neighbours of the cell at global (q, r). Returns 0..=6.  Empty centre cell is fine — neighbours are read independently of the centre's state.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tick_and_decay</span>(self: &amp;<span class="en">World</span>, base_lifetime: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>── Tick + decay ───────────────────────────────────────────────────</p>
+<p>One world step: advances <code>tick</code>, ages every non-empty cell by 1, then removes any cell whose <code>c_age</code> has crossed <code>effective_lifetime + decay_window</code> where <code>effective_lifetime = base_lifetime + neighbour_lease * filled_neighbour_count</code>.  Neighbour counts are computed against the PRE-TICK state — a single tick can remove a connected blob of cells, but the cascade (centre losing its neighbour support) only fires on the NEXT tick.  This keeps the simulation deterministic per-step and prevents one-tick complete collapse of large clusters.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">world_save</span>(self: <span class="en">World</span>, path: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Save the world to <code>path</code>, replacing whatever was there.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">world_load</span>(self: &amp;<span class="en">World</span>, path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Load the world from <code>path</code>.  Mutates <code>self</code> in place; pre-existing cells in <code>self</code> are left untouched unless the snapshot overwrites the same (q, r).  Returns the number of cells loaded.  Returns 0 if the file does not exist, has the wrong magic, or carries an unsupported version — never panics.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

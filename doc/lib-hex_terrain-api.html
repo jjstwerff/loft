@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hex_terrain API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library hex_terrain — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-hex_terrain-api.html">
+<meta property="og:title" content="hex_terrain API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library hex_terrain — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-hex_terrain-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="hex_terrain API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library hex_terrain — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>hex_terrain API</h1>
+<article>
+<p><a href="lib-hex_terrain.html">← hex_terrain</a> · version 0.1.1</p>
+<p class="lib-legend">26 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">TerrainType</span></code></pre>
+<p>One terrain type = content (a bundle row in the consuming game). tt_rise and tt_steep are INDEPENDENT; tt_wet marks water bodies (sea/lake): they take no relief and no boundary contest.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">TerrainParams</span></code></pre>
+<p>Algorithm parameters (engine side).  terrain_params() gives the blueprint's user-tuned defaults; every field is meters unless noted.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_params</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tile: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">TerrainParams</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Terrain</span></code></pre>
+<p>Parallel per-cell vectors, index = r * tr_nx + c (odd-r offset coords).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_new</span>(nx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ny: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Terrain</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_idx</span>(t: <span class="en">Terrain</span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_center</span>(p: <span class="en">TerrainParams</span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Cell center in world meters — hex_grid's odd-r lattice scaled so the horizontal pitch equals tp_tile (hex_grid's unit pitch is SQRT3).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_flow_to</span>(t: <span class="en">Terrain</span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>The downstream cell of (c, r) — itself when it has no flow direction.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_hash01</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ix: <span class="ty"><a href="stdlib-types.html">integer</a></span>, iy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ch: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_vnoise</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, wl: <span class="ty"><a href="stdlib-types.html">float</a></span>, ch: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_fbm</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, wl0: <span class="ty"><a href="stdlib-types.html">float</a></span>, octaves: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ch: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Fractal sum, roughly in [-1, 1].</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_detail_at</span>(p: <span class="en">TerrainParams</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Detail noise with DOMAIN WARP (the sampling space is swirled by a second noise so the value-noise lattice never reads as a repeating pattern).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_ridge_at</span>(p: <span class="en">TerrainParams</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>LOW-frequency ridged field, crest-sharpened: roughly ONE combined crest per steep zone — peaks consolidate into ridgelines instead of speckling.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_hydrology</span>(t: <span class="en">Terrain</span>, p: <span class="en">TerrainParams</span>, lake_mat: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>PRIORITY-FLOOD pit fill + steepest-descent flow + accumulation.  After this every land cell drains to the sea; cells the flood raised by more than tp_lake_fill become lakes (material set to lake_mat).  Selection-based flood (O(n^2)) — overland grids are small and this runs once at gen time.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_relief_pass</span>(t: <span class="en">Terrain</span>, types: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">TerrainType</span>&gt;, p: <span class="en">TerrainParams</span>)</code></pre>
+<p>Wet flags + the compounded neighbor relief.  Call AFTER the caller has classified land materials (relief reads the final wet set).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">TerrainSurf</span></code></pre>
+<p>One blended surface record at a fine point.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_surface_at</span>(t: <span class="en">Terrain</span>, types: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">TerrainType</span>&gt;, p: <span class="en">TerrainParams</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">TerrainSurf</span></code></pre>
+<p>Smooth kernel blend of the overland cells around (x, y) + the boundary-line contest + the fine height.  Pure function — THE seam invariant lives here.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_blend_h</span>(t: <span class="en">Terrain</span>, p: <span class="en">TerrainParams</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Lightweight coarse-blend height only (for slopes along river courses).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_lake_field</span>(p: <span class="en">TerrainParams</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, lakey: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The fractally jittered lake contour field (&gt;= 0.5 = lake water).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_water_at</span>(t: <span class="en">Terrain</span>, types: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">TerrainType</span>&gt;, p: <span class="en">TerrainParams</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Is (x, y) open water (sea by the fine height contour, or lake)?  PRE-carve — this is the shoreline rivers attach to.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">TerrainRiver</span></code></pre>
+<p>One river course PIECE: fine polyline (ends ON the shorelines) with per-vertex water width, carve depth and valley falloff width.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_edge_cross</span>(p: <span class="en">TerrainParams</span>, ca: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ra: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>THE EDGE BIT (user rule): a river never exits mid-side; each shared edge carries one canonical left/right bit.  Both tiles hash the SORTED cell pair, so they derive the same crossing point — seamless.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_control_pt</span>(p: <span class="en">TerrainParams</span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span>, r: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>The interior routing point of a tile (hash-jittered off-center; the natural confluence spot — tributaries entering the tile share it).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_rivers</span>(t: <span class="en">Terrain</span>, types: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">TerrainType</span>&gt;, p: <span class="en">TerrainParams</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">TerrainRiver</span>&gt;</code></pre>
+<p>All river course pieces, fully shaped: anchors (edge bits + control points) -&gt; fractal displacement -&gt; corner-cut smoothing -&gt; shoreline trim -&gt; width/ depth/valley-width per vertex (slope-shaped + the estuary depth bonus).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">TerrainSample</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">terrain_sample</span>(t: <span class="en">Terrain</span>, types: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">TerrainType</span>&gt;, p: <span class="en">TerrainParams</span>, rivers: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">TerrainRiver</span>&gt;, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">TerrainSample</span></code></pre>
+<p>The full sample: surface + ADDITIVE valley carving from every course near the point + the water classification (sea floods the carved mouth).  Pure function of (t, types, p, rivers, x, y) — THE window-independence invariant.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fixstep API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library fixstep — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-fixstep-api.html">
+<meta property="og:title" content="fixstep API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library fixstep — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-fixstep-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="fixstep API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library fixstep — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>fixstep API</h1>
+<article>
+<p><a href="lib-fixstep.html">← fixstep</a> · version 0.1.1</p>
+<p class="lib-legend">46 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ease_fraction</span>(k: <span class="ty"><a href="stdlib-types.html">float</a></span>, dt: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>What one frame of <code>dt</code> closes of a gap, in <code>[0, 1)</code>.</p>
+<p>⚠ Zero for a frame with no time in it — which is what a PAUSED consumer hands down, and it must not creep.</p>
+<p>Example: @FIX-012</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">approach</span>(now: <span class="ty"><a href="stdlib-types.html">float</a></span>, want: <span class="ty"><a href="stdlib-types.html">float</a></span>, k: <span class="ty"><a href="stdlib-types.html">float</a></span>, dt: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Move <code>now</code> toward <code>want</code> by one frame's worth.</p>
+<p>⚠ **<code>k</code> is the gap fraction closed per SECOND**, so it is a rate and not a step: an approach chasing something moving at <code>v</code> settles at a steady lag of <code>v / k</code>.  ⚠⚠ That derivation assumes a CONTINUOUS target — against one that stands still and then jumps a whole step, the real excursion is the step, not <code>v / k</code>, and a consumer that sized <code>k</code> on the formula will be out by the ratio of the two (measured at **3.7x** in this package's first consumer).</p>
+<p>Example: @FIX-012</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wrap_deg</span>(a: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>An angle in degrees, folded into <code>[0, 360)</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wrap_delta</span>(d: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>A DIFFERENCE of angles, folded into <code>(−180, 180]</code> — the short way round.</p>
+<p>⚠⚠ **This is not defensive tidying, and a real key set reaches the wrong-way swing.**  In this package's first consumer, holding one key gives a bearing of 360° and adding a second gives 60°.  The true turn is 60°; eased as plain numbers it is **−300°**, and the camera spins five sixths of a circle the wrong way on one extra keypress — while looking like a working camera the whole time, which is why it needs a test rather than an eye.</p>
+<p>Example: @FIX-013</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">approach_angle</span>(now: <span class="ty"><a href="stdlib-types.html">float</a></span>, want: <span class="ty"><a href="stdlib-types.html">float</a></span>, k: <span class="ty"><a href="stdlib-types.html">float</a></span>, dt: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Move an ANGLE toward another by one frame's worth, the short way.</p>
+<p>⚠ A separate door from <code>approach</code> rather than a flag on it: an angle is not a number that happens to wrap, and a consumer that eased a bearing with <code>approach</code> gets a camera that is correct at every angle except across the seam.</p>
+<p>Example: @FIX-013</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Bank</span></code></pre>
+<p>Progress banked toward the next whole unit.</p>
+<p>⚠ **One field, and the struct exists so the caller cannot forget to write the remainder back.**  loft has no by-reference integer, so a free function over an <code>integer</code> would have to answer a pair and leave the carry to the call site — which is the seven-sites problem wearing a library's clothes.  Passed as a parameter it aliases, so <code>bank_gain</code> updates it in place and answers only the whole units.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_new</span>() -&gt; <span class="en">Bank</span></code></pre>
+<p>A bank with nothing carried.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_whole</span>(units_per_second: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>How much banked progress makes one whole unit, for a clock counting <code>units_per_second</code> base units a second.</p>
+<p>⚠ dryopea's answer is the <code>BANK_WHOLE</code> constant above; this is the derivation, for a consumer whose clock counts something else.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_rate</span>(per_second: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Quantise a rate quoted in whole units per second.</p>
+<p>⚠ **It ROUNDS rather than truncating**, and the difference is visible at every rate that is not a whole millionth: truncating would make a mover systematically slower, which is the shape of defect this whole plan exists to remove.  ⚠ Truncation is also what <code>@D003</code> was — the same mistake one unit further out.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_gain</span>(b: <span class="en">Bank</span>, rate: <span class="ty"><a href="stdlib-types.html">integer</a></span>, elapsed: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Gain ground at <code>rate</code> for <code>elapsed</code> base time units, and answer the whole units it releases.  The remainder stays banked.</p>
+<p>⚠ **This is the one implementation of *do not lose a fraction* in dryopea**, and it is exact: <code>progress</code> is an integer, <code>rate × elapsed</code> is an integer, and a whole unit costs an integer, so there is nothing to round and no epsilon to get the direction of wrong (<code>CLAUDE.md</code> § Timers and epsilons: *neither direction is safe*).</p>
+<p>⚠ **A rate of zero banks nothing and keeps what is banked** — a mover that stops has not forgotten how far it had come.  Same for a non-positive <code>elapsed</code>: <code>tick_clock.loft</code> gives the reason time going backwards must be dropped rather than owed.</p>
+<p>⚠ **What it does NOT do is decide whether the mover may move.** <code>enemy_tick</code> asks the pre-walk window first, <code>helper_tick</code> asks whether the crew member is alive; a bank that knew about standing would have to know about every other reason not to move too. Example: @FIX-009</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_most</span>(rate: <span class="ty"><a href="stdlib-types.html">integer</a></span>, elapsed: <span class="ty"><a href="stdlib-types.html">integer</a></span>, whole: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The MOST one step at <code>rate</code> over <code>elapsed</code> could release — the ceiling, carry included, touching no bank.</p>
+<p>⚠ **An upper bound is a different question from a release**, and conflating them is what a caller does when it has no bank to spend. <code>play.loft::play_steer_reach</code> is the case: it asks how far ahead a held key should point, which must exceed anything one tick can cover, and it must not consume the player's carry to find out. Example: @FIX-010</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_progress</span>(b: const <span class="en">Bank</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>What is banked, in raw progress.</p>
+<p>⚠ **Readable so a run can be COMPARED and RESTORED** — <code>compare.loft::state_diff</code> reads it as part of a mover's state, and it is an integer now, so the comparison is exact without the &quot;floats EXACTLY&quot; argument that file had to make.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_fraction</span>(b: const <span class="en">Bank</span>, whole: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>What is banked, as a fraction of a whole unit.</p>
+<p>⚠ **The AUTHORING door, and the one place a float appears** — <code>emit.loft</code> writes a captured situation as <code>.keys</code> text and <code>script.loft</code> reads it back, and *hexes* is the unit a person authors in.  The round trip is exact because a double carries 53 bits and <code>BANK_WHOLE</code> needs 42: <code>bank_restore_fraction</code> recovers the integer this answered.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_restore</span>(b: <span class="en">Bank</span>, progress: <span class="ty"><a href="stdlib-types.html">integer</a></span>, whole: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Put a bank back where it was, in raw progress.</p>
+<p>⚠ Clamped into <code>[0, whole)</code> rather than trusted, for the reason <code>clock_restore</code> clamps: a carry at or past a whole unit is a state <code>bank_gain</code> can never leave behind, and accepting one would release a unit nothing paid for.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_restore_fraction</span>(b: <span class="en">Bank</span>, units: <span class="ty"><a href="stdlib-types.html">float</a></span>, whole: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Put a bank back from a fraction of a whole unit — <code>bank_fraction</code>'s other half.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bank_reset</span>(b: <span class="en">Bank</span>)</code></pre>
+<p>Throw the carry away.</p>
+<p>⚠ **Deliberately a door of its own rather than <code>bank_restore(b, 0)</code>, because it is a DECISION.**  A helper that comes back from recovery is a repaired vehicle rather than the wreck that was carried in, so its banked ground goes with the damage; an enemy that is merely blocked keeps everything.  Two behaviours, and the one that discards says so by name.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">TickClock</span></code></pre>
+<p>A fixed step and the time banked toward the next one.</p>
+<p>⚠ **Both integers, and that is the whole file.**  <code>banked</code> is always in <code>[0, step)</code> between calls, so there is no rounding to accumulate and no epsilon to get the direction of wrong (<code>CLAUDE.md</code> § Timers and epsilons: *neither direction is safe*).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_new</span>(step: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">TickClock</span></code></pre>
+<p>A clock ticking every <code>step</code> base units.</p>
+<p>⚠ **One argument, and a clock nobody configures behaves exactly as dryopea's did before this file** — uncapped, unscaled, carrying its remainder.  <code>plans/26</code> § The two rules under all of it: *defaults mean the behaviour you already had*.</p>
+<p>⚠ A step below 1 is clamped to 1 rather than refused, because the alternative is a nullable clock at every call site for a case no caller has: <code>clock_new(0)</code> is a mistake, not a mode.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_units_from_micros</span>(us: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Convert wall-clock microseconds — what loft's <code>ticks()</code> answers — to this clock's base units.</p>
+<p>⚠ **A multiplication, so it is exact.**  <code>main.loft</code> used to divide microseconds by 1e6 into float seconds before the simulation saw them, which threw the exactness away at the boundary and is half of what plan 26 was opened for (<code>plans/26</code> § 1).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_seconds_from_units</span>(units: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The other direction, in SECONDS.</p>
+<p>⚠⚠ **The seam plan 26 L3 was going to CLOSE, and what it did instead was change hands.**  Before L3 every one-shot timer in the game came through here to count float seconds — the boost and its cooldown, 90 ticks of helper recovery, 20 s of tower rebuild, the wave lull — and <code>tick_timer.loft</code> took all four into integer units.  What is left is not simulation at all:</p>
+<p>* **authoring** — <code>emit.loft</code> writes a captured situation as <code>.keys</code> text and a person reads it, and *seconds* is the unit a person authors in.  Exactly <code>bank_fraction</code>'s position one family over, and exactly as exact: a duration is a whole number of base units, so the round trip through <code>clock_units_from_seconds</code> recovers the integer this answered. * **presentation** — the camera's ease is <code>1 − e^(−k·dt)</code> over real frame time and is float by nature (<code>plans/26</code> § The invariant).</p>
+<p>⚠ **No mover and no timer may call this.**  A mover that did would be throwing away what <code>bank_gain</code> was built to keep, and a timer that did would be re-introducing the direction problem <code>tick_timer.loft</code> exists to delete.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_units_from_seconds</span>(seconds: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Float seconds to base units, ROUNDED — the authoring door's other half.</p>
+<p>⚠ **Rounding rather than truncating, for <code>tests/26_l1</code>'s reason one layer out**: a float second's worth of units is a hair over or under its exact count, and truncating a hair-under value costs a whole unit at every boundary.  The error is ~1e-10 against a step of 2 000 000.</p>
+<p>⚠ Negative time answers 0 rather than a negative count — the same refusal <code>clock_advance</code> makes, stated here too because the rounding would otherwise turn a small negative into <code>-0.5</code> and then into 0 by accident rather than by rule.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_set_rate</span>(clk: <span class="en">TickClock</span>, num: <span class="ty"><a href="stdlib-types.html">integer</a></span>, den: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Run simulated time at <code>num / den</code> of wall time.</p>
+<p>⚠ **A RATIONAL rather than a float, and that is the whole reason it needs no epsilon.**  <code>clock_set_rate(clk, 1, 3)</code> is a third of speed exactly, for ever: a frame worth 100 units contributes 33 and the leftover 1/3 is carried, where <code>elapsed * 0.3333…</code> drifts against a rate it could not state in the first place.  Same distinction <code>tick_bank.loft</code> § THE RATE IS SCALED AND THE TIME IS NOT draws one family over — except that a clock's rate is authored by a KEYPRESS rather than by <code>numbers.json</code>, so it is exact rather than quantised.</p>
+<p>⚠ **Pause is <code>0 / 1</code>**, and it banks nothing while keeping what is banked — so unpausing resumes mid-step rather than re-phasing the simulation.  A step of 0 is a mistake, never a pause (<code>clock_new</code>).</p>
+<p>⚠ A negative <code>num</code> is clamped to 0 rather than rewinding.  Time going backwards is dropped everywhere else in this file, and a rate that ran the simulation in reverse would need every consumer to have an inverse tick.</p>
+<p>⚠ **Changing the rate DROPS the wall carry**, because the carry is measured in <code>den</code>-ths of a base unit and the old <code>den</code> is gone.  It is under one base unit — a third of a microsecond — and a rate change is an event a player caused, not a per-frame path. Example: @FIX-007</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_rate_num</span>(clk: const <span class="en">TickClock</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The rate's numerator — 0 for a paused clock.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_rate_den</span>(clk: const <span class="en">TickClock</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The rate's denominator — never 0, and 1 for an unconfigured clock.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_advance</span>(clk: <span class="en">TickClock</span>, elapsed: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Spend elapsed time, and answer the whole steps it bought.</p>
+<p>⚠ **Integer division, not a subtraction loop.**  The loop is what lost the tick — eleven subtractions of a repeating fraction leave a remainder a hair under the twelfth — and it is also O(steps), so a frame that delivered an hour walked five thousand iterations to say so.  One division answers both.</p>
+<p>⚠ **Time going backwards is DROPPED, not banked.**  A negative elapsed is a clock that was reset or a caller subtracting in the wrong order; banking it would owe the simulation negative ticks and then swallow the next real frame.  Answering 0 and keeping the bank is the only behaviour that cannot corrupt a run.</p>
+<p>⚠ **No cap, and <code>clock_advance_capped</code> is the door that has one.** A frame that delivers 20 s buys 30 ticks here, which is the property dryopea's 654 gate measurements rest on. Example: @FIX-001</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_advance_capped</span>(clk: <span class="en">TickClock</span>, elapsed: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>The same, for a driver that may have been backgrounded — at most <code>max_steps</code>, and the excess is GONE.</p>
+<p>⚠⚠ **It DROPS rather than defers, and the difference is the whole door.**  <code>clock_advance</code> has already reduced the bank to the sub-step remainder by the time this clamps, so the steps beyond the cap are not owed: the next frame answers 1, not a burst.  The tempting wrong version clamps the answer and leaves the backlog banked, which runs the simulation behind the wall for ever after — <code>tests/26_l4</code> § A cap that defers is that version, kept as the control, and it is the only thing that makes this function's gate non-trivial.</p>
+<p>⚠ **And it must not compress**, which is moros's own note: *a compressed catch-up is the variable-step bug wearing a bound's clothes*.  Nothing here can — the step is fixed and this answers a COUNT — but a driver that multiplied its tick's dt to &quot;catch up&quot; would reintroduce exactly what <code>plans/22</code> § LOD is warned against.</p>
+<p>⚠ A cap below 1 is clamped to 1, for <code>clock_new</code>'s reason: a cap of zero is a simulation that can never advance, which is a mistake rather than a mode.  Pause is a rate of 0. Example: @FIX-004</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_pump</span>(clk: <span class="en">TickClock</span>, now: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Spend the time since the last reading of an ABSOLUTE wall clock.</p>
+<p>⚠ **The server pump's door: it owns the wall and the caller owns no subtraction.**  <code>now - last</code> written at the call site is where a driver gets the order backwards once and silently swallows a frame — <code>clock_advance</code> drops negative time, so the mistake looks like a stutter rather than an error.</p>
+<p>⚠ **The FIRST call primes and answers none.**  A pump whose first reading was treated as elapsed would open a server with its whole uptime as one burst of ticks.</p>
+<p>⚠ **A wall going backwards re-primes** rather than dropping the reading, because an absolute clock that jumped back is the new truth; dropping it would owe every future pump the difference.</p>
+<p>⚠ No cap — moros's server has none and <code>plans/26</code> § 3 says why the two repos are both right.  A pump that needs one wraps this in the same clamp <code>clock_advance_capped</code> applies. Example: @FIX-003</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_step</span>(_clk: const <span class="en">TickClock</span>, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Ask for <code>n</code> steps, and answer how many that was.</p>
+<p>⚠ **It does not touch the bank, and that is the whole point of it being a separate door.**  A count is not elapsed time: a script saying <code>tick 30</code> neither spends a live session's remainder nor leaves one behind.  <code>play.loft</code> § TWO ways to ask made this distinction one level up and measured what folding them costs.</p>
+<p>⚠ It looks trivial and is not free to delete: without it a caller that has a count must spell it as <code>n * step</code>, which is the exact mistake <code>tests/19_p1</code> records — and which is only safe here because the arithmetic is integer.  The door is what says so.</p>
+<p>⚠⚠ **<code>_clk</code> IS UNDERSCORED BECAUSE IT IS UNREAD BY DESIGN, AND THE UNDERSCORE IS LOAD-BEARING** (0.1.1).  Not reading it *is* the contract — a count must not spend a live session's remainder — so <code>never-read</code> is a true report of an intended fact rather than a defect.  Left bare it fails the chunk's <code>LOFT_DENY_WARNINGS=1</code> CI, and both tempting fixes are wrong: touching <code>clk</code> to quiet it breaks the contract, and an <code>.allow_warnings</code> file switches the gate off for every FUTURE warning in this package too.</p>
+<p>⚠ **The parameter stays rather than the signature dropping it.**  A caller holding a clock should reach for <code>clock_step(clk, n)</code> beside <code>clock_advance(clk, elapsed)</code>; a bare <code>step(n)</code> would be an arithmetic helper that names no case, and naming the case is the entire reason this door exists.</p>
+<p>Example: @FIX-002</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_step_units</span>(clk: const <span class="en">TickClock</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The step this clock ticks on, in base units.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_banked</span>(clk: const <span class="en">TickClock</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Time banked toward the next step, in base units — always in <code>[0, step)</code>.</p>
+<p>⚠ **Readable so a run can be RESTORED**, which is the whole of what a rollback consumer needs from the timing half (<code>plans/26</code> § What this plan does NOT build): re-running N steps from a restored bank is bit-identical because <code>clock_step</code> is exact. Example: @FIX-006</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_restore</span>(clk: <span class="en">TickClock</span>, banked: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Put a clock back where it was — the other half of <code>clock_banked</code>.</p>
+<p>⚠ Clamped into <code>[0, step)</code> rather than trusted: a bank at or past the step is a state <code>clock_advance</code> can never leave behind, and accepting one would make the next call answer a step nobody's time paid for.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_alpha</span>(clk: const <span class="en">TickClock</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>How far the bank is toward the next step, in <code>[0, 1)</code>.</p>
+<p>⚠ **The one number a renderer needs from a fixed-step clock**, and the reason it is here rather than at the call site: <code>banked / step</code> written by hand is a caller reaching INTO the accumulator, and a caller that can read <code>banked</code> can also write it.  This is the read door, and <code>clock_banked</code> (raw units, for save/restore) is the other one — two questions, two answers, one field.</p>
+<p>⚠ **Half-open by construction, not by a clamp.**  <code>clock_advance</code> leaves <code>banked</code> in <code>[0, step)</code> and <code>clock_restore</code> refuses anything else, so the division cannot reach 1.0 — which is what a caller lerping between two states depends on: an alpha of exactly 1.0 would draw the NEXT state one frame early, on the frame before the tick that produces it.</p>
+<p>⚠⚠ **What a consumer does with it is a PRESENTATION decision and this file must not make it.**  The textbook use is <code>lerp(previous_state, current_state, alpha)</code> — and dryopea measured it against two alternatives over one drive (<code>tests/26_l5_the_alpha.loft</code>, <code>@M035</code>):</p>
+<p>* <code>lerp(prev, cur, alpha)</code> draws the step that has ALREADY happened, so it is **exactly one step behind, for ever** — 2.598 m here, because a step is 2/3 of a second; * <code>cur + alpha·(cur − prev)</code> is **exact to machine precision** while the velocity holds, and jumps a whole step's travel on the frame the mover starts or stops; * a first-order ease toward <code>cur</code> needs no previous state, lags between the two, and is the only one whose picture depends on the frames it was drawn on.</p>
+<p>⚠ Three prices on three different axes, and which one is right is a function of how long the STEP is — so a clock that picked one would be wrong for every consumer whose step is a different length.  This answers *where between two steps are we*; it does not answer *what should be drawn there*. Example: @FIX-005</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clock_drive</span>(slow: <span class="en">TickClock</span>, fast: const <span class="en">TickClock</span>, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Spend <code>n</code> steps of <code>fast</code> on <code>slow</code>, and answer the slow steps that bought.</p>
+<p>⚠⚠ **The case is a strategy layer over a unit layer** — dryopea has the shape twice already (the camera steps at frame rate while the sim steps at 1.5 Hz, and <code>plans/22</code> § LOD contemplates ticking distant things every N ticks).  ⚠ **And it is the OPPOSITE of that plan's warning**: *bank progress, never multiply it* refuses to give a distant enemy <code>N × dt</code> of movement in one tick.  This gives a slower CLOCK the time those N ticks took, and it still ticks one step at a time.</p>
+<p>⚠ **Spelling it <code>n * step</code> at the call site is the shape of mistake <code>tests/19_p1</code> records** — a count folded into a duration, wrong for 602 of the first 1000 <code>n</code>.  Here it is exact, because both sides are integers; the door exists so that the next consumer does not re-derive it in seconds and find out the hard way, and <code>tests/26_l4</code> § Composing by hand is exact says so out loud rather than letting this comment overclaim.</p>
+<p>⚠ **A slow clock driven this way LAGS its driver by less than one fast step, and never leads.**  The fast clock's own bank is time that has not become a tick yet, so it has not been handed on — which is the correct answer and not an approximation: the composed clock is exactly as far along as the ticks that actually happened.</p>
+<p>⚠ **<code>slow</code>'s own rate still applies.**  A rate set on both clocks multiplies, which is a composition a caller asked for; set it on the one that faces the wall. Example: @FIX-008</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Timer</span></code></pre>
+<p>A one-shot duration and how much of it has been spent.</p>
+<p>⚠ **Both integers, and <code>total == 0</code> is UNARMED** — the zero-default that makes a partial struct literal correct everywhere this replaces a <code>0.0</code> seconds field.  See the header.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_new</span>() -&gt; <span class="en">Timer</span></code></pre>
+<p>A timer nobody has armed.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_armed</span>(units: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Timer</span></code></pre>
+<p>A timer armed for <code>units</code> — the factory, for a struct literal that wants one already running.</p>
+<p>⚠ <code>Enemy</code>'s pre-walk window is the case: an enemy is built already standing, so the field has to arrive armed.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_arm</span>(t: <span class="en">Timer</span>, units: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Arm it for <code>units</code>, from zero.</p>
+<p>⚠ **A duration of zero or less DISARMS rather than firing.**  Both readings are defensible and this one is what the call sites already mean: a schedule authored with a lull of 0 sends the next wave immediately because nothing is running, not because a timer fired. ⚠ It also re-arms from wherever it was, so a boost pressed during a boost restarts the clock rather than extending it — the behaviour the float version had, stated rather than inherited. Example: @FIX-011</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_running</span>(t: const <span class="en">Timer</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Is this timer running — armed, and not yet fired?</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_left</span>(t: const <span class="en">Timer</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Base units still to go.  Zero for a timer that is not running.</p>
+<p>⚠ **The DOWN reading**, and it is a subtraction rather than a second field.  <code>helper.recover</code> and <code>Vehicle.boost_left</code> were both stored this way and each carried its own epsilon; there is one number now and it is exact.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_spent</span>(t: const <span class="en">Timer</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Base units gone by.  Zero for a timer that is not running.</p>
+<p>⚠ **The UP reading**, off the same number.  <code>TowerCharge.repair</code> was stored this way — *seconds banked toward the rebuild* — because zero had to mean &quot;nobody is working on it&quot;, and that is still what an unarmed timer says.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_total</span>(t: const <span class="en">Timer</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The whole duration this timer was armed for, in base units.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_fraction</span>(t: const <span class="en">Timer</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>How far through it is, in <code>[0, 1)</code> — 0.0 for a timer that is not running.</p>
+<p>⚠ **The presentation door, and the one place a float appears** — a HUD showing a rebuild part-done, exactly <code>bank_fraction</code>'s position one family over.  Nothing in the simulation may read it: a comparison against 1.0 here is the epsilon problem walking back in through the display.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_spend</span>(t: <span class="en">Timer</span>, units: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Spend <code>units</code> of it.  Answers whether THIS call finished it.</p>
+<p>⚠ **It fires exactly once and then disarms**, which is the whole difference from <code>bank_gain</code>: the remainder past the boundary is DISCARDED, because a one-shot's residue means nothing afterwards. Carrying it would make the next arming shorter than the one before — measured in <code>tests/26_l3</code> § A one-shot built on a bank, where a 5.0 s cooldown costs 8 ticks the first time and 7 the second.</p>
+<p>⚠ A timer that is not running answers false and stays that way, so a caller may spend into it unconditionally — which is what <code>vehicle_burn</code> does with the cooldown every single tick.</p>
+<p>⚠ Non-positive time is dropped rather than owed, for <code>clock_advance</code>'s reason: time going backwards must not un-fire anything. Example: @FIX-011</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_cancel</span>(t: <span class="en">Timer</span>)</code></pre>
+<p>Stop it without firing.</p>
+<p>⚠ **A door of its own rather than <code>timer_arm(t, 0)</code>, because it is a DECISION** — the same argument <code>bank_reset</code> makes.  A vehicle that respawns loses the boost it was in the middle of; a cooldown that is merely running keeps everything.  Two behaviours, and the one that throws work away says so by name.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_restore_left</span>(t: <span class="en">Timer</span>, left: <span class="ty"><a href="stdlib-types.html">integer</a></span>, total: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Put a timer back from a DOWN reading — <code>units</code> left of <code>total</code>.</p>
+<p>⚠ Clamped rather than trusted, for <code>clock_restore</code>'s reason: <code>left</code> past <code>total</code> is a state <code>timer_spend</code> can never leave behind, and a <code>left</code> of zero or less is a timer that has already fired, which is an unarmed one.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">timer_restore_spent</span>(t: <span class="en">Timer</span>, spent: <span class="ty"><a href="stdlib-types.html">integer</a></span>, total: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Put a timer back from an UP reading — <code>units</code> spent of <code>total</code>.</p>
+<p>⚠ The other half, and the two are not interchangeable at the call site: <code>emit.loft</code> writes whichever reading its field was authored in, so a tower's rebuild round-trips as *banked* and a helper's recovery as *left*.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

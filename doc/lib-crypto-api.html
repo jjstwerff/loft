@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crypto API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library crypto — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-crypto-api.html">
+<meta property="og:title" content="crypto API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library crypto — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-crypto-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="crypto API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library crypto — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>crypto API</h1>
+<article>
+<p><a href="lib-crypto.html">← crypto</a> · version 0.3.8</p>
+<p class="lib-legend">28 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sha256</span>(data: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>SHA-256 hash of a string. Returns 64-char hex string.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sha256_b64</span>(data_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>SHA-256 of the RAW BYTES decoded from base64 <code>data_b64</code>. Returns base64 of the 32-byte digest. Use this to hash arbitrary byte strings (ciphertext, canonical CBOR) that are not valid UTF-8 and so cannot be passed to <code>sha256</code> as text. Example: @CRY-001 — the two hashing doors: text in / hex out vs base64 both ways.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hmac_sha256</span>(key: <span class="ty"><a href="stdlib-types.html">text</a></span>, data: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>HMAC-SHA256 of data with key. Returns 64-char hex string.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">base64_encode</span>(data: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Base64 encode a string.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">base64_decode</span>(data: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Base64 decode a string.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">base64url_encode</span>(data: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Base64url encode (JWT-safe, no padding).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ed25519_public_key</span>(secret_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Derive the 32-byte public key (base64) from a 32-byte secret seed (base64).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ed25519_sign</span>(secret_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, message_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Sign the base64 <code>message</code> bytes with the 32-byte secret seed (base64). Returns the 64-byte signature, base64. Example: @CRY-002 — sign <code>base64_encode(msg)</code>; the bare text signs other bytes, silently.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ed25519_verify</span>(public_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, message_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, signature_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Verify a signature over the base64 <code>message</code> bytes under a public key. Returns true iff the signature is valid. Example: @CRY-002 — why a wrongly-spelled message still verifies against itself.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ecdsa_p256_keygen</span>() -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Generate a fresh 32-byte P-256 secret scalar (base64) from the OS CSPRNG.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ecdsa_p256_public_key</span>(secret_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Derive the 64-byte public key <code>x || y</code> (base64) from a 32-byte secret scalar (base64). Example: @CRY-003 — the three JOSE lengths (32 / 64 / 64) a caller should check.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ecdsa_p256_sign</span>(secret_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, message_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Sign the base64 <code>message</code> bytes with the 32-byte secret scalar (base64). Returns the 64-byte <code>r || s</code> signature (base64), deterministic per RFC 6979. Example: @CRY-003 — signing twice answers identical bytes, and <code>r || s</code> is not DER.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ecdsa_p256_verify</span>(public_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, message_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, signature_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Verify an ES256 signature (64-byte <code>r || s</code>) over the base64 <code>message</code> bytes under a 64-byte <code>x || y</code> public key.  Returns true iff the signature is valid.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">x25519_dh</span>(secret_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, public_key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>A secret key is a 32-byte X25519 scalar (base64); a public key is the 32-byte u-coordinate (base64).  Returns the raw 32-byte shared secret (base64), or &quot;&quot; if either input is the wrong length.  Run the result through <code>hkdf_sha256</code> before using it as a key (RFC 7748 §6.1). Example: @CRY-004 — the DH output is keying material, not a key; and how to get a public key out of a secret scalar (X25519 has no separate keygen).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hkdf_sha256</span>(salt_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, ikm_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, info_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, length: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Derive <code>length</code> bytes of output keying material from <code>ikm</code>, <code>salt</code>, and <code>info</code> (each base64).  An empty base64 <code>salt</code> selects the all-zero salt. Returns the base64 OKM, or &quot;&quot; if <code>length</code> exceeds 255*32 or is &lt;= 0. Example: @CRY-004 — <code>info</code> is what separates two keys from one shared secret.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hkdf_extract</span>(salt_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, ikm_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>HKDF-Extract (RFC 5869 §2.2): the 32-byte PRK (base64) HMAC-SHA256(salt, ikm). An empty base64 <code>salt</code> selects the all-zero salt.  Use the Extract/Expand halves directly (rather than <code>hkdf_sha256</code>) when a PRK is reused for several Expands or when an Extract output is itself the value you want (e.g. HPKE). Example: @CRY-004 — the split halves compose to exactly <code>hkdf_sha256</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hkdf_expand</span>(prk_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, info_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, length: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>HKDF-Expand (RFC 5869 §2.3) from an existing 32-byte PRK.  Returns <code>length</code> bytes of OKM (base64), or &quot;&quot; on a short PRK, length &gt; 255*32, or length &lt;= 0.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bytes_to_base64</span>(bytes: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Standard base64 of a raw byte vector.  Empty vector -&gt; &quot;&quot;.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">base64_to_bytes</span>(b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;</code></pre>
+<p>Raw bytes from standard base64.  Malformed / empty input -&gt; empty vector. See the CAUTION above: read the result, never <code>+=</code> onto it. Example: @CRY-001 — reading a decoded byte vector, and hashing non-UTF-8 bytes.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aes256gcm_seal</span>(key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, nonce_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, aad_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, plaintext_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Encrypt + authenticate <code>plaintext</code> under <code>key</code>/<code>nonce</code>, binding <code>aad</code>. Returns base64 of ciphertext WITH the 16-byte tag appended, or &quot;&quot; on bad key/nonce length. Example: @CRY-005 — the tag rides in the blob, and a fresh nonce per message.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aes256gcm_open</span>(key_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, nonce_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, aad_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, ciphertext_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Verify + decrypt <code>ciphertext</code> (ciphertext||tag, base64) under <code>key</code>/<code>nonce</code>, binding <code>aad</code>.  Returns the base64 plaintext, or &quot;&quot; on ANY authentication failure — an empty result means the ciphertext/tag/aad did not verify. Example: @CRY-005 — &quot;&quot; is a failure signal, and an authentic empty plaintext gives it too.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">random_bytes</span>(length: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Return <code>length</code> cryptographically secure random bytes (base64) from the OS RNG.  Returns &quot;&quot; for length &lt;= 0.  Use for keys (32), nonces (12), salts.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">HpkeSealed</span></code></pre>
+<p>The result of <code>hpke_seal_base</code>: the KEM-encapsulated key <code>enc</code> and the AEAD <code>ciphertext</code> (ciphertext||16-byte-tag), both base64.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hpke_seal_base</span>(pk_r_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, info_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, aad_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, pt_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">HpkeSealed</span></code></pre>
+<p>HPKE SealBase (RFC 9180 §6.1): encrypt <code>pt</code> to recipient public key <code>pk_r</code>, binding <code>info</code> (key-schedule context) and <code>aad</code> (per-message AAD).  Generates a fresh ephemeral key, so each call's output differs.  All args/fields base64. Returns HpkeSealed { enc, ciphertext }; both &quot;&quot; on failure. Example: @CRY-006 — <code>enc</code> is fresh per call and must travel with the ciphertext.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hpke_seal_base_deterministic</span>(pk_r_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, sk_e_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, info_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, aad_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, pt_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">HpkeSealed</span></code></pre>
+<p>Deterministic SealBase — TEST ONLY.  Uses the caller-supplied ephemeral secret <code>sk_e_b64</code> instead of a random one, so the output is reproducible against an RFC 9180 known-answer vector.  Never use in production.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hpke_open_base</span>(sk_r_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, enc_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, info_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, aad_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, ct_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>HPKE OpenBase (RFC 9180 §6.1): decrypt <code>ct</code> for recipient secret key <code>sk_r</code> using the sender's <code>enc</code>, binding <code>info</code> and <code>aad</code>.  All args base64.  Returns the base64 plaintext, or &quot;&quot; on ANY failure (bad enc/key or AEAD auth failure). Example: @CRY-006 — <code>info</code> AND <code>aad</code> must both match the sender's, or open gives &quot;&quot;.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hpke_key_schedule_base_for_test</span>(shared_secret_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, info_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Expose the key-schedule outputs for KAT assertions — TEST ONLY.  Given a shared secret and base64 <code>info</code>, returns (key_b64, base_nonce_b64).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hpke_encap_deterministic_for_test</span>(pk_r_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>, sk_e_b64: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Expose deterministic Encap for KAT assertions — TEST ONLY.  Returns (shared_secret_b64, enc_b64).</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

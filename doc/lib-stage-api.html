@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>stage API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library stage — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-stage-api.html">
+<meta property="og:title" content="stage API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library stage — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-stage-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="stage API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library stage — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>stage API</h1>
+<article>
+<p><a href="lib-stage.html">← stage</a> · version 0.18.1</p>
+<p class="lib-legend">136 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">StageNode</span></code></pre>
+<p>A node's local placement, plus the world affine <code>compose</code> derives for it.</p>
+<p>⚠ NAMED <code>StageNode</code> AND NOT <code>Node</code>, because a type name is GLOBAL across the dependency graph and <code>mesh3d</code> — which <code>graphics</code> pulls in — already publishes a <code>Node</code> for its 3-D scene.  The compiler refuses the collision outright rather than resolving it silently, which is the good outcome; the cost of finding it after publishing would have been a rename nobody can make.</p>
+<p>The affine is 2x3 and is applied as x' = a*lx + c*ly + tx y' = b*lx + d*ly + ty which is the layout the instanced draw path consumes unchanged.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Layer</span></code></pre>
+<p>Everything one ordering band carries: how much of the camera it feels, what atmosphere stands in front of it, and how far out of focus it is.</p>
+<p>⚠ ONE RECORD, NOT THREE PARALLEL VECTORS.  Parallax lived in a bare <code>vector&lt;float&gt;</code> and fog and blur were about to join it as siblings — which is exactly the shape that put a sequence's name on another sequence's cells in P5: every list stays well-formed on its own and only the correspondence goes wrong, silently.  A layer's facts travel together.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">View</span></code></pre>
+<p>A way of LOOKING at the stage: a camera and the screen rect it paints into.</p>
+<p>⚠ A VIEW IS PRESENTATION, NEVER WORLD.  The scene cannot tell how many are looking at it — which is the split this phase exists to enforce: the world is deterministic and shared, the presentation is local and free.  Window size, camera and ambient motion may differ per viewer and must be allowed to.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">StageLight</span></code></pre>
+<p>A point light: where it stands, how far it reaches, and what colour it casts.</p>
+<p>⚠ IT LIVES IN WORLD SPACE, like everything else the app places.  A light is not attached to a node, so moving a torch-bearer means moving the light too — deliberate, because a light parented to a sprite would inherit that sprite's rotation and scale, and neither means anything to a point light. ⚠ <code>StageLight</code>, not <code>Light</code>: a TYPE name is global across every package in the build, and <code>mesh3d</code> — pulled in by <code>graphics</code> — already publishes a <code>Light</code>. The compiler refusing is the good outcome; after publishing, this rename is one nobody can make.  Same reason the node is <code>StageNode</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Stage</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Sequence</span></code></pre>
+<p>A run of atlas cells played at a rate.</p>
+<p>⚠ THE NAME LIVES HERE, not in a list beside <code>st_seqs</code>.  A parallel vector that only the naming registrar appended to drifted the moment a caller mixed <code>add_sequence</code> with <code>add_named_sequence</code>, and every later name then pointed at somebody else's cells — silently, because both lists were individually well-formed.  One home per fact; the test that caught it is kept.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Mask</span></code></pre>
+<p>An alpha mask: per-texel coverage, row-major, 0..255.</p>
+<p>A sprite is mostly holes, so a rect test answers the wrong question — you can SEE through a tree, therefore you must be able to CLICK through it.  A node without a mask is solid, which is the right default for a panel or a tile.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Place</span></code></pre>
+<p>Where to put a node, and how.  A struct rather than nine parameters because the compiler said so — <code>too-many-parameters</code> fires at eight, and a caller's burden is fixed by a struct where a reader's is fixed by an extracted function.</p>
+<p>⚠ THE DEFAULTS ARE THE POINT, not convenience.  Scale defaults to 1.0 and not to the zero an omitted field would otherwise take: a scale of 0 is a *meaningful* value of the field's domain — it collapses the node to nothing — so an author who writes <code>Place { pl_x: 10.0, pl_y: 20.0 }</code> and gets an invisible node has been handed a legal answer to a question they did not ask.  That is exactly the case <code>omitted-field-zero</code> exists to warn about, answered here at the declaration.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Bounds</span></code></pre>
+<p>A point, so a caller can ask where something ended up without unpacking six floats.  <code>world_point</code> is the only honest way to check a transform: a matrix means nothing except through what it does to a point.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">P2</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">stage_new</span>() -&gt; <span class="en">Stage</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">node_count</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">node_add</span>(self: <span class="en">Stage</span>, parent: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: const <span class="en">Place</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Add a node and answer its index.  <code>parent</code> is -1 for a root.</p>
+<p>⚠ Refuses a forward parent reference by answering -1.  <code>compose</code> is a single forward pass, so a child placed before its parent would read an unwritten world transform — silently, and the frame would look almost right. Example: @STG-002 — the tree is a flat array and a forward parent reference is refused, because <code>compose</code> is a single forward pass that would otherwise read an unwritten parent and answer plausibly.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">compose</span>(self: <span class="en">Stage</span>)</code></pre>
+<p>Derive every node's world affine in one forward pass.</p>
+<p>A node's local transform is  T(x, y) . R(rot) . S(sx, sy) . T(-ox, -oy), which is what makes the ORIGIN the anchor: the local point (ox, oy) maps exactly to (x, y), so a sprite whose origin sits at its feet stands up from where it is placed.  World = parent's world composed with that. Example: @STG-003 — deriving is the caller's to trigger; skipping it renders the previous state, which reads as input lag rather than as a missing call.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">depth_cue</span>(self: <span class="en">Stage</span>, near: <span class="ty"><a href="stdlib-types.html">float</a></span>, far: <span class="ty"><a href="stdlib-types.html">float</a></span>, far_scale: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>Turn the depth cue on.  <code>near</code> and <code>far</code> are depths; a node at <code>far</code> is drawn at <code>far_scale</code> of its size and hazed <code>far_haze</code> toward <code>haze_colour</code>, and one at <code>near</code> is untouched.  Off by default, and off means an identical picture.</p>
+<p>This is the 2.5-D FEEL: distance reads as smaller and less distinct, which is what separates a mob standing behind a wall from one standing in front of it even when neither overlaps the other.  Real blur belongs to the per-layer pass; a haze toward the fog colour costs one lerp and carries most of the effect.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cue_of</span>(self: const <span class="en">Stage</span>, depth: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>How far through the cue a depth sits: 0 at the near plane, 1 at the far one, clamped outside them so a stray depth cannot invert the effect.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">haze_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>How hazed node <code>idx</code> is, 0..1 — what a renderer fades toward the haze colour.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">order</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
+<p>The draw order, derived by <code>compose</code>: indices, back to front.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bounds_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Bounds</span></code></pre>
+<p>A node's axis-aligned bounds in world space. Example: @STG-007 — a clip inherits, intersects, and is axis-aligned.</p>
+<p>⚠ AXIS-ALIGNED, so a ROTATED clipper clips to its bounding box rather than to its turned rectangle.  A scissor is axis-aligned in hardware and there is no honest way to make it otherwise; a rotated clip needs a stencil, which this arc does not have.  Stated rather than discovered.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">world_point</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, lx: <span class="ty"><a href="stdlib-types.html">float</a></span>, ly: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">P2</span></code></pre>
+<p>Where a point in node <code>idx</code>'s own space lands in world space.  Valid after <code>compose</code>; answers (0, 0) for an index that is not a node.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">world_origin</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">P2</span></code></pre>
+<p>Where the node's ORIGIN is — the point A7's depth key sorts on. Example: @STG-001 — a node is anchored by its origin, so a sprite whose origin sits at its feet stands up from where it was placed.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">UiRect</span></code></pre>
+<p>── A2: the draw list ────────────────────────────────────────────────────────</p>
+<p>⚠ THESE THREE TYPES ARE NOT NEW.  Their field names and types are copied EXACTLY from <code>lavition_ui</code>, which produces <code>vector&lt;DrawRect&gt;</code> from <code>panel_draw_list</code> today and is proven by a 12 k-line editor.  Matching a working command shape rather than minting a rival one is the whole point: a game's UI and an editor's UI have to reach the GPU by one path, or the batcher sees two.</p>
+<p>⚠ AND THEY NEED ONE HOME, WHICH THEY DO NOT YET HAVE.  <code>lavition_ui</code> is unpublished, so its <code>DrawRect</code> and this one are two nominal types with one shape.  Until it is published (@PLN145 <code>D0</code>) the types cannot literally be shared, and one of the two must eventually give — see the plan.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">DrawRect</span></code></pre>
+<p>A packed 0xRRGGBB colour, as <code>lavition_ui</code> carries it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">DrawText</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_list</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">DrawRect</span>&gt;</code></pre>
+<p>Emit the scene as a flat command list, in index order.</p>
+<p>Index order IS the draw order for now: <code>A4</code> gives depth its own key, and doing it here would be a second ordering rule to keep in step with that one.  A node with no area emits nothing — a zero size is how a pure transform parent says it is scaffolding rather than a thing to look at.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render</span>(list: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">DrawRect</span>&gt;, cv: graphics::<span class="en">Canvas</span>)</code></pre>
+<p>Paint a command list onto a software canvas.</p>
+<p>⚠ THE ALPHA BYTE IS ADDED HERE, and it has to be.  A <code>DrawRect</code> carries 0xRRGGBB — <code>lavition_ui</code> says so, and keeps it a plain integer so it needs no graphics dependency — while <code>graphics::Canvas</code> reads 0xAARRGGBB and treats a missing top byte as FULLY TRANSPARENT.  That is graphics' own trap: the colour looks right in the source and paints nothing.  One <code>| 0xff000000</code> at the boundary is the whole fix, and it belongs at the boundary rather than in every caller.</p>
+<p>Example: @GFX-001</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">opaque</span>(colour: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>0xRRGGBB -&gt; 0xAARRGGBB, leaving an already-opaque colour alone.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Batch</span></code></pre>
+<p>One run of consecutive instances that share an atlas.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">batches</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Batch</span>&gt;</code></pre>
+<p>Split the visible nodes into runs, in scene order. Example: @STG-004 — adjacent runs only, never sorted, and what the interleave costs: four sprites across two atlases are four draws, cured by packing.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pack_instances</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;</code></pre>
+<p>Pack every visible node into one instance buffer, in the same order <code>batches</code> counted.  The two walk the scene by the same rule, so a batch's <code>b_first</code> and <code>b_count</code> index this buffer directly.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Painter</span></code></pre>
+<p>The GL objects a stage needs, built once.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">painter_new</span>() -&gt; <span class="en">Painter</span></code></pre>
+<p>Compile the shader and upload the unit quad.  Call once, after a window exists.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_render</span>(self: <span class="en">Stage</span>, p: <span class="en">Painter</span>, screen_w: <span class="ty"><a href="stdlib-types.html">float</a></span>, screen_h: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Draw the scene, one instanced call per run.  Answers the number of draw calls issued, which is the half of the gate that pixels cannot see: a batch that fell back to one draw per sprite would look identical and cost N.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">scissor_of</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: const <span class="en">Batch</span>, coff: const <span class="en">P2</span>) -&gt; <span class="en">Bounds</span></code></pre>
+<p>The screen rect a run may paint in: the view's own rect, intersected with the batch's clip once that clip is moved by the same offset as its content.</p>
+<p>An unbounded rect is spelled as the whole target rather than as a flag, so the intersection is arithmetic in every case and the unsplit stage is the degenerate cell rather than a second path.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_mask</span>(self: <span class="en">Stage</span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span>, alpha: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Register an alpha mask and answer its index, for <code>Place.pl_mask</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">to_local</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">P2</span></code></pre>
+<p>Take a screen point into node <code>idx</code>'s own space.</p>
+<p>The world affine is 2x2 plus a translation, so the inverse is closed form — <code>det = a*d - c*b</code>, and no general 4x4 inversion is involved.  A degenerate node (zero scale) has no inverse and answers its own origin rather than an infinity.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hits</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Is this screen point ON node <code>idx</code> — inside its rect AND, where it has a mask, on a texel that is not a hole?</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pick</span>(self: const <span class="en">Stage</span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The topmost node under this screen point, or -1. Example: @STG-006 — picking samples alpha, so a click falls through a hole.</p>
+<p>Walks the draw order BACKWARDS, so the node drawn last — the one on top — is tested first, and insertion order breaks a tie the same way it does when drawing.  One order, two consumers: a pick that disagreed with the picture would be worse than no pick at all.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">press</span>(self: <span class="en">Stage</span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>A press picks, and REMEMBERS.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">release</span>(self: <span class="en">Stage</span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>A release answers the node that took the PRESS, wherever the pointer is now. Example: @STG-005 — why a hit test alone is not input routing.</p>
+<p>⚠ THE CAPTURE IS THE POINT, and it is the half everyone forgets.  Without it a button fires when you press it and slide away, and never fires when you press it and drift a pixel — both of which feel broken and neither of which a rect test can explain.  A release with nothing captured answers -1.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">released_on</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Did the release land on the node that was pressed?  A button fires only when this is true; <code>release</code> still reports the captured node either way.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">capture</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">UiState</span></code></pre>
+<p>The four states a widget node can be in.</p>
+<p>⚠ <code>Disabled</code> outranks the other three: a node that cannot be used must not look pressable even while the pointer is on it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_pointer</span>(self: <span class="en">Stage</span>, kind: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Say whether the pointer is a mouse or a finger.  Mouse is the default.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pointer</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pointer_move</span>(self: <span class="en">Stage</span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>The pointer moved without a button.  A touch stream never sends this.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hovered</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The node the pointer is over, or -1.  Answers even under touch, where it is the node the finger is ON — <code>ui_state</code> is what declines to call that <code>Over</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_enabled</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, on: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+<p>Take a node out of use, or put it back.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">enabled</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ui_state</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">UiState</span></code></pre>
+<p>What this node looks like right now.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">click</span>(self: <span class="en">Stage</span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The release door for a widget: answers the node that FIRES, or -1.</p>
+<p>⚠ **Use this OR <code>release</code>, not both** — either ends the press.  <code>release</code> answers *who took the press* and leaves the fired/not decision to the caller; this answers the question a button actually asks.  It exists because combining <code>release</code> with <code>released_on</code> by hand is where press-then-leave-then-release goes wrong, and that is a mistake a library can simply not offer.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">focusable</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Can this node hold the keyboard?</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_focusable</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, on: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">focused</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Which node has the keyboard, or -1.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_focus</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Give it the keyboard.  A node that cannot take it clears the focus instead, so this never leaves the keyboard somewhere unreachable.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">focus_next</span>(self: <span class="en">Stage</span>)</code></pre>
+<p>⚠ TAB ORDER IS THE DECLARED ORDER — the order the nodes were added, which is the order a reader of the building code sees.  A separate <code>tab_index</code> would be a second ordering to keep in step with the first, and the two disagree the moment someone inserts a node.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">focus_prev</span>(self: <span class="en">Stage</span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_field</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, s: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Make this node an editable field holding <code>s</code>, and give it the tab order.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">is_field</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_text</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_caret</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Where the caret is, counted in CHARACTERS.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_mark</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The selection anchor.  Equal to the caret when nothing is selected.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_selection</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The selected text, or &quot;&quot; when the caret is a point.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">field_place_caret</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, at_char: <span class="ty"><a href="stdlib-types.html">integer</a></span>, extend: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+<p>Put the caret at a CHARACTER index — what a click resolves to once whoever draws the text has turned an x-coordinate into a count.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">clipboard</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Our own clipboard — see the header.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_clipboard</span>(self: <span class="en">Stage</span>, s: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">text_event</span>(self: <span class="en">Stage</span>, s: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Commit text into the focused field, replacing any selection.</p>
+<p>⚠ This is where IME text arrives: <code>EV_TEXT</code> delivers a whole COMMITTED string, which may be several characters and is very often not ASCII.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">key_event</span>(self: <span class="en">Stage</span>, key: <span class="ty"><a href="stdlib-types.html">integer</a></span>, mods: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>A key, with the modifiers that arrived WITH it.  Tab moves the focus; every other key goes to the focused field.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_stage</span>(self: const <span class="en">Stage</span>, cv: graphics::<span class="en">Canvas</span>)</code></pre>
+<p>Paint the scene onto a software canvas, honouring each node's alpha and tint.</p>
+<p><code>render(list, canvas)</code> stays the path for a <code>lavition_ui</code> command list, which carries 0xRRGGBB and no alpha by design.  This is the stage's own path, where a node has an alpha to respect — and the two must agree wherever alpha is 1.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_view</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cv: graphics::<span class="en">Canvas</span>)</code></pre>
+<p>Paint one VIEW of the scene: the same nodes, through that view's camera, and confined to its own screen rect.</p>
+<p>⚠ THE VIEWPORT NARROWS THE SPAN, it does not test each pixel — the same technique A6's clip uses, so the boundary falls where the arithmetic puts it rather than where a per-pixel predicate rounds it, and the two cannot disagree about a shared edge.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_camera</span>(self: <span class="en">Stage</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Move the camera.  Does NOT dirty the instance buffer — that is the point.</p>
+<p>An unsplit stage IS a one-view stage, so this is view 0's camera rather than a second place a camera can live — the same move P2 made with parallax, where flat scrolling is every factor at 1.0 instead of a separate path.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">camera_x</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">camera_y</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_parallax</span>(self: <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>, factor: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>How much of the camera a layer feels.  1.0 is the world; below that is a background that lags; above it a foreground that leads.  Flat scrolling is every factor at 1.0, which is the degenerate case rather than a second code path.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">parallax_of</span>(self: const <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cam_offset</span>(self: const <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">P2</span></code></pre>
+<p>The screen-space offset a layer's content is drawn at, in view 0.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">uploads</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>How many times the instance buffer has been written.  A pure camera move must not move this — the property the whole design turns on.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_time</span>(self: <span class="en">Stage</span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Example: @STG-008 — ambient motion is free, out of step, and visual only. Advance the ambient clock.  Does NOT dirty the instance buffer — that is the whole point of deriving the phase rather than stepping it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">time_of</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sway_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>How far node <code>idx</code> is displaced right now, in pixels.  Bounded by its amplitude by construction, since it is an amplitude times a sine.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_sequence</span>(self: <span class="en">Stage</span>, first: <span class="ty"><a href="stdlib-types.html">integer</a></span>, count: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fps: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>Register a sequence and answer its index, for <code>Place.pl_seq</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">advance</span>(self: <span class="en">Stage</span>, dt_us: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Step every animated node by <code>dt_us</code> MICROSECONDS — the simulation's own delta, not a clock this library reads.</p>
+<p>⚠ Dirties the instance buffer, unlike the camera and the ambient clock — an animated sprite genuinely changes one number per frame.  That number is a FRAME INDEX and not a uv rect, so it is one float and not four.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">frame_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Which cell node <code>idx</code> shows right now.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">restart</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Reset a node to the start of its sequence.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">Prop</span></code></pre>
+<p>Which of a node's numbers a tween drives.</p>
+<p>⚠ Every one is a <code>float</code> the node already stores.  Colour, atlas and the sequence are not here on purpose: they are not numbers you can be *half way* between, and interpolating them would produce values the node never holds.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">prop_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="en">Prop</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>What that property reads right now.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_prop</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="en">Prop</span>, v: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Write it now.  The immediate door — the tween door writes through the same switch, one frame at a time.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tween_prop</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="en">Prop</span>, to: <span class="ty"><a href="stdlib-types.html">float</a></span>, dur_us: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Move <code>p</code> from where it is now to <code>to</code>, over <code>dur_us</code> microseconds.</p>
+<p>⚠ <code>from</code> is read at THIS moment, so a tween started mid-flight carries on from where the last one had got to rather than snapping back to a remembered start. Replaces any tween already on this (node, property).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">prop_tweening</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="en">Prop</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Is that property still moving?</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cancel_prop_tween</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="en">Prop</span>)</code></pre>
+<p>Stop it wherever it has got to.  The property keeps its current value.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cancel_node_tweens</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Drop every tween on a node.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">tween_count</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>How many property tweens the stage is holding — the gate reads this.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_projection</span>(self: <span class="en">Stage</span>, mode: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">projection</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sequence_count</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_named_sequence</span>(self: <span class="en">Stage</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, first: <span class="ty"><a href="stdlib-types.html">integer</a></span>, count: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Register a sequence under a NAME, so <code>face</code> and <code>set_action</code> can resolve it. The convention is <code>&lt;key&gt;</code>, <code>&lt;key&gt;_&lt;action&gt;</code>, <code>&lt;key&gt;_&lt;action&gt;_&lt;facing&gt;</code>, and resolution walks it most-specific first.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">facing_name</span>(angle: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Which of the four compass facings an angle points at.</p>
+<p>⚠ SCREEN SPACE, Y DOWN: angle 0 is +x (east) and +pi/2 is +y (south), matching <code>pl_rot</code> and the shader.  The edges are HALF-OPEN, as A4's picking rects are — 45 degrees belongs to south — so no angle is claimed by two facings.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">face</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, angle: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Point a node at <code>angle</code> radians.  Top-down turns it; side-on picks and flips.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_action</span>(self: <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, action: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>What a node is doing — &quot;idle&quot;, &quot;walk&quot;, &quot;attack&quot;.  Re-resolves, phase intact.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">facing_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">action_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rotation_of</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The sprite's own rotation, which side-on leaves alone.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mirrored</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">view_count</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_view</span>(self: <span class="en">Stage</span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Add a view painting into the screen rect <code>(x, y, w, h)</code>.  A width of 0 or less means unbounded — the whole target, which is what view 0 starts as.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_view_rect</span>(self: <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_view_camera</span>(self: <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Move one view's camera.  Like <code>set_camera</code>, it does not dirty the buffer.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">view_camera_x</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">view_camera_y</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">view_offset</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">P2</span></code></pre>
+<p>Where a layer's content lands on screen in this view: the camera un-applied by the layer's parallax, then moved into the view's rect.</p>
+<p>⚠ THE VIEWPORT ORIGIN IS PART OF THE MAPPING, not decoration.  Leave it out and both views draw on top of each other while every camera test still passes.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sync_instances</span>(self: <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Pack the instance buffer if the scene changed, and say whether it did.</p>
+<p>One home for *when does the buffer get rewritten*, so the GL path and any count of uploads cannot disagree about it — and so N views can be shown to cost ONE upload without a GL context to prove it in.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pick_in</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The topmost node under a screen point AS THAT VIEW SEES IT, or -1.</p>
+<p>⚠ ONE SCREEN POINT IS A DIFFERENT WORLD POINT IN EACH VIEW — the same reason P2 un-applies the camera per LAYER.  A point outside the view's own rect is not that view's to answer, whatever its camera would map it to.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">in_view_rect</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>, sy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Is this screen point inside the view's rect?  An unbounded view holds every point, which is what keeps the unsplit stage a single code path.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hits_in</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sx: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>Does this node cover the screen point, as <code>view</code> maps it?</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">add_light</span>(self: <span class="en">Stage</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, radius: <span class="ty"><a href="stdlib-types.html">float</a></span>, colour: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Add a light.  Answers its index, for <code>move_light</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">move_light</span>(self: <span class="en">Stage</span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">light_count</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_ambient</span>(self: <span class="en">Stage</span>, level: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>How lit the world is before any light: 1.0 leaves the material untouched, so a game that never asks for light cannot be dimmed by this existing.  Turn it down and the scene goes dark except where a light reaches.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ambient</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">light_reach</span>(l: const <span class="en">StageLight</span>, px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>What a light contributes at a point: linear in the radius, clamped at both ends.</p>
+<p>⚠ LINEAR, <code>1 - d/r</code>, and that is a design call.  This phase's gate is hand-computed values, and a curve nobody can hand-compute is a gate nobody maintains.  L2 owns the prettier curve, and its own gate says how: expectations GENERATED from the same constants the shader uses, so retuning is one edit.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">lit_colour</span>(self: const <span class="en">Stage</span>, idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The colour a node is actually drawn in: its material, multiplied by the light standing on its footprint.</p>
+<p>⚠ ONE HOME.  Both render paths and the instance packer read this rather than each folding the light in themselves — the shape P6 shipped a defect through, where one fact derived per path was validated only where the derivations happened to agree.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Lit</span></code></pre>
+<p>A light level, per channel, 0..1.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_light_map</span>(self: <span class="en">Stage</span>, on: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">light_map</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_hud_layer</span>(self: <span class="en">Stage</span>, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Layers at or above <code>n</code> draw AFTER the composite and take no light.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hud_layer</span>(self: const <span class="en">Stage</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">light_rgb_at</span>(self: const <span class="en">Stage</span>, wx: <span class="ty"><a href="stdlib-types.html">float</a></span>, wy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Lit</span></code></pre>
+<p>The light standing at a world point, per channel.</p>
+<p>⚠ THE ONE HOME both samplings read: L1 asks it at a sprite's origin, L2 asks it per pixel.  One curve, one floor, one clamp — so the per-sprite and the per-pixel answers cannot disagree about the same point.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">light_level_at</span>(self: const <span class="en">Stage</span>, wx: <span class="ty"><a href="stdlib-types.html">float</a></span>, wy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The scalar level at a world point — the green channel of a white light, and the number the monotonic-and-floored invariant is stated about.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">composite_light</span>(self: const <span class="en">Stage</span>, view: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cv: graphics::<span class="en">Canvas</span>)</code></pre>
+<p>Multiply every pixel of the view's rect by the light standing there.</p>
+<p>⚠ THE SCREEN IS MAPPED TO THE WORLD THROUGH THE WORLD PLANE — layer 0, the plane lights live on.  A parallaxed background is therefore lit as though it stood on that plane, which is the honest simplification here: per-layer atmosphere is L3's question, not this pass's.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">composite_shader_source</span>() -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The composite's fragment shader.  Public so a test can check it reads the falloff and the floor as UNIFORMS rather than carrying its own copy of them.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_layer_fog</span>(self: <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>, colour: <span class="ty"><a href="stdlib-types.html">integer</a></span>, density: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Fade this layer toward <code>colour</code>.  Density 0 is clear and changes nothing.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layer_fog_colour</span>(self: const <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layer_fog_density</span>(self: const <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_layer_blur</span>(self: <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>, radius: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Put this layer out of focus by <code>radius</code> pixels.  0 is sharp.</p>
+<p>⚠ THE BLUR RUNS WHEN THE LAYER FINISHES, so it softens everything drawn up to and including it and NOTHING above — which is what makes a sharp foreground over a hazy distance possible, and what a fullscreen blur cannot do.  Distant bands therefore blur together, which is what *distance is out of focus* means.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layer_blur</span>(self: const <span class="en">Stage</span>, layer: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">blur_region</span>(cv: graphics::<span class="en">Canvas</span>, x0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x1: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Box-blur a rectangle of the canvas in place.</p>
+<p>⚠ SAMPLES ARE CLAMPED TO THE EDGE, never read as black.  Counting an off-image sample as black loses light everywhere the kernel overhangs, and it shows as a dark frame around the picture — the classic bug this phase gates against.  Clamping keeps a uniform field EXACTLY itself.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

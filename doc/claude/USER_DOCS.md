@@ -250,12 +250,26 @@ own suite, by the rule that it is a `.loft` file in the package — no list to f
 
 ### Tier 2 — The API reference: *what is the exact signature?*
 
-**Already built.** `loft doc <name>` renders it; the only change is publishing the output for
-each library alongside its guide page, and linking both from Tier 0.
+**Already built, and reachable more cheaply than `loft doc`.** The registry index carries
+each version's own `api` array — every `pub` signature with its doc comment, re-derived from
+the package source by registry CI at publish time. So the reference renders from the index
+alone: no package installed, no clone, and no way to drift from the version it describes.
 
-Generated from `pub` declarations and their doc comments, so it cannot drift from the code by
-construction — which is why it is the tier that already works, and the argument for pushing
-the other two toward generation as well.
+Generated from `pub` declarations and their doc comments, which is why it is the tier that
+already works — and the argument for pushing the other two toward generation as well.
+
+**A reference nobody can find is half-published**, so every name goes into the site's search
+index too, qualified as `pkg::name`. The qualifier is not a narrowing: the match is a
+substring test, so `render` still finds `markdown::render`, and the qualifier is what tells
+four packages' `render` apart in the result list. The search covered the bundled stdlib only
+(228 entries); with the distribution in it, 1296.
+
+⚠ **13 of the 42 published versions carry no `api` array** — the field was added after they
+were published. Their pages say exactly that and name the two routes that do work
+(`loft api <name>`, which reads the package itself, and the source), because an empty list
+reads as *this library exports nothing*, which is false for every one of them. The gap closes
+itself: the field is filled at each package's next release, so this is a shrinking number and
+the page needs no edit when it shrinks.
 
 ### Tier 3 — The source: *how does it actually work?*
 
@@ -486,8 +500,13 @@ independently shippable and none blocks the next except where marked.
    package, linked from the catalogue, which is also where the guide, the API reference and
    the source browser will hang. Two fields the design listed were dropped rather than faked:
    see the health-line note above.
-5. **Publish `loft doc` output** for each library, linked from Tier 0. The generator exists;
-   this is the site build calling it.
+5. ~~**Publish `loft doc` output** for each library, linked from Tier 0.~~ **Landed**, and by
+   a cheaper route than `loft doc`: the registry index's own `api` array already carries every
+   `pub` signature with its doc comment, so the reference needs no package installed and no
+   clone. One `doc/lib-<name>-api.html` per package, linked from the card, plus every name in
+   the site's search index — a reference nobody can find is half-published. ⚠ **13 of the 42
+   versions predate the `api` field**, and those pages say so and name the two routes that do
+   work, rather than rendering an empty list that reads as *this library exports nothing*.
 6. **The source browser** — `highlight_loft` over each package's `.loft` files, with the
    worked-example citations from `examples-index.tsv` and a derived call-site index beside
    them. Depends on 5 only for where the pages live.

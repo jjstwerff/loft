@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zttext API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library zttext — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-zttext-api.html">
+<meta property="og:title" content="zttext API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library zttext — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-zttext-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="zttext API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library zttext — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>zttext API</h1>
+<article>
+<p><a href="lib-zttext.html">← zttext</a> · version 0.1.1</p>
+<p class="lib-legend">84 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">zttext_version</span>() -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The library's own version marker — a scaffold anchor so the parity harness (interpret == native == native-wasm) exists before any engine logic lands.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Piece</span></code></pre>
+<p>A piece p = ⟨o, ℓ, s⟩ references the buffer span B[start, start+count) with style-id <code>style</code>. Pieces are immutable value objects: an edit REBUILDS the piece sequence, it never mutates a piece or swaps vector slots in place.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Doc</span></code></pre>
+<p>The content model. <code>buf</code> is the append-only buffer B ∈ Σ* (a vector&lt;character&gt;, so offsets are characters); <code>pieces</code> is the piece sequence D = ⟨p₁…pₙ⟩. The materialised text ⌊D⌋ is the concatenation of each piece's buffer span. (Bundling B with D keeps the engine's surface small; the buffer is treated as append-only within an edit.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Run</span></code></pre>
+<p>A styled run: a maximal same-style character span. <code>slice_runs</code> returns these; they are what an inverse Ins/Sty re-creates so undo restores styles, not just text.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">empty_doc</span>() -&gt; <span class="en">Doc</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">doc_from_text</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, style: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
+<p>build a one-piece doc holding <code>s</code> at style-id <code>style</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">materialise</span>(d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>⌊D⌋ — the logical text of the doc (concatenate every piece's buffer span in order).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">doc_len</span>(d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>|⌊D⌋| — the character length of the logical text. Example: @ZTX-002 — CHARACTERS, which is not the byte length of the materialised text.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">locate</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>locate(D, a) → (piece index, in-piece offset). Anchor <code>a</code> ∈ [0,|⌊D⌋|] sits BETWEEN characters; piece i covers logical [Cᵢ, Cᵢ+countᵢ). A boundary a = Cᵢ₊₁ lands in piece i+1 at offset 0; a = |⌊D⌋| (the end) returns the sentinel (n_pieces, 0).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">locate_inverse</span>(d: <span class="en">Doc</span>, pi: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ro: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>inverse of locate: (piece index, in-piece offset) → the logical anchor a.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">insert_text</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, s: <span class="ty"><a href="stdlib-types.html">text</a></span>, style: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
+<p>insert text <code>s</code> (style-id <code>style</code>) at anchor <code>a</code>. Appends <code>s</code>'s characters to a fresh buffer (append-only), then rebuilds the piece sequence splitting the piece at <code>a</code>. Example: @ZTX-001 — this RETURNS a new Doc; the one passed in is unchanged, so a discarded result is an edit that silently never happened.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">delete_range</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
+<p>delete the range [a,b). Keeps each piece's portion outside [a,b); the buffer is UNCHANGED (deleted characters stay in B so undo can restore them). Example: @ZTX-001 — a value, not a mutation: bind the result. Example: @ZTX-002 — <code>a</code> and <code>b</code> are CHARACTER positions, and the append-only buffer does not shrink (that is what undo restores from).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_style</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, style: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
+<p>set style-id <code>style</code> on the range [a,b): split each overlapping piece three ways ([ps,a) old · [a,b) new · [b,pe) old) and restyle the middle. Example: @ZTX-001 — a value, not a mutation: bind the result.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">slice_runs</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Run</span>&gt;</code></pre>
+<p>the styled runs of [a,b): one Run per overlapping piece-fragment, carrying its text and style. Concatenating the run texts is exactly ⌊D⌋[a,b); the styles are χ_D over [a,b).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">materialise_range</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>materialise just [a,b) as text.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">char_styles</span>(d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
+<p>per-character style vector over the whole doc (χ_D as a concrete list) — the reference against which piece-blindness (I2) and undo are checked.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">Op</span></code></pre>
+<p>The primitive edit operations (notation §8): ins(a,t,σ) · del(a,b) · sty(a,b,σ).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Txn</span></code></pre>
+<p>A transaction τ — an atomic, ordered composition of primitive ops; the unit of undo.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">txn_of</span>(ops: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Op</span>&gt;) -&gt; <span class="en">Txn</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">apply_op</span>(d: <span class="en">Doc</span>, op: <span class="en">Op</span>) -&gt; <span class="en">Doc</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">apply</span>(d: <span class="en">Doc</span>, t: <span class="en">Txn</span>) -&gt; <span class="en">Doc</span></code></pre>
+<p>apply a whole transaction, left to right. Only the pre- and post-states are observable.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">inv_op_group</span>(pre: <span class="en">Doc</span>, op: <span class="en">Op</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Op</span>&gt;</code></pre>
+<p>the inverse of a single op against its PRE-state <code>pre</code>, as an ordered op list (a delete or restyle over a multi-style range inverts to one op per style-run, so undo restores styles exactly, not just text).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">invert</span>(d: <span class="en">Doc</span>, t: <span class="en">Txn</span>) -&gt; <span class="en">Txn</span></code></pre>
+<p>invert(D, τ) → τ⁻¹ such that apply(apply(D,τ), τ⁻¹) ≈ D (same text + same per-char styles). Each op's inverse is computed against its pre-state; the groups are emitted in reverse op order (prepend each new group), since τ⁻¹ undoes the last op first. Example: @ZTX-003 — <code>d</code> must be the state BEFORE the transaction; the inverse of a deletion is an insertion of what was there, which only the pre-state knows. Restores per-character styles as well as text.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Style</span></code></pre>
+<p>A concrete style σ ∈ 𝕊. For the fake monospace measurer only <code>size</code> (per-character advance) matters; <code>weight</code>/<code>italic</code>/<code>dir</code> (0 = LTR, 1 = RTL) round out the shape the real backends will fill in. Layout reads styles ONLY through a StyleResolver, so a surface restyles by swapping the resolver.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">default_style</span>() -&gt; <span class="en">Style</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mono_measure</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, st: <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The fake monospace Measurer μ: advance width = character-count × style.size. Pure and deterministic, so every layout milestone is headless and parity-testable. The Measurer PORT type is <code>fn(text, Style) -&gt; float</code>; this is one implementation (a named ref you pass where a Measurer is expected).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">default_resolver</span>(_id: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span></code></pre>
+<p>A trivial StyleResolver ρ: every id resolves to the default style. The port type is <code>fn(integer) -&gt; Style</code>; a real surface passes its own (document stylesheet · IDE syntax theme · cell format).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">run_height</span>(st: <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The fake box height of a run in style <code>st</code>. Real backends give ascent+descent; the fake uses square cells (height = size) so line stacking is deterministic and hand-checkable.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Rect</span></code></pre>
+<p>The render IR (notation §4). A Rect is a plane rectangle; a Box β = ⟨rect, κ, style⟩ carries the LOGICAL content-ref κ = [ks, ke) (character span in ⌊D⌋) and a single style. The rect's position is the VISUAL order; κ is the LOGICAL order — both explicit in every box, which is the whole BiDi story (a selection is κ-intersection, geometry-free).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Box</span></code></pre>
+<p><code>hyphen</code> marks a synthetic line-end hyphen glyph (from a discretionary break, S4.7): it renders &quot;-&quot; rather than its κ text, and κ points at the soft-hyphen it stands in for.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">BoxSet</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">LaidLine</span></code></pre>
+<p>A laid-out visual line: the logical char span [cs,ce) its boxes cover, its top y and its height. <code>para_end</code> is true when this is a paragraph's LAST line (ended at a hard break or the doc end) — it is left ragged (justify skips it). <code>right</code> is the line's available right edge (the column edge, or an image's edge for a line beside one) — the target justify fills to. Carried by a Layout so incremental reflow can find the lines an edit touches (M3).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">PlacedImage</span></code></pre>
+<p>A placed image on the page: its rectangle + the image reference <code>id</code> (a file_record id at the app layer). It is BOTH a rendered element AND an exclusion region the text steers around.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Layout</span></code></pre>
+<p>A full layout result: the text boxes (the render IR), per-line metadata (the seam incremental reflow needs), and the placed images (rendered separately; text never overlaps them). <code>flow_layout</code> returns just the BoxSet; <code>flow_layout_full</code> returns this.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Token</span></code></pre>
+<p>A token in the stream: a word (non-space run), glue (a space run), a discretionary break (<code>disc</code>, a soft hyphen), or a paragraph break (<code>brk</code>, a newline run). <code>word</code>/<code>disc</code>/<code>brk</code> are the kind flags; all false → glue. Glue is the breakable inter-word space; disc is a zero-width in-WORD break (S4.7); brk is a HARD break that ends the line and starts a new paragraph (a paragraph's last line is ragged, and gets paragraph spacing after it).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">soft_hyphen</span>() -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The canonical discretionary-hyphen character: Unicode SOFT HYPHEN U+00AD (UTF-8 0xC2 0xAD). It is the PORTABLE storage form — invisible in any conforming Markdown/HTML pipeline, and rendered as a hyphen only when a line breaks at it. The <code>[-]</code> authoring notation maps to it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">encode_shy</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>encode the <code>[-]</code> authoring notation → the canonical soft hyphen (import / editor-input path).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">decode_shy</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>decode the canonical soft hyphen → the <code>[-]</code> notation (editor source-view / round-trip).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seg</span>(d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Token</span>&gt;</code></pre>
+<p>seg(⌊D⌋) → the token stream T of words ω, glue δ, and discretionary breaks (soft hyphens). A soft hyphen becomes its own zero-width Disc token; words are maximal non-space, non-soft-hyphen runs, so every inter-token boundary is a legal break (space or hyphen).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">token_width</span>(d: <span class="en">Doc</span>, tok: <span class="en">Token</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>ν(t) — the measured advance of a token: the sum over its style-runs of μ(run, ρ(style)). (A token may cross a style boundary; each run measures under its own resolved style.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Line</span></code></pre>
+<p>A laid-out line: the half-open token range [first, last_excl). Trailing glue at a break is NOT included (notation §6: &quot;trailing glue on a line is dropped&quot;).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">lines_greedy</span>(d: <span class="en">Doc</span>, toks: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Token</span>&gt;, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Line</span>&gt;</code></pre>
+<p>greedy line breaking (notation §6, brk): pack words while they fit in width W; interior glue counts toward the width, trailing glue is deferred and dropped at a break. The first word on a line always fits (an over-wide word overflows onto its own line, no infinite loop).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">next_line</span>(d: <span class="en">Doc</span>, toks: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Token</span>&gt;, from: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+<p>Break ONE line greedily starting at token <code>from</code> → (last_excl, next_tok, hyphen_disc, para_break): the line covers tokens [from, last_excl); the next line starts at <code>next_tok</code>; hyphen_disc is the token index of a soft hyphen the line broke a word at (a trailing hyphen glyph), else -1; para_break is true when the line ended at a HARD paragraph break (which is consumed — <code>next_tok</code> is past it). The per-line step both the full layout and the patch reuse.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">PlacedLine</span></code></pre>
+<p>A placed line: its boxes plus its LaidLine metadata.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">place_line</span>(d: <span class="en">Doc</span>, toks: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Token</span>&gt;, first: <span class="ty"><a href="stdlib-types.html">integer</a></span>, last_excl: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hyphen_disc: <span class="ty"><a href="stdlib-types.html">integer</a></span>, para_end: <span class="ty"><a href="stdlib-types.html">boolean</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">PlacedLine</span></code></pre>
+<p>Place tokens [first, last_excl) at top y — one box per style-run, x-advance left to right; the shared placement primitive so the full layout and a patched tail are byte-identical. If <code>hyphen_disc &gt;= 0</code>, append a trailing hyphen glyph box for that soft hyphen (S4.7).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layout_tokens_from</span>(d: <span class="en">Doc</span>, toks: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Token</span>&gt;, y0: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>, para_gap: <span class="ty"><a href="stdlib-types.html">float</a></span> = <span class="nm">0.0</span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>Lay out a TOKEN LIST (absolute char spans) from top y0 — the whole-doc layout, built as a sequence of next_line + place_line steps (the exact steps an incremental patch reuses).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">flow_layout_full</span>(d: <span class="en">Doc</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>, para_gap: <span class="ty"><a href="stdlib-types.html">float</a></span> = <span class="nm">0.0</span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>L for the flow surface: content + resolver + measurer + column width → a full Layout. <code>para_gap</code> is the extra vertical space after each paragraph (0 = paragraphs still break onto new lines, just with no gap).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">flow_layout</span>(d: <span class="en">Doc</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">BoxSet</span></code></pre>
+<p>The BoxSet-only view of a flow layout (the M1/M2 surface). Example: @ZTX-004 — measurement is an ARGUMENT, which is why the same document and ports lay out identically on every target; <code>default_resolver</code> + <code>mono_measure</code> are the deterministic pair to test against.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">line_assignment</span>(d: <span class="en">Doc</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">LaidLine</span>&gt;</code></pre>
+<p>D1 (EDITOR_DESIGN step D) — the LINE ASSIGNMENT: the per-line logical char spans [cs,ce) a document breaks into (each with its y/height, its justify edge <code>right</code>, and whether it is a paragraph's ragged last line). It is a PURE function of (content, styles, metrics, column), and it is the layer the determinism budget lives at (§8.22): common word widths ⇒ identical breaks ⇒ identical assignment on every platform. This is what a screen RenderSink paints one element PER (step D2), and what the loft-native PDF emitter (step E) paginates from — both downstream of, and agreeing because of, this one assignment. Materialise a line's text with <code>materialise_range(d, cs, ce)</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_dump</span>(bs: <span class="en">BoxSet</span>, d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>A headless RenderSink R: a deterministic textual dump of the BoxSet, one line per box — <code>[x,y,w,h] ks..ke s=style 'text'</code>. Golden-string comparable; the eyeball/regression view that stands in for a real DOM/Canvas/PDF sink (which is a Tier-2 backend, swapped at the browser edge). Coordinates are printed to one decimal so the string is backend-stable.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_commands</span>(l: <span class="en">Layout</span>, d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The DOM/Canvas RenderSink R : 𝔅 → paint commands — the reusable engine-level sink PROTOCOL. A thin per-target host (browser host.js / native / PDF) paints these; loft owns every coordinate (§8.22), so the geometry is identical on every reader and the host only positions boxes it is handed. One <code>LINE|y|h|right|paraEnd</code> per laid line (the justified line assignment, D2) then one <code>BOX|x|y|w|h|style|text</code> per glyph-box (CSS px, 2 decimals so the string is backend-stable). This is CONTENT-ONLY: caret/selection overlays are a consumer concern layered on top (cf. ztedit's <code>ed_render</code>, which adds SCALE/DOC/CARET/SEL around this same LINE/BOX core), so any read surface — viewer, editor, print preview — reuses it unchanged. Takes a full Layout (lines + boxes).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">boxset_height</span>(bs: <span class="en">BoxSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The total laid-out height (sum of line heights) — the column's content height.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">box_at</span>(bs: <span class="en">BoxSet</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>box_at(𝔅, x, y) → the index of the box CONTAINING (x,y) (half-open rect), or -1 if the point is in no box (a margin / gap — anchor_at then falls back to the nearest box).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">anchor_at</span>(bs: <span class="en">BoxSet</span>, d: <span class="en">Doc</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>H(q, 𝔅) — the logical anchor for a point: pick the box (containing, else nearest), then refine x WITHIN the box by finding the character split whose prefix width is closest to the local x (via μ, so it is correct for proportional fonts, not just monospace). (RTL refinement, where the prefix mapping reverses, is completed with BiDi placement in S4.5; this LTR refinement is exact for the flow surface.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sel</span>(bs: <span class="en">BoxSet</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
+<p>Sel(a,b) = { β : κ(β) ∩ [a,b) ≠ ∅ } — the boxes a logical selection [a,b) covers, returned as box indices. Defined PURELY by κ-intersection: it never mentions geometry, so a range crossing a direction boundary yields the correct (possibly visually-split) box set with no special-case code. THIS is the whole BiDi selection story.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sel_rects</span>(bs: <span class="en">BoxSet</span>, d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Rect</span>&gt;</code></pre>
+<p>Sel(a,b) as precise highlight RECTANGLES — character-granular. Each box the range covers is CLIPPED to its selected sub-span [max(a,ks), min(b,ke)), the endpoints mapped to x within the box via μ. So a partially-selected word highlights only the selected characters, not the whole word (<code>sel</code> returns whole boxes; this returns the sub-rects to paint). A fully-selected box yields its whole rect; the boundary boxes are the fine ones.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">caret_at</span>(bs: <span class="en">BoxSet</span>, d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Rect</span></code></pre>
+<p>caret_at(a) — the caret rectangle (zero width) for logical anchor a: the x is refined within the box holding a (a==ke → the box's right edge; a==ks → its left), y/h from that box. The dual of anchor_at (point → anchor); this is anchor → point, for drawing the cursor.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">word_at</span>(d: <span class="en">Doc</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>word(a) — the [ts,te) span of the word containing anchor a (what a double-click selects). A discretionary break does NOT end a word, so a hyphenated word selects whole: expand across adjacent word/disc tokens, stopping at glue. a in whitespace returns that glue run.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">line_boxes</span>(bs: <span class="en">BoxSet</span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;</code></pre>
+<p>line(a) — the box indices on the VISUAL line containing anchor a. A visual line is the maximal run of boxes sharing box@a's y that is CONTIGUOUS in reading order — not every box at that y. This matters for multi-column pages: column 1's line 3 and column 2's line 3 have the same absolute y, but they are laid out in reading order (all of column 1, then column 2), so a same-y run stays within one column. (A degenerate page with columns only one line tall would put two columns' first lines adjacent at the same y; real pages are taller, and layout_columns emits boxes column-major, so the run boundary is exact.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">doc_chars</span>(d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">character</a></span>&gt;</code></pre>
+<p>the doc's logical text as a character vector (for the styled-string diff).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">dirty</span>(old_d: <span class="en">Doc</span>, new_d: <span class="en">Doc</span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>dirty(D, D′) → (lo, hi_old, hi_new): the minimal changed span, computed by diffing the STYLED string (char AND style per position) — common prefix <code>lo</code>, common suffix trimmed. old[lo,hi_old) was replaced by new[lo,hi_new); the net char change is hi_new - hi_old. Diffing the observable styled string (not τ's op structure) gives the tightest range and makes patch independent of HOW the edit was expressed.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">PatchResult</span></code></pre>
+<p>The result of an incremental relayout: the new Layout, plus how many boxes were RECOMPUTED (the tail) vs REUSED from the old layout (the prefix). The counts are the bounded-work evidence M5 asserts; the layout is what M3's differential checks against a full relayout.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">patch</span>(old_layout: <span class="en">Layout</span>, old_doc: <span class="en">Doc</span>, new_doc: <span class="en">Doc</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">PatchResult</span></code></pre>
+<p>patch(L(D), D, D′) → a Layout EQUAL to L(D′) (the differential law I5), computed incrementally and with BOUNDED re-measurement (I7): reuse every line strictly before the edit verbatim, re-lay lines from there only until the break structure RECONVERGES with the old layout, then TRANSLATE the untouched tail (a cheap char+y shift, no re-measure).</p>
+<p>Two correctness hinges: · start one line EARLIER than the line containing the edit — that earlier line's content is entirely before the edit, so the break INTO it is fixed; re-laying from there catches a &quot;backward join&quot; (a shrunk word rising onto the previous line); · reconvergence — once a re-laid line ends at a new-doc char <code>nsc</code> past the dirty region and some OLD line starts at <code>nsc − delta</code>, the token streams from there are identical (shifted by delta), so the greedy produces identical lines: reuse the old tail, shifted. First-line / before-all edits fall back to a full relayout (still trivially I5-correct).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_dump_layout</span>(l: <span class="en">Layout</span>, d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The BoxSet dump of a Layout (for golden/differential comparison).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">map_anchor</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, op: <span class="en">Op</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>map_anchor(a, op) — where a caret at logical anchor a lands after op. Insert strictly before a shifts it right (a stays attached to the same following text); insert at/after a leaves it (typed text lands after the caret). Delete before a shifts it left; delete after a leaves it; delete spanning a collapses it to the deletion start. Style ops don't move it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">map_anchor_txn</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="en">Txn</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>map a caret through a whole transaction (op by op, left to right).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Page</span></code></pre>
+<p>A page: the line range [first_line, last_excl) it holds, plus the char and y at which it starts (its π entry — enough to lay the page out from scratch without the pages before it).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">paginate</span>(layout: <span class="en">Layout</span>, page_h: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Page</span>&gt;</code></pre>
+<p>paginate a laid-out column: lines stack onto a page until the next line would exceed page_h, then a new page begins. The first line of a page always fits (even if taller than page_h). The page list IS the break-point index π (each Page.first_char = π(n)).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seek_page_char</span>(pages: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Page</span>&gt;, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>seek(N) — the first CHARACTER of page N, read directly from π in O(1) (no laying out of pages 1..N−1). Pairs with layout_page to render page N from scratch (I6).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layout_page</span>(d: <span class="en">Doc</span>, start_char: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y0: <span class="ty"><a href="stdlib-types.html">float</a></span>, page_h: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>Lay out ONE page directly from a page-start (its first_char + top_y) — the same stop rule paginate uses, so it reproduces exactly that page's lines. This is &quot;seek to page N without laying out 1..N−1&quot;: the work is one page of lines, independent of N (I6).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">apply_bidi</span>(layout: <span class="en">Layout</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>Apply the UAX-9 L2 reorder (LTR/RTL subset) to a laid-out column: within each visual line, each maximal run of RTL boxes (resolved dir == 1) has its VISUAL order reversed — the boxes keep their logical κ, only their x changes. So x follows ψ while κ follows logical, and any κ-based operation (Sel, hit-test) is unaffected. Base direction is LTR (the flow surface).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">justify</span>(layout: <span class="en">Layout</span>, d: <span class="en">Doc</span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>, justify_last: <span class="ty"><a href="stdlib-types.html">boolean</a></span> = <span class="kw">false</span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>Justify each visual line by distributing its leftover space equally across its glue boxes (widen each, shift the rest right). The target right edge is the line's OWN available right (<code>LaidLine.right</code>) — the column edge, or an image's edge for a line beside one — so it works per column AND beside images (falls back to line_left + w_col for a hand-built layout). A paragraph's LAST line stays ragged UNLESS <code>justify_last</code> (the old-school &quot;fill every line&quot; look). Overfull or glue-less lines are left as-is. (Per-glue stretch/shrink BOUNDS are a refinement; this distributes equally.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">materialise_viewport</span>(d: <span class="en">Doc</span>, pages: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Page</span>&gt;, page_h: <span class="ty"><a href="stdlib-types.html">float</a></span>, y_top: <span class="ty"><a href="stdlib-types.html">float</a></span>, y_bottom: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, w_col: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>Materialise only the pages overlapping the vertical window [y_top, y_bottom) — the boxes a viewport (plus its page margin) actually shows. Each page is re-laid from its π entry, so the materialised box count tracks the VIEWPORT, not the document (I7): a 10× larger doc with the same viewport materialises the same boxes.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">piece_count</span>(d: <span class="en">Doc</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">compact_step</span>(d: <span class="en">Doc</span>, budget: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Doc</span></code></pre>
+<p>Coalesce up to <code>budget</code> adjacent piece pairs that reference a CONTIGUOUS buffer span with the SAME style (edits fragment the piece vector; those fragments often become mergeable again). Bounded per call (≤ budget merges) so it is interruptible — run it repeatedly in idle time. ⌊D⌋ is unchanged (a pure storage-layer coalesce), which is probe P3.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">PageGeom</span></code></pre>
+<p>Page geometry: the physical page, its margins, and its column grid. Column width is derived so <code>columns</code> equal columns plus <code>gutter</code> gaps exactly fill the content box.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">column_width</span>(g: <span class="en">PageGeom</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>the width of one column: (content width − the inter-column gutters) / columns.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">column_height</span>(g: <span class="en">PageGeom</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>the usable height of a column (page height minus top/bottom margins).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layout_columns</span>(d: <span class="en">Doc</span>, g: <span class="en">PageGeom</span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>Lay text out over a multi-column page grid in ABSOLUTE canvas coordinates (pages stacked downward, columns side by side within a page). Lines are broken at the column width and stacked down a column; when a line would overflow the column, flow moves to the next column, then to column 0 of the next page. Reuses next_line + place_line, so styles, per-run boxes, and discretionary hyphenation all carry over unchanged; the produced boxes feed Sel / hit-test / render directly. (Incremental multi-column reflow is a follow-on; an edit currently re-runs this full flow, which is fine at document scale.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">FlowImage</span></code></pre>
+<p>An in-text (flow) image anchored at content char <code>at</code>, with a placement mode and size. mode: IMG_LEFT → float left, text wraps right; IMG_FULL → full-width block, text below; IMG_RIGHT → float right, text wraps left. Placed at the flow position when reached.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">free_span</span>(left: <span class="ty"><a href="stdlib-types.html">float</a></span>, right: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, h: <span class="ty"><a href="stdlib-types.html">float</a></span>, imgs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">PlacedImage</span>&gt;) -&gt; (<span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+<p>free_span(left, right, y, h, imgs) → (flo, fhi, blocked): the WIDEST free horizontal interval in [left,right] over the vertical band [y, y+h), after removing every image rectangle that intersects that band. <code>blocked</code> is true when no free width remains (a full-width obstruction — the flow must drop below it). This is the one primitive both image kinds route through.</p>
+<p>The seam for NON-RECTANGULAR page images (arbitrary shapes — deferred until the page-layout designer makes them usable): this function turns exclusions into a per-band covered interval [clo,chi]. A shape only has to report ITS covered interval at (y,h) instead of a rectangle's; the flow above never changes. So &quot;shapes not just rects&quot; is a change to the coverage query, not to the layout.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">band_bottom</span>(imgs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">PlacedImage</span>&gt;, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, h: <span class="ty"><a href="stdlib-types.html">float</a></span>, left: <span class="ty"><a href="stdlib-types.html">float</a></span>, right: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>the y to drop to when a band is fully blocked: the nearest bottom edge of an obstruction intersecting [y, y+h) (so at least one rectangle ends there, opening space). Always &gt; y.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layout_flow_images</span>(d: <span class="en">Doc</span>, left: <span class="ty"><a href="stdlib-types.html">float</a></span>, right: <span class="ty"><a href="stdlib-types.html">float</a></span>, y0: <span class="ty"><a href="stdlib-types.html">float</a></span>, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>, para_gap: <span class="ty"><a href="stdlib-types.html">float</a></span>, line_h: <span class="ty"><a href="stdlib-types.html">float</a></span>, page_imgs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">PlacedImage</span>&gt;, flow_imgs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">FlowImage</span>&gt;) -&gt; <span class="en">Layout</span></code></pre>
+<p>Lay text into a single flow region [left,right] starting at top y0, steering around images. <code>page_imgs</code> are FIXED exclusion rectangles (page-layout images). <code>flow_imgs</code> are IN-TEXT images anchored at a content char, placed when the flow reaches them: IMG_FULL blocks the width (text resumes below), IMG_LEFT/IMG_RIGHT float to a side (text wraps in the free gap). Each line's width comes from free_span at its band, so text never overlaps an image; a fully-blocked band drops below the obstruction. <code>line_h</code> is the nominal line height used for the band test (exact for a uniform surface). Returns the text boxes + the placed images.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">layout_page_columns</span>(d: <span class="en">Doc</span>, g: <span class="en">PageGeom</span>, page_imgs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">PlacedImage</span>&gt;, flow_imgs: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">FlowImage</span>&gt;, resolve: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Style</span>, measure: <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="en">Style</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Layout</span></code></pre>
+<p>The full page: multi-column flow (paragraphs + hyphenation) that steers around BOTH image kinds. Page images are fixed absolute rectangles (each column avoids the ones over its x-range); in-text images are placed in whichever column the flow reaches their anchor in (IMG_LEFT/RIGHT float to that column's side, IMG_FULL blocks the column, breaking to the next column if it will not fit). The nominal line height is run_height(resolve(0)) — exact for a uniform surface. With no images this is identical to layout_columns; that is asserted.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

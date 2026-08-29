@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>graphics API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library graphics — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-graphics-api.html">
+<meta property="og:title" content="graphics API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library graphics — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-graphics-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="graphics API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library graphics — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>graphics API</h1>
+<article>
+<p><a href="lib-graphics.html">← graphics</a> · version 0.8.0</p>
+<p class="lib-legend">136 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rgba</span>(cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cg: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cb: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ca: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Pack RGBA channels into a single integer using bitwise ops. Layout: bits 24..31 = alpha, 16..23 = red, 8..15 = green, 0..7 = blue. Loft integers are 64-bit signed post-2c, so the packed value fits directly — no widening cast needed.  Each channel is MASKED to 8 bits, so an out-of-range argument wraps rather than saturating or being refused. Example: @GFX-001 — the alpha byte is the one a hand-written hex literal leaves at zero, and a zero alpha is fully transparent.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rgb</span>(cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cg: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cb: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Opaque colour: the same pack with alpha 255.  <code>rgb(255, 0, 0)</code> is 0xFFFF0000 — NOT the 0xFF0000 a reader reaches for, which has alpha 0. Example: @GFX-001 — why the literal and this call are different colours, and what each compositing path does with the difference.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">color_r</span>(color: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">color_g</span>(color: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">color_b</span>(color: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">color_a</span>(color: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Canvas</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">canvas</span>(cw: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ch: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fill_color: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Canvas</span></code></pre>
+<p>Create a canvas filled with a solid color.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">get_pixel</span>(self: const <span class="en">Canvas</span>, gx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, gy: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Get pixel color at (x, y). Returns 0 if out of bounds — and 0 is a COLOUR the canvas can hold (<code>rgba(0, 0, 0, 0)</code>), so the answer cannot serve as a bounds test.  Bound with <code>width</code>/<code>height</code>. Example: @GFX-003 — a neighbourhood scan that tests the returned colour miscounts its own transparent pixels as off-canvas.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">set_pixel</span>(self: <span class="en">Canvas</span>, sx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, sy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Set pixel color at (x, y). No-op if out of bounds.  STORES the colour byte for byte, alpha included — it does not composite; <code>blend_pixel</code> does. Example: @GFX-002 — storing a half-transparent colour replaces what was under it, rather than showing through it. Example: @GFX-003 — an out-of-range coordinate is declined in silence, so a wrong index is a missing part of the drawing, never a message.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call"><a href="stdlib-collections.html">clear</a></span>(self: <span class="en">Canvas</span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Fill the entire canvas with a solid color.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">blend</span>(dst: <span class="ty"><a href="stdlib-types.html">integer</a></span>, src: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Alpha-blend src over dst. Both are 0xAARRGGBB packed integers. Uses standard &quot;src over&quot; compositing: out = src * alpha + dst * (1 - alpha).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">blend_pixel</span>(self: <span class="en">Canvas</span>, bx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, by: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a pixel with alpha blending at (x, y) — the compositing counterpart to <code>set_pixel</code>, and the one a caller reaching for alpha usually meant. Example: @GFX-002 — store versus composite, side by side.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fill_rect</span>(self: <span class="en">Canvas</span>, rx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ry: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rw: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rh: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Fill a rectangle with a solid color. Clipped to canvas bounds.  Like every solid primitive here it STORES the colour (see <code>set_pixel</code>); a rectangle drawn in a half-transparent colour is not a translucent overlay. Example: @GFX-002 — what the buffer holds afterwards.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hline</span>(self: <span class="en">Canvas</span>, hx0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hx1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a horizontal line from (x0, y) to (x1, y). Clipped.  The end is EXCLUSIVE — <code>[x0, x1)</code> — and a reversed span draws nothing rather than being normalised. Example: @GFX-004 — where a span starts and stops, and what silence looks like.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">vline</span>(self: <span class="en">Canvas</span>, vx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vy0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vy1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a vertical line from (x, y0) to (x, y1). Clipped.  Exclusive end and no normalisation, exactly like <code>hline</code>. Example: @GFX-004 — the half-open span rule on both axes.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_rect</span>(self: <span class="en">Canvas</span>, drx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dry: <span class="ty"><a href="stdlib-types.html">integer</a></span>, drw: <span class="ty"><a href="stdlib-types.html">integer</a></span>, drh: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a rectangle outline (1px border). Clipped.  Built from four half-open spans, so (x, y, w, h) covers x .. x + w - 1 by y .. y + h - 1. Example: @GFX-004 — the exact pixels, and the hollow interior.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_line</span>(self: <span class="en">Canvas</span>, lx0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ly0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, lx1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ly1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a line from (x0, y0) to (x1, y1) using Bresenham's algorithm. Handles all octants. Each pixel is set (no blending).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_circle</span>(self: <span class="en">Canvas</span>, ccx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ccy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, radius: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a circle outline using the midpoint algorithm. Center at (cx, cy) with the given radius. Clipped via set_pixel.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fill_circle</span>(self: <span class="en">Canvas</span>, fcx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fcy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, radius: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Fill a circle (solid disk). Center at (cx, cy), given radius.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fill_ellipse</span>(self: <span class="en">Canvas</span>, fex: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fey: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ferx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, fery: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Fill an axis-aligned ellipse (solid). Center (cx, cy), radii (rx, ry).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_ellipse</span>(self: <span class="en">Canvas</span>, ecx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ecy: <span class="ty"><a href="stdlib-types.html">integer</a></span>, erx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ery: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw an axis-aligned ellipse outline. Center (cx, cy), radii (rx, ry).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_bezier</span>(self: <span class="en">Canvas</span>, bx0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, by0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, bx1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, by1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, bx2: <span class="ty"><a href="stdlib-types.html">integer</a></span>, by2: <span class="ty"><a href="stdlib-types.html">integer</a></span>, bx3: <span class="ty"><a href="stdlib-types.html">integer</a></span>, by3: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a cubic Bezier curve from (bx0,by0) to (bx3,by3) with control points (bx1,by1) and (bx2,by2). Uses adaptive subdivision — splits until segments are flat enough, then draws with Bresenham lines. Flatness threshold: max deviation of control points from the chord.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_aa_line</span>(self: <span class="en">Canvas</span>, ax0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ay0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ax1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ay1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw an anti-aliased line using Xiaolin Wu's algorithm. Uses blend_pixel for sub-pixel coverage.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fill_triangle</span>(self: <span class="en">Canvas</span>, tx0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ty0: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tx1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ty1: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tx2: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ty2: <span class="ty"><a href="stdlib-types.html">integer</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Fill a triangle with vertices (tx0,ty0), (tx1,ty1), (tx2,ty2). Uses flat-top/flat-bottom decomposition with scanline fill.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Coord</span></code></pre>
+<p>A point on the canvas, in pixels.</p>
+<p>Exists because a polygon is a LIST of them and <code>fill_triangle</code>'s six loose integers do not generalise — six is already the edge of what a caller gets right in order, and a polygon has no fixed count.</p>
+<p>NOT called <code>Point</code>: <code>mesh3d::LightType</code> has a <code>Point</code> variant and <code>graphics</code> depends on mesh3d, so the name is taken and the collision is a hard error (&quot;struct 'Point' conflicts with a enumvalue of the same name&quot;). <code>Vertex</code> is mesh3d's too. Reach for <code>Coord</code> in 2-D graphics code and the 3-D names stay where they belong.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fill_polygon</span>(self: <span class="en">Canvas</span>, pts: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Coord</span>&gt;, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Fill a closed polygon under the EVEN-ODD rule.</p>
+<p>The polygon closes itself: the last point joins the first, so a triangle is three points and not four. Fewer than three points draws nothing.</p>
+<p>Even-odd means a point is inside when a ray from it crosses the outline an odd number of times, so a self-intersecting outline leaves its overlap EMPTY — the classic five-point star is a pentagon-shaped hole with five filled arms. That is a choice, not a bug: the alternative (non-zero winding) fills the middle, and the two disagree on exactly the shapes people draw deliberately.</p>
+<p>Matches <code>fill_triangle</code> pixel for pixel on a triangle, which is the reason the row rule below is inclusive rather than the half-open rule a scanline filler usually takes. See the note on <code>polygon_crossings</code>. Example: @GFX-006 — the star's hollow middle, and the triangle agreement.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">resize_lanczos</span>(self: const <span class="en">Canvas</span>, ow: <span class="ty"><a href="stdlib-types.html">integer</a></span>, oh: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Canvas</span></code></pre>
+<p>Resample this canvas to <code>ow</code> x <code>oh</code> with a Lanczos-3 filter.</p>
+<p>Byte-identical to Pillow's <code>Image.resize(..., Image.LANCZOS)</code>, which is the point: the <code>.draw</code> corpus renders at 3x and downscales with exactly that, so a renderer that resamples any other way cannot be pixel-compared against it however good it looks (@PLN146 W0 finding 5).</p>
+<p>**Alpha is premultiplied across the resample and undone after**, because Pillow defines <code>resize</code> on an image with alpha as <code>convert(&quot;RGBa&quot;) -&gt; resize -&gt; convert(&quot;RGBA&quot;)</code>. That is a contract, not an optimisation: resampling straight RGBA lets a transparent texel's colour bleed into its neighbours, and the two disagree on any edge where alpha varies. Both roundings are Pillow's and neither is the obvious one — <code>(v*a + 127)/255</code> going in, a TRUNCATING divide coming out, and alpha 0 passes its colour through untouched rather than going black. Example: @GFX-007 — why a 3x supersample plus this is not the same picture as drawing once at final size.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">resize_bicubic</span>(self: const <span class="en">Canvas</span>, ow: <span class="ty"><a href="stdlib-types.html">integer</a></span>, oh: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Canvas</span></code></pre>
+<p>Resample with a BICUBIC filter — Pillow's <code>Image.resize</code> default.</p>
+<p>The default is the reason this exists: <code>resize(size)</code> with no <code>resample=</code> argument is bicubic, and code that builds a small image and enlarges it (a gradient computed at 100x100, say) takes that path without naming it. Read the call site's filter off the ARGUMENT LIST and it looks like there isn't one.</p>
+<p>⚠ Bicubic has negative lobes, so an ENLARGEMENT overshoots: a hard 40→200 step upscaled 4x spans 28..212 in Pillow and here alike. That is the filter, not a defect — clamping it away would be the defect.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">save_png</span>(self: const <span class="en">Canvas</span>, path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Save canvas as a PNG file. Automatically uses RGBA if any pixel has alpha &lt; 255, otherwise uses RGB. Returns true on success. Example: @GFX-005 — the choice is read off the pixels, so ONE alpha-0 pixel (a hand-written hex literal — @GFX-001) makes the whole file RGBA and that pixel a transparent hole.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_screenshot</span>(width: <span class="ty"><a href="stdlib-types.html">integer</a></span>, height: <span class="ty"><a href="stdlib-types.html">integer</a></span>, path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Capture the current GL back-buffer to an RGB PNG.  Call after a frame's draw calls and BEFORE gl_swap_buffers (reads GL_BACK).  Works on a headless / Wayland desktop where the window itself can't be grabbed.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_create_window</span>(width: <span class="ty"><a href="stdlib-types.html">integer</a></span>, height: <span class="ty"><a href="stdlib-types.html">integer</a></span>, title: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Create a window with an OpenGL 3.3 context. Returns true on success.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_create_fullscreen_window</span>(title: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Open a borderless fullscreen window at the primary monitor's native resolution. Returns true on success. Read the actual viewport size afterwards with <code>gl_window_width</code> / <code>gl_window_height</code> if you need to set up an aspect-aware camera.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_set_fullscreen</span>(on: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+<p>Toggle fullscreen on the existing window (runtime flip, cheaper than recreating the GL context — textures / VAOs / shaders survive).  Pass <code>true</code> for borderless fullscreen, <code>false</code> for windowed.  Browsers (WASM) require a user gesture to enter fullscreen; calling outside one is non-fatal.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_window_width</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Current window inner size in physical pixels.  Query after creating a (especially fullscreen) window so projection / 2D ortho / overlays use the real resolution rather than a windowed hint.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_window_height</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_poll_events</span>() -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Poll window events. Returns false when the window should close.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_swap_buffers</span>()</code></pre>
+<p>Swap buffers (present the frame).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_clear</span>(color: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Clear the screen with an RGBA color (packed as 0xRRGGBBAA).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_destroy_window</span>()</code></pre>
+<p>Destroy the window and OpenGL context.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_create_shader</span>(vertex_source: <span class="ty"><a href="stdlib-types.html">text</a></span>, fragment_source: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Compile and link a shader program. Returns the program ID (0 on failure).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_use_shader</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Use a shader program for subsequent draw calls.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_draw</span>(vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vertex_count: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a VAO with vertex_count vertices as triangles.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_upload_vertices</span>(data: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;, stride: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Upload a vector&lt;single&gt; as a vertex buffer. Returns VAO handle. stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color). Native codegen: loft_gl_upload_vertices(data_ptr: *const f32, count: u32, stride: i32) -&gt; i32</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_upload_instance_buffer</span>(data: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Upload per-instance data to a DYNAMIC_DRAW buffer. Returns the VBO handle (pass it to gl_instance_attrib). DYNAMIC because instances change per frame.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_instance_attrib</span>(vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>, ivbo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, location: <span class="ty"><a href="stdlib-types.html">integer</a></span>, components: <span class="ty"><a href="stdlib-types.html">integer</a></span>, stride_floats: <span class="ty"><a href="stdlib-types.html">integer</a></span>, offset_floats: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Bind instance VBO <code>ivbo</code>'s field to attribute <code>location</code> on <code>vao</code>, advancing once per INSTANCE (VertexAttribDivisor=1). components = floats in the field (2=vec2, 4=vec4); stride_floats = floats per instance record; offset_floats = this field's start within the record. Use locations &gt;=5 to clear the vertex attrs.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_draw_instanced</span>(vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vertex_count: <span class="ty"><a href="stdlib-types.html">integer</a></span>, instance_count: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw vertex_count vertices of <code>vao</code> as triangles, instance_count times.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_update_buffer</span>(vbo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, data: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;)</code></pre>
+<p>Orphan + re-upload an existing VBO (returned by gl_upload_vertices / gl_upload_instance_buffer) with new data, DYNAMIC_DRAW — per-frame updates without recreating the buffer.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_upload_indices</span>(vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>, data: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Upload triangle indices as an element (index) buffer bound to <code>vao</code>, so gl_draw_elements(vao, index_count, mode) draws indexed. Returns the EBO handle.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">GroupVboSet</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">group_vbos_new</span>(stride: <span class="ty"><a href="stdlib-types.html">integer</a></span>, draw_mode: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">GroupVboSet</span></code></pre>
+<p>Create an empty set for a fixed vertex stride + draw mode.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">group_vbos_upsert</span>(set: <span class="en">GroupVboSet</span>, gk: <span class="ty"><a href="stdlib-types.html">integer</a></span>, verts: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;,</code></pre>
+<p>Upload (or RE-upload) one group's baked vertices: delete the group's old VAO if present, upload the new data, and record the handle + vertex count + world bounds.  Call this only for the DIRTY groups each edit; untouched groups keep their cached VBOs.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">group_vbos_draw_all</span>(set: <span class="en">GroupVboSet</span>)</code></pre>
+<p>Draw every group's cached VBO with the set's draw mode.  (Per-group frustum culling — skip groups whose world bounds fall outside the view — is a future addition; the bounds are already stored.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">group_vbos_destroy</span>(set: <span class="en">GroupVboSet</span>)</code></pre>
+<p>Free every group's VAO and clear the set (call on teardown / world reset).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_set_uniform_mat4</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, mat: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;)</code></pre>
+<p>Set a mat4 uniform on a shader program. mat is a Mat4.m vector (16 floats). Native codegen: loft_gl_set_mat4(program: i32, name_ptr, name_len, mat_ptr: *const f64, count: u32)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_set_uniform_float</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, val: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Set a float uniform.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_set_uniform_int</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, val: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Set an integer uniform (also used for sampler2D texture unit bindings).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_set_uniform_vec2</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Set a vec2 uniform (e.g. screen size, texel size, a 2D offset).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_set_uniform_vec3</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, z: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Set a vec3 uniform (e.g. light position, color).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_set_uniform_vec4</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, z: <span class="ty"><a href="stdlib-types.html">float</a></span>, w: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Set a vec4 uniform (e.g. an RGBA color, a rect x/y/w/h).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_enable</span>(cap: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Enable a GL capability (GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE, GL_SCISSOR_TEST).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_disable</span>(cap: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Disable a GL capability.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_blend_func</span>(src: <span class="ty"><a href="stdlib-types.html">integer</a></span>, dst: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Set blend function (e.g. gl_blend_func(BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA)).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_cull_face</span>(face: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Set which face to cull (0=back, 1=front).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_depth_mask</span>(write: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+<p>Enable/disable depth buffer writing.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_finish</span>()</code></pre>
+<p>Block until every GL command issued so far has completed.</p>
+<p>The call that makes a read-back trustworthy: <code>gl_screenshot</code> and any other framebuffer read otherwise race the driver, so the same program can produce a complete frame or an empty one from run to run.  Costs a stall by definition — use it in a test or a screenshot path, never in a frame loop.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_viewport</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Set the viewport rectangle (used for FBO render passes).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_scissor</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Set the scissor box — clips rendering to this rect (origin bottom-left, like the viewport). Takes effect only while gl_enable(GL_SCISSOR_TEST) is set; use it for partial-damage redraw (re-render just a changed region).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_create_framebuffer</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Create a framebuffer object. Returns FBO handle.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_bind_framebuffer</span>(fbo: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Bind a framebuffer (0 = default screen framebuffer).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_framebuffer_texture</span>(fbo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, attachment: <span class="ty"><a href="stdlib-types.html">integer</a></span>, tex: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Attach a texture to an FBO (attachment: 0=color, 1=depth).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_create_depth_texture</span>(width: <span class="ty"><a href="stdlib-types.html">integer</a></span>, height: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Create a depth-only texture for shadow mapping.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_create_color_texture</span>(width: <span class="ty"><a href="stdlib-types.html">integer</a></span>, height: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Create an empty RGBA texture for render-to-texture.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_texture_filter</span>(tex: <span class="ty"><a href="stdlib-types.html">integer</a></span>, nearest: <span class="ty"><a href="stdlib-types.html">boolean</a></span>)</code></pre>
+<p>Set a texture's filtering: nearest = crisp pixel-art, else linear/smooth.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_generate_mipmap</span>(tex: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Generate mipmaps + trilinear minification for <code>tex</code> (after its pixels are uploaded) — keeps minified sprites / atlas pages clean.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_texture_subimage</span>(tex: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>, y: <span class="ty"><a href="stdlib-types.html">integer</a></span>, w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span>, data: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;)</code></pre>
+<p>Upload a sub-region of RGBA pixels (Canvas data, 0xAARRGGBB) into an existing texture at (x,y) sized w*h — incremental atlas packing without re-uploading.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_draw_fullscreen_quad</span>()</code></pre>
+<p>Draw a fullscreen quad (for post-processing). Uses built-in VAO with UV coords. Vertex shader receives: layout(location=0) vec2 aPos, layout(location=1) vec2 aUV.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_draw_mode</span>(vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vertex_count: <span class="ty"><a href="stdlib-types.html">integer</a></span>, mode: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw a VAO with explicit mode (DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_draw_elements</span>(vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>, index_count: <span class="ty"><a href="stdlib-types.html">integer</a></span>, mode: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw using an index buffer (EBO). mode: DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_line_width</span>(width: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Set line width for DRAW_LINES rendering.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_point_size</span>(size: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Set point size for DRAW_POINTS rendering.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_key_pressed</span>(key_code: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Returns true if the key is currently pressed (use KEY_* constants).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_mouse_x</span>() -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Mouse position X (pixels from left edge of window).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_mouse_y</span>() -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Mouse position Y (pixels from top edge of window).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_mouse_button</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Mouse button bitmask: 1=left, 2=right, 4=middle.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_mouse_wheel</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Scroll-wheel delta accumulated since the last call (positive = up). Reset on read.  Use per-frame to drive the editor's <code>InputState.in_wheel</code> or any other scroll-driven UI.  Pixel-delta trackpad scrolling is quantised at 20 px/line.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_next_event</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Pop the next queued input event and latch it; returns its EV_* tag, or EV_NONE when the queue is drained.  Call after gl_poll_events().</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_key</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Named/keycode of the latched key event (the KEY_* constants).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_mods</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Modifier bitmask of the latched event (MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_repeat</span>() -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>True if the latched key-down is an auto-repeat.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_text</span>() -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>UTF-8 text of the latched EV_TEXT event (&quot;&quot; otherwise).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_x</span>() -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>X position (pixels) of the latched mouse/touch event; width for EV_RESIZE.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_y</span>() -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Y position (pixels) of the latched mouse/touch event; height for EV_RESIZE.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_button</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Button of the latched mouse event (1=left, 2=right, 4=middle).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_wheel</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Wheel delta of the latched EV_WHEEL event (positive = up).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_event_touch_id</span>() -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Stable finger id of the latched EV_TOUCH_* event.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_load_font</span>(path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Load a font from a file path. Returns a font handle (&gt;= 0) or null on error.</p>
+<p>#255: a RELATIVE path resolves against the program's OWN directory (<code>source_dir()</code> — the source dir under <code>--interpret</code>, the executable's dir under <code>--native</code>), so a bundled font travels with the program and loads regardless of the launch directory (the symptom #255 hit: a font addressed relative to the source missed under <code>--native</code>, which runs from a temp dir, and text rendered invisible).  An ABSOLUTE path is used verbatim.  This matches loft's program-relative file-I/O default (<code>file()</code> / <code>read_file</code>).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_measure_text</span>(font: <span class="ty"><a href="stdlib-types.html">integer</a></span>, content: <span class="ty"><a href="stdlib-types.html">text</a></span>, size: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Measure text width in pixels at the given font size.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_text_height</span>(font: <span class="ty"><a href="stdlib-types.html">integer</a></span>, size: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Return the line height in pixels for a font at the given size.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_font_ascent</span>(font: <span class="ty"><a href="stdlib-types.html">integer</a></span>, size: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>@P340: return the font ASCENT in pixels (baseline -&gt; top of glyphs) from the font's real metrics.  gl_draw_text(x, y) anchors by the TOP, placing the baseline at y + gl_font_ascent(font, size); to baseline-align mixed sizes, draw each at y = baseline - gl_font_ascent(font, size_i).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_text</span>(self: <span class="en">Canvas</span>, font: <span class="ty"><a href="stdlib-types.html">integer</a></span>, content: <span class="ty"><a href="stdlib-types.html">text</a></span>, size: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_load_texture</span>(path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Load an image file (PNG, JPG) and upload it as a GL texture. Returns the texture ID (0 on failure).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_upload_canvas</span>(data: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, width: <span class="ty"><a href="stdlib-types.html">integer</a></span>, height: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Upload Canvas pixel data as a GL texture. Returns the texture ID. Converts 0xAARRGGBB packed integers to RGBA bytes for OpenGL.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_bind_texture</span>(texture_id: <span class="ty"><a href="stdlib-types.html">integer</a></span>, unit: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Bind a texture to a texture unit (0-based) for rendering.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_delete_texture</span>(texture_id: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Delete a texture.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_delete_shader</span>(program: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Delete a shader program.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_delete_vao</span>(vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Delete a vertex array object.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">gl_delete_framebuffer</span>(fbo: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Delete a framebuffer object.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">SpriteSheet</span></code></pre>
+<p>A sprite sheet backed by a Canvas atlas uploaded as a GL texture. Sprites are arranged in a grid of <code>ss_cols</code> x <code>ss_rows</code> cells.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">create_sprite_sheet</span>(atlas: const <span class="en">Canvas</span>, cols: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rows: <span class="ty"><a href="stdlib-types.html">integer</a></span>, vao: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">SpriteSheet</span></code></pre>
+<p>Create a sprite sheet from a Canvas atlas. The canvas is divided into a grid of <code>cols</code> x <code>rows</code> cells. Sprite index 0 is top-left, incrementing left-to-right then top-to-bottom.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_sprite</span>(sheet: const <span class="en">SpriteSheet</span>, mvp: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, sp_idx: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Draw sprite at <code>index</code> (0-based, row-major). <code>mvp</code> is the pre-multiplied projection * model matrix (16 singles). The caller builds the MVP for the desired screen position and size.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Painter2D</span></code></pre>
+<p>A 2D painter bundling shaders, a unit-quad VAO, and an orthographic projection. Create once per window with <code>create_painter_2d</code>, then use <code>draw_rect_at</code>, <code>draw_sprite_at</code>, and <code>draw_texture_at</code> to render.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">create_painter_2d</span>(screen_w: <span class="ty"><a href="stdlib-types.html">float</a></span>, screen_h: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Painter2D</span></code></pre>
+<p>Create a Painter2D for a window of size <code>screen_w</code> x <code>screen_h</code>. Compiles the flat and textured shaders, uploads the unit-quad VAO, and builds an orthographic projection with the origin at the top-left. Call once after <code>gl_create_window</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">painter_vao</span>(self: const <span class="en">Painter2D</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Return the unit-quad VAO owned by the painter, so it can be shared with <code>create_sprite_sheet</code> instead of uploading a second copy.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_rect_at</span>(painter: const <span class="en">Painter2D</span>, x: <span class="ty"><a href="stdlib-types.html">float</a></span>, y: <span class="ty"><a href="stdlib-types.html">float</a></span>, w: <span class="ty"><a href="stdlib-types.html">float</a></span>, h: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>Draw a filled rectangle at screen position (x, y) with size (w, h). Colour channels are in 0.0..1.0. Uses the painter's flat-color shader.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_sprite_at</span>(sheet: const <span class="en">SpriteSheet</span>, painter: const <span class="en">Painter2D</span>,</code></pre>
+<p>Draw a sprite from <code>sheet</code> at screen position (x, y) with size (w, h). <code>sp_idx</code> is the 0-based sprite index (row-major) in the sheet. This is a one-liner replacement for <code>make_mvp</code> + <code>draw_sprite</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draw_texture_at</span>(painter: const <span class="en">Painter2D</span>, tex: <span class="ty"><a href="stdlib-types.html">integer</a></span>,</code></pre>
+<p>Draw an arbitrary GL texture as a screen-space quad at (x, y, w, h). Uses the painter's textured shader, which flips V to match canvas origin. Suitable for textures created with <code>create_text_texture</code> or <code>gl_upload_canvas</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">create_text_texture</span>(font: <span class="ty"><a href="stdlib-types.html">integer</a></span>, content: <span class="ty"><a href="stdlib-types.html">text</a></span>, size: <span class="ty"><a href="stdlib-types.html">float</a></span>, color: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Rasterize <code>content</code> with <code>font</code> at <code>size</code> pixels, upload the glyph bitmap as a GL texture, and return the texture ID. The texture is sized to fit the measured text plus a small padding; pair with <code>draw_texture_at</code> to render. Caller owns the texture — call <code>gl_delete_texture</code> when done. Returns 0 if the text cannot be measured.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_load</span>(path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Load an audio clip (WAV or OGG). Returns handle (&gt;= 0) or null on failure.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_play</span>(clip: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Play a loaded clip at the given volume (0.0-1.0). Returns playback handle.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_stop</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Stop a playing clip by its playback handle.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_set_volume</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>)</code></pre>
+<p>Set volume of a playing clip (0.0-1.0).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_play_raw</span>(samples: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;, sample_rate: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Play raw PCM samples (mono, values -1.0 to 1.0) at the given sample rate. Returns playback handle, or null on failure.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_beep</span>(sb_freq: <span class="ty"><a href="stdlib-types.html">single</a></span>, sb_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sb_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Short percussive beep — brick hit, UI click.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_descend</span>(sd_f0: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_f1: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Descending tone — life lost, negative event.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_chirp</span>(sc_f0: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_f1: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Rising chirp — pickup collected, positive event.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_noise</span>(sn_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sn_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>White noise burst — percussion, explosion, brick break.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_bounce</span>(sp_freq: <span class="ty"><a href="stdlib-types.html">single</a></span>, sp_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Paddle bounce — low square wave thud with pitch drop.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Renderer</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">create_renderer</span>(rw: <span class="ty"><a href="stdlib-types.html">integer</a></span>, rh: <span class="ty"><a href="stdlib-types.html">integer</a></span>, title: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Renderer</span></code></pre>
+<p>Create a renderer with a window.  Compiles built-in shaders, allocates shadow map FBO.  Returns null on failure (no display).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">elapsed</span>(self: const <span class="en">Renderer</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Seconds since the renderer was created.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">upload_scene</span>(self: <span class="en">Renderer</span>, sc: const scene::<span class="en">Scene</span>)</code></pre>
+<p>Upload all meshes in the scene to GPU VAOs.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_frame_no_swap</span>(self: <span class="en">Renderer</span>, sc: const scene::<span class="en">Scene</span>,</code></pre>
+<p>Render one frame's 3D passes WITHOUT swapping buffers.  Callers that want to draw a 2D overlay between the 3D pass and the swap (e.g. the native Moros editor's panel) use this variant and invoke <code>graphics::gl_swap_buffers()</code> themselves after their overlay renders.  Returns false when close requested.</p>
+<p>Introduced by Initiative 03 Phase 3b (native moros editor panel overlay).  The existing <code>render_frame</code> wrapper below preserves backward compatibility with every current caller.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_frame</span>(self: <span class="en">Renderer</span>, sc: const scene::<span class="en">Scene</span>,</code></pre>
+<p>Render one frame (3D passes + buffer swap).  Convenience wrapper for callers that don't need a 2D overlay between the 3D pass and the swap — brick-buster, 24-renderer-demo, and every other current consumer.  Returns false when close requested.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_loop</span>(self: <span class="en">Renderer</span>, sc: const scene::<span class="en">Scene</span>, cam: const scene::<span class="en">Camera</span>)</code></pre>
+<p>Convenience: render loop until close.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">destroy</span>(self: <span class="en">Renderer</span>)</code></pre>
+<p>Destroy GPU resources and close the window.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>
