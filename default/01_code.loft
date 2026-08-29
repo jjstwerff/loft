@@ -1381,6 +1381,14 @@ fn OpClearKeyed(dest: reference, tp: const u16);
 // per-RECORD loop lives here, where the records exist.
 fn OpIndexGroup(primary: reference, view: reference, tp: const u16);
 #rust"s.database.index_group_records(&@primary, &@view, @tp);"
+// loft#1159 — fill the keyed collection `dest` with a deep COPY of every record the plain
+// vector `src` holds, each placed by its own key.  A vector LITERAL in a keyed position is
+// parsed into per-element inserts; a vector VALUE (`h.a = rows()`, `h.a += rows()`) is one
+// expression, and there was no route from it to those same inserts — `=` walked the source
+// with the DESTINATION's kind through `OpReplaceKeyed` and `+=` emitted nothing at all.
+// `tp`'s `0x8000` bit frees the source store after the copy, as it does for OpReplaceKeyed.
+fn OpFillKeyed(parent: reference, src: reference, tp: const u16, parent_tp: const u16, field: const u16);
+#rust"s.database.fill_keyed_from_vector(&@parent, &@src, @tp, @parent_tp, @field);"
 // @P305 — `coll[key] = value` insert-or-replace into a keyed collection
 // (hash/sorted/index), deduped by value's key.  Updates an existing key
 // in place OR inserts a new one (the plain `OpCopyRecord` lowering could

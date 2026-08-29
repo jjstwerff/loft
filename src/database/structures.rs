@@ -346,6 +346,29 @@ impl Stores {
         }
     }
 
+    /// loft#1159 — the FIELD INDEX of the field at byte offset `byte_off` in the struct or
+    /// enum-value type `struct_tp`, or `None` when no field sits there.
+    ///
+    /// A field ref names a byte POSITION, while every group question — `other_indexes`, the
+    /// sibling walk in [`Self::record_finish`] — is asked by field NUMBER. The two are
+    /// related only through the field list, so the translation lives here beside the list
+    /// rather than being re-derived at each caller.
+    #[must_use]
+    pub fn field_index_at(&self, struct_tp: u16, byte_off: u16) -> Option<u16> {
+        if (struct_tp as usize) >= self.types.len() {
+            return None;
+        }
+        let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) =
+            &self.types[struct_tp as usize].parts
+        else {
+            return None;
+        };
+        fields
+            .iter()
+            .position(|f| f.position == byte_off)
+            .map(|i| i as u16)
+    }
+
     /// loft#898 — the members of the linked collection group the keyed field at
     /// `byte_off` belongs to, as `(byte_off, collection_tp, is_view)` per member,
     /// INCLUDING the field itself. Empty when the field is not in a group.

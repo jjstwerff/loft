@@ -484,6 +484,42 @@ impl Stores {
     /// preceding remove.  `free_source` frees `value`'s store after the copy
     /// when it is a caller temp (the `0x8000` bit, as in `copy_record`).
     pub fn set_keyed(&mut self, coll: &DbRef, value: &DbRef, db: u16, free_source: bool) {
+        self.insert_keyed_copy(coll, value, db, coll, db, u16::MAX);
+        if free_source
+            && value.store_nr != coll.store_nr
+            // Sentinel guard: the `allocations[..]` prechecks below index by store_nr, so a null
+            // source must short-circuit here (the eventual `free` is already sentinel-safe).
+            && value.store_nr != u16::MAX
+            && !self.is_stack_store(value.store_nr)
+            && !self.allocations[value.store_nr as usize].free
+            && !self.allocations[value.store_nr as usize].read_only
+            && !self.allocations[value.store_nr as usize].is_free_protected()
+        {
+            self.free(value);
+        }
+    }
+
+    /// Place a deep COPY of `value` into the keyed collection `coll` (type `db`), keyed by
+    /// `value`'s own key fields, replacing any record already under that key.
+    ///
+    /// `(parent, parent_tp, field)` name the collection the way [`Self::record_finish`] wants
+    /// it — the owning struct ref, its type, and the field index — because that is what
+    /// decides whether the record reaches the rest of a linked collection group: the sibling
+    /// walk is keyed on the FIELD, and `field == u16::MAX` means "the parent IS the
+    /// collection", which is a lone collection with no siblings to maintain.
+    ///
+    /// This is one home on purpose (loft#1159). The bulk fill and `coll[k] = v` used to
+    /// differ in nothing but this, and the difference did not show as two spellings of an
+    /// insert — it showed as a linked group whose members disagreed on which records exist.
+    pub(crate) fn insert_keyed_copy(
+        &mut self,
+        coll: &DbRef,
+        value: &DbRef,
+        db: u16,
+        parent: &DbRef,
+        parent_tp: u16,
+        field: u16,
+    ) {
         let content_tp = match self.types[db as usize].parts {
             Parts::Hash(c, _)
             | Parts::Sorted(c, _)
@@ -520,27 +556,107 @@ impl Stores {
             }
         }
         // insert: claim a fresh record, deep-copy `value` into it, link by key.
-        let new = self.record_new(coll, db, u16::MAX);
+        let new = self.record_new(parent, parent_tp, field);
         let size = u32::from(self.size(content_tp));
         self.copy_block(value, &new, size);
         self.copy_claims(value, &new, content_tp);
-        self.record_finish(coll, &new, db, u16::MAX);
+        self.record_finish(parent, &new, parent_tp, field);
         // @P317 — LOFT_LOG=copy_check: warn if the keyed deep copy changed any
         // nested collection length (before the source-free below).
         if self.copy_check_enabled() {
             self.report_copy_mismatches(value, &new, content_tp, "set_keyed");
         }
+    }
+
+    /// loft#1159 — fill the keyed collection `dest` with a deep COPY of every record the
+    /// plain vector `src` holds, keyed by each record's own key fields.
+    ///
+    /// This is the bulk sibling of [`Self::set_keyed`], and it exists because the two ways of
+    /// naming the same records did not mean the same thing.  A vector LITERAL in a keyed
+    /// position (`h.a = [E{…}, E{…}]`) is parsed into per-element construction that inserts
+    /// each record by key; a vector VALUE (`h.a = rows()`, `h.a += rows()`) is one expression
+    /// of type `vector<E>`, and there was no route from it to the same inserts.  `=` reached
+    /// `OpReplaceKeyed`, which hands the source to `copy_claims` under the DESTINATION's type
+    /// and so walks a vector's storage as if it were a hash / index / trie — `sorted` alone
+    /// survived that, because a sorted's own storage IS a sequential vector.  `+=` reached
+    /// nothing at all and the statement was discarded.
+    ///
+    /// `raw_tp`'s `0x8000` bit frees the source store after the copy, exactly as it does for
+    /// `OpReplaceKeyed` and `OpSetKeyed`: a fresh-storage right-hand side (`rows()`) is a
+    /// temporary nobody else names.  The decode lives here, not in the two op bodies, so the
+    /// interpreter and the native generator cannot drift on it.
+    ///
+    /// The element addressing follows `is_linked` on the element TYPE, which is the same
+    /// question `index_group_records` asks and is a property of the type across the whole
+    /// program: a record-backed vector holds 4-byte record ids, a plain one holds its records
+    /// inline.  Reading the wrong one is how a length that disagrees with its own lookups gets
+    /// built, which is the state this replaces.
+    pub fn fill_keyed_from_vector(
+        &mut self,
+        parent: &DbRef,
+        src: &DbRef,
+        raw_tp: u16,
+        parent_tp: u16,
+        field: u16,
+    ) {
+        let free_source = raw_tp & 0x8000 != 0;
+        let tp = raw_tp & 0x7FFF;
+        if (tp as usize) >= self.types.len() || src.is_null() || src.store_nr == u16::MAX {
+            return;
+        }
+        // `field == u16::MAX` means the parent IS the collection — the convention
+        // `record_finish` and `record_new` already use for a lone collection.
+        let dest = self.field_ref(parent, parent_tp, field);
+        let dest = &dest;
+        let content_tp = self.content(tp);
+        if content_tp == u16::MAX {
+            return;
+        }
+        let length = vector::length_vector(src, &self.allocations);
+        let linked = self.is_linked(content_tp);
+        let width = if linked {
+            4
+        } else {
+            u32::from(self.size(content_tp))
+        };
+        // Resolve every element BEFORE inserting any of them.  An insert may grow the
+        // destination store, and when source and destination share one store a half-walked
+        // source is exactly the read that answers with another record's bytes.
+        let mut records: Vec<DbRef> = Vec::with_capacity(length as usize);
+        for i in 0..length {
+            let slot = vector::get_vector(src, width, i64::from(i), &self.allocations);
+            if slot.rec == 0 {
+                continue;
+            }
+            if linked {
+                let rec = keys::store(&slot, &self.allocations).get_u32_raw(slot.rec, slot.pos);
+                // A null element has no key to be found under, so it stays in the vector and
+                // out of the keyed collection — the same answer the group fill gives it.
+                if rec == 0 {
+                    continue;
+                }
+                records.push(DbRef {
+                    store_nr: src.store_nr,
+                    rec,
+                    pos: RECORD_PAYLOAD,
+                });
+            } else {
+                records.push(slot);
+            }
+        }
+        for rec in &records {
+            self.insert_keyed_copy(dest, rec, tp, parent, parent_tp, field);
+        }
         if free_source
-            && value.store_nr != coll.store_nr
-            // Sentinel guard: the `allocations[..]` prechecks below index by store_nr, so a null
-            // source must short-circuit here (the eventual `free` is already sentinel-safe).
-            && value.store_nr != u16::MAX
-            && !self.is_stack_store(value.store_nr)
-            && !self.allocations[value.store_nr as usize].free
-            && !self.allocations[value.store_nr as usize].read_only
-            && !self.allocations[value.store_nr as usize].is_free_protected()
+            && src.store_nr != dest.store_nr
+            // Sentinel guard: the `allocations[..]` prechecks index by store_nr.
+            && src.store_nr != u16::MAX
+            && !self.is_stack_store(src.store_nr)
+            && !self.allocations[src.store_nr as usize].free
+            && !self.allocations[src.store_nr as usize].read_only
+            && !self.allocations[src.store_nr as usize].is_free_protected()
         {
-            self.free(value);
+            self.free(src);
         }
     }
 

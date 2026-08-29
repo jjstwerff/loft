@@ -1404,6 +1404,36 @@ impl Parser {
                 };
                 #[cfg(feature = "wasm")]
                 let tp_val = i32::from(kt);
+                // loft#1159 — ask what the SOURCE is, which the keyed-LOCAL site beside this
+                // one has always asked (`is_keyed(&s_type)` in `parse_assign_op`) and this
+                // one did not.  `OpReplaceKeyed` hands the source to `copy_claims` under the
+                // DESTINATION's type, so a plain `vector<E>` was walked as if it were a hash
+                // / index / trie: `hash` found nothing (0), `index`, `trie` and `spatial`
+                // found one node, and only `sorted` survived — because a sorted's own
+                // storage IS a sequential vector.  A length that disagrees with its own
+                // lookups is the state that leaves behind, and nothing said so.
+                //
+                // The records are the same records either way, so the answer is not a
+                // refusal: `h.a = [E{…}, E{…}]` is the documented spelling and it inserts
+                // each record by key.  A vector VALUE now reaches those same inserts.  The
+                // clear comes first for the reason `=` always clears — it replaces the
+                // collection rather than adding to it — and it is the group-aware clear, so
+                // a member's siblings are reset with it (loft#898).
+                if !crate::parser::vectors::is_keyed(src_tp) {
+                    let mut ops = self.keyed_group_clear(to, kt, parent_tp);
+                    let (parent, parent_tp_id, field_nr) = self.fill_keyed_site(to, parent_tp, kt);
+                    ops.push(self.cl(
+                        "OpFillKeyed",
+                        &[
+                            parent,
+                            val.clone(),
+                            Value::Int(tp_val),
+                            Value::Int(i32::from(parent_tp_id)),
+                            Value::Int(i32::from(field_nr)),
+                        ],
+                    ));
+                    return Value::Insert(ops);
+                }
                 return self.cl(
                     "OpReplaceKeyed",
                     &[val.clone(), to.clone(), Value::Int(tp_val)],

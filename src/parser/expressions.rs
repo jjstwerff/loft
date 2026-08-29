@@ -1664,7 +1664,12 @@ use a separate collection or add after the loop"
     /// silently does not index the records) has no operation that repairs it.
     ///
     /// An ungrouped field yields the single clear it always had.
-    fn keyed_group_clear(&mut self, to: &Value, kt: u16, parent_tp: &Type) -> Vec<Value> {
+    pub(crate) fn keyed_group_clear(
+        &mut self,
+        to: &Value,
+        kt: u16,
+        parent_tp: &Type,
+    ) -> Vec<Value> {
         let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
             return vec![self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))])];
         };
@@ -1891,6 +1896,32 @@ use a separate collection or add after the loop"
     /// field at byte offset `off`. Rebuilt by swapping the offset in the SAME call
     /// so the base expression, its variable and the struct type all stay whatever
     /// the original site resolved them to.
+    /// loft#1159 — name the keyed field `to` the way `OpFillKeyed` needs it: the owning
+    /// struct ref, its type id, and the FIELD INDEX.
+    ///
+    /// The bulk fill places each record through `Stores::record_finish`, the same chokepoint
+    /// the element-wise `+= [r]` spelling reaches, and that walk maintains a linked
+    /// collection group only when it is given the field the write is spelled through — a
+    /// field NUMBER, which a field ref (an `OpGetField` naming a byte offset) does not carry.
+    /// Falling back to `(to, kt, u16::MAX)` is the lone-collection convention: the parent IS
+    /// the collection and there are no siblings to maintain, which is exactly right wherever
+    /// the site cannot be resolved.
+    pub(crate) fn fill_keyed_site(
+        &mut self,
+        to: &Value,
+        parent_tp: &Type,
+        kt: u16,
+    ) -> (Value, u16, u16) {
+        if let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp)
+            && let Value::Call(_, args) = to.unspan()
+            && let Some(parent) = args.first()
+            && let Some(idx) = self.database.field_index_at(struct_tp, byte_off)
+        {
+            return (parent.clone(), struct_tp, idx);
+        }
+        (to.clone(), kt, u16::MAX)
+    }
+
     fn field_at(to: &Value, off: u16) -> Value {
         let mut out = to.unspan().clone();
         if let Value::Call(_, args) = &mut out
@@ -3642,6 +3673,51 @@ use a separate collection or add after the loop"
             };
             let ls = self.new_record(&mut to.clone(), &np, elm, u16::MAX, &[scalar], &elm_tp);
             *code = Value::Insert(ls);
+            return Type::Void;
+        }
+        // loft#1159 — `keyed_field += <vector VALUE>`: insert every record the vector holds,
+        // each placed by its own key.
+        //
+        // The keyed twin of the vector-field arm above, and it was simply absent.  That arm
+        // is gated on `let Type::Vector(elm_tp, _) = f_type`, so a keyed destination never
+        // matched it; the struct-literal arm below is gated on `matches!(code,
+        // Value::Insert(_))` with a SINGLE element's type, so a vector-valued expression
+        // never matched that either.  `h.a += rows()` fell past both to a statement that
+        // emitted no write at all — `introspect` showed the call and then nothing — while
+        // `h.a += [E{…}, E{…}]` was correct, because a literal is parsed into per-element
+        // construction and never becomes a vector value.
+        //
+        // `formal/collections.md` (Col-Insert) is written over `c += [ rec, … ]` and says
+        // keyed kinds place each record by key.  It does not distinguish how that vector is
+        // spelled, so the two spellings owe the same answer.  No clear: `+=` adds.
+        if !self.first_pass
+            && var_nr == u16::MAX
+            && op == "+="
+            && dbref_append_target
+            && !matches!(code, Value::Insert(_))
+            && matches!(s_type.base(), Type::Vector(_, _))
+            && let Some(kt) = self.keyed_field_kt(f_type)
+        {
+            #[cfg(not(feature = "wasm"))]
+            let tp_val = if self.is_struct_returning_call(code) {
+                i32::from(kt) | 0x8000
+            } else {
+                i32::from(kt)
+            };
+            #[cfg(feature = "wasm")]
+            let tp_val = i32::from(kt);
+            let src = code.clone();
+            let (parent, parent_tp_id, field_nr) = self.fill_keyed_site(to, &lhs_parent_tp, kt);
+            *code = Value::Insert(vec![self.cl(
+                "OpFillKeyed",
+                &[
+                    parent,
+                    src,
+                    Value::Int(tp_val),
+                    Value::Int(i32::from(parent_tp_id)),
+                    Value::Int(i32::from(field_nr)),
+                ],
+            )]);
             return Type::Void;
         }
         // P192 follow-up: `field += elem` for keyed-collection fields
