@@ -2807,9 +2807,8 @@ for x in as1 { total = total + x.v; }
 for z in cs  { total = total + z.c; }   // still the same `total`
 ```
 
-⚠ On `--native`, reading a loop-body local *after* its loop does not compile
-(loft#1156); the interpreter allows it.  Declare the local before the loop if you
-need to read it afterwards.
+A body local read after its loop keeps the value the last iteration left, and a
+loop that never ran leaves it `null` — the same answer the loop variable gives.
 
 ### Hash collections: name the key (local or struct field)
 

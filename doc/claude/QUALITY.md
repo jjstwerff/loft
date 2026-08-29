@@ -2273,7 +2273,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 650 | 291 | 4 | **355** |
+| 651 | 291 | 4 | **356** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2285,7 +2285,9 @@ peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 
 644 · 285 until B6w added four, then 648 · 286 until B6y added `source_spelling`, and
 649 · 291 until loft#1145 added `Variables::retype_would_be_refused` — opaque, and deliberately:
 it answers *"is this a type CHANGE"* and treats a wrapper mismatch as one, which is the whole
-question `decl_accepts` decides beneath it — which reads
+question `decl_accepts` decides beneath it — and 650 · 291 until loft#1156 added
+`collect_loop_body_sets`, which discriminates on `Value::Loop` rather than on a `Type` at all
+and is counted opaque for want of a wrapper to see through — which reads
 `Type::Enum(syn, true, …)` to answer with the `Optional` the author wrote, and so is a peel in
 the OTHER direction: it sees through by construction.  B6w's four were: `needs_nullable_wrap`
 asks through `.base()` and sees through,

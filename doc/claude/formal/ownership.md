@@ -157,7 +157,7 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **4** (D-own-23, 2026-08-29, the CALL-SITE mirror of the Join leak — loft#1154,
+OPEN: **4** (D-own-24 opened and closed 2026-08-29 with loft#1156; D-own-23, 2026-08-29, the CALL-SITE mirror of the Join leak — loft#1154,
 and the residual D-own-22 left; D-own-21, 2026-08-29, the keyed return that can be ABSENT — the half
 D-own-20 left, and the reason loft#1143's guard carries no absent cell; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
@@ -181,6 +181,50 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-24 — OPENED AND CLOSED (2026-08-29, loft#1156): a body local died at the block, and was read after it
+
+`@FR-O-Owner` places a free where the value DIES.  A local a loop BODY assigns is scoped to the
+body block, so `get_free_vars` released its store at the end of every iteration — and a read
+after the loop then read a freed record.
+
+```loft
+for p in as1 { e = p; }
+// … anything that allocates …
+println("{e.v}");     // answers 100 — a `Junk`'s bytes, through `A`'s layout
+```
+
+⚠ **Three things make this the register's clearest case of a defect no instrument reports.**
+The obvious repro answers CORRECTLY — with nothing allocated in between, the freed slot still
+holds the last value, so the churn is what makes it visible at all.  `LOFT_STRICT_STORES=1`
+does NOT catch it: the slot really is free, so no detector is violated; the read simply lands
+on whatever the allocator handed out next.  And `--native` REFUSED the program (`E0425`),
+which reads like a native limitation and is the opposite — the free analysis had already
+placed the local's death at the block's end and native additionally scoped the Rust `let`
+there.  **One decision, expressed twice, half of it visible.**  Making it compile without
+moving the scope would have shipped the interpreter's use-after-free to native.
+
+Closed by hoisting the SCOPE, not by moving the free: pre-initialised at the enclosing scope
+the local gets ONE store that each iteration copies into.  That is byte-for-byte the IR a
+hand-written `e: A = A { … }` before the loop already produces, which is the strongest evidence
+available that the target shape is right — a program that already ran correctly on both
+backends.  It also settles the design question the issue left open (*extend the lifetime, or
+refuse the read?*) without choosing either: a refusal would have to explain why
+`for i in 0..2 { n = i * 10; } println(n)` is legal, and it is, on both backends — the scalar
+works precisely because a scalar slot is already function-wide, which is the scope the hoist
+gives the heap handle.  The rule was not extended; it reached the case that was missing it.
+
+The exclusion is `was_loop_var`, and it is what keeps loft#1135 closed: a loop's own VARIABLE
+is read after the loop routinely (LOFT.md documents it) and reserving a slot for it at the
+enclosing scope orphans one store per program.
+
+Guard: `tests/scripts/1156-a-loop-body-local-read-after-the-loop-is-not-freed-per-iteration.loft`,
+falsified at `8d3245eb` on both backends — **on different channels**, which is the signature:
+the interpreter fails an ASSERTION (it ran, and answered wrong), native fails to COMPILE and
+has no assertion to fail.  Its cells sweep a copy-bound local, a BORROW-bound one, zero
+iterations (`null`, the answer loft#915 gives), and a local first assigned in an INNER body and
+read after the OUTER loop — that last because hoisting only one level puts it in the outer
+loop's body, where every single-loop cell still passes.
 
 ### D-own-23 — OPEN (2026-08-29, loft#1154): the CALL-SITE mirror — a join whose arm is a call
 

@@ -1936,6 +1936,51 @@ fn collect_move_dest(
     });
 }
 
+/// Does `node` contain a `Value::Loop` anywhere inside it?
+///
+/// The `for` lowering wraps its loop in a block (`{#For block … loop {#For loop …} }`), so the
+/// statement an enclosing block holds is a `Block`, not the `Loop` itself.
+fn contains_loop(node: &Value) -> bool {
+    if matches!(node.unspan(), Value::Loop(_)) {
+        return true;
+    }
+    let mut found = false;
+    node.for_each_child(&mut |c| {
+        if !found && contains_loop(c) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Every variable assigned inside a LOOP BODY reachable from `node` — the `Loop`-recursing
+/// twin of `find_first_ref_vars`, which deliberately does not descend into a loop (loft#1156).
+///
+/// ⚠ It descends to the `Value::Loop` FIRST and only then collects.  Walking the whole
+/// statement instead collects the statement's own top-level `Set` — and a statement whose
+/// value happens to CONTAIN a loop (`test_value = { … for … { } … }`, the shape `expr!`
+/// wraps every snippet in) then hoisted the destination of the assignment being scanned.
+fn collect_loop_body_sets(node: &Value, mapping: &HashMap<u16, u16>, out: &mut Vec<u16>) {
+    if let Value::Loop(b) = node.unspan() {
+        for op in &b.operators {
+            collect_sets_in(op, mapping, out);
+        }
+        return;
+    }
+    node.for_each_child(&mut |c| collect_loop_body_sets(c, mapping, out));
+}
+
+/// Every variable assigned at any depth inside `node`.
+fn collect_sets_in(node: &Value, mapping: &HashMap<u16, u16>, out: &mut Vec<u16>) {
+    if let Value::Set(v, _) = node.unspan() {
+        let resolved = *mapping.get(v).unwrap_or(v);
+        if !out.contains(&resolved) {
+            out.push(resolved);
+        }
+    }
+    node.for_each_child(&mut |c| collect_sets_in(c, mapping, out));
+}
+
 /// Does `node` mention variable `v` anywhere inside it?
 fn mentions_var(node: &Value, v: u16) -> bool {
     if matches!(node.unspan(), Value::Var(x) if *x == v) {
@@ -4999,7 +5044,31 @@ impl Scopes {
         is_return: bool,
     ) -> Vec<Value> {
         let mut ls = Vec::new();
-        for v in &bl.operators {
+        for (i, v) in bl.operators.iter().enumerate() {
+            // loft#1156 — a local a LOOP BODY first assigns and something AFTER the loop
+            // reads.  Scoped to the body block, its store is freed at the end of every
+            // iteration and the later read lands on a freed record: measured, an `A` read
+            // `B`'s bytes once the slot was recycled, and `LOFT_STRICT_STORES=1` does NOT
+            // catch it — the slot is legitimately free, so nothing stands between a user
+            // and the wrong number.  Hoisting the SCOPE is the cure rather than moving the
+            // free: pre-initialised here the local gets ONE store that each iteration
+            // copies into, which is byte-for-byte the IR a hand-written `e: A = A { … }`
+            // before the loop already produces.
+            //
+            // Registered BEFORE the loop is scanned, for the reason `scan_if` gives at its
+            // own pre-init: the body's `Set` must see the variable as already assigned and
+            // take the reassignment path, not `claim()`.
+            let mut hoist: Vec<u16> = Vec::new();
+            self.loop_locals_read_after(v, &bl.operators[i + 1..], function, &mut hoist);
+            for &h in &hoist {
+                self.put_scope(h);
+                self.var_order.push(h);
+                ls.push(if matches!(function.tp(h), Type::Text(_)) {
+                    v_set(h, Value::Text(String::new()))
+                } else {
+                    v_set(h, Value::Null)
+                });
+            }
             let sv = self.scan(v, function, data);
             if let Value::Insert(to_insert) = sv {
                 for i in to_insert {
@@ -6391,6 +6460,60 @@ impl Scopes {
             }
         }
         ls
+    }
+
+    /// loft#1156 — the locals a LOOP first assigns that something AFTER it READS.
+    ///
+    /// A body local is scoped to the body block, so `get_free_vars` releases its store at the
+    /// end of each iteration.  A read after the loop is then a use-after-free — silent, and
+    /// invisible to `LOFT_STRICT_STORES=1` because the slot really is free by then; what the
+    /// read returns is whatever the allocator handed that slot next.  `--native` refuses the
+    /// program instead (`E0425`), which is the same decision made visible: the free analysis
+    /// already put the local's death at the block's end and native additionally scopes the
+    /// Rust `let` there.  One decision, expressed twice, half of it visible.
+    ///
+    /// ⚠ **Only a local READ AFTER the loop is taken**, and the exclusions are what keep this
+    /// from re-opening loft#1135.  A loop's own VARIABLE is read after the loop routinely
+    /// (`LOFT.md` documents it) and must NOT be hoisted: its header assigns it
+    /// unconditionally every iteration, and reserving a slot for it at the enclosing scope
+    /// registers it in a scope it does not live in — one orphaned store per program.
+    /// `was_loop_var` is the declared home for that question.  A local used INSIDE the loop
+    /// alone is correctly per-iteration and is left exactly as it is.
+    fn loop_locals_read_after(
+        &self,
+        op: &Value,
+        rest: &[Value],
+        function: &Function,
+        out: &mut Vec<u16>,
+    ) {
+        if rest.is_empty() || !contains_loop(op) {
+            return;
+        }
+        let mut assigned: Vec<u16> = Vec::new();
+        collect_loop_body_sets(op, &self.var_mapping, &mut assigned);
+        for v in assigned {
+            if self.var_scope.contains_key(&v)
+                || out.contains(&v)
+                || function.was_loop_var(v)
+                || !needs_pre_init(function.tp(v))
+            {
+                continue;
+            }
+            // Same guard as `find_first_ref_vars`: a BORROWED type may only be pre-inited
+            // once every dep is in scope, or the `OpCreateStack` emitted here reads an
+            // uninitialised slot.
+            if !function
+                .tp(v)
+                .depend()
+                .iter()
+                .all(|d| self.var_scope.contains_key(d))
+            {
+                continue;
+            }
+            if rest.iter().any(|r| mentions_var(r, v)) {
+                out.push(v);
+            }
+        }
     }
 
     /// Recursively collect variables that need a pre-init `Set(v, Null)` before an if/else.
