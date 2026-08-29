@@ -941,6 +941,13 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
     let raw_tp = tp as u16;
     let free_source = raw_tp & 0x8000 != 0;
     let tp = raw_tp & 0x7FFF;
+    // loft#1150 — an ABSENT source copies NOTHING; the twin of the guard in
+    // `State::replace_keyed`, which carries the reasoning.
+    if src.store_nr == u16::MAX {
+        stores.remove_claims(&dest, tp);
+        stores.mark_collection_absent(&dest);
+        return;
+    }
     stores.remove_claims(&dest, tp);
     stores.copy_claims(&src, &dest, tp);
     // @P317 — LOFT_LOG=copy_check (native): warn on nested-length divergence.

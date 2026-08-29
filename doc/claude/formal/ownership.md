@@ -157,13 +157,14 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **4** (D-own-24 opened and closed 2026-08-29 with loft#1156; D-own-23, 2026-08-29, the CALL-SITE mirror of the Join leak — loft#1154,
-and the residual D-own-22 left; D-own-21, 2026-08-29, the keyed return that can be ABSENT — the half
-D-own-20 left, and the reason loft#1143's guard carries no absent cell; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **3** (D-own-23, 2026-08-29, the CALL-SITE mirror of the Join leak — loft#1154, the
+residual D-own-22 left; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
 known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
-D-own-22 opened and closed 2026-08-29 with loft#1142;
-D-own-20 opened and closed 2026-08-29 with loft#1143;
+D-own-24 opened and closed 2026-08-29 with loft#1156, and D-own-21 the same day with
+loft#1150 — the three-faced one, whose entry records that a DEFERRAL is a missing
+measurement rather than a closed question; D-own-22 opened and closed 2026-08-29 with
+loft#1142; D-own-20 opened and closed 2026-08-29 with loft#1143;
 D-own-19 was opened 2026-08-28, narrowed the same day to its path-sensitive half (loft#1126)
 and CLOSED the same day with loft#1128; D-own-17 and D-own-18 both opened and closed
 2026-08-28;
@@ -181,6 +182,52 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-21 — CLOSED (2026-08-29, loft#1150): three faces of one list that read `Hash` and not `Optional(Hash)`
+
+Opened the same day and closed here.  A `-> hash<T[k]>?` did not hand back what it built, and
+the three defects hid one another in sequence: the value was DISCARDED and the sentinel
+returned; once D-own-22 made it come back, the arm buffers were freed twice — conditionally by
+that fix and unconditionally at scope exit — so the store being returned was released; and a
+genuinely ABSENT return panicked in `copy_claims` on the way into the caller's local.
+
+**All three are one miss wearing three faces.**  `@FR-L-Null` gives `τ?` the same layout and
+the same store as `τ`, so every site deciding *"does this carry a store?"* must peel:
+
+* `get_free_vars`'s `suppress_source` asked `is_dbref(tp(v))` BARE, so a nullable arm buffer
+  failed the `return_sources` suppression and took an unconditional scope-exit free.
+* `is_protectable_store_type` asked it bare **while its own caller peels**, so a `τ?` argument
+  left the @P290 witness set incomplete and the minting arm leaked.
+* `OpReplaceKeyed` dereferenced an ABSENT source, where its own FREE leg had carried the
+  sentinel guard all along — the copy leg simply never got one.
+
+⚠ **The second of those was written down and deliberately deferred**, on the ground that *"the
+change has no measurement asking for it"*: it is not inert (it moves emitted code in six corpus
+programs, every one a guard for this machinery) and it moves in the direction where a mistake
+is a use-after-free rather than a leak.  This issue is that measurement — one program, two
+spellings, and only the wrapper between them.  All six named guards (1021, 1029, 1105, 1106,
+1107, 882) are green under `LOFT_STRICT_STORES=1` + `LOFT_POISON=1` on both backends with the
+peel in place, which is the check the deferral asked for.  **A deferral records a missing
+measurement, not a closed question; take it up when the measurement arrives.**
+
+Absence needed a representation, and one already existed: `DbRef::ABSENT_REC` in the collection
+slot (loft#917) means null for an ALLOCATED store, where zero means the EMPTY collection.  So an
+absent source leaves the destination's store in place — there is nowhere else for a later `+=`
+to build — and marks the slot absent.  `Stores::mark_collection_absent` is the one home, called
+from both `OpReplaceKeyed` bodies.
+
+**This is the sixth and seventh site where this same list has drifted short by the wrapper** —
+`is_dbref` here (twice), at D-own-13, `deps_mut` (loft#1106), `is_keyed` (loft#1140's
+`94ae617f`) and `depend` (loft#1143).  `is_dbref`'s own doc records that it drifts when
+RESTATED; it drifts when asked BARE just as reliably.
+
+Guard: `tests/scripts/1150-a-keyed-return-that-can-be-absent-hands-back-what-it-built.loft`,
+falsified at `d47714d9` on both backends (a PANIC to clean).  `absent_is_not_empty` is the cell
+that separates the two states — every other cell passes if they are conflated.
+
+⚠ Its results are all BOUND before they are read: consuming a nullable keyed return INLINE
+retains the callee's store, which is **loft#1157**, pre-existing and measured unchanged across
+this fix, with the dense spelling clean.  An inline cell would lock that leak.
 
 ### D-own-24 — OPENED AND CLOSED (2026-08-29, loft#1156): a body local died at the block, and was read after it
 
@@ -326,7 +373,7 @@ cells sweep the three signature spellings, all five keyed kinds and the nullable
 control; **it deliberately carries no cell for a keyed return that can be ABSENT** — see
 D-own-21, which that would lock rather than guard.
 
-### D-own-21 — OPEN (2026-08-29, loft#1150): a keyed return that can be ABSENT frees every arm and hands back the sentinel
+### D-own-21 (original entry) — superseded by the CLOSED entry above (2026-08-29, loft#1150)
 
 The nullable half of the keyed return delivery that D-own-20 did not reach.  When the value a
 `-> hash<T[k]>?` hands back can be absent — either literally (`{ null }`) or because the tail

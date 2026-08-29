@@ -1919,6 +1919,19 @@ impl State {
         let tp = raw_tp & 0x7FFF;
         let dest = *self.get_stack::<DbRef>();
         let src = *self.get_stack::<DbRef>();
+        // loft#1150 — an ABSENT source copies NOTHING.  A `-> hash<T[k]>?` that answers
+        // `null` reaches here as the `u16::MAX` sentinel, and `copy_claims` dereferences the
+        // source store: `allocations[65535]` panicked on both backends.  The destination is
+        // left exactly as it was, which is what makes this the whole fix — a nullable keyed
+        // local's `Set(v, Null)` lowers to the sentinel, so skipping the copy leaves it
+        // absent, and a NON-null destination keeps the empty store that same `Set` allocated
+        // for it.  The FREE leg below has carried this guard all along, for the same reason
+        // and in the same words; only the COPY was missing it.
+        if src.store_nr == u16::MAX {
+            self.database.remove_claims(&dest, tp);
+            self.database.mark_collection_absent(&dest);
+            return;
+        }
         self.database.remove_claims(&dest, tp);
         self.database.copy_claims(&src, &dest, tp);
         if self.database.copy_check_enabled() {

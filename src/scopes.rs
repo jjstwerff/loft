@@ -6064,8 +6064,17 @@ impl Scopes {
         // `__work_N` buffer is alive but unused on a sibling arm MUST still be
         // freed, and short-circuiting the whole iteration on `return_sources`
         // would leak it (the enum-vector param-return `show()` regression).
+        //
+        // loft#1150 — `.base()`, because the block this set drives is *"Vector / Reference /
+        // Enum / keyed"* and a `τ?` IS one: `@FR-L-Null` gives it the same layout and the same
+        // store.  Asked bare, an `Optional(Hash)` arm buffer failed the suppression and took
+        // an UNCONDITIONAL scope-exit free on top of the conditional one loft#1142 emits — so
+        // the store being returned was freed and the caller read a dead record.  That is the
+        // fifth site where this same list has drifted short by the wrapper (`is_dbref` here
+        // and at D-own-13, `deps_mut`, `is_keyed`, `depend`); `is_dbref`'s own doc records
+        // that it drifts when restated, and it drifts when asked BARE too.
         let suppress_source = |function: &Function, v: u16| {
-            return_sources.contains(&v) && crate::data::is_dbref(function.tp(v))
+            return_sources.contains(&v) && crate::data::is_dbref(function.tp(v).base())
         };
         for v in vars {
             if v == ret_var || suppress_source(function, v) {
