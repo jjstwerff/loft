@@ -663,6 +663,32 @@ pub fn linked_group_lint_enabled() -> bool {
     *ON.get_or_init(|| !env_set("LOFT_NO_LINKED_GROUP"))
 }
 
+/// A linked collection group whose members are declared APART — with an unrelated field
+/// between them.
+///
+/// The group itself is deliberate and common (`{ tiles: vector<Tile>, by_key: hash<Tile[k]> }`
+/// is the idiom), so naming every one of them would be noise on correct code — which is why
+/// the double-fill advice above speaks at the LITERAL instead. Non-adjacency is the signal
+/// that separates the two: the idiom is written TOGETHER, because the author is thinking of
+/// one thing with two views, while a group nobody intended is two fields added at different
+/// times for different reasons — and that is exactly when unrelated fields end up between
+/// them.
+///
+/// Adjacency does not change what the program does, so this is a claim about INTENT and
+/// therefore only ever `advice`. It is also the one lint here whose false positive is still
+/// worth printing: a reader who meant the pairing learns nothing they did not know, and a
+/// reader who did not learns the one fact that makes their `len(view) == 0` explicable.
+///
+/// Owned source only — a consumer cannot rearrange a library's struct, so advising about one
+/// is noise they cannot act on.
+///
+/// **Default ON**; `LOFT_NO_GROUP_APART` opts out. One cached env read.
+#[must_use]
+pub fn group_apart_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !env_set("LOFT_NO_GROUP_APART"))
+}
+
 /// loft#940 — a library's free function that no bare call can reach.
 ///
 /// A call `f(x, …)` resolves the METHOD spelling `t_<type-of-x>_f` before the free `n_f`

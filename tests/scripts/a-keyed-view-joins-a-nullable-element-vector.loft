@@ -21,6 +21,8 @@
 //                         store allocated and dropped three times over — because a keyed
 //                         collection that joins a group becomes a VIEW for the first time, and a
 //                         view releases its own spine and not the records.
+//                         And the CONTAINER kind: a struct and a struct-enum VARIANT, which
+//                         hold fields on the same terms and form a group on the same terms.
 // Axes it HOLDS FIXED:    the vector is a struct FIELD written `vector<S?>` (the `?` is what
 //                         mints the synth enum) and is declared FIRST.  Declaration order is
 //                         the subject of its own guard —
@@ -53,6 +55,46 @@ struct KvSpatial { kp_data: vector<Kv?>, kp_look: spatial<Kv[kv_k, kv_k2]> }
 // Two collections over one element type, neither of them keyed, stay INDEPENDENT — the
 // negative control that keeps the group rule from swallowing every pair of vectors.
 struct KvTwoVectors { kw_a: vector<Kv?>, kw_b: vector<Kv?> }
+
+// A struct-enum VARIANT holds fields like a struct and `Stores::field` forms a group inside one
+// on the same terms, so the rewrite has to reach it too.  It did not: the parser ran it from
+// `parse_struct` only, and all five kinds read 0 here — `hash` included, so this half was
+// broken before the struct half was fixed.  Read through the FIELD rather than through an
+// `is`/`match` binding, which is a different route with two open defects of its own
+// (loft#1152's third shape, and the loft#1155 leak).  One variant each, so a direct field read
+// is the shape `variant-field-unchecked` is quiet on — the group question does not depend on
+// how many variants an enum has, and a guard should not carry an unrelated warning.
+enum KvVarHash    { KvvH { kvh_data: vector<Kv?>, kvh_look: hash<Kv[kv_nm]> } }
+enum KvVarSorted  { KvvS { kvs_data: vector<Kv?>, kvs_look: sorted<Kv[kv_k]> } }
+enum KvVarIndex   { KvvI { kvi_data: vector<Kv?>, kvi_look: index<Kv[kv_k]> } }
+enum KvVarTrie    { KvvT { kvt_data: vector<Kv?>, kvt_look: trie<Kv[kv_nm]> } }
+enum KvVarSpatial { KvvP { kvp_data: vector<Kv?>, kvp_look: spatial<Kv[kv_k, kv_k2]> } }
+
+fn kv_var_hash() -> integer {
+  v: KvVarHash = KvvH { kvh_data: [], kvh_look: [] };
+  v.kvh_data = [kv_first(), kv_second()];
+  len(v.kvh_look)
+}
+fn kv_var_sorted() -> integer {
+  v: KvVarSorted = KvvS { kvs_data: [], kvs_look: [] };
+  v.kvs_data = [kv_first(), kv_second()];
+  len(v.kvs_look)
+}
+fn kv_var_index() -> integer {
+  v: KvVarIndex = KvvI { kvi_data: [], kvi_look: [] };
+  v.kvi_data = [kv_first(), kv_second()];
+  len(v.kvi_look)
+}
+fn kv_var_trie() -> integer {
+  v: KvVarTrie = KvvT { kvt_data: [], kvt_look: [] };
+  v.kvt_data = [kv_first(), kv_second()];
+  len(v.kvt_look)
+}
+fn kv_var_spatial() -> integer {
+  v: KvVarSpatial = KvvP { kvp_data: [], kvp_look: [] };
+  v.kvp_data = [kv_first(), kv_second()];
+  len(v.kvp_look)
+}
 
 fn kv_first() -> Kv { Kv { kv_k: 7, kv_k2: 70, kv_nm: "seven" } }
 fn kv_second() -> Kv { Kv { kv_k: 8, kv_k2: 80, kv_nm: "eight" } }
@@ -142,6 +184,11 @@ fn main() {
   kv_w.kw_a = [kv_first()];
   assert(len(kv_w.kw_a) == 1 && len(kv_w.kw_b) == 0,
     "two plain vectors stay independent: a={len(kv_w.kw_a)} b={len(kv_w.kw_b)}");
+
+  // ---- the same five kinds inside a struct-enum VARIANT -----------------------------------
+  assert(kv_var_hash() == 2 && kv_var_sorted() == 2 && kv_var_index() == 2
+      && kv_var_trie() == 2 && kv_var_spatial() == 2,
+    "a variant's keyed view joins its nullable-element vector: {kv_var_hash()}/{kv_var_sorted()}/{kv_var_index()}/{kv_var_trie()}/{kv_var_spatial()}");
 
   println("keyed view over a nullable-element vector ok");
 }

@@ -2062,9 +2062,9 @@ That is the point of the feature: the keyed view stays in step with the list wit
 keep it in step, and it works whichever member you spell the insert through.
 
 **When it happens — one line:** two or more collections over the same element type, in the same
-struct, **at least one of them keyed** (`hash` / `sorted` / `index` / `spatial` / `trie`). Field
-order does not matter, and neither does whether the vector's element is nullable
-(`vector<Tile?>`). Two plain vectors over one element type are **independent** — a group needs a
+struct **or struct-enum variant**, **at least one of them keyed** (`hash` / `sorted` / `index` /
+`spatial` / `trie`). Field order does not matter, and neither does whether the vector's element
+is nullable (`vector<Tile?>`). Two plain vectors over one element type are **independent** — a group needs a
 keyed member.
 
 **When you want them apart**, say so in the TYPES — there is no per-field opt-out:

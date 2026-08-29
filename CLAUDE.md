@@ -482,6 +482,14 @@ nothing at the literal says so. Quiet on a member written `[]`, which is how eve
 constructed, and quiet when only one member is filled — those are the deliberate uses.
 `advice`, not `warning`: the result IS what the language documents, so ignoring it cannot
 produce a result the language did not promise; what is wrong is the author's model) ·
+`LOFT_NO_GROUP_APART` (`linked-group-apart` ADVICE, the DECLARATION-side half of the same
+question: a linked group whose members are declared APART, with an unrelated field between
+them — `{ entities: vector<E>, tick: integer, spawn_index: hash<E[id]> }`. The declaration is
+the only place the pairing is decidable; by the time a `len` reads 0 a group that did not
+form looks exactly like an empty one. Adjacency is the signal rather than the group itself,
+because the idiom is written TOGETHER while a group nobody intended is two fields added at
+different times for different reasons. Quiet on adjacent members, on a pair with no keyed
+member, and on a LIBRARY's struct, which a consumer cannot rearrange) ·
 `LOFT_NO_UNDECLARED_DEP` (loft#968 `undeclared-dependency` ADVICE: `use <pkg>` resolved a
 REGISTRY package the project's `loft.toml` never declares — so nothing distinguishes "we
 depend on this" from "this happens to be installed on the box that built it", the negative

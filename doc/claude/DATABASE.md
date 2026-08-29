@@ -1009,10 +1009,11 @@ from the test that FORMS a group, which did not refuse the pairing but silently 
 second, independent collection (loft#927).
 
 **A group needs at least one KEYED member, and nothing else about how it is written
-matters.** Two plain vectors over one element type stay independent — inserting into one
-must not propagate to the other — but a plain `vector<E>` beside any keyed collection over
-`E` is a member like any other, in EITHER declaration order, and whether the element is
-dense (`vector<E>`) or nullable (`vector<E?>`). Each of those three was once a hole that
+matters** — including whether the fields sit in a `struct` or in a struct-enum VARIANT, which
+holds fields on the same terms. Two plain vectors over one element type stay independent —
+inserting into one must not propagate to the other — but a plain `vector<E>` beside any keyed
+collection over `E` is a member like any other, in EITHER declaration order, and whether the
+element is dense (`vector<E>`) or nullable (`vector<E?>`). Each of these was once a hole that
 did not refuse the pairing but built a second, silent collection:
 
 * **declaration order** — the pairing test asked only whether the field being ADDED was
@@ -1022,10 +1023,15 @@ did not refuse the pairing but built a second, silent collection:
   still declared over dense `E` no longer matched by content. The view's element is
   rewritten to the sibling's enum for every keyed kind (`link_shared_nullable_views`);
   only `hash` used to be.
+* **a struct-enum VARIANT** — the nullable rewrite above ran from the struct parse only, so
+  every keyed kind in a variant stayed dense beside its `vector<S?>` sibling. The DENSE half
+  was always right, because group formation itself lives in `Stores::field`, which handles a
+  variant like a struct.
 * **a vector VALUE** — `data = rows()` and `data += rows()` move records in bulk through
   `vector_add` / `vector_replace`, which never reach `record_finish`, the per-record
   chokepoint that maintains the other members. Still open — **loft#1152**; add the records
-  element by element until it is closed.
+  element by element until it is closed. A member written through an `is` / `match` BINDING
+  is the same shape and is recorded there too.
 
 #### Two collections over one element type that must stay APART
 
@@ -1036,7 +1042,7 @@ one spelling that looks like a different type and is not is a type ALIAS:
 |---|---|
 | `struct Lvl { by_key: hash<Tile[k]>, picked: vector<Chosen> }` — a second STRUCT, fields identical | **independent** |
 | the two collections in **different structs** | **independent** |
-| both as **locals**, not fields — a group is a struct-FIELD rule | **independent** |
+| both as **locals**, not fields — a group is a FIELD rule | **independent** |
 | `type Chosen = Tile;` then `vector<Chosen>` | ⚠ **one group** — an alias names the same type |
 
 The newtype is the escape, and its cost is the conversion, which is a plain field copy:

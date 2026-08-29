@@ -3548,6 +3548,64 @@ half is mechanical; the ASSIGN half has to clear and rebuild every sibling and f
 held, which is an ownership design call, so the two halves are filed to be decided together.
 Workaround verified: add the records element by element (`for r in rows() { a.data += [r]; }`).
 
+#### B7c — the lint the walk asked for, and the sibling the walk itself did not audit (2026-08-29)
+
+Two follow-ons to B7b, one requested and one self-inflicted.
+
+**`advice[linked-group-apart]`.** Every bug in the @FR-Col-Group family — loft#843, loft#927 and
+both of B7b's — has one signature: *the group formed, or did not, and nothing said so.*  A group
+that did not form looks exactly like an empty one, so `len(view) == 0` is a legal value and the
+first diagnosis anyone gets is a wrong answer.  The declaration is the only place the question is
+decidable.
+
+I had argued a declaration-site lint would be noise, and `keys.rs::linked_group_lint_enabled`
+says so in as many words as the reason the double-fill advice speaks at the LITERAL instead.
+**The owner's refinement is what made it viable: fire only when the members are declared APART.**
+That reasoning holds for a group written TOGETHER — which is exactly what makes non-adjacency
+informative.  The idiom is written as one thing with two views; a group nobody intended is two
+fields added at different times for different reasons, and that is when unrelated fields end up
+between them.
+
+> **A carve-out's reason can be true of a narrower case than the carve-out covers.**  Second time
+> in one day: `901`'s `c1` said "widening that to any collection would make two independent
+> vectors alias" about a widening nobody proposed, and this one said "a declaration that forms a
+> group is usually deliberate" about the adjacent case.  Both readings were right about what they
+> described and wrong about what they were being used to block.
+
+The quiet half is the design, so it is what the test file pins — `tests/group_apart_lint.rs` is
+five silent cases behind one that fires, because an advice that fires on the idiom is one every
+reader learns to ignore.  Owned source only: a consumer cannot rearrange a library's struct.
+
+**And the sibling the walk did not audit.**  Extending the lint to struct-enum variants exposed
+that B7b's own fix never reached them: `link_shared_nullable_views` ran from `parse_struct` only,
+so **all five keyed kinds read 0 beside a `vector<S?>` in a variant — `hash` included**, meaning
+that half was broken before the struct half was fixed.  `synth_nullable_struct_fields` and
+`Stores::field` both handle `EnumValue`; only the parser site did not.
+
+> That is [[audit-the-siblings-of-a-fixed-rewrite]] going unapplied on the walk that produced the
+> lesson.  The question to have asked at the fix is not "did I fix this site" but **"what else
+> holds fields?"** — and `Stores::field`'s own `Parts::Struct(_) | Parts::EnumValue(_, _)` match
+> answers it in the same file I was editing.  The DECLARATION-ORDER half needed nothing, because
+> it lives in `Stores::field` and inherited the variant arm for free; the split between the two
+> halves' reach is the tell that one of them was written per-container and the other per-question.
+
+A second-order trap in the same fix: the advice resolved its source position by attribute INDEX,
+and a variant carries an implicit `enum` discriminator field the source never wrote — so the
+lookup ran one field past the end and the advice was silently absent in variants while the
+rewrite worked.  Positions are now resolved by field NAME.
+
+**Two findings filed, both pre-existing on `0785871f` and both reached through the `is` binding:**
+
+* **loft#1155** — binding a variant's keyed collection field with `is` or `match` LEAKS its
+  store, one per call, for every keyed kind (`vector` is clean).  Both leaking spellings are the
+  ones `warning[variant-field-unchecked]` recommends, and that warning gates a library's CI — so
+  a library author with a keyed collection in a variant chooses between a leak and a red gate.
+* **loft#1152, third shape** — a group member written through an `is` binding reaches that member
+  and not its siblings (`a=2 b=0`), where the direct field write reaches both.  Not the
+  binding-copies rule: the struct analogue `d = x.a; d = [...]` reads `a=0 d=2`, which IS the copy
+  rule and is correct.  Recorded on the issue so whoever takes the assign/append halves checks it
+  against the same fix.
+
 #### C — process / skills
 
 | item | state |

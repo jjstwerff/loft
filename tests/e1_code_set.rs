@@ -180,6 +180,15 @@ const CODES: &[(&str, &str)] = &[
          fn main() { s = S { by_k: [E { k: 1, v: 10 }], by_v: [E { k: 2, v: 20 }] }; \
          print(\"{len(s.by_k)}\"); }",
     ),
+    // The members are declared APART — `tick` sits between them — which is the shape whose
+    // author was probably not thinking of the two as one record set.  Written together they
+    // are the idiom and stay quiet.
+    (
+        "linked-group-apart",
+        "struct E { k: integer }\n\
+         struct S { a: vector<E>, tick: integer, b: hash<E[k]> }\n\
+         fn main() { s = S { }; s.a += [E { k: 1 }]; print(\"{len(s.b)}\"); }",
+    ),
     // loft#980 — `n` is declared by `Named` only, and the value is an `Anon`; nothing
     // between the two checks the tag, so the read answers `Anon`'s bytes.
     (
