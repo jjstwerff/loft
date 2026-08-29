@@ -131,6 +131,16 @@ is a compact `{field:value}` form, and the `:j` spec switches it to JSON with qu
 an explicit `<`/`>`/`^` overrides it; the width is measured in characters, so a multi-byte glyph
 still counts as one column.
 
+**A spec tunes ⟦v⟧, so it composes with `F-Render` for EVERY type — there is no type whose
+rendering a width cannot pad.** `{c:>5}` on a character, `{v:>12}` on a vector and `{p:*^16}` on a
+struct all pad the form `F-Render` gives them, exactly as `{"abc":>7}` pads text. Field-shaping
+(width, `<`/`>`/`^`, the pad token) applies to the rendered result; the flags that choose the
+RENDERING itself (`#`, the `:j` radix) belong to `F-Render` and are not field-shaping.
+
+That composition decides the one edge worth stating: a **null character renders as nothing**
+(`F-Render`), so `{nc:>3}` is three pad characters — a full field of them, not an empty string.
+Nothing is still a rendering, and a width pads whatever the rendering is.
+
 ### Fault-safety — an uncomputable inside `{…}` renders a tagged null, never halts
 
 ```

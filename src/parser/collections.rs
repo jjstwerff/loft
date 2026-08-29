@@ -2070,6 +2070,39 @@ use #count instead"
                 );
             }
         }
+        // @FR-F-Spec composes with @FR-F-Render: a spec TUNES ⟦v⟧, so the width, the
+        // alignment and the pad token apply to whatever the value's type renders as.  Most
+        // arms below carry them into their own renderer.  Two families cannot:
+        // `OpAppendCharacter` takes only the accumulator and the value, and
+        // `OpFormatDatabase` has room for the two `db_format` bits and nothing else — so a
+        // `{c:>5}` or a `{v:>12}` was rendered unpadded and nothing said the spec had been
+        // dropped (loft#1165, loft#1166).
+        //
+        // Render into a scratch text with the padding REMOVED, then format that text with
+        // it.  The composition is the rule, and it reaches every such type at once rather
+        // than widening one op signature per family.  The flags that belong to the RENDER
+        // — `#` and the `:j` radix, which `db_format` carries — stay on the inner call;
+        // only the field-shaping ones move out.
+        if !self.first_pass
+            && state.width != Value::Int(0)
+            && matches!(
+                tp,
+                Type::Character | Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, _, _)
+            )
+        {
+            let wv = self.vars.work_text(&mut self.lexer);
+            let inner = OutputState {
+                width: Value::Int(0),
+                dir: crate::parser::OUTPUT_DEFAULT.dir,
+                token: crate::parser::OUTPUT_DEFAULT.token,
+                ..state
+            };
+            let mut rendered = vec![v_set(wv, Value::Text(String::new()))];
+            self.append_data(tp, &mut rendered, wv, append_value, format, inner);
+            list.extend(rendered);
+            self.append_data_text(list, start, var, Value::Var(wv), state);
+            return;
+        }
         match tp {
             Type::Integer(_) => {
                 self.append_data_long(list, start, var, format.clone(), state);
