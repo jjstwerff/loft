@@ -7411,6 +7411,51 @@ impl Scopes {
             )
     }
 
+    /// Does EVERY arm of this `ncc` block yield a store the frame would own?
+    ///
+    /// ⚠ The keyed lift needs this and the reference arm does not, because for a keyed result
+    /// `bl.result.depend()` comes back EMPTY even when an arm is a bare local: `f() ?? d`
+    /// reads as owned and lifting it freed the caller's `d` — a use-after-free where the
+    /// defect was a leak, caught by the over-free cell rather than by reading (loft#1157).
+    ///
+    /// An arm the @P290 bracket can NAME is a view of something a variable still holds, which
+    /// is exactly the wrong thing to free; an arm it cannot name minted its own store.  The
+    /// SUBJECT reaches the tail as `Var(__ncc_N)`, so its own assignment is substituted in —
+    /// the temp is a name, and the question is about what the call behind it produced.
+    fn ncc_arms_are_all_owned(bl: &Block, data: &Data) -> bool {
+        let Some(last) = bl.operators.last() else {
+            return false;
+        };
+        let subject = bl.operators.iter().find_map(|op| match op.unspan() {
+            Value::Set(v, val) if !matches!(val.unspan(), Value::Null) => Some((*v, val.as_ref())),
+            _ => None,
+        });
+        let mut arms: Vec<&Value> = Vec::new();
+        Self::ncc_tail_arms(last, &mut arms);
+        if arms.len() < 2 {
+            return false;
+        }
+        arms.iter().all(|a| {
+            let effective = match (a.unspan(), subject) {
+                (Value::Var(v), Some((sv, val))) if *v == sv => val,
+                _ => *a,
+            };
+            crate::use_analysis::view_root_slots(data, effective).is_none()
+        })
+    }
+
+    /// The terminal value of each arm of an `ncc` block's tail `if`.
+    fn ncc_tail_arms<'a>(val: &'a Value, out: &mut Vec<&'a Value>) {
+        match val.unspan() {
+            Value::If(_, t, f) => {
+                Self::ncc_tail_arms(t, out);
+                Self::ncc_tail_arms(f, out);
+            }
+            Value::Block(b) if b.operators.len() == 1 => Self::ncc_tail_arms(&b.operators[0], out),
+            other => out.push(other),
+        }
+    }
+
     fn inline_struct_return(
         &self,
         val: &Value,
@@ -7477,6 +7522,26 @@ impl Scopes {
             && ((dep.is_empty() && !subject_is_call_ref) || self.ncc_join_is_witnessed(val, data))
         {
             return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
+        }
+        // loft#1157 — and the KEYED kinds, which that carve-out never named.  Its reasons are
+        // PER ITEM and both are about a mechanism that exists elsewhere: text is freed in place
+        // by the skip_free-orphan pass, a vector by its own delivery path.  A keyed `??` has
+        // NEITHER, so used inline its subject's store is owned by nothing — one retained record
+        // per evaluation, unbounded in a loop, while the bound spelling
+        // (`a = f() ?? []`) was clean all along because the `Set` gives the store an owner.
+        // Lifting rewrites the inline spelling into exactly that bound form.
+        //
+        // Same ownership gate as the reference arm: an EMPTY dep list is what says the value is
+        // owned, and a capturing fn-ref subject is excluded for the reason `subject_is_call_ref`
+        // gives — its empty dep list means nothing.
+        if let Value::Block(bl) = val.unspan()
+            && bl.name == "ncc"
+            && crate::parser::vectors::is_keyed(&bl.result)
+            && bl.result.depend().is_empty()
+            && !subject_is_call_ref
+            && Self::ncc_arms_are_all_owned(bl, data)
+        {
+            return Some(bl.result.without_deps());
         }
         // @P297 — a USER struct-returning call (`n_*` with a body) passed
         // directly as a call argument is wrapped in `Value::Span` by
