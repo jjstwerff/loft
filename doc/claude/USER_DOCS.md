@@ -15,10 +15,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > on the website, which can already be driven by a REPL and a debugger that the pages do not
 > expose.
 >
-> Written as a design, not a plan: one invariant, a count of what has to re-state it, the
-> failure paths written down before any code, and a check pinned to each claim
-> ([design-protocol](../../.claude/skills/design-protocol/SKILL.md)). The build order is
-> last, deliberately — the order is a consequence of the design, not the design.
+> **Plan: @PLN149.** Written as a design, not a plan: one invariant, a count of what has to
+> re-state it, the failure paths written down before any code, and a check pinned to each
+> claim ([design-protocol](../../.claude/skills/design-protocol/SKILL.md)). The build order
+> is last, deliberately — the order is a consequence of the design, not the design.
 
 ---
 
@@ -32,12 +32,12 @@ implements breakpoints and expression evaluation in the browser today, end-to-en
 None of it is reachable from a page a user lands on. A design that proposes building any of
 it again is wrong before it starts.
 
-**2. A reader arrives with one of three questions, and they are not interchangeable.**
-*What is there?* — *How do I start?* — *What is the exact signature?* Today loft answers the
-third one well, the second one twice out of forty-two, and the first one not at all on the
-web. Every tier below exists because a reader in one of those states is served badly by the
-answer to a different one. An API list is not an introduction, and an introduction is not a
-reference.
+**2. A reader arrives with one of four questions, and they are not interchangeable.**
+*What is there?* — *How do I start?* — *What is the exact signature?* — *How does it actually
+work?* Today loft answers the third one well, the second one twice out of forty-two, and the
+first and fourth not at all on the web. Every tier below exists because a reader in one of
+those states is served badly by the answer to a different one. An API list is not an
+introduction, an introduction is not a reference, and neither is the source.
 
 ---
 
@@ -159,7 +159,7 @@ Three things, and only the third needs new mechanism:
 
 ## The design
 
-Three tiers, each answering exactly one of the reader's three questions, each generated
+Four tiers, each answering exactly one of the reader's four questions, each generated
 from the one home.
 
 ### Tier 0 — Discovery: *what is there?*
@@ -174,6 +174,44 @@ registry, and costs the doc build nothing. It is the web twin of `loft api --reg
 already prints exactly this — the same source, a second renderer.
 
 This is the single highest-value item in the document and it depends on nothing else.
+
+#### The library card — the top-level facts, beside the tags
+
+The categories (`graphics`, `game`, `text`, `world`, …) are the tag system, and they answer
+*where does this belong*. They do not answer the question a reader actually has before
+clicking into a guide: **should I depend on this?** That needs a per-library record, and
+almost all of it is already declared — it is simply never rendered anywhere a user looks.
+
+| Field | Where it already lives |
+|---|---|
+| One-line description, homepage, categories | `index.json`, per package |
+| Version, publication date | `index.json`, per version |
+| **Minimum loft version** | `index.json` `loft` — the floor, already enforced at install |
+| **API / data compatibility floors** | `index.json` `api_compatible_with`, `data_compatible_with` |
+| Download size | `index.json` `size` |
+| **Dependencies** | `index.json` `deps` |
+| Auto-use triggers | `index.json` `triggers` — why a method resolves with no `use` |
+| Public API item count | computed by `gen-library-catalogue.py` for `LIBRARIES.md` |
+| Unreleased work / breaking-change flag | computed by the same script against `origin/main` |
+| wasm capability, or the reason it is exempt | the package's `.wasm_exempt`, whose contents CI already prints |
+
+**The card is a renderer, not a new dataset**, which is what keeps it inside the invariant:
+no field on it is a fourth hand-written home for anything. `loft api --registry` gets the
+same fields as a `--long` form, so the CLI and the page keep agreeing by construction.
+
+Exactly two facts on the card do not exist yet and are worth the work:
+
+- **Reverse dependencies — "what uses this".** Derivable by inverting every package's `deps`,
+  and it is the field that tells a reader whether they are the first person to try something.
+  `stage` being used by four other packages is a stronger signal than any adjective.
+- **A health line.** Last published, whether `origin/main` has moved since, whether the
+  library is `status:parked`. `LIBRARIES.md` already computes the first two for maintainers;
+  a user deciding whether to depend on something needs them more than a maintainer does.
+
+Do **not** put a maturity adjective on the card — "stable", "beta", "experimental". It is a
+judgement with no source, so it becomes a fourth hand-written home that drifts and that
+nobody can check. The version, the floors, the dependents and the health line are facts, and
+a reader draws the conclusion the adjective would have handed them.
 
 ### Tier 1 — The guide: *how do I start?*
 
@@ -206,6 +244,46 @@ each library alongside its guide page, and linking both from Tier 0.
 Generated from `pub` declarations and their doc comments, so it cannot drift from the code by
 construction — which is why it is the tier that already works, and the argument for pushing
 the other two toward generation as well.
+
+### Tier 3 — The source: *how does it actually work?*
+
+**Every `.loft` file of every library, rendered as syntax-highlighted HTML straight from the
+sources**, with each function linked to its definition and to the examples that call it.
+
+This tier exists because of something specific to loft: **the libraries are written in loft.**
+Reading `graphics` is reading the language. So the source browser is simultaneously the
+largest body of idiomatic loft in existence — 42 packages, thousands of lines, all of it
+compiling and tested — and today a reader who wants to see how a real library is *built* has
+nowhere to look but GitHub. A reference tells you a function's type; the source tells you what
+good loft looks like at scale, which is the question a reader has once the tutorial is behind
+them.
+
+Like the rest of this document, it is a renderer over data that exists:
+
+- **Highlighting.** `highlight_loft` (`src/documentation.rs:812`) already emits the nine
+  classes `DOC.md § Syntax highlighting classes` documents, and already wraps an identifier in
+  an `<a href>` when its name is in the link map. Cross-linking a call to its definition is
+  therefore the *existing behaviour* pointed at a larger link map, not a new feature.
+- **Example links.** The `@AAA-###` worked-example convention (@PLN141) already resolves a
+  `// Example: @GFX-001` citation above a `pub fn` to the test or application function that
+  demonstrates it. `examples-index.tsv` holds the resolved set — tag, `file:line`, function
+  name and a git blob URL, **117 tags today** — it is generated by
+  `scripts/check_doc_drift.sh` and gated in every library's CI, and a citation resolves
+  *across repos*. The data is built, validated and unrendered.
+
+The links go both ways: from a function to the examples that use it, and from an example back
+to every function it calls.
+
+**The honest limit, and the thing that closes it.** A citation exists only where an author
+wrote one, and [LIBRARY_AUTHORING.md § 2a](LIBRARY_AUTHORING.md) deliberately refuses a
+retroactive sweep — tagging every obvious accessor would turn the gate red on hundreds of
+functions that teach nothing. So a page that showed only curated examples would imply that an
+untagged function is unused, which is false and is the worse failure: it makes the
+best-documented libraries look the same as the least. The complement costs nothing here,
+because loft can parse loft: **a call-site index derived from the sources themselves**, which
+finds every use whether or not anyone tagged it. The two are different signals and the page
+says which is which — *worked example* (someone chose this as the thing to read first) versus
+*call sites* (every place it is used, mechanically).
 
 ### The one-home rule, and what it retires
 
@@ -343,6 +421,10 @@ Written before the code, because each one is silent by default.
 | The site renders 0.8.0 while the registry serves 0.9.0 | Both look correct in isolation | Every generated page carries the version it was built from; `registry-index-snapshot.json` is the oracle and the drift is a check, not a reading. |
 | A generated README is hand-edited | It looks better and is now a second home | The same drift-guard shape `tests/doc_hygiene.rs` already uses for `doc/examples.js`. |
 | A library has no guide | Its page 404s, or worse, silently vanishes from the nav | The page always exists, shows the API, and says *no guide yet*. The count of guide-less libraries is the metric the monthly review reads. |
+| A card field is missing for one library | The card still renders, one row blanker than the rest, and reads as "this library has no dependencies" rather than "nobody declared any" | Absent and empty are rendered differently, and the build reports how many packages are missing each field. A blank `deps` on a package that has them is a registry defect the card is the first thing to surface. |
+| A worked-example citation goes dangling | The source page links to a function that no longer exists | Already gated: `check_doc_drift.sh examples` fails on `dangling` / `duplicate` / `unregistered` in every library's CI, and `examples-index.tsv` is regenerated rather than hand-written. |
+| The source browser shows no examples for a function | A reader reads it as "nothing uses this" | Curated examples and derived call sites are labelled as different things, and the derived index is complete by construction — so *no call sites* is a real finding and *no worked example* never is. |
+| The source browser goes stale against a published version | Highlighted code that no longer matches what `loft install` fetches | Rendered from the same registry-cache source `loft api` reads, stamped with the version, and covered by the same snapshot oracle as the pages above. |
 | The REPL panel breaks | Every page still renders; the code blocks just stop being interactive | `38-call-it-yourself.loft` exists to fail. Its whole content is the interaction. |
 | `eval` returns `<unavailable>` for a `text` local | The reader reads it as "loft cannot do this" | The panel distinguishes *not supported here* from *no value*, and the page says which expressions are in range. This is a known limit of `eval_expr`, documented rather than hidden. |
 
@@ -360,6 +442,9 @@ No new harness. Each claim below is pinned to an instrument the repo already run
 | Generated README matches its source | drift guard, the `doc/examples.js` shape in `tests/doc_hygiene.rs` |
 | The library table in this repo's README matches the registry | same guard, same script that writes `LIBRARIES.md` |
 | The REPL panel actually evaluates | `tests/wasm_debug_relay.rs` already proves the protocol; the page adds a headless driver asserting one `eval` round-trip |
+| Every card field traces to a declared source | the card generator reads `index.json` + `gen-library-catalogue.py`'s computed fields only; a hand-written field is a review finding, and there is no code path that accepts one |
+| Every example link resolves | `scripts/check_doc_drift.sh examples` — already live in every library's CI since loft#971 — plus `examples-index.tsv`, regenerated by `make examples-index` and verified by `check_doc_drift.sh examples-index` |
+| The rendered source matches the shipped source | byte-compare the highlighted page's extracted text against the package file it came from; a highlighter that drops a line is otherwise invisible |
 | A guard would fail if the thing broke | `make falsify` on each new guard, recorded as `@falsified-at:` |
 | Guide quality does not rot | `make libraries-review` and the watermark table in [LIBRARY_DOC_REVIEW.md](LIBRARY_DOC_REVIEW.md), which already exist and currently have almost nothing to review |
 
@@ -378,22 +463,29 @@ independently shippable and none blocks the next except where marked.
    for `html` and `markdown`. Five files, no mechanism, and it closes the worst holes.
 2. **`doc/libraries.html` from the registry index**, in the nav and the sitemap. Needs no
    library change and turns 0 discoverable libraries into 42.
-3. **The new README.** Independent of everything above; can go first if the front door
-   matters more this week than the catalogue.
-4. **Publish `loft doc` output** for each library, linked from Tier 0. The generator exists;
+3. ~~**The new README.**~~ **Landed** — it was independent of everything above, which is why
+   it went first.
+4. **The library card** on each Tier 0 entry. Every field but two is already declared, so this
+   is mostly layout; the two are the inverted `deps` map and the health line.
+5. **Publish `loft doc` output** for each library, linked from Tier 0. The generator exists;
    this is the site build calling it.
-5. **The guide contract** — the five-part shape into `LIBRARY_AUTHORING.md` and
+6. **The source browser** — `highlight_loft` over each package's `.loft` files, with the
+   worked-example citations from `examples-index.tsv` and a derived call-site index beside
+   them. Depends on 5 only for where the pages live.
+7. **The guide contract** — the five-part shape into `LIBRARY_AUTHORING.md` and
    `LIBRARY_CHECKLIST.md`, then guides for the six that carry the most weight: `graphics`,
    `stage`, `server`, `web`, `html`, `markdown`.
-6. **The REPL and debug panel**, plus `38-call-it-yourself.loft`. Independent of 1–5; the
+8. **The REPL and debug panel**, plus `38-call-it-yourself.loft`. Independent of 1–7; the
    only step whose value is not library documentation at all.
-7. **Move the three guides home** — `14-image`, `32-time`, `21-random` — and delete the
-   hardcoded delegation lists. Last, because it is the step that is pure cleanup, and it is
-   only safe once the site renders guides from the library side.
-8. **Retire [DOC.md § Two tiers](DOC.md)**, replacing it with a pointer here.
+9. **Move the three guides home** — `14-image`, `32-time`, `21-random` — and delete the
+   hardcoded delegation lists. Late, because it is pure cleanup, and it is only safe once the
+   site renders guides from the library side.
+10. **Retire [DOC.md § Two tiers](DOC.md)**, replacing it with a pointer here.
 
-Steps 1–3 are each under a day and together change what a new user experiences more than
-4–8 combined.
+Steps 1, 2 and 4 are each under a day and together change what a new user experiences more
+than everything below them combined. Step 6 is the largest single piece of work in the
+document and the only one that is not mostly wiring — it is also the one with no substitute,
+because 42 packages of idiomatic loft currently have no reader.
 
 ---
 
