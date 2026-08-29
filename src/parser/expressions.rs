@@ -1754,7 +1754,7 @@ use a separate collection or add after the loop"
         f_type: &Type,
         to: &Value,
         mut parent_tp: Type,
-        var_nr: u16,
+        mut var_nr: u16,
         skip_validate: bool,
     ) -> Type {
         self.check_iter_safety(to, f_type, op);
@@ -2669,6 +2669,53 @@ use a separate collection or add after the loop"
             f_type.clone()
         } else {
             s_type
+        };
+        // loft#1145 — the other half of loft#915.  That issue gave a `for` loop's VARIABLE
+        // its own binding per loop, so two loops may spell one name at their own element
+        // types; a local declared in the BODY kept a single function-wide binding, so the
+        // second loop's `e = y` re-typed the first loop's slot and was REFUSED.  #915's own
+        // argument applies unchanged: the binding is what splits, not the scope — `e` is
+        // still readable after the loop (measured: it is, and any fix has to keep that), and
+        // the name resolves to whichever loop most recently bound it, exactly as the loop
+        // variable does.
+        //
+        // ⚠ STRICTLY ADDITIVE, and that is the property the whole cut rests on.  It fires
+        // only where `retype_would_be_refused` says the program is rejected TODAY, so no
+        // program that compiles can change behaviour.  The gate matters: an unconditional
+        // per-loop rebind would break the accumulator idiom — `for … { total = total + x.v }
+        // for … { total = total + 1 }` re-types nothing, so it must keep ONE binding, and a
+        // fresh one would read an unwritten slot.  That predicate is conservative on
+        // purpose; see its doc for why it is not a second opinion about `change_var_type`.
+        let cur_loop = self.vars.current_loop();
+        let born_in = if var_nr == u16::MAX {
+            u16::MAX
+        } else {
+            self.vars.created_in_loop(var_nr)
+        };
+        let rebound_to;
+        let to = if op == "="
+            && !s_type.is_unknown()
+            && cur_loop != u16::MAX
+            && born_in != u16::MAX
+            && born_in != cur_loop
+            && self
+                .vars
+                .retype_would_be_refused(var_nr, &s_type, &self.data)
+        {
+            // The SOURCE spelling, not the bound one.  A variable already split once is
+            // named `e#b1`, and registering the next split under that would key the third
+            // loop by a name no `names` lookup ever asks for — measured: two loops worked
+            // and the third re-typed the second's binding.  `#` cannot occur in a loft
+            // identifier, so the prefix before `#b` is exactly what the program wrote.
+            let bound = self.vars.name(var_nr).to_string();
+            let name = bound.split("#b").next().unwrap_or(&bound).to_string();
+            var_nr = self
+                .vars
+                .body_local_binding(&name, var_nr, &s_type, &mut self.lexer);
+            rebound_to = Value::Var(var_nr);
+            &rebound_to
+        } else {
+            to
         };
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index

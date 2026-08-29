@@ -2787,6 +2787,30 @@ that bound the name left there.  Nested loops are the exception: `for i { for i
 { } }` is rejected, because the inner binding would take over `i` for the rest of
 the outer body.
 
+A local declared **inside** a loop body splits the same way, and for the same
+reason — two adjacent loops doing different work want the same short name for the
+same role:
+
+```loft
+fn h() {
+  for x in as1 { e = x; print("a={e.v}\n"); }
+  for y in bs  { e = y; print("b={e.w}\n"); }   // fine — a different variable
+}
+```
+
+The split happens only where the two types differ; a local whose type is the same
+in both loops stays ONE variable, which is what keeps an accumulator working:
+
+```loft
+total = 0;
+for x in as1 { total = total + x.v; }
+for z in cs  { total = total + z.c; }   // still the same `total`
+```
+
+⚠ On `--native`, reading a loop-body local *after* its loop does not compile
+(loft#1156); the interpreter allows it.  Declare the local before the loop if you
+need to read it afterwards.
+
 ### Hash collections: name the key (local or struct field)
 
 A hash (and `sorted` / `index`) needs its key spelled out, because a bare `[]`
