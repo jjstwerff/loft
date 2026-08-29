@@ -3659,16 +3659,20 @@ impl Parser {
                 }
                 *ctp = Type::Boolean;
             } else if operator == ">" {
-                *ctp = self.call_op(
+                // loft#1151 — the SWAP is a resolution detail; the refusal must still name the
+                // operator the author wrote.
+                *ctp = self.call_op_as(
                     code,
                     "<",
+                    ">",
                     &[second_code, code.clone()],
                     &[second_type, ctp.clone()],
                 );
             } else if operator == ">=" {
-                *ctp = self.call_op(
+                *ctp = self.call_op_as(
                     code,
                     "<=",
+                    ">=",
                     &[second_code, code.clone()],
                     &[second_type, ctp.clone()],
                 );

@@ -1692,6 +1692,15 @@ fn an_unbounded_type_variable_reaches_no_bound_s_method() {
         .error("generic type T: operator '!=' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:43");
     code!("fn bad<T>(a: T, b: T) -> boolean { a < b }\nfn test() {}")
         .error("generic type T: operator '<' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:42");
+    // loft#1151 — the SWAPPED spellings name the operator the author WROTE.  `handle_operator`
+    // resolves `a > b` as `b < a` and `a >= b` as `b <= a`, and the refusal used to report the
+    // rewritten one: a program that typed `>=` was told about `<=`.
+    code!("fn bad<T>(a: T, b: T) -> boolean { a > b }\nfn test() {}")
+        .error("generic type T: operator '>' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:42");
+    code!("fn bad<T>(a: T, b: T) -> boolean { a >= b }\nfn test() {}")
+        .error("generic type T: operator '>=' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:43");
+    code!("fn bad<T>(a: T, b: T) -> boolean { a <= b }\nfn test() {}")
+        .error("generic type T: operator '<=' requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:43");
     code!("fn bad<T>(v: T) -> text { v.to_text() }\nfn test() {}")
         .error("generic type T: field access requires a concrete type at an_unbounded_type_variable_reaches_no_bound_s_method:1:37");
 }

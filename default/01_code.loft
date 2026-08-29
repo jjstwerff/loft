@@ -44,12 +44,18 @@ pub type u32 = integer limit(0, 4294967294) size(4);
 
 // Types that support the `<` comparison operator.
 // Satisfied by integer, single, float, text, and any user type defining OpLt.
+//
+// ONE method is all a type has to define: inside a generic bounded by this, `>`, `<=` and
+// `>=` all derive from `<` — `a > b` is `b < a`, `a <= b` is `!(b < a)`, `a >= b` is
+// `!(a < b)`.  Each evaluates its operands exactly once.
 pub interface Ordered {
   op < (self: Self, other: Self) -> boolean
 }
 
 // Types that support the `==` equality operator.
 // Satisfied by integer, single, float, text, boolean, and user types defining OpEq.
+//
+// `!=` derives from it (`a != b` is `!(a == b)`), so a type defining `op ==` gets both.
 pub interface Equatable {
   op == (self: Self, other: Self) -> boolean
 }

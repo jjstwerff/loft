@@ -10203,6 +10203,26 @@ impl Parser {
 
     /// Try to find a matching defined operator. There can be multiple possible definitions for each operator.
     fn call_op(&mut self, code: &mut Value, op: &str, list: &[Value], types: &[Type]) -> Type {
+        self.call_op_as(code, op, op, list, types)
+    }
+
+    /// [`Self::call_op`] where the operator the author WROTE differs from the one being
+    /// resolved (loft#1151).
+    ///
+    /// `handle_operator` derives the reversed spellings by swapping operands — `a > b` resolves
+    /// `<`, `a >= b` resolves `<=` — so by the time a refusal is reached the original spelling
+    /// is gone and the message named an operator the author never typed: `a >= b` on an
+    /// unbounded `<T>` reported *"operator '<=' requires a concrete type"*.  `spelled` is
+    /// carried for the DIAGNOSTIC only; every resolution decision still reads `op`, so the two
+    /// cannot drift into disagreeing about what is being resolved.
+    fn call_op_as(
+        &mut self,
+        code: &mut Value,
+        op: &str,
+        spelled: &str,
+        list: &[Value],
+        types: &[Type],
+    ) -> Type {
         // A first-pass UNARY op on an operand whose type is still UNRESOLVED — an
         // Unknown-rooted value, e.g. `x = f()` where `f`'s return type isn't linked
         // yet (a cross-package fn resolved only after this body's first pass) — must
@@ -10307,6 +10327,44 @@ impl Parser {
                     }
                 }
             }
+            // loft#1151 — `<=` DERIVES from the bound's `<`, and `>=` comes with it because
+            // `handle_operator` already rewrites `a >= b` to `b <= a`.  `Ordered` declares
+            // `op <` alone — deliberately, so a user type satisfies it by defining one
+            // method — and `>` has always derived from it by swapping operands; this is the
+            // same act for the non-strict spelling.
+            //
+            // `!(b < a)` is exact for a TOTAL order, and every type `Ordered` names has one.
+            // The case to worry about is a NaN, and loft does not have one here: its float
+            // null IS the NaN and the type system keeps it in `float?`, so the NON-NULL
+            // `float` a `<T: Ordered>` binds holds only real numbers.  Measured against the
+            // concrete `<=` over float, single, integer and text INCLUDING their extremes —
+            // 84 pairs, zero disagreements.  A user type's `OpLt` is promised to be an order
+            // by the bound it satisfies; where it is not, no derivation can help.
+            //
+            // Each operand is emitted ONCE.  That is what makes this shippable where
+            // `a < b || a == b` is not: the sound-looking alternative needs `Equatable` as a
+            // second bound AND evaluates both operands twice, so `f(x) <= g(y)` would call
+            // `f` and `g` twice while `f(x) < g(y)` beside it called them once.
+            if op == "<="
+                && self.context != u32::MAX
+                && list.len() == 2
+                && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name))
+            {
+                let lt_stub = format!("t_{}{}_OpLt", tv_name.len(), tv_name);
+                let lt_nr = self.data.def_nr(&lt_stub);
+                if lt_nr != u32::MAX {
+                    // SWAPPED: `a <= b` is `!(b < a)`.
+                    let swapped = [list[1].clone(), list[0].clone()];
+                    let swapped_tp = [types[1].clone(), types[0].clone()];
+                    let mut lt_code = Value::Null;
+                    let tp =
+                        self.call_nr(&mut lt_code, lt_nr, &swapped, &swapped_tp, false, &[], None);
+                    if tp != Type::Null {
+                        *code = self.cl("OpNot", &[lt_code]);
+                        return Type::Boolean;
+                    }
+                }
+            }
         } else {
             // @PLN99 Arc A completion — a first-grade struct's OWN operator method
             // (`t_<len><Type>_Op<Name>`) must take precedence over the built-in `possible`
@@ -10404,14 +10462,14 @@ impl Parser {
                 self.lexer,
                 &self.lexer.peek(),
                 Level::Error,
-                "generic type {tv_name}: operator '{op}' requires a concrete type",
+                "generic type {tv_name}: operator '{spelled}' requires a concrete type",
             );
         } else if types.len() > 1 {
             specific!(
                 self.lexer,
                 &self.lexer.peek(),
                 Level::Error,
-                "No matching operator '{op}' on '{}' and '{}'",
+                "No matching operator '{spelled}' on '{}' and '{}'",
                 types[0].name(&self.data),
                 types[1].name(&self.data)
             );
@@ -10420,7 +10478,7 @@ impl Parser {
                 self.lexer,
                 &self.lexer.peek(),
                 Level::Error,
-                "No matching operator {op} on {}",
+                "No matching operator {spelled} on {}",
                 types[0].name(&self.data)
             );
         }
