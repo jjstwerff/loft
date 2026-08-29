@@ -1510,8 +1510,8 @@ impl Parser {
         // case from Phase 07.  Safe after P236's fix (work-ref unification across If
         // branches in `parser/control.rs::unify_if_branches_work_refs`); without it,
         // `min_max(...) -> (integer, integer) { if cond { (a, b) } else { (c, d) } }`
-        // regressed on `--native` because each branch's separate synthetic-struct
-        // work-ref dropped the if/else's value.
+        // loses the if/else's value on `--native`, because each branch's separate
+        // synthetic-struct work-ref drops it.
         //
         // Everywhere ELSE the boxing is pure cost: it turns `(float, float, float)`
         // into a store record claimed and freed on every call, so the SAME arithmetic

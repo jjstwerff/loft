@@ -2238,9 +2238,9 @@ impl Parser {
             // heap-DbRef branch below exists precisely because that generic path has no
             // registered `OpConv*FromX -> Boolean` for a collection and hands back the
             // bare Var, which the interpreter then tests as raw bytes.  Asking it here
-            // put a `vector`-first tuple through exactly that hole — `v[0] ?? fb`
-            // answered the FALLBACK for a PRESENT element, losing the scalar half with
-            // it, on `--interpret` only.  A `Reference` first element hid it: that one
+            // puts a `vector`-first tuple through exactly that hole: `v[0] ?? fb` then
+            // answers the FALLBACK for a PRESENT element, losing the scalar half with
+            // it, on `--interpret` only.  A `Reference` first element hides it: that one
             // does have a generic path.  Recursion is also what keeps the two answers
             // from drifting, which is the same reason `ref_tuple_element_ok` is one list.
             self.coalesce_not_null(&Value::TupleGet(*v, 0), &first_tp)

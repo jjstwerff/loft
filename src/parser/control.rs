@@ -2128,7 +2128,7 @@ impl Parser {
             // semantics). The EXPLICIT `return v` / `return b.v` already does this
             // (parse_return), suite-proven. Narrowed by the two tail predicates to
             // whole-arg / struct-field tails: index / call tails stay on the rename
-            // path (the over-broad cut regressed the suite). `ls` is carried for
+            // path, which already delivers them correctly. `ls` is carried for
             // the alloc-failure fallback rename.
             Delivery::CopyBorrow(ls.to_vec())
         } else {
@@ -11692,7 +11692,7 @@ impl Parser {
     /// COPY the explicit `return v` path (`parse_return`) and the struct-field
     /// tail (`tail_is_struct_field_read`, #415) both perform.  Narrowed to a
     /// bare `Var` that is a vector argument: index / call / field tails keep
-    /// their existing handling (the over-broad cut regressed the suite — A.2).
+    /// their existing handling, which already gives them value semantics (A.2).
     fn tail_whole_arg_vector(&self, l: &[Value]) -> Option<u16> {
         let mut v = l.last()?;
         loop {

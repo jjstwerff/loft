@@ -15672,8 +15672,8 @@ mod plan86_nesting_guard_tests {
     /// levels to ≈8–9 MB — which overflowed the former 8 MB thread here and turned
     /// the ASan gate red (a guard that fires correctly, starved of stack).  64 MB
     /// clears 128 ASan-inflated levels with margin, while a runaway (broken guard →
-    /// 2000 levels ≈ 128 MB under ASan) still overflows, so a regressed guard is
-    /// caught either by the asserts or by an overflow.
+    /// 2000 levels ≈ 128 MB under ASan) still overflows, so a BROKEN guard is caught
+    /// either by the asserts or by an overflow.
     #[test]
     fn deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash() {
         let (has_error, has_msg) = std::thread::Builder::new()

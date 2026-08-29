@@ -33,6 +33,49 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A width or an alignment now works on every kind of value
+
+`"{name:>10}"` has always padded text and numbers.  On a **character**, a **vector**, a
+**struct** or an enum that carries fields, the width was thrown away without a word:
+
+```
+c = 'x';
+println("[{c:>5}]");     // printed [x]      — now prints [    x]
+
+v = [1, 2];
+println("[{v:>12}]");    // printed [[1,2]]  — now prints [       [1,2]]
+```
+
+The value was rendered correctly and then simply not padded, so a column of output that
+looked aligned in a small test drifted as soon as the values differed in length.  A spec
+now applies to whatever the value renders as, for every type.
+
+Two details worth knowing.  Flags that choose *how* a value renders — `#`, and `:j` for
+JSON — are unchanged, and combine with a width as you would expect.  And a **null
+character renders as nothing**, so `"{c:>3}"` on one gives three spaces: a width pads
+whatever the value rendered as, and nothing is still something to pad.
+
+If you had worked around this by rendering to a text first (`t = "{v}"; "{t:>12}"`), that
+still does exactly the same thing — you can keep it or drop it.
+
+### A slice with a calculation in it can be wrapped in brackets
+
+`(s[i + 1..])` was refused, with a message naming `OpAddInt` — an internal name — at a
+caret pointing past the slice:
+
+```
+error: missing argument for parameter 'v2' of `OpAddInt`
+```
+
+Nothing in that said *slice*, *index*, or *brackets*, so it read as a problem with
+whatever came after.  The same slice without the round brackets always worked, and so did
+`(s[i..])` and `(s[2..])` — it needed brackets, a slice, and a **number** written right
+before the `..` all at once, which is why it could sit in a file for a while looking like
+a puzzle.
+
+It compiles now.  If you hoisted the slice into its own variable to get around it, that is
+still perfectly good code.
+
 ### A failed `assert` names the line it is on
 
 If a function above it took a `const` (or a `&`) parameter it never modifies, every

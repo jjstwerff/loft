@@ -4609,8 +4609,8 @@ extern crate loft;"
         // `Str` or a `&str` depending on whether it is a literal or a formatted string.
         // The `log_*` family, for the same reason as `n_panic`: no `#rust` template, not
         // special-cased, so the generic path emitted `fn n_log_error(..) {}` and every
-        // structured log call vanished on `--native`.  Measured before the fix, with a
-        // logger configured: 2 records on `--interpret`, 0 on `--native`.  Silent loss of
+        // structured log call vanishes on `--native`.  With a logger configured that is
+        // 2 records on `--interpret` and 0 on `--native`.  Silent loss of
         // diagnostics on the backend you actually deploy is where bugs hide, which is why
         // this is worth a body rather than an allow-list entry.
         //

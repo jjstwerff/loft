@@ -3811,7 +3811,7 @@ use a separate collection or add after the loop"
             // Only widen when the value genuinely does NOT fit the narrow type — i.e.
             // exactly when the assignment would otherwise be a narrowing error.  A wider
             // value that PROVABLY fits (a constant) needs no widen; widening it anyway
-            // over-widens width-sensitive locals (it regressed the engine_host kernel).
+            // over-widens width-sensitive locals, of which the engine_host kernel is one.
             && !self.int_value_fits(code, f_type)
         {
             self.vars.widen_int(var_nr, &crate::data::I64);

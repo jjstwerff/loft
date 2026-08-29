@@ -67,8 +67,6 @@ src/cache.rs	stale artifact with the NEW fingerprint (probed 2026-06-12 on
 src/cache.rs	this run. **Default ON** (the 3–3.6× warm-start win, no longer hidden behind
 src/cache_gc.rs	! An age bound was tried here and removed. "Older than the running loft binary" reads
 src/cache_gc.rs	form of the `rm -rf` the docs used to prescribe. Scoped to what this module
-src/calc.rs	B2-runtime (2026-04-13): a unit variant in a mixed struct-enum
-src/calc.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/codegen_runtime.rs	#620 — this used to be gated on `target_arch = "wasm32"` alone, which also
 src/codegen_runtime.rs	(@P327 native). Writes the yielded value's bytes into `dest` and
 src/codegen_runtime.rs	2026-05-13 to close the unimplemented set so any loft
@@ -112,7 +110,6 @@ src/codegen_runtime.rs	the `external::` module that wrapped them all removed. ra
 src/codegen_runtime.rs	── Plan-09 phase 06: parallel-queue runtime (P202 close) ──────────────────
 src/compile.rs	@P381 — fixes the "Claim on read-only store (locked by: compile.rs
 src/compile.rs	@PLN24 arc B — wire every `#c` declaration into the same static-call
-src/compile.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/compile.rs	re-derive relative offsets after ops are inserted or removed (the jump
 src/compile.rs	sentinel as the ref-count is removed.
 src/copy_manifest.rs	a write through `var` no longer reaches the container. Reported unconditionally: a silent
@@ -249,7 +246,6 @@ src/database/allocation.rs	@PLN97 arc G Phase 3a — load the requested integer 
 src/database/allocation.rs	@PLN97 arc G Phase 3b.6 — load ONE TEXT-keyed entry from a persisted
 src/database/allocation.rs	@PLN97 arc G Phase 4 / 3b.7 — load the entries with integer key in
 src/database/allocation.rs	A kind that becomes servable and is not removed from here keeps refusing a
-src/database/allocation.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/database/allocation.rs	O(n log n) key sort. Used to feed `for e in h par(...)`: the parallel
 src/database/allocation.rs	Plan-06 phase 2 step 2b — narrow rebase path for structs whose
 src/database/allocation.rs	Plan-57 Phase C: the Stores ref-count is removed. Every non-pinned
@@ -285,7 +281,6 @@ src/database/descriptor.rs	@PLN127 arc D — was this field DECLARED nullable?
 src/database/descriptor.rs	entries are slots in a chunked arena and have no record of their own, @PLN135 arc H).
 src/database/io.rs	@P321(c): a PNG `--html` auto-discovered beside the entry file is
 src/database/io.rs	@P334 fix (2026-05-29): widen the active-impl cfg from
-src/database/io.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/database/io.rs	Plan-06 phase 4d.C step 2: see read_data's DbRef arm.
 src/database/io.rs	Plan-06 phase 4d.C step 2: stored DbRef pointer is
 src/database/io.rs	containment refusal used to skip filling the struct at all, and a handle
@@ -315,7 +310,6 @@ src/database/mod.rs	@PLN129 arc D — a collection's lazy source, plus the ident
 src/database/mod.rs	@PLN14 arc A — move a `Store` OUT of this table, leaving a freed sentinel
 src/database/mod.rs	@PLN14 arc B — **the materialize chokepoint**: give the value rooted at
 src/database/mod.rs	A lexical `..` refusal used to live on this path: it rejected
-src/database/mod.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/database/mod.rs	Plan-06 phase 1 — marker telling the parent which slot in this
 src/database/mod.rs	Plan-06 phase 2 — extract every worker-allocated Store
 src/database/mod.rs	Plan-06 phase 2b prereq — adopt all stores a worker allocated
@@ -340,7 +334,6 @@ src/database/search.rs	@P317 — LOFT_LOG=copy_check: warn if the keyed deep cop
 src/database/search.rs	@PLN135 arc H — a HASH entry is a slot in a chunked arena, not a record
 src/database/search.rs	@PLN135 arc H — a hash entry's storage goes back to its ARENA; a
 src/database/search.rs	@PLN135 arc H — two entries of the same hash now share a chunk RECORD, so
-src/database/search.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/database/search.rs	`other_indexes` analogue of the @P305 `keyed_field_is_linked` update-only
 src/database/search.rs	already exists it is removed first (so the key stays unique — dedup),
 src/database/search.rs	leak the record. `Array` is left out deliberately: it is removed by
@@ -366,7 +359,6 @@ src/database/structures.rs	@PLAN53 cluster 3: sound disjoint-borrow cross-store 
 src/database/structures.rs	@PLAN53 cluster 3: two different data structures in distinct stores —
 src/database/structures.rs	@PLN135 arc H — a hash's entries live packed in a chunked arena instead
 src/database/structures.rs	@PLN90 phase 1 — make the copy visible. A non-empty source means `vector_add`
-src/database/structures.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/database/structures.rs	Plan-06 phase 4d.C step 2: default for a 12-byte
 src/database/structures.rs	Plan-06 phase 4d.C step 2: stored DbRef pointer has no
 src/database/structures.rs	an unknown tag (e.g. a variant removed by a schema edit)
@@ -379,7 +371,6 @@ src/database/types.rs	@P375: a vector field carries no nullable flag — it is a
 src/database/types.rs	@P375: only an UNSET text (str_rec 0) is null; an allocated
 src/database/types.rs	@PLN127 arc D — mark a field as DECLARED nullable.
 src/database/types.rs	Comparing counts alone would miss a rollback that removed one name and
-src/database/types.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/database/types.rs	Plan-06 phase 2 — true iff `tp` (a struct or struct-enum-variant)
 src/database/types.rs	Plan-06 phase 2b refinement — per-variant ownership for
 src/database/types.rs	Plan-06 phase 4d.C step 2 — register the 12-byte raw `DbRef` storage
@@ -399,7 +390,6 @@ src/diagnostic_render.rs	! Plan-07 phase 4 will wire runtime errors through the 
 src/diagnostic_render.rs	! renderer; phase 5 adds suggestions; phase 6 adds typed-mismatch
 src/diagnostic_render.rs	Number of decimal digits in `n` (used to size the gutter).
 src/diagnostic_render.rs	full unicode-width handling deferred to phase 4 if needed).
-src/diagnostics.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/diagnostics.rs	Plan-07 phase 5: suggestion with a short-name guard.
 src/diagnostics.rs	The same line with its `[code]` tag removed, for comparing against prose written before
 src/documentation.rs	File stem of this page (`"05-float"`), used to build the canonical URL.
@@ -448,7 +438,6 @@ src/generation/calls.rs	@P304 — fire for ANY non-`Op` text-returning call, USE
 src/generation/calls.rs	@P321b — `OpSetText` with a NULL value must store the null pointer
 src/generation/calls.rs	@P361 — a `#rust` body that names the loft-internal pub modules
 src/generation/calls.rs	@P386: a text-result `Value::Block` argument whose body
-src/generation/calls.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/generation/calls.rs	Phase 09 phase 00 step 0.4: dispatches through
 src/generation/calls.rs	Plan 09 phase 01 added per-fn ABI tagging via the
 src/generation/calls.rs	Plan-07 phase 4 — RuntimeErrorKind enum lives in
@@ -458,7 +447,6 @@ src/generation/calls.rs	`output_block`'s @P321e/@P323 materialisation at
 src/generation/calls.rs	rewrite is NO LONGER done here per-call-site: it missed an emission
 src/generation/calls.rs	time (`OpGetVector` @P321d, again @P338, then `reserve` on a hash), each
 src/generation/coroutine.rs	- `state_idx`: the state number for this segment (used to name the struct field)
-src/generation/coroutine.rs	@P326 — Reference / Vector / struct-enum yields are DbRef-shaped.
 src/generation/coroutine.rs	@P326 — Reference-yielding generators override `next_dbref` (not
 src/generation/coroutine.rs	@P326 — also pre-declare `__ref_*` work-vars used by
 src/generation/coroutine.rs	@P326 — for-body factory must use the DbRef channel for
@@ -477,7 +465,6 @@ src/generation/dispatch.rs	@P302 — capture first-vs-reassign BEFORE the `decla
 src/generation/dispatch.rs	@P317 — a struct `Reference` local with no resolvable
 src/generation/dispatch.rs	@P321g: unspan `to` first. The parser wraps an assignment RHS in
 src/generation/dispatch.rs	A coroutine-persistent field used to be excluded too, on the reasoning that
-src/generation/dispatch.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/generation/dispatch.rs	Phase 09 phase 00 step 0.6: registry-first dispatch. When a
 src/generation/dispatch.rs	`"a".to_string()` wrap on the inner literals (plan-14 phase 02).
 src/generation/dispatch.rs	`first == false` is an @P302 keyed-collection reassignment (`s = []`
@@ -494,7 +481,6 @@ src/generation/emit.rs	@PLAN52 cluster I/VI helper: walk a Block's operators (re
 src/generation/emit.rs	@PLAN52 cluster VI (2026-05-30): closures (and
 src/generation/emit.rs	@PLAN52 cluster VI (2026-05-30): closures returning text
 src/generation/emit.rs	@PLAN52 cluster VII: when the if-result is `Text`, branches can
-src/generation/emit.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/generation/emit.rs	E0308 a variable thread count used to hit — and would also mint `i32`
 src/generation/emit.rs	P205 (plan-09 phase 07): if the function returns
 src/generation/emit.rs	P205 (plan-09 phase 07): when this function returns
@@ -542,7 +528,6 @@ src/generation/mod.rs	@PLN24 arc G — a symbol from a package that declares an 
 src/generation/mod.rs	@PLN26 phase 0.2 — declare `u8` (loft's boolean storage
 src/generation/mod.rs	@PLN26 phase 1 — `#native` symbols exported by 2+ packages. A *reachable*
 src/generation/mod.rs	@PLN26 phase 1 — a `#native` symbol exported by 2+ packages
-src/generation/mod.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/generation/mod.rs	D-html-vec (2026-07-04): a `vector<T>` arg IS a valid host import —
 src/generation/mod.rs	Plan-06 phase 4d: tuple struct fields inline the
 src/generation/mod.rs	Plan-12 phase 1a (2026-05-23) — `is_crypto_runtime_symbol` removed.
@@ -574,7 +559,6 @@ src/generation/mod.rs	parameter for it (@PLN128 arc D).
 src/generation/mod.rs	so this pointer is valid FOR THE CALL and no longer — the
 src/generation/mod.rs	structured log call vanished on `--native`. Measured before the fix, with a
 src/generation/mod.rs	the interp `fill_database` default-arm recursion, @P373).
-src/generation/mod.rs	type minted only for a LOCAL var (@P296) is referenced by
 src/generation/mod.rs	used to check that, so a type created one position early or late
 src/generation/mod.rs	which arc D deliberately made indistinguishable from a declared
 src/generation/mod.rs	whose own id falls AFTER the struct (the @P353 inversion: an
@@ -618,14 +602,12 @@ src/generation/pre_eval.rs	@P312 — same ref-alias hoist as the user-fn Call ar
 src/generation/pre_eval.rs	@P312 — the set of variables that some argument passes as a fresh
 src/generation/pre_eval.rs	@P364: if `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /
 src/generation/pre_eval.rs	@P364: the collapse HOISTS the Set's Call from `set_idx` (which
-src/generation/pre_eval.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/generation/pre_eval.rs	The @P274 use-after-free guard MUST see every free flavour —
 src/generation/pre_eval.rs	True if `v` reads any variable in `vars`, at any depth. Used by @P312 to
 src/generation/pre_eval.rs	and avoid double-borrow. Plan-07 phase 4 added more
 src/generation/pre_eval.rs	copy where `Return(Null)` is replaced by `Return(expr)` and `expr` is removed from
 src/generation/pre_eval.rs	ret_pos shifted by -1 because we removed one element before it.
 src/generation/pre_eval.rs	the @P274 path where `parse_append_text` (in vectors.rs) keeps
-src/generation/text.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/git_query.rs	@PLN119 arc F — the git natives behind `lib/git`.
 src/hash.rs	@PLN135 arc B — a probe asks only *is this the key*, about the SAME key every
 src/hash.rs	A bucket slot holds a 1-based ARENA INDEX, not a record number (@PLN135 arc H).
@@ -649,7 +631,6 @@ src/ir_read.rs	@PLN102 arc C step 1 — `#superseded "Y"` parses to the bare suc
 src/ir_read.rs	@PLN102 arc C step 2 — `source_is_owned` / `caller_source_is_owned`
 src/ir_read.rs	@PLN102 arc C step 3 — the recommended-idiom STEER fires for a call to a
 src/ir_read.rs	@PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol must
-src/ir_read.rs	@PLN102 arc C — a stdlib fn (parsed under `self.default`, i.e. `STD_SOURCE`)
 src/ir_read.rs	@PLN11 arc D micro-bench — wall-clock of producing the native stdlib
 src/ir_read.rs	@PLN11 arc D probe — the full mmap loop end-to-end: materialize the
 src/ir_read.rs	@PLN11 arc D step D1 — the public `Data::save` / `Data::open` API:
@@ -657,7 +638,6 @@ src/ir_read.rs	@PLN11 arc E — reject a missing / non-store / truncated / corru
 src/ir_read.rs	@PLN24 arc A — a `#c` binding survives the store round-trip.
 src/ir_read.rs	[`crate::ir_store::save_data`] (@PLN11 arc D): mmap the file
 src/ir_read.rs	as the @PLAN28 JSON decoder does.
-src/ir_read.rs	can call a GENERIC stdlib fn. Before the fix the generic-instantiation block
 src/ir_read.rs	codegen reads both on the load path; see plan README § arc C).
 src/ir_read.rs	consumes the field yet, is the cheap moment: arc B and arc C would each
 src/ir_read.rs	definitions. This is arc C's read-path milestone: a store-materialised
@@ -700,12 +680,10 @@ src/keys.rs	loft#827 — this used to be `std::hash::DefaultHasher`, whose algor
 src/keys.rs	populated) preserves the P253 hash-DoS defense (2026-05-11): without a
 src/keys.rs	struct reference, struct-enum, and — plan-25 (@PLN25) — vector.
 src/lexer.rs	@PLAN49 T1 breadcrumb — refresh every 256 iterations so a
-src/lexer.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/lexer.rs	Create a link to the current lexer position, it can be used to revert to
 src/lexer.rs	Expect code with spaces, line ends and remarks removed.
 src/lexer.rs	whose name is within the shared edit-distance cap. Used to turn a mistyped
 src/lib.rs	@PLAN12 phase 3.5a (2026-05-24) — re-export `extensions::native_call`
-src/lib.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/lib.rs	`now()`/`ticks()` used to return a hardcoded 0: a frame timer read the
 src/lib.rs	loft#851 — the page's FILESYSTEM. `--html` used to bind none at all: every
 src/lib.rs	std stdout, so its `print` branch uses `print!` (mirrors the @P334 FS
@@ -739,11 +717,9 @@ src/lib_placement/wire.rs	it. Present here so attaching does not change when arc
 src/lib_placement/wire.rs	the syscall we just removed for cache-line ping-pong.
 src/lib_placement/wire.rs	— arc D extends this to a worker that dies outright.
 src/live_reload.rs	! @PLN18 phase 02 — tier 0 of the execution tiers: **live per-function
-src/log_config.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/log_config.rs	Plan-22 phase 02d-vii follow-up — central check for the
 src/log_config.rs	tree for the named function. Used to verify "did the parser
 src/logger.rs	Convert a count of days since the Unix epoch (1970-01-01) to `(year, month, day)`.
-src/logger.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/logger.rs	Example: `"2026-03-13T14:05:32.417Z"`
 src/logger.rs	Plan-07 phase 4 — log a typed runtime event (`RuntimeError`)
 src/logger.rs	Shift epoch from 1970-01-01 to 0000-03-01
@@ -762,7 +738,6 @@ src/main.rs	@P282 — diagnostics (warnings + errors) go to STDERR,
 src/main.rs	@P296-sibling (Windows-only): `canonicalize()` returns an
 src/main.rs	@P321(c) Phase 3a: auto-discover *.png siblings of the entry .loft
 src/main.rs	@P321(c) Phase 3a: raw base64 of *.png siblings of the entry .loft
-src/main.rs	@P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
 src/main.rs	@P337: a missing wasm-opt is NOT a cosmetic "larger output"
 src/main.rs	@P350: self-validate the emitted wasm BEFORE writing the HTML so a
 src/main.rs	@P363: join with a path separator (Path::join) instead of string
@@ -814,7 +789,6 @@ src/main.rs	@PLN26 phase 4 — Windows has no RPATH, so a C-ABI-linked native-pa
 src/main.rs	@PLN78 step 0 removed from the catalogue.
 src/main.rs	@lib_plan-29 W2: apply each library's host.js-registered extension
 src/main.rs	@lib_plan-29 W2: concatenate every used library's
-src/main.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/main.rs	Days since 1970-01-01 (Unix epoch).
 src/main.rs	Host target only: wasm has no C ABI to link (arc E).
 src/main.rs	One path representation everywhere (@P296 / #460): on Windows,
@@ -944,15 +918,11 @@ src/native_utils.rs	@PLN26 phase 3 — a wasm target needs the package's rlib (w
 src/native_utils.rs	@PLN26 phase 4 — Windows links a DLL through its IMPORT
 src/native_utils.rs	@PLN26 phase 4 — stage every native-package DLL beside a just-built Windows
 src/native_utils.rs	@PLN26 phase 4 — the C-ABI path (import-library linking + DLL staged beside
-src/native_utils.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/native_utils.rs	P244-windows fix #2 (2026-05-12): use single-segment joins,
 src/native_utils.rs	build's content fingerprint, so `--html` / `--native-wasm` no longer need a
 src/native_utils.rs	cargo 1.99.0-nightly (2026-07-29) gives each crate its own
 src/native_utils.rs	cargo adopted on 2026-07-29 that directory does not exist, `read_dir` returned
-src/native_utils.rs	dir one level deeper; before the fix that resolved the project root to the
-src/native_utils.rs	test — a symptom three steps removed from the cause.
 src/ops.rs	@PLAN12 phase 3.5a (2026-05-24) — `RNG` thread-local + the
-src/ops.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/ops.rs	NOT a silent null" contract (these tests formerly asserted `should_panic`).
 src/ops.rs	Plan-07 phase 4e.3 — `format_long` with an optional fault-tag
 src/ops.rs	Text inequality — see [`op_eq_text`]. @P347 / #622.
@@ -1011,7 +981,6 @@ src/parallel.rs	── Plan-06 phase 2 — store-rebase infrastructure ───
 src/parallel.rs	── Plan-06 phase 3a — Stitch policy enum (DESIGN.md D1) ─────────────────────
 src/parser/builtins.rs	ARC.md A4 (closed 2026-05-07) — `check_light_eligible` and its
 src/parser/builtins.rs	ARC.md A4 (closed 2026-05-07) — `n_parallel_for_light` was
-src/parser/builtins.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/builtins.rs	`collect_callees`) were removed when the light Concat path
 src/parser/builtins.rs	offset-ref coercion sub-references `payload` (NOT S's first field, which is no longer
 src/parser/builtins.rs	store: it used to read empty (silent-wrong) or, mis-ordered, slot-panic at
@@ -1030,7 +999,6 @@ src/parser/collections.rs	@PLAN16 phase 05 — closures (`Type::Function`) join 
 src/parser/collections.rs	@PLN135 arc C — a `hash` reserves its BUCKET TABLE, which is a different
 src/parser/collections.rs	ARC.md A4 (closed 2026-05-07) — `n_parallel_for_light` was
 src/parser/collections.rs	B5 (2026-04-13): for a mixed struct-enum element type
-src/parser/collections.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/collections.rs	Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
 src/parser/collections.rs	Plan-06 phase 1 G2.1 — narrow-integer vector inputs
 src/parser/collections.rs	Plan-06 phase 1 G4 — accept Type::Function returns
@@ -1081,13 +1049,10 @@ src/parser/control.rs	A tuple LOCAL (@P330) — no hoist; the B5-L3 temp covers 
 src/parser/control.rs	B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
 src/parser/control.rs	B5 remaining half (2026-04-14): a HEAP match-arm
 src/parser/control.rs	Bind-site analogue of `do_if_acc`'s tail promotion (the @P323 sibling, 2026-07-10).
-src/parser/control.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/control.rs	P206 + plan-18: emit the missing-arrow diagnostic, then
 src/parser/control.rs	Plan-07 phase 1, step 1.13 — wrap intrinsic-keyword calls
 src/parser/control.rs	Plan-07 phase 1, step 1.13 — wrap user-typed Call / CallRef
 src/parser/control.rs	Plan-07 phase 4d.2 — defensive-check flow-analysis. When
-src/parser/control.rs	Plan-07 phase 4d.2 — walks `ops` looking for adjacent
-src/parser/control.rs	Plan-07 phase 4f.5 — float / single div / mod peers.
 src/parser/control.rs	Plan-07 phase 6 — a pattern whose type can never match the subject is a
 src/parser/control.rs	Plan-14 phase 07 (P234 runtime): rewrite a body-tail
 src/parser/control.rs	Plan-14 phase 07 (P234 runtime): when the function's expected
@@ -1109,7 +1074,6 @@ src/parser/control.rs	lambda (@P319).
 src/parser/control.rs	normal block-scope sweep (it is no longer the escaping return var). A
 src/parser/control.rs	once needed is deleted (@PLAN59 phase 2).
 src/parser/control.rs	remaining owner — that's the @P377 leak.
-src/parser/control.rs	return the base var being projected. Used to decide whether the
 src/parser/control.rs	scope analysis (the @P377 `render_struct(p) -> Canvas` shape). Marking
 src/parser/control.rs	server/client library) — see the plan-57 deferred-follow-ups.
 src/parser/control.rs	that survives frame teardown, @P293), NOT a hidden `&text` buffer — so
@@ -1132,7 +1096,6 @@ src/parser/definitions.rs	@PLN125 arc B — check a just-parsed `OpDrop`, the ho
 src/parser/definitions.rs	@PLN125 arc C — subscripting is spelled `op [] (self: Self, i: τ)`.
 src/parser/definitions.rs	@PLN24 arc A — `#c "<symbol>" "<c-signature>"` binds this
 src/parser/definitions.rs	@PLN24 arc A — `#c "<symbol>" "<c-signature>"`.
-src/parser/definitions.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/definitions.rs	I5 (phase 1): factory methods (Self in return without self: Self first param)
 src/parser/definitions.rs	P196 follow-up (2026-05-12): exclude tuples that contain a
 src/parser/definitions.rs	Phase 2c round 10c: `long` has been removed as a user-facing
@@ -1176,7 +1139,6 @@ src/parser/expressions.rs	@PLN135 arc A — `local_keyed += Struct { … }` (no 
 src/parser/expressions.rs	@PLN24 arc D — a `#c` binding returning text is a value-position
 src/parser/expressions.rs	@PLN25 — GATE FLIP LANDED (2026-06-20): nullable-by-default is ON for all user files +
 src/parser/expressions.rs	Context: phase 02d-iii.b's auto-deref wraps every read of
-src/parser/expressions.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/expressions.rs	LHS REMOVED from this branch. Vector `+= elem` is ambiguous
 src/parser/expressions.rs	P261 (2026-05-13): the third case — `s.v = [literal items]` —
 src/parser/expressions.rs	Phase 09 phase 00 step 0.7 — codegen-internal.
@@ -1227,8 +1189,6 @@ src/parser/fields.rs	@PLN125 arc C — a library type CAN be subscripted now, so
 src/parser/fields.rs	@PLN125 arc C — a library type that defines `OpIndex` indexes like a built-in
 src/parser/fields.rs	@PLN125 arc C — the `OpIndex` a library type defines for `x[i]`, or `u32::MAX`.
 src/parser/fields.rs	B2-runtime (2026-04-13): `Sig.Idle` on a mixed struct-enum
-src/parser/fields.rs	Before the fix, `s = x.to_text()` (where `x: T`,
-src/parser/fields.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/fields.rs	Likely also closes plan-17 (A) caveat (implicit
 src/parser/fields.rs	Plan-07 phase 4 step 4.6 — this is the for-loop
 src/parser/fields.rs	Plan-07 phase 4h — count this read for the
@@ -1282,7 +1242,6 @@ src/parser/mod.rs	@PLN26 phase 1 — two native packages exporting the SAME `#na
 src/parser/mod.rs	ADVICE on both paths (loft#785-era audit, @PLN131). This used to be
 src/parser/mod.rs	Bare calls into a library still do not RESOLVE — that is the rest of phase 6,
 src/parser/mod.rs	Case (c): emit the deferred error. `string` used to be special-cased
-src/parser/mod.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/mod.rs	Mirrors `vectors.rs:1161-1178` for perf parity with
 src/parser/mod.rs	Mirrors `vectors.rs:1532-1535` — `database.vector(content_db_type)`
 src/parser/mod.rs	P239 fix (2026-05-11): the for-loop iter-termination
@@ -1366,7 +1325,6 @@ src/parser/objects.rs	@P335: the RAW fallback resolves names stored un-prefixed,
 src/parser/objects.rs	@P376 — POISON the errored construction, PASS 2 ONLY.
 src/parser/objects.rs	@P376 — the format expression resolved to `Unknown`: a directly
 src/parser/objects.rs	@P387 / @P383 — the user-facing argument types of a fn used as a
-src/parser/objects.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/objects.rs	HASH-only while @P309 — a deep-copy data-loss/hang when `index<T>`
 src/parser/objects.rs	Plan-07 phase 4e.1 — format strings are the user's
 src/parser/objects.rs	Plan-07 phase 5: skip suggestions for very short names
@@ -1389,11 +1347,9 @@ src/parser/operators.rs	@P368 — a literal divisor is statically known; only a 
 src/parser/operators.rs	@P368 — wording: not "integer" (the same `/` warning covers float
 src/parser/operators.rs	@PLAN48 P2: an explicit `as <narrow-int>` is the sanctioned way to narrow
 src/parser/operators.rs	@PLAN52 cluster I iteration 2 (2026-05-30): name `__ncc_N`
-src/parser/operators.rs	@PLAN52 cluster IV interpret (2026-05-30): heap-DbRef types
 src/parser/operators.rs	@PLAN52 cluster IV interpret (2026-05-30, iteration 3): extend
 src/parser/operators.rs	@PLAN52 cluster IV-Tuple (2026-05-30): Tuple values are not heap-DbRef
 src/parser/operators.rs	@PLN125 arc C — `x[i]` on a library type lowers to that type's
-src/parser/operators.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/operators.rs	E0308 @P316 guards against (a wider-width *variable* default) cannot
 src/parser/operators.rs	Plan-07 phase 1, step 1.B.1 — capture the operator's source
 src/parser/operators.rs	Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone
@@ -1453,7 +1409,6 @@ src/parser/vectors.rs	@PLAN58 cluster IV: use the SAME element-type `known` as t
 src/parser/vectors.rs	@PLAN58 cluster-I (boolean outer-handle stride): for a nested
 src/parser/vectors.rs	A typed standalone empty `[]` (the @P365 fall-through above) has no
 src/parser/vectors.rs	Case B (Reference) — `s` is a struct; phase 02c handles
-src/parser/vectors.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/vectors.rs	Int(1)])`; phase 02d-v's `extract_boxed_var_from_lhs`
 src/parser/vectors.rs	P260 (2026-05-13): ALL Reference captures store as a 12-byte `Parts::DbRef`
 src/parser/vectors.rs	Plan-06 phase 4d.A.2 — fn-ref in a vector stores as
@@ -1498,22 +1453,18 @@ src/placement.rs	! # What a token cannot cover, and why it no longer has to (lof
 src/placement.rs	! derivation, arc H replaces the bucket array with an inline entry array. A store
 src/placement.rs	! widens a bucket slot to `(rec, hash)`, arc E changes the hash function and the index
 src/placement.rs	`2` is @PLN135 arc H. A slot used to hold the record number of an entry that was a
-src/platform.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/platform.rs	Used to normalise incoming paths that may carry the foreign separator.
 src/platform.rs	double compilation is removed — see PERFORMANCE.md § Design: BUILD1.
 src/platform.rs	recorded name alone, so consumers went looking for a `.tmp` that no longer
-src/png_store.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/profiler.rs	@PLN140 arc B/C — the loft-level profiler (CPU hot spots, and paths to allocations)
 src/profiler.rs	Not a hypothetical: the arc C oracle
 src/profiler.rs	The defect the arc C oracle caught: a fixed period only ever samples one phase
 src/profiler.rs	and `LOFT_ALLOC_PATHS` (arc C, `=<n>` sets the allocation sample rate).
 src/profiler.rs	arc C — an op allocated `stores` stores; sample one in `alloc_interval` and
 src/profiler.rs	── arc C: paths to ALLOCATIONS ──────────────────────────────────────────────
-src/radix_db.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/radix_db.rs	The BOX surface no longer composes the two ([`box_walk`] walks the box itself,
 src/radix_db.rs	it used to be this call plus [`in_box`], and the `till` form is what that pairing
 src/radix_db.rs	match, so a same-bucket sibling is never removed by mistake).
-src/radix_tree.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/radix_tree.rs	R6b — a removed node's id is reused rather than minted afresh.
 src/radix_tree.rs	`get` no longer re-scans the key: it trusts `d`, the bit at which `seek` saw the
 src/registry.rs	The part after the `:` in a status field (e.g. `"CVE-2026-001"` from `"yanked:CVE-2026-001"`).
@@ -1621,8 +1572,6 @@ src/scopes.rs	@PLN125 arc B — the scope-end hook `v`'s type declares, as a cal
 src/scopes.rs	@PLN125 arc B — the scope-end hook fires where the BINDING's life
 src/scopes.rs	A `__cell_<T>` is minted FOR this closure (plan-22 boxes a mutated scalar /
 src/scopes.rs	ARC.md A4 (closed 2026-05-07) — `parallel_for_light` was
-src/scopes.rs	Currently no production caller — phase 5b proper hooks it.
-src/scopes.rs	Currently no production caller — phase 5b proper hooks the
 src/scopes.rs	Currently no production caller — phase 5b' wires this in place
 src/scopes.rs	EXCEPTION (@P302): keyed collections — `s = []` lowers to
 src/scopes.rs	Plan-04 close-out (2026-04-22): V1 remains the slot
@@ -1666,17 +1615,14 @@ src/self_update.rs	The plan called 30 and @PLAN12 §6.7 "half a system" each: 6.
 src/self_update.rs	removed. Refusing here would wall off precisely the people `--from` exists for.
 src/self_update.rs	that no longer exist, so `verify-self` would report a permanent, meaningless
 src/siphash.rs	! the inversion this module buys: what used to be silent data corruption is now a red
-src/spatial.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/stack.rs	@PLAN53 S4 — the gap between what a fn-ref op MOVES and what its stdlib
 src/stack.rs	@PLAN53 cluster 2 / S4 — codegen mirror of `State::stack_step`: one
 src/stack.rs	@PLAN53 cluster 2 / S4: a mutable param / the return value each
 src/stack.rs	Both terms are `size()`-derived (see @PLAN53 cluster 2 / S1):
-src/stack.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/startup_cache.rs	! @PLN11 arc D / D2b — opt-in stdlib startup cache wiring.
 src/startup_cache.rs	! skipping the parse of `default/` entirely (~12× faster, see § arc D probe).
 src/startup_cache.rs	─── whole-program cache (arc E) ─────────────────────────────────────────────
 src/state/codegen.rs	(reassignment — the @P302 `s = []` clear): the slot already holds a
-src/state/codegen.rs	2026-04-28 element_offsets update). Reaches this branch only
 src/state/codegen.rs	@P283 — the same dispatch is needed for `OpAppendText`
 src/state/codegen.rs	@P290 — protect caller args from being freed by the
 src/state/codegen.rs	@P290 — soft free-protect over the deep-copy; writes / claims
@@ -1717,8 +1663,6 @@ src/state/codegen.rs	@PLN24 arc D — a `#c` text binding reaching the ORDINARY 
 src/state/codegen.rs	@PLN24 arc D — the `#c` twin of the line above, keyed on the
 src/state/codegen.rs	@PLN24 arc D — the `#c` twin. This is the THIRD place a text producer
 src/state/codegen.rs	B7 (2026-04-13): set up the same frame layout the regular
-src/state/codegen.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
-src/state/codegen.rs	LAST element fell off the end and was silently lost, and a write onto a
 src/state/codegen.rs	OpCopyRecord 0x8000 already freed the source or @P290
 src/state/codegen.rs	Phase 09 phase 00 step 0.7 — RawExpr is created only by native
 src/state/codegen.rs	Plan-06 phase 4d: nested tuple element — push
@@ -1743,7 +1687,6 @@ src/state/codegen.rs	the dead emit is removed.
 src/state/debug.rs	@PLAN53 cluster 2 / S4 — alignment invariant guard (trace path).
 src/state/debug.rs	@PLAN53 cluster 2 / S4: match execute_argv's aligned entry base.
 src/state/debug.rs	@PLAN53 cluster 2 / S4: the entry frame base is the STEPPED
-src/state/debug.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/state/debug.rs	is set; used to emit `[alloc #N at pc=…]` and matching `[free #N
 src/state/io.rs	@P295 — deep-copy a keyed collection (`sorted`/`hash`/`index`) into a
 src/state/io.rs	@P305 — `coll[key] = value` insert-or-replace into a keyed
@@ -1761,7 +1704,6 @@ src/state/io.rs	@PLN118 arc B — mark the deep-copy so the gen-detector classif
 src/state/io.rs	@PLN118 arc B — same copy-context mark as `copy_record` (finish deep-copies the
 src/state/io.rs	@PLN129 arc A — the miss path consults a bound source; identical to
 src/state/io.rs	@PLN90 phase 1 — make the copy visible. A real record deep-copy is about to
-src/state/io.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/state/io.rs	Plan-57 Phase C: single-ownership (ref-count removed) — close the OS file
 src/state/io.rs	Removed the last element in iteration order; signal end-of-iteration
 src/state/io.rs	`OpGetFileText` — the warning used to live here only, so `--native`
@@ -1779,7 +1721,6 @@ src/state/mod.rs	@P294: native lib fns push their results through the stack stor
 src/state/mod.rs	@P294: the frame-snapshot copy + the Created-status zone
 src/state/mod.rs	@P317 — aggregate leaked stores BY TYPE, most-leaked first, so the
 src/state/mod.rs	@P356 — record a RECOVERABLE fault (out-of-bounds / negative vector
-src/state/mod.rs	@P387 zero-cost: the parser injects exactly ONE text work-buffer for a
 src/state/mod.rs	@PLAN49 T1 — runtime phase breadcrumb. One call per
 src/state/mod.rs	@PLAN53 cluster 2 / 2h: copy the input bytes as ONE CONTIGUOUS chunk.
 src/state/mod.rs	@PLAN53 cluster 2 / 2i: the worker body's frame reserves the tuple arg
@@ -1815,7 +1756,6 @@ src/state/mod.rs	@PLN140 arc C — allocation PATHS. Hoisted out of the loop lik
 src/state/mod.rs	@PLN140 arc C — the op at `pc` allocated `stores` stores; hand the path that
 src/state/mod.rs	@PLN140 arc C — the op just ran; if it took stores, record the path
 src/state/mod.rs	@PLN18 phase 02 — tier-0 live reload: a counter-gated poll so a file
-src/state/mod.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/state/mod.rs	PKG.1: Replace a previously registered function (e.g. a stub) with a
 src/state/mod.rs	Plan-06 phase 1 G2 — primitive-input worker dispatch.
 src/state/mod.rs	Plan-06 phase 1 G3 — text-input worker dispatch.
@@ -1851,7 +1791,6 @@ src/state/text.rs	@PLAN53 cluster 2 / S4: stepped char-pop span (4 off, 8 aligne
 src/state/text.rs	@PLAN53 cluster 2 / S4: stepped span of popped i64+i64+f32 (20/24).
 src/state/text.rs	@PLAN53 cluster 2 / S4: the char pop occupies a stepped span
 src/state/text.rs	@PLAN53 cluster 5: deallocate the String's heap buffer. `clear()` sets
-src/state/text.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/state/text.rs	Plan-04 Phase 2h: positional variant of the removed `text()`. Writes a
 src/state/text.rs	Plan-07 phase 4e.3 — consume the fault tag set by the
 src/state/text.rs	Plan-07 phase 4e.3 — when a fault tag is set on the
@@ -1880,7 +1819,6 @@ src/store.rs	@PLN14 arc G — how many records are currently CLAIMED in this sto
 src/store.rs	@PLN97 arc G Phase 2 — `from_bytes` must fail-closed on a crafted buffer:
 src/store.rs	@PLN97 arc G Phase 2 — fail-closed structural validation of an
 src/store.rs	BEFORE `fl_rebuild`** (@PLN97 arc G Phase 2): a crafted buffer with a
-src/store.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/store.rs	Delete a record, this assumes that all links towards this record are already removed
 src/store.rs	H6: it used to decode `u16::MAX → null`, which silently nulled a
 src/store.rs	Trace helper for @PLAN38 debugging. Writes a line to
@@ -1908,18 +1846,15 @@ src/test_runner.rs	@P367: a typed runtime fault fired (no Rust panic).
 src/test_runner.rs	@P367: assert(false) / panic / divide-by-zero / OOB /
 src/test_runner.rs	@P389: each native package's rlib carries its own
 src/test_runner.rs	@PLN26 phase 4 — stage native-package DLLs beside the
-src/test_runner.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/test_runner.rs	`loft test --native` each exercise exactly one, so a bare "ok" used to be
 src/test_runner.rs	here too. It used to engage only on the run path and `loft sandbox-check`,
 src/timeout.rs	! @PLAN49 T1+T3 — process-wide execution timeout with a watchdog
 src/timeout.rs	@PLAN49 T2 — cooperative graceful exit. A `checkpoint_*` on the
-src/tree.rs	Copyright (c) 2023-2025 Jurjen Stellingwerff
 src/tree.rs	Should be removed when actually in use
 src/trie_db.rs	same-key sibling is never removed by mistake.
 src/typedef.rs	@P379 — struct-type registration is a flat table keyed by name. When
 src/typedef.rs	@PLN127 arc D — the ONE parse-time site that knows. `a_type` was
 src/typedef.rs	B2-runtime (2026-04-13): Before laying out records, retroactively
-src/typedef.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/typedef.rs	Plan-06 phase 4d: tuple struct fields inline the
 src/typedef.rs	Plan-22 phase 02b (2026-05-12): auto-Reference
 src/typedef.rs	`string` used to be special-cased here; it is now one row of the
@@ -1946,10 +1881,8 @@ src/use_analysis.rs	that is no longer true, and a fix line naming a backend that
 src/use_analysis.rs	value on one path, so a pending hand-off from before it is no longer certainly
 src/use_analysis.rs	write. @PLN128 arc C removed the second fix that used to sit here —
 src/variables/intervals.rs	@PLAN53 cluster 2: these three variants all carry child `Value`s
-src/variables/intervals.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/variables/intervals.rs	P240 fix (2026-05-11): tuple-literal reads. Without explicit
 src/variables/intervals.rs	Plan-07 phase 1: Span carries a source position and wraps a
-src/variables/mod.rs	@P295 — keyed collections carry a lifetime dep list too
 src/variables/mod.rs	@P376 — assigning the `Never` poison (an errored struct construction,
 src/variables/mod.rs	@PLAN28 C4 — borrowed view of the codegen-read fields of one `Variable`,
 src/variables/mod.rs	@PLAN28 C4 — owned codegen-read fields of one `Variable`, consumed by
@@ -1983,7 +1916,6 @@ src/variables/slots_v2.rs	@PLAN53 cluster 2 — see the fn doc for the algorithm
 src/variables/slots_v2.rs	greedy search avoids. (@PLAN53 cluster 2: without this, V2 placed
 src/variables/validate.rs	! plan-04 Phase 2a. Each test constructs a minimal `Function`
 src/variables/validate.rs	@PLAN53 cluster 2 — alignment invariant for the **aligned V2 layout only**.
-src/variables/validate.rs	Copyright (c) 2024-2025 Jurjen Stellingwerff
 src/variables/validate.rs	I8 (@PLAN53 cluster 2): a slot whose byte range exceeds the
 src/variables/validate.rs	bloat or a runaway offset (@PLAN53 cluster 2).
 src/variables/validate.rs	claim (@PLAN53 cluster 2).

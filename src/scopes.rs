@@ -4218,7 +4218,7 @@ impl Scopes {
                 // SURGICAL: only unwrap when the Insert's leading op is a lift
                 // `Set(__lift_N, …)`.  Other span-wrapped Inserts (closure-record
                 // construction, etc.) MUST keep their span — unwrapping them
-                // broadly regressed the closure-in-struct-field cases (`invalid
+                // broadly breaks closure-in-struct-field construction (`invalid
                 // fn-ref` in native codegen, @P258/@P259 territory).
                 //
                 // The A5.6 null-init preamble ([`Self::is_null_init_preamble`]) is the

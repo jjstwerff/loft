@@ -72,12 +72,19 @@ HIST_RE='\b(removed|no longer|used to [a-z]+|previously [a-z]+ed|formerly|change
 # DOC_QUALITY.md § B2 on the comment in front of you.
 INCIDENT_RE='\b(before the fix|regressed|answered (wrong|the FALLBACK)|(was|were) silently (wrong|lost|excluded|misrouted)|the bug was)\b'
 
+# The licence header is not a history stamp.  `Copyright (c) 2022-2025` matches the
+# bare-date half of TAGS_RE on every file that carries one, and the flag is unactionable
+# by construction — the year range is the licence, not a note about when a line was
+# written.  Excluding it is the same precision argument the INCIDENT_RE block above
+# makes: a thermometer that reports what nobody can act on gets ignored.
+LICENCE_RE='(Copyright \(c\)|SPDX-License-Identifier)'
+
 # Emit "path:lineno:content" for every flagged comment line (both patterns).
 collect_raw() {
   { grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -E "$TAGS_RE"
     grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$HIST_RE"
     grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$INCIDENT_RE"
-  } | sort -u
+  } | grep -vE "$LICENCE_RE" | sort -u
 }
 
 # Normalise raw lines to baseline keys: "path<TAB>trimmed-comment-text".
@@ -150,26 +157,26 @@ top)
 
 *)
   # Report modes: report (default) | -c/--counts | tags | history | incident
-  tag_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ec "$TAGS_RE")
-  hist_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Eic "$HIST_RE")
-  inc_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Eic "$INCIDENT_RE")
+  tag_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -vE "$LICENCE_RE" | grep -Ec "$TAGS_RE")
+  hist_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -vE "$LICENCE_RE" | grep -Eic "$HIST_RE")
+  inc_n=$(grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -vE "$LICENCE_RE" | grep -Eic "$INCIDENT_RE")
 
   if [ "$cmd" != "-c" ] && [ "$cmd" != "--counts" ]; then
     if [ "$cmd" = "report" ] || [ "$cmd" = "tags" ]; then
       echo "== History stamps (plan tag / phase / date) — review, strip the stamp =="
-      grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -E "$TAGS_RE" || echo "  (none)"
+      grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -vE "$LICENCE_RE" | grep -E "$TAGS_RE" || echo "  (none)"
       echo
     fi
     if [ "$cmd" = "report" ] || [ "$cmd" = "history" ]; then
       echo "== Change-narration (describes a past edit, not the present code) =="
       echo "   (note: 'used to <verb>' can be innocent — 'used to size the gutter')"
-      grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$HIST_RE" || echo "  (none)"
+      grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -vE "$LICENCE_RE" | grep -Ei "$HIST_RE" || echo "  (none)"
       echo
     fi
     if [ "$cmd" = "report" ] || [ "$cmd" = "incident" ]; then
       echo "== Incident-subject (documents the bug, not the contract) =="
       echo "   (DOC_QUALITY.md § B2 — CONVERT the story into its rule, do not delete it)"
-      grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -Ei "$INCIDENT_RE" || echo "  (none)"
+      grep -rnE '^[[:space:]]*///?' $FILES 2>/dev/null | grep -vE "$LICENCE_RE" | grep -Ei "$INCIDENT_RE" || echo "  (none)"
       echo
     fi
     if [ "$cmd" = "report" ]; then

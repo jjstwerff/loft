@@ -142,6 +142,8 @@ This allows inline format expressions like `"result: {value:>10}"` to be tokenis
 
 Special case: `1..4` tokenises as `Integer(1)`, `Token("..")`, `Integer(4)` — the lexer uses a look-ahead to avoid consuming `..` as part of a float.
 
+**That case emits TWO tokens from ONE scan**, and it is the only place that does. Having read `1..`, the number lexer cannot return both, so it returns the `Integer` as the live token and QUEUES the `..` in the replay buffer. A number that ends at a field dot (`n.v.0.0`, `r.0.x`) does the same with a `.`. Both tokens must reach the buffer — see the invariant under Backtracking below.
+
 ### Backtracking with `Link` / `revert`
 
 The lexer supports arbitrary lookahead through a memory buffer:
@@ -155,6 +157,8 @@ lexer.revert(link);         // restore position; replay buffered tokens
 `link()` increments a reference count. While any link is alive all consumed tokens are buffered. `Link` implements `Drop` to decrement the count; when the count reaches zero the buffer is discarded.
 
 The parser uses this to speculatively attempt a parse path (e.g. checking whether an identifier is a type name or a variable) and backtrack on failure.
+
+**The invariant: the buffer must hold every token the scan consumed, in the order it read them.** A revert replays from the buffer, so a token the scan produced but did not record is simply gone from the re-read. The one scan that produces two tokens (a number ending at `..` or a field `.`, above) is where that can go wrong: `cont()` records a freshly-scanned token, and the queued follow-up is written into the buffer by the number lexer itself, so the NUMBER has to be inserted in front of it rather than treated as already-buffered. Without that, `i + 1..` replayed as `i`, `+`, `..` and left the `+` with one operand — a parse that only fails when a look-ahead happens to span the number (`lexer::test::link_revert_replays_a_queued_number_split`).
 
 ### Key lexer methods
 
