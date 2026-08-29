@@ -27,7 +27,7 @@
 <p>Loft provides two tiers of randomness:</p>
 <p>The GLOBAL tier (one shared generator — right for scripts and casual use): rand(lo, hi)      — a random integer in [lo, hi] inclusive. rand_seed(seed)   — seed the random number generator for reproducible results. rand_indices(n)   — a vector of n integers [0..n-1] in a random order.</p>
 <p>The VALUE tier (owned streams — when the RNG is part of your STATE: games, simulations, replays; each stream is independent and travels with your data): seed_stream(seed) — an independent RandStream. r.get(lo, hi)     — a random integer in [lo, hi] from THIS stream. r.indices(n)      — a random permutation [0..n-1] from THIS stream.</p>
-<p>The global generator is a fast PCG64 algorithm; streams use L<code>Ecuyer</code>s combined LCG (pure loft, deterministic by construction). Without an explicit seed the generator starts from a fixed default seed, so results are reproducible across runs unless you seed with a time-based value.</p>
+<p>The global generator is a fast PCG64 algorithm; streams use L'Ecuyer's combined LCG (pure loft, deterministic by construction). Without an explicit seed the generator starts from a fixed default seed, so results are reproducible across runs unless you seed with a time-based value.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="basic-random-integers">Basic random integers</h2>
 <p><code>rand(lo, hi)</code> returns a uniformly distributed integer in [lo, hi]. Call <code>rand_seed</code> first to choose the sequence.</p>

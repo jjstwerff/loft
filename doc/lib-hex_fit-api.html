@@ -23,13 +23,165 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>hex_fit API</h1>
 <article>
-<p><a href="lib-hex_fit.html">← hex_fit</a> · version 0.1.0</p>
-<p>The registry does not record a public surface for <code>hex_fit</code> 0.1.0. The field was added after this version was published, and it is filled from source at a package's next release — so this page fills itself in when <code>hex_fit</code> ships again.</p>
-<p>Both of these work today:</p>
-<pre><code>loft api hex_fit
-</code></pre>
-<p>prints the surface with its documentation, read from the package itself; and the source is the other route.</p>
-<p><a href="https://github.com/loft-lang/loft-libs-world/tree/main/hex_fit">https://github.com/loft-lang/loft-libs-world/tree/main/hex_fit</a></p>
+<p><a href="lib-hex_fit.html">← hex_fit</a> · version 0.1.1</p>
+<p class="lib-legend">37 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Draft</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_new</span>(f: <span class="en">Form</span>, d: <span class="ty"><a href="stdlib-types.html">integer</a></span>, a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, p: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Draft</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_has_run</span>(s: <span class="en">Draft</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_write</span>(s: <span class="en">Draft</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The text of a stencil: the form's spelling, then — if there is one — a single <code>wall</code> line. One line, one record, same shape as <code>side</code>: the reader refuses anything else rather than repairing it (<code>X39</code>).</p>
+<p>⚠ THIS IS NOT THE CANONICAL TEXT.  It writes the spelling it is GIVEN, and both the form's start corner and the run's direction are choices the model does not fix — so two calls can spell one stencil two ways.  A round trip diffs against <code>draft_canon_text</code>.</p>
+<p>Example: @HXI-001</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_read</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Draft</span></code></pre>
+<p>Parse.  The <code>side</code> lines go to <code>form_read</code> unchanged; a trailing <code>wall</code> line is this layer's. A malformed record yields a stencil with an empty form — REFUSED, never repaired.</p>
+<p>THAT WAS A CLAIM BEFORE IT WAS A TEST, and it was wrong the same way <code>hex_form</code>'s reader was (that one was measured first; this line inherited both the <code>word_int(…) ?? 0</code> helper and the gap).  A nineteen-cell acceptance matrix admitted ten texts <code>draft_write</code> cannot emit and re-wrote each of them differently: a trailing space, an extra field, <code>+3</code>, <code>003</code>, a <code>wall</code> line placed between two <code>side</code> lines — and, sharper than any spelling, a field that is not a number at all.  <code>wall d x a -6 b 9 p 1</code> became <code>d 0</code>: not a wall that is missing, A WALL POINTING SOMEWHERE ELSE, admitted into the model without a word.  <code>a x</code> moved it instead.</p>
+<p>What pins it now is the same RE-SPELLING IDENTITY: a field is an integer only if printing the parse reproduces the original characters, a line is a record only if it carries exactly the fields the writer emits, and the <code>wall</code> line is LAST because that is where the writer puts it.</p>
+<p>Example: @HXI-003</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_draw</span>(s: <span class="en">Draft</span>, cq: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cr: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>,</code></pre>
+<p>Draw the whole stencil into one field: the fill, its own boundary walls, and the embedded run as material on INTERIOR edges only.  Returns the number of interior edges the run marked.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_interior</span>(cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>, embedmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">EdgeSet</span></code></pre>
+<p>The INTERIOR edges carrying <code>embedmat</code>, isolated — what the run reader consumes.  Boundary edges (one cell out) are the stencil's own walls and are never part of a run.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_rebuild_text</span>(cells: <span class="en">HexSet</span>, edges: <span class="en">EdgeSet</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>, embedmat: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>REBUILD, INCLUDING THE RUN.  The form comes from the cells (constructive recovery, <code>X45</code>); the run comes from the interior edges (<code>wall_read_run</code>, <code>X60</code>) — two recoveries reading disjoint slots.  An unreadable run is REFUSED, so it is dropped loudly by a text diff rather than silently.</p>
+<p>⚠ DIFF THIS AGAINST <code>draft_canon_text</code>, NOT against <code>draft_write</code>.  What comes back is the spelling the FIELD answers with, and for the run half that is one of two — see the note there.</p>
+<p>Example: @HXI-002</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_canon</span>(s: <span class="en">Draft</span>, cells: <span class="en">HexSet</span>) -&gt; <span class="en">Draft</span></code></pre>
+<p>── ONE MODEL, ONE TEXT — the canonical spelling ───────────────────────────</p>
+<p>The format's premise is that a <code>diff</code> means *the model changed*, which needs every model to have exactly ONE text.  The form half has that: a shape has n cyclic spellings and <code>form_canon</code> picks the smallest, which is why <code>rebuild_construct_text</code> and <code>form_canon_text</code> agree.</p>
+<p>THE RUN HALF HAD NO SUCH RULE, and a run has exactly TWO spellings — <code>(d, A, p)</code> and <code>(d + 12, B, p)</code> — because A-to-B and B-to-A mark the identical edges and the field stores no orientation (<code>wall_read_run</code>'s own note).  Measured over all 24 directions: the two spellings draw fields that differ in ZERO edges, and **exactly one of them survives a text round trip**, never both and never neither.  So an author who wrote the wall from the other end got *the model changed* out of a byte diff on a model that had not changed at all.</p>
+<p>The canonical spelling is therefore READ OFF THE FIELD rather than chosen by a rule — the same discipline <code>hexfit</code>'s feature grid is built on (<code>SPEC</code> **L11**: consult the table that owns the answer), and the only definition that cannot drift from what <code>draft_rebuild_text</code> will answer, since it is that same reader.</p>
+<p>Example: @HXI-001</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_canon_text</span>(s: <span class="en">Draft</span>, cells: <span class="en">HexSet</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The one text a round trip can be diffed against.  A run that does not FIT is left as written — the canon is a spelling rule, not a doorstep, and refusing here would hide which of the two is wrong.</p>
+<p>Example: @HXI-001</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_fit_reason</span>(code: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_fits</span>(s: <span class="en">Draft</span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>THE DOORSTEP.  <code>cells</code> is the form's own footprint.  Returns a reason code — <code>FIT_OK</code> or the specific restriction, never a bare false.</p>
+<p>Example: @HXI-004</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">draft_fit_p</span>(s: <span class="en">Draft</span>, cells: <span class="en">HexSet</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>AND THE ALTERNATIVE THE REFUSAL OWES (<code>K-FIT</code>): the longest run from this anchor, in this direction, that IS admissible and fits — searching downward so the offer is never longer than what was asked for.  0 when nothing fits, which is itself a usable answer: move the anchor.</p>
+<p>Example: @HXI-004</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fit_reason</span>(code: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>One reason table for the whole doorstep — <code>hexdraft</code>'s codes and these.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_grid</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;</code></pre>
+<p>The admissible positions on a side, in the order the run stores them — which is NOT t order (<code>A5</code>: index a feature by its exact <code>t</code>, never by its position in the <code>SideRun</code>).</p>
+<p>Example: @HXI-005</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_fits</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>, nedges: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>THE DOORSTEP.  <code>t</code> must be exactly an edge centre of this side — no tolerance (<code>P4</code>), because in regime R1 an epsilon is a defect signal and not a knob.</p>
+<p>Example: @HXI-005</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_fit_t</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>AND THE ALTERNATIVE THE REFUSAL OWES: the nearest admissible <code>t</code>.  This is what an editor calls with a raw mouse position — the snap is EXPLICIT and returns a value the author can see, rather than happening silently inside <code>place_opening</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">feature_fit_residual</span>(p: <span class="en">Plan</span>, cells: <span class="en">HexSet</span>, side: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The residual the editor must SHOW (<code>K-FIT</code>): how far the offer is from what was asked.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_is_shell</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_fits</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_fit_n</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The nearest realisable shell — <code>K-FIT</code> says *nearest*, so this can offer a LARGER disk than the author asked for (N = 11 is offered 12, not 0).  That is deliberate and differs from what the unrefused value would have drawn: an off-grid N silently draws the shell BELOW it, so <code>arc_fill</code> would have given 0.  Offering the nearest and showing the residual is the point — the author sees both candidates' cost — <code>arc_snap_n</code> is the other one — instead of being quietly rounded down. Ties go DOWN, to the smaller shell.</p>
+<p>Example: @HXI-006</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_fit_residual</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_snap_n</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>THE OTHER CANDIDATE, and the reason the comment above can say *both*.  This is the shell an UNREFUSED radius actually draws — the largest realisable one at or below <code>n24</code> — so an editor can show the author what the silent snap would have cost beside what the offer costs.  The two are not close: <code>N = 35</code> is offered 36 at a residual of 1 and would have drawn **12**, an error of 23 in the same units, because 12 and 36 are neighbouring shells.  Verified against <code>arc_fill</code> over every radius 0..64 rather than against the formula it shares with <code>arc_fits</code>.</p>
+<p>Example: @HXI-006</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">arc_snap_residual</span>(n24: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">level_fits</span>(lv: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>── LEVELS — MEASURED TO HAVE NOTHING TO REFUSE ─────────────────────────────</p>
+<p>A level is the topological SHEET (<code>X58</code>), stored as an integer (<code>ha_cy</code> / <code>ck_cy</code>) and used as a FILTER BEFORE THE CUT.  There is no continuous parameter here, so <code>I-QUANT</code> has nothing to say: nothing exists *between* two levels to be snapped to one of them.  Measured over the full range an integer holds — the behaviour at ±10^6 is identical to the behaviour at 0.</p>
+<p>This returns <code>FIT_OK</code> unconditionally, and that is a RESULT, not an omission.  <code>tests/fit.loft</code> keeps it honest the only way an always-true predicate can be kept honest: by showing that the SAME doorstep refuses the other parameters, so &quot;accepts every level&quot; is not &quot;accepts everything&quot;.</p>
+<p>Example: @HXI-008</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">mat_fits</span>(m: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>⚠ NO OFFER, AND THAT IS THE POINT.  <code>K-FIT</code> says a refusal offers *the nearest fitting alternative* — which presumes an ORDINAL parameter, where &quot;nearest&quot; means &quot;almost what you asked for&quot;.  A material id is NOMINAL: it is a name, not a magnitude.  The nearest admissible id to 256 is 255, and 255 is a *different material* — offering it would be worse than a blank no, because it looks like a small correction and is not.  So this refusal names its restriction and stops there.  The author must pick a material, not accept a rounding.</p>
+<p>Example: @HXI-007</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">height_units_at</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>, scale: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The voxel's own value for a height, at a given quantum: what <code>h_height</code> would hold.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">height_from_units_at</span>(u: <span class="ty"><a href="stdlib-types.html">integer</a></span>, scale: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fits_at</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>, scale: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>THE DOORSTEP, at the caller's quantum.  A height must land exactly on the voxel's grid; off it, the store truncates and <code>X59</code>'s returned residual would be wrong by the truncation — which is the one thing <code>SPEC</code> **G5** says must never happen silently.</p>
+<p>⚠ **A NON-POSITIVE QUANTUM IS REFUSED BY NAME RATHER THAN DIVIDED BY.** loft's division by zero yields null and keeps running, so an unchecked <code>z / scale</code> would discharge to <code>0.0</code> and this would answer *on the grid* for <code>z = 0</code> and *off it* for everything else — a wrong verdict dressed as a real one, which is exactly what a doorstep exists not to produce.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fit_z_at</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>, scale: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>The offer, and the residual the editor must show — in world units.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fit_residual_at</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>, scale: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">height_units</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">height_from_units</span>(u: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fits</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Example: @HXI-008</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fit_z</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_fit_residual</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seat_is_integral</span>(z: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Kept from before the fork closed, now meaning exactly &quot;on the voxel's grid&quot;.</p>
+</div>
 
   </article>
 <script src="search-index.js"></script>

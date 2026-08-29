@@ -385,7 +385,7 @@
   <span class="st">"{host}:{port}:{tls}"</span>
 }</code></pre>
 <h2 id="reference-parameters-and-defaults">Reference Parameters and Defaults</h2>
-<p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller<code>s variable and can read or write it. Without </code>&amp;<code>, Loft copies the value in, so changes inside the function stay local. Default values (written </code>= value' after the type) are substituted when the caller omits that argument.</p>
+<p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller's variable and can read or write it. Without <code>&amp;</code>, Loft copies the value in, so changes inside the function stay local. Default values (written <code>= value</code> after the type) are substituted when the caller omits that argument.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">add</span>(a:  &amp; <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>) {
   a += b + c;
 }</code></pre>
@@ -551,7 +551,7 @@
 <p>You can fill a vector with many copies of the same value using <code>; count</code> syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples.</p>
 <h2 id="passing-vectors-to-functions">Passing vectors to functions</h2>
 <p>When you pass a vector to a function, the function receives a <strong>slice</strong> — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with <code>+=</code> inside the function creates a local copy that the caller never sees.</p>
-<p>To let a function append to the caller<code>s vector, mark the parameter with </code>&amp;'. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
+<p>To let a function append to the caller's vector, mark the parameter with <code>&amp;</code>. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
 <pre><code>fn append_one(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
 </code></pre>
 <p>Without <code>&amp;</code>, only element-level mutations are visible to the caller:</p>
@@ -579,7 +579,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 </section>
 <section class="print-section" id="08-struct">
 <h1>Structs</h1>
-<p>A struct groups related values under one name. Instead of keeping a product<code>s name, price, and stock count in three separate variables that can drift out of sync, you bundle them together into a Product struct. Each piece of data inside the struct is called a field. You read and write fields using dot notation: </code>product.price'. Here is a simple product record. All four fields are plain integers or text.</p>
+<p>A struct groups related values under one name. Instead of keeping a product's name, price, and stock count in three separate variables that can drift out of sync, you bundle them together into a Product struct. Each piece of data inside the struct is called a field. You read and write fields using dot notation: <code>product.price</code>. Here is a simple product record. All four fields are plain integers or text.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Product</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   price: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
@@ -1991,7 +1991,7 @@ elapsed_ms  = elapsed_us / 1000
 }</code></pre>
 <h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
 <p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Text arguments are auto-wrapped through <code>json_parse</code> internally.</p>
-<p>A field the JSON does not mention — and a field written <code>null</code> — gets the DECLARED type<code>s absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field </code>integer?<code> / </code>float?' if you need to tell "absent" from "zero" apart:</p>
+<p>A field the JSON does not mention — and a field written <code>null</code> — gets the DECLARED type's absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field <code>integer?</code> / <code>float?</code> if you need to tell "absent" from "zero" apart:</p>
 <pre><code>struct Reading { id: integer, drift: float? }
 r = Reading.parse("{}")     // r.id == 0, r.drift == null
 </code></pre>
@@ -2047,7 +2047,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
 <h2 id="a-missing-field-gets-its-own-declared-absence">A missing field gets its own declared absence</h2>
-<p>When a field is absent from the JSON, it gets the absent value its DECLARATION allows — not the type<code>s null sentinel. A plain field cannot hold null, so it takes its empty value: 0 for a number, "" for text, false for a boolean. Declare the field </code>T?<code> when "the document did not say" has to be tellable from "the document said zero", and check it with </code>!<code> or </code>??' before use.</p>
+<p>When a field is absent from the JSON, it gets the absent value its DECLARATION allows — not the type's null sentinel. A plain field cannot hold null, so it takes its empty value: 0 for a number, "" for text, false for a boolean. Declare the field <code>T?</code> when "the document did not say" has to be tellable from "the document said zero", and check it with <code>!</code> or <code>??</code> before use.</p>
 <pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.name == <span class="st">""</span>, <span class="st">"a missing `text` field is empty: [{partial.name}]"</span>);

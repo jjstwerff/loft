@@ -373,6 +373,45 @@ fn to_anchor_id(text: &str) -> String {
         .join("-")
 }
 
+/// The byte offset — relative to `i + 1` — of the delimiter closing the `'…'` or
+/// `` `…` `` span that `c` opens at `i`, or `None` when this delimiter opens no span.
+///
+/// A backtick means one thing, so the next backtick closes it.  An apostrophe means three:
+/// a code delimiter, a possessive and a contraction.  Reading every apostrophe as a
+/// delimiter let the possessive in *"a product's name"* open a span that the real opener of
+/// `'product.price'` then closed, rendering three sentences of the Structs page as code.
+///
+/// So a quote opens a span only when it does not follow a word character, and closes one
+/// only when it is not followed by one.  That leaves `'don't'` a single span, and leaves
+/// `L'Ecuyer's` — where neither quote qualifies — as the prose it is.
+fn close_span(s: &str, i: usize, c: char) -> Option<usize> {
+    let rest = &s[i + 1..];
+    if c == '`' {
+        return rest.find(c).filter(|&e| e > 0);
+    }
+    if s[..i]
+        .chars()
+        .next_back()
+        .is_some_and(char::is_alphanumeric)
+    {
+        return None;
+    }
+    let mut from = 0;
+    while let Some(e) = rest[from..].find(c) {
+        let end = from + e;
+        if end > 0
+            && !rest[end + 1..]
+                .chars()
+                .next()
+                .is_some_and(char::is_alphanumeric)
+        {
+            return Some(end);
+        }
+        from = end + 1;
+    }
+    None
+}
+
 /// Convert inline markdown in already-escaped HTML text:
 /// `**bold**` → `<strong>bold</strong>`, `'code'` → `<code>code</code>`.
 fn inline_format(s: &str) -> String {
@@ -392,8 +431,7 @@ fn inline_format(s: &str) -> String {
                 chars.next();
             }
         } else if (c == '\'' || c == '`')
-            && let Some(end) = s[i + 1..].find(c)
-            && end > 0
+            && let Some(end) = close_span(s, i, c)
         {
             out.push_str("<code>");
             out.push_str(&s[i + 1..i + 1 + end]);
@@ -1748,6 +1786,40 @@ fn gather_pkg_topics(docs_dir: &std::path::Path) -> Vec<Topic> {
 #[cfg(all(test, feature = "registry"))]
 mod tests {
     use super::*;
+
+    // An apostrophe is a possessive and a contraction as well as a code delimiter, and
+    // reading every one as a delimiter published three sentences of the Structs page as
+    // code.  These are the shapes the topic corpus actually contains.
+    #[test]
+    fn inline_format_reads_an_apostrophe_as_prose_unless_it_delimits() {
+        // After a space, before punctuation: a code span, as it always was.
+        assert_eq!(
+            inline_format("write 'product.price' here"),
+            "write <code>product.price</code> here"
+        );
+        // The possessive cannot open a span, so the intended opener later in the sentence
+        // is still an opener.  (tests/docs/08-struct.loft; doc/08-struct.html shipped this
+        // paragraph with three sentences monospaced and a stray quote after them.)
+        assert_eq!(
+            inline_format("a product's name, using 'product.price'."),
+            "a product's name, using <code>product.price</code>."
+        );
+        // Neither quote qualifies here: one follows `L`, the other precedes `s`.
+        assert_eq!(
+            inline_format("L'Ecuyer's combined LCG"),
+            "L'Ecuyer's combined LCG"
+        );
+        // A contraction inside a span does not close it early.
+        assert_eq!(
+            inline_format("say 'don't' now"),
+            "say <code>don't</code> now"
+        );
+        // A backtick has one meaning, so the next backtick closes it.
+        assert_eq!(
+            inline_format("use `len(v)` here"),
+            "use <code>len(v)</code> here"
+        );
+    }
 
     #[test]
     fn extract_api_items_pulls_pub_sig_and_full_doc() {

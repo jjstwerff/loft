@@ -533,8 +533,12 @@ fn generate_libraries_page<S: std::hash::BuildHasher>(
         "Generated {rendered} library API references ({unrecorded} package(s) predate the \
          registry's `api` field and say so)"
     );
-    let (guides, no_guide) = generate_library_guides(index, stdlib_sections, topic_info, link_map)?;
-    println!("Generated {guides} library guides ({no_guide} package(s) ship none yet)");
+    let (guides, no_guide, guide_uncached) =
+        generate_library_guides(index, stdlib_sections, topic_info, link_map)?;
+    println!(
+        "Generated {guides} library guides ({no_guide} package(s) ship none yet, \
+         {guide_uncached} not in the local registry cache and say so)"
+    );
     let (src_pages, uncached) =
         generate_library_source_pages(index, stdlib_sections, topic_info, link_map)?;
     println!(
@@ -599,25 +603,23 @@ fn generate_library_cards(
         // The guide comes first: a reader who has decided to look at a library wants the
         // introduction before the facts about it. A package that ships none says so and
         // names the cure, because "no link" and "no guide" look identical.
-        let mut guide_files: Vec<std::path::PathBuf> = Vec::new();
-        collect_loft_files(
-            &loft::registry_index::extract_dir(name, &v.semver).join("docs"),
-            &mut guide_files,
-        );
-        if guide_files.is_empty() {
-            row(
-                "Guide",
-                "none yet \u{2014} the API reference and the source below are what there is",
-            );
-        } else {
-            row(
-                "Guide",
-                &format!(
+        row(
+            "Guide",
+            &match guide_source(name, &v.semver) {
+                GuideSource::Ships(_) => format!(
                     "<a href=\"lib-{0}-guide.html\">getting started with {0}</a>",
                     esc(name)
                 ),
-            );
-        }
+                GuideSource::None => {
+                    "none yet \u{2014} the API reference and the source below are what there is"
+                        .to_string()
+                }
+                GuideSource::Uncached => format!(
+                    "not known \u{2014} <code>{}</code> is not in this build's registry cache",
+                    esc(name)
+                ),
+            },
+        );
         row(
             "Version",
             &format!(
@@ -911,31 +913,33 @@ fn generate_library_api_pages<S: std::hash::BuildHasher>(
 /// Rendered with `render_topic_body` — the same renderer the language topics go through, so
 /// a library guide and a language page are the same artefact pointed at a different file.
 ///
-/// Returns `(rendered, without)`. A library with no guide gets no page and its card says so
-/// rather than linking at an empty one; writing `docs/01-getting-started.loft` in the
-/// package is the whole of what it takes to appear here.
+/// Returns `(rendered, without, uncached)`. A library with no guide gets no page and its
+/// card says so rather than linking at an empty one; writing `docs/01-getting-started.loft`
+/// in the package is the whole of what it takes to appear here.
 fn generate_library_guides<S: std::hash::BuildHasher>(
     index: &loft::registry_index::RegistryIndex,
     stdlib_sections: &[StdlibSection],
     topic_info: &[(String, String)],
     link_map: &HashMap<String, String, S>,
-) -> std::io::Result<(usize, usize)> {
+) -> std::io::Result<(usize, usize, usize)> {
     let mut rendered = 0usize;
     let mut without = 0usize;
+    let mut uncached = 0usize;
     for (name, pkg) in &index.packages {
         let Some(v) = loft::registry_index::find_best_version(pkg, "*", false) else {
             continue;
         };
-        let mut guides: Vec<std::path::PathBuf> = Vec::new();
-        collect_loft_files(
-            &loft::registry_index::extract_dir(name, &v.semver).join("docs"),
-            &mut guides,
-        );
-        guides.sort();
-        if guides.is_empty() {
-            without += 1;
-            continue;
-        }
+        let guides = match guide_source(name, &v.semver) {
+            GuideSource::Ships(files) => files,
+            GuideSource::None => {
+                without += 1;
+                continue;
+            }
+            GuideSource::Uncached => {
+                uncached += 1;
+                continue;
+            }
+        };
         rendered += 1;
 
         let mut body = String::new();
@@ -970,7 +974,40 @@ fn generate_library_guides<S: std::hash::BuildHasher>(
         let html = page_html(&title, &nav, &title, &body, &meta);
         fs::write(format!("doc/lib-{name}-guide.html"), html)?;
     }
-    Ok((rendered, without))
+    Ok((rendered, without, uncached))
+}
+
+/// What this build box can truthfully say about a package's guide.
+///
+/// The three answers are not two: *ships none* is a fact about the PACKAGE, *not cached* is
+/// a fact about the BOX, and a page that prints the second as the first tells a reader that
+/// `graphics` has no guide when it has one.  The release runner is exactly that box — it
+/// checks out, generates and publishes with an empty `~/.loft/registry` unless the workflow
+/// fills it — so the distinction is the published one, not a corner case.
+enum GuideSource {
+    /// The package is extracted here and ships these guide files (never empty, sorted).
+    Ships(Vec<std::path::PathBuf>),
+    /// The package is extracted here and ships no `docs/*.loft`.
+    None,
+    /// The package is not in this box's registry cache, so nothing about it is known.
+    Uncached,
+}
+
+/// The one place `docs/*.loft` is looked for, so the card and the guide page cannot disagree
+/// about whether there is a page to link at.
+fn guide_source(name: &str, semver: &str) -> GuideSource {
+    let dir = loft::registry_index::extract_dir(name, semver);
+    if !dir.is_dir() {
+        return GuideSource::Uncached;
+    }
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    collect_loft_files(&dir.join("docs"), &mut files);
+    files.sort();
+    if files.is_empty() {
+        GuideSource::None
+    } else {
+        GuideSource::Ships(files)
+    }
 }
 
 /// The `@TITLE:` a topic file declares, used only to head one guide among several.
@@ -1541,6 +1578,16 @@ fn generate_search_index(
             "{{name:{:?},kind:\"library\",url:\"lib-{}.html\"}}",
             pkg_name, pkg_name
         ));
+        // A guide is the answer to *how do I start?*, and it is the tier a reader is most
+        // likely to go looking for by name.  Only a package that actually ships one is
+        // listed — the search box must not offer a page the build did not write.
+        if matches!(guide_source(pkg_name, &v.semver), GuideSource::Ships(_)) {
+            entries.push(format!(
+                "{{name:{:?},kind:\"guide\",url:\"lib-{}-guide.html\"}}",
+                format!("{pkg_name} guide"),
+                pkg_name
+            ));
+        }
         for item in &v.api {
             if let Some(name) = sig_name(&item.sig) {
                 let kind = sig_kind(&item.sig);

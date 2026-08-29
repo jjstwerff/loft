@@ -40,7 +40,7 @@
   <span class="st">"{host}:{port}:{tls}"</span>
 }</code></pre>
 <h2 id="reference-parameters-and-defaults">Reference Parameters and Defaults</h2>
-<p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller<code>s variable and can read or write it. Without </code>&amp;<code>, Loft copies the value in, so changes inside the function stay local. Default values (written </code>= value' after the type) are substituted when the caller omits that argument.</p>
+<p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller's variable and can read or write it. Without <code>&amp;</code>, Loft copies the value in, so changes inside the function stay local. Default values (written <code>= value</code> after the type) are substituted when the caller omits that argument.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">add</span>(a:  &amp; <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>) {
   a += b + c;
 }</code></pre>

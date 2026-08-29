@@ -91,7 +91,7 @@
 <p>You can fill a vector with many copies of the same value using <code>; count</code> syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples.</p>
 <h2 id="passing-vectors-to-functions">Passing vectors to functions</h2>
 <p>When you pass a vector to a function, the function receives a <strong>slice</strong> — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with <code>+=</code> inside the function creates a local copy that the caller never sees.</p>
-<p>To let a function append to the caller<code>s vector, mark the parameter with </code>&amp;'. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
+<p>To let a function append to the caller's vector, mark the parameter with <code>&amp;</code>. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
 <pre><code>fn append_one(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
 </code></pre>
 <p>Without <code>&amp;</code>, only element-level mutations are visible to the caller:</p>

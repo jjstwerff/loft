@@ -22,6 +22,12 @@ path = "src/main.rs"
 [[bin]]
 name = "gendoc"
 path = "src/gendoc.rs"
+# The doc site's library tiers (@PLN149) are rendered from the registry index and the
+# packages it names, so gendoc reads `loft::registry_index` and `loft::install` — both
+# behind the `registry` feature.  Without this line `cargo clippy --no-default-features
+# --all-targets` (the second variant `make ship` runs) tries to build gendoc without
+# them and stops on E0433 before linting anything.
+required-features = ["registry"]
 
 [[bin]]
 name = "loft-keygen"

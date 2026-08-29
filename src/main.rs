@@ -2615,6 +2615,8 @@ fn bundle_import(indir: &str) -> i32 {
 /// Deliberately syntactic: `publish` does not parse the package, and the question is only
 /// *"is `{}` believable here?"*.  Over-reporting costs a note the author can ignore;
 /// under-reporting is the defect.
+// Its one caller is `registry` gated; the unit tests below reach it directly.
+#[cfg(any(test, feature = "registry"))]
 fn undeclared_source_deps(
     pkg_path: &std::path::Path,
     pkg_name: &str,
@@ -4419,6 +4421,7 @@ fn registry_sync() {
 }
 
 /// The legacy flat-text sync, for an explicitly configured `registry.txt` source.
+#[cfg(feature = "registry")]
 fn registry_sync_flat_file(existing_source: Option<&str>) {
     use loft::registry;
 

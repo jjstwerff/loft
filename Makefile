@@ -2054,12 +2054,26 @@ bench:
 	cargo build --release -q
 	bash bench/run_bench.sh --warmup
 
+.PHONY: doc doc-packages
+# The whole doc site, the way the release builds it (@PLN149).
+#
+# `gendoc` alone is not that: tiers 1 and 3 — the library guide and the source browser —
+# render the EXTRACTED package under `~/.loft/registry/`, which the registry index does
+# not carry.  On a box whose cache is empty every page still generates, and 42 of them
+# say "not on this build box" instead of showing the source.  Filling the cache first is
+# what makes a local build and the published site the same artefact.
+doc: doc-packages  ## Build doc/*.html the way the release does (cache first, then gendoc)
+	cargo run --bin gendoc
+
+doc-packages:  ## Fetch every published package the doc build renders (no-op once cached)
+	@cargo build --release --bin loft
+	@scripts/fetch-doc-packages.sh target/release/loft
+
 # Typst stamps a creation date into the PDF, so an unchanged document still produces a
 # different file on every build and a COMMITTED pdf churns in every diff.  Pinning
 # SOURCE_DATE_EPOCH to the source's last commit makes the output depend on the content
 # alone: rebuild without editing and git reports nothing.
-pdf:
-	cargo run --bin gendoc
+pdf: doc
 	SOURCE_DATE_EPOCH=$$(git log -1 --format=%ct -- doc/loft-reference.typ) \
 	  typst compile doc/loft-reference.typ doc/loft-reference.pdf
 
