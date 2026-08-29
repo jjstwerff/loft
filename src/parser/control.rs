@@ -244,6 +244,12 @@ enum RetPromotion {
     /// promotion would change the call ABI for locals the NRVO machinery
     /// cannot host (e.g. a call-result vector).
     MergeOnly,
+    /// loft#1182 — a CAPTURED closure variable, read out of the closure record: never
+    /// promoted, which is what [`TextDep::SkipCaptured`] has said about the text half all
+    /// along.  There is no store to place — the capture belongs to the frame that made it —
+    /// so growing a buffer for it declares a delivery the body then ignores, and
+    /// `--native`'s dispatch keeps that buffer because the candidate's return deps name it.
+    SkipCaptured,
     /// An inner work ref that is not — and is not ADOPTED by (cluster I-d) —
     /// the site's value: stays a plain local; the outer call deep-copies its
     /// record into the destination before scope exit frees it.  Sentinel sweep
@@ -12181,6 +12187,19 @@ impl Parser {
                 && self.data.def(self.context).attributes()[a as usize].hidden;
             return RetPromotion::MergeAttr { a, chain_site };
         }
+        // A CAPTURE has nothing to place either, and for the same reason the attribute rung
+        // above gives: the store belongs to the frame that made it, and the body reads it out
+        // of the closure record.  `classify_text_dep` has answered this exact question with
+        // `TextDep::SkipCaptured` since @PLN85 — one notion, and the ref ladder could not see
+        // it, so `{ q.xs }` grew a hidden `q` buffer that the body then ignores.  The
+        // interpreter hid that: `State::fn_return` releases any buffer the callee did not hand
+        // back (loft#1179), a runtime check that does not care what the deps claim.  `--native`
+        // reads the deps instead — `arm_frees_buf` frees an unfilled `__vc_hbuf` only when the
+        // candidate's return deps do NOT name a hidden heap attr, and they do, because the
+        // buffer exists — so it leaked one store per call (loft#1182).
+        if self.captured_names.iter().any(|(name, _)| name == n) {
+            return RetPromotion::SkipCaptured;
+        }
         // A reassigned returned LOCAL must NOT be NRVO-promoted — but a NAMED
         // local at a vector fn's body tail still DELIVERS: it falls through to
         // the `Bind` copy leg (reassignment is irrelevant to a single
@@ -12586,6 +12605,7 @@ impl Parser {
                     | RetPromotion::SkipReassigned
                     | RetPromotion::MergeOnly
                     | RetPromotion::SkipInnerRef
+                    | RetPromotion::SkipCaptured
                     | RetPromotion::SkipJoinArm => {}
                     // loft#974 — a shape that carries its own delivery takes the borrow
                     // fact and nothing else: no buffer rename, no bind, no arity growth.

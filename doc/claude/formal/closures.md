@@ -149,6 +149,26 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-14 — OPENED AND CLOSED (2026-08-29, loft#1182): a lambda handing back a place read
+> out of a CAPTURE reserved a return buffer it then ignored.** `(L-CapHeap)` says the captured
+> store belongs to the frame that made it, so there is nothing for the callee to place — and
+> `ref_return`'s ladder had no verdict for that and fell through to `Grow`, so
+> `fn(v: integer) -> vector<integer> { q.xs }` grew a hidden `q` buffer the body never fills.
+>
+> The two backends then disagreed, and that disagreement is the entry. `--interpret` was clean
+> because `State::fn_return` releases any buffer the callee did not hand back (D-clo-7's fix),
+> a RUNTIME check that does not care what the deps claim. `--native` reads the deps:
+> `arm_frees_buf` frees an unfilled `__vc_hbuf` only when the candidate's return deps do NOT
+> name a hidden heap attr, and they do, because the buffer exists. One store leaked per call.
+>
+> `classify_text_dep` has answered this exact question since @PLN85 — `TextDep::SkipCaptured`,
+> *"captured closure var — read from the closure record; never promoted"*. One notion, two
+> ladders, and only the text one could see it. The ref ladder now carries the same verdict.
+>
+> Guard: `tests/scripts/1182-a-captured-place-tail-reserves-no-buffer.loft`, whose native row
+> moves on the leak channel and whose interpret row is INERT — a backend divergence can only
+> move one, which is why `make falsify`'s conservative AND reports NOT falsified for it.
+
 > **D-clo-11 — OPENED AND CLOSED (2026-08-29, loft#1181): a captured STRUCT was TAKEN by the
 > caller's bind, and the same dep was dropped TWICE on its way to the call site.**
 > `(L-CapHeap)` names struct and vector in one breath, so D-clo-10's *"only for a COLLECTION
