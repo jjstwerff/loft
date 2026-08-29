@@ -19,8 +19,15 @@
 // which of the two it is, rather than presenting a calculator that mysteriously cannot see
 // the program's variables.
 
-import init, { debug_start, debug_command } from './pkg/loft.js';
 import { createHost } from './loft-rt.js';
+
+// The wasm module is imported DYNAMICALLY, not with a static `import { debug_start }`.
+// A static named import of a missing export is a link-time error that stops the whole
+// module before a line of it runs — so a page served from a tree whose `doc/pkg` predates
+// these two exports would show a dead panel and nothing explaining it. Loaded this way,
+// the absence is a value the panel can report.
+let debug_start = null;
+let debug_command = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -235,10 +242,18 @@ async function boot() {
     // `globalThis.loftHost.*` for file, time, random and log operations.
     const { host } = createHost();
     window.loftHost = host;
-    await init();
+    const mod = await import('./pkg/loft.js');
+    if (typeof mod.debug_start !== 'function' || typeof mod.debug_command !== 'function') {
+      setStatus('this site\u2019s loft bundle predates the panel \u2014 rebuild it with '
+        + '`make wasm`', 'err');
+      return;
+    }
+    debug_start = mod.debug_start;
+    debug_command = mod.debug_command;
+    await mod.default();
     ready = true;
     $('lp-run').disabled = false;
-    setStatus('ready — press Run', 'ok');
+    setStatus('ready \u2014 press Run', 'ok');
   } catch (e) {
     setStatus('the loft runtime did not load: ' + e.message, 'err');
   }

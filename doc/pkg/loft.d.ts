@@ -30,30 +30,6 @@ export function compile_and_run(files_json: string): string;
 export function compile_and_start(files_json: string): string;
 
 /**
- * Apply one debug command to the live session.
- *
- * Returns JSON `{"replies":[…],"output":"…"}` — the `D:` replies the command produced and
- * whatever the program printed while it ran.  The two travel together because a `run` or a
- * `resume` produces both, and a page fetching them separately could paint a pause before
- * the output that led to it.
- *
- * The grammar is [`command`]'s: `bp <fn>` / `bp <line>`, `run`, `resume`, `step`,
- * `eval <expr>`, `fns`.
- */
-export function debug_command(cmd: string): string;
-
-/**
- * Start a debug session over `source`, replacing any previous one.
- *
- * Returns JSON `{"ok":true}`, or `{"ok":false,"error":"…"}` carrying the diagnostics — a
- * page that offers to run the code in front of the reader has to say why it will not.
- *
- * A bare script (top-level statements, no `fn main`) is desugared exactly as
- * `compile_and_run` desugars it, so the two entries accept the same inputs.
- */
-export function debug_start(source: string): string;
-
-/**
  * Resume execution after a frame yield.  Returns JSON:
  * `{"running":true}` — yielded again, call on next requestAnimationFrame
  * `{"running":false,"output":"..."}` — program finished
@@ -73,17 +49,27 @@ export function swap_export(): string;
  */
 export function swap_stage(snapshot: string): void;
 
+/**
+ * Entry point called by each Worker Thread.  The JS worker loop calls
+ * this with the function index and element range.  The worker reads from the
+ * shared WASM memory (Store heap) and writes results directly back.
+ *
+ * This is a no-op stub until the wasm-threads feature build is available.
+ * The actual implementation needs access to the shared State, which requires
+ * the wasm-threads + atomics build flags.
+ */
+export function worker_entry(_fn_index: number, _start: number, _end: number): void;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly debug_command: (a: number, b: number) => [number, number];
-    readonly debug_start: (a: number, b: number) => [number, number];
     readonly compile_and_run: (a: number, b: number) => [number, number];
     readonly compile_and_start: (a: number, b: number) => [number, number];
     readonly resume_frame: () => [number, number];
     readonly swap_export: () => [number, number];
     readonly swap_stage: (a: number, b: number) => void;
+    readonly worker_entry: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

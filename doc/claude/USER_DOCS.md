@@ -581,6 +581,16 @@ live, which is what the prompt needs; but a program whose only `print` IS that l
 pauses with no output shown, which is why page 38 prints first and asserts after. Resume
 finishes it.
 
+**The committed `doc/pkg` cannot carry the two new exports yet (loft#1189).** It is a tracked
+binary last rebuilt at `c68aa37d`, and two browser tests load it rather than a fresh build —
+so rebuilding it to carry `debug_start` / `debug_command` turns them red on an `engine_host`
+native that is a stub in a wasm build. The bundle therefore stays as it was; the release job
+rebuilds it before every deploy, so the LIVE panel has the exports, and a page served from a
+tree with the old bundle says *"this site's loft bundle predates the panel — rebuild it with
+`make wasm`"* rather than showing a dead widget. The panel imports the module dynamically for
+exactly that reason: a static named import of a missing export is a link-time error that
+stops the whole script before it can report anything.
+
 **The panel drives the page's whole program, not each code block.** The design said *"every
 code block on a doc page becomes drivable"*; a topic page's blocks are fragments of ONE `.loft`
 file and the session is per program, so the panel runs the page and its line breakpoints
