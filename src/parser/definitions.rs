@@ -1290,6 +1290,37 @@ impl Parser {
             }
             self.lexer.token(")");
         }
+        // The entry point takes nothing, or the invocation arguments as one `vector<text>`.
+        //
+        // `State::execute_argv` fills exactly that one shape: it pushes a TEXT vector before
+        // the return address when `main` declares a single vector parameter, and pushes
+        // nothing otherwise.  Every other signature was still accepted and simply never
+        // filled — `main(who: text)` read `""`, two integers read whatever the frame held,
+        // and a `text` among two crashed on a corrupt store reference.  A `vector` of any
+        // OTHER element type is the same fault one step on: the text vector is pushed into a
+        // slot typed for something else (loft#1172).
+        //
+        // Refused rather than filled, because none of these shapes does anything today: there
+        // is no argument to lose.  Reading them is `args: vector<text>`.
+        if !self.default && !self.first_pass && fn_name == "main" {
+            let visible: Vec<&crate::data::Argument> = arguments
+                .iter()
+                .filter(|a| !a.name.starts_with("__work_") && !a.name.starts_with("__ref_"))
+                .collect();
+            let supported = visible.is_empty()
+                || (visible.len() == 1
+                    && matches!(&visible[0].typedef,
+                                Type::Vector(inner, _) if matches!(inner.base(), Type::Text(_))));
+            if !supported {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`main` takes no parameters, or one `vector<text>` for the invocation \
+                     arguments — `fn main(args: vector<text>)`.  Any other signature is never \
+                     filled, so it would read empty or worse"
+                );
+            }
+        }
         // validate that the type variable appears in the first parameter.
         if is_generic && !arguments.is_empty() {
             let tv_nr = self.data.def_nr(&type_var_name);

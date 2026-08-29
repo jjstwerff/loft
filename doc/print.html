@@ -2831,6 +2831,17 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   hello, world!
 </code></pre>
 <p>That is the whole thing. There is no build step to run first and no project to set up. A single file is a complete program.</p>
+<h2 id="give-your-program-some-arguments">Give your program some arguments</h2>
+<p>Put them after the file name, and declare one <code>vector&lt;text&gt;</code> parameter on <code>main</code> to read them:</p>
+<pre><code>  fn main(args: vector&lt;text&gt;) {
+    for who in args { println("hello, {who}!"); }
+  }
+</code></pre>
+<pre><code>  $ loft greet.loft Ada Grace
+  hello, Ada!
+  hello, Grace!
+</code></pre>
+<p>That one parameter is the only shape <code>main</code> accepts. Any other — a plain <code>text</code>, two of them — is refused, because nothing would fill it.</p>
 <h2 id="try-something-without-making-a-file">Try something without making a file</h2>
 <p>Type <code>loft</code> on its own and you get a prompt where you can type one line at a time and see the answer straight away:</p>
 <pre><code>  $ printf '2 + 3\n' | loft repl --fresh

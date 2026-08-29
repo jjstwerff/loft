@@ -6046,6 +6046,24 @@ Put your program in a file ending in '.loft' and pass it to loft:
 
 That is the whole thing. There is no build step to run first and no project to set up. A single file is a complete program.
 
+=== Give your program some arguments
+
+Put them after the file name, and declare one `vector\<text\>` parameter on 'main' to read them:
+
+```
+  fn main(args: vector<text>) {
+    for who in args { println("hello, {who}!"); }
+  }
+```
+
+```
+  $ loft greet.loft Ada Grace
+  hello, Ada!
+  hello, Grace!
+```
+
+That one parameter is the only shape 'main' accepts. Any other — a plain 'text', two of them — is refused, because nothing would fill it.
+
 === Try something without making a file
 
 Type 'loft' on its own and you get a prompt where you can type one line at a time and see the answer straight away:

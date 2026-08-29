@@ -5159,8 +5159,15 @@ impl State {
             line: 0,
         });
         // If fn main declares a vector<text> parameter, push argv before the return address.
+        //
+        // The store is the entry frame's to release: nothing in the program owns it, because
+        // no loft code allocated it.  Kept here and freed beside the frame's other cleanup
+        // below, or it is still live at exit — one leaked store per run of any program that
+        // reads its arguments (loft#1172).
+        let mut argv_store: Option<DbRef> = None;
         if attrs.len() == 1 && !attrs[0].hidden && matches!(attrs[0].typedef, Type::Vector(_, _)) {
             let args_vec = self.database.text_vector(argv);
+            argv_store = Some(args_vec);
             self.put_stack(args_vec);
         }
         // @PLAN59: the entry fn may carry hidden heap return-buffer attrs
@@ -5414,6 +5421,12 @@ impl State {
         // Fix #88: pop the synthetic entry-function frame.
         if !self.database.frame_yield {
             self.free_entry_return(&heap_ret_slots, &text_bufs);
+            // The argv vector dies with the frame that was handed it.  Guarded by
+            // `frame_yield` like the rest of this block: a yielded frame is still live and
+            // will read its arguments again when it resumes.
+            if let Some(args_vec) = argv_store {
+                self.database.free(&args_vec);
+            }
             self.call_stack.pop();
             self.database.parallel_ctx = None;
         }
