@@ -341,9 +341,18 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 >
 > **D-clo-13 — OPEN (2026-08-29, loft#1186): a lambda whose tail JOINS a capture with a mint
 > has one dep list for two ownerships.** `fn(n: integer) -> P { cap ?? P { v: -1 } }` hands
-> back the captured record when the subject is present and the call site's own return buffer
-> when it is absent — and `State::fn_return` KEEPS that buffer (D-clo-7's fix, identified by
-> store), so the caller owns it. Read as owned, the present arm is a use-after-free; read as
+> back the captured record when the subject is present and a store of its OWN when it is
+> absent.
+>
+> ⚠ **The absent arm was written here as handing back the call site's return buffer, and it
+> does not** (re-measured 2026-08-30, `7dfafc22`). The emitted body takes `__retbuf`, never
+> writes it, mints `__ref_p2_1` with `OpDatabase`, and keeps that store precisely when it is
+> the one being returned — its own `if __ref_p2_1 != __ret_1 { free }`. So the store the
+> borrow reading leaks is a CALLEE MINT, and no rule about who owns a call site's return
+> buffer can reach it: a caller-owned buffer the callee ignores changes nothing about the
+> store that actually comes back. The re-measurement is on the issue, together with what it
+> leaves standing — the callee computes *"the store I minted is the one I am returning"* in
+> one place, which is where an owner could be attached without a new ABI. Read as owned, the present arm is a use-after-free; read as
 > a borrow, the absent arm leaks one store per call. The NAMED twin is clean on BOTH arms and
 > says what the cure is: a direct call site mints the return buffer as a caller LOCAL that
 > scope exit frees, so whichever arm runs the buffer has an owner. The fn-ref path has no
