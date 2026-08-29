@@ -69,6 +69,29 @@ bundle + JS glue generated from the same commit — regardless of what
 was committed in `doc/pkg/` or `doc/brick-buster.html`.  This is the
 last line of defence if stale files slipped past PR review somehow.
 
+### 3b. Build stamp (`scripts/wasm_bundle_stamp.sh`)
+
+`make wasm` writes `doc/pkg-src.stamp` — a hash of the sources the
+bundle is built from — and the two browser tests
+(`engine_host_connector::browser_kernel_one_script_differential` and
+`::s6_browser_swap_under_living_page`) recompute it and FAIL when it
+disagrees.
+
+Those two tests LOAD the committed bundle rather than building one, so
+without the stamp they report on whatever was last committed instead of
+on the tree under test.  That is loft#1189: the bundle was a year older
+than the source and predated `client_loop`'s call to `kernel_swap_step`,
+a native the browser kernel did not supply — and both tests were green
+the whole time.  They fail rather than skip, because a skip reads the
+same as a pass to everything downstream.
+
+⚠ The stamp covers the files that decide what the browser kernel and the
+two fixture pages do, not the whole build input, and the script's header
+says why: an exact stamp reddens these tests on every commit touching
+`src/`, which ends in either a skipped test or a 2 MB binary recommitted
+several times a day.  It catches drift at the scale that actually
+happened.
+
 ### 4. Runtime guard (`doc/gallery.html::initLoft`)
 
 If a mismatch ever reaches a browser despite the above, the gallery
@@ -103,6 +126,7 @@ to an ignored-but-rebuilt-on-deploy model is the cleanest next step.
 | Event | What catches a broken browser artefact |
 |---|---|
 | Dev edits, runs locally | `make gallery` + `make game` on demand |
+| Suite runs the browser tests | `doc/pkg-src.stamp` — they refuse a bundle built from another tree |
 | Dev opens a PR | CI `gallery` job runs **both** `make gallery` and `make game` |
 | PR merged to main | CI `gallery` re-runs post-merge |
 | Tag pushed, Pages deploys | Release workflow runs `make gallery` + `make game` before `gh-pages` deploy |

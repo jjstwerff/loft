@@ -449,6 +449,59 @@ fn extract_literal_values(code: IrNode, data: &Data) -> Result<Vec<ConstElement>
     Ok(elements)
 }
 
+/// Which `#native` symbol each panicking stub stands for, by library index.
+///
+/// A stub is a plain `fn` pointer and so cannot carry the symbol it replaced, which left the
+/// panic saying only that SOME native was missing — and the two builds where that matters most
+/// are the ones with no console to re-run under `LOFT_STUB_DEBUG=1`: a browser bundle, and a
+/// released binary.  loft#1189 spent its investigation on exactly that message.
+///
+/// `State::static_call` already publishes the index it is about to dispatch
+/// (`extensions::set_current_lib_idx`), so the stub can read it back and look the symbol up
+/// here.  A process-global is right for THIS map where it was wrong for the stub SET: the set
+/// decides what a wiring pass may replace, and two compiles racing there skipped each other's
+/// symbols, while this map only renders a message.  Two States can still land different symbols
+/// on one index, so the entry is a SET and the message names every candidate rather than
+/// picking one and sounding certain.
+static STUB_SYMBOLS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<u16, std::collections::BTreeSet<String>>>,
+> = std::sync::OnceLock::new();
+
+fn remember_stub_symbol(idx: u16, sym: &str) {
+    let map = STUB_SYMBOLS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(mut m) = map.lock() {
+        m.entry(idx).or_default().insert(sym.to_string());
+    }
+}
+
+/// The symbol the stub now running stands for, rendered for the panic message.
+///
+/// Never fails and never blocks the report: an unknown index answers a description rather than
+/// a name, because a message that says less is still better than one that says nothing.
+fn stub_symbol_now() -> String {
+    let idx = crate::extensions::current_lib_idx();
+    let Some(map) = STUB_SYMBOLS.get() else {
+        return format!("<library index {idx}>");
+    };
+    let Ok(m) = map.lock() else {
+        return format!("<library index {idx}>");
+    };
+    match m.get(&idx) {
+        None => format!("<library index {idx}>"),
+        Some(names) if names.len() == 1 => {
+            format!("`{}`", names.iter().next().unwrap_or(&idx.to_string()))
+        }
+        Some(names) => format!(
+            "one of {} (two programs put different symbols on library index {idx})",
+            names
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        ),
+    }
+}
+
 /// PKG.1: For each `#native "symbol"` declaration, register a stub function
 /// that panics when called.  This lets codegen emit `OpStaticCall` with the
 /// correct library index.  `extensions::load_all()` replaces the stubs with
@@ -492,7 +545,7 @@ fn register_native_stubs(state: &mut State, data: &Data) {
         let stub: fn(&mut Stores, &mut DbRef) = {
             |_stores: &mut Stores, _db: &mut DbRef| {
                 panic!(
-                    "native function not loaded. Either (a) its library's native cdylib is \
+                    "native function {} not loaded. Either (a) its library's native cdylib is \
                      missing or stale — commonly built against a different libloft.rlib; \
                      rebuild with `make rebuild-native-cdylibs`, or `cargo build --release` \
                      in the library's `native/` dir — or (b) a freed store was read and its \
@@ -500,11 +553,15 @@ fn register_native_stubs(state: &mut State, data: &Data) {
                      fault is a store lifetime bug that happened EARLIER. Tell them apart: \
                      if the run is green with LOFT_POISON unset, or an earlier line reports \
                      `BUG (#306)` / a strict-store violation, it is (b) — re-run with \
-                     `LOFT_STRICT_STORES=1` to name the access and the free."
+                     `LOFT_STRICT_STORES=1` to name the access and the free.",
+                    stub_symbol_now()
                 );
             }
         };
         state.static_fn(sym, stub);
+        if let Some(&idx) = state.library_names.get(sym) {
+            remember_stub_symbol(idx, sym);
+        }
     }
     // Record which symbols this program stubbed, so `wire_native_fns` knows which
     // it may replace.  On the State, not a process-global: a global was overwritten

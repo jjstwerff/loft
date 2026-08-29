@@ -49,17 +49,6 @@ export function swap_export(): string;
  */
 export function swap_stage(snapshot: string): void;
 
-/**
- * Entry point called by each Worker Thread.  The JS worker loop calls
- * this with the function index and element range.  The worker reads from the
- * shared WASM memory (Store heap) and writes results directly back.
- *
- * This is a no-op stub until the wasm-threads feature build is available.
- * The actual implementation needs access to the shared State, which requires
- * the wasm-threads + atomics build flags.
- */
-export function worker_entry(_fn_index: number, _start: number, _end: number): void;
-
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -69,7 +58,6 @@ export interface InitOutput {
     readonly resume_frame: () => [number, number];
     readonly swap_export: () => [number, number];
     readonly swap_stage: (a: number, b: number) => void;
-    readonly worker_entry: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
