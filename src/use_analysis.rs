@@ -2400,7 +2400,10 @@ fn is_protectable_store_type(tp: &Type) -> bool {
 /// nothing while reading as covered — trading this leak for a use-after-free. That
 /// shape is cured at the call site instead, by hoisting the construction
 /// (`Scopes::inline_built_borrow_source`).
-fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
+/// `pub` for loft#1154's join gate, which needs the SLOTS and not just the boolean
+/// [`bracket_can_name`] answers — a join's arms must be protected individually, and an arm the
+/// bracket cannot name is the one that vetoes the whole decision.
+pub fn view_root_slots(data: &Data, arg: &Value) -> Option<Vec<u16>> {
     // A SPAN is source position, not structure: the parser wraps a field access in one
     // and leaves a bare local unwrapped, which is why `pick(q, …)` was clean while
     // `pick(b.s, …)` leaked. Reading through it is safe because the bracket is emitted

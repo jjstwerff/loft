@@ -157,11 +157,10 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-OPEN: **3** (D-own-23, 2026-08-29, the CALL-SITE mirror of the Join leak — loft#1154, the
-residual D-own-22 left; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
 known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
-D-own-24 opened and closed 2026-08-29 with loft#1156, and D-own-21 the same day with
+D-own-23 opened and closed 2026-08-29 with loft#1154; D-own-24 the same day with loft#1156, and D-own-21 with
 loft#1150 — the three-faced one, whose entry records that a DEFERRAL is a missing
 measurement rather than a closed question; D-own-22 opened and closed 2026-08-29 with
 loft#1142; D-own-20 opened and closed 2026-08-29 with loft#1143;
@@ -273,7 +272,7 @@ iterations (`null`, the answer loft#915 gives), and a local first assigned in an
 read after the OUTER loop — that last because hoisting only one level puts it in the outer
 loop's body, where every single-loop cell still passes.
 
-### D-own-23 — OPEN (2026-08-29, loft#1154): the CALL-SITE mirror — a join whose arm is a call
+### D-own-23 — OPENED AND CLOSED (2026-08-29, loft#1154): the CALL-SITE mirror — a join whose arm is a call
 
 D-own-22's residual, and the same rule from the other side.  A keyed local bound from a JOIN
 whose arm is a fresh-storage CALL retains that call's store:
@@ -291,13 +290,28 @@ Measured against D-own-22 on one program: `origin/main` ×6, the D-own-22 build 
 half is closed and this half is untouched, which is what says they are two deviations and not
 one.
 
-⚠ **The obvious cure is an OVER-FREE.**  Widening the gate to *"a join whose arms are calls"*
-breaks the mixed shape `if c { mk(1) } else { m }`: on the local arm the source is `m`'s store
-and freeing it takes the caller's collection.  The static bit cannot separate the arms and
-which arm ran is a runtime fact, so this wants loft#1140's @P290 bracket widened to protect
-every arm TERMINAL that is a live local or parameter — not only the ref ARGUMENTS
-`protectable_ref_args` answers for today, since an arm may be a bare local that is nobody's
-argument.  That widening is the design call this entry is open on.
+⚠ **The obvious cure is an OVER-FREE**, and that is what shaped the fix.  Widening the gate to
+*"a join whose arms are calls"* breaks the mixed shape `if c { mk(1) } else { m }`: on the local
+arm the source is `m`'s store and freeing it takes the caller's collection.  The static bit
+cannot separate the arms and which arm ran is a runtime fact.
+
+Closed by deciding PER ARM (`Parser::join_source_frees`): a fresh-storage CALL's store is
+nobody else's and may be freed; a NAMEABLE arm is marked for the @P290 bracket, which then
+refuses its free at runtime; an arm that is neither leaves the decision unmakeable and the
+conservative never-free stands.  `view_root_slots` already unioned a join's arm roots for the
+ARGUMENT case, so the witness half needed no new derivation — only to be reached.
+
+Guard: `tests/scripts/1154-a-join-of-calls-frees-the-store-its-callee-minted.loft`, falsified
+at `7f80c305` on both backends (ten retained stores to clean, with `exit` and `asserts` reading
+`0|0` on both trees).  `call_or_local` is the OVER-FREE control and fails LOUDLY — it reads the
+local back empty — where the defect itself is silent.
+
+⚠ **No `??` cell.**  `??` is a join in the LANGUAGE and not one in the IR: it lowers to a block
+named `ncc` holding its subject in a `skip_free` `__ncc_N` temp, so its arms are not
+`Value::If` arms and this gate does not reach them.  `X ?? <call>` retains the call's store —
+recorded on loft#1157, whose subject is exactly that: a keyed call result with no owner.
+Protecting `__ncc_1` as a witness would make it WORSE, since that temp is the one needing the
+free.
 
 ### D-own-22 — OPENED AND CLOSED (2026-08-29, loft#1142): a Join answered the ownership fact per FUNCTION
 

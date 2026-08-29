@@ -3286,9 +3286,18 @@ use a separate collection or add after the loop"
             // (`if c { x } else { […] }`) would then leak one store per call, which the
             // bracket instead resolves at runtime — protected store, free refused;
             // callee-minted store, freed.
+            //
+            // loft#1154 — a JOIN reaches the same decision through `join_source_frees`, which
+            // answers per ARM: a fresh-storage call's store is nobody else's, and a nameable
+            // arm is protected so the runtime refuses its free.  Without it the gate asked
+            // *is the RHS a call*, a `Value::If` is not one, and the store the taken arm's
+            // callee minted was copied out of and abandoned.
             #[cfg(not(feature = "wasm"))]
-            let tp_val = if self.is_struct_returning_call(code)
-                && crate::use_analysis::call_return_frees_source(&self.data, code)
+            let join_witnesses = self.join_source_frees(code);
+            #[cfg(not(feature = "wasm"))]
+            let tp_val = if (self.is_struct_returning_call(code)
+                && crate::use_analysis::call_return_frees_source(&self.data, code))
+                || join_witnesses.is_some()
             {
                 i32::from(kt) | 0x8000
             } else {
@@ -3357,10 +3366,14 @@ use a separate collection or add after the loop"
             // call.  `protectable_ref_args` is the same derivation the source-free gate
             // above consults for coverage, so the marks and the licence cannot drift.
             let mut seq = vec![Value::Set(var_nr, Box::new(Value::Null))];
-            let guarded: Vec<u16> = if tp_val & 0x8000 != 0 {
-                crate::use_analysis::protectable_ref_args(&self.data, code).0
-            } else {
+            // A JOIN's witnesses are its ARMS' — `protectable_ref_args` reads a call's
+            // arguments and a join has none of its own (loft#1154).
+            let guarded: Vec<u16> = if tp_val & 0x8000 == 0 {
                 Vec::new()
+            } else if let Some(w) = join_witnesses {
+                w
+            } else {
+                crate::use_analysis::protectable_ref_args(&self.data, code).0
             };
             for av in &guarded {
                 seq.push(self.cl("n_protect_store_frees", &[Value::Var(*av)]));

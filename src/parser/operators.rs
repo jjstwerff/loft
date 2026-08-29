@@ -405,6 +405,59 @@ impl Parser {
         }
     }
 
+    /// loft#1154 — the `0x8000` source-free decision for a JOIN right-hand side, and the
+    /// witnesses the @P290 bracket must mark for it.
+    ///
+    /// [`Self::is_struct_returning_call`] asks *is the RHS a call*, and
+    /// `g = if c { mk(1) } else { mk(2) }` is not one — so the bit was never set and the store
+    /// the taken arm's callee minted was copied out of and then abandoned, once per evaluation
+    /// of a call arm.
+    ///
+    /// A join may free its source when EVERY arm is one of two things: a fresh-storage CALL,
+    /// whose store nothing else names, or a value the bracket can NAME, which the runtime then
+    /// refuses to free.  An arm that is neither leaves the decision unmakeable, and the
+    /// conservative never-free stands — a leak, where the alternative is taking the caller's
+    /// store out from under it.  That split is why this cannot be a static "are the arms
+    /// calls" test: `if c { mk(1) } else { m }` mixes the two, and which arm ran is a runtime
+    /// fact.
+    ///
+    /// `Some(witnesses)` licenses the bit; `None` keeps today's answer.
+    pub(crate) fn join_source_frees(&self, code: &Value) -> Option<Vec<u16>> {
+        let mut arms: Vec<&Value> = Vec::new();
+        Self::join_arms(code.unspan(), &mut arms);
+        if arms.len() < 2 {
+            return None;
+        }
+        let mut witnesses: Vec<u16> = Vec::new();
+        let mut any_freeing_call = false;
+        for a in &arms {
+            if self.is_struct_returning_call(a)
+                && crate::use_analysis::call_return_frees_source(&self.data, a)
+            {
+                any_freeing_call = true;
+                witnesses.extend(crate::use_analysis::protectable_ref_args(&self.data, a).0);
+                continue;
+            }
+            witnesses.extend(crate::use_analysis::view_root_slots(&self.data, a)?);
+        }
+        any_freeing_call.then_some(witnesses)
+    }
+
+    /// The terminal value of every arm an `if` / `else if` chain can answer with.
+    ///
+    /// A one-operator block is how the parser wraps a bare arm and carries nothing of its own;
+    /// a block with construction ops in it is a MINT and is the arm itself.
+    fn join_arms<'a>(val: &'a Value, out: &mut Vec<&'a Value>) {
+        match val.unspan() {
+            Value::If(_, t, f) => {
+                Self::join_arms(t, out);
+                Self::join_arms(f, out);
+            }
+            Value::Block(bl) if bl.operators.len() == 1 => Self::join_arms(&bl.operators[0], out),
+            other => out.push(other),
+        }
+    }
+
     /// Give an OWNING call a home in THIS frame, so a join can VIEW it.
     ///
     /// [`formal/ownership.md`](../../doc/claude/formal/ownership.md) settles the shape:
