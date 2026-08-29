@@ -1172,12 +1172,18 @@ choice in `src/generation/dispatch.rs::emit_null_dbref`).
 **Every lib-side `debug_assert!` / `#[cfg(debug_assertions)]` check is compiled
 OUT of every ordinary build** — dev, test, AND `--release` —
 by `[profile.dev.package.loft] debug-assertions = false` (dev/test) and the
-release profile default.  That covers the H5 two-pass contract
-(`assert_pass2_def_attr_stable`), `Store::valid`/`Store::validate`, the
+release profile default.  That covers `Store::valid`/`Store::validate`, the
 `keys.rs`/`store.rs` boundary guards, codegen sanity asserts
 (`generate_set`/`generate_call`), the `get_stack` corrupt-DbRef guard, and the
 `[set_var]` width warnings.  The only standing build that checks them is the
-cargo-fuzz target.  So for any claim guarded by a debug assert, "the suite is
+cargo-fuzz target.
+
+**The H5 two-pass contract is NOT one of them** — `assert_pass2_def_attr_stable` is a plain
+`assert!` and runs in every build, which is why a program that trips it aborts an ordinary
+`cargo build --bin loft` run rather than passing quietly.  Its sibling
+`check_argument_geometry` (`src/state/codegen.rs`) is the same: always on, always fatal.  Both
+are compile-time contracts, so a listing of what the calibration run covers must not claim
+them ([COMPILER.md § The H5 two-pass contract](COMPILER.md)).  So for any claim guarded by a debug assert, "the suite is
 green" is a **calibration failure** — the instrument is not installed in that
 build.  The first-ever full calibration (2026-07-03, @PLN85) found four
 long-latent H5 producers plus a latent-assert inventory; the open cells live in

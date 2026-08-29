@@ -39,6 +39,10 @@ it is not a taxonomy invented up front.
                             live, because its oracle is all-(integer, integer)
     A9 evaluation count     loft#1118 again: one record per EVALUATION is invisible
                             in a matrix whose cells each run once
+    A10 closure capture     loft#1178's guard: every one of its eight cells put a
+                            lambda's own PARAMETER inside the comprehension and none
+                            put a CAPTURE there, so a regression that made a captured
+                            scalar read 0 sat in the file the fix shipped with
 
 THE RANKING CLAIM WAS FALSIFIED BY ITS OWN ORACLE, and that is worth knowing before
 reading any output.  The first design ranked files by how many values of an axis they
@@ -100,6 +104,8 @@ AXES = [
      ["integer", "narrow-int", "float", "text", "boolean", "struct",
       "enum", "nested-container"]),
     ("A9", "evaluation count", ["single", "loop"]),
+    ("A10", "closure capture",
+     ["none", "scalar", "collection", "struct", "through-comprehension"]),
 ]
 AXIS_TITLE = {a: t for a, t, _ in AXES}
 AXIS_DOMAIN = {a: d for a, _, d in AXES}
@@ -488,11 +494,86 @@ def a9_evaluation_count(s):
     return seen
 
 
+def _lambda_bodies(s):
+    """(body_start, body_end) for every lambda literal — both spellings.
+
+    A lambda is where the capture question lives, and it is the one construct the
+    `functions()` scan above cannot see: it has no name, and `fn(` with no identifier
+    after it is exactly what distinguishes it from a declaration.
+    """
+    res = []
+    for m in re.finditer(r"\bfn\s*\(|\|[\w\s,]*\|\s*\{", s):
+        b = s.find("{", m.end() - 1)
+        if b < 0:
+            continue
+        depth, i = 0, b
+        while i < len(s):
+            if s[i] == "{":
+                depth += 1
+            elif s[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    res.append((b + 1, i))
+                    break
+            i += 1
+    return res
+
+
+COMPREHENSION = re.compile(r"\.(map|filter|reduce|any|all|sort_by)\s*\(|\[\s*for\b")
+
+
+def a10_closure_capture(s):
+    """Which OUTER binding a lambda body reads, and whether it reads it through a
+    comprehension.
+
+    Approximate by construction, and in the safe direction: it reads bindings written
+    `name = <rhs>` at the start of a line, classifies them by the SHAPE of that rhs, and
+    asks which of those names a lambda body mentions.  A capture it cannot spell is a
+    value this axis reports as unreached, which is what a census is for.
+    """
+    seen = set()
+    kind = {}
+    for m in re.finditer(r"^\s*(\w+)\s*(?::[^=\n]+)?=\s*(.*)$", s, re.M):
+        name, rhs = m.group(1), m.group(2).lstrip()
+        if name.startswith("__") or rhs.startswith("fn") or rhs.startswith("|"):
+            continue
+        # A SET per name, not one verdict: two cells in one file legitimately spell the
+        # same name at different types, and keeping only the last one silently drops a
+        # value the file does reach.
+        if rhs.startswith("["):
+            kind.setdefault(name, set()).add("collection")
+        elif re.match(r"[A-Z]\w*\s*\{", rhs):
+            kind.setdefault(name, set()).add("struct")
+        else:
+            kind.setdefault(name, set()).add("scalar")
+    for b, e in _lambda_bodies(s):
+        body = s[b:e]
+        # A lambda's own parameters and locals are not captures.
+        local = set(re.findall(r"^\s*(\w+)\s*(?::[^=\n]+)?=", body, re.M))
+        hit = False
+        for name, kinds in kind.items():
+            if name in local:
+                continue
+            if not re.search(r"\b" + re.escape(name) + r"\b", body):
+                continue
+            hit = True
+            seen |= kinds
+            for c in COMPREHENSION.finditer(body):
+                tail = body[c.end():]
+                if re.search(r"\b" + re.escape(name) + r"\b", tail):
+                    seen.add("through-comprehension")
+                    break
+        if not hit:
+            seen.add("none")
+    return seen
+
+
 DETECT = {
     "A1": a1_container_kind, "A2": a2_container_provenance,
     "A3": a3_argument_spelling, "A4": a4_statement_context,
     "A5": a5_nullability, "A6": a6_default_shape,
     "A7": a7_element_type, "A9": a9_evaluation_count,
+    "A10": a10_closure_capture,
 }
 
 
@@ -541,9 +622,10 @@ def cross(x, y):
             n[(a, b)] = n.get((a, b), 0) + 1
     print(f"== {x} {AXIS_TITLE[x]}  x  {y} {AXIS_TITLE[y]} ==")
     print("   files reaching BOTH values; an upper bound (co-occurrence, not interaction)\n")
-    print(f"{'':18s}" + "".join(f"{v[:9]:>10s}" for v in dy))
+    w = max(18, max(len(v) for v in dx) + 2)
+    print(f"{'':{w}s}" + "".join(f"{v[:9]:>10s}" for v in dy))
     for a in dx:
-        print(f"{a:18s}" + "".join(f"{n.get((a, b), 0):10d}" for b in dy))
+        print(f"{a:{w}s}" + "".join(f"{n.get((a, b), 0):10d}" for b in dy))
     zeros = [(a, b) for a in dx for b in dy if not n.get((a, b))]
     if zeros:
         print(f"\n  never crossed ({len(zeros)}): "
@@ -565,7 +647,12 @@ It reads SYNTAX, so every count is a floor:
     does not know reads as its enclosing block rather than as its own context;
   * a file that reaches a value only in a COMMENTED-OUT cell reads as not
     reaching it, which is correct, and as never having considered it, which is
-    not.
+    not;
+  * A10 reads a capture as any outer `name = <rhs>` a lambda body MENTIONS, and
+    types it from the shape of that rhs -- so a capture reached through a call, a
+    field of a captured struct, or a binding whose rhs it cannot classify reads as
+    `scalar` or as nothing at all.  Its `none` is therefore the softest value here:
+    it means "no capture this file can spell", not "no capture".
 
 The DEPTH ranking this used to impose is gone, and the way it went is the useful
 part: it was scored against loft#1105, whose pinned axis -- every cell building
