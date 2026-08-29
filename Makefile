@@ -2054,9 +2054,14 @@ bench:
 	cargo build --release -q
 	bash bench/run_bench.sh --warmup
 
+# Typst stamps a creation date into the PDF, so an unchanged document still produces a
+# different file on every build and a COMMITTED pdf churns in every diff.  Pinning
+# SOURCE_DATE_EPOCH to the source's last commit makes the output depend on the content
+# alone: rebuild without editing and git reports nothing.
 pdf:
 	cargo run --bin gendoc
-	typst compile doc/loft-reference.typ doc/loft-reference.pdf
+	SOURCE_DATE_EPOCH=$$(git log -1 --format=%ct -- doc/loft-reference.typ) \
+	  typst compile doc/loft-reference.typ doc/loft-reference.pdf
 
 # Print one design document as its own PDF.  The Markdown stays the single source;
 # `scripts/md2typ.py` renders it, so the two cannot drift.
@@ -2065,7 +2070,8 @@ DOC ?= doc/claude/WEB_STACK.md
 OUT ?= doc/web-stack
 pdf-doc:
 	python3 scripts/md2typ.py $(DOC) $(OUT).typ
-	typst compile $(OUT).typ $(OUT).pdf
+	SOURCE_DATE_EPOCH=$$(git log -1 --format=%ct -- $(DOC)) \
+	  typst compile $(OUT).typ $(OUT).pdf
 
 test-native:
 	@cargo build --release -q
