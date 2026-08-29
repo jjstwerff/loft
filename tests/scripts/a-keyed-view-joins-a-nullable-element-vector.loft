@@ -179,6 +179,24 @@ fn main() {
   // ---- the view reached through a parameter ------------------------------------------------
   assert(kv_through_param(kv_v) == 15, "the group travels with the struct: {kv_through_param(kv_v)}");
 
+  // ---- a CONTROL, not a test: statement context does not move this contract ---------------
+  // `scripts/matrix_axes.py file` reports this guard as MISSING if-arm, and loft#1154 was an
+  // if-arm cell that did not exist until the tool asked — so the gap is worth answering rather
+  // than ignoring.  Measured, both backends: filling through an if-ARM, a bare BLOCK and a
+  // LOOP BODY all maintain the group, because `Stores::record_finish` runs per RECORD and does
+  // not branch on the enclosing statement.  Recorded here so the next reader does not
+  // re-derive it.  The axis that DOES move this contract is the assignment ROUTE — an element
+  // list maintains the group, a whole vector VALUE and an `is` binding do not — and all three
+  // of those shapes are loft#1152, deliberately not locked here.
+  kv_if = KvTrie { };
+  if kv_hs == 15 { kv_if.kr_data = [kv_first(), kv_second()]; }
+  else { kv_if.kr_data = [kv_first()]; }
+  assert(len(kv_if.kr_look) == 2, "the group holds when filled from an if-arm: {len(kv_if.kr_look)}");
+
+  kv_lp = KvTrie { };
+  for kv_i3 in 0..2 { kv_lp.kr_data += [Kv { kv_k: kv_i3, kv_k2: kv_i3, kv_nm: "n{kv_i3}" }]; }
+  assert(len(kv_lp.kr_look) == 2, "the group holds when filled from a loop body: {len(kv_lp.kr_look)}");
+
   // ---- the negative control: two plain vectors are NOT one record set ---------------------
   kv_w = KvTwoVectors { };
   kv_w.kw_a = [kv_first()];

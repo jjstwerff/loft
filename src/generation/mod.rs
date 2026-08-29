@@ -3030,17 +3030,25 @@ extern crate loft;"
                 crate::database::Parts::Array(c) => {
                     bare_io.push((tid, BareIo::Vector(*c)));
                 }
-                // `Ordered` is the same conversion applied to `Sorted`, and it is here for
-                // that symmetry — NOT because a failing case was found.  ⚠ Evidence level
-                // differs from the arm above and the difference is the point: `Array` has a
-                // reproducing program, `Ordered` has none.  Every shape tried reached
-                // neither (a tuple-yielded `sorted` beside a `vector` over one struct, and a
-                // struct holding `sorted<E[k]>` + `vector<E>` as a linked GROUP) — no
-                // `ordered<…>` type was minted on any build.  So this arm is unreached as
-                // far as it has been measured, and is kept because a file whose entire bug
-                // history is omitted variants is the wrong place to leave a known-symmetric
-                // hole open.  If you are here because it fired, that is new information:
-                // record the shape.
+                // `Ordered` is the same conversion applied to `Sorted`.  It was added for
+                // symmetry with no failing case behind it, and the comment here asked
+                // whoever saw it fire to record the shape.  **It fires**, and the shape is:
+                //
+                //     struct Box { data: vector<S?>, look: sorted<S[k]> }
+                //
+                // The `?` is what was missing from the shapes tried first.  A NULLABLE
+                // element makes the sibling view's element type the synth `__nullable<S>`,
+                // and the linked-group promotion then rewrites the field-referenced
+                // `Sorted` to `Ordered` — so a converted keyed type reaches this stream
+                // where a dense one never did.
+                //
+                // It also arrived carrying a defect, which is the argument for having kept
+                // the arm: rendered through the short `bare_field_name`, the key list came
+                // out `ordered<__nullable<W>[]>` — a name nothing else uses, so the call
+                // MINTED a second collection type and shifted every runtime id after it
+                // (loft#739's drift, caught by `verify_schema_ids`).  The cure was in
+                // `bare_field_name`, not here; this arm was right all along and simply had
+                // no reaching program until a nullable element supplied one.
                 crate::database::Parts::Ordered(c, keys) => {
                     bare_io.push((tid, BareIo::Sorted(*c, keys.clone())));
                 }
