@@ -219,11 +219,30 @@ pub fn signature_of(data: &Data, d: u32, kind: &str) -> String {
     // not part of the API — a reorder is a layout change (commit 5's axis), not an API break,
     // so sorting kills that false diff. Function PARAMS are positional (calls bind by
     // position), so their order IS the API and is preserved (`sort = false`).
-    let render = |atts: &[crate::data::Attribute], sort: bool| -> Vec<String> {
+    // `defaults` marks a parameter that carries one, as ` = default` — the FACT that it is
+    // optional, not the value. That fact is what makes appending one additive
+    // (COMPATIBILITY.md § Per-surface: "a new optional parameter"), and without it in the
+    // surface the diff cannot tell an optional addition from a required one, which is how a
+    // library adopting the idiom loft recommends came to be told it had broken its consumers
+    // (loft#1191). Only FN params carry it: a struct's members are parsed back out by
+    // `api_diff::members_of` splitting on `:`, and a value after one would read as part of
+    // the type. The value itself is deliberately not rendered — see the note on
+    // `api_diff::signature_break`.
+    let render = |atts: &[crate::data::Attribute], sort: bool, defaults: bool| -> Vec<String> {
         let mut v: Vec<(&str, String)> = atts
             .iter()
             .filter(|a| !a.hidden && a.name != "enum")
-            .map(|a| (a.name.as_str(), format!("{}: {}", a.name, ty(&a.typedef))))
+            .map(|a| {
+                let opt = if defaults && !matches!(a.value, crate::data::Value::Null) {
+                    " = default"
+                } else {
+                    ""
+                };
+                (
+                    a.name.as_str(),
+                    format!("{}: {}{}", a.name, ty(&a.typedef), opt),
+                )
+            })
             .collect();
         if sort {
             v.sort_by(|a, b| a.0.cmp(b.0));
@@ -234,11 +253,11 @@ pub fn signature_of(data: &Data, d: u32, kind: &str) -> String {
         "fn" | "method" | "operator" => {
             format!(
                 "({}) -> {}",
-                render(def.attributes(), false).join(", "),
+                render(def.attributes(), false, true).join(", "),
                 ty(&def.returned)
             )
         }
-        "struct" => format!("{{ {} }}", render(def.attributes(), true).join(", ")),
+        "struct" => format!("{{ {} }}", render(def.attributes(), true, false).join(", ")),
         "enum" => {
             // Variants are matched/constructed by name, so variant ORDER is not API either —
             // sort the variants, and each variant's fields, by name (the discriminant value a
@@ -247,7 +266,7 @@ pub fn signature_of(data: &Data, d: u32, kind: &str) -> String {
             for v in 0..data.definitions() {
                 let vd = data.def(v);
                 if vd.parent == d && vd.def_type == DefType::EnumValue {
-                    let fields = render(vd.attributes(), true);
+                    let fields = render(vd.attributes(), true, false);
                     let rendered = if fields.is_empty() {
                         vd.name.clone()
                     } else {

@@ -404,3 +404,85 @@ fn committed_dogfood_baseline_is_a_drop_in() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// loft#1191 — a TRAILING parameter that carries a DEFAULT is additive, and the check used
+/// to call it a break.
+///
+/// [COMPATIBILITY.md § Per-surface](../doc/claude/COMPATIBILITY.md) states the rule this
+/// asserts: under **Stdlib API**, *"a new optional parameter"* is listed as additive, and the
+/// regression column is *"a signature change that breaks existing calls"* — which a default
+/// does not. The old behaviour offered one remedy, raising `api_compatible_with`, so a
+/// library adopting the idiom loft recommends had to publish a withdrawal it never made.
+///
+/// The boundary is the whole content of the rule, so each side of it is asserted here: the
+/// old parameter list must remain a PREFIX of the new one and every added parameter must
+/// carry a default. Anything else still breaks — an appended required parameter, a default
+/// inserted before an existing parameter (which re-binds every positional call), a removed
+/// one, and a changed type.
+#[test]
+fn a_trailing_defaulted_parameter_is_additive_and_nothing_else_is() {
+    let base = "pub fn f(a: integer, b: float) -> integer { a }\n";
+
+    // The rule itself.
+    let (out, code) = api_diff_cli(
+        base,
+        "pub fn f(a: integer, b: float, c: boolean = false) -> integer { a }\n",
+        false,
+    );
+    assert_eq!(
+        code, 0,
+        "a trailing defaulted parameter is a drop-in:\n{out}"
+    );
+    assert!(out.contains("drop-in"), "human text:\n{out}");
+
+    // Two of them, because "one" is not a rule.
+    let (out, code) = api_diff_cli(
+        base,
+        "pub fn f(a: integer, b: float, c: boolean = false, d: integer = 3) -> integer { a }\n",
+        false,
+    );
+    assert_eq!(code, 0, "two trailing defaults are still a drop-in:\n{out}");
+
+    // A receiver does not change the rule.
+    let (out, code) = api_diff_cli(
+        "pub struct S { n: integer }\npub fn m(self: S, a: integer) -> integer { a }\n",
+        "pub struct S { n: integer }\npub fn m(self: S, a: integer, b: boolean = false) -> integer { a }\n",
+        false,
+    );
+    assert_eq!(code, 0, "a method's trailing default is a drop-in:\n{out}");
+
+    // --- and the four boundaries, each of which must STAY a break ---
+
+    let (out, code) = api_diff_cli(
+        base,
+        "pub fn f(a: integer, b: float, c: boolean) -> integer { a }\n",
+        false,
+    );
+    assert_eq!(code, 1, "an appended REQUIRED parameter breaks:\n{out}");
+
+    // Inserted before an existing parameter: every positional call re-binds, which is the
+    // silent half of the failure and the reason the rule is "trailing", not "defaulted".
+    let (out, code) = api_diff_cli(
+        base,
+        "pub fn f(a: integer, c: boolean = false, b: float) -> integer { a }\n",
+        false,
+    );
+    assert_eq!(code, 1, "a default inserted mid-list breaks:\n{out}");
+
+    let (out, code) = api_diff_cli(
+        "pub fn f(a: integer, b: float = 1.0) -> integer { a }\n",
+        "pub fn f(a: integer) -> integer { a }\n",
+        false,
+    );
+    assert_eq!(code, 1, "REMOVING a defaulted parameter breaks:\n{out}");
+
+    let (out, code) = api_diff_cli(
+        base,
+        "pub fn f(a: integer, b: text, c: boolean = false) -> integer { 0 }\n",
+        false,
+    );
+    assert_eq!(
+        code, 1,
+        "a changed type is a break even beside a legal addition:\n{out}"
+    );
+}
