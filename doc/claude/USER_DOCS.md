@@ -536,9 +536,14 @@ independently shippable and none blocks the next except where marked.
    the build found (⚠ **`main` must call every section** — `graphics`'s guide defines two
    sections `main` never calls, so their assertions have never run), `LIBRARY_CHECKLIST.md`
    carries the row, and `doc/lib-<name>-guide.html` renders any guide a package ships.
-   `html` and `markdown` are written and verified; `graphics` has one already (with the
-   defect above, in a repo currently on an active branch); `stage`, `server` and `web` need
-   an environment their examples can be run in and are not written.
+   `html` and `markdown` are written, verified and **published** (loft-libs-docs `8a40d5d`,
+   html 0.1.1 + markdown 0.2.1) — the write landed in `4efe2c3` and stopped one step short,
+   since a guide that never goes through a release is one no reader outside its repo can
+   reach. Both were run through the real `Guide` step before the bump, which is the first
+   time anything had executed them; green on both backends, and the backends agree.
+   `graphics` has one already (with the defect above, in a repo currently on an active
+   branch); `stage`, `server` and `web` need an environment their examples can be run in and
+   are not written.
 8. ~~**The REPL and debug panel**, plus `38-call-it-yourself.loft`.~~ **Landed.** Every
    executed topic page carries a Run / REPL / Debug panel driven by two new wasm exports
    (`debug_start`, `debug_command`) over the debugger's own command grammar, plus
@@ -576,10 +581,11 @@ Steps 1, 2 and 4 are each under a day and together change what a new user experi
 than everything below them combined; all three have landed.
 
 **Remaining: step 10**, plus the guides for `input` / `pluginabi` (step 1) and `stage` /
-`server` / `web` (step 7), which wait on other checkouts. Six packages now carry a guide —
-`graphics`, `random`, `imaging`, `time`, `html`, `markdown` — and the last four of those
-need a registry publish before the site can render them, because `gendoc` reads a guide out
-of the extracted tarball, never out of a checkout.
+`server` / `web` (step 7), which wait on other checkouts. **Six packages carry a guide and
+all six are published** — `graphics`, `random`, `imaging`, `time`, `html`, `markdown` — so
+`make doc` renders six guide pages where it rendered two. A guide only reaches a reader
+through a RELEASE: `gendoc` reads it out of the extracted tarball, never out of a checkout,
+so writing the file is half the step and bumping the version is the other half.
 
 **Step 8 was blocked by two defects in the machinery it sits on, and is capped by a third.**
 The design read `src/wasm_debug.rs` and believed its doc comment. Measured instead:
