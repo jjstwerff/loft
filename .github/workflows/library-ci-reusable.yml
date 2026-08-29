@@ -193,6 +193,80 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
+      # ── The guide, which is a program ──────────────────────────────────────
+      #
+      # `docs/*.loft` is the package's getting-started guide (LIBRARY_AUTHORING § 2c):
+      # prose in comments, code between, and `fn main` calling every section.  It is a
+      # RUNNING loft program, which is the only reason its examples cannot rot — so it
+      # has to be run, and the two steps above do not reach it.  `loft test` scans
+      # `tests/`; a guide is a program, not a suite.
+      #
+      # This step is what retired loft's hardcoded delegation list.  `tests/wrap.rs` and
+      # `tests/doc_lib_examples.rs` used to name `14-image.loft` and `21-random.loft` as
+      # string literals, so a library's guide was covered only if someone remembered to
+      # edit two files in another repo, and the prose lived there too — one home for the
+      # text, two for the coverage, and both drifted.  A guide that lives in its package
+      # is run by its package, by the rule that it is a `.loft` file under `docs/`, and
+      # there is no list to forget (loft @PLN149 step 9).
+      #
+      # Both backends AND a comparison, not either alone: a guide that prints one thing
+      # under the interpreter and another under `--native` is a defect in the language
+      # that the guide is the first to see, and each backend on its own says nothing
+      # about the other.  That agreement check is the property inherited from
+      # `doc_lib_examples.rs`, which is deleted in the same change.
+      #
+      # A package with no guide says so and passes.  Writing `docs/01-getting-started.loft`
+      # is the whole of what it takes to be covered here and to appear on the doc site.
+      - name: Guide — ${{ matrix.package }}
+        working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+          LOFT_STORE_GUARD: 1
+        run: |
+          set -u
+          shopt -s nullglob
+          guides=(docs/*.loft)
+          if [ ${#guides[@]} -eq 0 ]; then
+            echo "no docs/*.loft — this package ships no guide (LIBRARY_AUTHORING § 2c)"
+            exit 0
+          fi
+          rc=0
+          for g in "${guides[@]}"; do
+            echo "guide $g"
+            for mode in --interpret --native; do
+              out="$RUNNER_TEMP/guide-$(basename "$g" .loft)${mode}.out"
+              if ! LOFT_TIMEOUT=240 loft "$mode" "$g" > "$out" 2>"$out.err"; then
+                rc=1
+                {
+                  echo "### ❌ \`${{ matrix.package }}\` — guide \`$g\` failed on \`$mode\`"
+                  echo
+                  echo '```'
+                  grep -E '^[[:space:]]*(error|assertion|Warning\[|advice\[)' "$out.err" | head -30 \
+                    || tail -20 "$out.err"
+                  echo '```'
+                } >> "$GITHUB_STEP_SUMMARY"
+                cat "$out.err"
+              fi
+            done
+            i="$RUNNER_TEMP/guide-$(basename "$g" .loft)--interpret.out"
+            n="$RUNNER_TEMP/guide-$(basename "$g" .loft)--native.out"
+            if [ -f "$i" ] && [ -f "$n" ] && ! diff -u "$i" "$n" > "$RUNNER_TEMP/guide.diff"; then
+              rc=1
+              {
+                echo "### ❌ \`${{ matrix.package }}\` — guide \`$g\`: the backends disagree"
+                echo
+                echo "The same program printed different things under \`--interpret\` and"
+                echo "\`--native\`.  That is a language defect the guide is the first to see."
+                echo
+                echo '```diff'
+                head -40 "$RUNNER_TEMP/guide.diff"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              cat "$RUNNER_TEMP/guide.diff"
+            fi
+          done
+          exit $rc
+
       # ── The wasm target, which nothing measured ────────────────────────────
       #
       # A `[native] crate` is cross-built AS A WHOLE for `wasm32-wasip2`, so ONE

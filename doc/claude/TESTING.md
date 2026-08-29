@@ -1578,7 +1578,10 @@ writing ~20 large files during a routine `cargo test` run.
 
 Not connected to the `Test` builder API. The `last` test runs only the final file for fast iteration.
 
-Current docs files (23 files, `00`–`22`):
+Docs files, `00`–`38` — **36** of them.  The table below covers `00`–`22`; the rest are
+listed by `ls tests/docs`, which is the only count that cannot go stale.  A library's
+getting-started page is NOT here: it lives in the library, under its own `docs/`, and is
+run by that package's CI (@PLN149 step 9).
 
 | File | Topic |
 |---|---|
@@ -1602,7 +1605,6 @@ Current docs files (23 files, `00`–`22`):
 | `18-locks.loft` | Store locking and `const` parameters |
 | `19-threading.loft` | Parallel execution (`par(b=worker, threads)` for-loop clause) |
 | `20-logging.loft` | Runtime logging (`log_info`, `log_warn`, `log_error`, `log_fatal`) |
-| `21-random.loft` | Random numbers (`rand`, `rand_seed`, `rand_indices`) |
 | `22-time.loft` | Time functions (`now`, `ticks`) |
 
 ---
@@ -1630,7 +1632,7 @@ tests/
   common/
     cross_mode.rs         # Harness used by *_matrix.rs binaries (interp ↔ native equivalence)
   docs/
-    00-general.loft ... 21-random.loft     # User documentation loft programs (22 files)
+    00-general.loft ... 38-call-it-yourself.loft  # User documentation loft programs (36 files)
     wordlist.txt                           # Edge-case string keys for 21-stress.loft
   generated/
     default.rs            # Default-library schema snapshot (no #[test])

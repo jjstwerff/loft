@@ -629,9 +629,11 @@ next-frame).
 first inhabitant of `loft-libs-game` (W.0c + W.0d) — the package
 moved from the monorepo `lib/time/` to the chunk repo unchanged
 (preserving the existing API), tagged + released + added to the
-registry.  Monorepo's own consumers (`tests/docs/32-time.loft`)
-resolve via `tests/fixtures/libs/time/` (the Phase 6.12 fixture
-mirror).
+registry.  The monorepo's own doc page for it resolved via
+`tests/fixtures/libs/time/` (the Phase 6.12 fixture mirror) until
+@PLN149 step 9 moved that page into the package as
+`time/docs/01-getting-started.loft`; the fixture mirror stays for the
+tests that still link against it.
 
 **Lavition pairing:** editor uses time for animation playback + UI
 transitions + auto-save scheduling.

@@ -51,12 +51,13 @@ try {
 
 /**
  * Tests that are skipped entirely.
- * - File I/O tests that depend on real on-disk fixtures not easily replicated in VirtFS.
- * - Image tests that require PNG files.
+ *
+ * Empty.  It held `14-image.loft`, which needs PNG fixtures VirtFS has no easy way to
+ * carry — and that page now lives in the `imaging` package, where its own CI runs it
+ * against the real files (@PLN149 step 9).  A page that cannot run here is a page a
+ * reader cannot trust, so add an entry only with the open issue that explains it.
  */
-const SKIP = new Set([
-  '14-image.loft',     // requires PNG/image fixtures; pixel ops outside pure computation
-]);
+const SKIP = new Set([]);
 
 /**
  * Tests that run through WASM but whose output is NOT compared to native.
@@ -73,7 +74,6 @@ const SKIP_COMPARE = new Set([
   '16-time.loft',      // now()/ticks() values are non-deterministic
   '22-time.loft',      // same — doc version
   '15-random.loft',    // rand() without seed — non-deterministic
-  '21-random.loft',    // same — doc version
 ]);
 
 // ── Native reference runner ────────────────────────────────────────────────────

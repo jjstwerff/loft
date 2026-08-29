@@ -45,32 +45,13 @@ fn native_suite_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Docs files that are known to fail in `--native` mode.
-/// See PROBLEMS.md for details on each issue number.
+/// Files in `tests/docs/` that `native_dir` must not compile.
 ///
-/// Doc files to skip in native mode.
-const NATIVE_SKIP: &[&str] = &[
-    // (empty) — "25-generics.loft" was skipped here for the @PLN25/@PLN85
-    // Family-D residual (a generic `-> T?` (Optional) return kept the
-    // parametric `Optional(Reference(tv))` type instead of substituting T,
-    // mistyping the return slot — rustc E0308 on native).  FIXED by #493
-    // cell 5 (commit 64d94c50: `substitute_type` gained an `Optional` arm).
-    // Verified both the scalar-T (`last_element<integer/text>`, already in
-    // this file) and a struct-T instantiation compile + run correctly on
-    // `--native`; the skip is removed so `native_dir` now gates this file
-    // as a regression guard for cell 5.
-    //
-    // 14-image (`use imaging`) + 21-random (`use random`): a file that imports a
-    // library cannot be built by this harness's own emit path — see
-    // `run_via_loft_binary` for why.  These two are NOT delegated to the `loft`
-    // binary the way the feature examples are, because they are already run on BOTH
-    // backends through that same binary by `tests/doc_lib_examples.rs`; delegating
-    // here would buy a second copy of that coverage and a second cdylib build.
-    // NOT @P389 (resolved by C-ABI): the `loft` binary compiles two native packages
-    // fine, and does so for these files today.
-    "14-image.loft",
-    "21-random.loft",
-];
+/// Empty, and staying empty is the point: every page the site publishes is a
+/// program that runs on both backends, so an entry here is a page whose code a
+/// reader cannot trust.  Add one only with the open issue that explains it, and
+/// delete it the day that issue closes.
+const NATIVE_SKIP: &[&str] = &[];
 
 /// Script files to skip in native mode.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[

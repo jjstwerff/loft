@@ -436,7 +436,7 @@ fn home(r: Request) -> Response {
   [does every example compile and run?], [`tests/docs/` topic harness], [the 38 language\-reference topics],
   […on *both* backends?], [`features_examples_interpret` \+ `native_features`], [the `@F` catalogue],
   […including one that says `use webapp`?], [*`run_via_loft_binary`* — the delegation added for loft\#1173, which builds a library\-importing example through the real `loft --native`], [`@F43`],
-  [does a *library* example agree across backends?], [`tests/doc_lib_examples.rs` — subprocess through the real binary, interpret \=\= native], [`14-image`, `21-random`],
+  [does a *library* example agree across backends?], [the `Guide` step in `library-ci-reusable.yml` — runs each `docs/*.loft` on both backends and diffs the output], [every package that ships a guide],
   [does the printed *output* match the page?], [`tests/doc_commands.rs` — runs every `$` line on a page and asserts each following line appears], [the four CLI pages],
   [is a refusal the one we meant?], [`@EXPECT_ERROR` \/ `@EXPECT_WARNING` corpus annotations], [throughout `tests/`],
 )

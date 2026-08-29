@@ -32,14 +32,12 @@
 <li><a href="#11-index">Index</a> — <span class="toc-desc">Fast lookup and range queries over records</span></li>
 <li><a href="#12-hash">Hash</a> — <span class="toc-desc">Instant key lookup with a hash table</span></li>
 <li><a href="#13-file">File</a> — <span class="toc-desc">File system — text, binary, and directory access.</span></li>
-<li><a href="#14-image">Image</a> — <span class="toc-desc">Reading and writing PNG images with the imaging library</span></li>
 <li><a href="#15-lexer">Lexer</a> — <span class="toc-desc">Lexer library.</span></li>
 <li><a href="#16-parser">Parser</a> — <span class="toc-desc">Parsing Loft source code programmatically</span></li>
 <li><a href="#17-libraries">Libraries</a> — <span class="toc-desc">Library system — importing and using external loft modules.</span></li>
 <li><a href="#18-locks">Store Locks</a> — <span class="toc-desc">Immutability with const and runtime store locks</span></li>
 <li><a href="#19-threading">Parallel execution</a> — <span class="toc-desc">Parallel processing with the par(...) for-loop clause</span></li>
 <li><a href="#20-logging">Logging</a> — <span class="toc-desc">Recording events with the logging system</span></li>
-<li><a href="#21-random">Random</a> — <span class="toc-desc">Random numbers, seeding, and shuffled indices</span></li>
 <li><a href="#22-time">Time</a> — <span class="toc-desc">Wall-clock time and elapsed time</span></li>
 <li><a href="#23-safety">Safety</a> — <span class="toc-desc">Language traps and how to avoid them</span></li>
 <li><a href="#24-json">JSON</a> — <span class="toc-desc">JSON parsing and generation</span></li>
@@ -50,7 +48,6 @@
 <li><a href="#29-match">Match</a> — <span class="toc-desc">Pattern matching with match expressions</span></li>
 <li><a href="#30-formatting">Formatting</a> — <span class="toc-desc">Format strings — interpolation, alignment, and number bases</span></li>
 <li><a href="#31-ref-forward">Reference parameter forwarding</a> — <span class="toc-desc">Forwarding &amp; parameters between functions</span></li>
-<li><a href="#32-time">Time library</a> — <span class="toc-desc">The time library — dates and times as epoch milliseconds.</span></li>
 <li><a href="#33-features">Feature catalogue</a> — <span class="toc-desc">Every language and tooling feature, with what each one is for.</span></li>
 <li><a href="#34-running">Running your program</a> — <span class="toc-desc">How to run loft — one file, the REPL, and checking your work.</span></li>
 <li><a href="#35-testing">Testing your code</a> — <span class="toc-desc">How to write and run tests — a function whose name starts with test.</span></li>
@@ -1207,83 +1204,6 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <p>Writing to a read-only or invalid path also returns a FileResult. Always check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
 <pre><code>}</code></pre>
 </section>
-<section class="print-section" id="14-image">
-<h1>Image</h1>
-<p>PNG support is not built into loft — it lives in the <code>imaging</code> library, one of the installable packages in the loft registry. Add it to your project once with</p>
-<pre><code>loft install imaging
-</code></pre>
-<p>and import it at the top of any file with <code>use imaging;</code>. The library gives you three things: a <code>Pixel</code> struct (red / green / blue, each 0–255), an <code>Image</code> struct (name, width, height, and a flat <code>vector&lt;Pixel&gt;</code>), and the functions to move between an <code>Image</code> in memory and a <code>.png</code> file on disk.</p>
-<pre><code>file(path).png()        decode a PNG file into an Image (null if it cannot be read)
-image.save_png(path)    encode an Image back to a PNG file (true on success)
-pixel.value()           pack r,g,b into a single 0xRRGGBB integer
-</code></pre>
-<p>Because the library builds a small native (Rust) helper the first time you use it, the very first run compiles that helper — later runs are instant.</p>
-<p><code>#cwd</code> opts this program into cwd-relative paths so the bundled example file below resolves against the working directory (see 13-file). It must appear before the <code>use</code> line, which itself must come before any definition.</p>
-<pre><code>#cwd
-<span class="kw">use</span> imaging;</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="loading-a-png">Loading a PNG</h2>
-<p><code>file(path).png()</code> reads and decodes the whole file in one call. Afterwards the width, height, file name, and every pixel are already in memory.</p>
-<pre><code>  img = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example/map.png"</span>).<span class="fn-call">png</span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.width == <span class="nm">256</span>, <span class="st">"width={img.width}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.height == <span class="nm">256</span>, <span class="st">"height={img.height}"</span>);</code></pre>
-<p><code>img.name</code> is just the file name, without the directory part.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.name == <span class="st">"map.png"</span>, <span class="st">"name={img.name}"</span>);</code></pre>
-<p><code>img.data</code> is a flat <code>vector&lt;Pixel&gt;</code> laid out row by row, so its length is always width * height.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(img.data) == img.width * img.height, <span class="st">"pixel count {len(img.data)}"</span>);</code></pre>
-<h2 id="the-pixel-struct">The Pixel Struct</h2>
-<p>Each element of <code>img.data</code> is a <code>Pixel</code> with three channels — r, g, and b — each an integer from 0 (no intensity) to 255 (full intensity). <code>pixel.value()</code> packs the three channels into one 0xRRGGBB integer, handy for comparison or storage.</p>
-<pre><code>  first = img.data[<span class="nm">0</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first.r &gt;= <span class="nm">0</span> &amp;&amp; first.r &lt;= <span class="nm">255</span>, <span class="st">"red channel in range: {first.r}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first.<span class="fn-call">value</span>() == first.r * <span class="nm">0x10000</span> + first.g * <span class="nm">0x100</span> + first.b,
-    <span class="st">"packed colour = {first.value()}"</span>);</code></pre>
-<h2 id="reading-a-pixel-by-coordinate">Reading a Pixel by Coordinate</h2>
-<p>The pixel at column x, row y lives at index <code>y * width + x</code>. Here we read the centre pixel of the 256x256 image.</p>
-<pre><code>  centre = img.data[<span class="nm">128</span> * img.width + <span class="nm">128</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(centre.r &gt;= <span class="nm">0</span> &amp;&amp; centre.g &gt;= <span class="nm">0</span> &amp;&amp; centre.b &gt;= <span class="nm">0</span>, <span class="st">"centre pixel is valid"</span>);</code></pre>
-<h2 id="scanning-every-pixel">Scanning Every Pixel</h2>
-<p>A <code>for</code> loop over <code>img.data</code> visits every pixel in row order. Count how many pixels are "bright" using a simple average-of-channels brightness.</p>
-<pre><code>  bright = <span class="nm">0</span>;
-  <span class="kw">for</span> px <span class="kw">in</span> img.data {
-    brightness = (px.r + px.g + px.b) / <span class="nm">3</span>;
-    <span class="kw">if</span> brightness &gt; <span class="nm">200</span> {
-      bright += <span class="nm">1</span>
-    }
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bright &gt;= <span class="nm">0</span> &amp;&amp; bright &lt;= <span class="bi"><a href="stdlib-text.html">len</a></span>(img.data), <span class="st">"bright pixel count: {bright}"</span>);</code></pre>
-<h2 id="building-and-saving-an-image">Building and Saving an Image</h2>
-<p>You can also create an <code>Image</code> from scratch: fill a <code>vector&lt;Pixel&gt;</code>, wrap it in an <code>Image</code> with a matching width and height, and call <code>save_png</code>. Here we make a 2x2 swatch — red, green, blue, and grey — and write it to a scratch file.</p>
-<pre><code>  swatch = imaging::<span class="en">Image</span> {
-    name: <span class="st">"swatch"</span>,
-    width: <span class="nm">2</span>,
-    height: <span class="nm">2</span>,
-    data: [
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">255</span>, g: <span class="nm">0</span>,   b: <span class="nm">0</span> },
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">0</span>,   g: <span class="nm">255</span>, b: <span class="nm">0</span> },
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">0</span>,   g: <span class="nm">0</span>,   b: <span class="nm">255</span> },
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">128</span>, g: <span class="nm">128</span>, b: <span class="nm">128</span> }
-    ]
-  };</code></pre>
-<p>Write to a scratch file in the working directory, then delete it below so the example leaves nothing behind. A cwd-relative path (with <code>#cwd</code>) works on every OS — a hard-coded <code>/tmp/…</code> would not exist on Windows.</p>
-<pre><code>  scratch = <span class="st">"loft-doc-swatch.png"</span>;
-  saved = swatch.<span class="fn-call">save_png</span>(scratch);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(saved, <span class="st">"save_png reported success"</span>);</code></pre>
-<h2 id="round-tripping">Round-Tripping</h2>
-<p>Load the file we just wrote and confirm the pixels survived the encode/decode cycle unchanged.</p>
-<pre><code>  reloaded = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(scratch).<span class="fn-call">png</span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reloaded.width == <span class="nm">2</span> &amp;&amp; reloaded.height == <span class="nm">2</span>, <span class="st">"reloaded dimensions"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reloaded.data[<span class="nm">0</span>].r == <span class="nm">255</span> &amp;&amp; reloaded.data[<span class="nm">0</span>].g == <span class="nm">0</span> &amp;&amp; reloaded.data[<span class="nm">0</span>].b == <span class="nm">0</span>,
-    <span class="st">"reloaded red pixel"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reloaded.data[<span class="nm">3</span>].r == <span class="nm">128</span> &amp;&amp; reloaded.data[<span class="nm">3</span>].g == <span class="nm">128</span> &amp;&amp; reloaded.data[<span class="nm">3</span>].b == <span class="nm">128</span>,
-    <span class="st">"reloaded grey pixel"</span>);</code></pre>
-<p>Clean up the scratch file.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(scratch);</code></pre>
-<h2 id="error-handling">Error Handling</h2>
-<p><code>png()</code> returns null when the file does not exist or is not a decodable PNG. Always check the result with <code>!img</code> before you touch its fields.</p>
-<pre><code>  missing = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_image.png"</span>).<span class="fn-call">png</span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!missing, <span class="st">"png() of a missing file is null"</span>);
-}</code></pre>
-</section>
 <section class="print-section" id="15-lexer">
 <h1>Lexer</h1>
 <p>The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.</p>
@@ -1732,73 +1652,6 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 </code></pre>
 <p>The log messages give you a record of exactly what the program did and where it went wrong, without cluttering the terminal during normal runs.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"logging test passed"</span>);
-}</code></pre>
-</section>
-<section class="print-section" id="21-random">
-<h1>Random</h1>
-<p>Randomness lives in the <code>random</code> library, an installable package in the loft registry. Add it to a project once with</p>
-<pre><code>loft install random
-</code></pre>
-<p>and import it at the top of your file with <code>use random;</code>. The library gives you three functions, all backed by a fast PCG-64 generator:</p>
-<pre><code>rand(lo, hi)      a uniform random integer in [lo, hi] inclusive; null if lo &gt; hi
-rand_seed(seed)   seed the generator so a run is reproducible
-rand_indices(n)   a vector holding 0, 1, ..., n-1 in a random order
-</code></pre>
-<p>The generator is thread-local and starts from a fixed default seed, so results are reproducible across runs unless you seed it with something varying (for example <code>rand_seed(now() as integer)</code>).</p>
-<pre><code><span class="kw">use</span> random;</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="basic-random-integers">Basic Random Integers</h2>
-<p><code>rand(lo, hi)</code> returns a uniformly distributed integer between lo and hi, both included. Seed first with <code>rand_seed</code> when you want a repeatable sequence.</p>
-<pre><code>  <span class="fn-call">rand_seed</span>(<span class="nm">42</span>);
-  roll = <span class="fn-call">rand</span>(<span class="nm">1</span>, <span class="nm">6</span>);       <span class="cm">// a simulated die roll, 1..6</span>
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(roll &gt;= <span class="nm">1</span> &amp;&amp; roll &lt;= <span class="nm">6</span>, <span class="st">"die roll out of range: {roll}"</span>);</code></pre>
-<h2 id="reproducibility">Reproducibility</h2>
-<p>The same seed always produces the same sequence — essential for tests and for replaying a game from a saved seed.</p>
-<pre><code>  <span class="fn-call">rand_seed</span>(<span class="nm">0</span>);
-  a = <span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">999</span>);
-  <span class="fn-call">rand_seed</span>(<span class="nm">0</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">999</span>) == a, <span class="st">"the same seed must reproduce the sequence"</span>);</code></pre>
-<p><code>rand</code> returns null when the range is empty (lo &gt; hi), so you can detect a bad range with <code>!</code> instead of getting a crash.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">rand</span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"an inverted range returns null"</span>);</code></pre>
-<h2 id="random-ordering-rand-indices">Random Ordering: rand_indices</h2>
-<p><code>rand_indices(n)</code> returns a vector containing 0, 1, ..., n-1 in a random order. Use it to visit another collection in random order without copying the data.</p>
-<pre><code>  <span class="fn-call">rand_seed</span>(<span class="nm">7</span>);
-  order = <span class="fn-call">rand_indices</span>(<span class="nm">5</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(order) == <span class="nm">5</span>, <span class="st">"rand_indices(5) has five entries"</span>);</code></pre>
-<p>Every value 0..4 appears exactly once — it is a permutation, not a sample with repeats. We verify that by marking each position as seen.</p>
-<pre><code>  seen = [<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..5</span> { <span class="kw">false</span> }];
-  <span class="kw">for</span> idx <span class="kw">in</span> order {
-    seen[idx] = <span class="kw">true</span>
-  }
-  all_seen = <span class="kw">true</span>;
-  <span class="kw">for</span> s <span class="kw">in</span> seen {
-    <span class="kw">if</span> !s {
-      all_seen = <span class="kw">false</span>
-    }
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(all_seen, <span class="st">"rand_indices must cover every position exactly once"</span>);</code></pre>
-<h2 id="sampling-without-replacement">Sampling Without Replacement</h2>
-<p>Take the first k entries of a shuffled index vector to pick k distinct items.</p>
-<pre><code>  items = [<span class="st">"apple"</span>, <span class="st">"banana"</span>, <span class="st">"cherry"</span>, <span class="st">"date"</span>, <span class="st">"elderberry"</span>];
-  <span class="fn-call">rand_seed</span>(<span class="nm">1</span>);
-  indices = <span class="fn-call">rand_indices</span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(items));</code></pre>
-<p>Note on null-flow: indexing a vector by a *variable* (here <code>indices[i]</code>) yields a NULLABLE element — <code>text?</code> — because the compiler cannot prove the index is in range. Appending a <code>text?</code> to the non-null <code>picked</code> would change its type, so we supply a fallback with <code>?? ""</code>; the value is never actually null here.</p>
-<pre><code>  picked = <span class="st">""</span>;
-  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..3</span> {
-    <span class="kw">if</span> i &gt; <span class="nm">0</span> {
-      picked += <span class="st">", "</span>
-    }
-    picked += items[indices[i]] ?? <span class="st">""</span>
-  }</code></pre>
-<p><code>picked</code> now holds 3 distinct fruit names in a random order.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(picked) &gt; <span class="nm">0</span>, <span class="st">"should have picked some items: {picked}"</span>);</code></pre>
-<p>The same guard is needed for numbers — use <code>?? 0</code> when accumulating an integer that you read through a variable index.</p>
-<pre><code>  values = [<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>, <span class="nm">40</span>, <span class="nm">50</span>];
-  total = <span class="nm">0</span>;
-  <span class="kw">for</span> i <span class="kw">in</span> order {
-    total += values[i] ?? <span class="nm">0</span>
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">150</span>, <span class="st">"every value summed once: {total}"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="22-time">
@@ -2610,85 +2463,6 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   <span class="fn-call">box_set_val</span>(b3, <span class="nm">99</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">0</span>].val == <span class="nm">10</span>, <span class="st">"existing item preserved"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">1</span>].val == <span class="nm">99</span>, <span class="st">"zero item replaced"</span>);
-}</code></pre>
-</section>
-<section class="print-section" id="32-time">
-<h1>Time library</h1>
-<p>@ARGS: --lib tests/fixtures/libs</p>
-<p>The <code>time</code> library represents a point in time as a plain <code>integer</code> (i64) holding milliseconds since the Unix epoch — the same unit <code>now()</code> returns.  All calendar math is UTC and uses the proleptic Gregorian calendar, so results are identical on the interpreter, <code>--native</code>, and WebAssembly.  Import it with <code>use time;</code> and call its free functions with the <code>time::</code> prefix.</p>
-<p>Timezone model: field accessors and formatters are UTC.  For local-day bucketing pass a fixed UTC offset in minutes (<code>to_local</code> / <code>local_day</code> / <code>today</code>).  There is no timezone database and no daylight-saving handling — a fixed offset only.</p>
-<pre><code><span class="kw">use</span> time;</code></pre>
-<h2 id="parsing-and-field-access">Parsing and field access</h2>
-<p><code>parse</code> reads an ISO date "YYYY-MM-DD", optionally followed by a time. The accessors return UTC calendar fields; <code>weekday</code> is 0=Mon..6=Sun.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_fields</span>() {
-  d = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">year</span>(d) == <span class="nm">2026</span>, <span class="st">"year"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month</span>(d) == <span class="nm">5</span>, <span class="st">"month"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">day</span>(d) == <span class="nm">25</span>, <span class="st">"day"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday</span>(d) == <span class="nm">0</span>, <span class="st">"2026-05-25 is a Monday"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday_name</span>(d) == <span class="st">"Mon"</span>, <span class="st">"weekday name"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month_name</span>(d) == <span class="st">"May"</span>, <span class="st">"month name"</span>);</code></pre>
-<pre><code>  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hour</span>(t) == <span class="nm">14</span>, <span class="st">"hour"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">minute</span>(t) == <span class="nm">30</span>, <span class="st">"minute"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">second</span>(t) == <span class="nm">7</span>, <span class="st">"second"</span>);</code></pre>
-<p>The "T...Z" ISO form parses to the same instant as the space form.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25T14:30:07Z"</span>) == t, <span class="st">"ISO T/Z form"</span>);</code></pre>
-<p>Malformed input parses to null — test with <code>!</code>.</p>
-<pre><code>  bad = time::<span class="fn-call">parse</span>(<span class="st">"not-a-date"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"garbage is null"</span>);
-}</code></pre>
-<h2 id="formatting">Formatting</h2>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_formatting</span>() {
-  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(t) == <span class="st">"2026-05-25"</span>, <span class="st">"format_date"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_time</span>(t) == <span class="st">"14:30"</span>, <span class="st">"format_time"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_seconds</span>(t) == <span class="st">"14:30:07"</span>, <span class="st">"format_seconds"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(t) == <span class="st">"2026-05-25 14:30"</span>, <span class="st">"format_datetime"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_iso</span>(t) == <span class="st">"2026-05-25T14:30:07Z"</span>, <span class="st">"format_iso"</span>);
-}</code></pre>
-<h2 id="arithmetic-and-differences">Arithmetic and differences</h2>
-<p>Stepping never desynchronises across leap years — the math is exact.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_arithmetic</span>() {
-  jan1 = time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_weeks</span>(jan1, <span class="nm">1</span>)) == <span class="st">"2026-01-08"</span>, <span class="st">"add_weeks"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_days</span>(jan1, <span class="nm">365</span>)) == <span class="st">"2027-01-01"</span>, <span class="st">"add_days"</span>);</code></pre>
-<p>Leap-day boundary.</p>
-<pre><code>  feb28 = time::<span class="fn-call">parse</span>(<span class="st">"2024-02-28"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_days</span>(feb28, <span class="nm">1</span>)) == <span class="st">"2024-02-29"</span>, <span class="st">"leap day"</span>);</code></pre>
-<pre><code>  dec31 = time::<span class="fn-call">parse</span>(<span class="st">"2026-12-31"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">days_between</span>(jan1, dec31) == <span class="nm">364</span>, <span class="st">"days_between"</span>);</code></pre>
-<pre><code>  hourly = time::<span class="fn-call">seconds_between</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 00:00:00"</span>),
-                                 time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 01:00:00"</span>));
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hourly == <span class="nm">3600</span>, <span class="st">"seconds_between"</span>);
-}</code></pre>
-<h2 id="week-boundaries-and-iso-week-numbering">Week boundaries and ISO week numbering</h2>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_weeks</span>() {</code></pre>
-<p>start_of_week snaps back to Monday 00:00.</p>
-<pre><code>  wed = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-27"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">start_of_week</span>(wed)) == <span class="st">"2026-05-25"</span>, <span class="st">"Monday of week"</span>);</code></pre>
-<p>2026-01-01 is a Thursday -&gt; ISO week 1 of 2026.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>)) == <span class="nm">2026</span>, <span class="st">"iso_year"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>)) == <span class="nm">1</span>, <span class="st">"iso_week"</span>);</code></pre>
-<p>2021-01-01 is a Friday -&gt; still ISO week 53 of 2020.</p>
-<pre><code>  jan1_2021 = time::<span class="fn-call">parse</span>(<span class="st">"2021-01-01"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(jan1_2021) == <span class="nm">2020</span>, <span class="st">"iso_year rollback"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(jan1_2021) == <span class="nm">53</span>, <span class="st">"iso_week 53"</span>);
-}</code></pre>
-<h2 id="local-day-at-a-fixed-offset">Local day at a fixed offset</h2>
-<p>23:30 UTC at +120 minutes is 01:30 the next local day.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_local</span>() {
-  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 23:30:00"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(time::<span class="fn-call">to_local</span>(t, <span class="nm">120</span>)) == <span class="st">"2026-05-26 01:30"</span>, <span class="st">"to_local"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">local_day</span>(t, <span class="nm">120</span>)) == <span class="st">"2026-05-26"</span>, <span class="st">"local_day"</span>);
-}</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
-  <span class="fn-call">show_fields</span>();
-  <span class="fn-call">show_formatting</span>();
-  <span class="fn-call">show_arithmetic</span>();
-  <span class="fn-call">show_weeks</span>();
-  <span class="fn-call">show_local</span>();
-  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"time library: all checks passed"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="33-features">

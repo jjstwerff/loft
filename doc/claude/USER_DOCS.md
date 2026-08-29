@@ -60,7 +60,7 @@ use it:
 |---|---|---|---|
 | 1 | the library's `README.md` | **yes** | only via GitHub |
 | 2 | the library's `docs/*.loft` guide | **yes** | only via `loft doc` |
-| 3 | `tests/docs/NN-<lib>.loft` in the loft repo | **yes** | yes — the doc site |
+| 3 | ~~`tests/docs/NN-<lib>.loft` in the loft repo~~ — **retired, step 9** | — | — |
 | 4 | the registry `index.json` description | **yes** | via `loft api --registry` |
 | 5 | `LIBRARIES.md` | generated | no — local build, git-ignored |
 | 6 | `loft api <name>` | generated | CLI only |
@@ -68,11 +68,11 @@ use it:
 | 8 | `loft doc <name>` | generated | local HTML only |
 | 9 | a library page on the doc site | — | **does not exist** |
 
-Four hand-written homes for the same facts. **The drift is not hypothetical: `random`'s guide
-exists at sites 2 and 3 and the two files no longer match** — `docs/21-random.loft` in
-`loft-libs-core` hashes `fb3cf619…`, `tests/docs/21-random.loft` in this repo hashes
-`3f80cc26…`. Nobody edited both. Nothing reported it. Both are published, to different
-readers.
+Four hand-written homes for the same facts. **The drift was not hypothetical: `random`'s guide
+existed at sites 2 and 3 and the two files no longer matched** — `docs/21-random.loft` in
+`loft-libs-core` hashed `fb3cf619…`, `tests/docs/21-random.loft` in this repo hashed
+`3f80cc26…`. Nobody edited both. Nothing reported it. Both were published, to different
+readers. Site 3 is now gone (step 9): the two files were merged into one, in the library.
 
 The design collapses the four to **two**, each with a job the other cannot do:
 
@@ -111,7 +111,7 @@ work. What does not exist is any path from a reader to their output.
 | | |
 |---|---|
 | Published libraries | **42** |
-| …with a user doc page on the site | **3** — `imaging` (14-image), `random` (21-random), `time` (32-time) |
+| …with a user doc page on the site | **3** — `imaging` (14-image), `random` (21-random), `time` (32-time), all three in the LOFT repo rather than their own |
 | …with a hand-written guide in their own repo | **2** — `graphics`, `random` |
 | …with any `doc/` directory | **0** |
 | …with any examples | **3** — `game_protocol` (17), `drawing` (1), `graphics` (1) |
@@ -326,11 +326,11 @@ says which is which — *worked example* (someone chose this as the thing to rea
 
 | Today | After |
 |---|---|
-| `tests/docs/14-image.loft` (loft repo) | `imaging/docs/01-getting-started.loft` |
-| `tests/docs/32-time.loft` (loft repo) | `time/docs/01-getting-started.loft` |
-| `tests/docs/21-random.loft` **and** `random/docs/21-random.loft`, drifted | `random/docs/01-getting-started.loft`, one file |
+| ~~`tests/docs/14-image.loft` (loft repo)~~ | `imaging/docs/01-getting-started.loft` — **landed, imaging 0.3.1** |
+| ~~`tests/docs/32-time.loft` (loft repo)~~ | `time/docs/01-getting-started.loft` — **landed, time 0.3.1** |
+| ~~`tests/docs/21-random.loft` **and** `random/docs/21-random.loft`, drifted~~ | `random/docs/01-getting-started.loft`, one file — **landed, random 0.3.2** |
 | 42 hand-written `README.md` | generated from the guide + manifest, with a drift guard |
-| `tests/wrap.rs` SUITE_SKIP, `doc_lib_examples.rs` filename list | nothing — the library runs its own guide |
+| ~~`tests/wrap.rs` SUITE_SKIP, `doc_lib_examples.rs` filename list~~ | nothing — the library runs its own guide, in `library-ci-reusable.yml` — **landed** |
 
 The doc site renders a library's guide from the **registry cache** — the same source
 `loft api graphics` reads without a clone — so the loft repo never holds a copy of a library's
@@ -546,13 +546,40 @@ independently shippable and none blocks the next except where marked.
    Verified in headless Chrome: Run pauses, the frame's locals are listed, `nth_prime(10)`
    typed at the prompt answers 29, and a click on a source line sets a breakpoint. ⚠ Three
    things the design got wrong, all found by measuring before building — see below.
-9. **Move the three guides home** — `14-image`, `32-time`, `21-random` — and delete the
-   hardcoded delegation lists. Late, because it is pure cleanup, and it is only safe once the
-   site renders guides from the library side.
+9. ~~**Move the three guides home** — `14-image`, `32-time`, `21-random` — and delete the
+   hardcoded delegation lists.~~ **Landed** (loft-libs-core `38081d1` random 0.3.2,
+   loft-libs-graphics `2791593` imaging 0.3.1, loft-libs-game `f3f0a45` time 0.3.1). Each is
+   one `docs/01-getting-started.loft` in the five-part shape, run on both backends with
+   `LOFT_DENY_WARNINGS=1`. `tests/docs/{14-image,32-time,21-random}.loft`,
+   `tests/doc_lib_examples.rs` and the `SUITE_SKIP` / `WASM_SKIP` / `NATIVE_SKIP` entries are
+   deleted; all three skip lists are now EMPTY.
+
+   ⚠ **The step could not be pure cleanup, because the coverage it deletes had no
+   replacement.** The design says a guide is "run by its own CI"; it was not.
+   `library-ci-reusable.yml` runs `loft --tests tests`, and a guide is a program, not a
+   suite — so `html` and `markdown` (step 7) have never been run by CI, and deleting
+   `doc_lib_examples.rs` would have taken `imaging` and `random` from *both backends
+   compared* to *nothing*. A `Guide — <pkg>` step now runs every `docs/*.loft` on both
+   backends and diffs the two outputs, which is the property inherited from the test being
+   deleted. Falsified both ways before landing: a broken assert and a forced backend
+   divergence each turn it red with the finding in the job summary.
+
+   Two things the step measured. `parse`'s contract is **normalise, not validate** —
+   `time::parse("2026-13-45")` answers a non-null 2027-02-14, so a null check proves the text
+   was readable and nothing more; the first draft of the guide asserted the opposite and the
+   file said so on its first run. And `imaging`'s page had been describing a three-channel
+   `Pixel` since `a` landed in 0.3.0 — the drift this rule exists to end, found by moving the
+   text next to the code it describes.
 10. **Retire [DOC.md § Two tiers](DOC.md)**, replacing it with a pointer here.
 
 Steps 1, 2 and 4 are each under a day and together change what a new user experiences more
 than everything below them combined; all three have landed.
+
+**Remaining: step 10**, plus the guides for `input` / `pluginabi` (step 1) and `stage` /
+`server` / `web` (step 7), which wait on other checkouts. Six packages now carry a guide —
+`graphics`, `random`, `imaging`, `time`, `html`, `markdown` — and the last four of those
+need a registry publish before the site can render them, because `gendoc` reads a guide out
+of the extracted tarball, never out of a checkout.
 
 **Step 8 was blocked by two defects in the machinery it sits on, and is capped by a third.**
 The design read `src/wasm_debug.rs` and believed its doc comment. Measured instead:

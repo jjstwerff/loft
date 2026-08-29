@@ -59,8 +59,10 @@ leak:text_tl_fmt
 # `loft install` / registry-index fetch (`registry_index::http_get_bytes`) sets up a
 # process-lifetime HTTP/TLS client whose state is still REACHABLE at exit — so Linux LSan
 # (reachability-based) never flags it, while macOS ASan's at-exit check does. A one-time
-# client alloc, not a growing leak; the 3 network-doing docs fixtures (14-image / 21-random
-# / 32-time) surface it. macOS-only, so this line is a no-op on the Linux leg.
+# client alloc, not a growing leak; any fixture that resolves a registry package surfaces
+# it. macOS-only, so this line is a no-op on the Linux leg. (The three docs pages that used
+# to be the ones doing it — 14-image / 21-random / 32-time — moved into their libraries in
+# @PLN149 step 9; the suppression is about the HTTP layer, not about them.)
 leak:http_get_bytes
 
 # macOS `Network.framework` one-time DNS/network context (@PLN112 nightly, confirmed from the

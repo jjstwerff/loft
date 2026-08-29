@@ -212,6 +212,12 @@ page. Both `.loft` files declared `@NAME: Time`. Fixed by renaming the library
 one's `@NAME` to `Time library`, so the nav and `<title>` are distinct. No merge,
 no page deleted — merging would have destroyed real content.
 
+**Two pages now, not three** (@PLN149 step 9, 2026-08-29): the library one moved into
+the `time` package as `docs/01-getting-started.loft` and is published as
+`doc/lib-time-guide.html`, off the library's card rather than the language nav. What is
+left under Time is `22-time` (the builtin `now` / `ticks`) and `stdlib-time` (the API),
+which were never the pair that confused anyone.
+
 **Lexer/parser reordering deferred.** `gather_topics()` orders by the numeric
 filename prefix and `gendoc` has no topic-grouping mechanism, so reordering means
 *renaming* `15-lexer` / `16-parser` — 38 references, many in finished plan

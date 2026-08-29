@@ -419,9 +419,22 @@ is written and short, and only one of them can be either.
 
 **One file, in the package, in the topic format the language pages use** — `@NAME` / `@TITLE`,
 prose in `//` comments, code between. That format is not decoration: the guide is a **running
-loft program**, so an example that stops working stops compiling, in your own CI, on the same
-`loft test` that guards the rest of the package. A guide that cannot rot is the only kind
-worth a reader's trust.
+loft program**, so an example that stops working stops compiling. A guide that cannot rot is
+the only kind worth a reader's trust.
+
+**Your CI runs it, in its own step.** Not `loft test` — that scans `tests/`, and a guide is a
+program, not a suite, which is why the guides written before this rule existed were never
+executed by anything. The `Guide` step in `library-ci-reusable.yml` runs every `docs/*.loft`
+on **both backends** and diffs the two outputs; a package with no guide says so and passes.
+Run it yourself the same way:
+
+```sh
+LOFT_DENY_WARNINGS=1 loft --interpret docs/01-getting-started.loft
+LOFT_DENY_WARNINGS=1 loft --native    docs/01-getting-started.loft
+```
+
+Warnings are denied there as they are in the suite, so a guide that teaches an idiom the
+compiler warns about does not ship.
 
 It is rendered in two places from that one file, with no further work: `loft doc <name>`
 locally, and `doc/lib-<name>-guide.html` on the published site, linked from the library's
