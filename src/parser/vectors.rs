@@ -968,7 +968,7 @@ impl Parser {
         self.data.def_used(d_nr);
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
-        let ret_type = self.data.def(d_nr).returned().clone();
+        let ret_type = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
         Type::Function(arg_types, Box::new(ret_type), Deps::none())
     }
 
@@ -1152,7 +1152,7 @@ impl Parser {
         // the second-pass closure injection also adds a hidden __closure attribute.
         // Neither should appear in the public Function type — only declared params do.
         let arg_types: Vec<Type> = arguments.iter().map(|a| a.typedef.clone()).collect();
-        let ret_type = self.data.def(d_nr).returned().clone();
+        let ret_type = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
         // include the closure work var dep so that get_free_vars knows
         // a local ___clos_N variable owns the closure (and will free it).  Without
         // this dep, the Function arm in get_free_vars would emit a duplicate free.
@@ -1445,7 +1445,7 @@ impl Parser {
         let arg_types: Vec<Type> = (0..n_params)
             .map(|a| self.data.attr_type(d_nr, a))
             .collect();
-        let ret_type = self.data.def(d_nr).returned().clone();
+        let ret_type = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
         // include closure work var dep (same as fn-form lambda).
         let dep = if self.last_closure_work_var == u16::MAX {
             Deps::none()
@@ -1495,7 +1495,7 @@ impl Parser {
             let visible_params: Vec<Type> = (0..n_visible)
                 .map(|aid| self.data.attr_type(d_nr, aid).clone())
                 .collect();
-            let ret_tp = self.data.def(d_nr).returned().clone();
+            let ret_tp = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
             // fn-ref depends on closure work var `w` so that
             // get_free_vars does not emit OpFreeRef for the closure record
             // before the fn-ref escapes the defining scope.

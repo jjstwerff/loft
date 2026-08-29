@@ -11323,33 +11323,134 @@ impl Parser {
         matches!(vars.tp(v_nr).base(), Type::Function(_, _, d) if !d.is_empty()).then_some(v_nr)
     }
 
+    /// The return type a fn-ref VALUE publishes to whoever holds it — the deps a CALLER can
+    /// act on, and only those.
+    ///
+    /// A definition's return deps are ATTR-space indices into its own parameter list, and a
+    /// caller can name only the visible ones.  Of the rest exactly ONE is something the
+    /// caller reaches: `__closure`, the record the caller allocated and still owns.  Every
+    /// other hidden attribute — `ref_return`'s `__ref_N`, a text work buffer — is an
+    /// allocation the CALLEE makes and hands over, so a return tied to it arrives owned.
+    ///
+    /// Publishing both as *"an index the caller cannot name"* is what made `{ cap }` and
+    /// `{ sr_make(k) }` read the same downstream, and the only way to read the first as a
+    /// borrow was then to read the second as one too — every struct-returning capturing
+    /// lambda into a leak.  [`Argument::hidden`](crate::data::Argument::hidden) is the
+    /// distinction, and its own doc already states the conclusion: *"not a user-declared
+    /// parameter — should be excluded from dep propagation."*  Dropping those indices here
+    /// changes nothing else, because [`fnref_result_type`](Self::fnref_result_type) drops
+    /// every out-of-range index anyway; what it buys is that the one index left over means
+    /// what the caller reads it to mean.
+    fn published_ret_type(&self, d_nr: u32, ret: Type) -> Type {
+        let Some(dep) = ret.deps_ref() else {
+            return ret;
+        };
+        let def = self.data.def(d_nr);
+        let place_tail = self.tail_is_a_place(def);
+        let kept: Vec<u16> = dep
+            .as_attr_indices()
+            .iter()
+            .copied()
+            .filter(|a| match def.attributes().get(*a as usize) {
+                // A hidden buffer is the callee's own allocation, handed over: OWNED.
+                Some(at) if at.hidden => false,
+                // The caller's own record — a borrow, but only where the tail READS it.
+                Some(at) if at.name == "__closure" => place_tail,
+                // A visible parameter: the caller maps it through its own argument.
+                Some(_) => true,
+                // Past the attribute list: the same closure question in a grown spelling.
+                None => place_tail,
+            })
+            .collect();
+        if kept.len() == dep.as_attr_indices().len() {
+            return ret;
+        }
+        ret.with_deps(&crate::data::Deps::attrs(kept))
+    }
+
+    /// Is this body's tail a PLACE — a slot, or a field / element / capture read out of one?
+    ///
+    /// The question [`published_ret_type`](Self::published_ret_type) asks about the closure:
+    /// a tail that READS the closure hands back the captured store itself, so the caller
+    /// borrows.  A tail that JOINS — a `??`, an `if`, a `match` — may hand back a fresh store
+    /// on one arm and the capture on another, and the union its deps carry then names the
+    /// closure for a value that is often the callee's own.  Neither static reading serves both
+    /// arms: read as a borrow the minting arm leaks, read as owned the capture arm is released
+    /// while its variable is still live.  Answering only for the tail that cannot join keeps
+    /// the reading positive and UNDER-approximating, which is the direction every ownership
+    /// proof in this file takes — a shape it cannot read keeps the behaviour it already had.
+    ///
+    /// The inverse of [`body_mints_its_return`](Self::body_mints_its_return)'s walk, plus
+    /// `OpGetDbRef`, which is how a capture is read out of the closure record.
+    fn tail_is_a_place(&self, def: &crate::data::Definition) -> bool {
+        let Value::Block(bl) = def.code() else {
+            return false;
+        };
+        let Some(tail) = bl.operators.last() else {
+            return false;
+        };
+        let (get_field, get_vector, get_dbref) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+            self.data.def_nr("OpGetDbRef"),
+        );
+        let mut node = tail.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                // `ref_return`'s delivery wrapper: the steps that prepare a buffer, then the
+                // value actually handed back.  The LAST element is the answer — a body that
+                // clears a buffer and then returns a place is the shape loft#1182 names,
+                // where the buffer is declared and ignored.
+                Value::Insert(steps) => match steps.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::Var(_) | Value::TupleGet(_, _) => return true,
+                Value::Call(d, args) if *d == get_field || *d == get_vector || *d == get_dbref => {
+                    match args.first() {
+                        Some(base) => node = base.unspan(),
+                        None => return false,
+                    }
+                }
+                _ => return false,
+            }
+        }
+    }
+
     fn fnref_result_type(ret: Type, types: &[Type], fn_var: Option<u16>) -> Type {
         let visible = |d: &Deps| Deps::frame(Self::resolve_deps(types, d.as_attr_indices()));
-        // The CLOSURE half, and only for a collection return.  A struct, record-enum or text
-        // return is MATERIALISED into a fresh copy before it leaves the callee — `{ cap }` at
-        // `-> P` hands the caller its own record and is correct as it stands — while a
-        // collection return hands back the STORE, so the capture itself crosses the boundary
-        // and the caller must not take it.
+        // The CLOSURE half.  Every index left in a PUBLISHED return type that names no
+        // visible argument names `__closure` — [`published_ret_type`](Self::published_ret_type)
+        // drops the callee's own hidden buffers before the type ever leaves the lambda — so
+        // an out-of-range index here is the caller's own record and the value is a BORROW of
+        // it.  A store handed back that way is the capture itself, whatever its type:
+        // `(L-CapHeap)` names struct and vector in one breath, and the caller may read it,
+        // never take it.
         let borrows_closure = |d: &Deps| {
             fn_var.is_some()
                 && d.as_attr_indices()
                     .iter()
                     .any(|a| *a as usize >= types.len())
         };
-        match ret {
-            Type::Text(d) => Type::Text(visible(&d)),
-            Type::Vector(to, d) => {
-                let mut out = Self::resolve_deps(types, d.as_attr_indices());
-                if borrows_closure(&d)
-                    && let Some(v) = fn_var
-                    && !out.contains(&v)
-                {
-                    out.push(v);
-                }
-                Type::Vector(to, Deps::frame(out))
+        // `visible`, plus the fn-ref slot when the return borrows the closure it carries.
+        let through = |d: &Deps| {
+            let mut out = Self::resolve_deps(types, d.as_attr_indices());
+            if borrows_closure(d)
+                && let Some(v) = fn_var
+                && !out.contains(&v)
+            {
+                out.push(v);
             }
-            Type::Reference(to, d) => Type::Reference(to, visible(&d)),
-            Type::Enum(to, true, d) => Type::Enum(to, true, visible(&d)),
+            Deps::frame(out)
+        };
+        match ret {
+            // Text is COPIED out through a work buffer rather than handed back, so the
+            // caller's value is its own however the callee reached it.
+            Type::Text(d) => Type::Text(visible(&d)),
+            Type::Vector(to, d) => Type::Vector(to, through(&d)),
+            Type::Reference(to, d) => Type::Reference(to, through(&d)),
+            Type::Enum(to, true, d) => Type::Enum(to, true, through(&d)),
             other => other,
         }
     }

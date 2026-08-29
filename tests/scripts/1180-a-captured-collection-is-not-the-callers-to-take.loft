@@ -21,14 +21,14 @@
 //     deps answer that, and they mean it HERE, where the slot is a caller local whose type
 //     was inferred at the bind — the same predicate is inert one frame down, where the slot
 //     is a parameter with a declared fn-type (loft#1176).
-//   - only for a COLLECTION return.  A struct, record-enum or text return is MATERIALISED
-//     into a fresh copy before it leaves the callee, so `fn(i: integer) -> P { cap }` hands
-//     the caller its own record and was always right.  Without that restriction the dep is a
-//     pure over-approximation, and the cost is measured: the out-of-range index is
-//     `__closure` for `{ cap }` AND for `{ sr_make(k) }`, whose result is a FRESH store built
-//     from a captured value, so no dep-index test can separate them — reading it as a borrow
-//     leaks every struct-returning capturing lambda, eleven stores of them in
-//     `717-closure-struct-return.loft`.
+//   - only for a COLLECTION return.  ⚠ RETRACTED by loft#1181, which closed the struct case
+//     the same day.  A struct return is NOT materialised into a fresh copy — the lambda's
+//     body is `return OpGetDbRef(__closure, 0)` — so `fn(i: integer) -> P { cap }` was a
+//     use-after-free.  And the dep-index test that "cannot separate" `{ cap }` from
+//     `{ sr_make(k) }` is the RANGE test: their out-of-range indices are `__closure` and
+//     `__ref_N`, which `Argument::hidden` tells apart by NAME.  The leak the restriction was
+//     avoiding — eleven stores in `717-closure-struct-return.loft` — is real, and the name
+//     test is what removes it.
 //
 // The INLINE spelling was correct throughout, and that is why this was first filed as a leak:
 // nothing binds the result, so nothing adopts it.  Every cell below binds.
@@ -114,9 +114,11 @@ fn test_a_captured_keyed_collection_is_unchanged() {
 }
 
 fn test_the_returns_that_are_copied_out_are_unchanged() {
-  // The controls.  A struct return is materialised into a fresh copy before it leaves, so
-  // the caller owns it and adding a closure dep here would only suppress its free — which is
-  // the leak this repair had to be narrowed away from.
+  // The controls.  ⚠ The first loop's reason was wrong and loft#1181 corrected it: the
+  // captured struct is NOT copied out, it is handed back, so that loop is a BORROW and
+  // reading it as owned was a use-after-free.  The cells stay as what says the collection
+  // repair did not disturb the struct spelling; the struct question itself is
+  // `1181-a-captured-struct-is-not-the-callers-to-take.loft`.
   cap = P { n: 7 };
   s = fn(v: integer) -> P { cap };
   for i in 0..4 {
@@ -127,9 +129,9 @@ fn test_the_returns_that_are_copied_out_are_unchanged() {
   k = 3;
   mk = fn(v: integer) -> P { P { n: k + v } };
   for i in 0..4 {
-    // A DIFFERENT local from the loop above on purpose: reusing one makes the SECOND
-    // capturing lambda in a function read its capture as zero on `--interpret` (loft#1181),
-    // which is a live defect this file does not answer.
+    // A DIFFERENT local from the loop above on purpose: one local taking a lambda's
+    // BORROWED result in one block and an OWNED one in a sibling block loses the owned free
+    // (loft#1183), which is a live defect this file does not answer.
     m = mk(4);
     assert(m.n == 7, "fresh-from-capture bound {i}: got {m.n}");
   }

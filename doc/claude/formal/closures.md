@@ -92,11 +92,15 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **1** — a lambda's `??`-default store discarded INLINE leaks one store per call
-(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed).
-D-clo-10 — a captured collection TAKEN by the caller's bind — D-clo-9 — a captured record
-FREED by a caller that lifted a fn-ref tail — and D-clo-8 — a captured `vector<(…)>` unpacked
-rather than shared — were opened and closed on 2026-08-29, 2026-08-29 and 2026-08-28. Closed: both
+OPEN: **3** — a lambda's `??`-default store discarded INLINE leaks one store per call
+(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed);
+D-clo-12, a forwarding function's return type cannot carry what its fn-ref ARGUMENT knows, so
+it frees the capture (loft#1185); and D-clo-13, a lambda whose tail JOINS a capture with a
+mint has one dep list for two ownerships and no reading serves both arms (loft#1186).
+D-clo-11 — a captured STRUCT taken by the caller's bind — D-clo-10 — a captured collection
+taken the same way — D-clo-9 — a captured record FREED by a caller that lifted a fn-ref tail
+— and D-clo-8 — a captured `vector<(…)>` unpacked rather than shared — were opened and closed
+on 2026-08-29, 2026-08-29, 2026-08-29 and 2026-08-28. Closed: both
 lambda forms capture identically (D-clo-1), the
 stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
 2026-07-04 —
@@ -145,6 +149,72 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-11 — OPENED AND CLOSED (2026-08-29, loft#1181): a captured STRUCT was TAKEN by the
+> caller's bind, and the same dep was dropped TWICE on its way to the call site.**
+> `(L-CapHeap)` names struct and vector in one breath, so D-clo-10's *"only for a COLLECTION
+> return"* was never a rule — it was where the measurement stopped. `r = s(1)` on
+> `s = fn(v: integer) -> P { cap }` adopted the captured record and the rebind released it;
+> `LOFT_STRICT_STORES=1` reported the use-after-free, and a SECOND capturing lambda in the
+> same function turned it into a wrong answer by landing its closure record on the freed slot.
+>
+> That entry's stated reason — *"a struct return is MATERIALISED into a fresh copy before it
+> leaves the callee"* — is false, and the IR says so in one line: the lambda's body is
+> `return OpGetDbRef(__closure, 0)`. Nothing copies.
+>
+> Two independent drops, and the issue's two recorded repair attempts each failed on the
+> other one:
+>
+> - **the fn-ref VARIABLE kept pass 1's type.** Pass 1 has not parsed the body, so the type
+>   it publishes says the result is owned; pass 2 knows better. `is_equal` collapses deps, so
+>   `change_var_type`'s equality early-return kept the uninformed answer and the call site
+>   never saw the dep at all. A fn-ref slot now ADOPTS a refined return dep, for the reason
+>   the `#663` element width beside it is adopted — same base type, so the frame the two
+>   passes lay out is unchanged.
+> - **`fnref_result_type` read *"an index naming no visible argument"* as the closure.** True
+>   of `__closure` and false of `ref_return`'s `__ref_N`, and BOTH are out of range: `{ cap }`
+>   borrows and `{ sr_make(k) }` owns, spelled identically. D-clo-10 recorded that as
+>   *"no dep-index test can separate them"*, and that is true of a RANGE test and false of a
+>   NAME test — `Argument::hidden` already carries the distinction and its own doc already
+>   states the conclusion (*"should be excluded from dep propagation"*). A lambda now
+>   publishes a return type whose leftover out-of-range index can only be the closure, which
+>   is what lets the borrow be read without over-approximating the mint into a leak.
+>
+> ⚠ **The closure is read only where the lambda's tail is a PLACE** — a slot, or a field /
+> element / capture read out of one. A tail that JOINS hands back the capture on one arm and
+> a fresh store on the other while carrying ONE dep list, and neither reading is right twice:
+> as a borrow the minting arm leaks four stores, as owned the capture arm is released while
+> its variable is live. That is D-clo-13, and the restriction is what keeps this entry from
+> trading one defect for the other.
+>
+> Guard: `tests/scripts/1181-a-captured-struct-is-not-the-callers-to-take.loft`, whose
+> falsification row moves on ONE cell — the over-free is silent until something reuses the
+> slot, so the direct-rebind cells pass on the control build and are scored by
+> `LOFT_STRICT_STORES=1` instead.
+
+> **D-clo-12 — OPEN (2026-08-29, loft#1185): a FORWARDING function frees the capture its
+> fn-ref argument handed back.** `fn call_it(f: fn(integer) -> P, v: integer) -> P { f(v) }`
+> called with a capture-returning lambda releases the captured record on the caller's rebind.
+> Inside `call_it` the slot is a PARAMETER with a DECLARED fn-type, which carries no deps
+> whatever closure is passed, so the closure read D-clo-11 installed is inert one frame down
+> — the same predicate seen from the other side that D-clo-9 measured for monomorphs.
+> D-clo-9 resolved it at the CALL SITE, where the caller named the closure it passed; here
+> the forwarding function's return type is computed ONCE for every caller, so the fact has to
+> travel differently: a return dep parametric in the fn-ref argument, or a per-argument
+> re-derivation at the call site.
+
+> **D-clo-13 — OPEN (2026-08-29, loft#1186): a lambda whose tail JOINS a capture with a mint
+> has one dep list for two ownerships.** `fn(n: integer) -> P { cap ?? P { v: -1 } }` hands
+> back the captured record when the subject is present and the call site's own return buffer
+> when it is absent — and `State::fn_return` KEEPS that buffer (D-clo-7's fix, identified by
+> store), so the caller owns it. Read as owned, the present arm is a use-after-free; read as
+> a borrow, the absent arm leaks one store per call. The NAMED twin is clean on BOTH arms and
+> says what the cure is: a direct call site mints the return buffer as a caller LOCAL that
+> scope exit frees, so whichever arm runs the buffer has an owner. The fn-ref path has no
+> such local. The cure is the symmetric twin of `push_fnref_text_buffers` — a fn-ref call site
+> that may receive a heap delivery owns that buffer the way it already owns its `&text` ones,
+> with `Data::fnref_text_buffers`' widest-candidate-then-trim shape as the precedent for the
+> adaptive ABI.
+
 > **D-clo-10 — OPENED AND CLOSED (2026-08-29, loft#1180): a captured COLLECTION was TAKEN by
 > the caller's bind.** `(L-CapHeap)` says a captured heap value is SHARED — the caller may read
 > it, never take it. `r = g(7)` on `g = fn(v: integer) -> vector<integer> { cap }` adopted the
@@ -166,14 +236,15 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 >   it says HERE, where the slot is a caller local whose type was INFERRED at the bind; it is
 >   inert one frame down, where the same slot is a parameter with a DECLARED fn-type
 >   (loft#1176 measured that, and the two entries are the same predicate seen from both sides).
-> - only for a COLLECTION return. A struct, record-enum or text return is MATERIALISED into a
->   fresh copy before it leaves the callee, so `fn(i: integer) -> P { cap }` hands the caller
->   its own record and was always right. Without that restriction the dep is a pure
->   over-approximation, and the cost is measured: the out-of-range index is `__closure` for
->   `{ cap }` AND for `{ sr_make(k) }`, whose result is a FRESH store built from a captured
->   value, so no dep-index test can separate them — reading it as a borrow leaks every
->   struct-returning capturing lambda, eleven stores of them in
->   `717-closure-struct-return.loft`.
+> - only for a COLLECTION return. ⚠ **Both halves of this restriction were wrong, and D-clo-11
+>   closed it a few hours later.** A struct return is NOT materialised into a fresh copy —
+>   the lambda's body is `return OpGetDbRef(__closure, 0)` and nothing copies — so
+>   `fn(i: integer) -> P { cap }` was a use-after-free, not a value that "was always right".
+>   And *"no dep-index test can separate them"* is true of a RANGE test only: the
+>   out-of-range index is `__closure` for `{ cap }` and `__ref_N` for `{ sr_make(k) }`, and
+>   `Argument::hidden` tells them apart by NAME. The leak this restriction was avoiding —
+>   eleven stores in `717-closure-struct-return.loft` — is real and is what the name test
+>   removes.
 >
 > ⚠ The captured-FIELD spelling (`{ q.xs }`) answers correctly now and still LEAKS one store
 > per call on `--native` — loft#1182, a different mechanism: `ref_return` promotes the borrowed

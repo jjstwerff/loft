@@ -2000,6 +2000,25 @@ impl Function {
             self.depend_all(var_nr, type_def);
             return self.is_new(var_nr);
         }
+        // A fn-ref slot ADOPTS a refined RETURN dep, for the reason the element width above
+        // is adopted: `is_equal` collapses deps, and the two passes do not know the same
+        // thing.  Pass 1 has not parsed the lambda's body, so the type it publishes says the
+        // result is owned; pass 2 knows the body hands back what it CAPTURED and says so.
+        // Keeping the first answer is what left the call site with an empty dep for a store
+        // the outer scope still owns — the bind adopted it and scope exit released it, while
+        // `(L-CapHeap)` says a captured heap value is shared (loft#1181).  Same base type
+        // either way, so the frame the two passes lay out is unchanged.
+        let adopt_fnref_ret = matches!(
+            (var_tp, type_def),
+            (Type::Function(_, cur, _), Type::Function(_, new, _))
+                if cur.is_equal(new) && cur.depend() != new.depend()
+        );
+        if adopt_fnref_ret {
+            self.trace_type_change(var_nr, type_def, "change_var_type(fn-ref return deps)");
+            self.variables[var_nr as usize].type_def = type_def.clone();
+            self.depend_all(var_nr, type_def);
+            return self.is_new(var_nr);
+        }
         // @P376 — assigning the `Never` poison (an errored struct construction,
         // pass 2) to an as-yet-`Unknown` variable must OVERWRITE it to `Never`,
         // NOT take the early-return below.  `is_equal(Unknown, Never)` is true,
