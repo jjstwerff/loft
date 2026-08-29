@@ -219,6 +219,11 @@ ceremony — and fix PHP's weaknesses.
 4. **A server-side view/templating story** — programmatic HTML via format-strings
    + the `html` escape lib, or template files; to be decided.
 
+**The end-to-end design for all of this is [WEB_STACK.md](WEB_STACK.md)** — the client and
+server examples, the four libraries they need, the Let's Encrypt rotation protocol, the
+sandbox profile for third-party scripts, and how each part is verified on instruments the
+repo already has.
+
 **The `#c` tier is bigger than databases.**  It is loft's general "bind any C
 library without rustc" capability; DB is its first consumer, with image codecs,
 compression, crypto, BLAS, and C UI toolkits as later riders.  That is the

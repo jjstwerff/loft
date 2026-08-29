@@ -2058,6 +2058,15 @@ pdf:
 	cargo run --bin gendoc
 	typst compile doc/loft-reference.typ doc/loft-reference.pdf
 
+# Print one design document as its own PDF.  The Markdown stays the single source;
+# `scripts/md2typ.py` renders it, so the two cannot drift.
+#   make pdf-doc DOC=doc/claude/WEB_STACK.md OUT=doc/web-stack
+DOC ?= doc/claude/WEB_STACK.md
+OUT ?= doc/web-stack
+pdf-doc:
+	python3 scripts/md2typ.py $(DOC) $(OUT).typ
+	typst compile $(OUT).typ $(OUT).pdf
+
 test-native:
 	@cargo build --release -q
 	@failed=0; \

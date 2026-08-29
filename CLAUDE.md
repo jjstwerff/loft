@@ -378,6 +378,11 @@ strict: [formal/README.md](doc/claude/formal/README.md) (rules + deviations driv
 
 **Plans / roadmap:** [plans/README.md](doc/claude/plans/README.md) · [PLANNING.md](doc/claude/PLANNING.md) backlog ·
 [ROADMAP.md](doc/claude/ROADMAP.md) by milestone · [BROADENING.md](doc/claude/BROADENING.md) beyond games ·
+[WEB_STACK.md](doc/claude/WEB_STACK.md) the **better-PHP** end-to-end design — a client that calls a
+web service (JSON + auth) and its counterpart HTTPS server (Let's Encrypt with rotation, auth,
+SQL, a JSON and an HTML page), the four libraries they need, the sandbox profile for
+third-party scripts, and how each part is verified on instruments the repo already has;
+printable with `make pdf-doc` ·
 [lib_plans/README.md](doc/claude/lib_plans/README.md) (legacy) · [STACKTRACE.md](doc/claude/STACKTRACE.md) · [SANDBOX.md](doc/claude/SANDBOX.md).
 
 **Libraries / registry / packages:** `LIBRARIES.md` (generated on demand — `make libcatalogue`, not
