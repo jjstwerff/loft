@@ -3245,6 +3245,32 @@ impl Function {
     ///
     /// Set by `clean_work_refs` for work-ref temporaries re-purposed after use, and by the
     /// `??` lowering for a borrowed subject.
+    /// Is `v` a BORROWED VIEW the parser mints and OVERWRITES before any read — a match /
+    /// `is` payload binding (`_mv_<field>_N`) or a `??` coalesce subject (`__ncc_N`)?
+    ///
+    /// Distinct from [`Self::is_skip_free`], whose only contract is *"emit no `OpFreeRef`"* — a
+    /// free-time fact that an OWNED keyed return-local also carries.  Reading `skip_free` as
+    /// this question is what @PLN85 A.1 de-conflated at `gen_keyed_null`, correctly: a keyed
+    /// return-local that owns its store was left at the `u16::MAX` sentinel and OOB-panicked
+    /// the next record op.
+    ///
+    /// ⚠ But the de-conflation dropped this half rather than renaming it, and the KEYED site
+    /// then allocated a store for every match binding and orphaned it the moment the arm
+    /// overwrote the slot with its projection — one store per call, unbounded in a loop
+    /// (loft#1155).  The vector twin kept the broad gate and stayed clean, which is exactly
+    /// why `vector` was the control in that issue's own measurements.
+    ///
+    /// Both facts are required: the PREFIX says which kind of temp this is, and `skip_free`
+    /// confirms the parser marked it as a view rather than an owner.
+    #[must_use]
+    pub fn is_overwritten_view(&self, v: u16) -> bool {
+        if !self.is_skip_free(v) {
+            return false;
+        }
+        let n = self.name(v);
+        n.starts_with("_mv_") || n.starts_with("__ncc_")
+    }
+
     pub fn is_skip_free(&self, v: u16) -> bool {
         self.variables[v as usize].skip_free
     }
