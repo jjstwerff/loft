@@ -50,6 +50,48 @@
   <url><loc>https://loft-lang.org/loft/install.html</loc></url>
   <url><loc>https://loft-lang.org/loft/kernel-differential.html</loc></url>
   <url><loc>https://loft-lang.org/loft/kernel-swap.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-arguments.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-assets.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-cbor.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-crypto.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-drawing.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-fixstep.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-game_protocol.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-glb.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-graphics.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-gridmesh.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_body.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_draw.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_edge.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_field.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_fit.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_form.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_grid.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_place.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_recover.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_roof.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_shape.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_terrain.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_way.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-hex_world.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-html.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-imaging.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-input.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-lavition_ui.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-markdown.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-mesh3d.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-pluginabi.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-random.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-regex.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-server.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-shapes.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-ssh.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-stage.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-text2d.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-time.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-tween.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-web.html</loc></url>
+  <url><loc>https://loft-lang.org/loft/lib-zttext.html</loc></url>
   <url><loc>https://loft-lang.org/loft/libraries.html</loc></url>
   <url><loc>https://loft-lang.org/loft/playground.html</loc></url>
   <url><loc>https://loft-lang.org/loft/report.html</loc></url>

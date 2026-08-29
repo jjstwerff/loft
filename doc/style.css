@@ -516,3 +516,8 @@ article h3 {
    run down it, and let the description column take the wrapping instead. */
 .lib-table td:first-child { white-space: nowrap; }
 .lib-table td:nth-child(2) { white-space: nowrap; color: var(--dim); font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.9em; }
+.lib-lede { font-size: 1.05em; margin: 0 0 1.1em; }
+.lib-card th { width: 12em; white-space: nowrap; text-transform: none; font-size: 0.85em; }
+.lib-card td { white-space: normal; }
+.lib-card td:nth-child(2) { font-family: inherit; font-size: inherit; color: inherit; }
+.lib-legend { color: var(--dim); font-size: 0.85em; margin: 0 0 1.4em; }

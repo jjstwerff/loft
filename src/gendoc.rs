@@ -498,12 +498,10 @@ fn generate_libraries_page(
                 .map_or_else(|| "\u{2014}".to_string(), |v| esc(&v.semver));
             let name = esc(&pkg.name);
             let described = pkg.description.as_deref().unwrap_or("");
-            let link = match pkg.homepage.as_deref() {
-                Some(url) if !url.is_empty() => {
-                    format!("<a href=\"{}\"><code>{name}</code></a>", esc(url))
-                }
-                _ => format!("<code>{name}</code>"),
-            };
+            // The name links to the library's own page, not straight out to its
+            // repository: a reader deciding whether to depend on something wants the card
+            // first, and the repository link is on it.
+            let link = format!("<a href=\"lib-{name}.html\"><code>{name}</code></a>");
             let _ = writeln!(
                 body,
                 "<tr><td>{link}</td><td>{latest}</td><td>{}</td></tr>",
@@ -522,7 +520,247 @@ fn generate_libraries_page(
     };
     let html = page_html("Libraries", &nav, "Libraries", &body, &meta);
     fs::write("doc/libraries.html", html)?;
+
+    generate_library_cards(&index, stdlib_sections, topic_info)?;
     Ok(index.packages.len())
+}
+
+/// One page per library — the **card**: the facts a reader needs before deciding to depend
+/// on something, which is a different question from *what is there* (the catalogue) and from
+/// *how do I start* (the guide).
+///
+/// The categories are the tag system and they answer *where does this belong*. Nothing
+/// answered *should I depend on this*, even though the registry already declares almost all
+/// of it — the version and its date, the loft floor, the compatibility floors, the size, the
+/// dependencies, the auto-use triggers and the size of the public surface.
+///
+/// **The card is a renderer, not a dataset.** No field here is written by hand anywhere, so
+/// there is nothing for a maintainer to keep in step and nothing that can drift from the
+/// package it describes ([USER_DOCS.md](../doc/claude/USER_DOCS.md) Tier 0).
+fn generate_library_cards(
+    index: &loft::registry_index::RegistryIndex,
+    stdlib_sections: &[StdlibSection],
+    topic_info: &[(String, String)],
+) -> std::io::Result<()> {
+    // "What uses this" — the one field on the card that no package declares about itself.
+    // Inverting every package's `deps` is the whole derivation, and it is the field that
+    // tells a reader whether they are the first person to try something.
+    let mut used_by: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for (name, pkg) in &index.packages {
+        let Some(v) = loft::registry_index::find_best_version(pkg, "*", false) else {
+            continue;
+        };
+        for dep in v.deps.keys() {
+            used_by.entry(dep.as_str()).or_default().push(name.as_str());
+        }
+    }
+
+    for (name, pkg) in &index.packages {
+        let Some(v) = loft::registry_index::find_best_version(pkg, "*", false) else {
+            continue;
+        };
+        let mut body = String::new();
+
+        if let Some(d) = pkg.description.as_deref().filter(|d| !d.is_empty()) {
+            let _ = writeln!(body, "<p class=\"lib-lede\">{}</p>", esc(d));
+        }
+        let _ = writeln!(
+            body,
+            "<pre><code>loft install {}\n</code></pre>\n<pre><code>use {};\n</code></pre>",
+            esc(name),
+            esc(name)
+        );
+
+        body.push_str("<table class=\"lib-table lib-card\">\n");
+        let mut row = |k: &str, val: &str| {
+            let _ = writeln!(body, "<tr><th>{k}</th><td>{val}</td></tr>");
+        };
+
+        row(
+            "Version",
+            &format!(
+                "{} \u{2014} published {}",
+                esc(&v.semver),
+                esc(&short_date(&v.published))
+            ),
+        );
+        if !pkg.categories.is_empty() {
+            let cats = pkg
+                .categories
+                .iter()
+                .map(|c| {
+                    format!(
+                        "<a href=\"libraries.html#{}\">{}</a>",
+                        esc(c),
+                        esc(&category_title(c))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" \u{b7} ");
+            row("Categories", &cats);
+        }
+        row("Requires", &format!("loft <code>{}</code>", esc(&v.loft)));
+        row(
+            "Compatibility",
+            &compat_cell(
+                &v.semver,
+                v.api_compatible_with.as_deref(),
+                v.data_compatible_with.as_deref(),
+            ),
+        );
+        row("Download", &human_size(v.size));
+        if !v.api.is_empty() {
+            row(
+                "Public API",
+                &format!(
+                    "{} items \u{2014} <code>loft api {}</code> prints them with their documentation",
+                    v.api.len(),
+                    esc(name)
+                ),
+            );
+        }
+        row(
+            "Dependencies",
+            &package_links(
+                &v.deps.keys().map(String::as_str).collect::<Vec<_>>(),
+                index,
+                "none",
+            ),
+        );
+        row(
+            "Used by",
+            &package_links(
+                used_by.get(name.as_str()).map(Vec::as_slice).unwrap_or(&[]),
+                index,
+                "no other registry package \u{2014} you would be the first",
+            ),
+        );
+        if !v.triggers.is_empty() {
+            // A trigger is why a method resolves with no `use` line, which reads as magic
+            // until you know the package behind it.
+            let names = v
+                .triggers
+                .iter()
+                .map(|t| {
+                    let (m, recv) = t.split_once(':').unwrap_or((t.as_str(), ""));
+                    if recv.is_empty() {
+                        format!("<code>{}</code>", esc(m))
+                    } else {
+                        format!("<code>{}.{}()</code>", esc(recv), esc(m))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" \u{b7} ");
+            row(
+                "Loads itself for",
+                &format!("{names} \u{2014} these resolve with no <code>use</code> line"),
+            );
+        }
+        if !pkg.yanked.is_empty() {
+            let ys = pkg
+                .yanked
+                .iter()
+                .map(|y| format!("<code>{}</code>", esc(y)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            row(
+                "Yanked versions",
+                &format!("{ys} \u{2014} do not pin these"),
+            );
+        }
+        if let Some(url) = pkg.homepage.as_deref().filter(|u| !u.is_empty()) {
+            row("Source", &format!("<a href=\"{0}\">{0}</a>", esc(url)));
+        }
+        body.push_str("</table>\n");
+
+        body.push_str(
+            "<p class=\"lib-legend\">A <em>drop-in</em> floor is the oldest release of this \
+             package the current one still replaces without a source change. \
+             <em>Not declared</em> means exactly that \u{2014} the package has made no promise, \
+             which is the honest state for one published before the compatibility contract \
+             existed.</p>\n",
+        );
+        body.push_str("<p><a href=\"libraries.html\">\u{2190} All libraries</a></p>\n");
+
+        let nav = build_nav(topic_info, stdlib_sections, "libraries");
+        let desc = pkg
+            .description
+            .as_deref()
+            .filter(|d| !d.is_empty())
+            .map_or_else(
+                || format!("The {name} library for loft \u{2014} install it with `loft install {name}`."),
+                std::string::ToString::to_string,
+            );
+        let slug = format!("lib-{name}");
+        let meta = loft::documentation::PageMeta {
+            slug: &slug,
+            description: &desc,
+        };
+        let html = page_html(name, &nav, name, &body, &meta);
+        fs::write(format!("doc/lib-{name}.html"), html)?;
+    }
+    Ok(())
+}
+
+/// What the two compatibility floors mean, in the reader's terms.
+///
+/// The floor is *the oldest release this version is still a drop-in for* — so a floor EQUAL
+/// to the version says the opposite of what it looks like: nothing older is compatible,
+/// because the break happened here. A version that declares no floor has promised nothing,
+/// and that absence is load-bearing rather than an omission to paper over: 18 of the 42
+/// packages predate the contract.
+fn compat_cell(version: &str, api: Option<&str>, data: Option<&str>) -> String {
+    let one = |kind: &str, floor: Option<&str>| -> String {
+        match floor {
+            None => format!("{kind}: not declared"),
+            // Say what the floor literally declares, not what it implies. A floor equal to
+            // the version means either "the break happened here" or "this is a first
+            // release" — the index cannot tell those apart, and only one of them makes
+            // the word "breaks" true.
+            Some(f) if f == version => format!("{kind}: no earlier release is a drop-in"),
+            Some(f) => format!("{kind}: drop-in for {} and later", esc(f)),
+        }
+    };
+    format!("{} \u{b7} {}", one("API", api), one("stored data", data))
+}
+
+/// A dependency / dependent list, each name linked to its own card. `empty` is what the cell
+/// says when the list is empty — an empty cell reads as *unknown*, and here it is a fact.
+fn package_links(
+    names: &[&str],
+    index: &loft::registry_index::RegistryIndex,
+    empty: &str,
+) -> String {
+    if names.is_empty() {
+        return empty.to_string();
+    }
+    names
+        .iter()
+        .map(|n| {
+            if index.packages.contains_key(*n) {
+                format!("<a href=\"lib-{0}.html\"><code>{0}</code></a>", esc(n))
+            } else {
+                format!("<code>{}</code>", esc(n))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
+}
+
+/// `2026-08-21T10:48:14Z` \u{2192} `2026-08-21`. A reader wants the day, not the second.
+fn short_date(stamp: &str) -> String {
+    stamp.split('T').next().unwrap_or(stamp).to_string()
+}
+
+/// A download size a person can judge. Packages here run from 11 kB to 200 kB, so kB is the
+/// working unit and MB only appears if one ever grows into it.
+fn human_size(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{} kB", bytes.div_ceil(1024))
+    }
 }
 
 /// The heading a category slug is shown as.  The registry's slugs are terse because they

@@ -215,6 +215,10 @@ Exactly two facts on the card do not exist yet and are worth the work:
 - **A health line.** Last published, whether `origin/main` has moved since, whether the
   library is `status:parked`. `LIBRARIES.md` already computes the first two for maintainers;
   a user deciding whether to depend on something needs them more than a maintainer does.
+  ⚠ **Only the publication date is reachable from the index.** The drift flag needs a CLONE
+  and wasm capability needs the package source, and the site build has neither — so both stay
+  maintainer views rather than becoming a field the page guesses at. Measured while building
+  the card, not assumed.
 
 Do **not** put a maturity adjective on the card — "stable", "beta", "experimental". It is a
 judgement with no source, so it becomes a fourth hand-written home that drifts and that
@@ -478,8 +482,10 @@ independently shippable and none blocks the next except where marked.
    and the sitemap by rule (74 → 75 pages).
 3. ~~**The new README.**~~ **Landed** — it was independent of everything above, which is why
    it went first.
-4. **The library card** on each Tier 0 entry. Every field but two is already declared, so this
-   is mostly layout; the two are the inverted `deps` map and the health line.
+4. ~~**The library card** on each Tier 0 entry.~~ **Landed** — one `doc/lib-<name>.html` per
+   package, linked from the catalogue, which is also where the guide, the API reference and
+   the source browser will hang. Two fields the design listed were dropped rather than faked:
+   see the health-line note above.
 5. **Publish `loft doc` output** for each library, linked from Tier 0. The generator exists;
    this is the site build calling it.
 6. **The source browser** — `highlight_loft` over each package's `.loft` files, with the
@@ -496,7 +502,12 @@ independently shippable and none blocks the next except where marked.
 10. **Retire [DOC.md § Two tiers](DOC.md)**, replacing it with a pointer here.
 
 Steps 1, 2 and 4 are each under a day and together change what a new user experiences more
-than everything below them combined. Step 4 is now the next one. Step 6 is the largest single piece of work in the
+than everything below them combined; all three have landed.
+
+**Step 5 is cheaper than this document assumed.** The registry index carries each version's
+full `api` array — every `pub` signature *with its doc comment*, re-derived from source by
+registry CI so it cannot drift. Tier 2 therefore needs no package installed and no clone: it
+is the render the card already does, over a field that is already sitting there. Step 6 is the largest single piece of work in the
 document and the only one that is not mostly wiring — it is also the one with no substitute,
 because 42 packages of idiomatic loft currently have no reader.
 
