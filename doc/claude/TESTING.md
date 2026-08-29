@@ -2740,8 +2740,6 @@ the loud one.
 
 ---
 
----
-
 ## How a guard reads green while the defect stands
 
 A guard that cannot fail is worse than no guard: it is a standing claim that the behaviour

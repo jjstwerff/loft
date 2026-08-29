@@ -1329,8 +1329,6 @@ Strategy:
 
 ---
 
----
-
 ## Reading a defect — the shapes that keep recurring
 
 The matrix-first protocol in CLAUDE.md says how to *measure* a defect. These are the reading
