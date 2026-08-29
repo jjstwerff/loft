@@ -41,6 +41,16 @@ thread_local! {
 /// Parse the embedded stdlib + `program_src` into an interpreter session ready to
 /// debug (compiled, not yet run).  Returns `false` if either does not parse
 /// clean.  Replaces any previous session.
+///
+/// The program goes through [`parse_str`](crate::parser::Parser::parse_str) — the entry
+/// the REPL uses — and that choice is load-bearing, not incidental.  Every `eval` compiles
+/// a synthetic function through the same call, and `parse_str` begins with
+/// `Data::reset`, which resolves names under `STD_SOURCE`.  A program parsed through
+/// `parse_source` instead registers its definitions under its OWN source, where that
+/// resolution cannot see them: `eval len("abc")` answered 3 while `eval fib(10)` answered
+/// `<unavailable>` — the stdlib reachable, the program's own functions not, which is the
+/// opposite of what a REPL over a paused program is for.  Parsing both in one source is
+/// what makes the definitions in scope.
 #[must_use]
 pub fn start(program_src: &str) -> bool {
     let mut p = Box::new(crate::parser::Parser::new());
@@ -49,7 +59,7 @@ pub fn start(program_src: &str) -> bool {
             return false;
         }
     }
-    p.parse_source(program_src, "program.loft", false);
+    p.parse_str(program_src, "program.loft", false);
     if p.diagnostics.level() >= crate::diagnostics::Level::Error {
         return false;
     }
@@ -137,6 +147,13 @@ fn apply(sess: &mut Session, cmd: &str) -> Vec<String> {
 /// `h["a"].v`, `len(v)`, `s.field`).  A bare heap ident is read live in place; an
 /// expression that can't be bound/compiled (a `text` local, a parse error) yields
 /// `<unavailable>` rather than a wrong value.
+///
+/// The reach is measured, not assumed: a SCALAR result and a STRUCT result evaluate, a
+/// `text` or `vector` result does not (loft#1187).  `<unavailable>` is the safe answer
+/// there rather than a missing feature — every route that returns a text through this path
+/// corrupts the store, because the `Type::Text` arm of `eval_frame_reenter` is only sound
+/// for a call-returned-owned buffer.  The native debugger has the full surface; it reaches
+/// it through the REPL's reconstruct path instead.
 fn eval_expr(sess: &mut Session, expr: &str) -> String {
     let expr = expr.trim();
     if is_bare_ident(expr) {
@@ -266,20 +283,29 @@ fn build_run(
     ret_ty: &str,
     arg_names: &[String],
 ) -> Option<String> {
-    let name = format!("__eval_{}", sess.counter + 1);
+    // The counter advances whether or not this compiles, and a wreck is rolled back, so
+    // one expression that does not evaluate cannot reach the next one.  Both halves are
+    // needed and for the same reason: the name was reused after a failure AND the failed
+    // parse's definition was left in `data`, so the following eval collided with it and
+    // every eval from then on answered `<unavailable>` — a session a reader ends with
+    // their first typo.
+    sess.counter += 1;
+    let name = format!("__eval_{}", sess.counter);
     let src = format!("fn {name}({sig}) -> {ret_ty} {{\n  ({expr})\n}}\n");
+    let pre_defs = sess.parser.data.definitions();
     let pre_diag = sess.parser.diagnostics.entries().len();
     sess.parser.parse_str(&src, "<debug>", false);
     let failed = sess.parser.diagnostics.entries()[pre_diag..]
         .iter()
         .any(|e| e.level >= crate::diagnostics::Level::Error);
     if failed {
+        sess.parser.data.rollback_to(pre_defs);
         return None;
     }
-    sess.counter += 1;
     crate::scopes::check(&mut sess.parser.data);
     let d = sess.parser.data.def_nr(&format!("n_{name}"));
     if d == u32::MAX {
+        sess.parser.data.rollback_to(pre_defs);
         return None;
     }
     let ret_type = sess.parser.data.def(d).returned.clone();
@@ -299,6 +325,26 @@ fn is_scalar_type(t: &str) -> bool {
         t,
         "integer" | "float" | "single" | "boolean" | "character" | "byte"
     ) || t.starts_with("integer(")
+}
+
+/// Apply one debug command to the live session and return its `D:` replies.
+///
+/// The DIRECT entry, for a caller that already holds the session in its own process — the
+/// doc site's panel, which calls straight into the wasm module and has no relay to speak
+/// `D!:` frames through, and the native tests, which drive the same grammar [`pump`] does.
+/// `pump` is the same step wired to the host I/O channel instead.
+///
+/// `D:err no session` when [`start`] has not run, so a caller that lost its session gets an
+/// answer rather than silence.
+#[must_use]
+pub fn command(cmd: &str) -> Vec<String> {
+    SESSION.with(|s| {
+        let mut g = s.borrow_mut();
+        match g.as_mut() {
+            Some(sess) => apply(sess, cmd),
+            None => vec!["D:err no session".to_string()],
+        }
+    })
 }
 
 /// The pump the JS driver calls (per animation frame): drain every pending
@@ -361,5 +407,79 @@ mod tests {
             // resume -> runs to completion.
             assert_eq!(apply(sess, "resume"), vec!["D:terminated"]);
         });
+    }
+
+    // The program's OWN functions are callable from `eval`, which is the whole point of a
+    // REPL over a paused program: a reader types `fib(10)`, not `n + 2`.  They were not.
+    // `eval` compiles its synthetic fn through `parse_str`, which resolves under
+    // `STD_SOURCE`, while the program had been registered under its own source — so a
+    // stdlib call worked and a call to the program answered `<unavailable>`.
+    //
+    // Both sides are asserted together on purpose: a guard on the program call alone would
+    // also pass on a build where nothing resolves at all.
+    #[test]
+    fn eval_calls_the_programs_own_functions_and_the_stdlib() {
+        assert!(start(
+            "fn fib(n: integer) -> integer { if n < 2 { return n; } fib(n-1) + fib(n-2) }\n\
+             fn compute(n: integer) -> integer {\n  m = n + 2;\n  m\n}\n\
+             fn main() { compute(40); }\n"
+        ));
+        SESSION.with(|s| {
+            let mut g = s.borrow_mut();
+            let sess = g.as_mut().expect("session");
+            assert_eq!(apply(sess, "bp compute"), vec!["D:ok bp compute"]);
+            assert!(apply(sess, "run")[0].starts_with("D:hit compute"));
+            // A user fn on a literal.  fib(10) is 55, computed by hand.
+            assert_eq!(apply(sess, "eval fib(10)"), vec!["D:eval fib(10)=55"]);
+            // A user fn on the paused frame's own live local: compute's `n` is 40.
+            assert_eq!(
+                apply(sess, "eval fib(n - 30)"),
+                vec!["D:eval fib(n - 30)=55"]
+            );
+            // The stdlib side of the split, which never broke and must not start.
+            assert_eq!(
+                apply(sess, "eval len(\"abc\")"),
+                vec!["D:eval len(\"abc\")=3"]
+            );
+        });
+    }
+
+    // One expression that does not evaluate must not end the session.  It did: a failed
+    // `build_run` left its half-parsed definition in `data` AND did not advance the
+    // counter, so the next eval built the same name over the wreck and every eval after
+    // the first failure answered `<unavailable>` — including ones that had just worked.
+    //
+    // A text-valued expression is the failing input here because that is the shape a
+    // reader hits first (loft#1187 tracks making it evaluate); any non-evaluating
+    // expression exercises the same path.
+    #[test]
+    fn a_failed_eval_does_not_end_the_session() {
+        assert!(start(
+            "fn fib(n: integer) -> integer { if n < 2 { return n; } fib(n-1) + fib(n-2) }\n\
+             fn compute(n: integer) -> integer {\n  m = n + 2;\n  m\n}\n\
+             fn main() { compute(40); }\n"
+        ));
+        let s = SESSION.with(|s| {
+            let mut g = s.borrow_mut();
+            let sess = g.as_mut().expect("session");
+            let _ = apply(sess, "bp compute");
+            let _ = apply(sess, "run");
+            // Works before.
+            let before = apply(sess, "eval fib(10)");
+            // Does not evaluate — and must not be fatal.
+            let bad = apply(sess, "eval \"a\" + \"b\"");
+            // Still works after, which is the whole assertion.
+            let after = apply(sess, "eval fib(10)");
+            let other = apply(sess, "eval n + 2");
+            (before, bad, after, other)
+        });
+        assert_eq!(s.0, vec!["D:eval fib(10)=55"]);
+        assert_eq!(s.1, vec!["D:eval \"a\" + \"b\"=<unavailable>"]);
+        assert_eq!(
+            s.2,
+            vec!["D:eval fib(10)=55"],
+            "a failed eval poisoned the session"
+        );
+        assert_eq!(s.3, vec!["D:eval n + 2=42"]);
     }
 }
