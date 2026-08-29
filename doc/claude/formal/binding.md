@@ -207,6 +207,16 @@ asked for a live link, and silently handing back a copy would make that request 
 That is the consequence of writing `&`: it is an ownership decision, so loft declines the
 program rather than quietly changing what it means.
 
+**LIVENESS is not lexical, and reading it as lexical is what makes the materialise miss.** A
+view lives as long as its VARIABLE, not as long as the block the binding was written in: a
+re-bind of an outer local inside an `if` or a loop body still names a place that the code after
+the block can read. And a LOOP body's own disturbances precede every use on the NEXT turn, so
+the back edge is a second disturbance a single forward reading cannot see. Both halves of that
+are what `a = w.inner` inside `for … { w = Outer{inner: a}; a = w.inner }` needs: the container
+is reassigned around a live view, so B-View materialises it and says so. Pinned by
+`tests/scripts/1184-a-view-assigned-back-onto-its-own-source.loft`, whose last two cells are the
+control — an UNDISTURBED view still aliases and still writes through, on both backends.
+
 ### `const` — the immutability axis (binding-const vs value-const, @PLN40, shipped)
 
 `&` (above) and `const` are the two orthogonal axes of a binding: `&` opts a binding

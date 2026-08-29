@@ -2482,6 +2482,25 @@ impl State {
                     }
                     return;
                 }
+                // @PLN130 F1, the REASSIGNMENT twin — materialise an element/field read into
+                // a store `v` owns.  `gen_set_first_ref_elem_copy` does this for a first
+                // bind; a REBIND fell through to `set_var`, which binds the interior pointer
+                // and leaves `v` an owner of the CONTAINER's store.  The pre-Set `OpFreeRef`
+                // above then releases the container on the next turn, so `a = w.inner` inside
+                // a loop read the record `w = Outer{inner: a}` had just torn down and every
+                // heap field of it answered empty (loft#1184).
+                //
+                // Reaching here means the deps are EMPTY, which for a projection means
+                // `scopes.rs` stripped them: @FR-B-View's materialise clause fired because the
+                // container is disturbed while this view is live.  A view that kept its deps
+                // is not `owned_ref` and still aliases.
+                if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && !stash_old_for_post_free
+                    && crate::generation::container_element_base(stack.data, value).is_some()
+                {
+                    self.gen_set_first_ref_elem_copy(stack, v, value, d_nr);
+                    return;
+                }
             }
             self.set_var(stack, v, value);
             if stash_old_for_post_free {

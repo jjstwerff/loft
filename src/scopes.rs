@@ -508,6 +508,12 @@ fn record_cause(map: &mut HashMap<u16, Disturbance>, view: u16, d: Disturbance) 
 
 /// @PLN130 F2 + F8 — every VIEW binding that is live across a disturbance of its container.
 ///
+/// This is @FR-B-View's materialise clause: a struct-typed projection aliases without `&`, and
+/// where the container is DISTURBED (@FR-B-Disturb) while the view is still LIVE the binding
+/// gives up the alias, takes its own copy at the bind, and the author is told.  Answering it
+/// is this walk's whole job; the two users of the verdict — `scan_set`'s dep strip and the
+/// interpreter's materialising emitters — act on it.
+///
 /// Two disturbances, one question. A RESHAPE (`v.remove(i)`, `e#remove`) renumbers the
 /// positions inside the container's store, and a view is a `DbRef` pinned to one — so a view
 /// live across it silently starts naming a different element (probes 03-07, 29: a pure READ
@@ -562,10 +568,19 @@ fn record_cause(map: &mut HashMap<u16, Disturbance>, view: u16, d: Disturbance) 
 /// a later read or write of a shaken view is what condemns it. A view whose last use precedes
 /// the disturbance keeps its alias and writes through, which is the rustc rule.
 ///
-/// Known lower bound: a view bound inside a nested block that is used on a LATER iteration of
-/// an enclosing loop is not tracked, because the frame closes with the block. A disturbance
-/// anywhere inside a loop shakes every view held from outside it before the body is walked, so
-/// the ordinary loop shapes are covered; this one is not, and it keeps today's behaviour.
+/// A block frame ends the views the block OWNS, which is not the same as the views bound in
+/// it. Re-binding an outer local inside a nested block gives a view that outlives the block,
+/// and dropping it at the close is what let loft#1184 through — `a = w.inner` in a loop body,
+/// `w = Outer{inner: a}` on the next turn, every heap field of `a` empty from the second
+/// iteration on. So a view goes into the frame that owns its VARIABLE (the block it was first
+/// bound in), and a LOOP is walked twice: the first pass could only shake views that already
+/// existed, and the second supplies the use that condemns one the body itself bound. Two
+/// passes reach the fixpoint, because the second binds exactly the views the first did.
+///
+/// Known lower bound: only a `Var` names a container, so a disturbance reached through some
+/// other expression is not recognised — [`reshaped_containers`] and [`established_stores`] are
+/// both lower bounds, and a missed case keeps today's behaviour rather than inventing a new
+/// one.
 fn collect_views_to_materialise(
     code: &Value,
     function: &Function,
@@ -590,9 +605,18 @@ fn collect_views_to_materialise(
 struct ViewWalk<'a> {
     function: &'a Function,
     data: &'a Data,
-    /// One frame per open block: the views bound in it, and the container each one views.
-    /// A view bound inside a block dies when that block closes.
+    /// One frame per open block: the views the block OWNS, and the container each one views.
+    /// A view dies when the block that owns its VARIABLE closes — which is where the variable
+    /// was first bound, not necessarily where this binding was written (see `bound_at`).
     open: Vec<Vec<(u16, u16)>>,
+    /// The frame depth each variable was first BOUND at, which is the block that owns it.
+    ///
+    /// A view goes into the frame that owns its VARIABLE, not the block the binding statement
+    /// happens to sit in — the two differ whenever an outer local is re-bound inside a nested
+    /// block, and the variable then outlives that block. A hoisted `Set(v, Null)` declaration
+    /// is skipped: it is emitted at function scope for every ref- and text-typed local, so
+    /// counting it would put EVERY view at function scope and undo the frame model.
+    bound_at: HashMap<u16, usize>,
     /// Views whose container has been disturbed since the bind, and by what. Being shaken is
     /// not yet a verdict — it becomes one at the next use.
     shaken: HashMap<u16, Disturbance>,
@@ -625,6 +649,7 @@ impl ViewWalk<'_> {
             function,
             data,
             open: vec![Vec::new()],
+            bound_at: HashMap::new(),
             shaken: HashMap::new(),
             out: HashMap::new(),
             cross_frame,
@@ -663,6 +688,17 @@ impl ViewWalk<'_> {
                 // body come out live across a removal at the bottom of it.
                 self.disturb(stmt);
                 self.scoped(&b.operators);
+                // The BACK EDGE. The shake above could only reach views that already existed;
+                // a view the body itself binds is disturbed by the same statements one turn
+                // later, and nothing had seen it yet. So shake again and re-walk — the second
+                // pass is what supplies the USE that condemns it (loft#1184). One extra pass
+                // reaches the fixpoint: it binds exactly the views the first pass bound, so a
+                // third would read the same state.
+                let before: HashSet<u16> = self.shaken.keys().copied().collect();
+                self.disturb(stmt);
+                if self.shaken.keys().any(|v| !before.contains(v)) {
+                    self.scoped(&b.operators);
+                }
             }
             Value::If(cond, t, e) => {
                 // The condition is evaluated before either branch and is not part of one.
@@ -709,6 +745,7 @@ impl ViewWalk<'_> {
     /// One statement, in the order its parts take effect: what it disturbs, then what it
     /// uses, then what it (re)binds.
     fn leaf(&mut self, stmt: &Value) {
+        self.note_binding_depth(stmt);
         self.disturb(stmt);
         // Reading or writing a shaken view is what makes the disturbance matter.
         self.note_uses(stmt);
@@ -725,10 +762,27 @@ impl ViewWalk<'_> {
                 self.function.tp(*v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) && let Some(container) = base_container_var(rhs.unspan(), self.data)
-                && let Some(frame) = self.open.last_mut()
             {
-                frame.push((*v, container));
+                // The view belongs to the frame that owns its VARIABLE. Re-binding an outer
+                // local inside a nested block gives a view that outlives the block, and
+                // dropping it at the block's close is what let loft#1184 through: `a =
+                // w.inner` in a loop body, `w = Outer{inner: a}` on the next turn.
+                let depth = self.bound_at.get(v).copied().unwrap_or(self.open.len());
+                let idx = depth.min(self.open.len()).saturating_sub(1);
+                self.open[idx].push((*v, container));
             }
+        }
+    }
+
+    /// Note where each variable is first BOUND, which is [`Self::leaf`]'s frame for a view of it.
+    ///
+    /// A `Set(v, Null)` is the hoisted declaration every ref- and text-typed local gets at
+    /// function scope, not a binding, so it is not what owns the variable.
+    fn note_binding_depth(&mut self, stmt: &Value) {
+        if let Value::Set(v, rhs) = stmt.unspan()
+            && !matches!(rhs.unspan(), Value::Null)
+        {
+            self.bound_at.entry(*v).or_insert(self.open.len());
         }
     }
 
