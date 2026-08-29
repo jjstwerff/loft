@@ -4158,6 +4158,15 @@ impl Definition {
                 .operators
                 .last()
                 .is_none_or(|tail| Self::site_is_fresh(tail, vars)),
+            // A call THROUGH A FN-REF reaches the `_` arm below and answers "not proven",
+            // and loft#1176 measured why widening it here cannot work: the obvious
+            // discriminator — *"a fn-ref that CAPTURES nothing has nothing to borrow from"*,
+            // which `scopes::inline_struct_return` relies on for a `??` subject (loft#1114)
+            // — does not discriminate in THIS position.  There the fn-ref is a LOCAL whose
+            // type was inferred at the bind, so its deps name the closure record; here it is
+            // a PARAMETER whose type was DECLARED (`f: fn() -> T`), and a declared fn-type
+            // carries no deps whether the value passed captures or not.  Measured: a
+            // capturing lambda and a minting one both read "capture-free".
             other => match Self::root_var(other) {
                 Some(n) => n < vars.count() && !vars.is_argument(n),
                 // No readable root (a call, a literal-built aggregate): not proven fresh.

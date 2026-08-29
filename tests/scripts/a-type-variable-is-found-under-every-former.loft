@@ -54,6 +54,12 @@ pub fn l_opt<T>(d: T, x: T?) -> T { x ?? d }
 pub fn l_tup<T>(d: T, p: (T, T)) -> T { _ = d; p.0 }
 pub fn l_fn<T>(x: T, f: fn(T) -> boolean) -> boolean { f(x) }
 
+// A fn-ref whose RETURN is the type variable.  The buffer count a fn-ref call needs is a
+// function of that return, and the template lowers the call while the return is still `T`,
+// so the count has to be re-asked per monomorph (loft#1175).
+pub fn l_fnt<T>(x: T, f: fn(T) -> T) -> T { f(x) }
+pub fn l_fnt2<T>(x: T, f: fn(T) -> T) -> T { f(f(x)) }
+
 fn gen_int() -> iterator<integer> { yield 7; yield 8; }
 fn gen_text() -> iterator<text> { yield "a"; yield "b"; }
 
@@ -118,11 +124,38 @@ fn test_a_nullable_collection_first_parameter_binds_its_type_variable() {
   assert(f_optvec(b, 42) == 42, "absent vector: got {f_optvec(b, 42)}");
 }
 
+fn test_a_fn_ref_returning_the_type_variable_gets_its_buffers() {
+  // `text` is the cell that faulted: a fn-ref call pushes hidden `&text` work buffers, the
+  // count is read off the return type where the call is LOWERED, and inside a template that
+  // return is still `T` — so the count was zero and the monomorph entered its callee one
+  // buffer short.  `--interpret` faulted on the corrupt frame while `--native` answered
+  // correctly, which is the backend divergence `(D-op-1)` makes a definitional error.
+  //
+  // The other types are the controls, and they are not decoration: the first attempt at this
+  // cured `text` by counting a PARAMETRIC return as a text candidate, and that made every one
+  // of them abort.  A change that fixes text by widening the count moves these.
+  bang = fn(v: text) -> text { v + "!" };
+  assert(l_fnt("hi", bang) == "hi!", "text: got {l_fnt(\"hi\", bang)}");
+  assert(len(l_fnt("hi", bang)) == 3, "text length");
+  assert(l_fnt2("hi", bang) == "hi!!", "text applied twice: got {l_fnt2(\"hi\", bang)}");
+  assert(len(l_fnt2("hi", bang)) == 4, "text applied twice, length");
+
+  inc = fn(v: integer) -> integer { v + 1 };
+  assert(l_fnt(41, inc) == 42, "integer: got {l_fnt(41, inc)}");
+  neg = fn(v: boolean) -> boolean { !v };
+  assert(l_fnt(false, neg) == true, "boolean: got {l_fnt(false, neg)}");
+  same = fn(v: character) -> character { v };
+  assert(l_fnt('q', same) == 'q', "character: got {l_fnt('q', same)}");
+  dbl = fn(v: float) -> float { v * 2.0 };
+  assert(l_fnt(1.5, dbl) == 3.0, "float: got {l_fnt(1.5, dbl)}");
+  keep = fn(v: vector<integer>) -> vector<integer> { v };
+  assert(len(l_fnt([1, 2], keep)) == 2, "vector: got {len(l_fnt([1, 2], keep))}");
+}
+
 fn test_a_function_typed_parameter_binds_and_substitutes() {
   // The fn-ref former, in both directions: bound FROM parameter one (`f_fn`) and
-  // substituted INTO a later one (`l_fn`).  The return is deliberately not `T` — a
-  // fn-ref whose return is the type variable is refused at a `text` instantiation, and
-  // the refusal is its own cell in loft#1175.
+  // substituted INTO a later one (`l_fn`).  A return that is the type variable is the
+  // sharper case and has its own test above.
   even = fn(v: integer) -> boolean { v % 2 == 0 };
   assert(l_fn(4, even) == true, "even 4: got {l_fn(4, even)}");
   assert(l_fn(5, even) == false, "odd 5: got {l_fn(5, even)}");
@@ -156,6 +189,7 @@ fn main() {
   test_an_iterator_first_parameter_binds_its_type_variable();
   test_a_nullable_collection_first_parameter_binds_its_type_variable();
   test_a_function_typed_parameter_binds_and_substitutes();
+  test_a_fn_ref_returning_the_type_variable_gets_its_buffers();
   test_the_two_formers_the_old_descent_knew_still_work();
   test_a_later_parameter_substitutes_through_every_former();
   print("a-type-variable-is-found-under-every-former ok\n");

@@ -120,8 +120,7 @@ decided boundary, so it belongs here as a scope rule, not as a deviation to clos
 
 ## Deviations
 
-OPEN: **1** — `D-gen-2` below (loft#1175), opened 2026-08-29.  `D-gen-1` was opened and closed
-the same day.
+OPEN: **0** — `D-gen-1` and `D-gen-2` were both opened and closed on 2026-08-29.
 
 ⚠ **This line read `OPEN: 0` because *"a rules doc adds no code deviation"* — a claim about the
 doc's GENRE, not a measurement, and the same sentence `formatting.md` carried for its whole life
@@ -174,7 +173,7 @@ rather than any `Reference` — so a first parameter that names a concrete struc
 variable (`(P, T)`) answers with `T`.  Guard:
 `tests/scripts/a-type-variable-is-found-under-every-former.loft`.
 
-### D-gen-2 — OPEN (2026-08-29, loft#1175): a fn-ref returning `T`, instantiated at `text`
+### D-gen-2 — OPENED AND CLOSED (2026-08-29, loft#1175): a fn-ref returning `T` at `text`
 
 `fn f<T>(x: T, g: fn(T) -> T)` is correct at every instantiation measured — `integer`,
 `boolean`, `character`, `float`, `vector<integer>`, a struct — and faults at `text` on
@@ -183,18 +182,33 @@ variable (`(P, T)`) answers with `T`.  Guard:
 the template, where the return is still `T` and the count is zero.  This is `(G-Mono)`'s
 recurring class exactly: substitution rewrote the TYPE and left the COUNT behind.
 
-Refused at the instantiation rather than shipped, because a program the parser accepts must not
-fault; the refusal names the shape and the issue.  The cure is deferral — the `CallRef` site is
-already a named block whose `result` substitution rewrites to the concrete return type, so
-`rewrite_generic_type_defaults` can push the buffers there the way loft#1020 and loft#1028 answer
-their deferred sites.
+Closed by DEFERRAL, the cure this register already names for its class: the count is re-asked in
+`rewrite_generic_type_defaults`, where `T` is real and the fn-ref variable's type in the
+monomorph's own table is concrete, and the buffers are pushed with the same builder and in the
+same order as the four parse-time sites.  `args.len() == params.len()` is what says the buffers
+are still missing — the visible arguments are all a site pushes when the count was zero — so a
+call whose return was already concrete text is left alone rather than served twice.
+
+Two things the deferral needs that the parse-time path gets for free, both already written down
+elsewhere in the tree:
+
+- The variables come from `caller_text_buf`, not the shared `__work_N` counter.  This mint
+  happens after both passes, and drawing from the shared sequence would shift every later
+  `__work_N` (loft#662's class — the reason `collections::callback_call_ref` already mints this
+  way).
+- A buffer minted after the parse is not declared at the top level, so `scopes::check` scopes it
+  to the ARGUMENT block it appears in and frees it there, before the callee fills it.  A
+  top-level `Set` is hoisted for each new one, the same replay `patch_tret_callers` performs for
+  exactly this reason.  Without it the interpreter was correct and `--native` emitted a
+  `String` declared inside the argument block with an empty `OpCreateStack` beside it, which
+  does not compile — the divergence appearing on the OTHER backend from the original fault.
 
 ⚠ **The obvious cure was built and measured and is wrong.** `Data::fnref_text_buffers`' own doc
 says its candidate test is deliberately loose because *"being loose can only mint a buffer nothing
 uses, which the pop removes"* — so counting a PARAMETRIC return as a text candidate looks free.
 It cured `T = text` and made all six other instantiations abort: a non-text return has no
 `__retbuf` protocol for the pop to trim against, so the looseness is safe WITHIN the text family
-and not across its boundary.  Recorded here so the next attempt does not re-spend it.
+and not across its boundary.  The guard keeps every one of those six as a cell for that reason.
 
 
 - **Conformance is differential + directly checkable** — satisfaction is a single static judgment,

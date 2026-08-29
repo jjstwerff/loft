@@ -2311,7 +2311,22 @@ impl Parser {
             // skip, and the narrowness is load-bearing rather than conservative: the
             // signature-time path already served it, and a second buffer is one store leaked
             // per closure — `717-closure-struct-return.loft` caught exactly that.
-            if def.name().starts_with("n___lambda_") && !self.adopted_ret_defs.contains(&d) {
+            //
+            // loft#1177 — a DECLARED `-> vector<…>` is included for the same reason, and the
+            // sentence above needed correcting to say so: the signature-time path does not
+            // serve a lambda at all (it excludes them by name, *"separate parse path, no
+            // earlier callers"*), so *"already served"* was only ever true of the returns
+            // that need no buffer.  A struct and a record-enum are those — a declared
+            // `-> P` lambda carries no hidden attribute and answers correctly — while a
+            // VECTOR is delivered through a backing store the caller supplies, so pass 2
+            // GREW `__vdb_1` and `fn(v: integer) -> vector<integer> { [v] }` aborted the
+            // compiler on the H5 contract.  Narrow to `Vector` because that is the former
+            // measured to grow one; a second buffer on the others is the leak per closure
+            // that `717-closure-struct-return.loft` pins.
+            if def.name().starts_with("n___lambda_")
+                && !self.adopted_ret_defs.contains(&d)
+                && !matches!(def.returned().ret_promo_base(), Type::Vector(_, _))
+            {
                 continue;
             }
             let ret = def.returned().clone();
@@ -5957,49 +5972,6 @@ impl Parser {
             }
             return u32::MAX;
         }
-        // A fn-ref whose RETURN is the type variable, instantiated at `text`.
-        //
-        // A call through a fn-typed slot pushes hidden `&text` work buffers, and how
-        // many is read off the return type where the call is LOWERED — inside the
-        // template, where the return is still `T` and the count is therefore zero.
-        // Substitution rewrites the type and leaves the count behind, so the `text`
-        // monomorph enters its callee one buffer short: a corrupt frame, which the
-        // interpreter faults on and `--native` (a different calling convention) does
-        // not — a backend divergence, which @FR-D-op-1 makes a definitional error.
-        //
-        // Refused rather than shipped, because the alternative is a crash in a program
-        // the parser accepted.  Every other instantiation of the same shape is correct
-        // and stays allowed; the cure is to defer the buffer count to the monomorph the
-        // way loft#1020 / loft#1028 defer a null test — loft#1175.
-        if matches!(concrete.base(), Type::Text(_)) {
-            let fnref_returns_tv = self
-                .data
-                .def(g_nr)
-                .attributes()
-                .iter()
-                .any(|a| Self::type_mentions_tv_under_fn_return(&a.typedef, tv_nr));
-            if fnref_returns_tv {
-                if !self.first_pass {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "a generic taking a `fn(…) -> {}` cannot be instantiated at `text` \
-                         — the fn-ref call is lowered before `{}` is known, so a text return \
-                         enters the callee one work buffer short (loft#1175).  Instantiate at \
-                         another type, or take a `fn(…) -> text` written concretely",
-                        self.data.def(tv_nr).name(),
-                        self.data.def(tv_nr).name()
-                    );
-                }
-                // `u32::MAX` is "no generic of this name", so the caller follows with
-                // `Unknown function <name>` about a function declared a few lines up.
-                // That cascade is the lesser evil, measured: answering the TEMPLATE
-                // instead — the escape hatch the self-recursive case above uses — parses
-                // the call against a parametric signature and produces THREE errors
-                // (`Unknown definition n_<name>`, then `Cannot format type null`).
-                return u32::MAX;
-            }
-        }
         // Build the mangled name for the instantiated function.
         let type_nr = self.data.type_def_nr(&concrete);
         let mangled = if type_nr == u32::MAX {
@@ -6170,7 +6142,23 @@ impl Parser {
         let outer_vars = std::mem::replace(&mut self.vars, vars);
         let outer_context = self.context;
         self.context = d_nr;
-        let code = self.rewrite_generic_type_defaults(code, concrete);
+        let before_work: std::collections::HashSet<u16> =
+            self.vars.work_texts().into_iter().collect();
+        let mut code = self.rewrite_generic_type_defaults(code, concrete);
+        // loft#1175 — a work buffer minted by the rewrite above is not declared at the top
+        // level, so `scopes::check` would scope it to the ARGUMENT block it appears in and
+        // free it there, before the callee fills it.  Hoisting a top-level `Set` is the same
+        // replay `patch_tret_callers` and `retarget_parametric_*` already do for a buffer
+        // minted after the parse; without it `--native` declared the `String` inside the
+        // argument block and emitted an empty `OpCreateStack`, which does not compile.
+        if let Value::Block(bl) = &mut code {
+            for wt in self.vars.work_texts() {
+                if !before_work.contains(&wt) {
+                    bl.operators
+                        .insert(0, v_set(wt, Value::Text(String::new())));
+                }
+            }
+        }
         let vars = std::mem::replace(&mut self.vars, outer_vars);
         self.context = outer_context;
         self.data.definitions[d_nr as usize].code = code;
@@ -6689,14 +6677,6 @@ impl Parser {
     /// with whichever the walk reached first.
     pub(crate) fn type_var_of(data: &Data, tp: &Type) -> u32 {
         Self::extract_type_var(data, tp)
-    }
-
-    /// Does `tp` carry a `fn(…) -> …T…` anywhere — a fn-ref whose RETURN mentions the
-    /// type variable?  That is the one position where monomorphization cannot yet
-    /// deliver, because the hidden `&text` work-buffer count is read off the return
-    /// type at the call's LOWERING and substitution never revisits it.
-    fn type_mentions_tv_under_fn_return(tp: &Type, tv_nr: u32) -> bool {
-        tp.any_node(&mut |t| matches!(t, Type::Function(_, ret, _) if ret.contains_def(tv_nr)))
     }
 
     fn extract_type_var(data: &Data, tp: &Type) -> u32 {
@@ -7650,6 +7630,40 @@ impl Parser {
     /// Runs AFTER type substitution, so a nested generic (`concrete` still a type
     /// variable — `fn outer<S>(s: S?) { inner(s?) }`) re-marks the site and stays
     /// deferred until the outer instantiation names a real type.
+    /// Push the hidden `&text` work buffers a monomorph's fn-ref call needs and the
+    /// template could not know about — loft#1175.
+    ///
+    /// The count is a function of the fn-type's RETURN, which only becomes concrete at
+    /// substitution, so this asks [`Data::fnref_text_buffers`] again with the monomorph's
+    /// own table and pushes what it now answers.  Same count, same order and same builder
+    /// as the four parse-time sites, so the callee's slot layout has one description.
+    ///
+    /// **`args.len() == params.len()` is what says the buffers are still missing.** The
+    /// visible arguments are all a parse-time site pushes when the count was zero; a site
+    /// whose return was ALREADY concrete text pushed its buffers then and arrives longer,
+    /// so it is left alone rather than served twice.
+    ///
+    /// The variables come from `caller_text_buf`, not the shared `__work_N` counter: this
+    /// mint happens after both passes, and taking it from the shared counter would shift
+    /// every later `__work_N` (loft#662's class, the reason
+    /// `collections::callback_call_ref` already mints this way).
+    fn push_deferred_fnref_buffers(&mut self, v_nr: u16, args: &mut Vec<Value>) {
+        let Type::Function(params, ret, _) = self.vars.tp(v_nr).clone() else {
+            return;
+        };
+        if args.len() != params.len() {
+            return;
+        }
+        let n = self.data.fnref_text_buffers(params.len(), &ret);
+        if n == 0 {
+            return;
+        }
+        let work_vars: Vec<u16> = (0..n)
+            .map(|_| self.vars.caller_text_buf(&mut self.lexer))
+            .collect();
+        self.push_fnref_text_buffers(args, &work_vars);
+    }
+
     fn rewrite_generic_type_defaults(&mut self, val: Value, concrete: &Type) -> Value {
         match val {
             // loft#1020 — the deferred `== null` / `!= null`.  `bl.result` came through
@@ -7714,6 +7728,22 @@ impl Parser {
                     // rather than dropping the value: the call is already an error.
                     None => Value::Block(bl),
                 }
+            }
+            // loft#1175 — the hidden `&text` work buffers a fn-ref call needs, which the
+            // TEMPLATE could not count.  `Data::fnref_text_buffers` reads the count off the
+            // fn-type's RETURN, and inside a template that return is the type variable, so
+            // every such site was lowered with zero.  Substitution rewrites the type and
+            // leaves the count behind — `(G-Mono)`'s recurring class — and the `text`
+            // monomorph then enters its callee one buffer short: a corrupt frame the
+            // interpreter faults on.  Answered here, where `T` is real and the fn-ref
+            // variable's type in the monomorph's own table is already concrete.
+            Value::CallRef(v_nr, args) => {
+                let mut args: Vec<Value> = args
+                    .into_iter()
+                    .map(|a| self.rewrite_generic_type_defaults(a, concrete))
+                    .collect();
+                self.push_deferred_fnref_buffers(v_nr, &mut args);
+                Value::CallRef(v_nr, args)
             }
             // Everything else just carries children.  Recursion goes through the
             // `Value::for_each_child_mut` keystone rather than being re-enumerated here:

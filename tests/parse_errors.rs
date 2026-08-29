@@ -1083,35 +1083,6 @@ fn generic_operator_error() {
     );
 }
 
-/// A fn-ref whose RETURN is the type variable is refused at a `text` instantiation.
-///
-/// The hidden `&text` work-buffer count is read off the fn-type's return where the call is
-/// LOWERED — inside the template, where the return is still `T` and the count is zero — so
-/// substitution rewrites the type and leaves the count behind and the `text` monomorph enters
-/// its callee one buffer short.  `--interpret` faults on the corrupt frame and `--native`
-/// answers correctly, which is the backend divergence `@FR-D-op-1` makes a definitional error.
-///
-/// Every OTHER instantiation of the same shape is correct and stays allowed (measured at
-/// `integer`, `boolean`, `character`, `float`, `vector<integer>` and a struct), and so does a
-/// fn-ref with a concrete return — `fn(T) -> integer` at `T = text` is fine.  When loft#1175
-/// closes, this test is what says the refusal must go with it.
-#[test]
-fn generic_fnref_returning_the_type_var_refuses_at_text() {
-    code!(
-        "fn once<T>(x: T, f: fn(T) -> T) -> T { f(x) }\n         fn test() { e = fn(v: text) -> text { v + \"!\" }; _ = once(\"hi\", e); }"
-    )
-    .error(
-        "a generic taking a `fn(\u{2026}) -> T` cannot be instantiated at `text` \u{2014} the fn-ref \
-         call is lowered before `T` is known, so a text return enters the callee one work \
-         buffer short (loft#1175).  Instantiate at another type, or take a `fn(\u{2026}) -> text` \
-         written concretely at generic_fnref_returning_the_type_var_refuses_at_text:2:77"
-    )
-    // The follow-on.  A refused instantiation answers "no generic of this name", so the
-    // caller reports the name as unknown — measured as the lesser evil: answering the
-    // TEMPLATE instead produces three errors, not one.
-    .error("Unknown function once at generic_fnref_returning_the_type_var_refuses_at_text:2:63");
-}
-
 /// P5.3: field access on generic type T produces a generic-specific error.
 #[test]
 fn generic_field_error() {

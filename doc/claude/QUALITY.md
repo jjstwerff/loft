@@ -479,13 +479,21 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 330 | 313 | **17** |
+| 331 | 313 | **18** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
 The figures below the fold were measured against the NARROWER matcher this audit shipped with
 (221 · 211 · 10); B4g says what widening it added, why the backlog grew without anything
 regressing, and which site the measurement then took back off it.
+
+⚠ **A site can ENTER this table by gaining an arm, and the newest one did.**
+`parser::rewrite_generic_type_defaults` discriminated on `Block` alone until loft#1175 gave it
+a `CallRef` arm; two variants is the threshold, so it arrived as the eighteenth.  It descends
+rather than peels, and cannot be hidden by a wrapper for that reason: its fall-through arm is
+`Value::for_each_child_mut`, which treats a `Span` as a child and hands the walk the node
+underneath.  Peeling there would be worse than redundant — the walk rebuilds what it visits,
+so unwrapping would drop the position the `Span` carries.
 
 **Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
 and conflating them is how a backlog gets "cleared" with nothing fixed:
@@ -2283,7 +2291,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 654 | 292 | 6 | **356** |
+| 654 | 293 | 5 | **356** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2310,7 +2318,9 @@ spelling, so an `Optional` cannot reach them.  That is the distinction the opaqu
 The `(G-Mono)` walk (B7g) moved the KEYSTONE column rather than either of the other two:
 `Type::map_children` and `Type::zip_children` are the SET and PAIR twins of
 `Type::for_each_child`, so the two substituters and the unifier that used to hand-spell four
-formers, four formers and one now descend through it.  That is the column to watch — a site
+formers, four formers and one now descend through it.  Closing loft#1175 then took one back
+(6 → 5) by deleting the refusal's own `any_node` helper, and added a seeing-through site in
+its place — the movement is what the column is for, not the level.  That is the column to watch — a site
 that derives from the keystone cannot be opaque to a wrapper the keystone knows about, so
 moving a body from `opaque` to `keystone` closes the question for every future variant rather
 than for `Optional` alone.
@@ -3947,27 +3957,53 @@ any `Reference`, so `(P, T)` answers with `T` instead of with whichever the walk
 [[refusal-beats-backend-divergence]] rule paying out: every newly-reachable cell has to be run
 on both backends, and three of them were not clean.
 
-- **loft#1175** — `fn(T) -> T` at `T = text` enters its callee one hidden `&text` work buffer
-  short, because the count is read off the return type where the call is LOWERED and the return
-  is still `T` there.  `--interpret` faults on the corrupt frame, `--native` answers correctly.
-  **Refused at the instantiation rather than shipped** — a program the parser accepts must not
-  fault, and the other six instantiations of the same shape stay allowed.
-  ⚠ The obvious cure was built and measured: `fnref_text_buffers`' doc says its loose candidate
-  test can only *"mint a buffer nothing uses, which the pop removes"*, so counting a parametric
-  return as a text candidate looks free.  It cured `text` and made **all six other
+- **loft#1175 — CLOSED.** `fn(T) -> T` at `T = text` entered its callee one hidden `&text` work
+  buffer short, because the count is read off the return type where the call is LOWERED and the
+  return is still `T` there.  `--interpret` faulted on the corrupt frame, `--native` answered
+  correctly.  Closed by DEFERRAL — the count is re-asked per monomorph, which is the cure this
+  class already has (loft#1020's null test, loft#1028's null literal, loft#1032's yield channel).
+  ⚠ The obvious cure was built and measured first: `fnref_text_buffers`' doc says its loose
+  candidate test can only *"mint a buffer nothing uses, which the pop removes"*, so counting a
+  parametric return as a text candidate looks free.  It cured `text` and made **all six other
   instantiations abort** — a non-text return has no `__retbuf` protocol for the pop to trim
   against.  The looseness is safe within the text family, not across its boundary; the site's
-  own claim was the thing to falsify.
-- **loft#1176** — a monomorph whose tail is a FN-REF call leaks its returned struct when used
-  inline, one record per call, both backends.  This is the arm loft#1066's fix does not reach,
-  and that commit names it in advance: `monomorph_return_is_fresh` is a positive proof read off
-  the body, and *"a `return` of a CALL is the callee's fact and answers false"*.  Checking
-  #1066's own repro first is what made this a sibling rather than a re-report — it is clean now,
-  so the fix landed and this is the shape it cannot read.
-- **loft#1177** — a lambda returning `vector<T>` aborts the compiler (H5 reports `__vdb_1` as a
-  pass-2-only attribute).  **Not a generic defect at all**: the concrete twin ICEs identically,
-  which is the loft#1029 lesson again — a generic corpus is where such a thing becomes visible,
-  not where it lives.
+  own claim was the thing to falsify, and all six are cells in the guard for that reason.
+  ⚠ **And the deferral's own first version diverged on the OTHER backend.** A buffer minted
+  after the parse is not declared at the top level, so `scopes::check` scoped it to the argument
+  block and freed it before the callee filled it: the interpreter stayed correct while
+  `--native` emitted a `String` declared inside the block and an empty `OpCreateStack`, which
+  does not compile.  The repair is a top-level `Set` hoist — a replay `patch_tret_callers`
+  already performs, with its reason written at the site, two hundred lines from where I needed
+  it.
+- **loft#1177 — CLOSED, and it was two defects.** A lambda with a DECLARED `-> vector<…>`
+  aborted the compiler: a lambda gets a return buffer from neither reservation path — the
+  signature-time one excludes lambdas by name, and the between-passes one skipped a lambda whose
+  return was declared rather than adopted — so pass 2 GREW `__vdb_1` and H5 reported the
+  divergence.  The sentence justifying the skip, *"the signature-time path already served it"*,
+  was never true of a lambda; it was true of the RETURNS that need no buffer, which is why a
+  declared `-> P` and `-> E` were fine and only a collection was not.  **Not a generic defect at
+  all** — the concrete twin ICEs identically, the loft#1029 lesson again.
+  Reserving the buffer then exposed the second, and it is this walk's own class one more time:
+  `scopes::callref_owned_return` decides whether a closure call hands back a store the caller
+  must own, and its arms named `Reference` and record-`Enum` over a `_ => None` that reads as
+  *"nothing else needs owning"*.  A store-backed collection contradicts that.  **A HASH return
+  leaked the same way and always had**, which is what says the `_` was short by the whole
+  collection family rather than by the former the issue is named for — found only because the
+  vector fix made a sibling cell worth running.
+- **loft#1176 — OPEN, and the measurement is the product.** A monomorph whose tail is a FN-REF
+  call leaks its returned struct when used inline.  This is the arm loft#1066's fix does not
+  reach, and that commit names it in advance: `monomorph_return_is_fresh` is a positive proof
+  read off the body, and *"a `return` of a CALL is the callee's fact and answers false"*.
+  Checking #1066's own repro first is what made this a sibling rather than a re-report.
+  ⚠ **The obvious discriminator was built, measured, and does not discriminate.**
+  `scopes::inline_struct_return` decides the same question for a `??` subject with *"only a
+  CAPTURING fn-ref can hand back a store the caller's scope owns"* (loft#1114), reading the
+  fn-ref type's own deps.  Applied here it answered *capture-free* for a capturing lambda and a
+  minting one alike — because there the fn-ref is a LOCAL whose type was INFERRED at the bind,
+  so its deps name the closure record, and here it is a PARAMETER whose type was DECLARED, and
+  a declared fn-type carries no deps whatever is passed.  **The same predicate, sound in one
+  position and inert in the other, distinguished by where the type came from.**  Reverted with
+  the measurement written at the site.
 
 ⚠ **And one measurement that read as a fourth and was not.** The `T = struct` fn-ref cell first
 looked like a pre-existing leak, because the "twin" beside it leaked too — but that twin applied

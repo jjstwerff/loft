@@ -7305,6 +7305,31 @@ impl Scopes {
         match returned {
             Type::Reference(d, _) => Some(Self::reopt(opt, Type::Reference(*d, Deps::none()))),
             Type::Enum(d, true, _) => Some(Self::reopt(opt, Type::Enum(*d, true, Deps::none()))),
+            // loft#1177 — a COLLECTION return is the same question with the same answer, and
+            // it was missing: the arms named the two aggregate shapes a closure was known to
+            // return and `_ => None` read as *"nothing else needs owning"*, which a
+            // store-backed collection contradicts.  A lambda handing back a `vector` / keyed
+            // collection used INLINE (`len(g(7))`) therefore had its store owned by nothing —
+            // one leaked record per call, where the bound form `r = g(7)` was always clean.
+            // The dep list is rebuilt empty for the same reason the two arms above rebuild
+            // theirs: `returns_borrowed_view` has already refused a callee that hands back a
+            // view, so what reaches here is a store the caller must own.
+            Type::Vector(inner, _) => {
+                Some(Self::reopt(opt, Type::Vector(inner.clone(), Deps::none())))
+            }
+            Type::Hash(d, k, _) => Some(Self::reopt(opt, Type::Hash(*d, k.clone(), Deps::none()))),
+            Type::Sorted(d, k, _) => {
+                Some(Self::reopt(opt, Type::Sorted(*d, k.clone(), Deps::none())))
+            }
+            Type::Index(d, k, _) => {
+                Some(Self::reopt(opt, Type::Index(*d, k.clone(), Deps::none())))
+            }
+            Type::Radix(d, k, _) => {
+                Some(Self::reopt(opt, Type::Radix(*d, k.clone(), Deps::none())))
+            }
+            Type::Trie(d, k, _) => Some(Self::reopt(opt, Type::Trie(*d, k.clone(), Deps::none()))),
+            // Everything else is a value the caller does not own a store for — a scalar
+            // lives in the slot, and a `text` is freed by its own delivery path.
             _ => None,
         }
     }
