@@ -1025,6 +1025,37 @@ impl Parser {
         } else if self.lexer.has_token("return") {
             self.parse_return(val);
             Type::Never
+        } else if self.lexer.peek_token("debug_assert") {
+            // `debug_assert` is a RESERVED name with no definition behind it yet: @PLN53 A2.3
+            // adds `debug_assert(test, message)` as the `assert` companion that `--release`
+            // elides, and reserving the word early is what keeps user code from taking it in
+            // the meantime.  Every other keyword either has a parser arm or is defined in the
+            // default library, so without this one a statement starting with `debug_assert`
+            // fell through the whole chain and was reported as a missing `;` — at the
+            // PREVIOUS statement's line, naming neither the word nor the reason (loft#1167).
+            //
+            // Consume the call so one clear refusal is the whole output, rather than the
+            // first of a cascade.
+            self.lexer.has_token("debug_assert");
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`debug_assert` is reserved for a future release and does nothing yet — \
+                     use `assert(…)`, which is checked in every build"
+                );
+            }
+            if self.lexer.has_token("(") {
+                while !self.lexer.peek_token(")") && !self.lexer.peek_token(";") {
+                    let mut arg = Value::Null;
+                    self.expression(&mut arg);
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.has_token(")");
+            }
+            Type::Void
         } else if self.lexer.has_keyword("parallel") {
             self.parse_parallel(val);
             Type::Void

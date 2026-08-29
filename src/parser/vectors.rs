@@ -386,6 +386,32 @@ impl Parser {
         val: &mut Value,
         parent_tp: &mut Type,
     ) -> Type {
+        // The reserved-but-unbuilt name, in VALUE position.  The statement-position twin
+        // lives in `parse_assign_op_inner`'s keyword chain; both are needed because a
+        // keyword token reaches neither an identifier lookup nor a call, so every position
+        // that wanted a value reported a missing `;` instead (loft#1167).
+        if self.lexer.peek_token("debug_assert") {
+            self.lexer.has_token("debug_assert");
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`debug_assert` is reserved for a future release and does nothing yet — \
+                     use `assert(…)`, which is checked in every build"
+                );
+            }
+            if self.lexer.has_token("(") {
+                while !self.lexer.peek_token(")") && !self.lexer.peek_token(";") {
+                    let mut arg = Value::Null;
+                    self.expression(&mut arg);
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.has_token(")");
+            }
+            return Type::Void;
+        }
         if self.lexer.has_token("!") {
             let operand_pos = self.lexer.peek_pos().clone();
             let t = self.parse_part(var_tp, val, parent_tp);
