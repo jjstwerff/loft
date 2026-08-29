@@ -3825,6 +3825,24 @@ LEAVES the tag — so `{v[9] / 2}` reports the overrun that actually produced it
 build before this one did. Arming is what confines it to format scope, since the same peers
 serve a `??` discharge.
 
+⚠ **And the state had to leave `Stores` for a reason no probe on `--interpret` could show.**
+Written as `stores.note_format_fault(…)`, the fix passed every cell on the interpreter and
+every hand-run `--native` probe, then failed `native_scripts` on ONE of 898 corpus programs
+with `E0502`: the native emitter inlines an op's `#rust` body into whatever expression contains
+it, so the body landed inside another `stores.` call's argument list —
+`stores.enum_val(80, ({ … stores.note_format_fault(…) … }))` — one immutable borrow, one
+mutable, both live. `fill.rs` emits each body as its own statement, so the interpreter can
+never see it. The cause now lives in a thread-local in `ops` and the peers call free
+functions, which borrow nothing and compose in any position; per-thread is also the right
+scope, since a `par` worker renders its own strings.
+
+**The lesson is about which corpus can see a class.** A `#rust` body is a fragment pasted into
+positions the author never picks, so its blast radius is *every context the emitter can put it
+in* — and the only instrument that enumerates those is the 898-program native compile. Two
+hand-written `--native` probes and a three-guard suite all passed. For any `#rust` body that
+gains a `stores.`/`s.` CALL, `cargo test --test native native_scripts` is the gate, not a
+probe.
+
 **A third defect, found by asserting the fix rather than the bug: `"hi"[9]` disagreed across
 backends.** Writing the guard cell for a REAL text overrun turned up `null(oob)` on
 `--interpret` and empty on `--native`. `(F-Render)` settles it in one line — a null character

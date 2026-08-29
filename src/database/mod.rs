@@ -35,18 +35,8 @@ use crate::keys::{Content, DbRef};
 use crate::store::{Store, StoreChange};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Write as _};
-use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
-/// Plan-07 phase 4e.3 — `LOFT_FORMAT_BARE_NULL=1` opt-out for the
-/// `null(<reason>)` format-string suffix.  Read once per process so
-/// the format-string hot path stays branch-light.
-fn format_bare_null_enabled() -> bool {
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("LOFT_FORMAT_BARE_NULL").is_ok_and(|v| v == "1" || v == "true")
-    })
-}
 // the `--html` build compiles for wasm32-unknown-unknown
 // WITHOUT the `wasm` feature (the feature carries wasm-bindgen
 // host bridges that `--html`'s hand-rolled JS runtime does not
@@ -571,31 +561,6 @@ pub struct Stores {
     /// populated and the `RuntimeError` payload (kind enum + Position
     /// String + message String) is otherwise ~96 bytes per `Stores`.
     pub runtime_error: Option<Box<crate::runtime_error::RuntimeError>>,
-    /// Plan-07 phase 4e.3 — fault-kind tag for the next format-string
-    /// rendering of a null sentinel.  Set by the small `OpTagFault`
-    /// op (emitted by 4e.1's format-scope swap right BEFORE each
-    /// fault-prone Nullable-peer call).  Read AND cleared by the
-    /// format-conversion ops (`OpFormatInt` / `OpAppendCharacter` /
-    /// etc.) when they encounter the type's null sentinel — they
-    /// render `null(<tag>)` instead of bare `null`.  When the value
-    /// is non-null the tag is also cleared on consumption (so it
-    /// doesn't leak to a downstream interpolation).
-    ///
-    /// Always cleared at format-string boundaries by the same swap
-    /// pass (no need for runtime begin/end markers — 4e.1's
-    /// rewrite knows the format scope at parse time and only emits
-    /// `OpTagFault` immediately before its paired Nullable peer).
-    ///
-    /// `LOFT_FORMAT_BARE_NULL=1` env var makes the format ops
-    /// ignore this field (and emit bare `null`) for production
-    /// deployments that surface format strings to end users.
-    pub format_fault_tag: Option<&'static str>,
-    /// Whether the hole being rendered asked for a fault cause — set by `OpTagFault`, cleared
-    /// when a format op consumes the tag. The fault-prone `*Nullable` peers are emitted for a
-    /// `??` discharge as well as inside a format string, and only the format string has a
-    /// renderer to feed; without this a guarded `a / z ?? 0` would leave a `/0` behind for the
-    /// next unrelated hole to wear. See [`Self::note_format_fault`].
-    pub format_fault_armed: bool,
     /// Directory of the main source file being executed.
     /// Set by `main.rs` after parsing; used by `source_dir()` built-in.
     pub source_dir: String,
@@ -739,8 +704,6 @@ impl Clone for Stores {
             logger: self.logger.clone(),
             had_fatal: false,
             runtime_error: None,
-            format_fault_tag: None,
-            format_fault_armed: false,
             // #255: `source_dir` is parse-time CONFIG (the main source file's
             // directory), not runtime state — it must survive `clone()` so the
             // `source_dir()` builtin works after the test runner / native paths
@@ -1493,8 +1456,6 @@ impl Stores {
             logger: None,
             had_fatal: false,
             runtime_error: None,
-            format_fault_tag: None,
-            format_fault_armed: false,
             source_dir: String::new(),
             // #255 / @PLN9: program-relative by default — a relative file path
             // re-homes against the program's own directory, so "program + assets"
@@ -1743,81 +1704,30 @@ impl Stores {
         }
     }
 
-    /// Plan-07 phase 4e.3 — set the next-format-render fault tag.
-    /// Called by `OpTagFault(kind_id)` which 4e.1 emits IMMEDIATELY
-    /// before each fault-prone Nullable peer in format-string
-    /// scope.  The next format-conversion op (`OpFormatInt`,
-    /// `OpAppendCharacter`, etc.) reads the tag and, when the value
-    /// is the type's null sentinel, renders `null(<tag>)` instead
-    /// of bare `null`.
-    ///
-    /// Kind-id mapping (numeric IDs keep the IR stable across
-    /// label-string changes):
-    ///   1 → `/0`   (DivByZero)
-    ///   2 → `%0`   (ModByZero / RemByZero)
-    ///   3 → `oob`  (IndexOutOfBounds)
-    ///   4 → `neg`  (NegativeIndex)
-    ///   _ → bare null (no tag)
-    ///
-    /// `LOFT_FORMAT_BARE_NULL=1` env var (read once per process via
-    /// `format_bare_null_enabled()`) suppresses the tag entirely so
-    /// production deployments that surface format strings to end
-    /// users get clean `null` output.
+    /// The format-fault cause lives in [`crate::ops`], per thread, rather than on `Stores` —
+    /// a codegen constraint as much as a design one. The native emitter inlines an op's
+    /// `#rust` body into whatever expression contains it, so a body that writes through
+    /// `stores` lands inside another `stores.` call's arguments and rustc rejects it with
+    /// E0502 (loft#1169). Free functions over thread-local state borrow nothing and compose in
+    /// any position. These are thin delegates so existing call sites read the same.
     pub fn set_format_fault(&mut self, kind_id: u8) {
-        if format_bare_null_enabled() {
-            self.format_fault_tag = None;
-            return;
-        }
-        self.format_fault_tag = match kind_id {
-            1 => Some("/0"),
-            2 => Some("%0"),
-            3 => Some("oob"),
-            4 => Some("neg"),
-            _ => None,
-        };
+        crate::ops::note_format_fault(kind_id, true);
     }
 
-    /// Record that the op which just ran FAULTED, so `null(<reason>)` names the fault that
-    /// happened rather than the one its op could have had (loft#1169).
-    ///
-    /// `OpTagFault` used to SET the tag from the op's SHAPE, decided at parse time. Whether
-    /// the op actually faulted is a run-time fact only the op has, and without it any null
-    /// that merely flowed THROUGH the op wore its name: `{v[1]}` on a `vector<integer?>`
-    /// whose element is genuinely null read `null(oob)` with the index in range, and
-    /// `{n / a}` with `a == 5` read `null(/0)`. So `OpTagFault` now only ARMS the hole
-    /// ([`Self::arm_format_fault`]) and this is what writes a cause.
-    ///
-    /// **A peer that did NOT fault leaves the tag alone rather than clearing it**, and that
-    /// is the whole reason this is a set and not a keep-or-clear. One hole can hold several
-    /// fault-prone ops, and only the OUTERMOST is armed, so a peer that clears would erase a
-    /// cause an inner op had just recorded — `{v[0] / z}` (a real division by zero after a
-    /// successful read) lost its `/0`, and `{v[9] / 2}` could never have reported the overrun
-    /// that produced its null. Leaving it means an inherited null keeps the cause of wherever
-    /// it was born, which is exactly what the tag is for.
-    ///
-    /// Arming is what keeps this to format scope: the same peers are emitted for a `??`
-    /// discharge, and a fault there must not leave a cause behind for an unrelated hole to
-    /// wear.
+    /// See [`crate::ops::note_format_fault`].
     pub fn note_format_fault(&mut self, kind_id: u8, faulted: bool) {
-        if faulted && self.format_fault_armed {
-            self.set_format_fault(kind_id);
-        }
+        crate::ops::note_format_fault(kind_id, faulted);
     }
 
-    /// Arm the current format hole: clear any cause left by the previous one and let the ops
-    /// in this hole record theirs. Emitted as `OpTagFault` immediately before the hole's
-    /// outermost fault-prone op.
+    /// See [`crate::ops::arm_format_fault`].
     pub fn arm_format_fault(&mut self) {
-        self.format_fault_tag = None;
-        self.format_fault_armed = true;
+        crate::ops::arm_format_fault();
     }
 
-    /// Plan-07 phase 4e.3 — read + clear the format-fault tag.
-    /// Called by format-conversion ops on a null-sentinel value.
+    /// See [`crate::ops::take_format_fault`].
     #[must_use]
     pub fn take_format_fault(&mut self) -> Option<&'static str> {
-        self.format_fault_armed = false;
-        self.format_fault_tag.take()
+        crate::ops::take_format_fault()
     }
 
     /// Plan-07 phase 4c — Stores-side counterpart of

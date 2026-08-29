@@ -385,7 +385,7 @@ impl State {
         // backends — is a change to F-Render and the owner's call, not this op's.
         //
         // The tag is still TAKEN, so it cannot leak into a later hole in the same string.
-        let _ = self.database.take_format_fault();
+        let _ = ops::take_format_fault();
         if c as u32 == 0 {
             return;
         }
@@ -653,7 +653,7 @@ impl State {
         // `null(<tag>)` instead of bare `null`.  Take + drop the
         // tag unconditionally so it can never leak to a downstream
         // interpolation in the same format string.
-        let tag = self.database.take_format_fault();
+        let tag = ops::take_format_fault();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - 16);
         text_tl_fmt(tl_fn, s, |s| {
@@ -670,7 +670,7 @@ impl State {
         let dir = self.code::<i8>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
-        let tag = self.database.take_format_fault();
+        let tag = ops::take_format_fault();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - 16);
         text_tl_fmt(tl_fn, s, |s| {

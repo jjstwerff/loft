@@ -17,6 +17,85 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(dead_code)]
 use std::cmp::Ordering;
+
+// ── the format-fault cause (loft#1169) ───────────────────────────────────────────────────
+//
+// `null(<reason>)` in an interpolation names the fault that HAPPENED. Two facts have to meet
+// for that: the hole ASKED for a cause (`OpTagFault`, emitted at parse time before the hole's
+// outermost fault-prone op) and an op actually FAULTED (a run-time fact only the op has).
+//
+// This lives in a THREAD-LOCAL rather than on `Stores`, and that is a codegen constraint as
+// much as a design one. The native emitter inlines an op's `#rust` body into whatever
+// expression contains it, so a body that writes through `stores` lands inside another
+// `stores.` call's argument list and rustc rejects it:
+//
+//     stores.enum_val(80, ({ … stores.note_format_fault(3, …) … }))
+//     ^^^^^^ immutable borrow        ^^^^^^ mutable borrow  →  E0502
+//
+// The interpreter never saw it, because `fill.rs` emits each body as its own statement. Free
+// functions over thread-local state borrow nothing and compose in any position.
+//
+// Per-thread is also the right scope: a `par` worker renders its own format strings, so a
+// fault it raises must not be visible to — or overwritten by — another thread's.
+thread_local! {
+    static FORMAT_FAULT_TAG: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    static FORMAT_FAULT_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `LOFT_FORMAT_BARE_NULL=1` drops the `(reason)` suffix for deployments that show format
+/// strings to end users. Read once per process so the render path stays branch-light.
+fn format_bare_null() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("LOFT_FORMAT_BARE_NULL").is_ok_and(|v| v == "1" || v == "true")
+    })
+}
+
+/// The label a fault kind renders as. Numeric ids keep the IR stable across label changes.
+#[must_use]
+pub fn format_fault_label(kind_id: u8) -> Option<&'static str> {
+    match kind_id {
+        1 => Some("/0"),
+        2 => Some("%0"),
+        3 => Some("oob"),
+        4 => Some("neg"),
+        _ => None,
+    }
+}
+
+/// Arm the hole being rendered: clear the previous hole's cause and let this one record its
+/// own. Emitted as `OpTagFault` immediately before the hole's outermost fault-prone op.
+///
+/// Arming is what confines all of this to format scope. The same fault-prone `*Nullable`
+/// peers are emitted for a `??` discharge, and a fault there has no renderer to feed — without
+/// arming it would leave a cause behind for the next unrelated hole to wear.
+pub fn arm_format_fault() {
+    FORMAT_FAULT_TAG.with(|t| t.set(None));
+    FORMAT_FAULT_ARMED.with(|a| a.set(true));
+}
+
+/// Record that this op faulted, so the hole renders its cause rather than the cause of
+/// whichever op it happens to sit under.
+///
+/// **A peer that did NOT fault leaves the tag alone rather than clearing it**, which is why
+/// this is a set and not a keep-or-clear. One hole can hold several fault-prone ops while only
+/// the outermost is armed, so a clearing peer would erase a cause an inner op just recorded —
+/// `{v[0] / z}`, a real division by zero after a successful read, lost its `/0` that way.
+/// Leaving it also means an inherited null keeps the cause of wherever it was born, so
+/// `{v[9] / 2}` reports the overrun that actually produced its null.
+pub fn note_format_fault(kind_id: u8, faulted: bool) {
+    if faulted && FORMAT_FAULT_ARMED.with(std::cell::Cell::get) && !format_bare_null() {
+        FORMAT_FAULT_TAG.with(|t| t.set(format_fault_label(kind_id)));
+    }
+}
+
+/// Read and clear the cause. Called by the format-conversion ops when they meet a type's null
+/// sentinel; taken unconditionally so a cause can never leak into a later hole.
+#[must_use]
+pub fn take_format_fault() -> Option<&'static str> {
+    FORMAT_FAULT_ARMED.with(|a| a.set(false));
+    FORMAT_FAULT_TAG.with(std::cell::Cell::take)
+}
 // @PLAN12 phase 3.5a (2026-05-24) — `RNG` thread-local + the
 // associated `rand_int` / `rand_seed` / `shuffle_ints` helpers
 // removed.  random's drain to lib/random/native/ makes the cdylib
