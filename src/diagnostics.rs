@@ -131,6 +131,38 @@ pub struct DiagEntry {
     /// false. Shown by `--explain`; the LSP renders the same rows as code actions.
     pub fixes: Vec<Fix>,
 }
+/// A decoded string as `&'static str`, allocated once per DISTINCT value.
+///
+/// `code`, `concept` and `concept_ref` are `&'static str` because every producing site is a
+/// literal; a value read back from the startup cache has to become static somehow. The
+/// obvious `Box::leak` is what this replaces, and it was wrong in two ways that the same
+/// change fixes.
+///
+/// **It leaked per ENTRY, not per code.** `startup_cache` decodes one entry per cached
+/// diagnostic in a loop, and the codes are a small frozen set that entries SHARE — so a warm
+/// load of 200 diagnostics leaked 200 strings, most of them duplicates of each other. The
+/// comment justifying it said "a warm load decodes each at most once per process", which is
+/// true of each ENTRY and was being read as true of each CODE.
+///
+/// **And the memory was unreachable**, so LeakSanitizer was right to report it: the nightly
+/// ASan leak gate went red on both OSes (2026-08-28 and -29) with 10–40 bytes from
+/// `decode_from_cache`. Interning keeps the pointer in a table that outlives the process, so
+/// the allocation is REACHABLE and the gate is quiet without a suppression — which is the
+/// honest difference between "intentional" and "invisible to the tool".
+fn intern(s: String) -> &'static str {
+    static POOL: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> =
+        std::sync::OnceLock::new();
+    let pool = POOL.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let mut g = pool
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(found) = g.get(s.as_str()) {
+        return found;
+    }
+    let leaked: &'static str = Box::leak(s.into_boxed_str());
+    g.insert(leaked);
+    leaked
+}
 
 impl DiagEntry {
     /// Encode the DISPLAY fields as one escaped line, for the whole-program cache manifest.
@@ -265,11 +297,8 @@ impl DiagEntry {
                     text: unesc(e.next()?),
                 })
             };
-            // `concept` / `concept_ref` are `&'static str` for the same reason `code` is —
-            // every producing site is a literal.  Leaking is bounded: a warm load decodes
-            // each entry at most once per process.
-            let concept = Box::leak(unesc(f.next()?).into_boxed_str());
-            let concept_ref = Box::leak(unesc(f.next()?).into_boxed_str());
+            let concept = intern(unesc(f.next()?));
+            let concept_ref = intern(unesc(f.next()?));
             fixes.push(Fix {
                 kind,
                 title,
@@ -285,11 +314,7 @@ impl DiagEntry {
             file,
             line: line_no,
             col,
-            // `code` is `&'static str` because every producing site is a literal.  A decoded
-            // one has to become static somehow; leaking is bounded and correct here — the
-            // codes are a small frozen set and a warm load decodes each at most once per
-            // process, so this cannot grow with runtime.
-            code: (!code_s.is_empty()).then(|| &*Box::leak(code_s.into_boxed_str())),
+            code: (!code_s.is_empty()).then(|| intern(code_s)),
             suggestion: (!sugg.is_empty()).then_some(sugg),
             fixes,
         })
@@ -783,6 +808,36 @@ mod cache_roundtrip_tests {
         let back = DiagEntry::decode_from_cache(&original.encode_for_cache())
             .expect("a line this encoder wrote must decode");
         assert_same(&back, &original);
+    }
+    /// Decoding the same code twice hands back the SAME allocation, which is what makes the
+    /// bound real rather than asserted.
+    ///
+    /// `startup_cache` decodes one entry per cached diagnostic, and entries SHARE codes — so
+    /// before interning, a warm load allocated a fresh copy per entry and dropped the pointer
+    /// on the floor. The nightly ASan leak gate is what noticed (red on both OSes,
+    /// 2026-08-28/29, 10–40 bytes from `decode_from_cache`).
+    ///
+    /// Asserts POINTER identity, not string equality: equality would pass just as well on the
+    /// leaking version and measure nothing.
+    #[test]
+    fn a_repeated_code_is_interned_not_reallocated() {
+        let encoded = |c: &'static str| {
+            let mut e = entry_with(Vec::new());
+            e.code = Some(c);
+            e.encode_for_cache()
+        };
+        let same = encoded("avoidable-copy");
+        let other = encoded("lost-write");
+        let a = DiagEntry::decode_from_cache(&same).expect("decode a");
+        let b = DiagEntry::decode_from_cache(&same).expect("decode b");
+        let c = DiagEntry::decode_from_cache(&other).expect("decode c");
+        let (pa, pb, pc) = (a.code.expect("a"), b.code.expect("b"), c.code.expect("c"));
+        assert_eq!(pa, "avoidable-copy");
+        assert!(
+            std::ptr::eq(pa, pb),
+            "the same code decoded twice must reuse one allocation"
+        );
+        assert!(!std::ptr::eq(pa, pc), "distinct codes stay distinct");
     }
 
     /// An entry with NO fixes still round-trips, and must not gain one — the pointer counts
