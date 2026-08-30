@@ -2334,16 +2334,28 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 660 | 304 | 5 | **351** |
+| 660 | 306 | 5 | **349** |
 
-Two moving checkouts, and the two movements are independent.  loft#1200 added
+Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
 purpose — `Type::Optional` names the spelling it is looking for, and `.base()` peels it to ask
-what the storage is.  loft#1204 then REPAIRED a site out of the opaque column, which is the
-movement the column exists to report.  The two readings agree about the useful half: the
-`#1200` site was written knowing `layout(τ) = layout(τ?)`, and the defect it closes existed
-because a NEIGHBOURING site (`owned_refs`' tracking) is on the opaque side and never saw a
-nullable local at all.
+what the storage is.  loft#1204, loft#1207 and loft#1212 then REPAIRED sites out of the opaque
+column, which is the movement this column exists to report.
+
+⚠ **The queue this column names is not "349 bodies to read".**  Every repair in it so far was
+one member of a PREDICATE FAMILY peeled while its siblings were not — `is_keyed` (d1220a1b),
+`is_collection`, `collection_element`, `keyed_field_kt`, `assign_var_nr`, and
+`Store::collection_rec`, each fixed because a separate issue happened to route through it.
+`is_collection` is the sharpest: it is literally `is_keyed(tp) || matches!(tp, Vector)`, so
+peeling one arm left the union half-peeled and made `vector<τ>?` the one collection the
+predicate denied.  So the readable queue is *which families are peeled in one member and not
+their siblings* — a much shorter list, and enumerable.
+
+`collection_rec` is the instance worth remembering, because it is not in this table at all: it
+discriminates on a stored VALUE rather than on a `Type`, its header already said *"a missed site
+is a SIGSEGV rather than a wrong answer"*, and all twenty of its call sites were in `vector.rs`
+while the keyed family read its slots raw (loft#1213).  A family can be split across files that
+this screen never compares.
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were

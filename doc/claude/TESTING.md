@@ -2749,6 +2749,28 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**A CONTROL cell scored in the same file as the thing it controls can blank every channel
+`falsify.sh` reads.** A control usually fails on the pre-fix build too — that is what makes it a
+control — and if it fails LOUDLY it fixes the file's exit code at the same value on both trees.
+`falsify` then reports INERT and the guard measures nothing, while looking like a guard with a
+control in it. Measured twice in one day: loft#1211's refusal file scored a dense `const` control
+beside the cell, so both trees read `1|0|none|none` and the movement disappeared; loft#1212's five
+cells mixed three SILENT wrong answers with two that already reported (an ICE and an arithmetic
+message), and the two loud ones pinned the exit at 1 and hid the other three entirely.
+
+Split by the CHANNEL that moves, not by the story: the cells whose answer is silent go in one
+file, where the exit moves 0 → 1 (or the panic clears); the cells that already reported go in
+another, whose `@falsified-at` records the diagnostic identity instead and says plainly that
+`falsify` reads INERT for it. Removing a control is not always a loss either — a build where the
+mechanism dies outright still fails an `@EXPECT_ERROR` file on its own unmatched annotation, so
+the control's job is often already done by the harness.
+
+⚠ **`make falsify` cannot render a verdict for an annotation-scored file at all.** A passing
+`@EXPECT_ERROR` guard exits 1, which its exit channel reads as *"THIS TREE IS NOT CLEAN"* — so
+the tool prints NOT FALSIFIED for a guard that is working. Read the control/here pair it prints
+(0 → 1 is the movement you want) and record the real gating channel, `check_diagnostics` in
+`tests/wrap.rs`, in the `@falsified-at` note.
+
 **The fallback has the same shape as the wrong answer.** `b.c ?? []` on a nullable
 collection field took the wrong branch and answered the empty field: length 0, which is
 exactly what the correct `[]` default answers too. Five guards covered that field shape
