@@ -128,26 +128,42 @@ without a guard.
 
 ## Deviations
 
-OPEN: **2** (D-iter-2, D-iter-3) — the zero this line carried until 2026-08-30 was
-re-measured and did not hold. It rested on a corpus that varies the element TYPE
-(`tests/scripts/1074-combinators-over-tuple-elements.loft`) but never varies what the
-comprehension READS: every cell draws from a source the destination does not name, so
+OPEN: **0** — and the zero is new, not the one this line used to carry. That one was
+re-measured on 2026-08-30 and did not hold: it rested on a corpus that varies the element
+TYPE (`tests/scripts/1074-combinators-over-tuple-elements.loft`) but never varies what the
+comprehension READS. Every cell drew from a source the destination does not name, so
 `I-Comp`'s "fresh result, source untouched" clause was pinned only where it is trivially
-true. Varying that one axis broke three shapes at once, of which one is closed and two are
-open. D-iter-1 remains CLOSED.
+true. Varying that one axis broke all THREE destination kinds at once — a local, a struct
+field and a `+=` — and all three are now closed with their own guards. D-iter-1 remains
+CLOSED.
 
-> **D-iter-2 — a comprehension assigned to a struct FIELD it reads (loft#1195, OPEN).**
-> `s.v = [for i in 0..s.v.len() { s.v[i] * 2 }]` answers `[]` on both backends, silently.
+> **D-iter-2 — CLOSED (2026-08-30). A comprehension assigned to a struct FIELD it reads.**
+> `s.v = [for i in 0..s.v.len() { s.v[i] * 2 }]` answered `[]` on both backends, silently.
 > The whole-vector field replace emits `OpClearVector(s.v)` ahead of the comprehension's
-> own ops, so the field is empty before the loop reads it. `I-Comp` says the result is a
-> fresh store and the source is untouched, so the clear belongs after the loop — or the
-> field's value belongs in a snapshot taken before it.
+> own ops, so the field was empty before the loop read it. Sweeps like its local sibling —
+> body-only gives `[0,0,0]`, a foreign source gives `[1,3,4]` — with one control that
+> shaped the cure: reading a SIBLING field (`s.v = [for … s.w …]`) is correct, so the test
+> is on the FIELD EXPRESSION, not the struct's base variable.
+> Fixed (loft#1195) by the fresh-buffer route below.
 >
-> **D-iter-3 — a comprehension appended with `+=` to a vector it reads (loft#1196, OPEN).**
-> `a += [for i in 0..a.len() { a[i] * 2 }]` never terminates: it builds into `a`'s own
-> store while the bound re-reads that store's growing length (`--native` overflows in
-> `store.rs` instead). `I-Comp` builds a fresh vector and `+=` appends THAT, so the bound
-> is the original length. Unbounded allocation, not merely a hang.
+> **D-iter-3 — CLOSED (2026-08-30). A comprehension appended with `+=` to a vector it
+> reads.** `a += [for i in 0..a.len() { a[i] * 2 }]` never terminated: it built into `a`'s
+> own store while the bound re-read that store's growing length (`--native` overflowed in
+> `store.rs` instead). Unbounded allocation, not merely a hang.
+>
+> Its boundary is NARROWER than the other two, and the difference is instructive: the BODY
+> reading the destination is fine, because `+=` leaves the existing elements at their own
+> indices, so only the loop's TERMINATION condition — the bound, or the source being the
+> destination — was ever affected. The two body-only cells answer the same values under the
+> fresh-buffer model as they did built in place, which is what made the cure additive.
+> Fixed (loft#1196) by the same route.
+>
+> **The cure both took, and why it was already there.** `map` and `filter` build into a
+> buffer of their own and let the destination's assignment deliver it, so
+> `s.v = s.v.map(…)` and `a += a.map(…)` were correct on every cell throughout. The
+> comprehension now takes that same route whenever it reads a destination it cannot serve
+> by deferring a repoint — the reference route was the oracle, and the two spellings of one
+> operation now agree.
 
 > **D-iter-4 — CLOSED (2026-08-30). A comprehension assigned to a LOCAL it reads.**
 > `a = [for i in 0..a.len() { a[i] * 2 }]` answered `[]`, and the shape needed neither a
@@ -244,7 +260,14 @@ open. D-iter-1 remains CLOSED.
   does the reading (source, range bound, `if` guard, body) and however many times the
   statement is executed. The cell to run is a comprehension whose source is a FOREIGN vector
   and whose BODY reads the destination: it keeps the right length while every value is wrong,
-  so a length- or emptiness-only check passes on it.
+  so a length- or emptiness-only check passes on it. **Run it for all three destination
+  kinds** — a local, a struct field, and `+=` — because one mechanism serves them and they
+  broke together; and run each inside a surrounding LOOP, since a buffer reused across
+  executions of the same site fails only on the second one.
+- **A comprehension and its combinator agree** — `xs = xs.map(f)` and
+  `xs = [for x in xs { f(x) }]` answer the same thing, on the same destination kinds. The
+  combinators were correct while the comprehension was not, for every cell above, so this
+  pairing is the cheapest oracle the doc has for this rule.
 
 Any program where the interpreter and `--native` disagree on an iteration's order, length,
 element values, or the source's immutability is the definitional error this doc names.

@@ -60,10 +60,21 @@ stopped after one expansion, so sets that really were connected were reported as
 disconnected, and nothing anywhere threw.  A worklist holding a single item gives the
 same answer either way, which is why small cases looked fine.
 
-`.map` and `.filter` onto their own receiver were always correct, and a temporary
-(`t = [for …]; a = t;`) was the workaround — both still work, and both are now pinned
-by tests.  Two relatives are still open and both have the same workaround: the same
-comprehension assigned to a struct **field** it reads, and one appended with `+=`.
+The same defect had two more faces, and both are fixed with it.  Assigned to a struct
+**field** it reads, the comprehension emptied the field the same way.  Appended with
+**`+=`** to a vector whose length it measured, it never finished at all — the loop's own
+appends grew the length it was testing, so the program hung (and `--native` overflowed),
+climbing in memory the whole time:
+
+```loft
+s.v = [for i in 0..s.v.len() { s.v[i] ?? 0 }];   // was []; now the elements
+a  += [for i in 0..a.len()   { a[i]  ?? 0 }];    // hung; now appends a copy
+```
+
+`.map` and `.filter` onto their own receiver were correct all along, on all three —
+`s.v = s.v.map(…)` and `a += a.map(…)` both did the right thing.  That is what the
+comprehension now does too, so the two spellings of one operation finally agree.  The
+temporary (`t = [for …]; a = t;`) was the workaround and still works.
 
 ### A failed `assert` names the line it is on
 

@@ -2246,6 +2246,54 @@ impl Parser {
         if self.first_pass {
             return tp;
         }
+        // (I-Comp) A struct FIELD destination and a compound `+=` both read their target and
+        // have no repoint to defer, so they take the other delivery: build into a buffer of
+        // this comprehension's own and let the destination's assignment hand it over.  That
+        // is exactly the route `map` takes below in `collections.rs`, which is why
+        // `s.v = s.v.map(…)` and `a += a.map(…)` already answer correctly.  Pass-2 only —
+        // the early return above means the two passes cannot disagree about the mint.
+        if self.comprehension_needs_own_buffer(
+            vec,
+            val,
+            is_var,
+            is_field,
+            &[&fill, &create_iter, &for_next, &if_step, &body],
+        ) {
+            let out_tp = Type::Vector(Box::new(in_t.clone()), Deps::none());
+            let out = self.create_unique("vec", &out_tp);
+            self.vars.defined(out);
+            let out_elm = self.unique_elm_var(&out_tp, in_t, out);
+            self.data.vector_def(&mut self.lexer, in_t);
+            let vector_end = if matches!(in_type, Type::Vector(_, _)) {
+                Some((src_coll.clone(), iter_var))
+            } else {
+                None
+            };
+            // Reset `val` so the build creates a fresh result vector instead of seeding it
+            // with the destination — the same reset `parse_map` makes for the same reason.
+            *val = Value::Null;
+            return self.build_comprehension_code(
+                out,
+                &Value::Var(out),
+                out_elm,
+                in_t,
+                &in_type,
+                &var_tp,
+                for_var,
+                for_next,
+                pre_var,
+                vector_end,
+                fill,
+                create_iter,
+                if_step,
+                body,
+                val,
+                false,
+                false,
+                true,
+                tp,
+            );
+        }
         let is_plain_local_target = !is_field && !matches!(val.unspan(), Value::Call(_, _));
         // (I-Comp) Both shortcuts below build THROUGH the destination, so neither can serve
         // a comprehension that reads it — `[for i in 0..a.len() { 5 }]` assigned to `a`
@@ -2433,10 +2481,15 @@ impl Parser {
         // `OpCoroutineExhausted(__gen_N)` as the loop's break condition.
         // The generator var is the first arg of `OpCoroutineNext` inside
         // `for_next` (`Set(for_var, OpCoroutineNext(__gen_N, value_size))`).
+        //
+        // Peeled at all three levels, per `Value::unspan`'s rule for a site that
+        // discriminates on specific variants: a `Span` around any of them hides the shape,
+        // the generator var is not found, and the loop silently loses the break — which is
+        // the unbounded append @P325 was.
         let coroutine_gen_var = if matches!(in_type, Type::Iterator(_, _))
-            && let Value::Set(_, rhs) = &for_next
-            && let Value::Call(_, next_args) = rhs.as_ref()
-            && let Some(Value::Var(v)) = next_args.first()
+            && let Value::Set(_, rhs) = for_next.unspan()
+            && let Value::Call(_, next_args) = rhs.unspan()
+            && let Some(Value::Var(v)) = next_args.first().map(Value::unspan)
         {
             *v
         } else {
@@ -3154,6 +3207,32 @@ impl Parser {
             && !self.vars.is_argument(vec)
     }
 
+    /// The PLACE an accessor expression names: the variable it is rooted at, and the field
+    /// offsets walked from there.  `None` for anything that is not a variable or a chain of
+    /// `OpGetField`s.
+    ///
+    /// Two things are deliberately ignored, because the same place written at two source
+    /// positions differs in both: the `Span` wrappers (peeled at every level, not just the
+    /// top) and the accessor's trailing type-id argument, which is a resolution artefact
+    /// rather than part of the place.  Plain `PartialEq` on the expression sees both and so
+    /// answers "different place" for `s.inner.v` on the left and `s.inner.v` on the right —
+    /// the nesting is what makes it bite, since a one-level `s.v` has only a bare `Var`
+    /// under it.
+    pub(crate) fn field_place(&self, v: &Value) -> Option<(u16, Vec<i32>)> {
+        match v.unspan() {
+            Value::Var(x) => Some((*x, Vec::new())),
+            Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
+                let Value::Int(off) = args.get(1)?.unspan() else {
+                    return None;
+                };
+                let (root, mut path) = self.field_place(args.first()?)?;
+                path.push(*off);
+                Some((root, path))
+            }
+            _ => None,
+        }
+    }
+
     /// Does a comprehension being built into `vec` READ `vec` itself?
     ///
     /// `I-Comp` ([`doc/claude/formal/iteration.md`]) builds a comprehension into a FRESH
@@ -3162,13 +3241,12 @@ impl Parser {
     /// Building straight into the destination — the `#501` watermark reuse — keeps that
     /// promise only while nothing in the loop reads the destination back.
     ///
-    /// Answered for a whole-value `=` into a LOCAL only ([`Parser::replace_target`]): that
-    /// is the assignment which repoints the destination at a fresh store, and so the only
-    /// one with a repoint to defer.  The two destinations that read their target the same
-    /// way and are emptied by a different site each carry their own report — a struct FIELD
-    /// is cleared ahead of the loop by the field replace (loft#1195), and a compound `+=`
-    /// appends into the destination with no repoint at all (loft#1196).  Answering either
-    /// here would give it the `=` delivery, which replaces instead of appending.
+    /// Answered for a whole-value `=` into a LOCAL only ([`Parser::assign_target`] with
+    /// [`Parser::assign_replaces`]): that is the assignment which repoints the destination
+    /// at a fresh store, and so the only one with a repoint to DEFER.  The other two
+    /// destinations read their target the same way but are emptied — or grown — by a
+    /// different site, so they take the fresh-buffer route instead
+    /// ([`Parser::comprehension_needs_own_buffer`]).
     ///
     /// `parts` are the comprehension's evaluated pieces.  The read test is
     /// [`Value::reads_var`], whose over-approximation costs this caller a deferred
@@ -3181,7 +3259,57 @@ impl Parser {
     ) -> bool {
         is_var
             && vec != u16::MAX
-            && vec == self.replace_target
+            && vec == self.assign_target
+            && self.assign_replaces
+            && parts.iter().any(|v| v.reads_var(vec))
+    }
+
+    /// Does a comprehension need to be built into a BUFFER of its own, rather than through
+    /// its destination?
+    ///
+    /// The other half of `I-Comp` beside [`Self::comprehension_reads_target`]. Two
+    /// destinations read what they are being assigned and cannot be served by deferring a
+    /// repoint, because neither HAS one to defer:
+    ///
+    /// * a struct FIELD (loft#1195) — the whole-vector field replace emits
+    ///   `OpClearVector(s.v)` ahead of the comprehension's own ops, so the field is empty
+    ///   before the loop reads it. `dest` is the field expression, and the comparison is by
+    ///   EXPRESSION: reading a SIBLING field (`s.v = [for … s.w …]`) is correct today and
+    ///   must keep its in-place build.
+    /// * a compound `+=` into a local (loft#1196) — it appends into the destination's own
+    ///   store, so a bound or source that reads the destination measures a length that the
+    ///   loop itself is growing, and the loop never ends.
+    ///
+    /// Both are answered by building into a fresh local and letting the destination's own
+    /// assignment deliver it — the route `map` and `filter` already take, which is why
+    /// `s.v = s.v.map(…)` and `a += a.map(…)` are correct today while the comprehension
+    /// spelling of each is not.
+    pub(crate) fn comprehension_needs_own_buffer(
+        &self,
+        vec: u16,
+        dest: &Value,
+        is_var: bool,
+        is_field: bool,
+        parts: &[&Value],
+    ) -> bool {
+        if is_field {
+            // Compared as a PLACE, so a nested destination (`s.inner.v`) matches its own
+            // reads.  When the destination is an accessor shape `field_place` cannot read,
+            // fall back to any read of its ROOT variable: that is over-wide — a sibling
+            // field matches it — and over-wide costs a buffer, never a wrong answer.
+            let Some(dest_place) = self.field_place(dest) else {
+                return dest
+                    .base_var()
+                    .is_some_and(|root| parts.iter().any(|v| v.reads_var(root)));
+            };
+            return parts.iter().any(|v| {
+                v.any_node(&mut |n| self.field_place(n).is_some_and(|p| p == dest_place))
+            });
+        }
+        is_var
+            && vec != u16::MAX
+            && vec == self.assign_target
+            && !self.assign_replaces
             && parts.iter().any(|v| v.reads_var(vec))
     }
 

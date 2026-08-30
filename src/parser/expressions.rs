@@ -2160,16 +2160,16 @@ use a separate collection or add after the loop"
         // assignment (`b += &a`) is excluded on purpose: it mutates `b`, it does not
         // give `b` a reference type, so it is not a bind site.
         self.amp_head = op == "=";
-        // Name the destination a whole-value `=` replaces, for this RHS only.  A
-        // comprehension that reads it has to defer repointing it until its loop has run
-        // (`I-Comp`); a compound `+=` appends in place, so it names nothing.  Saved and
-        // restored because the RHS may contain assignments of its own.
-        let prev_replace = std::mem::replace(
-            &mut self.replace_target,
-            if op == "=" { var_nr } else { u16::MAX },
-        );
+        // Name the destination this assignment writes, for this RHS only, along with
+        // whether it REPLACES it.  A comprehension that reads its own destination needs
+        // both: `=` repoints the target at a fresh store, `+=` appends into what it already
+        // holds, and the two need different deliveries (`I-Comp`).  Saved and restored
+        // because the RHS may contain assignments of its own.
+        let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
+        let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
-        self.replace_target = prev_replace;
+        self.assign_target = prev_target;
+        self.assign_replaces = prev_replaces;
         self.amp_head = false;
         self.expected = prev_read_target;
         // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue

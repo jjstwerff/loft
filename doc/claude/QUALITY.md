@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 337 | 319 | **18** |
+| 337 | 320 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -493,6 +493,16 @@ before they match, so they land on the peeling side and leave the opaque column 
 loft#1185 to 337 · 319 with `parser::tail_calls_a_fnref_parameter`, which unspans for the same
 reason.
 
+loft#1194 moved the OPAQUE column for the first time in a while, 18 → **17**, and the way it
+happened is worth keeping. The comprehension fix added an `unspan`ing match to
+`vectors::build_comprehension_code`, and the table moved on its own — because a site here is a
+FUNCTION, so one peeling match reclassified a function whose actual blind spot was somewhere
+else in it. That blind spot was real: the @P325 coroutine-termination detection matched `Set`,
+`Call` and `Var` through `for_next` with no peel at any of the three levels, so a `Span` around
+any of them loses the generator var, the loop loses its break, and the unbounded append @P325
+closed comes back. It now peels at all three, so the 17 is earned rather than masked. ⚠ The
+general lesson is the audit's granularity: adding an unspan to a function can move the column
+without fixing anything, so a row that improves is a claim to check, not a result to record.
 ⚠ **A site can ENTER this table by gaining an arm, and the newest one did.**
 `parser::rewrite_generic_type_defaults` discriminated on `Block` alone until loft#1175 gave it
 a `CallRef` arm; two variants is the threshold, so it arrived as the eighteenth.  It descends
