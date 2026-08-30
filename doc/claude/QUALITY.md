@@ -479,13 +479,17 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 334 | 316 | **18** |
+| 336 | 318 | **18** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
 The figures below the fold were measured against the NARROWER matcher this audit shipped with
 (221 · 211 · 10); B4g says what widening it added, why the backlog grew without anything
 regressing, and which site the measurement then took back off it.
+
+loft#1186 moved it to 336 · 318 with the two predicates the join reading needed —
+`parser::tail_joins_with_a_place` and `parser::node_place_root`, both of which unspan the node
+before they match, so they land on the peeling side and leave the opaque column where it was.
 
 ⚠ **A site can ENTER this table by gaining an arm, and the newest one did.**
 `parser::rewrite_generic_type_defaults` discriminated on `Block` alone until loft#1175 gave it
@@ -1401,10 +1405,14 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 40 | **7** | 33 |
+| 41 | **8** | 33 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
+
+loft#1186 moved it to 41 · 8 with `parser::node_place_root`, the arm-level half of the join
+reading: it resolves a projection by op name AND carries the `TupleGet` spelling, so it lands
+on the handling side and leaves the third column where it was.
 
 ⚠ **The row reads 38 · 5 · 33 and the paragraph above it says 18 · 2 · 16, mostly because the
 SCREEN was widened rather than because sites appeared.** It has moved four times in one merge —

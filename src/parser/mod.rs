@@ -11310,7 +11310,14 @@ impl Parser {
             return ret;
         };
         let def = self.data.def(d_nr);
-        let place_tail = self.tail_is_a_place(def);
+        // A JOIN counts as well as a plain place, and the hand-up is what pays for it.  Read
+        // as OWNED, the arm that yields the CAPTURE is a use-after-free the moment the caller
+        // rebinds (loft#1186's present arm, and loft#1181's mechanism one shape over).  Read
+        // as a borrow, the arm that MINTS leaks — which is why this used to answer only for a
+        // tail that cannot join.  `OpFreeRefOrHandUp` gives that mint an owner at the one
+        // place the callee knows it is handing back its own store, so the borrow reading is
+        // now the right one for both arms.  See `formal/closures.md` D-clo-13, @PLN150.
+        let place_tail = self.tail_is_a_place(def) || self.tail_joins_with_a_place(def);
         let kept: Vec<u16> = dep
             .as_attr_indices()
             .iter()
@@ -11348,6 +11355,67 @@ impl Parser {
     /// of the closure record.
     fn tail_is_a_place(&self, def: &crate::data::Definition) -> bool {
         self.tail_place_root(def).is_some()
+    }
+
+    /// Does this body's tail JOIN, with at least one arm a place?
+    ///
+    /// The `??` / `if` / `match` shape [`tail_is_a_place`](Self::tail_is_a_place) deliberately
+    /// answered `false` for, back when a borrow reading leaked the minting arm.  Kept as its
+    /// own question rather than folded into `tail_place_root`: that one answers *"which
+    /// variable IS the tail"*, and a join has no single answer — asking it separately leaves
+    /// every non-join tail reading exactly as before.
+    ///
+    /// Looks through the value-block wrappers a lowered `??` puts in the way, and asks only
+    /// about the ARMS: a join two of whose arms mint is not this question.
+    fn tail_joins_with_a_place(&self, def: &crate::data::Definition) -> bool {
+        let Value::Block(bl) = def.code() else {
+            return false;
+        };
+        let Some(tail) = bl.operators.last() else {
+            return false;
+        };
+        let mut node = tail.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                Value::Insert(steps) | Value::Parallel(steps) => match steps.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::Block(inner) => match inner.operators.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::If(_, t, e) => {
+                    return self.node_place_root(t).is_some() || self.node_place_root(e).is_some();
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// [`tail_place_root`](Self::tail_place_root) for an arbitrary node rather than a body's
+    /// tail — the arm-level question [`tail_joins_with_a_place`](Self::tail_joins_with_a_place)
+    /// asks.
+    fn node_place_root(&self, node: &Value) -> Option<u16> {
+        let (get_field, get_vector, get_dbref) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+            self.data.def_nr("OpGetDbRef"),
+        );
+        let mut node = node.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                Value::Insert(steps) => node = steps.last()?.unspan(),
+                Value::Block(bl) => node = bl.operators.last()?.unspan(),
+                Value::Var(v) | Value::TupleGet(v, _) => return Some(*v),
+                Value::Call(d, args) if *d == get_field || *d == get_vector || *d == get_dbref => {
+                    node = args.first()?.unspan();
+                }
+                _ => return None,
+            }
+        }
     }
 
     /// The root variable of a PLACE tail — `None` when the tail is not a place.

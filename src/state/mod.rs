@@ -1142,6 +1142,26 @@ impl State {
         self.call_stack.pop();
     }
 
+    /// Hand the store this frame is RETURNING to whoever will hold it.
+    ///
+    /// `OpFreeRefOrHandUp`'s adoption leg: the callee is returning a store it minted itself,
+    /// and its caller reads the result as a borrow — so neither of them frees it, and without
+    /// an owner it leaks one store per call (`formal/closures.md` D-clo-13, loft#1186).
+    ///
+    /// It joins the SAME list a delivered return buffer uses, at this frame's depth, so
+    /// [`Self::release_fnref_bufs`] carries it up on the way out by the rule it already
+    /// applies: the store is owned by the frame that holds it, and ownership travels with the
+    /// return value.  Nothing new decides when it dies.
+    pub fn hand_up_returned(&mut self, returned: DbRef) {
+        if returned.store_nr == u16::MAX || returned.rec == 0 {
+            return;
+        }
+        let depth = u32::try_from(self.call_stack.len())
+            .unwrap_or(u32::MAX)
+            .saturating_sub(1);
+        self.fnref_bufs.push((depth, returned));
+    }
+
     /// Free the return buffers [`Self::fn_call_ref`] allocated for the frame now returning,
     /// keeping the one the callee actually handed back.
     ///

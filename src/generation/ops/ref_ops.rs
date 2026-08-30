@@ -241,6 +241,50 @@ impl OpEmitter for OpFreeRefIfDistinctEmitter {
     }
 }
 
+/// `OpFreeRefOrHandUp` — [`OpFreeRefIfDistinctEmitter`]'s fresh-store leg unchanged, and its
+/// ADOPTION leg handing the store to the frame that will hold it.
+///
+/// The two name one store when the callee is returning the store it minted, and this op is
+/// emitted only where the caller reads that result as a BORROW — so neither frame frees it and
+/// nobody would.  `cr_fnref_buf` with the store as both arguments is the registration side of
+/// the rule `FnRefBufGuard` already applies to a delivered return buffer: owned by possession,
+/// released when the holding frame ends.  `args`: `[placeholder, witness]`.
+pub struct OpFreeRefOrHandUpEmitter;
+
+impl OpEmitter for OpFreeRefOrHandUpEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        if let [ph_val, wit_val] = args {
+            let ph_name = if let Value::Var(v) = ph_val {
+                format!(
+                    "var_{}",
+                    super::super::sanitize(
+                        ctx.output.data.def(ctx.output.def_nr).variables().name(*v)
+                    )
+                )
+            } else {
+                String::new()
+            };
+            // Both operands parenthesised for the reason `OpFreeRefIfDistinctEmitter` gives.
+            write!(ctx.w, "if (")?;
+            ctx.emit(ph_val)?;
+            write!(ctx.w, ").store_nr != (")?;
+            ctx.emit(wit_val)?;
+            write!(ctx.w, ").store_nr {{ OpFreeRef(cell,")?;
+            ctx.emit(ph_val)?;
+            write!(ctx.w, ", \"{ph_name}\")")?;
+            if let Value::Var(_) = ph_val {
+                write!(ctx.w, "; {ph_name}.store_nr = u16::MAX")?;
+            }
+            write!(ctx.w, " }} else {{ codegen_runtime::cr_fnref_buf(cell, ")?;
+            ctx.emit(wit_val)?;
+            write!(ctx.w, ", ")?;
+            ctx.emit(wit_val)?;
+            write!(ctx.w, ") }}")?;
+        }
+        Ok(())
+    }
+}
+
 /// @PLN87 P2.1 — `OpInitRefSentinel(slot)` sets the slot to the null sentinel
 /// (`DbRef::NULL`, `store_nr == u16::MAX`) WITHOUT freeing its prior contents, so
 /// a following `OpDatabase` allocates a FRESH store instead of clearing+reusing

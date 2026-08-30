@@ -5226,6 +5226,23 @@ impl Scopes {
     /// Enforces @FR-O-Derived: free placement is DERIVED, not decided — a local is freed
     /// iff it owns its store and does not transfer it out, once, at scope exit.  A
     /// per-site heuristic anywhere else in codegen is the bug that rule names.
+    /// Does `d_nr`'s published return BORROW the closure it carries?
+    ///
+    /// The one question that decides whether a store this function mints and hands back will
+    /// have an owner at the call site.  `published_ret_type` keeps the `__closure` index only
+    /// where the caller is meant to read the result as a borrow, so its presence here IS the
+    /// caller's reading — asked off the same attribute list, so the two cannot drift.
+    fn return_borrows_closure(data: &Data, d_nr: u32) -> bool {
+        if d_nr == u32::MAX || d_nr >= data.definitions() {
+            return false;
+        }
+        let def = data.def(d_nr);
+        let Some(idx) = def.attributes().iter().position(|a| a.name == "__closure") else {
+            return false;
+        };
+        u16::try_from(idx).is_ok_and(|i| def.returned.depend().contains(&i))
+    }
+
     fn free_vars(
         &mut self,
         is_return: bool,
@@ -5585,7 +5602,18 @@ impl Scopes {
             let tmp = function.add_temp_var(&name, tp);
             self.var_scope.insert(tmp, self.scope);
             self.var_order.push(tmp);
-            let free_if = data.def_nr("OpFreeRefIfDistinct");
+            // loft#1186 / @PLN150 — when this function's PUBLISHED return names its
+            // `__closure`, its callers read the result as a borrow, and the not-distinct leg
+            // then leaves the store the callee minted owned by nobody: the callee does not
+            // free it (it is the value it returns) and the caller will not (it borrows).
+            // `OpFreeRefOrHandUp` is `OpFreeRefIfDistinct` with an owner on that leg.  The
+            // distinct leg is identical, so a function whose return does not borrow keeps
+            // exactly the op it had.
+            let free_if = data.def_nr(if Self::return_borrows_closure(data, self.d_nr) {
+                "OpFreeRefOrHandUp"
+            } else {
+                "OpFreeRefIfDistinct"
+            });
             let mut result = Vec::with_capacity(ls.len() + null_arm_record_sources.len() + 2);
             result.push(v_set(tmp, expr.clone()));
             for &src in &null_arm_record_sources {

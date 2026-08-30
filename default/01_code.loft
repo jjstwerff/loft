@@ -858,6 +858,20 @@ fn OpFreeRefTag(v1: reference, tag: const u16);
 // placeholder) frees the orphan.
 fn OpFreeRefIfDistinct(placeholder: reference, witness: reference);
 #rust"if @placeholder.store_nr != @witness.store_nr {{ s.database.free(&@placeholder); }}"
+// `OpFreeRefIfDistinct` for a return whose CALLER reads it as a borrow.
+//
+// Same fresh-store leg: the callee allocated its own store, ignored the placeholder, so the
+// orphan is freed here.  The ADOPTION leg differs, and that is the whole point — when the two
+// name one store the callee is handing back the store it minted, and a caller that borrows the
+// result will never free it.  Nobody would.  So the store is handed to the frame that will
+// HOLD it, by the rule `State::release_fnref_bufs` already applies to a delivered return
+// buffer: owned by possession, released when that frame ends.
+//
+// Emitted only where the caller's reading is known to be a borrow — a lambda whose published
+// return names its `__closure` — so the adoption leg cannot collide with a caller that frees
+// the store itself.  See `formal/closures.md` D-clo-13 and @PLN150.
+fn OpFreeRefOrHandUp(placeholder: reference, witness: reference);
+#rust"if @placeholder.store_nr == @witness.store_nr {{ s.hand_up_returned(@witness); }} else {{ s.database.free(&@placeholder); }}"
 // Release an on=4 iteration scratch at loop exit.  A read-only/exposed source's
 // scratch lives in a store of its own and goes back whole; a CO-LOCATED one (writable
 // source) goes back as the two records it claimed inside that source store — leaving

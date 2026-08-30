@@ -92,15 +92,14 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **3** — a lambda's `??`-default store discarded INLINE leaks one store per call
-(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed);
+OPEN: **2** — a lambda's `??`-default store discarded INLINE leaks one store per call
+(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed); and
 D-clo-12, a forwarding function's return type cannot carry what its fn-ref ARGUMENT knows, so
-it frees the capture (loft#1185); and D-clo-13, a lambda whose tail JOINS a capture with a
-mint has one dep list for two ownerships and no reading serves both arms (loft#1186).
+it frees the capture (loft#1185).
 
-⚠ **The three open entries have ONE cure between them, and it is not another ownership
-predicate.** Each is a call site that allocated a return buffer and cannot say whether what
-came back IS that buffer: D-clo-13 across the two arms of a `??`, D-clo-12 across the frame a
+⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
+Each was a call site that allocated a return buffer and could not say whether what came back
+IS that buffer: D-clo-13 across the two arms of a `??`, D-clo-12 across the frame a
 forwarding function puts in the way, and loft#1183 across two assignments to one local. Every
 static reading is right for one case and wrong for the other, which is what says the question
 is not statically answerable at all — so the answer is not to answer it. **The store is owned
@@ -110,14 +109,16 @@ releases it. BOTH backends do that now — the interpreter through `release_fnre
 `--native` through `codegen_runtime::FnRefBufGuard`, which reads the frame's declared return
 type where the interpreter reads the store that came back (loft#1183, closed).
 
-⚠ **That closed ONE of the three, not all three, and the difference is what the remaining two
-are about.** The hand-up answers for a store the CALL SITE allocated; D-clo-12 and D-clo-13
-hand back a store the call site never made — the closure's capture — and give it to a caller
-whose type reads it as owned. Measured after the hand-up landed on both backends: loft#1183's
-guard is clean on both, while loft#1185 still reports seven use-after-free reads and
-loft#1186's present arm six, unchanged on either backend. So the two open entries are a
-question about the CAPTURE, not about the buffer, and the buffer's cure cannot reach them.
-Measured repairs that do NOT work are recorded on each issue.
+⚠ **That closed ONE of the three, and the difference named what the other two were about.**
+The hand-up answers for a store the CALL SITE allocated; D-clo-12 and D-clo-13 hand back a
+store the call site never made — the closure's capture, or the callee's own mint — and give it
+to a caller whose type reads it as owned. D-clo-13 is now closed too, by the same
+owner-by-possession rule reaching one step further: the callee already computes, at run time
+and in one place, that the store it is handing back is the store it minted, and
+`OpFreeRefOrHandUp` attaches an owner there (loft#1186). D-clo-12 remains, and its distance is
+exactly the frame in the way: a forwarding function's return type is computed once for every
+caller, so no per-argument fact reaches it. @PLN150. Measured repairs that do NOT work are
+recorded on each issue.
 D-clo-11 — a captured STRUCT taken by the caller's bind — D-clo-10 — a captured collection
 taken the same way — D-clo-9 — a captured record FREED by a caller that lifted a fn-ref tail
 — and D-clo-8 — a captured `vector<(…)>` unpacked rather than shared — were opened and closed
@@ -373,8 +374,8 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > extra record copy on the forwarding path.  The `&text` half has paid exactly that since
 > loft#1116.
 >
-> **D-clo-13 — OPEN (2026-08-29, loft#1186): a lambda whose tail JOINS a capture with a mint
-> has one dep list for two ownerships.** `fn(n: integer) -> P { cap ?? P { v: -1 } }` hands
+> **D-clo-13 — OPENED AND CLOSED (2026-08-29 / 2026-08-30, loft#1186): a lambda whose tail
+> JOINS a capture with a mint had one dep list for two ownerships.** `fn(n: integer) -> P { cap ?? P { v: -1 } }` hands
 > back the captured record when the subject is present and a store of its OWN when it is
 > absent.
 >
@@ -394,6 +395,28 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > that may receive a heap delivery owns that buffer the way it already owns its `&text` ones,
 > with `Data::fnref_text_buffers`' widest-candidate-then-trim shape as the precedent for the
 > adaptive ABI.
+
+> **The cure was not a third reading of the dep list.** The callee already computes the
+> answer, at run time and in one place: the two operands of the free that guards its own mint
+> name ONE store exactly when it is handing that store back. `OpFreeRefOrHandUp` is that free
+> with an owner on the adoption leg — the store joins the list a delivered return buffer uses
+> and `release_fnref_bufs` carries it up, by the rule loft#1183 already established. The
+> distinct leg is untouched, so a function whose return does not borrow keeps the op it had.
+>
+> With the mint owned, the BORROW reading is right for both arms, and `published_ret_type` now
+> keeps the `__closure` index for a JOIN tail with a place arm as well as for a tail that
+> cannot join. `--native` needed one more thing to agree: a REFERENCE-returning fn-ref call
+> was handed the null sentinel where the interpreter has always allocated a buffer, so the
+> store the callee materialised had no owner on that backend alone. It gets a real buffer now,
+> which is also what makes the comparison askable there.
+>
+> Guard: `tests/scripts/1186-a-join-tail-hands-its-mint-an-owner.loft`, whose both-arms cell —
+> one closure, one call site, the arm decided by the argument — moves on BOTH channels at
+> `c3545888`: use-after-free reads interpreted, a leak natively.
+>
+> ⚠ **loft#1185 is NOT closed by this**, and the difference is the point: a forwarding frame's
+> return type is computed once for every caller, so the fact never reaches it. That is D-clo-12
+> and @PLN150's second channel.
 
 > **D-clo-10 — OPENED AND CLOSED (2026-08-29, loft#1180): a captured COLLECTION was TAKEN by
 > the caller's bind.** `(L-CapHeap)` says a captured heap value is SHARED — the caller may read
