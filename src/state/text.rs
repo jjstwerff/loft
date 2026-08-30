@@ -251,14 +251,25 @@ impl State {
     /// and a `&str` into it coexist happily at compile time.  The overlap test is one
     /// address compare on the append path; the copy happens only when the two really are
     /// one buffer.
-    fn append_possibly_aliased(dst: &mut String, src: &str) {
-        let (src_at, dst_at) = (src.as_ptr() as usize, dst.as_ptr() as usize);
-        if src_at >= dst_at && src_at < dst_at + dst.capacity() {
-            let owned = src.to_owned();
-            dst.push_str(&owned);
-        } else {
-            dst.push_str(src);
-        }
+    /// Materialise the append SOURCE when it lies inside the destination's allocation, and
+    /// answer `None` when it does not.
+    ///
+    /// `s = s + s` reaches the interpreter as `OpAppendText(s, s)`: the source `Str` and the
+    /// destination slot name ONE buffer, and growing the destination frees the bytes the
+    /// source still points at.  Copying is the cure, but WHEN it happens is the rule — the
+    /// copy has to be taken while the only live handle on those bytes is the shared one.
+    /// Taking `&mut String` to the destination first and copying through it hands the same
+    /// bytes to a `&mut` and a `&str` at once, which is exactly what `&mut` promises cannot
+    /// happen; a release build is entitled to act on the promise, and does (loft#1216 —
+    /// 30/30 SIGSEGV in `--release` against loft#1062's own fixture, clean in `--debug`, and
+    /// clean again the moment an added `eprintln` moved the allocations).
+    ///
+    /// So the caller asks with the destination's raw address and capacity, taken and dropped
+    /// before this runs, and only re-borrows once the answer is owned.  Sized on CAPACITY, not
+    /// length: the source can point into the destination's spare tail.
+    fn aliased_source(dst_at: usize, dst_cap: usize, src: &str) -> Option<String> {
+        let src_at = src.as_ptr() as usize;
+        (src_at >= dst_at && src_at < dst_at + dst_cap).then(|| src.to_owned())
     }
 
     #[inline]
@@ -270,17 +281,32 @@ impl State {
                 .insert(self.stack_cur.pos + self.stack_pos + size_ptr() - u32::from(pos));
         }
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
-        let v1 = self.string_mut(pos - size_ptr() as u16);
+        let off = pos - size_ptr() as u16;
+        // The destination's address and capacity, taken through a borrow that ENDS here — see
+        // `aliased_source` for why the copy must not be taken through a live `&mut`.
         // @PLN25 slice (c): a null `text?` accumulator (the STRING_NULL sentinel) IGNORES the
         // append, so `s += x` on a null `s` stays null (propagate — nulls stay visible, never
         // swept into "\0x"). A non-null text is never the sentinel, so this never fires for it.
         // DN1-gated so gate-OFF (the legacy nullable model, where a plain text can still be
         // STRING_NULL) keeps its byte-identical append behaviour.
-        if crate::keys::pln25_dn1_enabled() && v1.as_str() == super::STRING_NULL {
+        let (dst_at, dst_cap, is_null) = {
+            let d = self.string_mut(off);
+            (
+                d.as_ptr() as usize,
+                d.capacity(),
+                crate::keys::pln25_dn1_enabled() && d.as_str() == super::STRING_NULL,
+            )
+        };
+        if is_null {
             return;
         }
+        let v1 = self.string_mut(off);
+        let owned = Self::aliased_source(dst_at, dst_cap, text.str());
         let before = (v1.as_ptr() as usize, v1.capacity());
-        Self::append_possibly_aliased(v1, text.str());
+        match &owned {
+            Some(o) => v1.push_str(o),
+            None => v1.push_str(text.str()),
+        }
         if let Some(fn_nr) = tl_fn {
             text_tl_grow(
                 fn_nr,
@@ -335,9 +361,19 @@ impl State {
         let text = self.string();
         let pos = self.code::<u16>();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
-        let v1 = self.string_ref_mut(pos - size_ptr() as u16);
+        let off = pos - size_ptr() as u16;
+        // Same order as `append_text`: decide and copy before the `&mut` exists.
+        let (dst_at, dst_cap) = {
+            let d = self.string_ref_mut(off);
+            (d.as_ptr() as usize, d.capacity())
+        };
+        let owned = Self::aliased_source(dst_at, dst_cap, text.str());
+        let v1 = self.string_ref_mut(off);
         let before = (v1.as_ptr() as usize, v1.capacity());
-        Self::append_possibly_aliased(v1, text.str());
+        match &owned {
+            Some(o) => v1.push_str(o),
+            None => v1.push_str(text.str()),
+        }
         if let Some(fn_nr) = tl_fn {
             text_tl_grow(
                 fn_nr,
