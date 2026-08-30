@@ -2881,6 +2881,14 @@ did not move while the per-backend rows show that it did. Read the rows, not the
 record which channel is the real one in the guard's own `@falsified-at` header. Seen three
 times: loft#1211 (refusal-scored), loft#1216 (in-process vs binary) and loft#1217 (native-only).
 
+**Split a refusal guard by the PASS its check runs in, not by topic.** A pass-1 error stops the
+file before anything gated on `!first_pass` runs, so two refusal cells that look like siblings
+cannot share a file when their checks fire in different passes: the second cell's
+`@EXPECT_ERROR` goes unmatched for a reason that has nothing to do with the fix under test, and
+reads as a broken guard. Measured on loft#1215/#1221, where @PLAN52's ambiguity check is not
+pass-gated and fired in pass 1 while the `(N-Store)` cell beside it needed pass 2. Topic is the
+tempting axis and the pass is the load-bearing one.
+
 **A parser-global's lifetime can be shorter than the construct it describes.** The shape is
 `self.flag = false; parse(); read self.flag`, and it breaks when `parse()` re-enters the same
 function for a sub-expression — the nested entry runs the clear again and erases what the outer
