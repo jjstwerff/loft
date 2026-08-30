@@ -254,6 +254,26 @@ Every one of them **failed silently** — the pairing was never refused, a secon
 collection was built instead, and `len` of the empty view is a legal value.  That is the shape
 to test for: a group's failure mode is not an error, it is a zero.
 
+**The demonstration, on real data, in one line of arithmetic.**  `tools/indexer/src/scan.loft`
+declared its distinct-tag set and its distinct-link-target set over ONE element type, so they
+were one set.  `make index` over this repo reported
+
+```
+before   1781 distinct tags   1781 link targets     ← identical, both are |tags ∪ links|
+after    1002 distinct tags    779 link targets     ← 1002 + 779 = 1781
+```
+
+Two counts reading the same number is the suspicion; the two halves summing to it is the proof,
+and it takes one line to state.  Reach for that shape whenever a group is suspected — a merged
+set and a coincidence are hard to tell apart by eye and trivial to tell apart by addition.  The
+same run shows why the zero is only half the failure mode: this group's members were both
+NON-empty and both wrong, because each walk saw the union (every link target was emitted with a
+tag bucket, and every tag with a link bucket).  A group that fails by over-filling reads as a
+plausible number rather than as a zero.
+
+Confirmed independently from a second checkout: 779 of that build's index entries are
+path-shaped link targets, matching the after-count exactly from a tree built before the fix.
+
 ⚠ **Not settled by this rule: which member HOLDS the records.**  The first-declared member is
 the holder and the rest are views.  loft#1158 predicted that a keyed-first group would need the
 vector made holder regardless of order; measured, it does not — all four write routes
