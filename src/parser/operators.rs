@@ -2447,7 +2447,19 @@ impl Parser {
         // vector default types Unknown and collapses to `null` (the P365 family),
         // which downstream classifies the ncc `if` as a null-arm shape — the
         // return delivery then skips materialisation and native emits `()`.
-        let rhs_hint = if matches!(var_tp, Type::Unknown(_) | Type::Null) {
+        // loft#1208 — a POSTFIX `x?` supplies its own default, and `(N-Default)` says exactly
+        // which one: `construct_default(τ)` for the SUBJECT's τ.  `var_tp` is the type the
+        // enclosing context wants from the whole postfix CHAIN — `integer` in `e = v?[0]`,
+        // because `?` binds tighter than `[]` and the chain continues after it
+        // (@FR-G-Post-Default).  That is a different expression, so it is never the hint for
+        // this default.  Preferring it parsed the collection default `[]` against `integer`
+        // and then reported the disagreement it had just created: *"`??` default of type
+        // `integer` is not assignable to `vector<integer>`"* — naming a `??` the program does
+        // not contain.  The parenthesised `(v?)[0]` escaped only because a sub-expression
+        // parse enters with no expected type, which falls through to the same `lhs_type.base()`
+        // this now takes directly.
+        let postfix_default = self.pending_default_src.is_some();
+        let rhs_hint = if postfix_default || matches!(var_tp, Type::Unknown(_) | Type::Null) {
             lhs_type.base()
         } else if let (Type::Enum(syn, true, _), Type::Reference(struct_d, _)) =
             (lhs_type.base(), var_tp.base())
