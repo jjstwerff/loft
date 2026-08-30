@@ -42,6 +42,34 @@ recorded separately rather than folded in.
 **Measured on 24 cores.** Full run: **572 s**, of which `cargo nextest` is ~478–572 s and the
 three builds ~130 s. So the test step is the whole question.
 
+**Run a 19-second triple FIRST when the change touches parser diagnostics, guards or docs.**
+`make ci` stops at its first failure, so each cycle surfaces exactly ONE new problem and costs
+the full ten minutes to do it. Measured over one afternoon's work on the nullable-collection
+cluster: five consecutive cycles, each ending on a different thing — a stale audit row in
+QUALITY.md, a flaky browser test, a cdylib rebuild that blew a 60 s per-test budget, a real
+corpus breakage, and a stale `doc/examples.js`. Three of those five are caught by
+
+```bash
+cargo nextest run --release -E 'binary(doc_hygiene) + binary(wrap) + binary(issues)'
+```
+
+which takes **19 s**. It does not replace `make ci` — the corpus breakage and the cdylib budget
+are only reachable from the full run, and `Stores::find`'s unit test was found by nothing else
+— but it converts three of the five ten-minute cycles into one twenty-second one.
+
+Two specific traps behind that list, both worth knowing before they cost a cycle:
+
+* **`doc/examples.js` is a tracked SHADOW of `examples/*.loft`.** Editing an example without
+  re-running `loft --interpret scripts/build-playground-examples.loft` leaves the playground
+  serving the old text, and `doc_hygiene::doc_examples_js_is_up_to_date` fails. Regenerate in
+  the same commit.
+* **Never run cargo beside a live `make ci`.** They share a target directory, and the collision
+  surfaces as a mold link error — `undefined symbol: anon.<hash>.llvm.<hash>` against a stale
+  `libloft.rlib` — which reads exactly like a real link failure and is not. A clean tree with
+  nothing else building is the only valid run, and
+  `grep -c "CI-RESULT: ALL GATES PASSED" result.txt` is the only verdict: the wrapper's own exit
+  code has been observed as 0 on a run whose `result.txt` said FAILED.
+
 ⚠⚠ **The "slowest tests" list is a trap, and reading it is how this went wrong the first
 time.** JUnit `time` is WALL clock, so on a saturated machine it counts *waiting*:
 
