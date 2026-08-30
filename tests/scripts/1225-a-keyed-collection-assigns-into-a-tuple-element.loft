@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#1225 (part) — a KEYED collection assigns into a tuple element, as its vector twin does.
+//
+// `t.0 = h` where the element is a `hash<E[k]>?` was an internal compiler error — *"TuplePut:
+// unsupported element type"* — on three lines of ordinary source.  `TuplePut`'s element match
+// sends `Reference`, `Vector` and an inline-nullable `Enum` to `OpPutRef` and panics on
+// everything else, and no keyed kind was listed: a keyed collection is the SAME 12-byte handle
+// its vector twin is, so it writes the same way and simply had no arm.
+//
+// The arm is written through `is_keyed` rather than by listing five variants beside `Vector`,
+// because a site that names some of the kinds reads as a complete rule and is not one — the
+// same failure `keyed_known_type`'s header records, where naming three of five left `spatial`
+// and `trie` silently carrying a defect (loft#922).  All five kinds are scored below for that
+// reason: a fix that added only `Hash` would satisfy the repro and leave four kinds panicking.
+//
+// The VECTOR control is the separating one: it was correct throughout, because it is the arm
+// the keyed kinds should have been sharing.
+//
+// NOT fixed here, and the rest of loft#1225: a keyed collection in a tuple element that is
+// NULL is still never materialised, so `t.0[k] = v` faults and `t.0 += [x]` is silently lost.
+// That is a materialisation site, not a write encoding — a tuple element is a frame slot with
+// no `place_store` route, where a FIELD materialises through its addressable slot — and it
+// travels with its own fix.  The cells below therefore build their collection FIRST and assign
+// it in, which is the shape this half makes work.
+//
+// @falsified-at: e2ea6a93 — interpret exit 101 -> 0, interpret panicked -> clean, native exit
+//   101 -> 0, native panicked -> clean.
+//
+//   The PANIC channel is the one that moves, and BOTH backends move on it — the ICE is raised
+//   in bytecode codegen, which `--native` reaches too, so this is not one of the one-backend
+//   guards loft#1224 is about.  On the control the file dies in `src/state/codegen.rs` before
+//   any assertion runs: the exit and panic channels score that it got that far at all, and the
+//   assertions below score the values once it does.
+
+struct E1225 { k: integer, nm: text }
+struct P1225 { x: integer, y: integer }
+
+fn main() {
+  // hash — the filed spelling.
+  h1225: hash<E1225[k]>? = null;
+  h1225[2] = E1225 { k: 2, nm: "two" };
+  th1225: (hash<E1225[k]>?, integer) = (h1225, 5);
+  assert(len(th1225.0?) == 1, "a hash assigns into a tuple element");
+  assert(th1225.0?[2].nm == "two", "and its lookup answers through the tuple");
+
+  // sorted, index, trie and radix — the four that a Hash-only fix would have left panicking.
+  s1225: sorted<E1225[k]>? = null;
+  s1225[3] = E1225 { k: 3, nm: "three" };
+  ts1225: (sorted<E1225[k]>?, integer) = (s1225, 5);
+  assert(len(ts1225.0?) == 1, "a sorted assigns into a tuple element");
+
+  i1225: index<E1225[k]>? = null;
+  i1225[4] = E1225 { k: 4, nm: "four" };
+  ti1225: (index<E1225[k]>?, integer) = (i1225, 5);
+  assert(len(ti1225.0?) == 1, "an index assigns into a tuple element");
+
+  // `trie` keys on TEXT and `spatial` on a coordinate pair, so neither shares the three
+  // above's shape — which is the point of scoring them: they are the two loft#922 found a
+  // three-of-five list had silently left behind.
+  tri1225: trie<E1225[nm]>? = null;
+  tri1225["a"] = E1225 { k: 5, nm: "a" };
+  ttri1225: (trie<E1225[nm]>?, integer) = (tri1225, 5);
+  assert(len(ttri1225.0?) == 1, "a trie assigns into a tuple element");
+
+  sp1225: spatial<P1225[x,y]>? = null;
+  sp1225 += [P1225 { x: 1, y: 2 }];
+  tsp1225: (spatial<P1225[x,y]>?, integer) = (sp1225, 5);
+  assert(len(tsp1225.0?) == 1, "a spatial assigns into a tuple element");
+
+  // The WRITEBACK spelling, which is what the workaround on the issue rests on: read the
+  // element out, fill it, put it back.  This is the statement that raised the ICE.
+  tw1225: (hash<E1225[k]>?, integer) = ([], 9);
+  w1225 = tw1225.0 ?? [];
+  w1225[7] = E1225 { k: 7, nm: "seven" };
+  tw1225.0 = w1225;
+  assert(len(tw1225.0?) == 1, "a filled collection writes back into the element it came from");
+  assert(tw1225.0?[7].nm == "seven", "and the record survives the round trip");
+
+  // ---- controls ----
+
+  // The VECTOR element: the arm the keyed kinds should have shared, correct throughout.
+  v1225: vector<integer>? = [1, 2];
+  tv1225: (vector<integer>?, integer) = (v1225, 5);
+  assert(len(tv1225.0?) == 2, "a vector element was never broken");
+
+  // A DENSE keyed element — no `?`, so the peel is not what is being scored.
+  d1225: hash<E1225[k]> = [];
+  d1225[8] = E1225 { k: 8, nm: "eight" };
+  td1225: (hash<E1225[k]>, integer) = (d1225, 5);
+  assert(len(td1225.0) == 1, "a dense keyed element assigns in too");
+
+  // An element already holding records keeps them when another is written over it.
+  tr1225: (hash<E1225[k]>?, integer) = (h1225, 1);
+  r1225: hash<E1225[k]>? = null;
+  r1225[9] = E1225 { k: 9, nm: "nine" };
+  tr1225.0 = r1225;
+  assert(len(tr1225.0?) == 1 && tr1225.0?[9].nm == "nine", "the element takes the new collection");
+}
