@@ -3349,8 +3349,41 @@ impl Parser {
         // the initial `=` assignment; calling vector_db again would reset v to an
         // empty record and discard the existing elements.  create_vector handles
         // the `=` re-assignment case by calling vector_db unconditionally.
+        //
+        // loft#1219 — an empty dep is a PARSE-TIME stand-in for the runtime question
+        // *does this variable already hold a store?*, and a local declared `= null` breaks
+        // the correspondence: it never got the dep the comment above assumes, so the mint
+        // lands at the APPEND site.  Outside a loop that is right and the site runs once;
+        // inside one it re-executes per iteration, orphaning the previous store, and
+        // `v: vector<integer>? = null; for i in 0..3 { v += [i] }` ended holding the LAST
+        // element alone.  No parse-time predicate can answer it — the honest answer is "no"
+        // on the first iteration and "yes" on every later one — so an APPEND asks at
+        // runtime instead, and mints only into a slot that is still absent.
+        //
+        // A REPLACE keeps the unguarded mint: `v = [...]` in a loop must REBUILD each time,
+        // and guarding it would turn a rebuild into an append.  `assign_replaces` is that
+        // distinction and it is already threaded; `assign_target` pins the pair to THIS
+        // variable, so a literal in some other position cannot read a stale flag.
         if !substituted && self.vars.tp(vec).depend().is_empty() {
-            ls.extend(self.vector_db(in_t, vec));
+            let db_ops = self.vector_db(in_t, vec);
+            let guarded_mint = !self.first_pass
+                && !db_ops.is_empty()
+                && !self.assign_replaces
+                && vec != u16::MAX
+                && self.assign_target == vec;
+            if guarded_mint {
+                // The `OpDatabase` is now conditional, so the backing's entry null-init has
+                // to be the non-allocating sentinel — otherwise the path that skips the mint
+                // leaks an eagerly-allocated store.  Same reason `vector_db`'s rebind branch
+                // marks it, for the same conditional shape.
+                if let Some(&db) = self.vars.tp(vec).depend().last() {
+                    self.vars.mark_inline_ref(db);
+                }
+                let absent = self.cl("OpVectorIsNull", &[Value::Var(vec)]);
+                ls.push(v_if(absent, Value::Insert(db_ops), Value::Null));
+            } else {
+                ls.extend(db_ops);
+            }
         }
         // O8.1a: pre-allocate vector capacity when the element count is known
         // at compile time.  This eliminates resize calls in vector_append.  A keyed
