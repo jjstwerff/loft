@@ -2247,6 +2247,17 @@ impl Parser {
             return tp;
         }
         let is_plain_local_target = !is_field && !matches!(val.unspan(), Value::Call(_, _));
+        // (I-Comp) Both shortcuts below build THROUGH the destination, so neither can serve
+        // a comprehension that reads it — `[for i in 0..a.len() { 5 }]` assigned to `a`
+        // took the fill with a count read after the destination was already emptied.  The
+        // general loop path below defers the repoint and answers these correctly; a
+        // self-reading comprehension simply forgoes the optimisation.  Pass-2 only, so
+        // skipping them cannot move the two passes apart.
+        let self_read = self.comprehension_reads_target(
+            vec,
+            is_var,
+            &[&fill, &create_iter, &for_next, &if_step, &body],
+        );
         // O8.5 (loft#884): a comprehension whose body does not vary with the loop
         // variable IS a fill, so emit the repeat literal's one-template-plus-copy
         // instead of the per-element record protocol.  Tried before the unroll
@@ -2267,6 +2278,7 @@ impl Parser {
         // doing, but it needs that case decided and timed on its own, not inherited
         // from a bug fix.
         if is_plain_local_target
+            && !self_read
             && let Some(fill) =
                 self.try_const_fill_comprehension(range_bounds.as_ref(), &body, &if_step)
         {
@@ -2284,6 +2296,7 @@ impl Parser {
         // If the range bounds are const and the body folds for every i,
         // emit a pre-computed literal vector instead of a runtime loop.
         if matches!(in_t, Type::Integer(_))
+            && !self_read
             && let Some(unrolled) = self.try_const_unroll_comprehension(
                 for_var,
                 range_bounds.as_ref(),
@@ -2350,7 +2363,7 @@ impl Parser {
         in_type: &Type,
         var_tp: &Type,
         for_var: u16,
-        for_next: Value,
+        mut for_next: Value,
         pre_var: Option<u16>,
         // The SOURCE collection and its index variable, for length-based termination;
         // `None` when the source is not a vector.  The source EXPLICITLY, because
@@ -2360,10 +2373,10 @@ impl Parser {
         // a text loop's `iter_var` is a byte POSITION and cannot answer "how many
         // elements so far" (loft#1000).
         vector_end: Option<(Value, u16)>,
-        fill: Value,
-        create_iter: Value,
-        if_step: Value,
-        body: Value,
+        mut fill: Value,
+        mut create_iter: Value,
+        mut if_step: Value,
+        mut body: Value,
         val: &mut Value,
         is_var: bool,
         is_field: bool,
@@ -2428,6 +2441,69 @@ impl Parser {
             *v
         } else {
             u16::MAX
+        };
+        // (I-Comp) A comprehension that READS its own destination cannot be built through
+        // that destination.  The fresh store `create_vector` splices in for a `=` repoints
+        // the variable BEFORE the loop, so the range bound, the source and the body all
+        // read the empty result being built instead of the value they named — silently, and
+        // on both backends.  Take that store's ops here instead and hold back the ONE op
+        // that repoints the destination, so the loop appends through the store's own handle
+        // while every read still resolves through the destination's previous store.
+        //
+        // Split out of `vector_db` rather than rebuilt, so the argument, keyed and rebind
+        // guards — and the rebind pre-free — stay in their one home.  An empty answer means
+        // there is no fresh store at this site, and nothing to defer.
+        let deferred = if self.comprehension_reads_target(
+            vec,
+            is_var,
+            &[&fill, &create_iter, &for_next, &if_step, &body],
+        ) {
+            let mut ops = self.vector_db(in_t, vec);
+            ops.iter()
+                .position(|o| matches!(o.unspan(), Value::Set(s, _) if *s == vec))
+                .map(|at| {
+                    let Value::Set(_, handle) = ops.remove(at).unspan().clone() else {
+                        unreachable!("position matched a Set")
+                    };
+                    // Snapshot what the destination holds NOW, into a store of its own,
+                    // and point every READ at the snapshot.  `OpDatabase` reuses the slot's
+                    // current store (`clear` + `claim`), so on a second execution of this
+                    // site the buffer store IS the one the destination was left pointing
+                    // at — clearing it would empty the value the loop is about to read.
+                    // The snapshot is taken before that clear, which is what makes the
+                    // idiom survive a surrounding loop.  Same cure, same reason, as the
+                    // trailing self-reference `v = a + v` in `create_vector`.
+                    let src_tp = Type::Vector(Box::new(in_t.clone()), Deps::none());
+                    let src = self.create_unique("comp_src", &src_tp);
+                    self.vars.defined(src);
+                    let mut snap = self.vector_db(in_t, src);
+                    let elem_tp = self.append_elem_tp(in_t);
+                    snap.push(self.cl(
+                        "OpAppendVector",
+                        &[Value::Var(src), Value::Var(vec), Value::Int(elem_tp)],
+                    ));
+                    // Reads only: the loop's WRITES are built from `vec_expr` below and
+                    // never appear in these five, so this rename cannot redirect an append.
+                    for part in [
+                        &mut fill,
+                        &mut create_iter,
+                        &mut for_next,
+                        &mut if_step,
+                        &mut body,
+                    ] {
+                        crate::parser::collections::rename_var(part, vec, src);
+                    }
+                    snap.extend(ops);
+                    (snap, *handle)
+                })
+        } else {
+            None
+        };
+        // The container the loop appends through: the deferred store's own handle, or the
+        // destination itself when nothing reads it back.
+        let vec_expr = &match &deferred {
+            Some((_, handle)) => handle.clone(),
+            None => vec_expr.clone(),
         };
         let mut lp = vec![for_next];
         if matches!(in_type, Type::Text(_))
@@ -2547,7 +2623,14 @@ impl Parser {
             }
         }
         ls.extend(for_steps);
-        if self.vector_needs_db(vec, in_t, is_var) {
+        if let Some((alloc, handle)) = deferred {
+            // Allocate and zero the store first, run the loop, and only THEN point the
+            // destination at what the loop built.  The ordering is the whole fix.
+            for (i, op) in alloc.into_iter().enumerate() {
+                ls.insert(i, op);
+            }
+            ls.push(v_set(vec, handle));
+        } else if self.vector_needs_db(vec, in_t, is_var) {
             let db = self.insert_new(vec, elm, in_t, &mut ls);
             self.vars.depend(vec, db);
         } else if !is_field && !is_var && *val != Value::Null {
@@ -3069,6 +3152,37 @@ impl Parser {
             // Argument vectors already have a caller-provided backing store; do not
             // allocate a local __vdb_N store that would be freed before the return.
             && !self.vars.is_argument(vec)
+    }
+
+    /// Does a comprehension being built into `vec` READ `vec` itself?
+    ///
+    /// `I-Comp` ([`doc/claude/formal/iteration.md`]) builds a comprehension into a FRESH
+    /// result vector and hands that over, so the destination still holds the value it had
+    /// while the source, the range bound, the `if` guard and the body are evaluated.
+    /// Building straight into the destination — the `#501` watermark reuse — keeps that
+    /// promise only while nothing in the loop reads the destination back.
+    ///
+    /// Answered for a whole-value `=` into a LOCAL only ([`Parser::replace_target`]): that
+    /// is the assignment which repoints the destination at a fresh store, and so the only
+    /// one with a repoint to defer.  The two destinations that read their target the same
+    /// way and are emptied by a different site each carry their own report — a struct FIELD
+    /// is cleared ahead of the loop by the field replace (loft#1195), and a compound `+=`
+    /// appends into the destination with no repoint at all (loft#1196).  Answering either
+    /// here would give it the `=` delivery, which replaces instead of appending.
+    ///
+    /// `parts` are the comprehension's evaluated pieces.  The read test is
+    /// [`Value::reads_var`], whose over-approximation costs this caller a deferred
+    /// repoint and never a wrong answer.
+    pub(crate) fn comprehension_reads_target(
+        &self,
+        vec: u16,
+        is_var: bool,
+        parts: &[&Value],
+    ) -> bool {
+        is_var
+            && vec != u16::MAX
+            && vec == self.replace_target
+            && parts.iter().any(|v| v.reads_var(vec))
     }
 
     pub(crate) fn unique_elm_var(&mut self, parent_tp: &Type, assign_tp: &Type, vec: u16) -> u16 {

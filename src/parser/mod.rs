@@ -321,6 +321,14 @@ pub struct Parser {
     /// could only peek the NEXT token, which cannot tell the whole RHS from the LAST
     /// operand of one — the hole that let `b = 1 + &a;` compile.
     pub(crate) amp_head: bool,
+    /// The local a whole-value `=` is REPLACING, for the duration of that assignment's
+    /// right-hand side; `u16::MAX` outside one and for every compound (`+=`) assignment,
+    /// which appends to the target's existing store instead of repointing it.
+    ///
+    /// A comprehension RHS reads this to keep `I-Comp`'s promise that the destination
+    /// still holds its old value while the loop runs — see
+    /// [`Parser::comprehension_reads_target`].
+    pub(crate) replace_target: u16,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -1118,6 +1126,7 @@ impl Parser {
             pending_param_positions: Vec::new(),
             amp_pending: false,
             amp_head: false,
+            replace_target: u16::MAX,
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,

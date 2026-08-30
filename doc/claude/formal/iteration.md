@@ -128,10 +128,59 @@ without a guard.
 
 ## Deviations
 
-OPEN: **0** — D-iter-1 was opened and CLOSED on 2026-08-22, by re-measuring the `OPEN: 0`
-this line used to carry. The zero is back, and it now rests on a corpus that varies the
-element type (`tests/scripts/1074-combinators-over-tuple-elements.loft`) rather than on one
-that never did.
+OPEN: **2** (D-iter-2, D-iter-3) — the zero this line carried until 2026-08-30 was
+re-measured and did not hold. It rested on a corpus that varies the element TYPE
+(`tests/scripts/1074-combinators-over-tuple-elements.loft`) but never varies what the
+comprehension READS: every cell draws from a source the destination does not name, so
+`I-Comp`'s "fresh result, source untouched" clause was pinned only where it is trivially
+true. Varying that one axis broke three shapes at once, of which one is closed and two are
+open. D-iter-1 remains CLOSED.
+
+> **D-iter-2 — a comprehension assigned to a struct FIELD it reads (loft#1195, OPEN).**
+> `s.v = [for i in 0..s.v.len() { s.v[i] * 2 }]` answers `[]` on both backends, silently.
+> The whole-vector field replace emits `OpClearVector(s.v)` ahead of the comprehension's
+> own ops, so the field is empty before the loop reads it. `I-Comp` says the result is a
+> fresh store and the source is untouched, so the clear belongs after the loop — or the
+> field's value belongs in a snapshot taken before it.
+>
+> **D-iter-3 — a comprehension appended with `+=` to a vector it reads (loft#1196, OPEN).**
+> `a += [for i in 0..a.len() { a[i] * 2 }]` never terminates: it builds into `a`'s own
+> store while the bound re-reads that store's growing length (`--native` overflows in
+> `store.rs` instead). `I-Comp` builds a fresh vector and `+=` appends THAT, so the bound
+> is the original length. Unbounded allocation, not merely a hang.
+
+> **D-iter-4 — CLOSED (2026-08-30). A comprehension assigned to a LOCAL it reads.**
+> `a = [for i in 0..a.len() { a[i] * 2 }]` answered `[]`, and the shape needed neither a
+> loop, a call, a struct nor a tuple. `#501`'s watermark reuse builds a comprehension
+> straight into its destination, and the fresh store `create_vector` splices in for a `=`
+> repoints the destination BEFORE the loop — so the source, the range bound, the `if`
+> guard and the body all resolved through the empty result being built.
+>
+> **The filed scope was one of six cells.** Sweeping which PART does the reading says the
+> source need not be the destination at all:
+>
+> | cell | answered |
+> |---|---|
+> | `a = [for i in 0..a.len() { a[i]*2 }]` — bound + body | `[]` |
+> | `a = [for x in a { x*2 }]` — the source IS `a` | `[]` |
+> | `a = [for i in 0..3 { a[i]*2 }]` — body only | `[0,0,0]`, length right |
+> | `a = [for i in 0..a.len() { i*2 }]` — bound only | `[]` |
+> | `a = [for x in b { x + a[0] }]` — a FOREIGN source, body reads `a` | `[1,3,4]` |
+> | `a = [for i in 0..3 if a[i] > 7 { i }]` — the `if` guard | `[]` |
+>
+> The foreign-source cell is the sharpest: `b` drives the loop, the length is right, and
+> every value is read out of the half-built result. The const-fill and const-unroll
+> shortcuts (loft#884) build through the destination too and carried the same defect.
+>
+> Fixed (loft#1194) by holding back the ONE op that repoints the destination until after
+> the loop, and snapshotting what the destination holds so the loop's reads resolve
+> through that. The snapshot is what makes a SURROUNDING loop work: `OpDatabase` reuses
+> the slot's store (`clear` + `claim`), so on a second execution of the same site the
+> buffer store IS the one the destination was left pointing at — reordering alone left the
+> reported "pop the last element" worklist idiom still empty. `.map` / `.filter` on the
+> same vector were correct throughout (they already mint their own result), as was a
+> `&`-alias read; both are controls in
+> `tests/scripts/1194-a-comprehension-reads-its-destination.loft`.
 
 > **D-iter-1 — CLOSED (2026-08-22). Every combinator was broken over a TUPLE element.**
 > `xs.map(|t| { t.0 * 10 })` on a `vector<(integer, integer)>` answers
@@ -190,6 +239,12 @@ that never did.
 - **Empty/null (`I-Empty` / `I-NullSrc`)** — `for x in [] { … }` and a `for` over a null
   collection both run the body zero times and continue.
 - **Fresh result (`I-Comp`)** — `ys = xs.map(f)` leaves `xs` unchanged (a new store, `H-Alloc`).
+- **The destination is a legal source (`I-Comp`)** — `a = [for i in 0..a.len() { a[i]*2 }]`
+  reads what `a` held when the statement began, never the result being built, whichever part
+  does the reading (source, range bound, `if` guard, body) and however many times the
+  statement is executed. The cell to run is a comprehension whose source is a FOREIGN vector
+  and whose BODY reads the destination: it keeps the right length while every value is wrong,
+  so a length- or emptiness-only check passes on it.
 
 Any program where the interpreter and `--native` disagree on an iteration's order, length,
 element values, or the source's immutability is the definitional error this doc names.

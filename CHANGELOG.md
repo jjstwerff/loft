@@ -33,6 +33,38 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A vector rebuilt from itself keeps its contents
+
+The ordinary "drop the last element" idiom quietly produced an **empty** vector:
+
+```loft
+st: vector<integer> = [1, 2, 3, 4, 5];
+st = [for q in 0..(st.len() - 1) { st[q] ?? 0 }];   // was []; now [1,2,3,4]
+```
+
+A comprehension builds a fresh vector and hands it over, so everything inside it — the
+source, the range bound, the `if` guard, the body — should read what the variable held
+when the line started.  It was reading the empty result being built instead.
+
+The source did not even have to be the vector being assigned.  This kept the right
+length and got every value wrong, which is the version that survives a test suite:
+
+```loft
+a = [7, 8, 9];
+b = [1, 2, 3];
+a = [for x in b { x + (a[0] ?? 0) }];   // was [1,3,4]; now [8,9,10]
+```
+
+It was found in a breadth-first search whose worklist used the pop idiom: the search
+stopped after one expansion, so sets that really were connected were reported as
+disconnected, and nothing anywhere threw.  A worklist holding a single item gives the
+same answer either way, which is why small cases looked fine.
+
+`.map` and `.filter` onto their own receiver were always correct, and a temporary
+(`t = [for …]; a = t;`) was the workaround — both still work, and both are now pinned
+by tests.  Two relatives are still open and both have the same workaround: the same
+comprehension assigned to a struct **field** it reads, and one appended with `+=`.
+
 ### A failed `assert` names the line it is on
 
 If a function above it took a `const` (or a `&`) parameter it never modifies, every
