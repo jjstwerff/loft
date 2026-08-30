@@ -2864,6 +2864,32 @@ backends and sixteen test binaries leaked (`placement_parity`, `n2_cdylib`, `lea
 corpus). Only the suite could find that, so a lifetime change is not verified by its matrix —
 the matrix says the defect is closed, the suite says nothing else opened.
 
+**The defect's own EMISSION PATH decides which syntactic position exercises it.** A guard is
+written in whatever position reads naturally — usually a lookup straight inside an `assert` —
+and that position may never reach the code the defect lives in. loft#1217's broken branch is in
+the `Set` emission path, so a keyed lookup written as an argument compiled correctly on the
+pre-fix build and `make falsify` read INERT on both backends; the same lookup BOUND TO A LOCAL
+first reached the branch and failed. This is the general form of the argument-position trap: do
+not ask *"which position is safe?"* but *"which position does the emitter this defect lives in
+actually see?"*, and answer it by falsifying rather than by reading. It cost two guards in one
+day, both caught only by the tool.
+
+**`make falsify`'s verdict is an AND across backends, so a one-backend defect reads NOT
+FALSIFIED.** A native-only fault leaves the interpreter correctly inert, and an
+`@EXPECT_ERROR`-scored guard exits 1 when it PASSES — both make the summary line say the guard
+did not move while the per-backend rows show that it did. Read the rows, not the verdict, and
+record which channel is the real one in the guard's own `@falsified-at` header. Seen three
+times: loft#1211 (refusal-scored), loft#1216 (in-process vs binary) and loft#1217 (native-only).
+
+**A parser-global's lifetime can be shorter than the construct it describes.** The shape is
+`self.flag = false; parse(); read self.flag`, and it breaks when `parse()` re-enters the same
+function for a sub-expression — the nested entry runs the clear again and erases what the outer
+one recorded. It is invisible to a guard written with the simplest spelling, because the
+simplest spelling has nothing after the construct: `b.d? += […]` kept its discharge flag only
+because nothing is parsed after the `?`, while `h?[k] = v` lost it to the index parse
+(loft#1214). So a guard for anything flag-driven needs a cell with something PARSED AFTER the
+feature, not only the minimal one.
+
 ---
 
 ## Diagnostic tiers — what `--deny-warnings` may fail on
