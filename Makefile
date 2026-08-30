@@ -157,7 +157,7 @@ SUDO := $(shell d="$(PREFIX)"; while [ -n "$$d" ] && [ "$$d" != / ] && [ ! -e "$
 # skipped runtimes.  Set by `make install-native` / `install-user-fast`.
 NATIVE_ONLY ?=
 
-.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-user install-native install-user-fast install-artifacts install-artifacts-native install-wasm-artifacts uninstall uninstall-user debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook hooks libcatalogue features-fetch features-gen features-check surface-gen surface-check api-compat check-contract-goldens
+.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-user install-native install-user-fast install-artifacts install-artifacts-native install-wasm-artifacts uninstall uninstall-user debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook hooks libcatalogue features-fetch features-gen features-check surface-gen surface-check api-compat check-contract-goldens contract-labels-test
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -1923,6 +1923,7 @@ ci: ci-guard
 	cargo clippy --all-targets --all-features -- -D warnings >> result.txt 2>&1 && \
 	scripts/check_doc_drift.sh >> result.txt 2>&1 && \
 	$(MAKE) --no-print-directory label-guard-test >> result.txt 2>&1 && \
+	python3 scripts/contract_labels.py --self-test >> result.txt 2>&1 && \
 	cargo build --all-targets >> result.txt 2>&1 && \
 	cargo build --release --lib >> result.txt 2>&1 && \
 	cargo build --no-default-features --target-dir target/nodefault >> result.txt 2>&1 && \
@@ -2227,6 +2228,14 @@ label-guard-test:
 	else \
 	    echo "  WARN: node not found — skipping label-guard selftest"; \
 	fi
+
+# The `Contract:` trailer parser, same argument one axis over: the push workflow
+# applies the `contract:` label off it, so a regex that stopped matching would
+# apply no label — which is exactly what a fix nobody judged looks like, and the
+# monthly ratio would report convergence it never measured.
+.PHONY: contract-labels-test
+contract-labels-test:  ## the `Contract:` trailer parse behind the push workflow's contract: label
+	@python3 scripts/contract_labels.py --self-test
 
 .PHONY: linkcheck linkcheck-external
 linkcheck:

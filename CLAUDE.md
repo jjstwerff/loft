@@ -303,7 +303,9 @@ subsystem. Lineage is separate and goes in the BODY as `Found-via: #N`
 the right answer and the fix makes that promise hold; strained = closing it extended a rule, changed
 a documented surface, or needed a design call. The fixing commit is the ONLY moment that answer
 exists, and the monthly ratio is what the contract-1 decision reads (`make bug-review` § 5,
-[.github/LABELS.md § `contract:`](.github/LABELS.md)); absence counts as UNJUDGED, never settled. **Inside a
+[.github/LABELS.md § `contract:`](.github/LABELS.md)); absence counts as UNJUDGED, never settled —
+the same push run that applies `fixed-pending-merge` reads this trailer and sets the `contract:`
+label, and warns when a `Fixes #N` arrives without one. **Inside a
 plan:** file only if it reproduces on `main`; branch-internal breakage stays in the plan's docs.
 Don't scope-creep the active fix with unrelated bugs.
 

@@ -1521,6 +1521,13 @@ jobs:
       - name: Label-guard parser selftest
         run: node tools/label_guard_selftest.mjs
 
+      # The same argument for the `Contract:` trailer parser: the push workflow
+      # applies the `contract:` label off it, and a regex that stopped matching
+      # would apply nothing — indistinguishable from a fix nobody judged, which
+      # is the one reading that axis must never get wrong.
+      - name: Contract-trailer parser selftest
+        run: python3 scripts/contract_labels.py --self-test
+
       - name: Summary
         if: always()
         run: |

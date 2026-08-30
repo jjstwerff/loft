@@ -275,9 +275,13 @@ Filing is half the loop; closing is the other half.
   or needed a design call.  **This is the one moment the answer exists** — it is what the
   fix turned out to need, which nobody could know when the bug was filed — and over a
   month the settled : strained ratio is the convergence signal the contract-1 decision
-  reads (`make bug-review` § 5).  `.githooks/commit-msg` asks for it while you type;
-  `scripts/contract_labels.py` names the fixes on a branch that went without and applies
-  the labels.  Absence counts as UNJUDGED, never as settled.
+  reads (`make bug-review` § 5).  `.githooks/commit-msg` asks for it while you type, and
+  the push then applies the label itself — the run that labels the issue
+  `fixed-pending-merge` reads the same commits for the trailer, and warns when a `Fixes #N`
+  arrives without one.  `scripts/contract_labels.py` is the backstop for what that run
+  cannot see (a push over 20 commits, a trailer amended in later): it names the fixes on a
+  branch that went without and applies the labels.  Absence counts as UNJUDGED, never as
+  settled.
 - **A fix needs a regression** — link the `tests/scripts/NNN` / `tests/*.rs` that
   locks it in.  A `fixed-pending-merge` issue with no regression is a re-opening
   waiting to happen.

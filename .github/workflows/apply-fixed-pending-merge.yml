@@ -2,12 +2,37 @@
 # loft-lang/.github). On a push to a non-main branch it labels every issue a
 # commit says it Fixes/Closes/Resolves with `fixed-pending-merge`, and warns on
 # bare `(#N)` mentions. See loft-lang/.github README.
+#
+# The second job is loft's own, and deliberately not in the org workflow: the
+# `contract:` axis is this repo's convergence gate on `doc/claude/formal/`, and
+# the two labels exist nowhere else in the org. It rides the same event so a
+# fix's two verdicts — WHICH issue it closes, and whether closing it MOVED the
+# standard — land at the same moment, off the same commit list.
 name: fixed-pending-merge (apply)
 on:
   push:
     branches-ignore: [main]
 permissions:
   issues: write
+  contents: read
 jobs:
   apply:
     uses: loft-lang/.github/.github/workflows/apply-fixed-pending-merge.yml@main
+
+  contract:
+    # `Contract: settled|strained` beside `Fixes #N` → the `contract:` label
+    # (.github/LABELS.md § contract:). The fix commit is the only moment that
+    # answer exists, so this is the moment to record it; absence stays UNJUDGED
+    # and is warned about, never read as settled.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Only the parser is needed — it reads the push payload, not history.
+          sparse-checkout: scripts/contract_labels.py
+          sparse-checkout-cone-mode: false
+      - name: "Label from Contract: trailers"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/contract_labels.py --event "$GITHUB_EVENT_PATH" --apply
