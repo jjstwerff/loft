@@ -31,9 +31,11 @@ const QUALITY: &str = "doc/claude/QUALITY.md";
 ///
 /// So the requirement is the RECORD, and the tool that produces it is
 /// `scripts/falsify.sh <guard.loft> <control-ref>` — it builds the control, runs the guard
-/// on both trees through the entry point the corpus runner would pick, and compares four
-/// channels apart (exit code, assertion failures, leaked stores, panic) so the line names
-/// WHICH one moved:
+/// on both trees through the entry point the corpus runner would pick, and compares six
+/// channels apart (exit code, assertion failures, leaked stores, panic, stack-store free
+/// refusals, and the guard's own `@EXPECT_ERROR` declarations) so the line names WHICH one
+/// moved.  One channel on one backend is enough — a backend-divergence guard cannot move
+/// both sides, and its inert side is recorded as expected rather than held against it:
 ///
 /// ```text
 /// // @falsified-at: 3ca5ec79 — interpret leaked kt=78 Sk×156 -> clean, native leaked … -> clean

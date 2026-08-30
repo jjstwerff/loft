@@ -15,10 +15,14 @@
 # reaches the code path it was written for.
 #
 # So this does not ask "does it pass now".  It builds `<control-ref>`, runs the guard THERE
-# and HERE through the entry point the corpus runner would pick, and compares five channels
-# separately — exit code, assertion failures, leaked stores, panic, and stack-store free
-# refusals (`BUG (#306)`).  The verdict names the channel that moved, which is the fact a
-# bare pass/fail hides.
+# and HERE through the entry point the corpus runner would pick, and compares six channels
+# separately — exit code, assertion failures, leaked stores, panic, stack-store free refusals
+# (`BUG (#306)`), and the guard's own `@EXPECT_ERROR` declarations.  The verdict names the
+# channel that moved, which is the fact a bare pass/fail hides.
+#
+# A guard need only move ONE channel on ONE backend.  A backend-divergence guard cannot move
+# both by construction, so an inert side is reported as expected rather than counted against
+# it; what the gate is for is a guard that moves nothing anywhere (loft#1224).
 #
 # The control build is cached per ref under the scratch root, so a second guard against the
 # same ref costs nothing.
@@ -70,7 +74,18 @@ fi
 # zero-parameter function otherwise.  Picking the wrong one is the failure this tool exists
 # to stop, so it is derived from the file rather than passed in.
 entry_modes() { # <guard> ; sets MODE_I / MODE_N
-  if grep -qE '^[[:space:]]*fn main[[:space:]]*\(' "$1"; then
+  # loft#1224 — an ANNOTATION-SCORED guard is run as a plain program whatever its entry point,
+  # because that is the only mode whose OUTPUT carries the thing being compared.
+  #
+  # `--tests` does ENFORCE the annotation — a declared error that never occurs is `FAIL
+  # (expected parse error but file parsed cleanly)`, exit 1, measured on all four fn-name ×
+  # has-main shapes.  What it does not do is PRINT the diagnostic: a passing file reports `ok`
+  # and exits 0, and the message text appears zero times.  The channel below matches on that
+  # text, so scored under `--tests` a refusal guard reads identical on both trees — `0/1`, exit
+  # 0 — and every such run was INERT.  The claim is checkable there; it is not COMPARABLE there.
+  if grep -qE '@EXPECT_ERROR|@EXPECT_FAIL' "$1"; then
+    MODE_I=(--interpret); MODE_N=(--native)
+  elif grep -qE '^[[:space:]]*fn main[[:space:]]*\(' "$1"; then
     MODE_I=(--interpret); MODE_N=(--native)
   else
     MODE_I=(--tests); MODE_N=(--tests --native)
@@ -83,7 +98,7 @@ build() { # <dir> <target-dir> -> path to binary
   echo "$2/debug/loft"
 }
 
-# Five channels, read apart.  A guard scored on one of them can be silent on the others,
+# Six channels, read apart.  A guard scored on one of them can be silent on the others,
 # and which one moved is the thing worth printing.
 #
 # The REFUSAL channel is here because `tests/wrap.rs` Part A2 already fails a corpus file on
@@ -93,7 +108,31 @@ build() { # <dir> <target-dir> -> path to binary
 # `BUG (#306)` line means a whole-store free aimed at the eval-stack store that only the
 # allocator's guard stopped, and the guard keeps the store alive — which is exactly why
 # values, exit code and the leak report can all stay put while it fires.
-signature() { # <binary> <guard-path> <extra-args…> ; prints "exit|asserts|leak|panic|refusals"
+#
+# The EXPECT channel is the same lesson one guard-kind over: an annotation-scored file's
+# channel is the diagnostic it declared, and reading only the five above scored it INERT
+# whatever it did (loft#1224).
+
+# How many of a guard's own `@EXPECT_ERROR` / `@EXPECT_FAIL` declarations the run produced,
+# as "matched/declared" — or "-" when the file declares none.
+#
+# This is the channel an annotation-scored guard actually moves, and without it such a guard is
+# unscoreable here: its PASSING answer IS a diagnostic, so the exit code is 1 on both trees and
+# every other channel reads identical, while the thing that changed — whether the declared
+# message was produced at all — goes unread.  The bulk path skips these files for exactly that
+# reason; the single-guard path ran them anyway and called the result INERT (loft#1224).
+expect_channel() { # <guard-path> <output> -> "matched/declared" | "-"
+  local file="$1" out="$2" want matched=0 declared=0
+  while IFS= read -r want; do
+    [ -n "$want" ] || continue
+    declared=$((declared + 1))
+    case "$out" in *"$want"*) matched=$((matched + 1)) ;; esac
+  done < <(sed -n 's/.*@EXPECT_\(ERROR\|FAIL\)://p' "$file" \
+           | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  if [ "$declared" -eq 0 ]; then echo "-"; else echo "$matched/$declared"; fi
+}
+
+signature() { # <binary> <guard-path> <extra-args…> ; "exit|asserts|leak|panic|refusals|expect"
   local bin="$1" file="$2"; shift 2
   local out rc
   # `timeout` as well as `LOFT_TIMEOUT`, and the outer one is not redundant: an OLD control
@@ -109,7 +148,7 @@ signature() { # <binary> <guard-path> <extra-args…> ; prints "exit|asserts|lea
   leak=$(echo "$out" | grep -oE "stores not freed at program exit: .*" | head -1 | sed 's/.*exit: //')
   panic=$(echo "$out" | grep -oE "panicked at [^:]*" | head -1)
   refusals=$(echo "$out" | grep -c "BUG (#306)")
-  echo "$rc|$asserts|${leak:-none}|${panic:-none}|$refusals"
+  echo "$rc|$asserts|${leak:-none}|${panic:-none}|$refusals|$(expect_channel "$file" "$out")"
 }
 
 mkdir -p "$CACHE"
@@ -182,9 +221,19 @@ CONTROL="$TGT/debug/loft"
 # lock is per target dir — building into it stalls a gate that is already running.
 HERE=$(build "$ROOT" "$CACHE/head-target") || { echo "this tree does not build" >&2; exit 1; }
 
-fail=0
+# loft#1224 — the verdict is an OR across backends, not an AND, and it names the inert side.
+#
+# A guard for a BACKEND DIVERGENCE can only move one channel by construction: if both backends
+# moved it would not be a divergence.  Scoring `fail=1` on any inert backend therefore reported
+# NOT FALSIFIED for every such guard — measured on the native-only loft#1217 and loft#1222,
+# where native went 1 -> 0 and interpret was correctly identical on both trees.  What the gate
+# is for is a guard that moves NOTHING, so that is what it now reports; a backend that stays put
+# while its sibling moves is named rather than counted as a failure.
+falsified_any=0
+notclean=0
+INERT_SIDES=""
 CHANNELS=""
-printf '%-12s %-10s %-40s %s\n' backend tree "exit|asserts|leak|panic|refusals" verdict
+printf '%-12s %-10s %-46s %s\n' backend tree "exit|asserts|leak|panic|refusals|expect" verdict
 for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
   name=${pair%% *}; args=${pair#* }
   # shellcheck disable=SC2086
@@ -194,21 +243,33 @@ for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
   # reads as a difference and would score every guard as falsified for the wrong reason.
   # shellcheck disable=SC2086
   h=$(signature "$HERE" "$ROOT/$GUARD" --path "$ROOT/" $args)
+  h_expect=$(echo "$h" | cut -d'|' -f6)
+  # loft#1224 — "clean" means the guard PASSES, and for an annotation-scored file passing is a
+  # refusal: it exits 1 and prints the message it declared.  Judging it by exit code alone
+  # reported THIS TREE IS NOT CLEAN for a guard that was working exactly as written.  So a file
+  # that declares expectations is clean when it produced all of them, and every other file is
+  # clean when it exits 0 with nothing leaked, asserted, panicked or refused.
   clean_here="ok"
-  [ "${h%%|*}" = "0" ] || clean_here="NOT-CLEAN"
-  case "$h" in *"|none|none|0") ;; *) clean_here="NOT-CLEAN";; esac
-  [ "$(echo "$h" | cut -d'|' -f2)" = "0" ] || clean_here="NOT-CLEAN"
+  if [ "$h_expect" = "-" ]; then
+    [ "${h%%|*}" = "0" ] || clean_here="NOT-CLEAN"
+    case "$h" in *"|none|none|0|-") ;; *) clean_here="NOT-CLEAN";; esac
+    [ "$(echo "$h" | cut -d'|' -f2)" = "0" ] || clean_here="NOT-CLEAN"
+  else
+    [ "${h_expect%/*}" = "${h_expect#*/}" ] || clean_here="NOT-CLEAN"
+  fi
   if [ "$c" = "$h" ]; then
     verdict="INERT — the control and this tree answer the same"
-    fail=1
+    [ -n "$INERT_SIDES" ] && INERT_SIDES="$INERT_SIDES, "
+    INERT_SIDES="$INERT_SIDES$name"
   elif [ "$clean_here" != "ok" ]; then
     verdict="THIS TREE IS NOT CLEAN"
-    fail=1
+    notclean=1
   else
     verdict="falsified"
+    falsified_any=1
     # Name the channel that moved, so the recorded line says what was measured rather
     # than only that something was.
-    for i in 1 2 3 4 5; do
+    for i in 1 2 3 4 5 6; do
       cf=$(echo "$c" | cut -d'|' -f$i); hf=$(echo "$h" | cut -d'|' -f$i)
       [ "$cf" = "$hf" ] && continue
       case $i in
@@ -217,21 +278,31 @@ for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
         3) d="leaked $cf -> clean";;
         4) d="panicked -> clean";;
         5) d="$cf stack-store free refusal(s) (BUG #306) -> $hf";;
+        6) d="expectations matched $cf -> $hf";;
       esac
       [ -n "$CHANNELS" ] && CHANNELS="$CHANNELS, "
       CHANNELS="$CHANNELS$name $d"
     done
   fi
-  printf '%-12s %-10s %-40s %s\n' "$name" control "$c" ""
-  printf '%-12s %-10s %-40s %s\n' "$name" here "$h" "$verdict"
+  printf '%-12s %-10s %-46s %s\n' "$name" control "$c" ""
+  printf '%-12s %-10s %-46s %s\n' "$name" here "$h" "$verdict"
 done
 
 echo
-if [ $fail -eq 0 ]; then
+if [ $notclean -eq 1 ]; then
+  echo "NOT falsified.  This tree does not pass the guard, so nothing here says whether the"
+  echo "guard can CATCH anything — fix the tree first, then re-run."
+  exit 1
+elif [ $falsified_any -eq 1 ]; then
+  # An inert backend beside a moved one is expected for a backend-divergence guard, so say so
+  # in the recorded line rather than withholding the verdict (loft#1224).
+  [ -n "$INERT_SIDES" ] && CHANNELS="$CHANNELS; $INERT_SIDES INERT (expected for a
+  backend-divergence guard — only one side can move)"
   echo "Paste this into $GUARD:"
   echo "// @falsified-at: $SHA — $CHANNELS"
+  exit 0
 else
   echo "NOT falsified.  A guard that answers the same on the build it was written for is"
   echo "measuring something other than the defect — check the ENTRY POINT above first."
+  exit 1
 fi
-exit $fail
