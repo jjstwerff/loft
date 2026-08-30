@@ -33,6 +33,28 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### `x? += …` accumulates from the type's zero
+
+`?` on the left of an assignment says *which value to read when this place is null*; the write
+still lands in the place. That is the accumulate-from-nothing idiom:
+
+```loft
+hits: integer? = null;
+hits? += 1;                  // 1     — the `?` read the zero
+misses: integer? = null;
+misses += 1;                 // null  — no `?`, so the null propagates through `+`
+```
+
+It did not work. On a vector field the appended record was built into the destination and the
+destination was then appended to itself, so a one-element field grew to four; on a null place
+the write disappeared and the field stayed null; a keyed sibling of the vector was never
+re-indexed; a `text` place crashed the compiler; and a scalar place was refused with a message
+about the operator. All of it silent, and identical on both backends.
+
+For a **collection** the `?` was always redundant — `b.d += [r]` on a null field already builds
+the empty collection first — and that spelling was correct throughout. `(a ?? d) += e` stays
+refused: it names two values and no place.
+
 ### Appending to a nullable text field works
 
 ```loft

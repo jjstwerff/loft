@@ -9,6 +9,33 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A `?` on an assignment place discharges the READ and writes through to the place (2026-08-30)
+
+`place? op= e` says two things — write `place`, and read the type's default when `place` is
+null — and the second half was eating the first. The left-hand side lowers to the same
+null-check the expression form uses, which is a VALUE and re-evaluable, so every writer that
+took it for the destination wrote somewhere else. Five faces, one cause, all silent and
+identical on both backends: a vector field built the appended record INTO the destination and
+appended the destination to itself (`b.d? += [r]` on a one-element field read len 4); a null
+place threw the write away and stayed null; `linked-group` maintenance compares the written
+place structurally, so the vector's keyed sibling received nothing; a `text` place reached
+codegen with no variable to write and took the compiler down; and a scalar place was refused
+outright as *"Not implemented operation + for type integer"* (loft#1205).
+
+**Cure: peel the place back out of the discharge at the assignment dispatcher, and seed it
+with the default when the place is one that propagates.** The peel is what makes every form
+below see the field or local it is really writing, and `(E-Asgn-Compound)` then holds for this
+place spelling too. It is not the whole fix, because the `?` does not cost the same everywhere:
+a COLLECTION's own `op=` already reads through the discharge — appending to a null collection
+builds the empty one first — while a scalar or `text` PROPAGATES, so for those the read is
+discharged by seeding the place with its default when, and only when, it is null. `x? += 3` on
+a null `x` is therefore 3, which is the accumulate-from-the-zero idiom and the whole reason to
+write the `?`. Only the postfix `x?` peels: an explicit `(a ?? d)` names two values and no
+place and stays refused. The seed reads the place twice, so it is built on the place the
+@PLN102 F2 hoist has already bound rather than on the spelling the author wrote —
+`w[idx()]? += 1` calls `idx()` once, where off the original spelling it called twice and read
+one element while writing the next. `operational.md` states it as `@FR-E-Asgn-Discharge`.
+
 ### Appending to a `text?` struct field is no longer an internal compiler error (2026-08-30)
 
 `n.t += "cd"` on a `t: text?` field was an ICE on both backends — the plainest thing the field

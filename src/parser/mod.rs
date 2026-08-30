@@ -805,6 +805,14 @@ pub struct Parser {
     /// the notice fires before the default exists and the caller's cursor has moved past
     /// the statement terminator by the time it returns.
     pub(crate) ncc_default_end: Option<(u32, u32)>,
+    /// The last null-check built by [`Parser::build_null_coalesce_default`] came from the
+    /// postfix `x?` discharge (@PLN116), not from an explicit `a ?? d`.
+    ///
+    /// The two spellings build the SAME IR and mean different things on an assignment
+    /// place: `x?` names one place and says what to read when it is null, while `a ?? d`
+    /// names two values and no place at all.  Read at the assignment dispatcher, which
+    /// peels the first and leaves the second refused (loft#1205).
+    pub(crate) last_place_discharge: bool,
     /// loft#1023 — definitions whose BODY has been parsed in the current second pass.
     ///
     /// A generic instantiated before its own template appears in this set was built from
@@ -1214,6 +1222,7 @@ impl Parser {
             pending_default_rhs: None,
             pending_default_src: None,
             ncc_default_end: None,
+            last_place_discharge: false,
             pass2_bodies: std::collections::HashSet::new(),
             stale_monomorphs: Vec::new(),
             conv_owned_result: None,

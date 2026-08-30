@@ -1963,6 +1963,67 @@ use a separate collection or add after the loop"
         out
     }
 
+    /// The place a postfix `x?` on an assignment left-hand side was reading, if `to` is
+    /// that discharge.
+    ///
+    /// [`Parser::build_null_coalesce_default`] emits two shapes for one meaning: a
+    /// temp-bound `ncc` block when the subject is non-trivial (`b.d?` — the temp keeps the
+    /// subject from being evaluated twice), and a bare null-check `if` when it is trivial
+    /// (`v?`).  Both name their subject in the position this reads, and that subject is the
+    /// place the assignment writes.
+    ///
+    /// Callers must check [`Parser::last_place_discharge`] first: an explicit `a ?? d`
+    /// builds the identical shape and names no place (loft#1205).
+    fn peel_place_discharge(to: &Value) -> Option<Value> {
+        match to.unspan() {
+            Value::Block(bl) if bl.name == "ncc" => match bl.operators.first().map(Value::unspan) {
+                Some(Value::Set(_, place)) => Some((**place).clone()),
+                _ => None,
+            },
+            Value::If(_, present, _) => Some((**present).clone()),
+            _ => None,
+        }
+    }
+
+    /// Seed `place` with type `base`'s default when — and only when — it is null, so a
+    /// compound assignment written `place? op= e` reads the default the `?` asked for.
+    ///
+    /// GUARDED, rather than the shorter `place = place?`: that spelling reads the place on
+    /// its own right-hand side, and a `text` local's store CLEARS the destination before it
+    /// copies, so the copy read a buffer the clear had just emptied — `t? += "cd"` on
+    /// `t = "ab"` answered `"cd"`.  The guard's store takes a CONSTANT, so no place is
+    /// ever its own source.  `None` when the type has no default (`(D-NoRef)`) or the place
+    /// is a shape [`Parser::place_store`] cannot write, which leaves the statement as the
+    /// peel alone made it.
+    fn discharge_seed(&mut self, place: &Value, base: &Type) -> Option<Value> {
+        let (default, _) = self.build_default(base)?;
+        let store = self.place_store(place, default)?;
+        let present = self.coalesce_not_null(place, base);
+        let absent = self.cl("OpNot", &[present]);
+        Some(v_if(absent, store, Value::Insert(Vec::new())))
+    }
+
+    /// Emit a store of `value` into `place`, where `place` is the left-hand side of an
+    /// assignment as the expression parser built it.
+    ///
+    /// The two shapes an assignment place takes: a bare local (`Value::Var`), and a heap
+    /// read (`OpGet<T>(base, offset)`) whose writing twin
+    /// [`Parser::call_to_set_op`] already names.  `None` for anything else, which leaves
+    /// the caller with no seed rather than a store to a place it could not identify.
+    fn place_store(&mut self, place: &Value, value: Value) -> Option<Value> {
+        match place.unspan().clone() {
+            Value::Var(v) if v != u16::MAX => Some(v_set(v, value)),
+            Value::Call(d, args) => {
+                let name = self.data.def(d).name().to_string();
+                if !name.starts_with("OpGet") {
+                    return None;
+                }
+                Some(self.call_to_set_op(&name, &args, value, "="))
+            }
+            _ => None,
+        }
+    }
+
     /// Apply the operator `op` to an already-parsed LHS and parse the RHS, then rewrite
     /// `code` into the assignment IR.  Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
@@ -4318,6 +4379,9 @@ use a separate collection or add after the loop"
         // `{ &a }` still reaches the D-bind-7 guard below with its own message,
         // instead of being reported here as a sub-expression use.
         self.amp_head = started_with_amp;
+        // loft#1205 — only a discharge built by THIS left-hand side may be peeled below,
+        // so the flag starts clear rather than carrying an earlier statement's answer.
+        self.last_place_discharge = false;
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
         self.amp_head = false;
         self.in_tuple_lhs = saved_tuple_lhs;
@@ -4705,6 +4769,48 @@ use a separate collection or add after the loop"
                         self.sandbox_raw_writes.entry(self.context).or_insert(pos);
                     }
                 }
+                // loft#1205 — `P? op= e` / `P? = e`.  A `?` discharges a READ: on an
+                // assignment place it says what to read when `P` is null, it does not make
+                // the discharge itself the destination.  The LHS parse lowered it to the
+                // same null-check the expression form uses, and that null-check is
+                // RE-EVALUABLE, so every form below saw a value where a place should be.
+                // Measured, all silent and on both backends: the vector `+=` path adopted
+                // the check as the literal's own backing store and appended the destination
+                // to itself (`b.d? += [r]` on a one-element field answered len 4), a null
+                // place threw the write away entirely, a `text` place reached codegen with
+                // no variable to write and took the compiler down, and a scalar place was
+                // refused as *"Not implemented operation + for type integer"*.
+                //
+                // Peel to the place the discharge was reading, so the field / local being
+                // written is what the machinery below is handed.  `(E-Asgn-Compound)` is
+                // what that buys: the place's addressing then evaluates exactly once, and
+                // the @PLN102 F2 hoist under this can still do its half for a place whose
+                // addressing calls a function.
+                //
+                // Only the postfix `x?` peels.  An explicit `(a ?? b)` names two values and
+                // no place — there is nothing to peel to — and stays refused.
+                //
+                // The rule this site enforces is `@FR-E-Asgn-Discharge`.
+                //
+                // Peeling alone answers for a COLLECTION and for `=`.  A collection's own
+                // `op=` already reads through the discharge — `b.d += [r]` on a null field
+                // builds the empty collection and appends into it — and a plain `=` has no
+                // read to discharge, so in both the `?` asks for what the place already
+                // does.  A scalar or `text` place PROPAGATES instead (`(N-Prop)`: null + 3
+                // is null), so there the read is discharged explicitly by the seed built
+                // below the F2 hoist.  `i? += 3` on a null `i` is 3, which is what the `?`
+                // said; without the seed it would be null, and the `?` would be noise.
+                let mut seed_wanted = false;
+                if self.last_place_discharge
+                    && let Some(place) = Self::peel_place_discharge(&to)
+                {
+                    seed_wanted = op != "="
+                        && !crate::parser::vectors::is_collection(f_type.base())
+                        && (crate::data::is_scalar(f_type.base())
+                            || matches!(f_type.base(), Type::Text(_)));
+                    to = place.clone();
+                    *code = place;
+                }
                 // @PLN102 F2 (C92) — a compound assign evaluates its place ONCE.
                 // When the place reads a heap scalar slot through a NON-idempotent
                 // accessor (`w[idx()]`, `m[i()][j()]`, `getvec()[0]` — the index or
@@ -4762,6 +4868,19 @@ use a separate collection or add after the loop"
                     to = rebuilt.clone();
                     *code = rebuilt;
                 }
+                // loft#1205 — the seed is built HERE, from the place the F2 hoist may just
+                // have rewritten, because it reads the place a second time: once to ask
+                // whether it is null, once to write the default in.  Read off the original
+                // `w[idx()]`, that second read would call `idx()` again — measured, with the
+                // seed built above instead: two calls, the value read from element 0 and
+                // written to element 1, silently.  Through `_place` it is one call, which is
+                // the whole point of the hoist and `(E-Asgn-Compound)`.
+                let discharge_seed = if seed_wanted && !self.first_pass {
+                    let base = f_type.base().clone();
+                    self.discharge_seed(&to, &base)
+                } else {
+                    None
+                };
                 let var_nr = self.assign_var_nr(code, op, &f_type, &mut parent_tp);
                 // Handle `f += X` for File variables before type-changing logic.
                 if op == "+="
@@ -4776,6 +4895,16 @@ use a separate collection or add after the loop"
                 // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
                 let result =
                     self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr, f2_hoisted);
+                // loft#1205 — the discharged read runs before the compound, which was built
+                // for a place the seed has just made non-null.  Prepended FIRST so the F2
+                // binding below ends up in front of it: the seed reads and writes THROUGH
+                // that binding, so a `_place` bound after it is a `_place` it cannot see —
+                // native reported `cannot find value var___place_1`, and the interpreter
+                // quietly seeded the wrong slot.
+                if let Some(seed) = discharge_seed {
+                    let assign = std::mem::replace(code, Value::Null);
+                    *code = Value::Insert(vec![seed, assign]);
+                }
                 // @PLN102 F2 — run the once-evaluated place binding before the compound.
                 if let Some(setup) = f2_setup {
                     let assign = std::mem::replace(code, Value::Null);

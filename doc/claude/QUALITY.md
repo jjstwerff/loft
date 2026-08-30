@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 339 | 322 | **17** |
+| 341 | 324 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -518,6 +518,12 @@ rather than peels, and cannot be hidden by a wrapper for that reason: its fall-t
 `Value::for_each_child_mut`, which treats a `Span` as a child and hands the walk the node
 underneath.  Peeling there would be worse than redundant — the walk rebuilds what it visits,
 so unwrapping would drop the position the `Span` carries.
+
+loft#1205 moved it to 340 · 323 · 17 with the two predicates the `?`-on-a-place reading needed
+— `parser::peel_place_discharge`, which tells a temp-bound `ncc` block from a bare null-check
+`if`, and `parser::place_store`, which tells a local from a heap read.  Both unspan before they
+match, for the reason the column exists: each is deciding what an assignment WRITES, and a
+`Span` that hid the shape would leave the statement writing nothing.
 
 **Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
 and conflating them is how a backlog gets "cleared" with nothing fixed:

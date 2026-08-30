@@ -329,6 +329,38 @@ or per nesting level). Contrast `E-Asgn`: a plain `x = v` already writes its pla
 there is no double-eval to close. [DESIGN_DECISIONS.md C92](../DESIGN_DECISIONS.md); verified
 both backends — `tests/scripts/pln102-f2-place-once.loft`.
 
+### Compound assignment through a discharge — the `?` is on the READ
+
+```
+  (E-Asgn-Discharge)  ⟨place? op= e, σ⟩  →  ⟨place op= e, σ'⟩   where
+                      σ' = σ[place ↦ construct_default(τ)]   when σ(place) = null
+                      σ' = σ                                 otherwise
+                      — and `place` is addressed EXACTLY ONCE, by (E-Asgn-Compound).
+                      A discharge is not a place: `place?` is a VALUE, and what the `?`
+                      says on the left of an assignment is which value to READ when the
+                      place is null.  The write lands in `place`.
+                      `place? = e` therefore means `place = e` — a plain assignment has
+                      no read to discharge.
+                      An explicit `(a ?? d)` names two values and no place; it takes no
+                      assignment at all.
+```
+
+**In words.** `x? += 3` on a null `x` is `3`, not null: the `?` picked what to read, the
+statement still writes `x`. It is the accumulate-from-the-zero idiom, and it composes with
+the once-only rule above — the place's addressing is evaluated once for the read, the
+discharge and the write together. For a COLLECTION the discharge is what `op=` already
+does (appending to a null collection builds the empty one first), so `b.d? += [r]` and
+`b.d += [r]` agree; for a scalar or `text` they differ, because a bare `op=` PROPAGATES
+(`(N-Prop)`: `null + 3` is null) and that difference is the whole reason to write the `?`.
+Delivering the discharge reads the place a second time — once to ask whether it is null,
+once to write the default in — so it is read through the temp (E-Asgn-Compound) already
+binds, never off the spelling the author wrote. `w[idx()]? += 1` therefore calls `idx()`
+**once**, and the discharge and the operation land on the element that one call named; read
+off the original spelling instead it calls twice and reads one element while writing the
+next, which is the corruption the once-only rule exists to prevent.
+[DESIGN_DECISIONS.md C92](../DESIGN_DECISIONS.md), [types.md (N-Default)](types.md);
+verified both backends — `tests/scripts/1205-a-discharged-place-writes-through-to-its-place.loft`.
+
 ---
 
 ## Deviations
