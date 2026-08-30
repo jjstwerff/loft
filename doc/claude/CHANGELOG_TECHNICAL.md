@@ -36,6 +36,28 @@ place and stays refused. The seed reads the place twice, so it is built on the p
 `w[idx()]? += 1` calls `idx()` once, where off the original spelling it called twice and read
 one element while writing the next. `operational.md` states it as `@FR-E-Asgn-Discharge`.
 
+### `const` binds through a discharge interior to an assignment place (2026-08-30)
+
+`lhs_base_var` is the one home for *which binding does this write reach*, and it walks the place
+looking for it. It had an arm for loft#980's variant-field guard `if` and none for either shape a
+NULL DISCHARGE lowers to — the `ncc`/`ncr` temp block, and the bare-variable `if` — so a place
+ROOTED in a discharge answered `u16::MAX`, no binding at all, and both of its readers took that
+at face value. `validate_write` had nothing to check, so `(Const-Value)` never fired and
+`h.i?.x = 99` mutated a `const` parameter in silence on both backends; the text-assignment arm
+read the same answer as *"this left side names no variable"* and reported the file-scope-constant
+message about code the author had not written (loft#1211).
+
+**One home, three questions.** `null_discharge_subject` now answers what a discharge was applied
+to, and both `lhs_base_var` and `(E-Asgn-Discharge)`'s `peel_place_discharge` read it. They were
+two matchers for one shape, and they disagreed: the peel claimed ANY `if` on a left-hand side,
+including loft#980's variant-field guard, whose then arm is the RECEIVER rather than a place. No
+spelling was found that reaches it — a field target lowers to an `OpGet` call, never to the bare
+guard — so this is the restatement removed rather than a second defect closed.
+
+The boundary stays where `(E-Asgn-Discharge)` put it: a discharge that IS the target is that
+rule's question, and one INTERIOR to the place leaves an ordinary write that must simply resolve
+to its root.
+
 ### Appending to a `text?` struct field is no longer an internal compiler error (2026-08-30)
 
 `n.t += "cd"` on a `t: text?` field was an ICE on both backends — the plainest thing the field

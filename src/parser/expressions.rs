@@ -99,18 +99,56 @@ fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
 fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     match v.unspan() {
         Value::Var(nr) => *nr,
-        // loft#980 — see through the variant-field guard `if tag(c) ∈ declaring { c } else
-        // { null }`: the receiver is the THEN arm.  Recognised by its ELSE arm being the
-        // zero-argument null sentinel, so an ordinary `if` on the left of an assignment is
-        // still not a place and is still refused.
-        Value::If(_, then, els)
-            if matches!(els.unspan(), Value::Call(d, a)
-                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
-        {
-            lhs_base_var(then, data)
+        // Exactly two `if`s reach the left of an assignment, and both name their place through
+        // the THEN arm.  loft#980's variant-field guard — `if tag(c) ∈ declaring { c } else
+        // { null }` — carries the receiver there, and a bare-variable NULL DISCHARGE carries
+        // its SUBJECT there (`v?.x = …`, whose else arm is the type's default instead of the
+        // sentinel).  The subject is what a write through the discharge reaches on the path
+        // that reaches anything, so resolving to it is what keeps `const` binding through
+        // `h.i?.x = …`: while this answered "no variable at all", `validate_write` had no base
+        // to check and mutated a `const` parameter in silence (loft#1211).
+        Value::If(_, then, _) => lhs_base_var(then, data),
+        // …and a discharge whose subject is NOT a bare variable binds it to a temp inside an
+        // `ncc`/`ncr` block instead.  Only a discharge block is seen through: a
+        // `fn_ref_field_read` / `tuple_unbox` block is a different question, and answering it
+        // here would be guessing.
+        Value::Block(_) => {
+            null_discharge_subject(v, data).map_or(u16::MAX, |s| lhs_base_var(s, data))
         }
         Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0], data),
         _ => u16::MAX,
+    }
+}
+
+/// The SUBJECT a NULL DISCHARGE was applied to — `e` in `e?`, `e ?? d`, `e ?? return` — when
+/// `v` is one, and `None` when it is not.
+///
+/// ONE home for the two shapes the discharge lowering produces, because two questions read it
+/// and each used to carry its own matcher: which variable a place ROOTED in a discharge writes
+/// through ([`lhs_base_var`], so `const` still binds through `h.i?.x = …`), and which place a
+/// discharge that IS the target was reading ([`Parser::peel_place_discharge`], `@FR-E-Asgn-Discharge`).
+/// A non-trivial subject is bound to a `__ncc_N` / `ncr_N` temp by the block's own head
+/// statement; a bare VARIABLE subject can be read twice for free, so it lowers to a plain `if`
+/// with no temp and the subject stands in the then arm.
+fn null_discharge_subject<'a>(v: &'a Value, data: &crate::parser::Data) -> Option<&'a Value> {
+    match v.unspan() {
+        Value::Block(bl) if bl.name == "ncc" || bl.name == "ncr" => {
+            match bl.operators.first().map(Value::unspan) {
+                Some(Value::Set(_, subject)) => Some(subject),
+                _ => None,
+            }
+        }
+        // loft#980's variant-field guard is the other `if` that reaches a left-hand side; its
+        // zero-argument null-sentinel ELSE arm is what tells the two apart.  A discharge's else
+        // arm is the type's DEFAULT, so the guard is the only `if` this must not claim — its
+        // then arm is the receiver, and peeling to it would write through the wrong place.
+        Value::If(_, then, els)
+            if !matches!(els.unspan(), Value::Call(d, a)
+                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
+        {
+            Some(then)
+        }
+        _ => None,
     }
 }
 
@@ -1974,15 +2012,16 @@ use a separate collection or add after the loop"
     ///
     /// Callers must check [`Parser::last_place_discharge`] first: an explicit `a ?? d`
     /// builds the identical shape and names no place (loft#1205).
-    fn peel_place_discharge(to: &Value) -> Option<Value> {
-        match to.unspan() {
-            Value::Block(bl) if bl.name == "ncc" => match bl.operators.first().map(Value::unspan) {
-                Some(Value::Set(_, place)) => Some((**place).clone()),
-                _ => None,
-            },
-            Value::If(_, present, _) => Some((**present).clone()),
-            _ => None,
-        }
+    ///
+    /// Reads [`null_discharge_subject`], the one home for what a discharge looks like, which
+    /// [`lhs_base_var`] also consults — so "which place was this discharge reading?" and "which
+    /// binding does a write through a discharge reach?" cannot drift apart.  That home also
+    /// declines loft#980's variant-field guard, the OTHER `if` that reaches a left-hand side:
+    /// its then arm is the receiver rather than a place, so a guard reached with the flag set
+    /// by a `?` elsewhere in the same left-hand side is left alone instead of peeled into
+    /// (loft#1211).
+    fn peel_place_discharge(to: &Value, data: &crate::parser::Data) -> Option<Value> {
+        null_discharge_subject(to, data).cloned()
     }
 
     /// Seed `place` with type `base`'s default when — and only when — it is null, so a
@@ -4802,7 +4841,7 @@ use a separate collection or add after the loop"
                 // said; without the seed it would be null, and the `?` would be noise.
                 let mut seed_wanted = false;
                 if self.last_place_discharge
-                    && let Some(place) = Self::peel_place_discharge(&to)
+                    && let Some(place) = Self::peel_place_discharge(&to, &self.data)
                 {
                     seed_wanted = op != "="
                         && !crate::parser::vectors::is_collection(f_type.base())

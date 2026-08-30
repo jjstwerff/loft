@@ -33,6 +33,24 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### `const` holds through a `?` inside the place
+
+A `const` parameter could be modified after all, if the write went through a nullable field on
+the way:
+
+```loft
+fn touch(h: const Holder) {
+  h.inner?.x = 99;           // compiled, ran, and the CALLER saw 99
+  h.inner.x  = 99;           // refused correctly — the same write, dense
+}
+```
+
+The promise `const` makes is about the write's root, and a `?` does not change which binding a
+write reaches — it changes what a read answers. The same gap made an ordinary write
+unreachable from the other side: `a.i?.nm = "cd"` on a `text` member reported that *a
+file-scope `NAME: text = …` is a CONSTANT*, about code nobody had written, while the `integer`
+member beside it wrote through fine. Both are one missing case, on both backends.
+
 ### `x? += …` accumulates from the type's zero
 
 `?` on the left of an assignment says *which value to read when this place is null*; the write

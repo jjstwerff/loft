@@ -361,6 +361,20 @@ next, which is the corruption the once-only rule exists to prevent.
 [DESIGN_DECISIONS.md C92](../DESIGN_DECISIONS.md), [types.md (N-Default)](types.md);
 verified both backends — `tests/scripts/1205-a-discharged-place-writes-through-to-its-place.loft`.
 
+**A discharge INTERIOR to the place is a different question, and this rule does not reach it.**
+`h.i?.x = …` discharges `h.i` and then names `.x`, so the target is an interior place
+(`H-View`) and the statement is an ordinary write — there is no `place?` at the top for the
+rule above to rewrite. What still has to hold is that the write RESOLVES to the binding it
+reaches: `h.i?.x = …` roots at `h` exactly as `h.i.x = …` does, so
+[binding.md (Const-Value)](binding.md) keeps rejecting it on a `const h`. While the resolver
+stopped at the discharge and answered "no binding at all", it did not — a `const` parameter
+was mutated in silence and the caller saw the new value, on both backends, with no diagnostic
+(loft#1211). One home answers what a discharge was applied to for both questions, so which
+place a discharged TARGET was reading and which binding a write THROUGH one reaches cannot
+drift apart; verified both backends —
+`tests/scripts/1211-a-const-binding-holds-through-an-interior-discharge.loft`,
+`tests/scripts/1211b-a-place-behind-an-interior-discharge-is-written.loft`.
+
 ---
 
 ## Deviations

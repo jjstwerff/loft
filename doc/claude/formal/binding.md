@@ -254,7 +254,16 @@ source: [../plans/40-const-fields/const-model.md](../plans/40-const-fields/const
                           ALLOWED (it re-points the slot; it does not touch the old
                           value).  The read-only dual of B-Ref-Alias: where `&` opts
                           a binding INTO write-through aliasing, `const` on the type
-                          opts it OUT of every through-write.
+                          opts it OUT of every through-write.  "Every" includes a
+                          write reached through a NULL DISCHARGE — `h.i?.x = …`
+                          binds to `h` exactly as `h.i.x = …` does — because the rule
+                          is about the write's ROOT, and a discharge changes what a
+                          read ANSWERS, not which binding a write travels to
+                          ([operational.md](operational.md) `E-Asgn-Discharge` is the
+                          separate question of a discharge that IS the target).
+                          While the resolver stopped at the discharge and answered
+                          "no binding at all" this went unenforced and a `const`
+                          parameter was mutated in silence (loft#1211).
   (Const-ScalarCollapse)  a by-value SCALAR (`integer` / `float` / `single` /
                           `boolean` / `character`) has no interior distinct from its
                           binding, so it freezes FULLY under EITHER axis:
