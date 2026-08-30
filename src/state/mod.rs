@@ -319,6 +319,29 @@ pub struct State {
     pub(crate) debug: Option<Box<crate::debugger::Debugger>>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
+    /// Return buffers [`State::fn_call_ref`] allocated for a callee's hidden attributes,
+    /// paired with the call-stack DEPTH of the frame they were pushed for — the store the
+    /// caller must free when the callee hands back something else.
+    ///
+    /// A direct call site mints its return buffer as a caller LOCAL and frees it at scope
+    /// exit.  A fn-ref call site cannot: it does not know which function the slot holds, so
+    /// the buffer is allocated HERE, and a callee that delivers its return some other way
+    /// (it minted its own store, or the delivery slot got rebound to a borrow) leaves it
+    /// owned by nobody — one store per call, unbounded in a loop
+    /// (`formal/closures.md` D-clo-7).  `--native` never had it because its dispatch passes
+    /// the null sentinel for a Reference return and frees an unfilled `__vc_hbuf` for a
+    /// vector one.
+    ///
+    /// Empty on every run that makes no fn-ref call to a buffer-taking callee, which is the
+    /// overwhelming majority — the cost when unused is one `is_empty` branch per return.
+    fnref_bufs: Vec<(u32, DbRef)>,
+    /// The allocation counter as each live fn-ref call found it, by callee frame depth.
+    ///
+    /// Paired with `Store::alloc_serial`, this is what separates a store the callee MINTED
+    /// from one that was already there — the question no static dep list can answer, and the
+    /// one loft#1185 turns on: a capture handed back belongs to a frame further up and must be
+    /// left alone, while a mint handed back belongs to nobody until this says so.
+    fnref_calls: Vec<(u32, u64)>,
     /// Raw pointer to the `Data` the running program was compiled from, or null before
     /// any program has run.
     ///
@@ -626,6 +649,8 @@ impl State {
             fn_positions: Vec::new(),
             debug: None,
             call_stack: Vec::new(),
+            fnref_bufs: Vec::new(),
+            fnref_calls: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None], // index 0 = null sentinel
@@ -852,6 +877,7 @@ impl State {
         // here: bytecode VM's OpDatabase at src/state/io.rs:708 calls
         // `clear(db)` unconditionally → OOB on u16::MAX (allocation.rs:421).
         let mut hidden_bufs_size: u16 = 0;
+        let mut allocated_bufs: Vec<DbRef> = Vec::new();
         if !self.data_ptr.is_null() {
             // SAFETY: the `Data` outlives this `State` — see `data_ptr`.
             let data = unsafe { &*self.data_ptr };
@@ -903,6 +929,14 @@ impl State {
                 // misread, and with no hidden buffer the shift is zero.  It takes a
                 // capturing closure that ALSO returns a struct, and then the callee
                 // receives a garbage closure `DbRef` and faults.
+                // loft#1179 / `formal/closures.md` D-clo-7 — remember the store, because
+                // this call site is the only owner it will ever have.  A DIRECT call mints
+                // its return buffer as a caller local that scope exit frees; here the
+                // buffer is minted per call and handed to a callee that may deliver its
+                // return some other way (it minted its own store, or the delivery slot was
+                // rebound to a borrow), and then nothing frees it.  [`Self::fn_return`]
+                // does, against the value that actually came back.
+                allocated_bufs.push(buf);
                 let before = self.stack_pos;
                 self.put_stack(buf);
                 hidden_bufs_size += u16::try_from(self.stack_pos - before).unwrap_or(0);
@@ -928,6 +962,18 @@ impl State {
         let closure_span = u16::try_from(self.stack_pos - before_closure).unwrap_or(0);
         let total = arg_size + hidden_bufs_size + closure_span;
         let code_pos = i64::from(self.fn_positions[d_nr]);
+        // The depth the callee's frame is about to occupy, recorded BEFORE `fn_call` pushes
+        // it so the two agree by construction rather than by an off-by-one.
+        let frame_depth = u32::try_from(self.call_stack.len()).unwrap_or(u32::MAX);
+        for buf in allocated_bufs {
+            self.fnref_bufs.push((frame_depth, buf));
+        }
+        // loft#1185 — the allocation counter as it stands BEFORE the callee runs.  A store the
+        // callee hands back whose stamp is above this was minted inside the call and has no
+        // owner anywhere; one at or below it was already there (a capture, an argument) and is
+        // somebody else's.  `release_fnref_bufs` is where that comparison is made.
+        self.fnref_calls
+            .push((frame_depth, self.database.stores_allocated));
         self.fn_call(d_nr as u32, total, code_pos);
     }
 
@@ -1119,7 +1165,123 @@ impl State {
         self.stack_pos += u32::from(ret);
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
+        // Both lists are consumed here, and the OR is load-bearing: a fn-ref call whose callee
+        // allocated no buffer still leaves a snapshot, and skipping the release for it left that
+        // snapshot to be matched against a LATER frame at the same depth — a store then read as
+        // "minted during the call" that was not, handed up, and freed under a live binding.
+        if !self.fnref_bufs.is_empty() || !self.fnref_calls.is_empty() {
+            self.release_fnref_bufs(value);
+        }
         self.call_stack.pop();
+    }
+
+    /// Hand the store this frame is RETURNING to whoever will hold it.
+    ///
+    /// `OpFreeRefOrHandUp`'s adoption leg: the callee is returning a store it minted itself,
+    /// and its caller reads the result as a borrow — so neither of them frees it, and without
+    /// an owner it leaks one store per call (`formal/closures.md` D-clo-13, loft#1186).
+    ///
+    /// It joins the SAME list a delivered return buffer uses, at this frame's depth, so
+    /// [`Self::release_fnref_bufs`] carries it up on the way out by the rule it already
+    /// applies: the store is owned by the frame that holds it, and ownership travels with the
+    /// return value.  Nothing new decides when it dies.
+    pub fn hand_up_returned(&mut self, returned: DbRef) {
+        if returned.store_nr == u16::MAX || returned.rec == 0 {
+            return;
+        }
+        let depth = u32::try_from(self.call_stack.len())
+            .unwrap_or(u32::MAX)
+            .saturating_sub(1);
+        self.fnref_bufs.push((depth, returned));
+    }
+
+    /// The allocation counter as the fn-ref call into `depth` found it, consuming the entry.
+    ///
+    /// `None` when this frame was not entered through a fn-ref — an ordinary call's return is
+    /// the caller's by its own type, and nothing here has a claim on it.
+    fn fnref_call_snapshot(&mut self, depth: u32) -> Option<u64> {
+        let at = self.fnref_calls.iter().rposition(|(d, _)| *d == depth)?;
+        Some(self.fnref_calls.remove(at).1)
+    }
+
+    /// Free the return buffers [`Self::fn_call_ref`] allocated for the frame now returning,
+    /// keeping the one the callee actually handed back.
+    ///
+    /// The kept one is identified by STORE, not by the whole `DbRef`: a callee that
+    /// delivered through the buffer may answer a record or a position inside it, and that is
+    /// still the store the caller now owns as its result. Everything else this call site
+    /// allocated was never used for the delivery — the buffer variable is compiler-generated
+    /// and appears only in return-delivery code, so nothing outside the callee can be
+    /// holding it — and is released here.
+    ///
+    /// Entries left behind by a frame that unwound some other way (a coroutine truncation)
+    /// are DROPPED rather than freed: the value they name is no longer this frame's to
+    /// judge, and leaking is the recoverable direction.
+    fn release_fnref_bufs(&mut self, value: u8) {
+        let depth = u32::try_from(self.call_stack.len())
+            .unwrap_or(u32::MAX)
+            .saturating_sub(1);
+        let returned: Option<DbRef> = (usize::from(value) == size_of::<DbRef>()).then(|| {
+            let back = u16::try_from(self.stack_step(u32::from(value))).unwrap_or(0);
+            *self.get_var::<DbRef>(back)
+        });
+        // loft#1185 — a store this frame MINTED and is handing back has no owner: the callee
+        // does not free what it returns, and its caller may be a forwarding function whose
+        // return type says nothing about it.  Its stamp is above the snapshot taken when the
+        // call began; a CAPTURE's is not, and a capture belongs to a frame further up and is
+        // not ours to place.  That comparison is the whole of what no static dep list could
+        // answer, and it costs one `u64` per allocation and one lookup per fn-ref return.
+        let minted_here = self.fnref_call_snapshot(depth).is_some_and(|since| {
+            returned.is_some_and(|r| {
+                (r.store_nr as usize) < self.database.allocations.len()
+                    && self.database.allocations[r.store_nr as usize].alloc_serial > since
+            })
+        });
+        if minted_here
+            && let Some(r) = returned
+            && !self
+                .fnref_bufs
+                .iter()
+                .any(|(d, b)| *d == depth && b.store_nr == r.store_nr)
+        {
+            self.fnref_bufs.push((depth, r));
+        }
+        // The buffer the callee HANDED BACK moves up one frame rather than being forgotten.
+        // The call site is the only owner it will ever have, and the caller's static type may
+        // say it owns nothing — a local that borrows on one assignment and receives this store
+        // on another (loft#1183), a `??` whose other arm hands back the capture (loft#1186), a
+        // forwarding frame in the way (loft#1185).  None of those can be answered statically,
+        // and none has to be: the store is owned by the frame that currently HOLDS it, and
+        // ownership travels with the return value.  A caller that goes on to free it itself
+        // leaves the handle stale, which the already-free guard below skips.
+        let mut handed_up: Vec<DbRef> = Vec::new();
+        while let Some(&(d, buf)) = self.fnref_bufs.last() {
+            if d < depth {
+                break;
+            }
+            self.fnref_bufs.pop();
+            if d != depth {
+                continue;
+            }
+            if returned.is_some_and(|r| r.store_nr == buf.store_nr) {
+                handed_up.push(buf);
+                continue;
+            }
+            // A store the callee already released leaves a stale handle here; freeing it
+            // twice would hand a live slot back to the pool.
+            if buf.store_nr == COROUTINE_STORE
+                || (buf.store_nr as usize) >= self.database.allocations.len()
+                || self.database.allocations[buf.store_nr as usize].free
+            {
+                continue;
+            }
+            self.free_ref_db(buf);
+        }
+        if depth > 0 {
+            for buf in handed_up {
+                self.fnref_bufs.push((depth - 1, buf));
+            }
+        }
     }
 
     // ── CO1.1 — Coroutine frame helpers ─────────────────────────────────────
@@ -3144,8 +3306,9 @@ impl State {
             // A heap value (struct / vector / struct-enum) is destination-passed,
             // NOT copied to the frame base, so `reenter_ret` can't retrieve it (it
             // would read back the first pushed arg).  The caller serialises such a
-            // result in-fn via `.to_json()` and routes it through the `Text` arm
-            // instead — so this path is a deliberate `None`, never a wrong read.
+            // result in-fn — boxed in a one-field record, so a `vector` and a `text` ride the
+            // same `.to_json()` the struct case always did (loft#1187) — and routes it through
+            // the `Text` arm instead.  So this path is a deliberate `None`, never a wrong read.
             Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => None,
             Type::Enum(_, false, _) => {
                 let schema = self.database.name(&ret.name(data));
@@ -6249,6 +6412,8 @@ impl State {
             fn_positions: Vec::new(),
             debug: None,
             call_stack: Vec::new(),
+            fnref_bufs: Vec::new(),
+            fnref_calls: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None],

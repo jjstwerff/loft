@@ -102,25 +102,80 @@ comparison, `??`) evaluates both operands under E-Left.
                                                 overflows the type, or op is `/`/`%` with
                                                 v₂ = 0.  The result is **null**; evaluation
                                                 CONTINUES (it never halts).
+                                                FLOAT and SINGLE are the exception, because
+                                                for them "not computable" is decided by IEEE
+                                                and not by this rule: `5.0 / 0.0` is `inf`, a
+                                                REPRESENTABLE value, so it is not null.  Only
+                                                what IEEE makes a NaN is — `0.0 / 0.0`, and
+                                                `x % 0.0` — since the float null IS the NaN
+                                                (E-Null).  Overflow follows the same line:
+                                                `1.0e308 * 10.0` keeps `inf`.
   (E-NullArg)   any op with a `null` operand produces `null` (null is CONTAGIOUS),
-                EXCEPT comparisons, which are DEFINITE against the reserved pattern and
-                UNIFORM across every scalar type:
+                EXCEPT the two families below.
+                COMPARISONS are DEFINITE against the reserved pattern and UNIFORM across
+                every scalar type:
                   `null == null` → true;  `v == null` / `null == v` → false (v non-null);
                   `!=` is the exact complement of `==`;
+                  equality holds for `integer`, `character`, `float`, `single`, `boolean`
+                  and `text` alike;
                   ordering (`<` `>` `<=` `>=`) places `null` at the LOW extreme —
                   `null < v` → true, `v < null` → false, `null < null` → false —
-                  the SAME for `integer`, `character`, `float`, `single`, `boolean`.
+                  the SAME for every ORDERED type: `integer`, `character`, `float`,
+                  `single`, `text`.  `boolean` carries equality without ordering
+                  (see below), so the ordering half does not reach it.
+  (E-Truthy)    a TRUTHINESS position reads `null` as `false` and yields a DEFINITE
+                two-state boolean.  The positions are the `if` / `while` / `assert`
+                condition, `!e`, and BOTH operands of `&&` / `||` — and nothing else:
+                elsewhere a `null` boolean stays null under (E-NullArg).  So
+                `true && null` is `false`, not `null`, and the result of `&&`/`||`
+                never holds the boolean null sentinel.
 ```
 
 **In words.** Arithmetic gives the obvious result when it fits. When it *can't* — overflow,
 divide/modulo by zero — it yields **null** and the program **keeps running**; it does not
-halt. Comparisons are the exception to contagion: they let you *test* for null (`x == null`)
-and give a **total order** with null sorting first, and this is **uniform across scalar
-types** — `null == null` is always true, never type-dependent. (`float`/`single` null was a
-NaN, so `null == null` used to be false and ordering unordered — deviation D-op-null-1, CLOSED
-by keystone step 2 (2026-07-10); both are now uniform with the integer/char behavior.) This is
-the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
-cell that can't compute shows null and never stops the other cells. A fault is *local* — it
+halt. Comparisons are the first exception to contagion: they let you *test* for null
+(`x == null`) and give a **total order** with null sorting first, and this is **uniform across
+scalar types** — `null == null` is always true, never type-dependent. (`float`/`single` null was
+a NaN, so `null == null` used to be false and ordering unordered — deviation D-op-null-1, CLOSED
+by keystone step 2 (2026-07-10); both are now uniform with the integer/char behavior.)
+
+**`boolean` has equality but no ordering, and the ordering clause used to claim it anyway.**
+`null == null`, `null == false` and `!=` all answer per the rule on a `boolean?`, but `<` on two
+booleans is REFUSED at compile time — *"No matching operator '<' on 'boolean' and 'boolean'"* —
+because no `OpLtBool` exists and `default/01_code.loft`'s `Ord` interface lists
+`integer`/`single`/`float`/`text` and deliberately not `boolean`. That is a decision, not a gap:
+`false < true` is a convention a program should have to spell out. The rule listed `boolean` in
+the ordering clause for its whole life regardless — an over-claim measured and corrected by the
+`@FR-E-NullArg` walk (2026-08-29), which is the kind of thing an uncited rule accumulates.
+
+**The second exception is truthiness (E-Truthy).** `&&`, `||`, `!` and the `if`/`while`/`assert`
+condition are not contagious — they read a null operand as `false` — which is
+[DESIGN_DECISIONS.md C73](../DESIGN_DECISIONS.md)'s three-state boolean, and is why `&&`/`||`
+type as the non-null `boolean`. It is a genuinely separate exception from comparisons and was
+simply missing here, so E-NullArg read as forbidding behaviour the language ships and documents.
+See D-op-6 for what that cost.
+
+**A `match` arm GUARD is deliberately NOT one of those positions, and that is not an oversight
+to file.** It REFUSES a nullable — *"guard must be boolean, got boolean?"* — where the
+neighbouring `if` coerces. The rule says "and nothing else" for exactly this reason: a guard
+chooses between ARMS, so a null silently reading as "skip this arm" picks a different branch
+with nothing said, while an `if`'s two outcomes are both written at the site. The cure is
+spellable (`mb() ?? false`, `mb() == true`) and the diagnostic names it. Every listed position
+was verified on both backends; the guard's refusal was too.
+
+**Float division by zero is `inf`, and that is a decision, not an oversight.** `(E-Uncomp)`
+read as covering it for years and the code never did; the carve-out above was added by the
+`@FR-E-NullArg` walk (2026-08-29) after the rule sent it hunting a bug that was not there —
+the third time an incomplete rule in this family produced a false positive. The reason is
+recorded at `OpDivFloat` in `default/01_code.loft`: forcing NaN (loft#983) made ONE expression
+answer two things — `inf` inline, where the `*Nullable` peer is emitted, and `null` once bound
+or returned — split division from float OVERFLOW, which keeps `inf` in every position, and
+made `a / b ?? 0.0` select the peer that never yields null, so the idiom every numeric library
+uses to defend a divide guarded nothing. Integer `/0` stays null: an integer has no `inf` to
+answer with.
+
+**Under all of it is the spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)):
+a cell that can't compute shows null and never stops the other cells. A fault is *local* — it
 degrades one value, never the whole run. The same holds for every uncomputable step (an
 out-of-bounds index, a deref of an absent value): null, continue.
 
@@ -280,8 +335,42 @@ both backends — `tests/scripts/pln102-f2-place-once.loft`.
 
 OPEN: **3** (D-op-1/2, and D-op-5 opened 2026-08-25 — two spellings of a following
 null-check still report, the sibling of a wrapper-list drift fixed the same day; the null-model keystone deviations D-op-null-1/2 both CLOSED 2026-07-10 by
-keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
+keystone steps 2–3, and D-op-6 opened AND closed 2026-08-29 by the first `@FR-E-NullArg` walk.
+Opened 2026-07-10 by the @PLN102 pre-freeze audit —
 [the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md).)
+
+⚠ **This register read `OPEN: 2` while D-op-6 was live, and no measurement could have moved
+it** — the rule it violates was itself incomplete. `(E-NullArg)` named comparisons as the only
+exception to contagion and never mentioned truthiness, so a `&&` that answered `null` looked
+like the rule being OBEYED rather than a shipped decision (C73) being broken. An `OPEN: n` is
+only as strong as the rules above it, not only as strong as its oracle.
+
+### D-op-6 — CLOSED (2026-08-29, the `@FR-E-NullArg` walk): `&&`/`||` kept a null right operand
+- Was: `&&` and `||` coerced a null LEFT operand to `false` and let a null RIGHT operand through
+  unchanged — `true && null` answered `null` where C73 says `false`. The parser types the whole
+  expression the non-null `Type::Boolean`, so the null flowed out of a position the type system
+  had already promised could not hold one: `r: boolean = t && maybe()` compiled clean and
+  `r == null` was `true`; the same value reached a `boolean` STRUCT FIELD and a
+  `vector<boolean>` element, and `(t && maybe()) ?? true` discharged it to `true`. On the field
+  the compiler even emitted `redundant-null-check`, *"'on' is 'not null', comparison is always
+  false"*, beside a comparison that answered true.
+- Cause, and why it is one hole and not two: the lowering is `a && b` → `if a { b } else
+  { false }`, so the LEFT operand becomes the `if` CONDITION and the jump coerces it
+  (`OpGotoFalse` tests `!= 1`) while the RIGHT operand becomes a branch VALUE that nothing
+  coerces. `convert` does not close it — every OTHER nullable type reaching a boolean position
+  picks up a real conversion (`integer?` gets `OpConvBoolFromInt`, whose `!= i64::MIN` is
+  already 0/1), but `boolean?` → `boolean` shares a base type and converts to nothing at all.
+  So the coercion had one home, the jump, and the right operand never reached it.
+- Fixed in `Parser::boolean_operator` (`src/parser/vectors.rs`), the one site that knows both
+  operands are truthiness positions: a nullable-boolean right operand is wrapped in
+  `b == true`, C73's raw compare, which answers `false` for the 255 sentinel. Parser-side, so
+  both backends inherit it from one IR change; short-circuit is unaffected (the wrap stays
+  inside the branch, measured by a counting right operand). Guard
+  `tests/scripts/a-boolean-operator-answers-a-definite-boolean.loft`, falsified at `48544f1e`
+  on both backends.
+- Also corrected by the same walk, in the rule rather than the code: `(E-NullArg)`'s ordering
+  clause claimed `boolean`, which has no ordering operator at all, and `(E-Truthy)` did not
+  exist.
 
 ### D-op-null-1 — CLOSED (2026-07-10, keystone step 2): float/single null comparison now uniform
 - Was: `float`/`single` null (a NaN) made `null == null` **false** and ordering unordered, where
@@ -475,6 +564,10 @@ unguarded site also logs a `divide_by_zero` Warn — **only with a logger attach
 `database.logger` is `None`, so a bare run shows nothing and that silence is not a
 counter-example to this rule); `a + 1` at `a = i64::MAX` is **null** and
 continues; `(i64::MAX + 1) ?? 0` is `0` (E-Coalesce); `integer` null is `i64::MIN`.
+(E-Truthy) is checkable the same way and needs the RAW compare to see it: `b: boolean =
+true && maybe()` is `false`, so `b == false` is true and `b == null` is false — `!b` cannot
+tell those apart, because `!` is itself a truthiness position. Guard
+`tests/scripts/a-boolean-operator-answers-a-definite-boolean.loft`.
 D-op-1/D-op-2's falsifier is any program where the interpreter and `--native` disagree —
 e.g. #433's cbor `read_value` (interp `20`, native E0308 pre-fix). When the rules become the
 shared oracle, that disagreement is the definitional error, and this doc is the definition it

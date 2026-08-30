@@ -444,13 +444,19 @@ pub(crate) fn run_tests(
                 continue;
             }
 
-            // Struct/enum definitions end the header.
+            // Struct/enum definitions end the header.  A `struct` or `enum` cannot BE a
+            // test, so an annotation in front of one has no function to bind to — but it
+            // still describes a diagnostic the file must produce, so it becomes file-level
+            // rather than being discarded.  It used to be discarded: six `@EXPECT_ERROR`s
+            // in `102b-pass1-expected-errors.loft` sit in front of the deliberately-invalid
+            // `struct integer` / `enum hash` declarations they describe, and not one of them
+            // was ever checked.
             if trimmed.starts_with("struct ") || trimmed.starts_with("enum ") {
                 in_header = false;
                 pending_ignore = false;
-                pending_fail.clear();
-                pending_error.clear();
-                pending_warning.clear();
+                ann.expect_fail_file.append(&mut pending_fail);
+                ann.expect_errors.append(&mut pending_error);
+                ann.expect_warnings.append(&mut pending_warning);
                 continue;
             }
 
@@ -462,10 +468,15 @@ pub(crate) fn run_tests(
             // still binds the annotation to test_foo.
             let Some(comment) = trimmed.strip_prefix("//") else {
                 if !trimmed.is_empty() {
-                    // Non-comment, non-blank line — clear pending.
-                    pending_fail.clear();
-                    pending_error.clear();
-                    pending_warning.clear();
+                    // Non-comment, non-blank line — no function follows, so promote rather
+                    // than drop, for the reason given at the struct/enum arm above.  This is
+                    // the arm that reaches an annotation written INSIDE a body:
+                    // `persist-bind-field-store-757.loft` carries one there, and it was inert
+                    // — replacing its text with a warning that exists nowhere left the file
+                    // passing exactly as before.
+                    ann.expect_fail_file.append(&mut pending_fail);
+                    ann.expect_errors.append(&mut pending_error);
+                    ann.expect_warnings.append(&mut pending_warning);
                     pending_ignore = false;
                 }
                 continue;

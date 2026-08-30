@@ -578,6 +578,8 @@ iter:
 # `make wasm-html-test`) afterwards if you need the --html variant back.
 wasm:
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg --release -- --features wasm --no-default-features
+	@./scripts/wasm_bundle_stamp.sh > doc/pkg-src.stamp
+	@echo "  wrote doc/pkg-src.stamp ($$(cut -c1-12 doc/pkg-src.stamp)…)"
 
 # @PLN117 — the THREADED gallery bundle: par() over real Web Worker threads.
 # Same shape as `make wasm` but with the wasm-threads recipe (see `wasm-mt` for

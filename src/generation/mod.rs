@@ -1667,6 +1667,23 @@ impl Output<'_> {
     /// flipped it re-enters the parked interpreter over the shared world,
     /// pushing args in declared order (the 02 frame contract).  Allocates the
     /// fn's table index as a side effect — gate first, allocate after.
+    /// Every local a `return` in this body NAMES, at any depth.
+    ///
+    /// A Rust `let` lives where the emission first reaches it, so a local first assigned
+    /// inside a nested block is out of scope for a `return` outside it.  The interpreter
+    /// cannot have that — a local is a frame slot wherever it is written — so the answer is
+    /// used to bind those locals up front and make the two backends agree about scope.
+    fn collect_returned_vars(node: &Value, out: &mut Vec<u16>) {
+        if let Value::Return(inner) = node.unspan()
+            && let Value::Var(v) = inner.unspan()
+            && !out.contains(v)
+        {
+            out.push(*v);
+        }
+        node.unspan()
+            .for_each_child(&mut |child| Self::collect_returned_vars(child, out));
+    }
+
     fn live_entry_check(&mut self, def: &crate::data::Definition) -> Option<String> {
         if def.name() == "n_main" {
             return None;
@@ -4698,6 +4715,25 @@ extern crate loft;"
         let mut vdb_prologue = String::new();
         {
             let vars = def.variables();
+            // loft#1178 — and every VIEW a `return` NAMES, for the reason loft#731 gives one
+            // paragraph down about the iteration scratch: a Rust `let` lives where the
+            // emission first reaches it, and a `return` at function level naming a local whose
+            // `let` landed inside a nested block is `E0425: cannot find value in this scope`.
+            // The interpreter cannot have this — every local is a frame slot — so it is a
+            // property of the EMISSION, not of the program, and the cure is the same one the
+            // two names below already get: bind it up front so the `let` position stops
+            // deciding the scope.  The map desugar's `_map_result_1` is the shape that made
+            // this general: it is built inside the comprehension block and handed back from
+            // outside it.
+            //
+            // A VIEW only — a local whose type NAMES what it borrows.  #354 measured the
+            // other half and its sentence is the boundary: hoisting a heap local that OWNS
+            // its store re-inits a fresh one per call that the matched free no longer covers,
+            // and the crawler's libs exhausted the store table on it.  A view owns nothing,
+            // so a `DbRef::NULL` pre-binding can orphan nothing; the store it looks into is
+            // hoisted by the `__vdb` rule above.
+            let mut returned_vars: Vec<u16> = Vec::new();
+            Self::collect_returned_vars(def.code(), &mut returned_vars);
             for v in 0..vars.count() {
                 // loft#731 — the iteration scratch belongs here for exactly the
                 // reason above, and was missed because it arrives by a different
@@ -4711,7 +4747,9 @@ extern crate loft;"
                 // position stops depending on where the null-init landed.
                 let is_iter_scratch = vars.name(v).contains("hash_scratch");
                 if !vars.is_argument(v)
-                    && (vars.name(v).starts_with("__vdb") || is_iter_scratch)
+                    && (vars.name(v).starts_with("__vdb")
+                        || is_iter_scratch
+                        || (returned_vars.contains(&v) && !vars.tp(v).depend().is_empty()))
                     && rust_type(vars.tp(v), &Context::Variable) == "DbRef"
                 {
                     use std::fmt::Write as _;
@@ -4858,10 +4896,25 @@ extern crate loft;"
                 } else {
                     String::new()
                 };
+                // loft#1183 — a fn-ref dispatch arm that pre-allocates a vector return
+                // buffer hands the DELIVERED one to a destination whose static type may
+                // say it owns nothing, so the buffer needs the frame as its owner.  Every
+                // instrumented frame carries the guard, not only the ones that ALLOCATE a
+                // buffer: a heap-returning frame passes its buffers to its caller, so the
+                // frame that ends up releasing one is usually not the frame that made it,
+                // and a gap in the chain is a store nothing frees.  A frame with none pays
+                // two `Cell` reads (`codegen_runtime::FnRefBufGuard`).
+                let hands_up = matches!(
+                    def.returned().base(),
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                );
+                let fnref_guard = format!(
+                    "\n  let _fnref_guard = codegen_runtime::FnRefBufGuard::new(cell, {hands_up});"
+                );
                 self.call_stack_prefix = Some(format!(
                     "{live_check}  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
-                     let _call_guard = codegen_runtime::CallGuard;{vdb_prologue}"
+                     let _call_guard = codegen_runtime::CallGuard;{fnref_guard}{vdb_prologue}"
                 ));
                 self.output_block(w, body, returns_text, true)?;
                 self.call_stack_prefix = None;

@@ -24,6 +24,68 @@ use crate::variables::Function;
 use crate::variables::size;
 use std::collections::HashSet;
 
+/// The callee's argument SLOTS and the definition's ATTRIBUTES are one list, in one order.
+///
+/// A call site lowers its argument list from the definition's attributes; the callee places its
+/// slots in [`crate::variables::Function::arguments`] order, which is variable-NUMBER order.
+/// Nothing made the two agree. When a return-buffer promotion retires one argument variable and
+/// makes a later-numbered one the argument in its place, they stop agreeing — and a `CallRef`
+/// then writes the closure into the return buffer's slot while the body reads its `__closure`
+/// from the buffer's. The result is a wrong answer with no diagnostic: a zeroed record, or a
+/// captured integer reading 0 (loft#1188, and the collection leg of loft#1178 beside it).
+///
+/// **The condition is a name disagreement AND a type disagreement at the same position**, and
+/// each half rules out a benign case the other admits:
+///
+/// - names agreeing settles it, whatever the types say. A `__vdb_N` backing-store work-ref is
+///   spelled `main_vector<T>` as a VARIABLE and `vector<T>` as an ATTRIBUTE — two spellings of
+///   one slot, not two arguments.
+/// - types agreeing settles it too. Two hidden scratch buffers of the same type are
+///   interchangeable — the caller pushes two empty `&text`s and the callee fills whichever it
+///   was handed — and the stdlib's `text::resolve` carries exactly that pair in swapped order
+///   and answers correctly on both backends.
+///
+/// What is left is a slot holding a value of another NAME and another SHAPE, which no spelling
+/// difference explains and every read of which reads someone else's bytes.
+///
+/// Only a definition whose argument count matches its attribute count is compared. A `#rust` /
+/// `#native` body has attributes and no variable table at all, and a promoted `text` parameter is
+/// deliberately redirected to a shadow local, so a LENGTH mismatch is one of those rather than
+/// this. Deps are stripped before comparing: they record where a value came from, not what
+/// storage the slot is.
+fn check_argument_geometry(
+    function: &crate::variables::Function,
+    data: &Data,
+    def_nr: u32,
+    args: &[u16],
+) {
+    let attrs = data.def(def_nr).attributes();
+    if attrs.len() != args.len() {
+        return;
+    }
+    let mut bad: Option<usize> = None;
+    for (i, (v, a)) in args.iter().zip(attrs.iter()).enumerate() {
+        if function.name(*v) != a.name && function.tp(*v).without_deps() != a.typedef.without_deps()
+        {
+            bad = Some(i);
+            break;
+        }
+    }
+    let Some(i) = bad else { return };
+    let by_slot: Vec<&str> = args.iter().map(|v| function.name(*v)).collect();
+    let by_attr: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
+    panic!(
+        "argument geometry: `{}` places its argument slots in variable order ({}) while a call \
+         site lowers the attribute order ({}) — position {i} holds a `{}` where the call site \
+         writes a `{}`, so every read of that slot reads another argument's bytes",
+        data.def(def_nr).name(),
+        by_slot.join(", "),
+        by_attr.join(", "),
+        function.tp(args[i]).name(data),
+        attrs[i].typedef.name(data),
+    );
+}
+
 /// Stored-tuple element offset — the byte offset of element `idx`
 /// inside the synthetic `__tuple<…>` struct as laid out by the
 /// storage routine.  Looks up the struct's post-finish field
@@ -210,6 +272,7 @@ impl State {
         // use arguments() instead of names map lookup — the names map may
         // redirect promoted text parameters to shadow locals.
         let args = stack.function.arguments();
+        check_argument_geometry(&stack.function, stack.data, def_nr, &args);
         for v in &args {
             stack.function.set_stack_pos(*v, stack.position);
             // @PLAN53 cluster 2 / S4: stepped arg span (identity when off).
@@ -2480,6 +2543,25 @@ impl State {
                         self.code_add(free_pos);
                         stack.add_op("OpFreeRefIfDistinct", self);
                     }
+                    return;
+                }
+                // @PLN130 F1, the REASSIGNMENT twin — materialise an element/field read into
+                // a store `v` owns.  `gen_set_first_ref_elem_copy` does this for a first
+                // bind; a REBIND fell through to `set_var`, which binds the interior pointer
+                // and leaves `v` an owner of the CONTAINER's store.  The pre-Set `OpFreeRef`
+                // above then releases the container on the next turn, so `a = w.inner` inside
+                // a loop read the record `w = Outer{inner: a}` had just torn down and every
+                // heap field of it answered empty (loft#1184).
+                //
+                // Reaching here means the deps are EMPTY, which for a projection means
+                // `scopes.rs` stripped them: @FR-B-View's materialise clause fired because the
+                // container is disturbed while this view is live.  A view that kept its deps
+                // is not `owned_ref` and still aliases.
+                if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && !stash_old_for_post_free
+                    && crate::generation::container_element_base(stack.data, value).is_some()
+                {
+                    self.gen_set_first_ref_elem_copy(stack, v, value, d_nr);
                     return;
                 }
             }

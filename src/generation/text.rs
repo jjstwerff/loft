@@ -340,7 +340,7 @@ impl Output<'_> {
             let prefix = if stack { "" } else { "&mut " };
             write!(
                 w,
-                "ops::format_long_with_tag({prefix}{s_nr}, {val_expr}, stores.take_format_fault(), {radix} as u8, {width_expr}, {token} as u8, {plus}, {note}, {dir} as i8)"
+                "ops::format_long_with_tag({prefix}{s_nr}, {val_expr}, ops::take_format_fault(), {radix} as u8, {width_expr}, {token} as u8, {plus}, {note}, {dir} as i8)"
             )?;
             return Ok(());
         }

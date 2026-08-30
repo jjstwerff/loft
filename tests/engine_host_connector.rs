@@ -445,6 +445,47 @@ fn s6_ws_recv(stream: &std::net::TcpStream) -> Option<String> {
     (hdr[0] & 0x0F == 1).then(|| String::from_utf8_lossy(&payload).into_owned())
 }
 
+/// Refuse to run against a browser bundle built from a different tree.
+///
+/// `doc/pkg` is a committed artefact, and the two tests below load it rather than building
+/// one — so without this they report on whatever was last committed instead of on the tree
+/// under test.  That is not hypothetical: the bundle was a YEAR older than the source when
+/// loft#1189 was filed, and it predated `client_loop`'s call to `kernel_swap_step`, a native
+/// the browser kernel did not supply.  Both tests were green throughout.
+///
+/// The stamp comes from `scripts/wasm_bundle_stamp.sh`, which `make wasm` writes beside the
+/// bundle — ONE home for what the bundle is built from, so the two sides cannot drift.  Read
+/// its header for what the stamp covers and what it deliberately does not.
+///
+/// Failing rather than skipping is the point: a skip here reads the same as a green run to
+/// everything that consumes the suite's result, and a green run about an artefact from another
+/// era is exactly what this exists to stop.
+fn assert_bundle_describes_this_tree() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let script = root.join("scripts/wasm_bundle_stamp.sh");
+    let Ok(out) = Command::new(&script).current_dir(&root).output() else {
+        eprintln!("SKIP-CHECK: cannot run {}", script.display());
+        return;
+    };
+    let want = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let have = std::fs::read_to_string(root.join("doc/pkg-src.stamp"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    assert!(
+        !want.is_empty() && want == have,
+        "doc/pkg was built from a different tree — this test would be reporting on that build, \
+         not on this one (loft#1189).  Run `make wasm` and commit the bundle.\n  \
+         bundle stamp: {}\n  source stamp: {}",
+        if have.is_empty() { "<none>" } else { &have },
+        if want.is_empty() {
+            "<unreadable>"
+        } else {
+            &want
+        },
+    );
+}
+
 /// FNV-1a 64 — must match `fnv64` in doc/kernel-swap.html.
 fn s6_fnv64(s: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -494,6 +535,7 @@ fn s6_browser_swap_under_living_page() {
         eprintln!("SKIP: chromium/node/harness/bundle missing");
         return;
     }
+    assert_bundle_describes_this_tree();
 
     let port = common::bind_port(18102);
     // The relay server: ticks the sync class; relays "pushblob:" payloads
@@ -740,6 +782,7 @@ fn browser_kernel_one_script_differential() {
         eprintln!("SKIP: chromium/node/harness/bundle missing");
         return;
     }
+    assert_bundle_describes_this_tree();
 
     let port = common::bind_port(18105);
     let server_prog = test_tmp().join(format!("eh_diff_srv_{}.loft", std::process::id()));

@@ -357,6 +357,42 @@ impl Parser {
         if !self.convert(&mut second_code, &second_type, &Type::Boolean) && !self.first_pass {
             self.can_convert(&second_type, &Type::Boolean);
         }
+        // `&&`/`||` do not route through `call_op_as`, so its deferral counter cannot see an
+        // operand pass 1 failed to type — and `handle_operator` publishes `Type::Boolean` for
+        // this expression whatever the operands did, which ERASES the evidence for everything
+        // upstream.  An operand still `Unknown` here is that evidence, and this is the only
+        // place it exists.  Pass 2 re-parses and types it properly, so it matters only where
+        // the source is parsed once; see `Parser::unresolved_types` (loft#1170).
+        if self.first_pass && (tp.is_unknown() || second_type.is_unknown()) {
+            self.unresolved_types = self.unresolved_types.saturating_add(1);
+        }
+        // Both operands of `&&`/`||` are TRUTHINESS positions, so the result is a definite
+        // two-state boolean — C73 (`&&`/`||`/`!` coerce `null` to `false`), which is why the
+        // caller types this expression the non-null `Type::Boolean`.  The left operand becomes
+        // the `if` CONDITION below and a jump coerces it (`OpGotoFalse` tests `!= 1`); the
+        // right operand becomes a branch VALUE, which nothing coerces.  `convert` does not
+        // close that: it inserts a real conversion for every OTHER nullable type reaching a
+        // boolean position (`integer?` picks up `OpConvBoolFromInt`, whose `!= i64::MIN` is
+        // already 0/1), but `boolean?` to `boolean` shares a base type, so it converts to
+        // nothing at all.  `b == true` is the definite-iser — C73's raw compare answers
+        // `false` for the 255 sentinel and is measured identical on both backends — and it is
+        // applied to the one operand the jump never sees.  @FR-E-Truthy, the truthiness
+        // exception to @FR-E-NullArg's contagion.
+        // Not gated on `!first_pass`: a DEFAULT VALUE — a parameter's or a struct field's —
+        // is parsed once, in pass 1, so a pass-2-only wrap left `fn f(b: boolean = t && m())`
+        // answering null while every other position was fixed.
+        //
+        // `Type::Null` is the LITERAL spelling of the same operand (`t && null`), which
+        // `convert` turns into `OpConvBoolFromNull` — the 255 sentinel — and then hands on
+        // unchanged.  It reaches this position the same way and must answer the same
+        // `false`; only the static type differs.  Every OTHER nullable type is already
+        // definite by the time it arrives (`integer?` through `OpConvBoolFromInt`), so
+        // these two are the whole domain.
+        if matches!(&second_type, Type::Optional(inner) if **inner == Type::Boolean)
+            || second_type == Type::Null
+        {
+            second_code = self.cl("OpEqBool", &[second_code, Value::Boolean(true)]);
+        }
         *code = v_if(
             code.clone(),
             if is_or {
@@ -958,7 +994,7 @@ impl Parser {
         self.data.def_used(d_nr);
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
-        let ret_type = self.data.def(d_nr).returned().clone();
+        let ret_type = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
         Type::Function(arg_types, Box::new(ret_type), Deps::none())
     }
 
@@ -1134,6 +1170,16 @@ impl Parser {
 
         self.data.def_used(d_nr);
 
+        // A lambda's own emit is the ONLY thing that may answer this question about it.
+        // `emit_lambda_code` sets `last_closure_work_var` for a CAPTURING lambda and leaves
+        // it alone for a non-capturing one, so a capturing lambda nested in the body just
+        // parsed would otherwise still be the answer — and the assignment site would map
+        // THIS fn-ref to a closure variable that lives in the inner lambda's table.  Native
+        // then emits `var_??` for the closure argument and the program does not compile.
+        // The named-function reset in `definitions.rs` states the same rule one scope out
+        // (*"a lambda inside make_adder leaks last_closure_work_var into the next function
+        // parsed"*); a lambda inside a lambda is the same leak within one body.
+        self.last_closure_work_var = u16::MAX;
         self.emit_lambda_code(code, d_nr);
 
         // Build the user-visible function type from the declared arguments only.
@@ -1142,7 +1188,7 @@ impl Parser {
         // the second-pass closure injection also adds a hidden __closure attribute.
         // Neither should appear in the public Function type — only declared params do.
         let arg_types: Vec<Type> = arguments.iter().map(|a| a.typedef.clone()).collect();
-        let ret_type = self.data.def(d_nr).returned().clone();
+        let ret_type = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
         // include the closure work var dep so that get_free_vars knows
         // a local ___clos_N variable owns the closure (and will free it).  Without
         // this dep, the Function arm in get_free_vars would emit a duplicate free.
@@ -1423,6 +1469,8 @@ impl Parser {
 
         self.data.def_used(d_nr);
 
+        // See the twin in `parse_lambda`: only this lambda's own emit may answer.
+        self.last_closure_work_var = u16::MAX;
         self.emit_lambda_code(code, d_nr);
 
         // The public Function type is the DECLARED parameters only — the first
@@ -1435,7 +1483,7 @@ impl Parser {
         let arg_types: Vec<Type> = (0..n_params)
             .map(|a| self.data.attr_type(d_nr, a))
             .collect();
-        let ret_type = self.data.def(d_nr).returned().clone();
+        let ret_type = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
         // include closure work var dep (same as fn-form lambda).
         let dep = if self.last_closure_work_var == u16::MAX {
             Deps::none()
@@ -1485,7 +1533,7 @@ impl Parser {
             let visible_params: Vec<Type> = (0..n_visible)
                 .map(|aid| self.data.attr_type(d_nr, aid).clone())
                 .collect();
-            let ret_tp = self.data.def(d_nr).returned().clone();
+            let ret_tp = self.published_ret_type(d_nr, self.data.def(d_nr).returned().clone());
             // fn-ref depends on closure work var `w` so that
             // get_free_vars does not emit OpFreeRef for the closure record
             // before the fn-ref escapes the defining scope.

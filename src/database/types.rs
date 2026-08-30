@@ -206,6 +206,43 @@ impl Stores {
         self.names.contains_key(name)
     }
 
+    /// Take on the type definitions `from` has and this schema does not.
+    ///
+    /// A debug session parks a `State` whose `Stores` was CLONED from the parser's when the
+    /// program was compiled, and every later parse — an `__eval_N` the debugger compiles over
+    /// the paused frame — registers its types in the parser's schema only.  A record of such a
+    /// type then has an id the running `State` cannot resolve, which is the panic loft#1187
+    /// records for its fourth route: *"a struct type defined after the `State` was built is not
+    /// in its schema"*.
+    ///
+    /// Ids are POSITIONAL, and that is what makes the sync a plain append: both schemas grew
+    /// from one clone, so this one is a prefix of `from` and every id keeps its meaning.  A
+    /// schema that is NOT a prefix is left alone rather than merged — renumbering ids under a
+    /// running program is how a keyed read starts naming a type the program never used
+    /// (`LOFT_STRICT_SCHEMA_IDS`), and refusing is the recoverable direction.
+    ///
+    /// Returns whether the schemas agree afterwards.
+    pub fn adopt_new_types(&mut self, from: &Self) -> bool {
+        if from.types.len() < self.types.len() {
+            return false;
+        }
+        if self
+            .types
+            .iter()
+            .zip(from.types.iter())
+            .any(|(a, b)| a.name != b.name)
+        {
+            return false;
+        }
+        for tp in &from.types[self.types.len()..] {
+            self.types.push(tp.clone());
+        }
+        for (name, id) in &from.names {
+            self.names.entry(name.clone()).or_insert(*id);
+        }
+        true
+    }
+
     /// The registered db structure name of a built type id (the reverse of `name`).
     /// `""` for an out-of-range id.  Used by typedef to derive a synth `__nullable<S>`
     /// enum's db name from its payload struct's (already-disambiguated) db name.

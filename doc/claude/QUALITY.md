@@ -149,6 +149,16 @@ real product: the `⇐` expected-type channel has **ten push sites carrying six 
 admission lists**, and `Type::Tuple` is in none of them — which is why the same shapes still
 fail in a `return` and in an argument, filed as **loft#1122**.  A `--native`-only silent wrong
 answer found beside it is **loft#1123**.
+**B7g walked `@FR-G-Mono`, picked because the bug review names generic/monomorph as the
+sharpest RISING class and because `formal/interfaces.md` carried the same unmeasured `OPEN: 0`
+sentence `formatting.md` had.** One question — relate a template type to a concrete one — had
+**five homes carrying four different lists** of which `Type` formers to descend, and the
+DECLARATION read the rule while the CALL did not: `fn f<T>(x: T?, d: T)` was accepted where it
+was written and reported as *"Unknown function"* at every call, at every type.  The corpus is
+why nothing saw it — **166 generic declarations in the tree and every one puts a bare `T` or a
+`vector<T>` first**.  Closed by deriving all four from the keystone; unlocking the refused
+shapes then produced three more (loft#1175, #1176, #1177), one of which is refused rather than
+shipped because its cure turns a refusal into a crash.
 **B6w walked the issue B6v had FILED (loft#1134) and found the report inverted**: the route it
 called broken was the only correct one, and the two it called correct were two mistakes
 cancelling.  The declared layout is what settles such a question — a `LOFT_DUMP_TYPES=1` dump,
@@ -469,13 +479,27 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 330 | 313 | **17** |
+| 337 | 319 | **18** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
 The figures below the fold were measured against the NARROWER matcher this audit shipped with
 (221 · 211 · 10); B4g says what widening it added, why the backlog grew without anything
 regressing, and which site the measurement then took back off it.
+
+loft#1186 moved it to 336 · 318 with the two predicates the join reading needed —
+`parser::tail_joins_with_a_place` and `parser::node_place_root`, both of which unspan the node
+before they match, so they land on the peeling side and leave the opaque column where it was;
+loft#1185 to 337 · 319 with `parser::tail_calls_a_fnref_parameter`, which unspans for the same
+reason.
+
+⚠ **A site can ENTER this table by gaining an arm, and the newest one did.**
+`parser::rewrite_generic_type_defaults` discriminated on `Block` alone until loft#1175 gave it
+a `CallRef` arm; two variants is the threshold, so it arrived as the eighteenth.  It descends
+rather than peels, and cannot be hidden by a wrapper for that reason: its fall-through arm is
+`Value::for_each_child_mut`, which treats a `Span` as a child and hands the walk the node
+underneath.  Peeling there would be worse than redundant — the walk rebuilds what it visits,
+so unwrapping would drop the position the `Span` carries.
 
 **Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
 and conflating them is how a backlog gets "cleared" with nothing fixed:
@@ -1383,10 +1407,14 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 39 | **6** | 33 |
+| 41 | **8** | 33 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
+
+loft#1186 moved it to 41 · 8 with `parser::node_place_root`, the arm-level half of the join
+reading: it resolves a projection by op name AND carries the `TupleGet` spelling, so it lands
+on the handling side and leaves the third column where it was.
 
 ⚠ **The row reads 38 · 5 · 33 and the paragraph above it says 18 · 2 · 16, mostly because the
 SCREEN was widened rather than because sites appeared.** It has moved four times in one merge —
@@ -2273,7 +2301,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 651 | 291 | 4 | **356** |
+| 659 | 300 | 5 | **354** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2287,14 +2315,33 @@ peeled the three sites that decided a nullable collection's LAYOUT, then 643 · 
 it answers *"is this a type CHANGE"* and treats a wrapper mismatch as one, which is the whole
 question `decl_accepts` decides beneath it — and 650 · 291 until loft#1156 added
 `collect_loop_body_sets`, which discriminates on `Value::Loop` rather than on a `Type` at all
-and is counted opaque for want of a wrapper to see through — which reads
+and is counted opaque for want of a wrapper to see through, and 651 · 291 until the
+`@FR-E-NullArg` walk gave `boolean_operator` the `Optional(Boolean)` test that definite-ises
+`&&`/`||`'s right operand — it reads the wrapper's INNER type to decide, so it sees through — which reads
 `Type::Enum(syn, true, …)` to answer with the `Optional` the author wrote, and so is a peel in
-the OTHER direction: it sees through by construction.  B6w's four were: `needs_nullable_wrap`
+the OTHER direction: it sees through by construction.  loft#1190 then moved it to 658 · 297 with
+`use_analysis::copy_allocates_nothing`'s inner walk, which asks *"does duplicating this allocate"*
+of a value struct's fields: it discriminates through `.base()`, so it lands on the seeing-through
+side and leaves the opaque column where it was, and loft#1183 to 658 · 298 by giving the native
+function prologue the heap-return test that arms `FnRefBufGuard` — asked through `.base()`, so a
+`τ?` heap return is read as the heap return it is.  loft#1185 then moved it to 659 · 300: the
+fn-ref-parameter test asks through `.base()` too, and the native call site's heap-return test
+does the same, so both land on the seeing-through side.  B6w's four were: `needs_nullable_wrap`
 asks through `.base()` and sees through,
 while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are opaque ON
 PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored tuple
 attribute, or of the `Some` variant's `payload`), and a stored attribute is already the storage
 spelling, so an `Optional` cannot reach them.  That is the distinction the opaque column is for:
+The `(G-Mono)` walk (B7g) moved the KEYSTONE column rather than either of the other two:
+`Type::map_children` and `Type::zip_children` are the SET and PAIR twins of
+`Type::for_each_child`, so the two substituters and the unifier that used to hand-spell four
+formers, four formers and one now descend through it.  Closing loft#1175 then took one back
+(6 → 5) by deleting the refusal's own `any_node` helper, and added a seeing-through site in
+its place — the movement is what the column is for, not the level.  That is the column to watch — a site
+that derives from the keystone cannot be opaque to a wrapper the keystone knows about, so
+moving a body from `opaque` to `keystone` closes the question for every future variant rather
+than for `Optional` alone.
+
 a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
 every count here is a snapshot of two moving checkouts, so re-run the tool rather than
 reading a number.)  It reproduces **15 of 15** hand answers written down before it was
@@ -3606,6 +3653,263 @@ rewrite worked.  Positions are now resolved by field NAME.
   rule and is correct.  Recorded on the issue so whoever takes the assign/append halves checks it
   against the same fix.
 
+#### B7d — `@FR-F-Spec` walked: a rules doc whose `OPEN: 0` was about its own genre (2026-08-29)
+
+Sixth rule walked, and the first in `formatting.md` — ten rules, no code citation, `OPEN: 0`, so
+it had never been walked at all. The walk found **four defects, two of them silent-wrong and one
+a backend divergence**, plus two more it filed rather than fixed (loft#1165, loft#1166).
+
+**The zero was never a measurement.** Its parenthetical said *"a rules doc — it shrinks
+operational.md's D-op-1, adds no code deviation"*, which is a claim about the DOC'S GENRE, not
+about the code. No oracle stood under it, so nothing could have moved it off zero. That is a
+sharper version of the standing warning that an `OPEN: 0` is only as strong as its oracle: here
+there was no oracle to be weak, and the line still read like a result.
+
+**All four had a correct neighbour, which is what kept them invisible.** The conformance section
+already warns that *"a differential oracle cannot see a flag both backends drop"*; every one of
+these is the next case along — both backends agreed, and agreed on the wrong answer.
+
+| defect | the neighbour that was right |
+|---|---|
+| `{a / b:<12}` right-aligns `null(/0)` | `{n:<12}` left-aligns a bare `null` |
+| `{p:J}` / `{p:json}` are not `{p:j}` | `{p:j}` renders JSON correctly |
+| `{n:0>5}` — a comparison reaches the width | every FLAG is already order-independent |
+| `{n:e}` / `{n:j}` panic `"Unknown radix"` | the four radixes an integer has arms for |
+
+The first is [[keystone-claim-is-a-measurement]] in miniature: six lines existed in THREE copies,
+and a comment claimed the interpreter inlined them "to keep the hot path tight" — the inline body
+was a `format!` and a call, the same work. Folding the two copies onto the shared function fixed
+the bug and removed the place it could come back.
+
+**The third is a carve-out comment naming its own residual, for the second time this month.**
+`string_states` was rewritten to consume the flags in any order, and its note records the failure
+exactly: an out-of-order flag *"was simply left in the stream for the WIDTH expression to find"*.
+A `0` fill is left there for the identical reason — the fill branch can only claim a lexer TOKEN
+and a digit lexes as an Integer — so `{n:0>5}`, how a reader coming from Rust spells zero-pad,
+rendered unpadded on `--interpret` and reached rustc as `E0308 expected i64, found bool` on
+`--native`. [[carve-out-comment-is-a-map]]: grep the carve-out, not the symptom.
+
+**The rule wanted extending, not just enforcing.** F-Spec listed the flags and never mentioned
+the FILL character at all, though it is implemented and is the whole reason a digit in that
+position is ambiguous. An edge the rules cannot express is the rules asking to grow: `F-Spec-Fill`
+now says fill comes first and cannot be a digit, and `F-Spec-Exec` says a part the renderer
+cannot execute is refused rather than dropped — which is the L9 rule that was already written
+beside the code, and had only ever been asked about `text` and `boolean`.
+
+**A guard whose control fails by COMPILE ERROR scores its runtime cells vacuously.** The first
+version of the guard pinned everything in one file; `make falsify` reported `1|0` on the control
+— exit 1, **zero** assertion failures — because the `{p:J}` cells do not compile there, so the
+program never ran and the alignment cell it was written for was never reached. Split in two, each
+half fails on the control through its own channel: `1|1` for the runtime file, `1|0` for the
+spelling one, and the second file says in its header why its assert count is 0 on purpose. This is
+[[absent-warning-is-not-a-pass]] one level up — not the wrong channel, but a channel that cannot
+speak because an earlier one already stopped the run.
+
+**The side finding: the test harness dropped assertions.** Writing the refusal guard surfaced that
+`@EXPECT_ERROR` bound to nothing in some positions. `parse_annotations` states one rule — *"any
+pending annotations not followed by a fn → file-level"* — and had three sites implementing it, of
+which only the EOF one did; the `struct`/`enum` and non-comment arms **cleared** instead.
+Measured over `tests/scripts` + `tests/docs`: **7 annotations in 2 files were bound to nothing and
+never checked**, six of them in `102b-pass1-expected-errors.loft` in front of the very
+`struct integer` / `enum hash` declarations they describe. Falsified rather than assumed — the one
+in `persist-bind-field-store-757.loft` was given a warning text that exists nowhere and the file
+passed exactly as before; after the fix that same edit FAILS. All seven claims turn out to be
+true, so nothing was hiding behind them; they are simply live now.
+
+⚠ **A second shape from the same census is measured and NOT fixed.** An annotation in the file
+HEADER is routed to file-level even when a `fn` follows it immediately, which contradicts the
+binder's own comment (*"still binds the annotation to test_foo"*). It is uniform: **12 files have
+exactly one such annotation each, always the first**, including `36-parse-errors.loft` (34 other
+per-function annotations) and `102b` (15). Those annotations are not dead — they pass if ANY error
+in the file matches — but they cannot detect that their own function stopped producing the error.
+Fixing it makes 50 files strictly stricter and each red would need its own attribution check, so
+it wants its own pass rather than a ride on this one.
+
+#### B7e — `@FR-E-NullArg` walked: the rule that forbade what the language ships (2026-08-29)
+
+Seventh rule walked, and the first in `operational.md` — 17 rules, two of them cited, and
+`E-NullArg` itself uncited. The walk found **one silent-wrong that breaks a type-system
+promise** (fixed here, D-op-6), **one rule that over-claimed** (fixed in the doc), and **one
+misattributed diagnostic** (filed, loft#1169). A position sweep of the fix then turned up a
+second root, unrelated to the rule and also filed (loft#1170).
+
+**The finding: `&&` and `||` kept a null RIGHT operand.** C73 — the three-state boolean — says
+`&&`/`||`/`!` coerce `null` to `false`, and the parser types the whole expression the non-null
+`Type::Boolean` on the strength of it. But `true && maybe()` answered **`null`**, so
+
+```loft
+r: boolean = t && maybe_bool();   // compiles clean
+r == null                         // true, on a variable declared `boolean`
+```
+
+and the same value reached a `boolean` STRUCT FIELD and a `vector<boolean>` element — non-null
+storage holding the 255 sentinel — while `(t && maybe()) ?? true` discharged it to `true`, so a
+defensive fallback answered the opposite of the decision. Both backends agreed throughout;
+there was nothing for a differential oracle to see.
+
+**One home, and the right operand never reached it.** The lowering is `a && b` → `if a { b }
+else { false }`, so the LEFT operand becomes the `if` CONDITION and the jump coerces it
+(`OpGotoFalse` tests `!= 1`), while the RIGHT operand becomes a branch VALUE that nothing
+coerces. `convert` looks like the second home and is not: every *other* nullable type reaching a
+boolean position picks up a real conversion (`integer?` gets `OpConvBoolFromInt`, whose
+`!= i64::MIN` is already 0/1) — which is why `t && maybe_int()` was correct all along and is
+kept as the control cell — but `boolean?` → `boolean` shares a base type and converts to
+**nothing at all**. Fixed in `Parser::boolean_operator`, the one site that knows both operands
+are truthiness positions, by wrapping a nullable-boolean right operand in `b == true`; that is
+C73's own raw compare, it is parser-side so both backends inherit it from one IR change, and
+short-circuit is untouched (measured with a counting right operand, not argued).
+
+**The rule is what let it stand, and no oracle could have moved the register.** `(E-NullArg)`
+named comparisons as the ONLY exception to contagion and never mentioned truthiness — so a `&&`
+answering `null` read as the rule being *obeyed*, not as C73 being broken. The register said
+`OPEN: 2` throughout. This is a sharper version of B7d's lesson: there, an `OPEN: 0` was only as
+strong as its oracle; here it was only as strong as **the rules above it**, and no amount of
+measuring would have found a deviation from a rule that described the wrong contract.
+`(E-Truthy)` now names the positions that coerce, and is what the fix cites.
+
+⚠ **The same rule over-claimed in the other direction.** Its ordering clause said null orders
+low *"the SAME for `integer`, `character`, `float`, `single`, `boolean`"* — but `<` on two
+booleans is REFUSED at compile time, deliberately: there is no `OpLtBool` and `Ord` lists
+`integer`/`single`/`float`/`text`. Equality is uniform across all of them, ordering only across
+the ordered ones. The existing uniformity guard covered float, single, integer and character —
+four of the five types its own rule named — so the two it omitted were exactly the two the rule
+got wrong. **A guard that carries a subset of the types its rule enumerates is where an
+over-claim survives**; `boolean` and `text` cells were added to it.
+
+⚠ **Twelve of the new guard's cells are BLIND to the bug it guards, and that is worth knowing
+before writing the next one.** The natural spelling of a truth-table cell is
+`assert(!(t && maybe()))` — and `!` is *itself* a coercing position, so `!null` is `true` and
+every one of those cells passed on the broken build. Only `== false` / `== null` — the raw
+compare — can see the sentinel. Each load-bearing group was then measured against the control
+**separately**, because a failed assert stops the run and one falsified line says nothing about
+the twenty after it.
+
+The compiler was also making the claim out loud: `s.on == null` emits `redundant-null-check`,
+*"'on' is 'not null', comparison is always false"* — beside a comparison that answered `true`.
+A lint stating an invariant is a place to check that the invariant holds.
+
+⚠ **The fix had a hole at one position, and only a POSITION SWEEP found it.** The first version
+was gated on `!self.first_pass` — reflex, not reasoning — and a parameter default is parsed
+**once, in pass 1**, so `fn f(b: boolean = t && maybe())` still answered `null` while a struct
+field default, a return, a lambda body, a `for` body and a `while` condition were all fixed. The
+matrix that found the bug could not have found this: it varied the OPERAND, and this varies where
+the EXPRESSION sits. Sweeping the positions a construct can occupy is cheap and belongs in the
+verification of any parser-side fix.
+
+**And the sweep found a second, unrelated defect — loft#1170, filed.** A parameter default that
+is a COMPOUND expression whose operand calls a function declared BELOW drops that operand:
+`= 1 + late(0)` stores just `1` and `= true && late(0)` answers `false` where the truth is
+`true`, both backends, no diagnostic, with the interpreter corrupting its stack on the way out.
+That is `#1086`'s class one axis over — its hoist triggers on `unresolved_names`, and a
+forward-declared CALL resolves its name while leaving its RETURN TYPE unlinked, so the identical
+collapse happens with the counter reading zero. Two plausible detectors were measured and
+rejected before filing (the default's own `dtype`, which `&&` overwrites with a concrete
+`Type::Boolean` regardless of its operands; and `can_convert`, which is itself behind
+`!first_pass`) — recorded in the issue so the next attempt does not re-spend them.
+
+**Filed, not fixed — loft#1169.** A null that merely *passes through* a fault-prone op is
+rendered as that fault: `{v[1]}` on a `vector<integer?>` whose element is genuinely null says
+`null(oob)` with the index in range, and `{n / a}` with a null dividend and `a == 5` says
+`null(/0)`. The tag is chosen at PARSE time from the op's shape and consumed at run time from
+the VALUE, so the two facts that must meet — *this op could fault* and *this op did fault* — are
+one and none. The runtime log is correct throughout, so `(E-Report)` holds; it is the render
+path alone. Not fixed here because the missing fact lives in nine `#rust` bodies on the hot path
+(`OpDivFloatNullable` is bare `@v1 / @v2` with no `s` in scope), and `src/parser/operators.rs`
+already carries a deferred note pointing at the shape the fix probably wants.
+
+#### B7f — the two the walk filed, closed (2026-08-29)
+
+Both roots B7e filed were then fixed in the same session, and closing them turned up a third
+thing plus one measurement that looked like a fourth and was not.
+
+**loft#1170 — a parameter default dropped its forward-declared call.** `= 1 + late(0)` stored
+the bare `1`; `= true && late(0)` answered `false` and left the interpreter a short stack that
+SIGSEGV'd on the way out. Nine spellings collapsed (`+ - * / % == >` and both short-circuits),
+both backends, silently.
+
+The cause is #1086's exactly one axis over, and its own carve-out named the spot: that fix
+hoists a default whenever pass 1 could not resolve something, and measures it with
+`unresolved_names` — a count of identifiers that resolved to NOTHING. A forward-declared CALL
+resolves its NAME (definitions are recorded before bodies are parsed); what is missing is the
+RETURN TYPE, so `call_op_as` defers, returns `Unknown` **without building the operator**, and
+leaves `code` as the bare left operand — with the counter reading zero the whole time.
+`unresolved_types` is its sibling, incremented at the two sites where pass 1 actually gives up,
+and the hoist is the cure that already existed.
+
+⚠ **`&&` erases the evidence, which is why the obvious detector fails.** `handle_operator`
+publishes `Type::Boolean` for a short-circuit whatever its operands did, so `dtype` — the
+default's own type, which the type-check three lines below already reads — is concrete even
+when an operand was never typed. That candidate was built and measured before being rejected;
+it is recorded in the issue so the next attempt does not re-spend it. **A type published by
+the construct is not evidence about its operands.**
+
+**loft#1169 — a null that passed THROUGH a fault-prone op wore its name.** The tag is armed at
+parse time from the op's SHAPE and consumed at run time from the VALUE, so *could fault* and
+*did fault* were one fact and none: `{v[1]}` on a genuinely-null element read `null(oob)` with
+the index in range, and `{n / a}` with `a == 5` read `null(/0)`. Cells A and B were then
+indistinguishable, and so were C and D — **a tag that cannot be wrong is also carrying no
+information**. `Stores::keep_format_fault_if` is the rule in one place and every fault-prone
+`*Nullable` peer calls it with its own answer; the peers err toward CLEARING where the two
+cases are not cheaply separable, because a missing tag is honest and a wrong one is not. The
+filed issue judged this needs-design on the grounds that the fact "lives in nine `#rust` bodies
+on the hot path" — true about the location, wrong about the cost: every one of those tests sits
+on a branch the op already takes, and the peers are emitted only at guarded sites, never on the
+common `v[i]` read. **A blocker written from the shape of a fix is a hypothesis** — see B6.
+
+⚠ **The first version of this fix had the peers CLEAR the tag when they had not faulted, and
+that broke a case the unfixed build got right.** Only the OUTERMOST op in a hole is armed, but
+every fault-prone op in it runs — so a clearing peer erases a cause an INNER op just recorded.
+`{v[0] / z}` — a genuine division by zero after a successful read — lost its `/0`. It was
+caught by asking *"what did this build answer that the old one got right?"*, which is the
+[[optimisation-guard-needs-a-control-cell]] question in a non-optimisation setting: **a fix
+that removes wrong output needs a cell where output must SURVIVE**, or "removed the tag
+entirely" passes every cell. Every inherited-null cell in the guard would have passed.
+The shape it forced is better than the one it replaced: `OpTagFault` now only ARMS the hole,
+`note_format_fault` is the single place a cause is written, and a peer that inherits a null
+LEAVES the tag — so `{v[9] / 2}` reports the overrun that actually produced its null, which no
+build before this one did. Arming is what confines it to format scope, since the same peers
+serve a `??` discharge.
+
+⚠ **And the state had to leave `Stores` for a reason no probe on `--interpret` could show.**
+Written as `stores.note_format_fault(…)`, the fix passed every cell on the interpreter and
+every hand-run `--native` probe, then failed `native_scripts` on ONE of 898 corpus programs
+with `E0502`: the native emitter inlines an op's `#rust` body into whatever expression contains
+it, so the body landed inside another `stores.` call's argument list —
+`stores.enum_val(80, ({ … stores.note_format_fault(…) … }))` — one immutable borrow, one
+mutable, both live. `fill.rs` emits each body as its own statement, so the interpreter can
+never see it. The cause now lives in a thread-local in `ops` and the peers call free
+functions, which borrow nothing and compose in any position; per-thread is also the right
+scope, since a `par` worker renders its own strings.
+
+**The lesson is about which corpus can see a class.** A `#rust` body is a fragment pasted into
+positions the author never picks, so its blast radius is *every context the emitter can put it
+in* — and the only instrument that enumerates those is the 898-program native compile. Two
+hand-written `--native` probes and a three-guard suite all passed. For any `#rust` body that
+gains a `stores.`/`s.` CALL, `cargo test --test native native_scripts` is the gate, not a
+probe.
+
+**A third defect, found by asserting the fix rather than the bug: `"hi"[9]` disagreed across
+backends.** Writing the guard cell for a REAL text overrun turned up `null(oob)` on
+`--interpret` and empty on `--native`. `(F-Render)` settles it in one line — a null character
+renders as nothing, *so that iterating text past its end appends no garbage* — so the
+interpreter's extra was the deviation, and `append_character` now drops the tag it still takes.
+`D-fmt-4`, opened and closed. Nothing pinned it: the four `fmt43_*` cases are all integer holes.
+
+⚠ **And one measurement that read exactly like a fourth defect and was correct behaviour.**
+`5.0 / 0.0` renders `inf`, not `null(/0)`, which `(E-Uncomp)` — "op is `/`/`%` with v₂ = 0, the
+result is null" — appears to forbid. It is deliberate: the float null IS the NaN, `inf` is a
+representable value rather than a missing one, and loft#983 reverted forcing NaN because it made
+one expression answer `inf` inline and `null` once bound, and made `a / b ?? 0.0` guard nothing.
+I had already written "want null" into a probe and a guard comment before reading the note at
+`OpDivFloat` that says all of this.
+
+**That is the third false positive this family of rules has produced, and it is the same shape
+as the defect the walk started from.** `(E-NullArg)` forbade what C73 ships; `(E-Uncomp)` forbade
+what loft#983 decided. An incomplete rule does not merely fail to catch bugs — it MANUFACTURES
+them, and each costs a probe, a hypothesis and very nearly a wrong fix. Both carve-outs are
+written down now, each beside the rule it corrects —
+[[incomplete-rules-doc-is-costlier-than-none]] for the earlier count.
+
 #### C — process / skills
 
 | item | state |
@@ -3617,6 +3921,170 @@ rewrite worked.  Positions are now resolved by field NAME.
 | a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, seven modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g); `optional` asks the same question over the TYPE former — who resolves a shape without peeling `τ?`, plus the caller-side `.base()` list (B6p). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
 | a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
 | the negative-control gate's LEAK channel | ⚠ **blind for the corpus's standard guard shape** — `falsify.sh` reads "stores not freed" off stderr, which only a `main`-ful `--interpret` run prints; `--tests` does not leak-check at all (that gate lives in `tests/wrap.rs`). So a leak guard written `main`-less scores INERT on both trees and is recorded as a LOCK. Measured on `a-nullable-return-joins-its-branch-arms.loft`, which `make ci` failed while falsify read `0|0|none|none` (B6p). Warning written into the tool's header; the cure — a leak check on `--tests` — is a decision about every library's `loft test` |
+
+#### B7g — `@FR-G-Mono` walked: the declaration read the rule and the call did not (2026-08-29)
+
+Picked because the bug review names **generic/monomorph** as the sharpest RISING class
+(+7.0 pp, 13 of this cycle's issues against a 1.4 % peak), and because `formal/interfaces.md`
+carried the same unmeasured `OPEN: 0` sentence `formatting.md` had — *"a rules doc … adds no
+code deviation"*, a claim about the doc's GENRE with no oracle under it.  Two independent
+signals at one doc.
+
+**The disagreement, found by reading before any probe.** One question — *"relate a template
+type and a concrete type"* — has five homes, and they carry four different lists of which
+`Type` formers to descend:
+
+| former | `for_each_child` (keystone) | `rewrite_type_opt` | `rewrite_unknown` | `substitute_type` ×2 | `resolve_type_var` | `extract_type_var` |
+|---|---|---|---|---|---|---|
+| Vector · Optional · Tuple | ✓ | ✓ | ✓ | ✓ | Vector only | Vector only |
+| Iterator | ✓ | ✓ | · | ✓ | · | · |
+| RefVar · Rewritten | ✓ | ✓ | ✓ | · | · | · |
+| Function | ✓ | ✓ | · | · | · | · |
+
+`Type::contains_def`'s own doc claims the GET side *"had drifted behind the SET side"* and names
+Function among the children *"that `substitute_type` DOES rewrite"*.  It does not, and has never
+— the GET side was derived from the keystone and the SET side never was, so the comment records
+the repair of one half as if it were both.
+
+**The defect the disagreement produced is a legal declaration no call can reach.**  The
+DECLARATION-side check that a generic's first parameter carries the type variable is
+`arguments[0].typedef.contains_def(tv_nr)` — keystone-derived, all seven formers.  The
+CALL-side reads were the two narrowest rows above.  So `fn f<T>(x: T?, d: T)` is accepted where
+it is written and reported as **`Unknown function f`** at every call, at every instantiating
+type.  Same for `(T, T)`, `(T, integer)`, `iterator<T>`, `vector<T>?` and `fn(T) -> …`; and
+`fn(T) -> T` in a LATER parameter was refused with *"expected `fn(T) -> T`, got
+`fn(integer) -> integer`"* — the substitution the message itself asks for.
+
+**Why no oracle saw it, measured rather than asserted.** Across `tests/scripts`, `tests/docs`,
+`default/` and `doc/`, **166 generic declarations put a bare `T` or a `vector<T>` in the first
+parameter and not one puts anything else** — exactly the two arms the descent knew.  The
+implementation and its corpus were written against each other.  This register's own axis list
+(TYPE for #1028, OPERATION for the `??` check, SPELLING for the write, RETURN TYPE for #1032,
+ARGUMENT SPELLING for #1029) had never included *which FORMER the first parameter wears*, and
+the `T?` guards are the sharpest illustration: every one of them writes
+`fn g<T>(v: vector<T>, a: T? = null)`, putting the carrier first, so the file that exists to
+test nullable type variables would not compile with the `T?` in front.
+
+Closed by deriving all four from the keystone — `Type::map_children` (the SET twin) and
+`Type::zip_children` (the PAIR twin, for a walk descending two type trees at once), both
+exhaustive.  `extract_type_var`'s LEAF also became precise, a type-var placeholder rather than
+any `Reference`, so `(P, T)` answers with `T` instead of with whichever the walk reached first.
+
+**Unlocking a refused shape is where the walk earned its next three findings**, which is the
+[[refusal-beats-backend-divergence]] rule paying out: every newly-reachable cell has to be run
+on both backends, and three of them were not clean.
+
+- **loft#1175 — CLOSED.** `fn(T) -> T` at `T = text` entered its callee one hidden `&text` work
+  buffer short, because the count is read off the return type where the call is LOWERED and the
+  return is still `T` there.  `--interpret` faulted on the corrupt frame, `--native` answered
+  correctly.  Closed by DEFERRAL — the count is re-asked per monomorph, which is the cure this
+  class already has (loft#1020's null test, loft#1028's null literal, loft#1032's yield channel).
+  ⚠ The obvious cure was built and measured first: `fnref_text_buffers`' doc says its loose
+  candidate test can only *"mint a buffer nothing uses, which the pop removes"*, so counting a
+  parametric return as a text candidate looks free.  It cured `text` and made **all six other
+  instantiations abort** — a non-text return has no `__retbuf` protocol for the pop to trim
+  against.  The looseness is safe within the text family, not across its boundary; the site's
+  own claim was the thing to falsify, and all six are cells in the guard for that reason.
+  ⚠ **And the deferral's own first version diverged on the OTHER backend.** A buffer minted
+  after the parse is not declared at the top level, so `scopes::check` scoped it to the argument
+  block and freed it before the callee filled it: the interpreter stayed correct while
+  `--native` emitted a `String` declared inside the block and an empty `OpCreateStack`, which
+  does not compile.  The repair is a top-level `Set` hoist — a replay `patch_tret_callers`
+  already performs, with its reason written at the site, two hundred lines from where I needed
+  it.
+- **loft#1177 — CLOSED, and it was two defects.** A lambda with a DECLARED `-> vector<…>`
+  aborted the compiler: a lambda gets a return buffer from neither reservation path — the
+  signature-time one excludes lambdas by name, and the between-passes one skipped a lambda whose
+  return was declared rather than adopted — so pass 2 GREW `__vdb_1` and H5 reported the
+  divergence.  The sentence justifying the skip, *"the signature-time path already served it"*,
+  was never true of a lambda; it was true of the RETURNS that need no buffer, which is why a
+  declared `-> P` and `-> E` were fine and only a collection was not.  **Not a generic defect at
+  all** — the concrete twin ICEs identically, the loft#1029 lesson again.
+  Reserving the buffer then exposed the second, and it is this walk's own class one more time:
+  `scopes::callref_owned_return` decides whether a closure call hands back a store the caller
+  must own, and its arms named `Reference` and record-`Enum` over a `_ => None` that reads as
+  *"nothing else needs owning"*.  A store-backed collection contradicts that.  **A HASH return
+  leaked the same way and always had**, which is what says the `_` was short by the whole
+  collection family rather than by the former the issue is named for — found only because the
+  vector fix made a sibling cell worth running.
+- **loft#1176 — CLOSED, and it took its opposite down with it.** A monomorph whose tail is a
+  FN-REF call leaked its returned struct when used inline: the arm loft#1066's fix does not
+  reach, and that commit names it in advance — `monomorph_return_is_fresh` is a positive proof
+  read off the body, and *"a `return` of a CALL is the callee's fact and answers false"*.
+  Checking #1066's own repro first is what made this a sibling rather than a re-report.
+  ⚠ **The obvious discriminator was built, measured, and does not discriminate.**
+  `scopes::inline_struct_return` decides the same question for a `??` subject with *"only a
+  CAPTURING fn-ref can hand back a store the caller's scope owns"* (loft#1114), reading the
+  fn-ref type's own deps.  Applied here it answered *capture-free* for a capturing lambda and a
+  minting one alike — because there the fn-ref is a LOCAL whose type was INFERRED at the bind,
+  so its deps name the closure record, and here it is a PARAMETER whose type was DECLARED, and
+  a declared fn-type carries no deps whatever is passed.  **The same predicate, sound in one
+  position and inert in the other, distinguished by where the type came from.**
+  The fact is not unreachable, only unreachable from INSIDE the callee: at the CALL SITE the
+  caller named the closure it passed, so `fnref_target` resolves it and the target's own
+  body-shaped proof decides.  Both ownership reads are required and neither is redundant —
+  `returns_borrowed_view` catches a lambda handing back its own PARAMETER, and
+  `monomorph_return_is_fresh` catches one handing back a CAPTURE, which the deps proxy calls
+  owned because the dep names the hidden `__closure`.
+  ⚠ **And the reference route was the one that was silently wrong.** Scoring the broken
+  monomorph against the hand-written concrete twin — the [[reference-route-is-the-oracle]]
+  move — is what found it: the twin lifts on the deps proxy ALONE, so a capture-returning
+  closure had its record FREED, answering another value on the next iteration and garbage
+  after the scope, on both backends.  The two routes were wrong in opposite directions, and
+  the one this issue was filed against was the safe half.  So the resolution now gates BOTH,
+  ahead of every signature-carried fact: a `-> P` says the same thing whether the closure
+  mints, hands back the caller's argument, or hands back a capture.
+- **loft#1179 — CLOSED, and it was the formal register's own open deviation.** A fn-ref call
+  site allocates one store per hidden return attribute, because it cannot know which function
+  the slot holds — and a callee that delivers its return some other way left it owned by
+  nobody.  `formal/closures.md` D-clo-7 had named the mechanism a month earlier and left it
+  open: *"a direct call site mints the return buffer as a caller LOCAL it frees at scope exit,
+  while the fn-ref path has `fn_call_ref` allocate a store the rebinding body never adopts"*.
+  Reading that sentence is what turned three separate-looking reports into one free in
+  `State::fn_return`, keeping the buffer the callee handed back — identified by STORE, since a
+  callee that delivered through it may answer a record inside it.
+  `--native` never had it, which is where the shape of the cure came from: its dispatch passes
+  the null sentinel for a Reference return and frees an unfilled `__vc_hbuf` for a vector one.
+  ⚠ **Two of the three reports it was supposed to close are only half-closed, and the guard
+  says which half.**  loft#1180's leak is gone and its SILENT WRONG is not — a lambda handing
+  back a captured collection has its capture ADOPTED by the bind and released at scope exit,
+  so the captured variable reads empty from the second call on, both backends.  That was
+  filed as a leak because the probe called it INLINE; binding the result is what shows it, and
+  [[print-inside-the-loop-is-vacuous]]'s lesson is the same one — the spelling you probe with
+  decides which channel can move.  loft#1178's reservation is safe to widen on `--interpret`
+  now and still refused, because `--native` cannot COMPILE the widened shape (the map desugar
+  declares `var__map_result_1` inside the comprehension block and `ref_return` returns it from
+  outside), and one backend accepting what the other refuses is worse than both refusing.
+- **loft#1180 — CLOSED, and the report it started from was measuring the wrong channel.**  A
+  lambda handing back a captured COLLECTION had its capture ADOPTED by the caller's bind and
+  released at scope exit: the captured variable answered EMPTY from the second call onward, on
+  both backends.  `fnref_result_type` drops a return-dep index naming no visible argument, on
+  the grounds that *"the value arrives OWNED"* — true of a hidden work buffer, false of
+  `__closure`, which is the caller's own record.  Third position for loft#1114's sentence.
+  ⚠ **It was filed as a LEAK because the probe called the lambda INLINE.**  Nothing binds an
+  inline result, so nothing adopts it, and the wrong answer cannot appear —
+  [[print-inside-the-loop-is-vacuous]]'s lesson from the other side: the SPELLING a probe uses
+  decides which channel can move, and a leak channel that moves is not evidence that the value
+  channel is clean.  The cell that scores it binds, in a loop, and reads the capture back.
+  ⚠ **And the repair had to be narrowed TWICE, both times against a measured cost.**  A
+  dep-index test alone cannot separate `{ cap }` from `{ sr_make(k) }` — a fresh store built
+  FROM a captured value carries the same out-of-range index — so restricting to a CAPTURING
+  slot was not enough and the second restriction is the type former: a struct, record-enum or
+  text return is materialised into a fresh copy before it leaves, so only a COLLECTION return
+  hands the capture across.  Without that, eleven stores leak in
+  `717-closure-struct-return.loft`, which is the guard that caught it.
+
+⚠ **And one measurement that read as a fourth and was not.** The `T = struct` fn-ref cell first
+looked like a pre-existing leak, because the "twin" beside it leaked too — but that twin applied
+the function TWICE (`f(f(x))`) while the generic applied it once.  The one-application twin is
+clean, so the leak is monomorph-only and belongs to #1176.  A twin that differs from its subject
+in a second way is not a twin, and the leak channel cannot tell you which difference produced the
+warning.
+
+The `optional` table above moved on its KEYSTONE column for the first time (4 → 6): a body that
+derives from `for_each_child` cannot be opaque to a wrapper the keystone knows about, so moving
+a site from `opaque` to `keystone` closes the question for every future variant rather than for
+`Optional` alone.
 
 #### B2 — open, and the owner's call
 

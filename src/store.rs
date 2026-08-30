@@ -287,6 +287,17 @@ pub struct Store {
     pub tag: u32,
     /// When true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
+    /// Which allocation this slot is, on `Stores`' monotonic counter.
+    ///
+    /// Slot NUMBERS are reused, so `store_nr` alone cannot answer *"is this the same store I
+    /// saw earlier?"* — and two questions in the fn-ref return path need exactly that: whether
+    /// a returned store was minted DURING a call (`State::release_fnref_bufs`, loft#1185), and
+    /// whether a remembered handle still names what it named when it was remembered. The
+    /// counter never repeats within a run, so a comparison against a snapshot answers both.
+    ///
+    /// Stamped where the slot goes live, beside `created_at`, which records WHERE rather than
+    /// WHEN.
+    pub alloc_serial: u64,
     /// Bytecode position that allocated this store (via OpDatabase).
     /// Used for diagnostics when a store is leaked at program exit.
     pub created_at: u32,
@@ -538,6 +549,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
             free_root: 0,
@@ -663,6 +675,7 @@ impl Store {
             recording: None,
             tag: 0,
             borrowed: false,
+            alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
             pinned: false,
@@ -731,6 +744,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
             free_root: 0,
@@ -826,6 +840,7 @@ impl Store {
             read_only: false,
             free_protect_depth: 0,
             borrowed: false,
+            alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
             free_root: 0,
@@ -1780,6 +1795,7 @@ impl Store {
             recording: None,
             tag: self.tag,
             borrowed: false,
+            alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
             pinned: self.pinned,
@@ -1814,6 +1830,7 @@ impl Store {
             read_only: false,
             free_protect_depth: self.free_protect_depth,
             borrowed: false,
+            alloc_serial: self.alloc_serial,
             created_at: self.created_at,
             last_op_at: self.last_op_at,
             free_root: self.free_root,
@@ -1857,6 +1874,7 @@ impl Store {
             recording: None,
             tag: self.tag,
             borrowed: true,
+            alloc_serial: 0,
             created_at: 0,
             last_op_at: 0,
             pinned: self.pinned,

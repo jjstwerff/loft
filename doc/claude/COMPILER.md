@@ -317,9 +317,9 @@ enums apart, so the mint must stay unconditional. Guarded by the name-collision 
 
 ### The H5 two-pass contract — the lazy-append law
 
-`assert_pass2_def_attr_stable` (`src/parser/mod.rs`, debug-assertions only —
-see [DEBUG.md § the calibration run](DEBUG.md#the-debug-assertions-calibration-run-target-da)
-for why ordinary builds never check it) pins the cross-pass contract:
+`assert_pass2_def_attr_stable` (`src/parser/mod.rs`) pins the cross-pass contract. It is a
+plain `assert!`, so it runs in EVERY build — an ordinary `cargo build --bin loft` aborts on
+it, which is what a user sees when a program trips it:
 
 > **Pass-1 facts are frozen — every pass-1 def number and attr index must be
 > identical after pass 2.  Pass 2 may only APPEND name-keyed synthetic facts
@@ -340,6 +340,36 @@ Everything else stays fatal — notably `__ref_N` / `__retbuf` growth, the
 pass-2-only def or attr.  The appends are safe precisely because they are
 name-keyed and trailing: call sites are re-parsed in pass 2 against the final
 attr list, and no pass-1 number moves.
+
+The snapshot is taken AFTER `reserve_late_return_buffers`, which is what lets a buffer be
+reserved between the passes for a return type pass 1 could not classify (#675). That is also
+the limit of what this check can see: it compares COUNTS. A fix aimed at the count can leave
+the two passes agreeing on how many attributes there are and disagreeing about which VARIABLE
+is the argument — which is the next contract.
+
+### Argument geometry — the attribute list and the slot list are one list
+
+`check_argument_geometry` (`src/state/codegen.rs`) pins the contract *inside* one function:
+
+> **A call site lowers its argument list from the definition's ATTRIBUTES; the callee places
+> its argument slots in `Function::arguments()` order, which is variable-NUMBER order.  The
+> two are the same list, in the same order.**
+
+Nothing made them agree. A return-buffer promotion that retires one argument variable and
+makes a later-numbered one the argument in its place breaks the correspondence silently: the
+call site writes the closure into the return buffer's slot, the body reads its `__closure`
+from the buffer's, and the program answers a zeroed record or a captured integer of `0` — on
+the interpreter only, because `--native` builds its argument list from the attributes alone
+and never consults the variable order (loft#1188, and the collection leg of loft#1178).
+
+The condition is a **type** disagreement at a position, not a name one. Two hidden scratch
+buffers of the same type are interchangeable — the caller pushes two empty `&text`s and the
+callee fills whichever it was handed — and the stdlib's `text::resolve` carries exactly that
+pair in swapped order and answers correctly on both backends. A type disagreement cannot be
+benign in the same way: the slot holds a value of another shape, so every read of it reads
+another argument's bytes. Only a definition whose argument count equals its attribute count is
+compared, because a `#rust` / `#native` body has attributes and no variable table and a
+promoted `text` parameter is redirected to a shadow local.
 
 ### Reading a verdict off the IR — read the TYPE, not the shape
 
