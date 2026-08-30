@@ -177,18 +177,38 @@ impl Stores {
         // The same answer `Store::collection_rec` gives on the vector side, where every slot
         // dereference goes through that accessor and absent therefore reads as empty.  Its
         // header names this failure exactly — *"a missed site is a SIGSEGV rather than a wrong
-        // answer"* — and the keyed family had none of its twenty sites.  Stated once HERE,
-        // above the kind dispatch, because the question is the collection's, not each kind's:
-        // hash, sorted, index, ordered, trie and radix would otherwise each need it, and the
-        // one that was forgotten would be the one that crashes.
-        if crate::vector::is_absent_collection(data, &self.allocations) {
-            return DbRef {
+        // answer"* — and the keyed family had none of its twenty sites.  Stated ONCE, in the
+        // guard arm below, because the question is the collection's and not each kind's: hash,
+        // sorted, index, ordered, trie and radix would otherwise each need it, and the one that
+        // was forgotten would be the one that crashes.  It sits under the non-collection arm
+        // rather than above the whole match so that it answers only where a collection was
+        // actually named.
+        match &self.types[db as usize].parts {
+            // The TYPE question is asked first, and deliberately so.  A type that reaches this
+            // arm is a programming error rather than a miss, and the absent test below would
+            // otherwise short-circuit past it: a `DbRef` naming no slot is indistinguishable
+            // from an absent collection, so a wrong `db` was answered with a silent miss
+            // instead of this diagnostic.
+            Parts::Base
+            | Parts::Struct(_)
+            | Parts::Enum(_)
+            | Parts::EnumValue(_, _)
+            | Parts::Byte(_, _)
+            | Parts::Short(_, _)
+            | Parts::ShortRaw(_, _)
+            | Parts::Int(_, _)
+            | Parts::DbRef
+            | Parts::ChildRec(_) => panic!(
+                "find called on non-collection type: {} (db={})",
+                self.types[db as usize].name, db
+            ),
+            // Every arm below names a COLLECTION, so the absent question is the collection's
+            // and is asked ONCE here rather than in each kind.
+            _ if crate::vector::is_absent_collection(data, &self.allocations) => DbRef {
                 store_nr: data.store_nr,
                 rec: 0,
                 pos: 0,
-            };
-        }
-        match &self.types[db as usize].parts {
+            },
             Parts::Vector(c) => self.find_vector(data, *c, key),
             Parts::Array(c) => self.find_array(data, *c, key),
             Parts::Sorted(c, _) => {
@@ -243,19 +263,6 @@ impl Stores {
                 crate::radix_db::find(data, &self.allocations, self.keys(db), key)
             }
             Parts::Index(_, _, _) => self.find_index(data, db, key),
-            Parts::Base
-            | Parts::Struct(_)
-            | Parts::Enum(_)
-            | Parts::EnumValue(_, _)
-            | Parts::Byte(_, _)
-            | Parts::Short(_, _)
-            | Parts::ShortRaw(_, _)
-            | Parts::Int(_, _)
-            | Parts::DbRef
-            | Parts::ChildRec(_) => panic!(
-                "find called on non-collection type: {} (db={})",
-                self.types[db as usize].name, db
-            ),
         }
     }
 
