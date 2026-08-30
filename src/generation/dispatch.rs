@@ -936,14 +936,12 @@ impl Output<'_> {
         // so no double-borrow (and the receiver was already pre-eval-hoisted).
         if let Value::Call(call_dnr, args) = to.unspan()
             && self.data.def(*call_dnr).rust().is_empty()
-            && args
-                .iter()
-                .any(|a| contains_op_database(IrNode::Native(a), self.data))
+            && args.iter().any(|a| self.arg_needs_text_hoist(a))
         {
             let def_fn = self.data.def(*call_dnr);
             let mut hoisted: Vec<Option<String>> = vec![None; args.len()];
             for (idx, arg) in args.iter().enumerate() {
-                if contains_op_database(IrNode::Native(arg), self.data) {
+                if self.arg_needs_text_hoist(arg) {
                     let param_tp = if idx < def_fn.attributes().len() {
                         rust_type(&def_fn.attributes()[idx].typedef, &Context::Argument)
                     } else {
@@ -1500,6 +1498,30 @@ impl Output<'_> {
         self.fn_ref_context = saved_ctx;
         self.tuple_text_to_string = saved_tuple;
         result
+    }
+
+    /// Does this call ARGUMENT still mutate a store at the point it is emitted, so that
+    /// leaving it inline would double-borrow `stores`?
+    ///
+    /// The raw IR is the wrong thing to ask.  `pre_eval` runs first and hoists exactly these
+    /// arguments into `let _pre_N = …;` bindings, after which
+    /// [`Output::output_code`] substitutes the NAME — so an argument already in
+    /// `active_pre_eval` contributes no mutation here, whatever its IR says.
+    ///
+    /// Asking the IR made the text-level hoist below fire on top of the IR-level one, and that
+    /// is not merely redundant: the branch it guards writes the call ITSELF and so never
+    /// reaches the op registry.  `OpGetRecord`'s emitter — the one that reads the key types off
+    /// the store and builds `&[Content::…]` — was skipped, and its four-parameter runtime fn
+    /// was handed the IR's `[data, db_tp, count, key…]` verbatim:
+    /// `OpGetRecord(cell, _harg_s_0, 80_i32, 1_i32, 3_i64)`, rejected by rustc as E0061
+    /// (loft#1217).  Every registered emitter shares the exposure, because the branch is gated
+    /// on `rust().is_empty()` and that does not exclude a registry-owned Op; `OpGetRecord` is
+    /// only the one whose emitter changes the ARITY, so it is the one that failed loudly.
+    fn arg_needs_text_hoist(&self, arg: &Value) -> bool {
+        !self
+            .active_pre_eval
+            .contains_key(&(std::ptr::from_ref(arg) as usize))
+            && contains_op_database(IrNode::Native(arg), self.data)
     }
 
     #[allow(clippy::too_many_lines)]
