@@ -4466,31 +4466,28 @@ impl Parser {
             ));
             return;
         }
+        // The source's own spelling decides nothing here: `S?`, a bare `S` and a bare `null`
+        // all name the same dense payload, and `needs_nullable_wrap` is the one place that
+        // knows it.  Asking for `Reference(S)` by hand instead missed the `Optional(Reference)`
+        // spelling entirely — every value a function RETURNS as `S?`, and every local declared
+        // `S?` — so the dense record went in untagged: the first field became the
+        // discriminant, `s.a` answered `s.b`, and a runtime null overwrote nothing at all.
         if !self.first_pass
-            && let Type::Enum(syn, true, _) = &td
-            && self.data.def(*syn).name.starts_with("__nullable<")
-            && let Type::Reference(src_d, _) = exp_tp
-            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
+            && let Type::Enum(syn, true, _) = td.base()
+            && self.needs_nullable_wrap(*syn, exp_tp)
         {
             let syn = *syn;
-            let some_d = self.data.variant_of(syn, "Some");
             let enum_kt = i32::from(self.data.def(syn).known_type());
             let item_pos = i32::from(
                 self.database
                     .position(self.data.def(td_nr).known_type(), field),
             );
-            let src_var = self.vars.work_refs(exp_tp, &mut self.lexer);
-            list.push(v_set(src_var, value.clone()));
             let field_ref = self.cl(
                 "OpGetField",
                 &[code.clone(), Value::Int(item_pos), Value::Int(enum_kt)],
             );
-            // Single-payload: set the discriminant present (Null=1, Some=2; 0 = absent)
-            // and copy the whole dense `S` source into the inline `payload` field.
-            let present = self.build_some_present(some_d, field_ref, Value::Var(src_var));
-            let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
-            let not_null = self.cl("OpNot", &[is_null]);
-            list.push(v_if(not_null, Value::Insert(present), Value::Null));
+            let write = self.emit_nullable_slot_write(syn, &field_ref, value.clone());
+            list.extend(write);
             return;
         }
         if crate::parser::vectors::is_collection(&td_base) {

@@ -1141,54 +1141,24 @@ impl Parser {
         {
             return self.cl("OpSetInt4", &[base, fld, Value::Int(0)]);
         }
-        // @PLN25 E2 — `inline_nullable = <expression source of type S>`: a nullable
-        // `__nullable<S>` field / vector element assigned from an EXPRESSION whose
-        // type is `Reference(S)` (a call / variable, possibly the null sentinel).
+        // @PLN25 E2 — `inline_nullable = <expression source>`: a nullable `__nullable<S>`
+        // field / vector element assigned from an EXPRESSION rather than a literal.
         // `copy_ref` → `OpCopyRecord` would copy S's flat layout (`id@0,tag@8`) into
         // the packed `Some` element (`disc@0,tag@4,id@8`) — garbage on a present
         // source, and `allocation.rs:560` OOB on a null source (no store to read).
-        // Instead: when the source is present, build the `Some` variant (disc 2 +
-        // per-field copy at the Some offsets); when null, set discriminant 0.  This
-        // is `handle_field`'s null-source convert lifted to the `[i] = expr` / field
-        // store site.  A literal `S{…}` already built `Some` in `parse_var`, so its
-        // `src_tp` is the enum (not `Reference(S)`) and it does not reach here.
+        // `emit_nullable_slot_write` is the shared home; the struct field and the tuple
+        // member reach the same slot through it.  A literal `S{…}` already built `Some` in
+        // `parse_var`, so its `src_tp` is the enum itself and `needs_nullable_wrap` — which
+        // reads BOTH spellings of the source, `S` and `S?` — answers no for it.
         if op == "="
             && !self.first_pass
             && !matches!(to, Value::Var(_))
-            && let Type::Enum(syn, true, _) = f_type
-            && self.data.def(*syn).name.starts_with("__nullable<")
-            && let Type::Reference(src_d, _) = src_tp
-            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
+            && let Type::Enum(syn, true, _) = f_type.base()
+            && self.needs_nullable_wrap(*syn, src_tp)
         {
             let syn = *syn;
-            let some_d = self.data.variant_of(syn, "Some");
-            let src_var = self.vars.work_refs(src_tp, &mut self.lexer);
-            // Single-payload: set the discriminant present and copy the whole dense `S`
-            // source into the inline `payload` field (Null=1, Some=2; 0 = absent).
-            let present = self.build_some_present(some_d, to.clone(), Value::Var(src_var));
-            // null branch — set discriminant 0 (the element may already hold a
-            // `Some`; unlike the construction path it is not freshly zero-inited).
-            let null_set = self.cl(
-                "OpSetEnum",
-                &[to.clone(), Value::Int(0), Value::Enum(0, u16::MAX)],
-            );
-            let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
-            let not_null = self.cl("OpNot", &[is_null]);
-            // Free the element's prior `Some` payload before overwriting it with
-            // either the new `Some` or null — both branches below clobber the
-            // inline slot in place, so without this the old heap payload (text /
-            // nested vector) leaks.  `remove_claims` no-ops on an already-null
-            // element, so it is safe even on first assignment.  Free FIRST: the
-            // source (a plain `Reference(S)` value) cannot alias this enum-typed
-            // inline slot, so clearing it does not disturb the source read.
-            let kt = self.data.def(syn).known_type();
-            let mut body = Vec::with_capacity(3);
-            if kt != u16::MAX {
-                body.push(self.cl("OpClearKeyed", &[to.clone(), Value::Int(i32::from(kt))]));
-            }
-            body.push(v_set(src_var, val.clone()));
-            body.push(v_if(not_null, Value::Insert(present), null_set));
-            return v_block(body, Type::Void, "nullable_elem_convert");
+            let write = self.emit_nullable_slot_write(syn, to, val.clone());
+            return v_block(write, Type::Void, "nullable_elem_convert");
         }
         // @PLN25 index flip — an element WRITE `v[i] = h` is an lvalue slot, not a nullable
         // read: under the flip `v[i]` types `Optional(Reference/Enum)`, but the slot itself

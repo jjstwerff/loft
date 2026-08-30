@@ -9573,6 +9573,13 @@ impl Parser {
     /// absent. `build_nullable_set_null` is what the absent arm uses, so a slot being
     /// REASSIGNED releases the payload it held instead of leaking it.
     ///
+    /// The PRESENT arm releases it too, for the same reason and with the same op: both arms
+    /// clobber the slot in place, so a `Some` payload holding a keyed collection or a nested
+    /// store is orphaned unless the write says otherwise. Exactly one clear on either path —
+    /// `build_nullable_set_null` carries the absent arm's — because `OpClearKeyed` reads the
+    /// discriminant, and a second one over a slot whose discriminant still says `Some` would
+    /// release the same claims twice.
+    ///
     /// `slot_ref` addresses the slot itself — an `OpGetField` at the enum's own type.
     /// Answers the statements to emit; the caller decides where they go.
     pub(crate) fn emit_nullable_slot_write(
@@ -9593,7 +9600,15 @@ impl Parser {
             return Vec::new();
         }
         let mut list = vec![v_set(src_var, value)];
-        let present = self.build_some_present(some_d, slot_ref.clone(), Value::Var(src_var));
+        let kt = self.data.def(syn).known_type();
+        let mut present = Vec::with_capacity(3);
+        if kt != u16::MAX {
+            present.push(self.cl(
+                "OpClearKeyed",
+                &[slot_ref.clone(), Value::Int(i32::from(kt))],
+            ));
+        }
+        present.extend(self.build_some_present(some_d, slot_ref.clone(), Value::Var(src_var)));
         let absent = self.build_nullable_set_null(syn, slot_ref.clone());
         let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
         let not_null = self.cl("OpNot", &[is_null]);

@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""How much of each CONTRACT doc is its own change history — a report, never a gate.
+
+A contract doc says what is true: the language's rules, a library's API, what a tool does.
+The story of how it got that way is worth keeping and belongs somewhere else, because a
+reader skimming for the rule has to skim past every sentence about the fix that produced it.
+`formal/ownership.md` was 1905 lines of which 1748 were its deviation register.
+
+The convention this reports against:
+
+    <doc>.md            the contract, plus the CURRENT state (what is open, what is pending)
+    <doc>-history.md    the timeline — what changed, when, why, and what closed it
+
+So the release step is: run this, and for a doc near the top either move its history into the
+companion or say in the release notes why it stays. It cannot be a gate — whether a date is
+timeline or contract is a judgement (`@F7 shipped in 1.1` is a compatibility FACT), and a gate
+over a judgement gets satisfied rather than obeyed.
+
+Usage:
+    python3 scripts/doc_history_report.py            # every contract doc, worst first
+    python3 scripts/doc_history_report.py --top 15   # just the head of the list
+    python3 scripts/doc_history_report.py <path>…    # named docs, with their matching lines
+"""
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Docs whose SUBJECT is the timeline.  Excluded because a changelog scoring 100 % history is
+# the changelog working, and reporting it would train the reader to ignore the report.
+EXCLUDE_EXACT = {
+    "CHANGELOG.md",
+    "doc/claude/CHANGELOG_TECHNICAL.md",
+    "doc/claude/PROBLEMS.md",       # the closed-issue archive
+    "doc/claude/QUALITY.md",        # the walk journal — its entries ARE the record
+    "doc/claude/ROADMAP.md",
+    "doc/claude/STABILITY_ROADMAP.md",
+    "doc/claude/STABILITY_SWEEP.md",
+    "doc/claude/STABILITY_HOTSPOTS.md",
+    "doc/claude/STABILITY_REDFLAGS.md",
+    "doc/claude/DESIGN_DECISIONS.md",   # a register of decisions, each with its date
+    "doc/claude/LIBRARY_BRANCHES.md",
+    "doc/claude/MOVING.md",
+    "doc/claude/formal/ROADMAP.md",
+}
+EXCLUDE_DIRS = ("doc/claude/plans/", "doc/claude/lib_plans/", "doc/features/", "doc/claude/finished/")
+
+ROOTS = ("doc/claude", "doc", ".")
+
+# What a CHANGE sentence looks like, as opposed to a statement of what is true.  Each pattern
+# earned its place on a hand-read sample; the report is only as good as this list, so it is
+# short and literal rather than clever.
+SIGNALS = [
+    (re.compile(r"\b20\d\d-\d\d-\d\d\b"), "a date"),
+    (re.compile(r"\b(?:loft|moros|dryopea|crawler)#\d+\b"), "an issue id"),
+    (re.compile(r"\b(?:CLOSED|OPENED|REOPENED|RE-OPENED|LANDED|SHIPPED|FIXED|REVERTED)\b"), "a status word"),
+    (re.compile(r"\b(?:used to|previously|before the fix|had been|was wrong|no longer|"
+                r"until (?:this|that) (?:fix|landed)|the bug was|turned out to be)\b", re.I), "a before/after phrase"),
+    (re.compile(r"^\s*(?:>\s*)?\W*\*\*(?:Status|Fixed|Closed|Landed)\b", re.M | re.I), "a status line"),
+    (re.compile(r"\b[0-9a-f]{8,40}\b(?![.\w])"), "a commit hash"),
+]
+
+
+def contract_docs():
+    seen = set()
+    for base in ROOTS:
+        top = os.path.join(ROOT, base)
+        for dirpath, dirnames, filenames in os.walk(top):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "target"]
+            for fn in filenames:
+                if not fn.endswith(".md") or fn.endswith("-history.md"):
+                    continue
+                rel = os.path.relpath(os.path.join(dirpath, fn), ROOT)
+                if rel in seen or rel in EXCLUDE_EXACT or rel.startswith(EXCLUDE_DIRS):
+                    continue
+                seen.add(rel)
+                yield rel
+
+
+# A whole SECTION can be history, and that is the shape that actually buries a contract: a
+# register runs for hundreds of lines of which only a few carry a date, so a line-by-line
+# signal reads it as almost clean.  `formal/ownership.md` scored 143 by line and 1748 by
+# section.  Matched on the header alone, so a doc keeps its score after the move.
+# Boundaries are h2 ONLY: a register's entries are h3 (`### D-own-16 — …`), so treating an h3
+# as a new section ended the run at the first entry and read 1748 lines of ownership.md as 156.
+HISTORY_SECTION = re.compile(
+    r"^##\s+(?:\d+\.\s*)?(?:Deviations|History|Timeline|Change ?log|What changed|"
+    r"Revision history|Closed\b|Resolved\b)", re.I)
+SECTION = re.compile(r"^## ", re.M)
+
+
+def score(rel):
+    """(timeline lines, total lines, [(lineno, text, why)]) for one doc."""
+    text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+    lines = text.splitlines()
+    flagged = {}
+    # whole history SECTIONS first, so a register is counted once and in full
+    in_history = None
+    for n, line in enumerate(lines, 1):
+        if SECTION.match(line):
+            in_history = "a history section" if HISTORY_SECTION.match(line) else None
+        if in_history:
+            flagged[n] = (line.strip(), in_history)
+    for n, line in enumerate(lines, 1):
+        if n in flagged:
+            continue
+        why = [name for pat, name in SIGNALS if pat.search(line)]
+        if why:
+            flagged[n] = (line.strip(), ", ".join(why))
+    hits = [(n, t, w) for n, (t, w) in sorted(flagged.items())]
+    return len(hits), len(lines), hits
+
+
+def main(argv):
+    top = 25
+    if "--top" in argv:
+        i = argv.index("--top")
+        top = int(argv[i + 1])
+        argv = argv[:i] + argv[i + 2:]
+    named = [a for a in argv if not a.startswith("--")]
+
+    if named:
+        for rel in named:
+            rel = os.path.relpath(os.path.abspath(rel), ROOT)
+            t, total, hits = score(rel)
+            print(f"== {rel}: {t} of {total} lines carry change history ==")
+            for n, line, why in hits:
+                print(f"  {n:>5}  [{why}]  {line[:100]}")
+        return 0
+
+    rows = []
+    for rel in contract_docs():
+        t, total, _ = score(rel)
+        if t:
+            companion = os.path.exists(os.path.join(ROOT, rel[:-3] + "-history.md"))
+            rows.append((t, total, rel, companion))
+    rows.sort(reverse=True)
+
+    print("== how much of each contract doc is its own change history ==")
+    print("  a companion `<doc>-history.md` is where it belongs; `has companion` says one exists\n")
+    print(f"  {'timeline':>8} {'lines':>7} {'share':>6}  companion  doc")
+    for t, total, rel, comp in rows[:top]:
+        print(f"  {t:>8} {total:>7} {100*t/max(total,1):>5.0f}%  {'yes' if comp else ' - ':^9}  {rel}")
+    tot_t = sum(r[0] for r in rows)
+    tot_l = sum(r[1] for r in rows)
+    print(f"\n  {len(rows)} docs carry some; {tot_t} timeline lines in {tot_l} total "
+          f"({100*tot_t/max(tot_l,1):.0f}%).  Showing {min(top, len(rows))}.")
+    print("  Run with a path to see the lines: python3 scripts/doc_history_report.py <doc.md>")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -3560,27 +3560,18 @@ impl Parser {
             p = Value::Insert(Vec::new());
             t = in_t.clone();
         } else if !self.first_pass
-            && let Type::Enum(syn, true, _) = &*in_t
-            && let Type::Reference(s_d, _) = &t
-            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*s_d).name())
+            && let Type::Enum(syn, true, _) = in_t.base()
+            && self.needs_nullable_wrap(*syn, &t)
             && !matches!(p, Value::Insert(_))
         {
-            // @PLN25 single-payload — store a DENSE struct value `S` into a
+            // @PLN25 single-payload — store a value spelled `S` or `S?` into a
             // `vector<__nullable<S>>` element (`v += [p]`, `v += [make()]`): set the
-            // discriminant present and copy the whole dense `S` into the inline `payload`
-            // field (one record copy).  A non-Var source is stashed once so it is not
-            // re-evaluated.  Gate-inert: `__nullable<>` exists only when E2 is active.
+            // discriminant present and copy the dense `S` into the inline `payload` field.
+            // `emit_nullable_slot_write` is the shared home — it stashes the source once and
+            // supplies the runtime null test this arm used to be written without, which is
+            // what an `S?` source needs: the value is only dense when it is present.
             let syn = *syn;
-            let some_d = self.data.variant_of(syn, "Some");
-            let mut steps = Vec::new();
-            let src = if matches!(p, Value::Var(_)) {
-                p.clone()
-            } else {
-                let tmp = self.create_unique("nbl_src", &t);
-                steps.push(v_set(tmp, p.clone()));
-                Value::Var(tmp)
-            };
-            steps.extend(self.build_some_present(some_d, Value::Var(elm), src));
+            let steps = self.emit_nullable_slot_write(syn, &Value::Var(elm), p.clone());
             p = Value::Insert(steps);
             t = in_t.clone();
         } else if matches!(t, Type::Null) && matches!(in_t.base(), Type::Enum(_, false, _)) {

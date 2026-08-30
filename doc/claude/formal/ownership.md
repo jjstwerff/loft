@@ -159,7 +159,9 @@ implication that reading `deps` is *sufficient*.
 
 OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
-known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, below) —
+known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, whose
+BOUNDARY was corrected and whose wider half CLOSED 2026-08-30, with three cures measured and
+ruled out along the way, loft#1200) —
 D-own-23 opened and closed 2026-08-29 with loft#1154; D-own-24 the same day with loft#1156, and D-own-21 with
 loft#1150 — the three-faced one, whose entry records that a DEFERRAL is a missing
 measurement rather than a closed question; D-own-22 opened and closed 2026-08-29 with
@@ -611,6 +613,23 @@ scope-exit free: latent everywhere, and an observable wrong ANSWER where the loc
 `LOFT_POISON=1` on both backends).  One static site cannot separate the first iteration, where
 the store is still the work-ref's, from the rest.
 
+**An UNGATED peel of the two shape tests was tried too, and is unsound — do not re-run it.**
+Peeling the `?` fixes every leak cell on both backends, and the empty dep list those tests
+stand on (@FR-O-Proxy) is a PROXY: for a nullable `Reference` local it reads "owner" for at
+least three unrelated kinds of borrow.  Each was found by the REFUSAL channel — `BUG (#306)`, a
+whole-store free of the eval-stack store — which is the channel a widened free moves and the one
+a leak matrix cannot see:
+
+| slot | what it really holds | found in |
+|---|---|---|
+| the `__lift_N` of an inline `f(x) != null` | the eval-stack record — a `-> S?` return is NOT delivered into a caller-owned buffer the way its dense twin is | `1085-ret-buffer-passthrough-free.loft` |
+| a local a lambda CAPTURES | a slot shared with the closure record | `1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft` |
+| a local bound from a reflection builtin (`t = type_named(name)`) | a borrowed handle into a store the runtime owns | `pln127-reflect-consumer.loft` |
+
+Excluding the first two still left the third, and three unrelated borrow kinds reaching one
+predicate is what says the predicate is the wrong place: the shape cannot license the free, so
+the cure below peels it only behind a per-RUN witness that none of these three borrows can set.
+
 **The cure is this entry's own sentence, carried out.**  A per-RUN witness — a boolean per
 qualifying local (`__lbo_<name>`), false at entry, set true only by a MINTING CALL and false by
 anything else — makes the free conditional on the local actually being the store's sole owner.
@@ -640,6 +659,42 @@ mechanism"*, which is the sentence this measurement falsifies for the self-refer
 
 Found while building loft#1119's boundary matrix; distinct from D-own-15, which was the
 oracle answering differently per caller rather than a free that is absent for everyone.
+
+**The join was never the axis (2026-08-30).**  The plain reassignment leaks
+identically — `c: S? = S { x: 5 }; for i in 0..10 { c = mk(i); }` retains nine stores in ten
+rounds, with no `??` anywhere — so *"genuinely the hard shape rather than an oversight"* was a
+reading of the repro rather than a measurement of the boundary, and the witness experiment
+above changed nothing because the shape never reaches the witness machinery at all.  Both
+backends decide this from a shape test over the local's TYPE, and both named `Reference` and
+the record `Enum` without peeling the `?`: `S?` is `Optional(Reference(S))`, which holds the
+store exactly as its dense twin does.  Every OTHER former was already right in its nullable
+spelling — `vector<T>?`, `hash<K[k]>?` and `text?` all release — because `Optional` is
+transparent to `depend()` and to `is_keyed`, and only the bare `matches!` was not.  `Vector`
+stays out of the peel on purpose: a nullable vector releases through its own path, and the
+comment saying so is beside the test that had to be widened.
+
+**And the obvious cure is measured and RULED OUT, which is the more useful half.**  Peeling
+the `?` in both shape tests fixes every leak cell on both backends and is unsound: the empty
+dep list those tests stand on (@FR-O-Proxy) is a PROXY, and for a nullable `Reference` local it
+reads "owner" for at least three unrelated kinds of borrow.  Each was found by the REFUSAL
+channel — `BUG (#306)`, a whole-store free of the eval-stack store — which is the channel a
+widened free moves and the one a leak matrix cannot see:
+
+| slot | what it really holds | found in |
+|---|---|---|
+| the `__lift_N` of an inline `f(x) != null` | the eval-stack record — a `-> S?` return is NOT delivered into a caller-owned buffer the way its dense twin is | `1085-ret-buffer-passthrough-free.loft` |
+| a local a lambda CAPTURES | a slot shared with the closure record | `1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft` |
+| a local bound from a reflection builtin (`t = type_named(name)`) | a borrowed handle into a store the runtime owns | `pln127-reflect-consumer.loft` |
+
+Excluding the first two still left the third, and three unrelated borrow kinds reaching one
+predicate is what says the predicate is the wrong place: the fix belongs where the ownership
+FACT is known (@FR-O-Oracle), not in a widened shape test.  So the widening was measured,
+reverted, and recorded here rather than shipped.
+
+What the original entry got right is the reason the leak channel was the only one speaking: the
+values are correct throughout on both backends.  What it got wrong is the boundary — a filed
+repro shows the shape someone happened to write, never the shape the defect covers, so the
+first probe of a filed leak should be the same program with the interesting feature REMOVED.
 
 ### D-own-15 — CLOSED (2026-08-27, loft#1119): the ORACLE answered differently depending on who asked
 

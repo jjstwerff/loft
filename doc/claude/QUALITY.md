@@ -3953,6 +3953,7 @@ written down now, each beside the rule it corrects —
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
 | a tool for the axis a matrix HELD FIXED | ✅ done — `scripts/matrix_axes.py`, derived rather than declared (the declared form is falsified by D-own-6). `file <path>` censuses one guard against the language's own domains; `cross <A> <B>` names the value PAIRS no corpus file reaches, which is the shape every failure B6m counted actually had. Scored 6 of 6 against hand answers written before it was built, and that scoring found two detector bugs — a grouping paren read as an argument list, and `strip()` erasing the code inside an interpolation. Its depth ranking was falsified by its own oracle and removed. All REPORTS. See B6q |
 | a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, seven modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g); `optional` asks the same question over the TYPE former — who resolves a shape without peeling `τ?`, plus the caller-side `.base()` list (B6p). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
+| the `optional` screen's UNIT — a function, where it should be a shape TEST | ⚠ **open, and measured**: the four sites B7h fixed all sit in its "see through the wrapper" bucket, because each function peels `Optional` somewhere else in its body. `handle_field` peels `td` and then matches `exp_tp` bare; `generate_set` peels for the keyed kinds and then matches `Reference`/`Enum` bare. So the screen's 354 opaque is a FLOOR over functions with no peel at all, and the class it exists to find hides in the 300. Splitting it per shape test is the change; the count it reports today is not wrong, it answers a narrower question than its name |
 | a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
 | the negative-control gate's LEAK channel | ⚠ **blind for the corpus's standard guard shape** — `falsify.sh` reads "stores not freed" off stderr, which only a `main`-ful `--interpret` run prints; `--tests` does not leak-check at all (that gate lives in `tests/wrap.rs`). So a leak guard written `main`-less scores INERT on both trees and is recorded as a LOCK. Measured on `a-nullable-return-joins-its-branch-arms.loft`, which `make ci` failed while falsify read `0|0|none|none` (B6p). Warning written into the tool's header; the cure — a leak check on `--tests` — is a decision about every library's `loft test` |
 
@@ -4119,6 +4120,112 @@ The `optional` table above moved on its KEYSTONE column for the first time (4 �
 derives from `for_each_child` cannot be opaque to a wrapper the keystone knows about, so moving
 a site from `opaque` to `keystone` closes the question for every future variant rather than for
 `Optional` alone.
+
+#### B7h — `@FR-L-Null-Tag` walked: the rule names its own home, and three writers were not in it (2026-08-30)
+
+Picked because the bug review makes **ownership/free** the largest rising class (+6.5 pp, 34 of
+this cycle's 161 issues) and because `formal/ownership.md` was the only register still carrying
+an OPEN deviation with a live repro — `D-own-16`, *"a SELF-referential join never frees the
+store it displaces"*.  Working that repro is what led to the rule this section is named for,
+which is the ordinary shape of the walk: the filed cell is a door, not the room.
+
+**The first probe was the filed program with its interesting feature REMOVED, and that was the
+whole boundary.**  `D-own-16` is `c = mk(i) ?? c`, and its entry reads *"it is genuinely the
+hard shape rather than an oversight"* — the borrow arm IS the variable being assigned, so a
+pre-assignment free would be a use-after-free on the arm that takes it.  Deleting the `?? c`
+leaks identically: nine stores in ten rounds for a plain `c = mk(i)` in a loop, values right
+throughout, on both backends.  The join was never the axis, and the "measured and reverted"
+experiment recorded under that entry could not have moved anything, because the shape never
+reaches the witness machinery it was aimed at.
+
+The axis is one former's nullable spelling, and the census says so cleanly:
+
+| local's declared type | reassigned in a loop from a call |
+|---|---|
+| `S` · `E` (dense struct, dense record enum) | clean |
+| **`S?` · `E?`** | **9 of 10 stores retained** |
+| `vector<T>` · `vector<T>?` · `hash<K[k]>` · `hash<K[k]>?` · `text` · `text?` | clean |
+
+Every other former is right in BOTH spellings because `Optional` is transparent to `depend()`
+and to `is_keyed`; only a bare `matches!(tp(v), Type::Reference(_,_) | Type::Enum(_,true,_))`
+was not, in the interpreter's `owned_ref` and in the native emitter's `owned_ref_reassign`.
+Same fact, short by the same shape, on both backends — @FR-O-NoDiverge holding while
+@FR-O-Owner did not.  Filed as **loft#1200**; `D-own-16` stays OPEN with its boundary corrected.
+
+⚠ **The obvious cure was built, measured and REVERTED, and that is the finding.**  Peeling the
+`?` in both shape tests fixes every leak cell on both backends — and is unsound, because the
+empty dep list those tests stand on (@FR-O-Proxy) reads *owner* for at least three unrelated
+kinds of borrow that a nullable `Reference` local can hold:
+
+| slot | what it really holds | caught by |
+|---|---|---|
+| the `__lift_N` of an inline `f(x) != null` | the eval-stack record — a `-> S?` return is NOT delivered into a caller-owned buffer the way its dense twin is | `1085-ret-buffer-passthrough-free.loft` |
+| a local a lambda CAPTURES | a slot shared with the closure record | `1114-…-capture-is-shared-…` |
+| a local bound from a reflection builtin (`t = type_named(name)`) | a borrowed handle into a store the runtime owns | `pln127-reflect-consumer.loft` |
+
+Every one of them was found by the **REFUSAL** channel (`BUG (#306)`), never by a value and
+never by a leak: a widened free moves the channel a leak matrix is blind to, which is
+[[a-leak-channel-cannot-score-an-overfree]] paying out three times in one afternoon.  Two
+exclusions were added and the third kind arrived anyway — and three unrelated borrows reaching
+one predicate is what says the predicate is the wrong PLACE, not that it needs a fourth
+exclusion.  The fix belongs where the ownership fact is known (@FR-O-Oracle).  ⚠ `Vector` was
+never in the peel either, and its carve-out comment says why: *"a nullable vector already
+releases through its own path and widening that one would free twice"* — a warning about
+exactly this, written beside the test, one former over.
+
+**Then the same class turned up on the write side, and that one answers WRONG.**  `S?` is
+`Optional(Reference(S))` at the type level but a tagged `__nullable<S>` in an inline slot, and
+`(L-Null-Tag)` ends with the sentence a walk exists to test: *"every writer and reader of such a
+slot goes through the tag; the pair that holds this is `emit_nullable_slot_write` /
+`emit_nullable_slot_read`"*.  It was a description of ONE writer out of four.  Deciding to tag
+needs the SOURCE's type, and the source has two spellings meaning one thing:
+
+| writer | the source test it spells | sees `S?` |
+|---|---|---|
+| `mod.rs::needs_nullable_wrap` (the declared home; the tuple member asks it) | `match src_tp.base()` | yes |
+| `objects.rs::handle_field` (struct field, construction AND assignment) | `let Type::Reference(src_d, _) = exp_tp` | **no** |
+| `collections.rs` (`v[i] = expr`, field store) | `let Type::Reference(src_d, _) = src_tp` | **no** |
+| `vectors.rs` (`v += [expr]`) | `let Type::Reference(s_d, _) = &t` | **no** |
+| `operators.rs::wrap_dense_default_as_some` (`?? dflt`) | `rhs_type.base()` | yes |
+
+So for every source a function RETURNS as `S?` or a local DECLARES as `S?`, the dense record
+went into the tagged slot untagged.  Two faces, both silent, both backends byte-identical:
+
+| destination \ source | literal | call `-> S` | call `-> S?` | local `S?` | local `S` |
+|---|---|---|---|---|---|
+| field, at construction · assigned · nested · an element's own field | ok | ok | **wrong** | **wrong** | ok |
+| vector element, `+=` · `[i] =` | ok | ok | **wrong** | **wrong** | ok |
+| **tuple member** | ok | ok | ok | ok | ok |
+
+A present value landed one field low, so every read came back one field HIGH (`s.a` answered
+`s.b`; the last field read off the end).  And a value the callee withheld at RUNTIME wrote
+nothing at all — assigning a null into an occupied slot was a silent no-op that left the slot
+reading PRESENT with its previous value.  With the discriminant aliased onto the payload's
+first field, an ordinary `S { a: 0, … }` read back ABSENT.  Filed as **loft#1198**;
+`D-layout-3` opened and closed.
+
+**Why no oracle saw it, measured rather than asserted.**  The two dense columns are the half a
+hand-written test can see, and the corpus writes literals.  The tuple row is the control that
+names the cause rather than the symptom — it is the one writer that asks the shared predicate,
+so it was right on all five sources while its three siblings were wrong on the same two.
+
+⚠ **The three hand-rolled writers were not identical, and absorbing them without reading what
+each DOES would have traded a wrong answer for a leak.**  Only `collections.rs` released the
+payload the slot already held before overwriting it, with the reason written at the site; the
+shared home cleared only on its ABSENT arm.  So the home gained the present-arm clear — exactly
+one clear on either path, because `OpClearKeyed` reads the discriminant and a second one over a
+slot still tagged `Some` would release the same claims twice.  That is the
+[[deconflation-drops-a-half]] hazard from the merge side: the site that is about to disappear is
+the one holding the fact nobody wrote down anywhere else.
+
+⚠ **The `optional` screen reported all four sites as COMPLIANT, and finding that out is worth
+more than the row it did not move.**  Its counts are unchanged by this walk (659 · 300 · 5 ·
+354, before and after) because it classifies per FUNCTION: `handle_field`, `generate_set` and
+`output_set_body` each peel `Optional` SOMEWHERE in their body, so all three sit in the
+"see through the wrapper" bucket while a second shape test inside them stays bare.  A function
+is not the unit — the shape TEST is.  Listed in C as the next instrument change, because this
+walk is the second time a `τ?` opacity has been found by hand in a function the screen calls
+clean.
 
 #### B2 — open, and the owner's call
 

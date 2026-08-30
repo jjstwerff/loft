@@ -253,6 +253,30 @@ that gate, now applied across a network boundary.
   also has a dense local somewhere in the program, because that one registers the bookkeeping in
   time and the nullable form inherits a correct layout.
 
+- **D-layout-3 — three writers did not go through the tag** (2026-08-30, loft#1198). `L-Null-Tag`
+  ends *"every writer and reader of such a slot goes through the tag; the pair that holds this is
+  `emit_nullable_slot_write` / `emit_nullable_slot_read`"*, and the sentence was a description of
+  one writer out of four. Deciding to tag needs the SOURCE's type, and a nullable struct has two
+  spellings that mean one thing — the dense `S` and the `S?` a function returns or a local
+  declares. The tuple's writer asked `needs_nullable_wrap`, which reads both. The struct field
+  (`objects.rs::handle_field`), the element store (`collections.rs`) and the append
+  (`vectors.rs`) each spelled `let Type::Reference(src_d, _) = src_tp` instead and so could see
+  only the dense one.
+
+  For every `S?`-spelled source the dense record therefore went in untagged, which is `L-Null`'s
+  layout applied where `L-Null-Tag` governs — the same confusion of the two halves that D-tup-6
+  and D-layout-2 are, arriving this time from the WRITE side. Two faces: a present value landed
+  one field low so every read came back one field high, and a value the callee withheld at
+  runtime wrote nothing at all, leaving the slot reading PRESENT with its previous value. With
+  the discriminant aliased onto the payload's first field, `S { a: 0, … }` read back ABSENT.
+
+  **Status — CLOSED.** All three route through `emit_nullable_slot_write`, which now also
+  releases the payload the slot held on its PRESENT arm — one of the three carried that free and
+  the shared home did not, so absorbing them without it would have traded a wrong answer for a
+  leak. Guard: `tests/scripts/1198-a-nullable-source-is-tagged-into-its-slot.loft`, whose
+  controls are the dense source (the half a corpus of literals can see) and the tuple member
+  (the writer that already obeyed the rule).
+
 ---
 
 ## Conformance
