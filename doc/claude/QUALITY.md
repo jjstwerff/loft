@@ -1431,7 +1431,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 42 | **8** | 34 |
+| 43 | **8** | 35 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -1448,6 +1448,23 @@ destination (`t.0 = [for i in 0..t.0.len() { t.0[i] * 2 }]`) is CORRECT on both 
 so it never reaches this predicate and the site's blindness costs nothing. Recorded because
 that is a fact about a neighbouring route, not a property of `field_place`: if the tuple
 destination ever starts arriving here, this is the row that says the predicate cannot see it.
+
+loft#1214 moved it to 43 · 8 · **35** with `parser::keyed_receiver_discharge`, which asks
+whether an assignment place is a KEYED element read (`OpGetRecord`) before peeling a discharge
+out of its receiver. Its fallback IS a semantic boundary, and this time the boundary is the
+point of the predicate rather than an omission: the question is *"is the accessor a keyed
+element write?"*, and a `TupleGet` is not one whatever it contains — a tuple element reached
+through a keyed lookup still arrives as `OpGetRecord` with the `TupleGet` inside the SUBJECT,
+which this predicate hands to `null_discharge_subject` rather than reading itself.
+
+The measurement that says so also found a neighbouring route that is broken, which is the kind
+of fact this screen exists to surface. A keyed collection held in a TUPLE ELEMENT is never
+materialised: `t.0[k] = v` on a `(hash<E[k]>?, integer)` panics with a NULL DbRef, and did
+before loft#1214 and on the shipped build. The `?` spelling answered length 0 in silence there
+and now panics with its bare twin, which is the two spellings agreeing rather than a new
+defect — but the place-kind itself has no materialisation, so it is filed apart. The predicate
+above is not what is blind to it; `keyed_local_materialise` answers only for a keyed LOCAL, and
+a tuple element is not a variable.
 
 ⚠ **The row reads 38 · 5 · 33 and the paragraph above it says 18 · 2 · 16, mostly because the
 SCREEN was widened rather than because sites appeared.** It has moved four times in one merge —
