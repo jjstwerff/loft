@@ -335,6 +335,13 @@ pub struct State {
     /// Empty on every run that makes no fn-ref call to a buffer-taking callee, which is the
     /// overwhelming majority — the cost when unused is one `is_empty` branch per return.
     fnref_bufs: Vec<(u32, DbRef)>,
+    /// The allocation counter as each live fn-ref call found it, by callee frame depth.
+    ///
+    /// Paired with `Store::alloc_serial`, this is what separates a store the callee MINTED
+    /// from one that was already there — the question no static dep list can answer, and the
+    /// one loft#1185 turns on: a capture handed back belongs to a frame further up and must be
+    /// left alone, while a mint handed back belongs to nobody until this says so.
+    fnref_calls: Vec<(u32, u64)>,
     /// TR1.3: raw pointer to `Data`, valid only during `execute_argv`.
     pub(crate) data_ptr: *const crate::data::Data,
     /// Fix #87: cached library index for `n_stack_trace`.  `u16::MAX` = not yet resolved.
@@ -625,6 +632,7 @@ impl State {
             debug: None,
             call_stack: Vec::new(),
             fnref_bufs: Vec::new(),
+            fnref_calls: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None], // index 0 = null sentinel
@@ -945,6 +953,12 @@ impl State {
         for buf in allocated_bufs {
             self.fnref_bufs.push((frame_depth, buf));
         }
+        // loft#1185 — the allocation counter as it stands BEFORE the callee runs.  A store the
+        // callee hands back whose stamp is above this was minted inside the call and has no
+        // owner anywhere; one at or below it was already there (a capture, an argument) and is
+        // somebody else's.  `release_fnref_bufs` is where that comparison is made.
+        self.fnref_calls
+            .push((frame_depth, self.database.stores_allocated));
         self.fn_call(d_nr as u32, total, code_pos);
     }
 
@@ -1136,7 +1150,11 @@ impl State {
         self.stack_pos += u32::from(ret);
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
-        if !self.fnref_bufs.is_empty() {
+        // Both lists are consumed here, and the OR is load-bearing: a fn-ref call whose callee
+        // allocated no buffer still leaves a snapshot, and skipping the release for it left that
+        // snapshot to be matched against a LATER frame at the same depth — a store then read as
+        // "minted during the call" that was not, handed up, and freed under a live binding.
+        if !self.fnref_bufs.is_empty() || !self.fnref_calls.is_empty() {
             self.release_fnref_bufs(value);
         }
         self.call_stack.pop();
@@ -1162,6 +1180,15 @@ impl State {
         self.fnref_bufs.push((depth, returned));
     }
 
+    /// The allocation counter as the fn-ref call into `depth` found it, consuming the entry.
+    ///
+    /// `None` when this frame was not entered through a fn-ref — an ordinary call's return is
+    /// the caller's by its own type, and nothing here has a claim on it.
+    fn fnref_call_snapshot(&mut self, depth: u32) -> Option<u64> {
+        let at = self.fnref_calls.iter().rposition(|(d, _)| *d == depth)?;
+        Some(self.fnref_calls.remove(at).1)
+    }
+
     /// Free the return buffers [`Self::fn_call_ref`] allocated for the frame now returning,
     /// keeping the one the callee actually handed back.
     ///
@@ -1183,6 +1210,27 @@ impl State {
             let back = u16::try_from(self.stack_step(u32::from(value))).unwrap_or(0);
             *self.get_var::<DbRef>(back)
         });
+        // loft#1185 — a store this frame MINTED and is handing back has no owner: the callee
+        // does not free what it returns, and its caller may be a forwarding function whose
+        // return type says nothing about it.  Its stamp is above the snapshot taken when the
+        // call began; a CAPTURE's is not, and a capture belongs to a frame further up and is
+        // not ours to place.  That comparison is the whole of what no static dep list could
+        // answer, and it costs one `u64` per allocation and one lookup per fn-ref return.
+        let minted_here = self.fnref_call_snapshot(depth).is_some_and(|since| {
+            returned.is_some_and(|r| {
+                (r.store_nr as usize) < self.database.allocations.len()
+                    && self.database.allocations[r.store_nr as usize].alloc_serial > since
+            })
+        });
+        if minted_here
+            && let Some(r) = returned
+            && !self
+                .fnref_bufs
+                .iter()
+                .any(|(d, b)| *d == depth && b.store_nr == r.store_nr)
+        {
+            self.fnref_bufs.push((depth, r));
+        }
         // The buffer the callee HANDED BACK moves up one frame rather than being forgotten.
         // The call site is the only owner it will ever have, and the caller's static type may
         // say it owns nothing — a local that borrows on one assignment and receives this store
@@ -6337,6 +6385,7 @@ impl State {
             debug: None,
             call_stack: Vec::new(),
             fnref_bufs: Vec::new(),
+            fnref_calls: Vec::new(),
             data_ptr: std::ptr::null(),
             stack_trace_lib_nr: u16::MAX,
             coroutines: vec![None],

@@ -2246,6 +2246,26 @@ impl Parser {
     /// `block_result` carried; mirrors `classify_vector_delivery`.
     fn classify_reference_delivery(&self, ls: &[u16], l: &[Value]) -> RefDelivery {
         if l.last()
+            .is_some_and(|tail| Self::tail_calls_a_fnref_parameter(tail, &self.vars))
+        {
+            // loft#1185 — the tail calls through a fn-ref PARAMETER, so what comes back may be
+            // the capture of whatever closure the caller passed: a store this frame does not
+            // own and its caller cannot name.
+            //
+            // The fact exists one frame UP, where the closure was named, and it cannot travel
+            // down: this function's return type is computed ONCE for every caller, so no
+            // per-argument dep reaches it.  Reading the result as a borrow instead is not
+            // available either — the same parameter carries a closure that MINTS, and a borrow
+            // there leaks the mint (`call_it(fresh, 1)`, measured clean today).
+            //
+            // So the value is COPIED before it escapes, which is what `MaterializeView` already
+            // does for a tail that points into something the callee frees.  The caller then owns
+            // an ordinary fresh record and the capture is untouched, at the cost of one record
+            // copy on the forwarding path — the cost `formal/closures.md` D-clo-12 already
+            // named for closing this.
+            return RefDelivery::MaterializeView;
+        }
+        if l.last()
             .is_some_and(|tail| self.return_projects_into_local(tail))
         {
             // The tail POINTS INTO something the callee frees, so it cannot be
@@ -2290,6 +2310,38 @@ impl Parser {
         } else {
             // Owned / arg-borrow: rename the tail's work-ref(s) onto `__retbuf`.
             RefDelivery::Rename(ls.to_vec())
+        }
+    }
+
+    /// Is this tail a call through a fn-typed PARAMETER?
+    ///
+    /// The one shape whose returned store the frame can say nothing about: a fn-ref LOCAL's
+    /// type carries the closure it was built with, so a call through it publishes a dep the
+    /// caller can map, while a PARAMETER's type is the declared `fn(…) -> τ` and carries
+    /// nothing about any closure — which is exactly why loft#1185's fact has no route.
+    ///
+    /// Looks through the wrappers a tail can be sitting in, and asks only about the call
+    /// itself: a tail that merely CONTAINS such a call somewhere is not this question.
+    fn tail_calls_a_fnref_parameter(tail: &Value, vars: &crate::variables::Function) -> bool {
+        let mut node = tail.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                Value::Insert(steps) | Value::Parallel(steps) => match steps.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::Block(bl) => match bl.operators.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::CallRef(v, _) => {
+                    return *v < vars.count()
+                        && vars.is_argument(*v)
+                        && matches!(vars.tp(*v).base(), Type::Function(_, _, _));
+                }
+                _ => return false,
+            }
         }
     }
 

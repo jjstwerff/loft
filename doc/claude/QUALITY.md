@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 336 | 318 | **18** |
+| 337 | 319 | **18** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -489,7 +489,9 @@ regressing, and which site the measurement then took back off it.
 
 loft#1186 moved it to 336 · 318 with the two predicates the join reading needed —
 `parser::tail_joins_with_a_place` and `parser::node_place_root`, both of which unspan the node
-before they match, so they land on the peeling side and leave the opaque column where it was.
+before they match, so they land on the peeling side and leave the opaque column where it was;
+loft#1185 to 337 · 319 with `parser::tail_calls_a_fnref_parameter`, which unspans for the same
+reason.
 
 ⚠ **A site can ENTER this table by gaining an arm, and the newest one did.**
 `parser::rewrite_generic_type_defaults` discriminated on `Block` alone until loft#1175 gave it
@@ -2299,7 +2301,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 658 | 298 | 5 | **355** |
+| 659 | 300 | 5 | **354** |
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2322,7 +2324,9 @@ the OTHER direction: it sees through by construction.  loft#1190 then moved it t
 of a value struct's fields: it discriminates through `.base()`, so it lands on the seeing-through
 side and leaves the opaque column where it was, and loft#1183 to 658 · 298 by giving the native
 function prologue the heap-return test that arms `FnRefBufGuard` — asked through `.base()`, so a
-`τ?` heap return is read as the heap return it is.  B6w's four were: `needs_nullable_wrap`
+`τ?` heap return is read as the heap return it is.  loft#1185 then moved it to 659 · 300: the
+fn-ref-parameter test asks through `.base()` too, and the native call site's heap-return test
+does the same, so both land on the seeing-through side.  B6w's four were: `needs_nullable_wrap`
 asks through `.base()` and sees through,
 while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are opaque ON
 PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored tuple

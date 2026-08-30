@@ -1089,7 +1089,18 @@ impl Output<'_> {
         } else {
             None
         };
+        // loft#1185 — a fn-ref callee that MINTS its return hands back a store nobody owns once
+        // the value crosses a forwarding frame.  Snapshot the allocation counter here and ask
+        // `cr_fnref_minted` afterwards; a CAPTURE's stamp predates this and is left alone.
+        // Heap returns only — a text return crosses as an owned `String`.
+        let heap_return = matches!(
+            ret_type.base(),
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+        );
         write!(w, "{{ ")?;
+        if heap_return {
+            write!(w, "let __vc_seq = codegen_runtime::cr_alloc_serial(cell); ")?;
+        }
         for (i, arg) in args.iter().enumerate() {
             let expr = self.generate_expr_buf(arg)?;
             // P265: when the fn-ref's parameter at this index is text,
@@ -1162,6 +1173,9 @@ impl Output<'_> {
             "loft::keys::DbRef::NULL".to_string()
         };
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
+        if heap_return {
+            write!(w, "let __vc_out = ")?;
+        }
         write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, _fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => ")?;
@@ -1309,8 +1323,19 @@ impl Output<'_> {
         }
         write!(
             w,
-            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }} }}"
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
         )?;
+        if heap_return {
+            // The match is the block's value; bind it so the store can be asked about, then
+            // yield it unchanged.
+            write!(
+                w,
+                "; codegen_runtime::cr_fnref_minted(cell, __vc_out, __vc_seq, {closure_expr}); \
+                 __vc_out }}"
+            )?;
+        } else {
+            write!(w, " }}")?;
+        }
         Ok(())
     }
 

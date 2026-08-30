@@ -92,10 +92,8 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **2** — a lambda's `??`-default store discarded INLINE leaks one store per call
-(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed); and
-D-clo-12, a forwarding function's return type cannot carry what its fn-ref ARGUMENT knows, so
-it frees the capture (loft#1185).
+OPEN: **1** — a lambda's `??`-default store discarded INLINE leaks one store per call
+(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed).
 
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
@@ -298,16 +296,38 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > slot, so the direct-rebind cells pass on the control build and are scored by
 > `LOFT_STRICT_STORES=1` instead.
 
-> **D-clo-12 — OPEN (2026-08-29, loft#1185): a FORWARDING function frees the capture its
-> fn-ref argument handed back.** `fn call_it(f: fn(integer) -> P, v: integer) -> P { f(v) }`
+> **D-clo-12 — OPENED AND CLOSED (2026-08-29 / 2026-08-30, loft#1185): a FORWARDING function
+> froze the capture its fn-ref argument handed back.** `fn call_it(f: fn(integer) -> P, v: integer) -> P { f(v) }`
 > called with a capture-returning lambda releases the captured record on the caller's rebind.
 > Inside `call_it` the slot is a PARAMETER with a DECLARED fn-type, which carries no deps
 > whatever closure is passed, so the closure read D-clo-11 installed is inert one frame down
 > — the same predicate seen from the other side that D-clo-9 measured for monomorphs.
 > D-clo-9 resolved it at the CALL SITE, where the caller named the closure it passed; here
-> the forwarding function's return type is computed ONCE for every caller, so the fact has to
-> travel differently: a return dep parametric in the fn-ref argument, or a per-argument
-> re-derivation at the call site.
+> the forwarding function's return type is computed ONCE for every caller, so no per-argument
+> fact can reach it. Both routes that entry proposed were measured and neither works: reading
+> a fn-typed PARAMETER as capturing moves nothing, because the dep still never reaches the
+> published `-> P`.
+>
+> **So the value is COPIED before it escapes** — `classify_reference_delivery` answers
+> `MaterializeView` for a tail that calls through a fn-ref parameter, the same rewrite it
+> already applies to a tail pointing into something the callee frees. The caller then owns an
+> ordinary fresh record and the capture is untouched, at the cost of one record copy on the
+> forwarding path, which is the cost this entry named.
+>
+> The copy alone would orphan the other arm: a forwarded lambda that MINTS its return leaves a
+> store nobody owns once the copy is taken. `Store::alloc_serial` — a monotonic stamp compared
+> against a snapshot taken when the fn-ref call began — separates a store minted DURING the
+> call from a capture that predates it, and the minted one joins the hand-up list loft#1183
+> established. That comparison is the whole of what no static dep list could answer, and slot
+> numbers being reused is why nothing cheaper can stand in for it.
+>
+> Guard: `tests/scripts/1185-a-forwarded-fnref-result-is-not-the-callers.loft`, with the mint
+> row as its control.
+>
+> ⚠ **The BOUND spelling is not closed**: `{ r = f(v); r }` binds before returning, so the tail
+> is a `Var` and no tail-shaped rule reaches it — 4 use-after-free reads either side. Reaching
+> it means unpicking NRVO, since `r` is itself the return buffer there and a copy would target
+> its own source. @PLN150.
 
 > **D-clo-12 / D-clo-13 — the two are ONE question, and every static reading of it has now
 > been measured in both directions (2026-08-30).** The question is: *does a fn-ref call hand
