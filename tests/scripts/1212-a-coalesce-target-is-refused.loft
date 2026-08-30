@@ -77,3 +77,15 @@ fn main() {
   test_1212_vector_field_null_is_refused();
   test_1212_plain_assign_to_a_coalesced_local_is_refused();
 }
+
+// The coalesce one level IN: the RECEIVER of a keyed element write.  `(a ?? d)` names two
+// values and no place wherever it sits on a left-hand side, so this is refused for the same
+// reason the whole-place spellings above are — and it was reached by neither the refusal nor
+// loft#1214's peel, so it lowered to a write into the coalesce's own throwaway default and
+// lost it in silence.
+// @EXPECT_ERROR: the left side of this assignment is a `??` coalesce
+fn test_1212_keyed_receiver_is_refused() {
+  h1212r: hash<Et1212[k]>? = null;
+  (h1212r ?? [])[3] = Et1212 { k: 3, nm: "three" };
+  assert(true, "unreached");
+}

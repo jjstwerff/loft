@@ -2024,6 +2024,50 @@ use a separate collection or add after the loop"
         null_discharge_subject(to, data).cloned()
     }
 
+    /// The subject of a discharge sitting at the RECEIVER of a KEYED element accessor —
+    /// `h?[k]`, `n.h?[k]` — when the place is one, and `None` when it is not.
+    ///
+    /// `@FR-E-Asgn-Discharge` says the write lands in `place`, and for a collection the `?`
+    /// asks for exactly what the place already does.  That holds one level in as well: the
+    /// discharge here is the RECEIVER of the target rather than the target, and the place the
+    /// write must reach is still the collection the `?` was reading.  Left unpeeled, the null
+    /// path writes into the fresh default the discharge builds for its `else` arm — a
+    /// collection nobody holds, dropped at the end of the statement.
+    ///
+    /// A KEYED accessor only.  A keyed element write is the one element write that CREATES its
+    /// slot, so it is the only one for which "build the empty collection first" changes the
+    /// answer; a vector element write addresses an EXISTING slot, and on the null path there is
+    /// no element either side of the peel.  A struct-field walk (`OpGetField`) is excluded on
+    /// the rule's own grounds — `h.i?.x = …` has no "build the empty one first" on its null
+    /// path, which is why loft#1211 resolves it through [`lhs_base_var`] instead.
+    ///
+    /// Reads [`null_discharge_subject`], the one home for what a discharge looks like, so this
+    /// and the whole-place spelling cannot drift apart about which shapes carry one.
+    fn keyed_receiver_discharge<'a>(
+        to: &'a Value,
+        data: &crate::parser::Data,
+    ) -> Option<&'a Value> {
+        let Value::Call(d_nr, args) = to.unspan() else {
+            return None;
+        };
+        if data.def(*d_nr).name() != "OpGetRecord" {
+            return None;
+        }
+        null_discharge_subject(args.first()?, data)
+    }
+
+    /// Does this assignment PLACE read through a null discharge, in either position?
+    ///
+    /// The one predicate both readers of a discharged left-hand side ask: the refusal of an
+    /// explicit `(a ?? d)`, which names two values and no place, and the peel that rewrites a
+    /// postfix `x?` to the place it was reading.  While the refusal saw only the whole-place
+    /// spelling, `(n.h ?? [])[k] = v` was neither refused nor peeled — it lowered to a write
+    /// into the coalesce's throwaway default and lost it in silence.
+    fn place_reads_through_discharge(to: &Value, data: &crate::parser::Data) -> bool {
+        null_discharge_subject(to, data).is_some()
+            || Self::keyed_receiver_discharge(to, data).is_some()
+    }
+
     /// Seed `place` with type `base`'s default when — and only when — it is null, so a
     /// compound assignment written `place? op= e` reads the default the `?` asked for.
     ///
@@ -4413,7 +4457,29 @@ use a separate collection or add after the loop"
         binds
     }
 
+    /// Parse an assignment, keeping [`Parser::last_place_discharge`] the answer for the
+    /// left-hand side that is being parsed HERE.
+    ///
+    /// The flag records which of the two spellings built the last discharge — a postfix `x?`,
+    /// which names a place, or an explicit `(a ?? d)`, which names two values and none
+    /// (`@FR-E-Asgn-Discharge`).  `parse_assign_inner` clears it before parsing its own left
+    /// side so an earlier statement's answer cannot be read as this one's, and a left side
+    /// re-enters that function for every sub-expression it contains — an index (`h?[k]`), a
+    /// call argument.  A nested clear therefore erased the answer the OUTER left side had
+    /// already recorded: `b.d? += […]` survived because nothing is parsed after its `?`,
+    /// while `h?[k] = v` had its `?` forgotten by the time the place was judged, so the
+    /// place read as an explicit coalesce and was refused (loft#1214).
+    ///
+    /// Restoring on the way out confines each nesting level to its own answer: the inner
+    /// parse cannot leak one outward, and cannot destroy the one already standing.
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
+        let outer_discharge = self.last_place_discharge;
+        let tp = self.parse_assign_inner(code);
+        self.last_place_discharge = outer_discharge;
+        tp
+    }
+
+    fn parse_assign_inner(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
         // @PLN87 D-bind-7 — does THIS statement begin with a prefix `&`?  No valid
         // statement does: `&` is only ever a binding RHS (`x = &a`) or a type
@@ -4766,7 +4832,9 @@ use a separate collection or add after the loop"
                 // slot and says what to READ when that slot is null, so it peels below.
                 // Consume the right-hand side so the statement is finished before returning,
                 // matching the tuple-compound refusal above.
-                if !self.last_place_discharge && null_discharge_subject(&to, &self.data).is_some() {
+                if !self.last_place_discharge
+                    && Self::place_reads_through_discharge(&to, &self.data)
+                {
                     if !self.first_pass {
                         diagnostic_at!(
                             self.lexer,
@@ -4908,6 +4976,27 @@ use a separate collection or add after the loop"
                             || matches!(f_type.base(), Type::Text(_)));
                     to = place.clone();
                     *code = place;
+                } else if self.last_place_discharge
+                    && let Some(subject) = Self::keyed_receiver_discharge(&to, &self.data).cloned()
+                {
+                    // The same rule one level in: the discharge is the RECEIVER of the
+                    // target, and the write still lands in the collection the `?` was
+                    // reading.  Unpeeled, the null path wrote into the fresh collection the
+                    // discharge builds for its `else` arm — one nobody holds, dropped at the
+                    // end of the statement, so `n.h?[k] = v` on an absent field answered
+                    // length 0 with nothing reported (loft#1214).
+                    //
+                    // No seed, unlike the whole-place branch above: a keyed insert already IS
+                    // "build the empty collection first", because loft#1213 materialises an
+                    // absent keyed destination on the write itself.  That is also what makes
+                    // the bare `n.h[k] = v` correct, and this peel is what makes the two
+                    // spellings agree.
+                    if let Value::Call(_, args) = to.unspan_mut()
+                        && let Some(recv) = args.first_mut()
+                    {
+                        *recv = subject;
+                    }
+                    *code = to.clone();
                 }
                 // @PLN102 F2 (C92) — a compound assign evaluates its place ONCE.
                 // When the place reads a heap scalar slot through a NON-idempotent

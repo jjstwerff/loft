@@ -1080,7 +1080,18 @@ impl Parser {
             // every entry inserted after the first (silent data loss on the
             // interpreter, use-after-free SIGSEGV once the store is recycled).
             let tp_val = db_tp;
-            return self.cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);
+            // A keyed LOCAL declared `= null` owns no store, so the insert would follow the
+            // null sentinel as a record number.  Build the empty collection first, which is
+            // what `(N-Default)` says a write to a null collection does.
+            let materialise = match coll.unspan() {
+                Value::Var(v) => self.keyed_local_materialise(*v),
+                _ => None,
+            };
+            let set = self.cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);
+            return match materialise {
+                Some(guard) => Value::Insert(vec![guard, set]),
+                None => set,
+            };
         }
         // #328: a `reference<T>` field is a POINTER — assignment repoints
         // the field; it must never deep-copy record bytes into the current

@@ -3177,6 +3177,41 @@ impl Parser {
         vec != u16::MAX && is_keyed(self.vars.tp(vec))
     }
 
+    /// The empty keyed collection a NULLABLE keyed LOCAL must be given before a write can
+    /// land in it — `if h == null { OpDatabase(h, …) }` — or `None` when `vec` is not one.
+    ///
+    /// `(N-Default)` states it on the COLLECTION and not on the kind: appending to a null
+    /// collection builds the empty one first.  Two of the three shapes already keep it and
+    /// the third could not.  A vector LOCAL is given a `__vdb_N` backing at the write
+    /// ([`Parser::vector_db`]); a keyed FIELD holds the absent marker in a slot the runtime
+    /// materialises in place (`collection_rec`, loft#1213).  A keyed LOCAL has neither: its
+    /// store comes from its DECLARATION, and one declared `= null` is given no store at all,
+    /// so the slot holds the null sentinel and every keyed accessor follows it as a record
+    /// number — `h += [e]` and `h[k] = e` both reached "a NULL DbRef reached a store
+    /// accessor" while the dense local one declaration over was correct.
+    ///
+    /// GUARDED, not unconditional, and that is the half a write site cannot supply for
+    /// itself: the site can run many times, so an unguarded mint would build a fresh
+    /// collection on every pass and throw away what the previous ones put in it.  Guarded,
+    /// the mint is idempotent and a keyed local filled inside a loop keeps its records.
+    ///
+    /// An ARGUMENT is excluded: its store is the caller's, and a null one is the caller's
+    /// answer to give.
+    pub(crate) fn keyed_local_materialise(&mut self, vec: u16) -> Option<Value> {
+        if self.first_pass
+            || !self.keyed_local(vec)
+            || !self.vars.tp(vec).peel_optional().1
+            || self.vars.is_argument(vec)
+        {
+            return None;
+        }
+        let keyed_tp = self.vars.tp(vec).clone();
+        let kt = self.keyed_known_type(&keyed_tp)?;
+        let test = self.cl("OpVectorIsNull", &[Value::Var(vec)]);
+        let mint = self.cl("OpDatabase", &[Value::Var(vec), Value::Int(i32::from(kt))]);
+        Some(crate::data::v_if(test, mint, Value::Null))
+    }
+
     /// The registered database type for a KEYED collection type — the id that makes
     /// `record_new` / `record_finish` dispatch to `hash::add` / `sorted_new` /
     /// `tree::add` / the spatial index rather than to `vector_append`.
@@ -3844,6 +3879,13 @@ impl Parser {
         in_t: &Type,
     ) -> Vec<Value> {
         let mut ls = Vec::new();
+        // A keyed LOCAL declared `= null` owns no store, so the record would be added
+        // through the null sentinel.  Build the empty collection first — `(N-Default)` —
+        // here rather than at each append spelling, because every one of them reaches this
+        // function to add its record and no two reach it by the same route.
+        if let Some(guard) = self.keyed_local_materialise(vec) {
+            ls.push(guard);
+        }
         let is_field = self.is_field(val);
         let ed_nr = self.data.type_def_nr(in_t);
         if ed_nr == u32::MAX && self.first_pass && crate::data::Data::type_has_unresolved(in_t) {
