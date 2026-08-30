@@ -3748,18 +3748,39 @@ use a separate collection or add after the loop"
         // (element-type, narrow-type, or otherwise) is rejected.  Single-
         // element-push case (RHS type == LHS element type) is already caught
         // by the diagnostic just before this branch.
+        //
+        // loft#1207 — the DESTINATION is read through `.base()`, the reading
+        // `vectors::is_keyed` already takes: a `vector<τ>?` field is stored as the vector it
+        // names plus one reserved null, so which vector to append to does not depend on the
+        // wrapper.
+        //
+        // This is the PASS-2 half of that issue and it does not stand alone.  The refusal a
+        // nullable vector append used to earn is decided a pass earlier, in
+        // `vectors::is_collection`: `towards_set`'s collection interception is asked in pass 1,
+        // and while that predicate matched its `Vector` arm bare it denied a `vector<τ>?`, so
+        // the statement fell through to the generic operator lookup as *"No matching operator
+        // 'Add' on 'vector<E>?'"* before any `!first_pass` branch could claim it.  With the
+        // pass-1 half alone the statement compiles and routes here; with this half alone the
+        // pass-1 refusal still fires.  Both are load-bearing, and each is measured so by
+        // reverting it against the guard.
+        //
+        // The SOURCE is deliberately left unpeeled.  A `τ?` value stored into a `τ` slot is
+        // `(N-Store)`'s question, not this branch's, and peeling here would ADMIT it: the
+        // dense-destination direction is loft#1210, where the interpreter panics writing a
+        // read-only store and `--native` emits Rust that will not compile.  Widening the
+        // destination must not quietly widen the source with it.
         if !self.first_pass
             && op == "+="
-            && let Type::Vector(elm_tp, _) = &f_type.clone()
+            && let Type::Vector(elm_tp, _) = &f_type.base().clone()
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
         {
-            if !s_type.is_equal(f_type) {
+            if !s_type.is_equal(f_type.base()) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
                     "vector `+= other_vec` requires equal types ({} != {})",
-                    f_type.name(&self.data),
+                    f_type.base().name(&self.data),
                     s_type.name(&self.data)
                 );
                 *code = Value::Insert(Vec::new());

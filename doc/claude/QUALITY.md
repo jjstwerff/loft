@@ -2390,8 +2390,25 @@ to 659 · 302 · 352 the same way, by giving `collection_element` the peel its s
 third time by REPAIR rather than by addition: `assign_var_nr` decides whether a text `+=` gets
 the variable it writes through, its own router already asked through `.base()`, and the
 disagreement between the two was an internal compiler error on `n.t += "cd"` for a `text?`
-field.  Three consecutive movements of this column have been a body leaving it because it was
-wrong, which is the pattern the column is worth watching for.
+field.  loft#1207 moved it twice more, to 659 · 305 · 349, for the fourth and fifth time by
+REPAIR: `is_collection` and `keyed_field_kt`.
+
+Those five repairs are worth reading as ONE finding rather than five, and the reading is
+what the CALLER half exists to give.  `is_keyed`, `assign_var_nr`, `collection_element`,
+`is_collection` and `keyed_field_kt` are the same predicate family — "which collection is
+this?" — peeled at five different times, each because a separate issue happened to route
+through it.  `is_collection` is the sharpest case: it is literally `is_keyed(tp) ||
+matches!(tp, Vector)`, so when `is_keyed` gained its `.base()` in d1220a1b the union was
+left half-peeled, and a `vector<τ>?` became the one collection it denied.  Its own doc
+asserted the two predicates "differ by that one variant BY DESIGN" while they in fact
+differed on two axes, and 6 of its 23 call sites had already grown a hand-peel at the call
+site — which is the tell this column is for: callers working around a predicate one at a
+time is what a half-applied peel looks like from outside.
+
+So the queue this column names is not "351 bodies to read" but "which predicate families
+have been peeled in one member and not its siblings" — a much shorter list, and one a
+`sites` query can enumerate.  Five consecutive movements of this column have been a body
+leaving it because it was wrong, which is the pattern the column is worth watching for.
 
 a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
 every count here is a snapshot of two moving checkouts, so re-run the tool rather than

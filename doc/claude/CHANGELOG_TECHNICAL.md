@@ -36,6 +36,37 @@ place and stays refused. The seed reads the place twice, so it is built on the p
 `w[idx()]? += 1` calls `idx()` once, where off the original spelling it called twice and read
 one element while writing the next. `operational.md` states it as `@FR-E-Asgn-Discharge`.
 
+### A nullable collection appends a non-literal source (2026-08-30)
+
+`n.v += src` on a `vector<τ>?` field was refused as *"No matching operator 'Add' on
+'vector<integer>?'"*, and `n.h += src` on a `hash<τ[k]>?` field emitted no write at all — the
+records vanished, `len` read 0, no diagnostic (loft#1207). A bracketed source was correct
+throughout, which is the control that says the axis is the SOURCE shape crossed with the `?`
+on the declaration, not the field.
+
+**Two halves, both load-bearing, each measured so by reverting it alone against the guard.**
+The keyed half is `keyed_field_kt` matching unpeeled, so every nullable keyed field fell to
+its `None` arm and the two callers that gate a write on it emitted nothing.
+
+The vector half is not at any of the assignment-path routing sites the issue named.
+`vectors::is_collection` is `is_keyed(tp) || matches!(tp, Vector)`, and `is_keyed` gained its
+`.base()` in `d1220a1b` while the `Vector` arm did not — so a `vector<τ>?` was the one
+collection the predicate denied. `towards_set`'s collection interception asks it in **pass
+1**, before any `!first_pass` route can claim the statement, so the append fell through to
+the generic operator lookup and was refused a whole pass before the concat branch could see
+it. Its doc asserted the two predicates "differ by that one variant BY DESIGN" while they
+differed on two axes, and 6 of `is_collection`'s 23 call sites had already grown a hand-peel
+at the call site — the shape a half-applied peel makes from outside.
+
+**Not fixed here, and now separate: loft#1213.** An ABSENT (rather than empty) keyed
+destination keeps its reserved-null marker into `OpFillKeyed`, so the fill writes against
+`rec=4294967295` — length right, records reachable by no key, panic on the first lookup, both
+backends. It reproduces on the parent commit through the shipped discharged spelling
+(`n.h? += src`), so it is older than this fix; what this fix changes is that the bare
+spelling now reaches it instead of dropping the records in silence. The vector twin is its
+control: `vector_add_array` materialises an absent destination and the keyed path has no
+equivalent step.
+
 ### An absent keyed field materialises on append instead of dereferencing its marker (2026-08-30)
 
 A `τ?` collection slot holds `DbRef::ABSENT_REC` when the field was never constructed, and

@@ -4378,8 +4378,16 @@ impl Parser {
     /// HASH-only while @P309 — a deep-copy data-loss/hang when `index<T>`
     /// grew the shared element struct — was open; now fixed in
     /// `copy_claims_array_body`.)
+    ///
+    /// Asks through `.base()`, the reading [`crate::parser::vectors::is_keyed`] already
+    /// takes: a `hash<E[k]>?` field is stored as the hash it names plus one reserved null,
+    /// so which keyed store it is does not depend on the wrapper.  Matched unpeeled, every
+    /// nullable keyed field fell to the `None` arm, and the two callers that gate a WRITE on
+    /// it emitted no write at all — `h.c += rows` on a `hash<E[k]>?` field silently added
+    /// nothing where the dense twin added two, for all five keyed kinds and every non-literal
+    /// source (loft#1207).
     pub(crate) fn keyed_field_kt(&mut self, td: &Type) -> Option<u16> {
-        match td {
+        match td.base() {
             Type::Hash(d, key, _) => {
                 let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.hash(c, key))

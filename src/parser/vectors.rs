@@ -4595,18 +4595,15 @@ impl Parser {
 /// ⚠ No rule names the KEYED FAMILY as a category, though that is the question 16 sites
 /// actually ask — see doc/claude/formal/IMPLEMENTATIONS.md.
 ///
-/// ⚠ NOT nullability-agnostic, and that is a KNOWN GAP rather than a decision.  A
-/// `hash<S[k]>?` is a keyed collection that may be absent, and `Optional(τ)` occupies τ's
-/// storage exactly (@FR-L-Null) — yet all 24 call sites ask this bare, so every one of them
-/// answers "not keyed" for a `τ?`.  The visible cost is that `h: hash<S[k]>? = [S { … }]`
-/// builds a `vector<S>` and is then refused against its own declared type.
+/// Nullability-agnostic: the operand is read through `.base()`.  A `hash<S[k]>?` is a keyed
+/// collection that may be absent, and `Optional(τ)` occupies τ's storage exactly
+/// (@FR-L-Null), so which keyed kind a type names does not depend on the wrapper.  Asking
+/// bare instead answers "not keyed" for every `τ?`, and the call sites that gate a WRITE on
+/// it then emit no write at all.
 ///
-/// Peeling HERE is the one-home fix and it is measured INSUFFICIENT: with the peel (plus
-/// `content`, `keyed_known_type` and `gen_keyed_null` peeled to match) the literal compiles
-/// and answers correctly on `--interpret`, and `--native` panics in `keys.rs` on a
-/// `u16::MAX` store number.  A refusal is better than a backend divergence, so the peel is
-/// not here.  [`Parser::get_type`] above carries it, for the narrower question it asks
-/// (loft#909).
+/// [`is_collection`] must peel on BOTH of its arms for the same reason.  The two differ by
+/// the `Vector` variant and by nothing else — a difference on the nullability axis makes a
+/// `vector<τ>?` the one collection `is_collection` denies, which is loft#1207.
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp.base(),
@@ -4624,8 +4621,16 @@ pub(crate) fn is_keyed(tp: &Type) -> bool {
 /// `Parts::{Vector, Hash, Sorted, Radix, Trie}`.  Checklist #4 in
 /// doc/claude/formal/IMPLEMENTATIONS.md: this is the `is_keyed` set plus `Vector`, and the
 /// two differ by that one variant BY DESIGN — not a drifted copy of each other.
+///
+/// That "one variant" is the whole difference, which is why the `Vector` arm reads
+/// `tp.base()` exactly as [`is_keyed`] does.  While it matched bare, the two predicates
+/// disagreed on a second axis nothing documented: a `vector<τ>?` was the one collection this
+/// answered "no" for, so `towards_set`'s collection interception — asked in PASS 1, before
+/// any `!first_pass` route can claim the statement — let a nullable vector append fall
+/// through to the generic operator lookup and be refused as *"No matching operator 'Add'"*
+/// (loft#1207).
 pub(crate) fn is_collection(tp: &Type) -> bool {
-    is_keyed(tp) || matches!(tp, Type::Vector(_, _))
+    is_keyed(tp) || matches!(tp.base(), Type::Vector(_, _))
 }
 
 /// P216: walk a captured variable's `Type` and call `tuple_def` for

@@ -110,6 +110,21 @@ For a **collection** the `?` was always redundant — `b.d += [r]` on a null fie
 the empty collection first — and that spelling was correct throughout. `(a ?? d) += e` stays
 refused: it names two values and no place.
 
+### Appending to a nullable collection works
+
+```loft
+struct Bag { rows: vector<Row>?, by_id: hash<Row[id]>? }
+b.rows += more;              // was: "No matching operator 'Add' on 'vector<Row>?'"
+b.by_id += more;             // was: added nothing at all, and said nothing
+```
+
+A `vector<τ>?` or `hash<τ[k]>?` field takes the same append its dense twin does. The two
+halves failed differently and both are fixed: the vector was refused outright, and the keyed
+one was **silent** — the records vanished and `len` read 0 with no diagnostic anywhere. Only
+a *non-literal* source was affected, so `b.rows += [r]` was correct all along, which is what
+made the silent half easy to miss. Appending to a field that is actually absent builds the
+empty collection first, as it always did for a dense one.
+
 ### Appending to a nullable text field works
 
 ```loft
