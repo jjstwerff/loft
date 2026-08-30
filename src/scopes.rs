@@ -4440,6 +4440,48 @@ impl Scopes {
                 Value::Null,
             ));
         }
+        // @FR-O-Latest / @FR-O-Owner — a NULLABLE heap-record local reassigned from a call
+        // that MINTS.  The dense twin never reaches this: its callee is handed a `__retbuf`
+        // and fills the store the local already owns, so nothing is displaced and the local
+        // names one store for the whole loop.  A nullable RECORD return gets no such buffer,
+        // and that is deliberate rather than an oversight — `-> S?` is loft#896's synthetic
+        // `__nullable<S>`, a different representation with its own delivery, and giving it a
+        // buffer as well leaks one record per call (`ret_promo_base` records that
+        // measurement).  So every call mints, and what the local held before is displaced
+        // and unreachable unless the caller releases it — which nothing did (loft#1200).
+        //
+        // The nullable spellings of the OTHER formers are clean for the same reason the
+        // dense record is: `vector<T>?` peels to a real `__retbuf` and `text?` takes a work
+        // buffer, so both reuse one store.  The record is the only former whose nullable
+        // form mints per call, which is why this reads the peeled shape and not `Optional`
+        // alone.
+        if transition_free.is_none()
+            && was_in_scope
+            && matches!(function.tp(v), Type::Optional(_))
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            // @FR-O-Proxy is unsound alone — a free taken on the empty dep list must
+            // consult @FR-O-Override.
+            && function.tp(v).depend().is_empty()
+            && !function.is_skip_free(v)
+            // Owned AT or OUTSIDE this depth, where the blocks above want the depth to
+            // match exactly.  The displacing assignment is the common case here and it sits
+            // one level IN: the local takes its first store before the loop and is
+            // reassigned inside it, so ownership is established at depth 0 and read at
+            // depth 1.  Requiring equality answered the straight-line spelling and left
+            // every loop leaking — which is the shape the issue was filed with.  The free
+            // is emitted immediately before the assignment that overwrites the slot, so it
+            // runs exactly when that assignment does, on whatever path reaches it.
+            && self
+                .owned_refs
+                .get(&v)
+                .is_some_and(|d| *d <= self.loops.len())
+            && mints_a_store_the_target_does_not_hold(value, v, ov, data)
+        {
+            transition_free = Some(call("OpFreeRef", v, data));
+        }
         // A record ENUM is the second spelling of a struct-like heap store, and this
         // transition — and the `owned_refs` tracking below that licenses it — reads the
         // same @FR-O-Latest fact for both.  The two blocks above already pair the
@@ -4466,8 +4508,13 @@ impl Scopes {
             transition_free = Some(call("OpFreeRef", v, data));
         }
         // Track the LATEST assignment's ownership for this var.
+        //
+        // `.base()` peels the `?`: @FR-L-Null says `layout(τ) = layout(τ?)`, so a nullable
+        // heap local owns its store exactly as the dense one does and a nullability marker
+        // cannot change who frees it.  Without the peel `c: S?` was never entered here at
+        // all, so every reader of `owned_refs` below was blind to it (loft#1200).
         if matches!(
-            function.tp(v),
+            function.tp(v).base(),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) {
             match self.ref_rhs_ownership(value, data) {
@@ -8144,6 +8191,35 @@ fn delivers_into_buffer(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
     };
     args.get(buf_idx)
         .is_some_and(|a| matches!(a.unspan(), Value::Var(w) if *w == v || *w == ov))
+}
+
+/// Does this call hand back a store the target does NOT already hold?
+///
+/// The complement of [`displaces_owned_through_fresh_callee`]'s NRVO shape.  There the target
+/// sits at the callee's return-buffer attribute, so the callee fills the store the target
+/// already owns and nothing is displaced.  Here the callee MINTS: it has no return buffer at
+/// all — which is every nullable RECORD return, whose representation carries its own delivery
+/// — or it was handed someone else's.  What the target held before is then displaced and
+/// unreachable, and @FR-O-Latest makes releasing it this frame's job.
+///
+/// The target must not be READ anywhere in the call: the free is emitted before the
+/// assignment, so a call that still reads the old value would be handed a freed store.
+fn mints_a_store_the_target_does_not_hold(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
+    let Value::Call(fn_nr, args) = value.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if !def.is_loft_defined() || !def.return_adopts_fresh_store() {
+        return false;
+    }
+    let names_v = |x: &Value| matches!(x.unspan(), Value::Var(w) if *w == v || *w == ov);
+    if def
+        .hidden_return_buffer_attr()
+        .is_some_and(|i| args.get(i).is_some_and(names_v))
+    {
+        return false;
+    }
+    args.iter().all(|a| !a.reads_var(v) && !a.reads_var(ov))
 }
 
 fn displaces_owned_through_fresh_callee(value: &Value, v: u16, ov: u16, data: &Data) -> bool {

@@ -1,0 +1,190 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A nullable heap-record local releases the store its reassignment displaces.
+//
+// `@FR-O-Latest` says ownership is a property of the LATEST assignment, and `@FR-O-Owner`
+// that every store has exactly one owner.  `c: S? = S { x: 5 }; for i in 0..10 { c = mk(i); }`
+// kept all nine displaced stores.
+//
+// The dense twin never reaches this, and the reason is what names the defect rather than
+// hiding it: a `-> S` callee is handed a `__retbuf` and fills the store the local ALREADY
+// owns, so across the whole loop the local names ONE store and nothing is displaced.  A
+// nullable RECORD return gets no such buffer — `-> S?` is loft#896's synthetic
+// `__nullable<S>`, a different representation carrying its own delivery, and giving it a
+// buffer as well leaks one record per call, which `ret_promo_base` records as measured.  So
+// every call mints, and the caller must release what it displaces.
+//
+// Two halves were needed and each is useless alone.  `owned_refs` — the record of which
+// local currently owns a store — was keyed on an UNPEELED shape, so a `c: S?` was never
+// entered in it and every reader of it was blind to the local; `@FR-L-Null` says
+// `layout(τ) = layout(τ?)`, so a `?` cannot change who frees a store, and the tracking now
+// peels.  And the free's own gate wanted ownership established at the CURRENT loop depth,
+// where this shape establishes it one level OUT: the local takes its first store before the
+// loop and is reassigned inside it.  With only the first half the straight-line spelling
+// below went clean and every loop still leaked — which is the shape the issue was filed with.
+//
+// @falsified-at: 7b099d78 — interpret 71 leaked stores -> 0 and native 71 -> 0, on a plain
+// dev build.  The LEAK channel is the only one that moves: assertion failures are 0 -> 0 on
+// both backends, so a run that scores only values learns nothing here.  ⚠ The native leg
+// needs `LOFT_NATIVE_LEAK_CHECK=1` — a bare `--native` run prints no leak report at all, and
+// reads clean on a build carrying every one of these leaks.
+//
+// ⚠ **Two shapes are still OUT of reach, and they are deliberately NOT cells here.**  The
+// corpus leak gate hard-fails any script that leaks, so a cell for either would turn this
+// guard red and cost the gate its meaning; they are recorded in `formal/ownership.md`
+// D-own-16 instead, with the probes that measured them:
+//
+//   - a call that READS the local (`c = bump(c, i)`).  The free is emitted BEFORE the
+//     assignment, so freeing there hands the callee a freed store; declining is REQUIRED,
+//     not conservative.  Closing it needs the release to happen after the call.
+//   - a local whose previous assignment was a BORROW (`d: S? = c`, `c` a parameter).  Static
+//     IR cannot separate the first iteration, where `d` still borrows the caller's record and
+//     must NOT free, from the rest, where it owns a mint and must.  That is what the
+//     `rbuf_witness` runtime flag answers elsewhere, and it is not wired here.
+//
+// Both leaked before this fix as well, so neither is a regression — they are the boundary,
+// and both were checked to still answer the RIGHT VALUE, which is the half that would turn
+// a leak into a use-after-free.
+
+struct S { x: integer }
+enum E { A { n: integer }, B { m: integer } }
+
+fn mk(i: integer) -> S? { S { x: i } }
+fn mk_dense(i: integer) -> S { S { x: i } }
+fn mk_enum(i: integer) -> E? { A { n: i } }
+fn mk_maybe(i: integer) -> S? { if i % 2 == 0 { S { x: i } } else { null } }
+
+fn test_a_nullable_struct_local_reassigned_in_a_loop() {
+  c: S? = S { x: 5 };
+  for i in 0..10 { c = mk(i); }
+  assert((c?.x ?? -1) == 9, "the last value survives: got {c?.x ?? -1}");
+}
+
+fn test_a_nullable_record_enum_local_reassigned_in_a_loop() {
+  e: E? = A { n: 5 };
+  for i in 0..10 { e = mk_enum(i); }
+  assert((e?.n ?? -1) == 9, "enum, last value: got {e?.n ?? -1}");
+}
+
+fn test_the_source_return_may_be_dense() {
+  // The CALLEE's spelling is not the axis — a `-> S` call assigned into an `S?` local
+  // displaces just the same.  The issue was filed with a nullable callee, which reads as
+  // though the two had to agree.
+  c: S? = S { x: 5 };
+  for i in 0..10 { c = mk_dense(i); }
+  assert((c?.x ?? -1) == 9, "dense callee, last value: got {c?.x ?? -1}");
+}
+
+fn test_the_loop_is_not_the_axis_either() {
+  // Straight-line reassignment displaces two stores and leaked them both.  A loop only
+  // makes it unbounded.
+  c: S? = S { x: 5 };
+  c = mk(1);
+  c = mk(2);
+  c = mk(3);
+  assert((c?.x ?? -1) == 3, "straight-line, last value: got {c?.x ?? -1}");
+}
+
+fn test_a_callee_that_actually_withholds_a_value() {
+  // The absent arm is a real value of the type, and the store displaced by a `null` must be
+  // released like any other.
+  c: S? = S { x: 5 };
+  for i in 0..10 { c = mk_maybe(i); }
+  assert(c == null, "the odd last call withheld a value");
+}
+
+fn test_a_conditional_reassignment() {
+  // The free rides the assignment, so it must not run on the path that does not assign.
+  c: S? = S { x: 5 };
+  for i in 0..10 { if i % 2 == 0 { c = mk(i); } }
+  assert((c?.x ?? -1) == 8, "conditional, last value: got {c?.x ?? -1}");
+}
+
+fn test_two_arms_that_both_assign() {
+  c: S? = S { x: 5 };
+  for i in 0..10 {
+    if i % 2 == 0 { c = mk(i); } else { c = mk(i * 100); }
+  }
+  assert((c?.x ?? -1) == 900, "two arms, last value: got {c?.x ?? -1}");
+}
+
+fn test_nested_loops() {
+  c: S? = S { x: 5 };
+  for i in 0..4 {
+    for j in 0..4 { c = mk(i * 10 + j); }
+  }
+  assert((c?.x ?? -1) == 33, "nested, last value: got {c?.x ?? -1}");
+}
+
+fn test_the_local_is_read_between_reassignments() {
+  // The free is emitted before the assignment, so a read EARLIER in the same iteration must
+  // still see the previous store.
+  c: S? = S { x: 5 };
+  total = 0;
+  for i in 0..10 {
+    total += c?.x ?? 0;
+    c = mk(i);
+  }
+  assert(total == 5 + 0 + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8, "reads see the old store: got {total}");
+  assert((c?.x ?? -1) == 9, "and the last value survives: got {c?.x ?? -1}");
+}
+
+fn build_and_return() -> S? {
+  c: S? = S { x: 5 };
+  for i in 0..10 { c = mk(i); }
+  c
+}
+
+fn test_the_surviving_store_is_still_returned() {
+  // THE control the repair had to keep: the store the LAST assignment left must reach the
+  // caller.  Freeing one store too many here is a use-after-free rather than a leak, so this
+  // cell scores the opposite failure from the rest of the file.
+  r = build_and_return();
+  assert((r?.x ?? -1) == 9, "the returned value: got {r?.x ?? -1}");
+}
+
+fn test_a_single_assignment_frees_nothing() {
+  // Nothing is displaced by a local's FIRST assignment, and a free there would release a
+  // store that was never allocated.
+  c: S? = mk(7);
+  assert((c?.x ?? -1) == 7, "single assignment: got {c?.x ?? -1}");
+}
+
+fn test_the_other_nullable_formers_are_unchanged() {
+  // These are clean for the same reason the dense record is — they reuse ONE store.
+  // `vector<T>?` peels to a real `__retbuf` and `text?` takes a work buffer, which is why
+  // the record is the only former whose nullable form mints per call.
+  v: vector<integer>? = [0];
+  for i in 0..10 { v = mk_vector(i); }
+  assert(len(v ?? []) == 2, "nullable vector: got {len(v ?? [])}");
+  t: text? = "z";
+  for i in 0..10 { t = mk_text(i); }
+  assert((t ?? "") == "n9", "nullable text: got {t ?? \"\"}");
+}
+
+fn mk_vector(i: integer) -> vector<integer>? { [i, i + 1] }
+fn mk_text(i: integer) -> text? { "n{i}" }
+
+fn test_a_dense_local_is_unchanged() {
+  c: S = S { x: 5 };
+  for i in 0..10 { c = mk_dense(i); }
+  assert(c.x == 9, "dense local: got {c.x}");
+}
+
+fn main() {
+  test_a_nullable_struct_local_reassigned_in_a_loop();
+  test_a_nullable_record_enum_local_reassigned_in_a_loop();
+  test_the_source_return_may_be_dense();
+  test_the_loop_is_not_the_axis_either();
+  test_a_callee_that_actually_withholds_a_value();
+  test_a_conditional_reassignment();
+  test_two_arms_that_both_assign();
+  test_nested_loops();
+  test_the_local_is_read_between_reassignments();
+  test_the_surviving_store_is_still_returned();
+  test_a_single_assignment_frees_nothing();
+  test_the_other_nullable_formers_are_unchanged();
+  test_a_dense_local_is_unchanged();
+  print("1200-a-nullable-record-local-frees-what-it-displaces ok\n");
+}

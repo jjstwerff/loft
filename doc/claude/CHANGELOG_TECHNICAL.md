@@ -9,6 +9,33 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A nullable heap-record local releases what its reassignment displaces (2026-08-30)
+
+`@FR-O-Latest` makes ownership a property of the latest assignment, and a `c: S?` reassigned
+from a call kept every store it displaced — nine of ten over ten rounds, unbounded in a loop,
+both backends, values right throughout.
+
+The dense twin is clean for a reason that names the defect: a `-> S` callee is handed a
+`__retbuf` and fills the store the local ALREADY owns, so nothing is ever displaced. A
+nullable RECORD return gets no such buffer, and deliberately — `-> S?` is a synthetic
+`__nullable<S>` with its own delivery, and giving it a buffer as well leaks one record per
+call. So every call mints, and the caller owes the release. `vector<T>?` and `text?` are clean
+because both do reuse one buffer; the record is the only former whose nullable form mints per
+call (loft#1200).
+
+Two halves, each useless alone. `owned_refs` — which local currently owns a store — was keyed
+on an unpeeled shape, so a nullable local was never entered in it and every reader was blind
+to it; `@FR-L-Null` says `layout(τ) = layout(τ?)`, so a `?` cannot change who frees a store.
+And the free's gate wanted ownership established at the current loop depth, where this shape
+establishes it one level out. With only the first half the straight-line spelling went clean
+and every loop still leaked.
+
+Measured wider than filed: the loop is not the axis (straight-line leaks too) and neither is
+the callee's spelling (a dense `-> S` call into an `S?` local leaks the same). Two shapes stay
+out of reach and are recorded on `formal/ownership.md` D-own-16, which this narrows rather
+than closes — both are the case where the assigned value READS the local it assigns, so the
+release has to happen after the value is computed rather than before the store.
+
 ### A mapped lambda's collection does not own the buffer it was delivered through (2026-08-30)
 
 `@FR-O-Owner` says every heap store has exactly one owner, and `xs.map(|x| { [x, x + 1] })`

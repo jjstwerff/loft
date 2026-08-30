@@ -174,7 +174,8 @@ closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 rec
 witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
 D-own-11 opened and closed 2026-08-26, D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; D-own-25 opened and closed
-2026-08-30 with loft#1201; the five original D-own deviations
+2026-08-30 with loft#1201, and D-own-16 was NARROWED the same day by loft#1200 to the one
+shape whose assigned value reads the local it assigns; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
 axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
@@ -574,10 +575,25 @@ and the owning shape does not.  Guard:
 `tests/scripts/1121-a-backed-default-does-not-allocate-a-store-it-overwrites.loft`, which scores
 that 0 beside the leak.
 
-### D-own-16 — OPEN (2026-08-27): a SELF-referential join never frees the store it displaces
+### D-own-16 — OPEN, NARROWED 2026-08-30 (2026-08-27): a SELF-referential join never frees the store it displaces
+
+⚠ **The wider half of what this entry covered is CLOSED (2026-08-30, loft#1200), and the
+narrowing is the useful part.**  The entry was filed on the self-referential join and read as
+though the join were the mechanism.  It was not: the PLAIN reassignment `c = mk(i)` leaked
+identically, with no join anywhere, and so did the straight-line spelling with no loop — so
+what the entry actually described was a nullable heap-record local never releasing what its
+reassignment displaced, whatever the source.  That is now fixed, and the numbers say the join
+was the smaller half: the loft#1200 guard leaked 71 stores before the fix and 0 after, while
+the repro BELOW still leaks exactly 3.
+
+What remains is genuinely the hard shape, and it is the same one as the other residual the fix
+records: **the assigned value READS the local**.  The free is emitted before the assignment, so
+taking it hands the callee — or the join's borrow arm — a store that is already gone.  Both
+need the release to happen after the value is computed, which is a different mechanism, not a
+wider predicate.
 
 `(O-Deps)` places a free from the deps a value carries.  A local reassigned from a join over
-ITSELF gets none placed: `c = mk(i) ?? c` retains every displaced store, nine of ten over ten
+ITSELF gets none placed: `c = mk(i) ?? c` retains every displaced store, three of ten over ten
 rounds, both backends, values right throughout — so only the leak channel speaks.
 
 ```loft
