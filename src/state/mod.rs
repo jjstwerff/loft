@@ -3221,8 +3221,9 @@ impl State {
             // A heap value (struct / vector / struct-enum) is destination-passed,
             // NOT copied to the frame base, so `reenter_ret` can't retrieve it (it
             // would read back the first pushed arg).  The caller serialises such a
-            // result in-fn via `.to_json()` and routes it through the `Text` arm
-            // instead — so this path is a deliberate `None`, never a wrong read.
+            // result in-fn — boxed in a one-field record, so a `vector` and a `text` ride the
+            // same `.to_json()` the struct case always did (loft#1187) — and routes it through
+            // the `Text` arm instead.  So this path is a deliberate `None`, never a wrong read.
             Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => None,
             Type::Enum(_, false, _) => {
                 let schema = self.database.name(&ret.name(data));

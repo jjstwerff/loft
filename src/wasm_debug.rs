@@ -32,6 +32,16 @@ struct Session {
     done: bool,
     /// Names each synthetic eval fn (`__eval_<n>`) uniquely across evals.
     counter: u32,
+    /// The def-source the PROGRAM parsed under.
+    ///
+    /// A definition is keyed by `(name, source)`, and `Parser::parse_str` resets the scope to
+    /// the stdlib's on each pass — so an `__eval_N` compiled that way cannot see the program's
+    /// own functions, and `stats(1, 9)` answered *"Unknown function stats"*.  That is where
+    /// every non-scalar row of loft#1187 actually stopped, before any question about how the
+    /// value crosses the frame.  [`Parser::parse_snippet`] parses under this scope instead;
+    /// it exists for the same failure one tier over (a live-reload snippet losing its library
+    /// scope, #350).
+    program_source: u16,
 }
 
 thread_local! {
@@ -53,6 +63,7 @@ pub fn start(program_src: &str) -> bool {
     if p.diagnostics.level() >= crate::diagnostics::Level::Error {
         return false;
     }
+    let program_source = p.data.source;
     crate::scopes::check(&mut p.data);
     let mut state = Box::new(State::new(p.database.clone()));
     crate::compile::byte_code(&mut state, &mut p.data);
@@ -66,6 +77,7 @@ pub fn start(program_src: &str) -> bool {
             started: false,
             done: false,
             counter: 0,
+            program_source,
         });
     });
     true
@@ -192,8 +204,28 @@ fn idents(expr: &str) -> std::collections::HashSet<String> {
 }
 
 /// Bind the referenced live locals as args, infer the result type, and evaluate
-/// `expr` over the paused frame.  A heap result can't ride the frame base, so it's
-/// serialised in-fn with `.to_json()` (as [`State::eval_frame_reenter`] documents).
+/// `expr` over the paused frame.
+///
+/// A heap result cannot ride the frame base, so it is serialised in-fn and returned as text
+/// (as [`State::eval_frame_reenter`] documents).  Everything that is not a scalar goes through
+/// ONE shape — a generated one-field record, serialised with `.to_json()`:
+///
+/// ```text
+///   struct __EvalBox_7 { v: <inferred type> }
+///   fn __eval_7(…) -> text { __EvalBox_7 { v: (expr) }.to_json() }
+/// ```
+///
+/// The direct spelling `(expr).to_json()` works only for a STRUCT — `.to_json()` is a parser
+/// intercept for struct instances, so a `text` or a `vector` failed to compile and the client
+/// answered `<unavailable>` (loft#1187).  Boxing puts every non-scalar back on the one path
+/// that is known good: the record is serialised inside the callee and what crosses the frame
+/// boundary is a call-returned-owned text, which is the Text arm's stated precondition.  A
+/// text returned DIRECTLY is a work buffer freed at teardown, and reading it there is the
+/// store corruption that issue's second route measured.
+///
+/// The box's type is registered in the PARSER's schema when the eval compiles, and the paused
+/// `State`'s was cloned before the session started — [`Stores::adopt_new_types`] carries it
+/// across, which is that issue's fourth route.
 fn eval_via_reenter(sess: &mut Session, expr: &str) -> Option<String> {
     let refs = idents(expr);
     let mut binds: Vec<(String, String)> = Vec::new();
@@ -215,16 +247,29 @@ fn eval_via_reenter(sess: &mut Session, expr: &str) -> Option<String> {
         .join(", ");
     let ret = infer_ret(sess, &sig, expr)?;
     if is_scalar_type(&ret) {
-        build_run(sess, &sig, expr, &ret, &arg_names)
-    } else {
-        build_run(
-            sess,
-            &sig,
-            &format!("({expr}).to_json()"),
-            "text",
-            &arg_names,
-        )
+        return build_run(sess, &sig, expr, &ret, "", &arg_names);
     }
+    let box_name = format!("__EvalBox_{}", sess.counter + 1);
+    let boxed = build_run(
+        sess,
+        &sig,
+        &format!("{box_name} {{ v: ({expr}) }}.to_json()"),
+        "text",
+        &format!("struct {box_name} {{ v: {ret} }}\n"),
+        &arg_names,
+    )?;
+    unbox(&boxed)
+}
+
+/// The value out of `{"v":<value>}`, verbatim.
+///
+/// Verbatim rather than re-rendered: the box is a serialisation detail of how the value
+/// crossed the frame boundary, and what the reader asked for is the value.  A `text` comes
+/// back quoted and a `vector` bracketed, which is what `loft debug` shows for the same
+/// expressions.
+fn unbox(json: &str) -> Option<String> {
+    let inner = json.trim().strip_prefix("{\"v\":")?.strip_suffix('}')?;
+    Some(inner.to_string())
 }
 
 /// Compile `fn _(sig) {{ __t = (expr); }}` and read `__t`'s (base) type.  Rolled
@@ -234,7 +279,8 @@ fn infer_ret(sess: &mut Session, sig: &str, expr: &str) -> Option<String> {
     let src = format!("fn {name}({sig}) {{\n  __t = ({expr});\n}}\n");
     let pre_defs = sess.parser.data.definitions();
     let pre_diag = sess.parser.diagnostics.entries().len();
-    sess.parser.parse_str(&src, "<debug>", false);
+    sess.parser
+        .parse_snippet(&src, "<debug>", sess.program_source);
     let failed = sess.parser.diagnostics.entries()[pre_diag..]
         .iter()
         .any(|e| e.level >= crate::diagnostics::Level::Error);
@@ -264,12 +310,14 @@ fn build_run(
     sig: &str,
     expr: &str,
     ret_ty: &str,
+    prelude: &str,
     arg_names: &[String],
 ) -> Option<String> {
     let name = format!("__eval_{}", sess.counter + 1);
-    let src = format!("fn {name}({sig}) -> {ret_ty} {{\n  ({expr})\n}}\n");
+    let src = format!("{prelude}fn {name}({sig}) -> {ret_ty} {{\n  ({expr})\n}}\n");
     let pre_diag = sess.parser.diagnostics.entries().len();
-    sess.parser.parse_str(&src, "<debug>", false);
+    sess.parser
+        .parse_snippet(&src, "<debug>", sess.program_source);
     let failed = sess.parser.diagnostics.entries()[pre_diag..]
         .iter()
         .any(|e| e.level >= crate::diagnostics::Level::Error);
@@ -283,6 +331,13 @@ fn build_run(
         return None;
     }
     let ret_type = sess.parser.data.def(d).returned.clone();
+    // A type the eval just declared exists only in the PARSER's schema; the paused `State`
+    // holds a clone taken before the session started, and a record of an id it cannot resolve
+    // faults inside `database::types` rather than answering (loft#1187).  Ids are positional
+    // and both schemas grew from that one clone, so this is an append.
+    if !sess.state.database.adopt_new_types(&sess.parser.database) {
+        return None;
+    }
     sess.state
         .eval_frame_reenter(&mut sess.parser.data, d, arg_names, &ret_type, false)
 }
@@ -359,6 +414,46 @@ mod tests {
             assert_eq!(apply(sess, "eval n * n"), vec!["D:eval n * n=1600"]);
             assert_eq!(apply(sess, "eval 2 + 3"), vec!["D:eval 2 + 3=5"]);
             // resume -> runs to completion.
+            assert_eq!(apply(sess, "resume"), vec!["D:terminated"]);
+        });
+    }
+
+    /// A text- or vector-valued expression evaluates, and answers the value (loft#1187).
+    ///
+    /// Those two used to answer `<unavailable>`, and it was the SAFE answer: `(expr).to_json()`
+    /// does not compile for either — `.to_json()` is a parser intercept for struct instances —
+    /// and each of the three ways round it corrupted the store, because a text returned
+    /// directly rides a work buffer freed at the callee's teardown.  Boxing the value in a
+    /// generated one-field record puts every non-scalar back on the STRUCT path, which was
+    /// working throughout.
+    ///
+    /// The scalar and struct rows are here as the controls: this rewrote how every non-scalar
+    /// eval is compiled, so the shape that already worked has to still work, and the shape that
+    /// never went near the box has to be untouched.
+    #[test]
+    fn a_text_or_vector_valued_eval_answers_its_value() {
+        assert!(start(
+            "fn shout(s: text) -> text { s.to_uppercase() }\n             fn evens(n: integer) -> vector<integer> { [for i in 0..n { i * 2 }] }\n             struct Stats { lo: integer, hi: integer }\n             fn stats(a: integer, b: integer) -> Stats { Stats { lo: a, hi: b } }\n             fn compute(n: integer) -> integer {\n  m = n + 2;\n  m\n}\n             fn main() { compute(40); }\n"
+        ));
+        SESSION.with(|s| {
+            let mut g = s.borrow_mut();
+            let sess = g.as_mut().expect("session");
+            assert_eq!(apply(sess, "bp compute"), vec!["D:ok bp compute"]);
+            let hit = apply(sess, "run");
+            assert!(hit[0].starts_with("D:hit compute"), "paused: {hit:?}");
+            for (expr, want) in [
+                ("n + 2", "42"),
+                ("stats(1, 9)", r#"{"lo":1,"hi":9}"#),
+                ("shout(\"hi\")", "\"HI\""),
+                ("\"a\" + \"b\"", "\"ab\""),
+                ("evens(4)", "[0,2,4,6]"),
+            ] {
+                assert_eq!(
+                    apply(sess, &format!("eval {expr}")),
+                    vec![format!("D:eval {expr}={want}")],
+                    "evaluating `{expr}` over the paused frame"
+                );
+            }
             assert_eq!(apply(sess, "resume"), vec!["D:terminated"]);
         });
     }
