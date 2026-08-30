@@ -4444,6 +4444,134 @@ through an element of a nullable keyed collection, routed via a parameter, produ
 and none for the DENSE control either, so the probe never reached `note_key_field_write` at all.
 [[a-count-of-zero-must-prove-it-ran]]; the cell is withdrawn rather than reported as clean.
 
+#### B7k — the `+=` routing table, made total: over-claiming and under-claiming are one defect (2026-08-30)
+
+Picked because B7j's own probe left it: the walk that closed loft#1205 filed loft#1215 at a
+site whose problem it had named — *"that push site never compares `s_type` with `elm_tp` at
+all"* — and the file-instead-of-fix note said it *"serves no correct program and funnels the
+broken ones"*. Both halves of that sentence turned out to be claims worth re-measuring, and
+one of them was wrong.
+
+**The mechanism is one sentence: `towards_set`'s `+=` handling is a chain of route branches
+with no `else`, so it is neither exclusive nor total.** Every defect below follows from that,
+and the two directions had both shipped:
+
+| direction | destination | what happened |
+|---|---|---|
+| over-claim | vector | the single-element push compares nothing, so an unrelated source was written RAW: `float` → its IEEE-754 bits as an i64, `boolean` → 8705, `text` → allocator panic, a struct source and a `vector<text>` element → SIGSEGV, `--native` → E0308 on all of them |
+| over-claim | keyed | the bulk-fill route claims any VECTOR source without reading its element, so a `vector<text>` filled a `hash<E[k]>`: `len` 1, nothing reachable by key |
+| under-claim | keyed | no catch-all, so an unrelated source emitted no write at all — `len` 0, in silence |
+| under-claim | keyed | a record VARIABLE at a FIELD, because the record route is gated on the source being a struct LITERAL — a VECTOR's requirement, since a vector's bare element is @PLAN52's ambiguity. The keyed LOCAL and the bracketed FIELD were both correct, so one question had three answers |
+| under-claim | vector | a VARIANT at a vector over its enum: the ambiguity check asks `is_equal`, `Reference(Named)` vs `Enum(Tagged, …)` reads unrelated, and the generic path grew the vector by THREE |
+| under-claim | keyed | a whole keyed collection appended to another of the same type — nothing written, nothing said |
+
+Filed as loft#1215 (the over-claims) and loft#1221 (the under-claims), fixed together because
+splitting them would put the same chokepoint in two commits.
+
+**The cure is one classifier, and its element test is the interesting part.**
+`Parser::append_source` names which of three shapes a source is, so `Unrelated` becomes
+expressible. What it must NOT do is spell a fifth copy of "is this an element" — this file
+already asks that question in four places — so it delegates to `can_convert`, the predicate
+arguments, returns and struct literals already ask. That delegation is load-bearing:
+**the element type has two spellings**, `Reference(d)` where a keyed kind's `content()` reads
+a nullable record and `Enum(d, true, …)` where a vector carries it, plus `(C-Var)`'s variant.
+A fresh `is_equal` refuses two working corpus programs. `can_convert` was missing `(C-Var)`
+entirely, so the rule went there rather than here — [[one-notion-two-ir-spellings]] a third
+time in this walk, now at the level of a coercion rule rather than an op name.
+
+⚠ **Delegating to a validator needed one guard, and the corpus found it rather than the
+matrix.** `can_convert` answers TRUE for an unknown `test_type` — correct for a validator,
+which must not report a generic body's placeholder as a mismatch — but read as *"this IS an
+element"* every unresolved element type becomes a hit. A struct-enum's collection field
+resolves lazily, so `j.xs += [Item { … }]` earned the ambiguity refusal *with the brackets
+already written*, in a live gate (`977-struct-enum-collection-field-write.loft`). The lesson
+is not "guard unknowns": it is that a predicate's ANSWER FOR THE UNKNOWN CASE is part of its
+contract, and the safe value flips when the caller is a refusal instead of a validator.
+
+⚠ **The filed note's "serves no correct program" was RIGHT, and its implied conclusion was
+wrong.** With the refusal in place the push branch should be unreachable by argument —
+`Element` is refused earlier by @PLAN52's bracket rule, `Whole` is claimed by concat — and
+deleting it looked like the clean end of the thread. A probe at its head over ~2000 `.loft`
+files says otherwise: **one caller**, a nullable ELEMENT source, which reaches it because
+`(N-Store)`'s peel runs AFTER the ambiguity check and the peeled type is never re-asked. So
+the branch stays, and what the measurement actually found is that the `?` spelling of one
+statement is more permissive than the plain one (loft#1223). [[keystone-claim-is-a-measurement]]
+— an "unreachable" derived from the code is a claim, and this one cost nothing to check.
+
+⚠ **A guard's cure must itself work, and one draft of the message advertised a dead end.** The
+first refusal text offered *"or the whole `hash<E[k]>` to concatenate"* — which is the third
+under-claim row, a silent drop. Rewritten to name only the two spellings measured to work at
+every destination kind, and the dead end became its own cell instead.
+
+⚠ **Two refusal cells could not share a file, and the reason is the PASS.** @PLAN52's
+ambiguity check is not pass-gated and fires in pass 1; the keyed-whole refusal is
+`!first_pass`. Put together, the pass-1 error stops the file before pass 2 runs and the second
+`@EXPECT_ERROR` goes unmatched for a reason that has nothing to do with the fix
+([[which-pass-does-the-site-run-in]]). Split into `1221b` and `1221c`, with the reason written
+at the top of each.
+
+⚠ **A native failure in the probe file was the PROBE's fault, and separating it found a real
+bug.** `--native` rejected the five-kind guard with `E0425: cannot find value t88`, which
+reads as a divergence the fix introduced. It is not: the probe declared its trie's element
+struct AFTER the struct holding the field, and a `trie` field with a forward reference emits
+`db.trie(t, "k")` before `t` is bound. Two controls settle it — the same forward reference
+with a struct-LITERAL source (a route neither fix touches) fails identically, and `hash` /
+`sorted` / `index` / `vector` all tolerate it. loft#1222, filed and not fixed.
+
+Blast radius: an env-gated probe at the check over ~2000 `.loft` files reports **one** append
+the classifier calls unrelated, in an archive probe that already failed on a later line.
+
+⚠ **The blast-radius sweep was scored on the wrong channel, and `make ci` is what said so.**
+The sweep above reports one hit over ~2000 files and that number is true — but it greps for the
+two new DIAGNOSTICS, so it can only ever find programs the change newly REFUSES. Half of this
+fix makes a previously-dropped statement start EXECUTING, and that half is invisible on the
+diagnostic channel *by construction*. `make ci` found what the sweep could not:
+`373-empty-braces-collection-field.loft` read `total=20` against its own `expect 10`, because it
+fills both members of a linked group and the second fill had been a no-op.
+[[absent-warning-is-not-a-pass]] is the same lesson one channel over — there a leak channel
+scored what a value channel should have; here a diagnostic channel did.
+
+**The instrument that answers it is a differential on VALUES:** the same corpus through both
+binaries, comparing stdout. Run debug-vs-debug it reports exactly TWO differing files —
+`examples/collections.loft` and this walk's own new guard. Two traps in it, both hit:
+
+  * **Compare like-for-like PROFILES.** The first run used the RELEASE build against the parent's
+    DEBUG one and accused the change of a SIGSEGV in `1062-self-append-reallocation.loft`. Both
+    builds print `1062 ok` on debug; the fault is release-only and is the already-filed
+    loft#1216. A profile difference reads exactly like a regression.
+  * **It is blind to every `test_`-only file.** Those have no `main`, so `--interpret` runs
+    nothing and the cell is vacuous — which is why the differential did NOT find 373 and the wrap
+    suite did ([[guard-entry-point-decides-what-runs]], one directory wider than usual).
+
+⚠ **The doubling led to a defect that is NOT this walk's, and the control is what says so.**
+Double-filling a linked group writes one good record and one whose `text` field reads `null`
+while the `integer` beside it is correct. Reproduced byte-identical on the parent through the two
+spellings that compile there, so loft#1221 makes a third spelling reach the path rather than
+creating it — loft#1226. The shipped `examples/collections.loft` was written in the one spelling
+that was a no-op, so it is one bracket away from corrupting on the released build; it and the
+373 cell are corrected here by DROPPING the redundant append, since filling one member of a group
+already fills the other. loft#1227 is the lint half: `linked-group-double-fill` covers the struct
+literal and not the append, which is now the more dangerous spelling.
+
+⚠ **A `COMPATIBILITY.md` register entry was proposed for the behaviour change and DECLINED, on
+the document's own terms.** *"Contract 0 is pre-1.0 — the only era with no promise. Until the
+freeze, every surface may move; this whole document takes effect at the `0 → 1` flip."* The
+"a fix that changes an observable result is a regression" line is real and does not bind yet; §
+What a falling bug rate does and does not license is the positive form — at contract 0 a defect
+on a walked path *is simply fixed*, and landing this class before the flip is the point. An entry
+would assert a promise that does not exist. The migration note went to CHANGELOG.md instead,
+where an upgrading reader looks.
+
+⚠ **The `optional` audit row moves 659 · 305 · 349 → 660 · 306 · 349, and the shape of that
+movement is the point.** `Parser::append_source` ENTERS the table peeling — it reads
+`dest.base()` before it classifies anything, because a `vector<τ>?` is the collection it names
+plus one reserved null and which routes exist does not depend on the wrapper. So the
+denominator and the peel column move together and the opaque column does not move at all,
+which is what a new site added with the question already answered looks like. Contrast the
+five REPAIRS loft#1207 recorded, where the opaque column fell: [[keystone-claim-is-a-measurement]]
+applies to this table too — a row that improves is a claim to check, and a row that grows
+evenly is the honest reading of a site that was never part of the backlog.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

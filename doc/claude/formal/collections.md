@@ -74,6 +74,27 @@ owns their *operations + order*).
 ```
 *Anchor:* tests/scripts/48-spatial-construct-free.loft (construct/append/len).
 
+**What `Col-Insert`'s source may BE, and what it may not.** The rule is written over one
+spelling, `c += [ rec, … ]`, and three source shapes satisfy it: the collection ITSELF (for a
+vector, concatenation), ONE element, and a `vector` OF elements (which a keyed kind places one
+by one — loft#1159).  Anything else is not an insert at all and is refused, by
+[types.md](types.md) `C-Only`: `⤳` is the only implicit coercion, so a value the collection
+cannot hold has no reading here.  A source that IS holdable but is spelled another way is
+still an insert — [types.md](types.md) `C-Var` makes a VARIANT one element of a vector over
+its enum, and a nullable record reaches a keyed kind as `Reference(d)` and a vector as the
+synthetic `Enum(d, true, …)`, which are two spellings of the same element and not two
+questions (loft#1215, loft#1221).
+
+Two source shapes the rule deliberately does NOT license, each with its own answer:
+
+  * **a whole KEYED collection into another of the same type.**  `Col-Insert` is about records
+    joining a collection and says nothing about merging two, so this is refused rather than
+    implemented.  Not a permanent decision — the rule could grow a merge — but silence was
+    never one of the options, and it is what shipped until loft#1221.
+  * **a bare element into a VECTOR.**  Legal by this rule and refused by @PLAN52's ambiguity
+    rule instead: `vector<vector<T>> += vector<T>` is both "push one element" and "concatenate",
+    so the brackets are required for every element type, not only the ambiguous ones.
+
 ### 1.2b Removal — `Col-Remove` (a vector RENUMBERS; a keyed kind does not)
 
 ```

@@ -9,6 +9,67 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### The `+=` routing table is total: every collection append routes or reports (2026-08-30)
+
+`towards_set`'s `+=` handling is a chain of route branches, each testing a hand-spelled
+condition, with no site deciding that an append is unrouted. So the chain was neither exclusive
+nor total, and both failure directions had shipped.
+
+**Over-claiming (loft#1215).** The vector single-element push is gated on `!Insert(code)` and
+compares `s_type` with `elm_tp` nowhere — the two branches that DO compare (`+= elem`'s ambiguity
+diagnostic and the concat branch) both return before it, so only mismatches arrive and it wrote
+them raw as one element of the element type. A `float` read back as its IEEE-754 bits, a
+`boolean` as `8705`, a `text` panicked `database/allocation.rs`, a struct source and a
+`vector<text>` element each ended in a SIGSEGV, and `--native` emitted Rust that would not
+compile (E0308) for all of them. A keyed destination has no catch-all, so the same source fell
+past every branch to a statement emitting no write, with `len` reading 0.
+
+**Under-claiming (loft#1221).** Three admissible sources reached no route: a record VARIABLE at a
+keyed FIELD (the record branch is gated on `matches!(code, Value::Insert(_))`, a vector's
+requirement); a VARIANT at a vector over its enum (the ambiguity check asks `is_equal`, which
+reads `Reference(Named)` and `Enum(Tagged, …)` as unrelated, and the generic path then grew the
+vector by three); and a whole keyed collection at another of the same type.
+
+**Cure — one classifier.** `Parser::append_source` (`parser/vectors.rs`) answers which of three
+shapes a `+=` source is against its destination — `Whole`, `Element`, `ElementVector` — so the
+fourth answer, `Unrelated`, becomes expressible. It is asked at the single point where every
+destination kind and every route are still in play, beside `(N-Store)`'s check and for the same
+reason: the push, the concat, the keyed fill and the record routes are all downstream, so a check
+at any of them is one more copy of a question this file already asks in four places.
+
+Its element test goes through `Parser::can_convert`, the predicate that already answers *"may
+this value satisfy that slot"* for arguments, returns and struct literals. That delegation is
+load-bearing rather than tidy: the element type has more than one SPELLING — a nullable record is
+`Reference(d)` where a keyed kind's `content()` reads it and `Enum(d, true, …)` where a vector
+carries it, and `(C-Var)` makes a variant satisfy its enum — and a fresh `is_equal` refuses two
+working corpus programs. `can_convert` was missing `(C-Var)`, so the rule was added there rather
+than spelled a fifth time.
+
+`holds_element` answers FALSE for an `Unknown` on either side, and that guard is the whole
+difference between a validator and a refusal: `can_convert` answers TRUE for an unknown
+`test_type` — right for a validator, which must not report a generic body's placeholder as a
+mismatch — but read as *"this IS an element"* it turns every unresolved element type into a hit.
+A struct-enum's collection field resolves lazily, so `j.xs += [Item { … }]` asked while `xs` was
+still `Unknown` earned @PLAN52's ambiguity refusal with the brackets already written
+(`tests/scripts/977-struct-enum-collection-field-write.loft`, caught by the corpus sweep).
+
+**Blast radius measured, not argued.** An env-gated probe at the check reported every append the
+classifier calls `Unrelated`, over ~2000 `.loft` files (`tests/scripts`, `tests/docs`,
+`tests/lib`, `default`, `examples`, `doc`, `bench`): **one hit**, an archive probe appending a
+`float` to a `vector<single>` in a file that already failed on a later line. A second sweep after
+the ambiguity check was rederived reports only files that already expect that message.
+
+**The push branch is NOT dead, and that was measured rather than reasoned.** With the refusal in
+place a vector's push should be unreachable — `Element` is refused earlier by the bracket rule
+and `Whole` is claimed by concat — but a probe at its head across the same corpus reports one
+caller: a nullable ELEMENT source, peeled by `(N-Store)` after the ambiguity check has already
+run. That spelling bypasses @PLAN52's bracket rule its dense twin obeys, filed as loft#1223.
+
+**Not fixed here:** loft#1222 — a `trie<T[k]>` field whose element struct is declared LATER
+emits `db.trie(t, "k")` before `t` is bound (E0425, `--native` only). It reproduces with a
+struct-literal source, whose route is untouched by either fix, and `hash` / `sorted` / `index` /
+`vector` all tolerate the same forward reference.
+
 ### A `?` on an assignment place discharges the READ and writes through to the place (2026-08-30)
 
 `place? op= e` says two things — write `place`, and read the type's default when `place` is

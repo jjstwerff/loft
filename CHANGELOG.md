@@ -87,6 +87,74 @@ write reaches — it changes what a read answers. The same gap made an ordinary 
 unreachable from the other side: `a.i?.nm = "cd"` on a `text` member reported that *a
 file-scope `NAME: text = …` is a CONSTANT*, about code nobody had written, while the `integer`
 member beside it wrote through fine. Both are one missing case, on both backends.
+### Every `+=` on a collection now either appends or says why not
+
+`c += v` had a list of routes and no `else`, so a source matching none of them went one of two
+ways, both quiet.
+
+A **vector** had a catch-all — a route that writes the value as one element without ever
+comparing its type — so an unrelated source was written raw:
+
+```loft
+struct D { c: vector<integer> }
+
+d = D { c: [] }
+f: float = 2.5
+d.c += f          // len 1, and the element reads 4612811918334230528
+```
+
+That is the IEEE-754 bit pattern of `2.5` read back as an integer. A `boolean` stored `8705`, a
+`text` took the process down inside the allocator, and appending a struct — or an integer to a
+`vector<text>` — ended in a segfault. `--native` refused to compile any of them, so the two
+backends disagreed about the same program.
+
+A **keyed** collection had no catch-all, so the same source reached nothing at all and the
+append simply vanished with `len` reading 0.
+
+Both now report:
+
+```
+error: cannot append `float` to `vector<integer>` — a `+=` source must be one `integer`
+       element written `[…]`, or a `vector<integer>` of them
+```
+
+### Appending a record to a keyed field no longer needs a literal
+
+The same list of routes was incomplete in the other direction: a source the collection *can*
+hold sometimes reached no route either, and was dropped in silence.
+
+```loft
+struct E { k: integer, n: integer }
+struct D { h: hash<E[k]> }
+
+d = D { h: [] }
+e = E { k: 2, n: 8 }
+d.h += e          // used to add nothing; len read 0
+```
+
+A keyed field took `d.h += E { k: 2, n: 8 }` and `d.h += [e]`, and a keyed *local* took the bare
+`h += e` — three spellings of one question, and only one of them was wrong. All five keyed kinds
+were affected.
+
+**If you wrote that statement, check what it was doing for you.** Two collections over the same
+element type are a linked *group* — two routes to a single record set — so appending to one
+already puts the record in the other:
+
+```loft
+struct Counter { ordered: vector<Word>, by_text: hash<Word[text]> }
+
+c.ordered += [w]      // this alone puts the record in BOTH; `c.by_text["apple"]` finds it
+c.by_text += w        // a no-op before this release; now a SECOND append
+```
+
+Code that filled both members was relying on the second statement doing nothing, and it now adds
+every record twice. The vector member is the only one that shows it — a hash keeps one entry per
+key either way — so a test that checks the lookup will not notice while the vector's length has
+doubled. The fix is to delete the redundant append; `examples/collections.loft` was written this
+way and is corrected in this release. Two more of the same shape are fixed with it: appending a variant to a vector over
+its enum (`b.items += Named { … }`) grew the vector by three instead of one and now asks for the
+usual brackets, and appending a whole keyed collection to another of the same type wrote nothing
+and now says so.
 
 ### `x? += …` accumulates from the type's zero
 

@@ -62,8 +62,11 @@ fn test_vector_plus_hash_distinct_keys() {
     Word { text: "banana", count: 5 },
     Word { text: "cherry", count: 2 },
   ] {
+    // ONE append fills both members: they are a linked group over `Word`, so a record
+    // reaching `ordered` is reachable through `by_text` as well.  Appending to each would
+    // add every word twice — and only the VECTOR's length shows it, because the hash keeps
+    // one entry per key either way.  That is what `total` below is asserting.
     c.ordered += [w];
-    c.by_text += w;
   }
   total = 0;
   for e in c.ordered { total = total + e.count; }

@@ -5071,6 +5071,61 @@ impl Parser {
         }
     }
 
+    /// Classify a `c += e` source against the collection `dest` it is appended to — the one
+    /// home for [`AppendSource`], so the routes below cannot disagree about which of them
+    /// owns a statement, and a source none of them owns is NAMED rather than guessed at.
+    ///
+    /// The element test is asked of [`Parser::can_convert`], the predicate that already
+    /// answers *"may this value satisfy that slot"* for arguments, returns and struct
+    /// literals.  It has to be that one, because "the element type" has more than one
+    /// spelling and a fresh `is_equal` knows only the first: a nullable record is
+    /// `Reference(d)` where `content()` reads it off a keyed kind and `Enum(d, true, …)`
+    /// where a vector carries it (@FR-L-Null), and `(C-Var)` makes a VARIANT satisfy its
+    /// enum, so `vector<Tagged>` holds a `Named`.  Both spellings are live in the corpus.
+    ///
+    /// `Unknown` on either side answers [`AppendSource::Whole`] — a generic body carries
+    /// placeholder types until monomorphisation, and refusing there would refuse the
+    /// template rather than any of its instances.
+    pub(crate) fn append_source(&mut self, dest: &Type, s_type: &Type) -> AppendSource {
+        let dest = dest.base();
+        let content = dest.content();
+        if s_type.is_unknown() || content.is_unknown() {
+            return AppendSource::Whole;
+        }
+        if s_type.is_equal(dest) {
+            return AppendSource::Whole;
+        }
+        if self.holds_element(&content, s_type) {
+            return AppendSource::Element;
+        }
+        if is_keyed(dest)
+            && let Type::Vector(elm, _) = s_type.base()
+            && self.holds_element(&content, elm)
+        {
+            return AppendSource::ElementVector;
+        }
+        AppendSource::Unrelated
+    }
+
+    /// May a value of type `src` be ONE element of a collection whose element type is
+    /// `content`?  Delegates to [`Parser::can_convert`] in both directions, because the two
+    /// spellings of a record element are not ordered: a keyed kind reads its element off
+    /// `content()` as `Reference(d)` while a vector carries the synthetic `Enum(d, true, …)`,
+    /// and which side holds which depends on the destination's kind rather than on the value.
+    pub(crate) fn holds_element(&mut self, content: &Type, src: &Type) -> bool {
+        // `Unknown` is not a match, and saying so here is what keeps the predicate usable by a
+        // REFUSAL.  [`Parser::can_convert`] answers TRUE for an unknown `test_type` — the right
+        // answer for a validator, which must not report a generic body's placeholder as a
+        // mismatch — but read as "this IS an element" it turns every unresolved element type
+        // into a hit: a struct-enum's collection field resolves lazily, so `j.xs += [Item { … }]`
+        // asked while `xs` was still `Unknown` looked like a bare element append and earned
+        // @PLAN52's ambiguity refusal with the brackets already written.
+        if content.is_unknown() || src.is_unknown() {
+            return false;
+        }
+        content.is_equal(src) || self.can_convert(src, content) || self.can_convert(content, src)
+    }
+
     // <children> ::=
 }
 
@@ -5127,6 +5182,34 @@ pub(crate) fn is_keyed(tp: &Type) -> bool {
 /// (loft#1207).
 pub(crate) fn is_collection(tp: &Type) -> bool {
     is_keyed(tp) || matches!(tp.base(), Type::Vector(_, _))
+}
+
+/// What a `c += e` source IS, relative to the collection it is being appended to.
+///
+/// @FR-Col-Insert is stated over `c += [ rec, … ]` — a record joins the collection — and the
+/// routes that implement it each serve ONE spelling of that source: the whole collection
+/// (concatenation), a single element, or a vector of elements aimed at a keyed kind.  Naming
+/// the three in one place is what makes the FOURTH answer expressible: a source the
+/// destination cannot hold at all.
+///
+/// Without that answer the routes are a partial list with no `else`, and each of the two
+/// failure directions has shipped.  A source matching no route reached whichever route tests
+/// LEAST — the vector single-element push, which compares nothing — and was written raw into
+/// an element slot: a `float` read back as its IEEE-754 bits, a `text` panicking the
+/// allocator, `--native` refusing to compile the Rust it emitted (loft#1215).  A keyed
+/// destination has no such catch-all, so the same source fell past every route to a statement
+/// that emitted no write, and the append vanished with `len` reading 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppendSource {
+    /// The source IS the collection — `v += other_v`, concatenation.
+    Whole,
+    /// The source is ONE element.  A keyed kind places it by key; a vector requires the
+    /// `+= [elem]` brackets (@PLAN52), so for a vector this is a diagnosis, not a route.
+    Element,
+    /// A vector OF elements aimed at a KEYED destination — loft#1159's bulk fill.
+    ElementVector,
+    /// Nothing the destination can hold.
+    Unrelated,
 }
 
 /// P216: walk a captured variable's `Type` and call `tuple_def` for

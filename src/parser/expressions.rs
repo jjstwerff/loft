@@ -2865,10 +2865,21 @@ use a separate collection or add after the loop"
         // *"Variable 'v' cannot change type from vector<integer>? to integer"* for a
         // local, *"No matching operator 'Add'"* for a field, neither of which mentions
         // `+= [elem]`.
+        // loft#1221 — "is the source ONE element of this vector" is asked of the same home the
+        // append routes ask (`holds_element`), because the element type has more than one
+        // spelling and a bare `is_equal` knows only the first.  @FR-C-Var makes a VARIANT an
+        // element of a vector over its enum, so `b.items += Named { … }` is a bare element
+        // append and owes the reader this message.  Asked with `is_equal` it was none of the
+        // routes' business: `Reference(Named)` and `Enum(Tagged, …)` read as unrelated, the
+        // statement fell past every branch, and the generic path grew the vector by THREE.
         if op == "+="
-            && let Type::Vector(elm_tp, _) = f_type.base()
+            && let Type::Vector(_, _) = f_type.base()
             && !s_type.is_unknown()
-            && (**elm_tp).is_equal(&s_type)
+            && {
+                let content = f_type.base().content();
+                let src = s_type.clone();
+                self.holds_element(&content, &src)
+            }
             && !s_type.is_equal(f_type.base())
         {
             diagnostic!(
@@ -2931,6 +2942,77 @@ use a separate collection or add after the loop"
             let peeled = s_type.base().clone();
             self.convert(code, &s_type, &peeled);
             s_type = peeled;
+        }
+        // loft#1215 — the append routes below are a partial list, and nothing said so.  A
+        // source that matches none of them used to reach whichever route tests LEAST: the
+        // vector single-element push, which compares its source with the element type
+        // nowhere and writes whatever it is handed as one element.  A `float` came back as
+        // its IEEE-754 bits read as an `i64`, a `boolean` as 8705, a `text` panicked the
+        // allocator, a struct source and a `vector<text>` element both ended in a SIGSEGV,
+        // and `--native` refused to compile any of them — so the two backends disagreed
+        // about the same program.  A KEYED destination has no catch-all route, so the same
+        // source fell past everything to a statement that emitted no write at all and the
+        // append vanished with `len` reading 0.
+        //
+        // @FR-C-Only settles it without a design call: `⤳` is the only implicit coercion, and
+        // no `⤳` relates a `float` to an `integer` slot.  So this is an ordinary type
+        // error, and the reference route is one operator over — `d.c = f` has always been
+        // one.
+        //
+        // Placed at the ONE point where every destination kind and every route are still in
+        // play, beside `(N-Store)`'s check for the same reason: the vector push, the vector
+        // concat, the keyed fill and the record-literal routes are all downstream, so a
+        // check at any of them is one more copy of a question this file already asks in
+        // four places.  [`Parser::append_source`] is that question's home.
+        if op == "+=" && !self.first_pass && crate::parser::vectors::is_collection(f_type.base()) {
+            let dest = f_type.base().clone();
+            let kind = self.append_source(&dest, &s_type);
+            // A KEYED destination has no route for the WHOLE collection either — `d.h +=
+            // other_h` between two `hash<E[k]>` silently emitted no write and `len` read 0.
+            // Refused rather than implemented: @FR-Col-Insert is stated over records joining a
+            // collection and says nothing about merging two, so making it work is a design
+            // call and a new op, while making it SAY so costs nothing and is strictly better
+            // than the drop.  The vector twin is the control that keeps this scoped — there
+            // `Whole` IS concatenation, and it must stay.
+            let unroutable_whole = kind == crate::parser::vectors::AppendSource::Whole
+                && crate::parser::vectors::is_keyed(&dest)
+                && !s_type.is_unknown();
+            if unroutable_whole {
+                let content = dest.content().name(&self.data);
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot append a whole `{}` to another — a keyed collection's `+=` takes \
+                     one `{}` element written `[…]`, or a `vector<{}>` of them",
+                    dest.source_name(&self.data),
+                    content,
+                    content
+                );
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            if kind == crate::parser::vectors::AppendSource::Unrelated {
+                // The two spellings named are the two that were MEASURED to work at every
+                // destination kind: `+= [elem]` and `+= <vector of elem>`.  For a vector the
+                // second IS the collection, so one sentence serves both kinds.  What is
+                // deliberately NOT offered is "the whole collection, to concatenate" at a
+                // KEYED destination: `d.h += other_h` between two `hash<E[k]>` is itself a
+                // silent drop, and a refusal whose cure is broken sends the reader to a dead
+                // end — that one is loft#1221, the routes that drop an ADMISSIBLE source.
+                let content = dest.content().name(&self.data);
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot append `{}` to `{}` — a `+=` source must be one `{}` element \
+                     written `[…]`, or a `vector<{}>` of them",
+                    s_type.name(&self.data),
+                    dest.source_name(&self.data),
+                    content,
+                    content
+                );
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
         }
         // C54.A incremental 2a — if the variable carries an annotated
         // target type `: Long` with a narrower `Integer` RHS
@@ -4026,7 +4108,15 @@ use a separate collection or add after the loop"
             && op == "+="
             && dbref_append_target
             && crate::parser::vectors::is_collection(f_type)
-            && matches!(code, Value::Insert(_))
+            // loft#1221 — a KEYED destination takes an element however it is SPELLED.  The
+            // `Insert` requirement is a vector's: for a vector a bare element is @PLAN52's
+            // ambiguity and the brackets are required, so only a struct LITERAL can reach a
+            // vector here.  A keyed kind has no such ambiguity — `h += rec` is the spelling
+            // its own LOCAL has always accepted — and requiring `Insert` of it left the
+            // FIELD form owned by nothing: `d.h += e` for a plain local `e` of the element
+            // type fell past every route to a statement that emitted no write, and the
+            // append vanished with `len` reading 0.
+            && (matches!(code, Value::Insert(_)) || crate::parser::vectors::is_keyed(f_type))
         {
             let elm_tp = f_type.content();
             // Only fire for single-element append (RHS type matches the

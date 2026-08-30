@@ -4738,6 +4738,18 @@ impl Parser {
             {
                 return true;
             }
+            // @FR-C-Var — a VARIANT satisfies the enum it belongs to: `Reference(S) ⤳
+            // Enum(E)` when `S ∈ variants(E)`.  The argument, return and struct-field
+            // positions all accept `Named { … }` where a `Tagged` is declared, so a
+            // predicate that answers *"may this value satisfy that slot"* has to say the
+            // same — asked from a fourth position it said no, and the caller then read a
+            // legal value as unrelated to the slot it was going into (loft#1215).
+            if let (Type::Reference(v_nr, _), Type::Enum(e_nr, _, _)) = (test_type, should)
+                && self.data.def_type(*v_nr) == crate::data::DefType::EnumValue
+                && self.data.def(*v_nr).parent == *e_nr
+            {
+                return true;
+            }
             // @PLN25 E2 — a `__nullable<S>` value is accepted into a dense `S`
             // slot; `convert` emits the payload sub-ref (gap 2).
             if let (Type::Enum(enum_d, true, _), Type::Reference(struct_d, _)) = (test_type, should)
