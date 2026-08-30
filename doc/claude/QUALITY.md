@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 337 | 320 | **17** |
+| 338 | 321 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -493,7 +493,10 @@ before they match, so they land on the peeling side and leave the opaque column 
 loft#1185 to 337 · 319 with `parser::tail_calls_a_fnref_parameter`, which unspans for the same
 reason.
 
-loft#1194 moved the OPAQUE column for the first time in a while, 18 → **17**, and the way it
+loft#1194/#1195 moved the table twice: 337 · 319 · 18 → 337 · 320 · **17**, then
+338 · 321 · 17 as `parser::field_place` entered it — a new site that discriminates `Var` from
+`Call` and peels at every level, so it lands on the peeling side and leaves the opaque column
+alone. The OPAQUE column moving at all was the first time in a while, and the way it
 happened is worth keeping. The comprehension fix added an `unspan`ing match to
 `vectors::build_comprehension_code`, and the table moved on its own — because a site here is a
 FUNCTION, so one peeling match reclassified a function whose actual blind spot was somewhere
@@ -1417,7 +1420,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 41 | **8** | 33 |
+| 42 | **8** | 34 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -1425,6 +1428,15 @@ so the row cannot go stale — the same arrangement the `unspan` table has.)
 loft#1186 moved it to 41 · 8 with `parser::node_place_root`, the arm-level half of the join
 reading: it resolves a projection by op name AND carries the `TupleGet` spelling, so it lands
 on the handling side and leaves the third column where it was.
+
+loft#1195 moved it to 42 · 8 · **34** with `parser::field_place`, which reads a comprehension
+destination as a PLACE (root variable + `OpGetField` offsets) and does not carry the
+`TupleGet` spelling. Asked the question this screen exists to ask — is the fallback a semantic
+boundary or a shape nobody listed? — the answer is measured rather than argued: a tuple-element
+destination (`t.0 = [for i in 0..t.0.len() { t.0[i] * 2 }]`) is CORRECT on both backends today,
+so it never reaches this predicate and the site's blindness costs nothing. Recorded because
+that is a fact about a neighbouring route, not a property of `field_place`: if the tuple
+destination ever starts arriving here, this is the row that says the predicate cannot see it.
 
 ⚠ **The row reads 38 · 5 · 33 and the paragraph above it says 18 · 2 · 16, mostly because the
 SCREEN was widened rather than because sites appeared.** It has moved four times in one merge —
