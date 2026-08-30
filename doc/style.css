@@ -504,3 +504,36 @@ article h3 {
   /* Don't show URLs for internal anchors or nav links */
   a[href^="#"]:after, a[href$=".html"]:after { content: ""; }
 }
+
+/* ── Libraries page (the registry catalogue) ────────────────────────────── */
+
+.lib-count { color: var(--dim); font-size: 0.9em; margin: -0.4em 0 1.2em; }
+.lib-table { width: 100%; border-collapse: collapse; font-size: 0.88em; margin: 0.6em 0 1.8em; }
+.lib-table th { background: var(--nav-bg); border: 1px solid var(--border); padding: 6px 10px; text-align: left; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; }
+.lib-table td { border: 1px solid var(--border); padding: 6px 10px; vertical-align: top; }
+.lib-table tr:nth-child(even) td { background: var(--code-bg); }
+/* The name column is the scan target — keep it on one line so a reader's eye can
+   run down it, and let the description column take the wrapping instead. */
+.lib-table td:first-child { white-space: nowrap; }
+.lib-table td:nth-child(2) { white-space: nowrap; color: var(--dim); font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.9em; }
+.lib-lede { font-size: 1.05em; margin: 0 0 1.1em; }
+.lib-card th { width: 12em; white-space: nowrap; text-transform: none; font-size: 0.85em; }
+.lib-card td { white-space: normal; }
+.lib-card td:nth-child(2) { font-family: inherit; font-size: inherit; color: inherit; }
+.lib-legend { color: var(--dim); font-size: 0.85em; margin: 0 0 1.4em; }
+
+/* ── Library source browser ─────────────────────────────────────────────── */
+
+/* Line numbers are a counter rather than markup: a 6,000-line library would
+   otherwise carry half a megabyte of per-line boilerplate saying nothing. */
+pre.src { counter-reset: srcline; overflow-x: auto; line-height: 1.45; }
+pre.src > code > span { counter-increment: srcline; display: block; }
+pre.src > code > span::before {
+  content: counter(srcline);
+  display: inline-block; width: 3.5em; margin-right: 1em;
+  text-align: right; color: var(--dim); opacity: 0.55;
+  border-right: 1px solid var(--border); padding-right: 0.6em;
+  user-select: none;
+}
+/* The line a fragment link just jumped to, so an anchor from the item table lands visibly. */
+pre.src > code > span:target { background: var(--nav-bg); outline: 1px solid var(--border); }

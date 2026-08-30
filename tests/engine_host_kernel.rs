@@ -2217,3 +2217,159 @@ fn main() {{
     );
     let _ = std::fs::remove_file(&prog);
 }
+
+// ── The browser kernel's native registry ────────────────────────────────────
+//
+// `KERNEL_FUNCTIONS_WASM` is a hand-maintained list, and what it registers has to agree with
+// two other things nothing was checking: the implementations beside it, and the natives the
+// shared loop calls.  loft#1189 was one defect of each kind — `n_kernel_client_event_status`
+// was implemented in `engine_host::browser` and never listed, and `n_kernel_swap_step` was
+// called by `client_loop` on every turn and neither implemented nor listed.  Both showed up
+// only as a panicking stub inside a browser page, and the committed bundle was old enough to
+// predate them, so the browser tests never saw either.
+//
+// The two guards below are exact — a name is in a list or it is not — rather than a call-graph
+// walk, which over-approximates: followed transitively from the client roots it reaches the
+// SERVER family through the role-generic wrappers and would demand `n_kernel_listen` be
+// registered for a browser.
+
+/// The `#native` symbol each `fn name(...)` in the lib maps to, plus each `pub fn n_*` the
+/// browser module defines and each name `KERNEL_FUNCTIONS_WASM` registers.
+fn browser_kernel_sources() -> (String, String, String) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    (
+        std::fs::read_to_string(root.join("lib/engine_host/src/engine_host.loft"))
+            .expect("engine_host.loft"),
+        std::fs::read_to_string(root.join("src/engine_host.rs")).expect("engine_host.rs"),
+        std::fs::read_to_string(root.join("src/native.rs")).expect("native.rs"),
+    )
+}
+
+/// The names `KERNEL_FUNCTIONS_WASM` registers, read out of the source text.
+///
+/// The table is `cfg(target_arch = "wasm32")`, so a host test cannot look at the value — the
+/// text is the only view of it from here.
+fn registered_for_wasm(native_rs: &str) -> std::collections::HashSet<String> {
+    let start = native_rs
+        .find("pub const KERNEL_FUNCTIONS_WASM")
+        .expect("KERNEL_FUNCTIONS_WASM");
+    let end = native_rs[start..].find("\n];").expect("end of the table") + start;
+    native_rs[start..end]
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|s| s.starts_with("n_"))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn every_browser_kernel_native_is_registered_for_wasm() {
+    let (_, engine_host_rs, native_rs) = browser_kernel_sources();
+    let registered = registered_for_wasm(&native_rs);
+    let open = engine_host_rs
+        .find("\npub mod browser {")
+        .expect("`pub mod browser`");
+    // The module ends at the first `}` in column zero after it — every item inside is
+    // indented.  Without the bound this read on past the module and collected the NATIVE and
+    // codegen implementations that follow it, which a browser build has no business with.
+    let close = engine_host_rs[open + 1..]
+        .find("\n}")
+        .map_or(engine_host_rs.len(), |i| open + 1 + i);
+    let module = &engine_host_rs[open..close];
+    // The module's own items are indented four spaces; anything deeper belongs to a nested
+    // block and anything at column zero is past its closing brace.
+    let mut missing = Vec::new();
+    for line in module.lines() {
+        let Some(rest) = line.strip_prefix("    pub fn n_") else {
+            continue;
+        };
+        let Some(name) = rest.split('(').next().map(str::trim) else {
+            continue;
+        };
+        let sym = format!("n_{name}");
+        if !registered.contains(&sym) {
+            missing.push(sym);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "`engine_host::browser` implements {missing:?} and `KERNEL_FUNCTIONS_WASM` does not \
+         register them — a browser page reaches the panicking stub instead (loft#1189).  Add \
+         each to the table in src/native.rs, or delete the implementation."
+    );
+}
+
+#[test]
+fn the_shared_client_loop_calls_only_natives_the_browser_kernel_has() {
+    let (lib, _, native_rs) = browser_kernel_sources();
+    let registered = registered_for_wasm(&native_rs);
+    // The natives the lib declares, by loft name: `fn kernel_x(…) -> τ;` followed by `#native`
+    // (with an explicit symbol, or `n_` + the name).
+    let lines: Vec<&str> = lib.lines().collect();
+    let mut symbol_of: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t != "#native" && !t.starts_with("#native \"") {
+            continue;
+        }
+        let explicit = t
+            .strip_prefix("#native \"")
+            .and_then(|r| r.split('"').next());
+        let Some(decl) = lines[..i].iter().rev().find_map(|l| {
+            let l = l.trim_start();
+            let l = l.strip_prefix("pub ").unwrap_or(l);
+            l.strip_prefix("fn ").and_then(|r| r.split('(').next())
+        }) else {
+            continue;
+        };
+        symbol_of.insert(
+            decl,
+            explicit.map_or_else(|| format!("n_{decl}"), str::to_string),
+        );
+    }
+    // `client_loop` is THE loop every browser page runs, and its body is scanned directly
+    // rather than followed transitively: what it calls itself is exactly what a page reaches
+    // on every turn, and it is decidable without guessing.
+    let start = lib
+        .find("fn client_loop(")
+        .expect("`client_loop` in engine_host.loft");
+    let body = &lib[start..];
+    let end = body
+        .find("\nfn ")
+        .or_else(|| body.find("\npub fn "))
+        .unwrap_or(body.len());
+    let body = &body[..end];
+    // A call is the name at a word boundary: a bare `contains` reported `client_loop` calling
+    // `sync_next` because it calls `client_sync_next`, and the guard's whole value is that its
+    // failures mean something.
+    let calls = |name: &str| {
+        let needle = format!("{name}(");
+        body.match_indices(&needle).any(|(at, _)| {
+            at == 0
+                || !body[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    };
+    let mut missing = Vec::new();
+    for (name, sym) in &symbol_of {
+        if !calls(name) {
+            continue;
+        }
+        // A text-returning native is dispatched under its `_dest` variant (see
+        // `state::codegen`'s `_dest` list), so either spelling counts as supplied.
+        if !registered.contains(sym) && !registered.contains(&format!("{sym}_dest")) {
+            missing.push(sym.clone());
+        }
+    }
+    missing.sort();
+    assert!(
+        missing.is_empty(),
+        "`client_loop` calls {missing:?} and the browser kernel does not supply them — every \
+         browser page running `run_client` / `run_local` reaches the panicking stub on its \
+         first turn (loft#1189).  Implement each in `engine_host::browser` and register it in \
+         `KERNEL_FUNCTIONS_WASM`."
+    );
+}

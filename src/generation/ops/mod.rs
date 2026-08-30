@@ -205,6 +205,10 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
         "OpFreeRefIfDistinct",
         Box::new(ref_ops::OpFreeRefIfDistinctEmitter),
     );
+    r.insert(
+        "OpFreeRefOrHandUp",
+        Box::new(ref_ops::OpFreeRefOrHandUpEmitter),
+    );
     // Plan-57 store-identity gate (LOFT_STORE_TAG only): native parity for the
     // verifying store ops.  Absent from normal builds (the IR post-pass emits them
     // only under the gate), so registering them is inert otherwise.

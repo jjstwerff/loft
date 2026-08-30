@@ -68,22 +68,12 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 REPO_HASH=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
 REPO_SLUG=$(printf '%s' "$(basename "$REPO_ROOT")" | tr -c 'A-Za-z0-9._-' '_')
 REPO_TAG="$REPO_SLUG.$REPO_HASH"
-# Per-checkout server-test port offset: the engine-host / wasm-relay tests bind FIXED ports, so
-# two concurrent suites (this checkout + a sibling) would collide and flake.  Derive a distinct
-# non-zero offset per checkout (a multiple of 2000 > the ~1200-wide base-port span, so two
-# checkouts' ranges never overlap) and export it for `common::test_port`.
-#
-# The multiplier is bounded so the RESULT stays below the kernel's ephemeral range
-# (`/proc/sys/net/ipv4/ip_local_port_range`, 32768 on Linux).  It was `% 16`, giving offsets
-# up to 32000: with a top base port of 19322 that put this checkout's tests on 43322, INSIDE
-# the range the kernel hands out for outgoing connections.  Any outbound socket on the box —
-# cargo, rustc, a browser a test launches — could take the port between the availability check
-# and the server's bind, and the test then failed with "server never started on 43322".  That
-# is the whole of the long-standing wasm_debug_relay / engine_host full-suite flake: it only
-# ever appeared under `find_problems.sh`, because a plain `cargo test` leaves the offset unset
-# and lands in the safe band.  `% 6` keeps the top port at 19322 + 12000 = 31322 < 32768 while
-# still giving six non-overlapping per-checkout ranges.
-export LOFT_TEST_PORT_OFFSET=$(( (REPO_HASH % 6 + 1) * 2000 ))
+# The per-checkout server-test port offset used to be computed here and exported.  It is now
+# `common::checkout_port_offset`, which reproduces `(cksum(path) % 6 + 1) * 2000` in Rust — the
+# SAME bands, so nothing moved, but every way of running the suite gets them: `make ci` and a
+# bare `cargo test` as well as this script.  That gap was loft#1193 — two gates running at once
+# collided on fixed ports and the red read as a browser bug.  Set `LOFT_TEST_PORT_OFFSET` by
+# hand to pin a band.
 
 # FFI toolchain guard (E0514 self-heal).  A nightly / sanitizer build run into the
 # shared `target/` leaves `target/release/deps/libloft_ffi-*.rlib` compiled by a

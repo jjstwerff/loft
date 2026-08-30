@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Call it yourself
+// @TITLE: A page you drive, not one you read
+// Every other page here shows you loft.  This one hands it to you.
+// The functions below are compiled and live in the panel at the bottom of the
+// page: type a call, press enter, and loft answers.  Nothing is a transcript —
+// the number you see is the one your browser just computed.
+// ## What to try first
+// `fib(10)` is the shortest way to be sure the panel is real.  Change the 10 and
+// the answer changes; ask for `fib(30)` and you will wait a moment, because this
+// is the naive recursion and it really does make that many calls.
+fn fib(n: integer) -> integer {
+  if n < 2 {
+    return n;
+  }
+  fib(n - 1) + fib(n - 2)
+}
+
+// ## Numbers with a shape
+// `nth_prime(1)` is 2, `nth_prime(10)` is 29.  Try to guess `nth_prime(100)`
+// before you ask for it — the primes thin out faster than most people expect.
+fn is_prime(n: integer) -> boolean {
+  if n < 2 {
+    return false;
+  }
+  d = 2;
+  while d * d <= n {
+    if n % d == 0 {
+      return false;
+    }
+    d += 1;
+  }
+  true
+}
+
+fn nth_prime(n: integer) -> integer {
+  found = 0;
+  candidate = 1;
+  while found < n {
+    candidate += 1;
+    if is_prime(candidate) {
+      found += 1;
+    }
+  }
+  candidate
+}
+
+// ## Text goes in
+// `vowels("your name here")` counts the vowels in whatever you type.  The
+// argument is a text and the answer is a number, which is the shape the panel
+// renders today — see the note at the end of the page.
+fn vowels(s: text) -> integer {
+  n = 0;
+  for c in s {
+    if c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' {
+      n += 1;
+    }
+  }
+  n
+}
+
+// ## A struct comes back
+// `stats(3, 17)` answers `{"lo":3,"hi":17,"span":14}` — a whole record, rendered
+// as JSON, from one call.  Give it the arguments in the wrong order and it still
+// answers correctly, which is the point of it.
+struct Span {
+  lo: integer,
+  hi: integer,
+  span: integer,
+}
+
+fn stats(a: integer, b: integer) -> Span {
+  lo = if a < b { a } else { b };
+  hi = if a < b { b } else { a };
+  Span { lo: lo, hi: hi, span: hi - lo }
+}
+
+// ## Pausing inside a run
+// The panel can also stop the program mid-flight.  Click a line number in the
+// code above to set a breakpoint, press Run, and the panel lists the variables
+// that line can see — then the same prompt evaluates against THAT frame, so a
+// call like `fib(step)` uses the `step` the paused function is holding.
+fn walk_to(limit: integer) -> integer {
+  total = 0;
+  step = 0;
+  while step < limit {
+    step += 1;
+    total += fib(step);
+  }
+  total
+}
+
+// ## What the panel cannot do yet
+// An expression whose value is a text or a vector answers `<unavailable>` rather
+// than a value: the browser evaluator reads a result off the paused frame, and
+// only a number, a character, a boolean or a struct survives that trip
+// (loft#1187).  So `vowels("hello")` answers 2 and `stats(1, 9)` answers a
+// record, while a function returning a text does not — which is why every
+// function on this page hands back one of the shapes that works.
+fn main() {
+  // The demonstration comes first and the checks follow it, so a reader who presses
+  // Run sees an answer straight away — the panel stops on main's LAST line, and a
+  // program whose only print IS that line would pause with nothing shown yet.
+  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"hello\")={vowels(\"hello\")}\n");
+  // The page is a real program, so these run on both backends like every other page
+  // here, and an example that stops being true stops compiling.
+  assert(fib(10) == 55, "fib(10)");
+  assert(fib(1) == 1 && fib(0) == 0, "fib base cases");
+  assert(nth_prime(1) == 2, "the first prime is 2");
+  assert(nth_prime(10) == 29, "the tenth prime is 29");
+  assert(!is_prime(1) && is_prime(2) && !is_prime(9), "is_prime edges");
+  assert(vowels("hello") == 2, "hello has two vowels");
+  assert(vowels("") == 0, "no text, no vowels");
+  s = stats(17, 3);
+  assert(s.lo == 3 && s.hi == 17 && s.span == 14, "stats orders its arguments");
+  // fib(1..4) is 1 + 1 + 2 + 3.
+  assert(walk_to(4) == 7, "walk_to sums the first four");
+}

@@ -1,0 +1,94 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Running your program
+// @TITLE: How to run loft — one file, the REPL, and checking your work.
+// The pages before this one show how to WRITE loft. This one shows how to RUN it.
+// You need one command to start, and everything else is optional.
+// ## Run a file
+// Put your program in a file ending in '.loft' and pass it to loft:
+//
+//     $ loft hello.loft
+//     hello, world!
+//
+// That is the whole thing. There is no build step to run first and no project
+// to set up. A single file is a complete program.
+// ## Give your program some arguments
+// Put them after the file name, and declare one `vector<text>` parameter on 'main'
+// to read them:
+//
+//     fn main(args: vector<text>) {
+//       for who in args { println("hello, {who}!"); }
+//     }
+//
+//     $ loft greet.loft Ada Grace
+//     hello, Ada!
+//     hello, Grace!
+//
+// That one parameter is the only shape 'main' accepts. Any other — a plain 'text',
+// two of them — is refused, because nothing would fill it.
+//
+// ## Try something without making a file
+// Type 'loft' on its own and you get a prompt where you can type one line at a
+// time and see the answer straight away:
+//
+//     $ printf '2 + 3\n' | loft repl --fresh
+//     5
+//
+// Typed by hand it looks like this — start it, then type at the prompt:
+//
+//     loft
+//     loft> 2 + 3
+//     5
+//
+// This is called a REPL, which is short for "read, evaluate, print, loop".
+// It is the quickest way to check what a function does or try an idea.
+// Your session is remembered, so you can close it and come back later —
+// '--fresh' is how you ask for a clean one instead.
+// ## Two ways to run, and why you usually ignore this
+// loft can run your program in two ways. It compiles your program to a fast
+// program first when it can, and otherwise it reads and runs your program
+// directly. The second way is called interpreting.
+//
+// You do not have to choose. loft picks for you, and the ANSWER is the same
+// either way — that is a rule the language holds itself to, not a hope.
+// You can ask for one on purpose when you want to:
+//
+//     $ loft --interpret hello.loft
+//     hello, world!
+//
+// A downloaded loft always interprets. That is normal and not something to fix.
+// ## Stop a program that runs too long
+// A loop with a mistake in it can run forever. Give loft a time limit and it
+// stops the program for you:
+//
+//     $ loft --timeout 10 hello.loft
+//     hello, world!
+//
+// This is worth using whenever you run something for the first time.
+// ## Check your work without running it
+// Sometimes you only want to know whether the program is correct so far:
+//
+//     $ loft check hello.loft
+//     ok
+//
+// This reports mistakes and runs nothing. It is fast, and it is a good habit
+// while you are still writing.
+// ## When loft tells you something is wrong
+// A message from loft names the file, the line, and what to do. Some messages
+// can also show you the exact replacement to write:
+//
+//     $ loft --explain --interpret hello.loft
+//     hello, world!
+//
+// That prints the suggested fix under each message. It only shows you the fix;
+// it changes nothing, so it is always safe to run.
+
+fn main() {
+  // A program is just a file with a `main` function in it, like this one.
+  // Everything above is how you would run this file.
+  greeting = "hello";
+  who = "world";
+  message = "{greeting}, {who}!";
+  assert(message == "hello, world!", "string interpolation builds the message");
+  println(message);
+}

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>server API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library server — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-server-api.html">
+<meta property="og:title" content="server API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library server — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-server-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="server API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library server — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>server API</h1>
+<article>
+<p><a href="lib-server.html">← server</a> · version 0.6.0</p>
+<p class="lib-legend">42 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Server</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">WebSocket</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Request</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">listen</span>(port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Server</span></code></pre>
+<p>Bind a TCP listener on <code>port</code> and return the server.</p>
+<p>Failing to take the port is FATAL here, deliberately.  The native listener answers -1 when the bind fails, and a <code>Server</code> built on -1 is indistinguishable from a healthy one at every call site: <code>run</code> spins forever on an empty event pump, so the process reports itself up and serves nobody.  Worse, that state is invisible from OUTSIDE the process too — a readiness probe that connects to the port reaches whoever DID win the bind and reports success — so the failure surfaces somewhere else entirely, as a client that hangs or talks to a stranger's server.</p>
+<p>Use <code>try_listen</code> when losing the port is an outcome you mean to handle: retrying on another port, or scanning a range. Example: @SRV-001 — halting door vs recoverable door, and why <code>bound()</code> is not optional.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">try_listen</span>(port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Server</span></code></pre>
+<p>Like <code>listen</code>, but hands back an UNBOUND server instead of halting when the port cannot be taken.  Check <code>bound()</code> before using it: every other method on an unbound server does nothing, quietly. Example: @SRV-001 — the retry shape: try_listen, then bound(), then use it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">listen_on</span>(addr: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Server</span></code></pre>
+<p>Bind on a chosen address rather than the wildcard <code>0.0.0.0</code> that plain <code>listen</code> uses. <code>&quot;127.0.0.1&quot;</code> restricts the server to loopback — unreachable from the network — which is the safe default a machine sitting behind a reverse proxy or an SSH tunnel wants, and the one <code>listen</code> deliberately does NOT give (it binds every interface). An empty <code>addr</code> means <code>0.0.0.0</code>. Halts if the bind fails; <code>try_listen_on</code> hands back an unbound server instead.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">try_listen_on</span>(addr: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Server</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">listen_tls</span>(port: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cert: <span class="ty"><a href="stdlib-types.html">text</a></span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Server</span></code></pre>
+<p>Serve TLS (https:// / wss://). <code>cert</code> is a PEM certificate CHAIN (leaf first, then any intermediates — what an ACME client writes as fullchain.pem); <code>key</code> is the PEM private key. Both are the file CONTENTS, not paths, so the caller reads them however it likes (<code>file(path).content()</code>), keeping this layer free of any filesystem policy. The op surface is identical to a plaintext server — accept, respond, WebSocket upgrade all work the same, just over TLS. Halts if the certificate/key is unusable or the bind fails (never a silent fallback to cleartext — a TLS server that quietly served http would be the worst surprise).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">try_listen_tls</span>(port: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cert: <span class="ty"><a href="stdlib-types.html">text</a></span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Server</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">try_listen_tls_on</span>(addr: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span>, cert: <span class="ty"><a href="stdlib-types.html">text</a></span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Server</span></code></pre>
+<p>TLS on a chosen bind address — <code>listen_tls</code> + <code>listen_on</code> combined. An empty <code>addr</code> means <code>0.0.0.0</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bound</span>(self: <span class="en">Server</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>True when this server actually owns its port.  Always true for a <code>listen()</code> result (that halts otherwise) — it is the check that makes a <code>try_listen()</code> result usable.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">next_nonblocking</span>(self: <span class="en">Server</span>) -&gt; <span class="en">Request</span></code></pre>
+<p>Non-blocking variant of <code>next()</code>.  Returns null immediately if no connection is pending.  Use this when the server interleaves HTTP accept with multi-client WS polling on a single port (single_port audience demo / future TTT-style multi-tab apps).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">next</span>(self: <span class="en">Server</span>) -&gt; <span class="en">Request</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond</span>(self: <span class="en">Request</span>, status: <span class="ty"><a href="stdlib-types.html">integer</a></span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_typed</span>(self: <span class="en">Request</span>, status: <span class="ty"><a href="stdlib-types.html">integer</a></span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, content_type: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Send an HTTP response with a caller-specified Content-Type and close the connection.  Use for HTML / CSS / JSON / WASM payloads; <code>respond</code> defaults to <code>text/plain</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_bytes</span>(self: <span class="en">Request</span>, status: <span class="ty"><a href="stdlib-types.html">integer</a></span>, body: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">u8</a></span>&gt;, content_type: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Send a response whose body is RAW BYTES — an image, a font, a wasm module, any payload that is not text.</p>
+<p>⚠⚠ USE THIS FOR ANYTHING BINARY; the text responses cannot carry it and FAIL SILENTLY. <code>respond</code>/<code>respond_typed</code> take loft <code>text</code>, and a <code>text</code> built from non-UTF-8 bytes is the EMPTY text (<code>text_from_bytes</code> documents exactly that). So serving a PNG through them answers **200 OK with Content-Length: 0** — a success the caller cannot distinguish from an empty file, and a broken image with no error anywhere. Measured 2026-08-21: the loft review viewer had been serving every <code>doc/images/*.png</code> that way.</p>
+<p><code>content_type</code> empty defaults to <code>application/octet-stream</code>, which is the honest answer for bytes of unknown kind — name the real type when you know it (<code>image/png</code>, <code>font/woff2</code>, <code>application/wasm</code>).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">header</span>(self: <span class="en">Request</span>, name: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>Look up a request header case-insensitively (e.g. &quot;Range&quot;, &quot;Origin&quot;, &quot;If-None-Match&quot;); returns &quot;&quot; if absent. Values containing ':' (an Origin URL, a date) are rejoined intact. Example: @SRV-002 — why a hand-rolled <code>h.split(':')[1]</code> over <code>headers</code> loses the port.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_with_headers</span>(self: <span class="en">Request</span>, status: <span class="ty"><a href="stdlib-types.html">integer</a></span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, headers: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;)</code></pre>
+<p>Send a response with caller-controlled headers (Content-Range, ETag, the CORS headers, …). <code>headers</code> is a vector of &quot;Key: Value&quot; lines; Content-Length is auto-added from the body unless a header supplies one; the body is written verbatim (binary-safe).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">cors_headers</span>(origin: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;</code></pre>
+<p>Standard CORS headers so a browser client can read Content-Range / Content-Length / ETag on a cross-origin byte-range fetch. <code>origin</code> is the allowed origin (&quot;*&quot; for any).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">serve_range</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, extra: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">text</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Serve a byte range of <code>body</code> when the request carries a Range header, adding <code>extra</code> headers (CORS / ETag) to the 206 or 416. Returns true if a range response was sent; false when there is no Range header (the caller serves the full body). Single-range &quot;bytes=off-last&quot; / open-ended &quot;bytes=off-&quot; only. Example: @SRV-003 — the boolean says WHO answered; false is the case you must handle.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">serve_data</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, etag: <span class="ty"><a href="stdlib-types.html">text</a></span>, origin: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>One-call helper to serve a (possibly binary) resource with full byte-range + CORS + HEAD + conditional support — the server counterpart to the web client's http_get_range / http_size. <code>etag</code> &quot;&quot; skips conditional; <code>origin</code> &quot;&quot; skips CORS. Example: @SRV-003 — this one takes every branch, so it is always true and always final.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_html</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Convenience wrappers for the common cases TTT v3 needs.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_css</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_js</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_loft</span>(self: <span class="en">Request</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_404</span>(self: <span class="en">Request</span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">close</span>(self: <span class="en">Server</span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">ws_upgrade</span>() -&gt; <span class="en">WebSocket</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">next</span>(self: <span class="en">WebSocket</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span>?</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">send</span>(self: <span class="en">WebSocket</span>, msg: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">send_binary</span>(self: <span class="en">WebSocket</span>, msg: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Send <code>msg</code> as a binary WebSocket frame (opcode 2).  Loft <code>text</code> is a byte buffer — pack u8/u16/i32/etc. into it via <code>to_bytes</code> style code, then ship it.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">last_opcode</span>(self: <span class="en">WebSocket</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Opcode of the last frame returned by <code>next</code> on this socket. Use after <code>next</code> to decide whether to interpret the payload as utf-8 text or as a binary blob.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">close</span>(self: <span class="en">WebSocket</span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">WsEvent</span></code></pre>
+<p>Event delivered to the on_event handler.  <code>connected</code> and <code>message</code> are mutually-exclusive booleans for fast dispatch without an integer enum.  Wire format <code>&lt;msg_id&gt;:&lt;payload&gt;</code> is parsed by <code>run</code> so msg_id and payload come pre-split.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">run</span>(self: <span class="en">Server</span>, on_event: <span class="kw">fn</span>(<span class="en">WsEvent</span>))</code></pre>
+<p>Block forever, draining events and calling the handler. Malformed message frames are logged at warn level and silently dropped — the handler never sees them.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">poll_event</span>(self: <span class="en">Server</span>) -&gt; <span class="en">WsEvent</span></code></pre>
+<p>Non-blocking single-event drain — returns the next WsEvent, or null when nothing is pending.  Lets a server that also needs a periodic tick (timers, decay, snapshots) run its OWN loop while still using the efficient Rust-side event pump: drain <code>poll_event</code> in a batch, do the periodic work, idle-sleep when a pass produced nothing.  <code>run</code> above is the convenience wrapper for servers that only react to events.</p>
+<p>Disconnect (kind 2) and malformed message frames are skipped internally (the caller never sees them), so a null return always means &quot;idle&quot;.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_html</span>(self: <span class="en">Server</span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+<p>Reply to the HTTP request currently parked by a <code>http</code> WsEvent and close it.  Call exactly once from the handler for an <code>ev.http</code> event.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_typed</span>(self: <span class="en">Server</span>, status: <span class="ty"><a href="stdlib-types.html">integer</a></span>, body: <span class="ty"><a href="stdlib-types.html">text</a></span>, content_type: <span class="ty"><a href="stdlib-types.html">text</a></span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">respond_404</span>(self: <span class="en">Server</span>)</code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">send_to</span>(self: <span class="en">Server</span>, client_id: <span class="ty"><a href="stdlib-types.html">integer</a></span>, msg: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Send a frame to a specific client.  Returns true on success.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">broadcast</span>(self: <span class="en">Server</span>, msg: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Send a frame to every active client.  Returns the count of successful sends.  Iteration happens entirely in Rust.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">disconnect</span>(self: <span class="en">Server</span>, client_id: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Forcefully close one client's connection.  The slot is freed for reuse by future accepts.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

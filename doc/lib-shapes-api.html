@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shapes API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library shapes — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-shapes-api.html">
+<meta property="og:title" content="shapes API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library shapes — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-shapes-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="shapes API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library shapes — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>shapes API</h1>
+<article>
+<p><a href="lib-shapes.html">← shapes</a> · version 0.5.0</p>
+<p class="lib-legend">16 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Rect</span></code></pre>
+<p>Axis-aligned bounding box for 2D collision.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Circle</span></code></pre>
+<p>Circle shape for 2D collision.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rects_overlap</span>(a: const <span class="en">Rect</span>, b: const <span class="en">Rect</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Test whether two axis-aligned rectangles overlap. The comparison is STRICT, so rectangles sharing an edge do NOT overlap. Example: @SHP-001 — touching is not overlapping, and what that buys: a row of abutting tiles is quiet, and a mover pushed out by exactly its penetration depth is done.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">circles_overlap</span>(a: const <span class="en">Circle</span>, b: const <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Test whether two circles overlap. Strict, like <code>rects_overlap</code>: tangent circles do NOT overlap. Example: @SHP-001 — the shared strict boundary across all three predicates.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rect_circle_overlap</span>(r: const <span class="en">Rect</span>, c: const <span class="en">Circle</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Test whether a rectangle and a circle overlap. A true circle test — the circle's bounding box is NOT a substitute for it, and a circle wholly inside the rectangle counts as overlapping. Example: @SHP-003 — where the box approximation disagrees (every corner), and why containment answers true.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Overlap</span></code></pre>
+<p>Overlap depth between two rectangles on each axis.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rect_overlap_depth</span>(a: const <span class="en">Rect</span>, b: const <span class="en">Rect</span>) -&gt; <span class="en">Overlap</span></code></pre>
+<p>Compute the overlap depth between two rectangles on each axis. Both depths are UNSIGNED distances — the caller derives the direction from the relative positions.  Returns (0.0, 0.0) when they don't overlap. Useful for bounce direction: if ox &lt; oy → horizontal bounce. Example: @SHP-002 — the sign is the caller's to work out (applying it the wrong way pushes deeper), and the smaller axis is the minimal correction.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aabb_overlap</span>(ax: <span class="ty"><a href="stdlib-types.html">float</a></span>, ay: <span class="ty"><a href="stdlib-types.html">float</a></span>, aw: <span class="ty"><a href="stdlib-types.html">float</a></span>, ah: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>Test AABB overlap using raw coordinates (no struct allocation — safe in loops). Same strict boundary as <code>rects_overlap</code>. Example: @SHP-001 — touching is not overlapping, raw form included.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aabb_depth_x</span>(ax: <span class="ty"><a href="stdlib-types.html">float</a></span>, ay: <span class="ty"><a href="stdlib-types.html">float</a></span>, aw: <span class="ty"><a href="stdlib-types.html">float</a></span>, ah: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>Compute the AABB overlap depth on the X axis using raw coordinates — <code>aabb_depth_y</code> is the other half of the pair, and each call re-runs the overlap test on its own.  Unsigned, like <code>rect_overlap_depth</code>.  <code>0.0</code> means the two do not overlap AT ALL (a real overlap always penetrates by strictly more than zero), not &quot;they meet with no penetration on this axis&quot;. Safe in loops (no struct allocation). Example: @SHP-002 — the depth pair, its 0.0 sentinel, and how a caller turns it into a correction.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">aabb_depth_y</span>(ax: <span class="ty"><a href="stdlib-types.html">float</a></span>, ay: <span class="ty"><a href="stdlib-types.html">float</a></span>, aw: <span class="ty"><a href="stdlib-types.html">float</a></span>, ah: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>Compute the AABB overlap depth on the Y axis using raw coordinates — the other half of the <code>aabb_depth_x</code> pair, with the same unsigned <code>0.0</code>-is-no-overlap contract.  Safe in loops (no struct allocation). Example: @SHP-002 — the depth pair, its 0.0 sentinel, and how a caller turns it into a correction.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Proxy</span></code></pre>
+<p>A shape approximated by a SET of boxes rather than one.</p>
+<p>A sprite's silhouette is rarely a rectangle, and a single bounding box around a diagonal or an L is mostly empty — a mover well clear of the art still reads as a hit.  A handful of boxes tracks the silhouette closely enough to fix that while staying axis-aligned, so every test below is still the cheap one.</p>
+<p>The contract a producer owes is CONTAINMENT: every box together must cover everything solid, so substituting the proxy for the art can only ever over- report a hit, never miss one. A system validated against the proxy therefore stays valid when the art changes. Containment alone is satisfied by a screen-sized box, which is why a producer also bounds the OVERSHOOT — see <code>overshoot</code>.</p>
+<p>Measured over a 36-sprite corpus (@PLN146 F7a): 16 boxes banded along the tighter axis beat a convex hull on mean, median and worst case, and need no shape kind this library does not already have.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">proxy_hits</span>(self: const <span class="en">Proxy</span>, r: const <span class="en">Rect</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Does anything in the proxy overlap <code>r</code>?</p>
+<p>The set test every consumer would otherwise write, with the same STRICT boundary as <code>rects_overlap</code> — a box sharing an edge does not overlap.  An EMPTY proxy answers false: nothing solid was derived, so nothing can be hit, which is the answer that keeps a sprite with no opaque texels from colliding with the world.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">proxies_overlap</span>(self: const <span class="en">Proxy</span>, other: const <span class="en">Proxy</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Do two proxies overlap anywhere?</p>
+<p>Pairwise, because a proxy is small by construction — 16 boxes against 16 is 256 rect tests in the worst case and stops at the first hit.  Cull with the cheap <code>bounds()</code> box first when both are large.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">bounds</span>(self: const <span class="en">Proxy</span>) -&gt; <span class="en">Rect</span></code></pre>
+<p>The single box containing every box in the proxy — the AABB it replaces.</p>
+<p>Useful as a broad-phase cull before <code>proxies_overlap</code>, and as the denominator when judging whether the proxy earned its extra boxes.  An empty proxy answers a zero-size box at the origin.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">area</span>(self: const <span class="en">Proxy</span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>Total area of the proxy's boxes.</p>
+<p>Bands from one derivation do not overlap, so for a banded proxy this is the covered area exactly.  A proxy whose boxes DO overlap counts the shared part twice, which overstates the area and therefore the overshoot — the honest direction for a bound.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">overshoot</span>(self: const <span class="en">Proxy</span>, solid: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>How much bigger the proxy is than the thing it stands for, as a fraction.</p>
+<p><code>solid</code> is the area actually covered by art — the opaque texel count for a sprite. <code>0.0</code> is exact, <code>1.0</code> is twice the size. This is the number a packer gates on, and the reason containment alone is not the contract: a screen-sized box contains everything and is useless.</p>
+<p>A <code>solid</code> of zero or less answers <code>0.0</code> rather than dividing: there is nothing to be a multiple OF, and a null here would propagate into a comparison that then silently passes.</p>
+<p>The trailing <code>?</code> is not redundant with that guard.  A divide types <code>float?</code> whatever the code above it proves, so without the discharge this returns a null into a non-null <code>float</code> — which is the very failure the guard is there to prevent, arriving by the other door.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

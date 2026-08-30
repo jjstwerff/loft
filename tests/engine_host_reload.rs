@@ -353,3 +353,33 @@ fn main() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The port band reproduces POSIX `cksum` — the checksum `find_problems.sh` has always piped
+/// the checkout path through.
+///
+/// The band is the one thing here that cannot be checked from inside a single checkout: a
+/// shared band is invisible to both runs that share it, which is what made loft#1193 read as a
+/// browser defect rather than as a port belonging to somebody else.  What CAN be checked is
+/// that the formula is the same one, so moving it out of the shell script did not re-shuffle
+/// which checkout sits where — and the expected values below come from `cksum` itself, not
+/// from this implementation.
+#[test]
+fn the_port_band_reproduces_posix_cksum() {
+    // $ printf '%s' <path> | cksum
+    for (path, cksum) in [
+        ("/home/jurjens/workspace/loft", 1_514_545_013_u64),
+        ("/home/jurjens/workspace/loft2", 2_450_841_579),
+        ("/home/jurjens/workspace/loft-8c", 85_609_831),
+    ] {
+        let expected = u16::try_from(cksum % 6 + 1).unwrap() * 2000;
+        assert_eq!(
+            common::port_band_of(path),
+            expected,
+            "band for `{path}` disagrees with `cksum` ({cksum})"
+        );
+        assert!(
+            19322_u32 + u32::from(expected) < 32768,
+            "band {expected} puts the top base port inside the ephemeral range"
+        );
+    }
+}

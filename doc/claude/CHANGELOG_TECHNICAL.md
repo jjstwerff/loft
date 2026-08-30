@@ -9,6 +9,61 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A format spec tunes what the value renders as, whatever its type (2026-08-29)
+
+`@FR-F-Spec` tunes ⟦v⟧ and `@FR-F-Render` says what ⟦v⟧ is per type, so the two COMPOSE —
+there is no type whose rendering a width cannot pad. Two families dropped the field-shaping
+half in silence. `OpAppendCharacter` takes the accumulator and the value and nothing else, so
+a `character` lost the whole spec (loft#1165); `OpFormatDatabase` has room for the two
+`db_format` bits, so a vector, struct or record-enum kept `#` and `:j` and discarded width,
+alignment and pad token (loft#1166). Both backends agreed, so neither had a differential
+oracle, and the L9 escalation directly above the dispatch already stated the rule they broke
+(*"a specifier that can never have any effect on the value type is always a bug"*) while
+asking it only of `text` and `boolean`.
+
+**Cure: render into a scratch text with the padding removed, then format that text with it.**
+The composition is what the rules say, so it reaches every such type at once rather than
+widening one op signature per family across both backends — which is what both issues
+predicted the fix would need. The flags that choose the RENDERING stay on the inner call;
+only the field-shaping ones move out. `formatting.md` now states the composition, and the
+edge it decides: a null character renders as nothing, so a width pads a full field.
+
+Guard `tests/scripts/1165-a-format-spec-tunes-every-rendering.loft` asserts each field by
+LENGTH as well as content, and its controls are the `text`/`integer` arms the fix routes the
+others through.
+
+### A number that ends a scan is recorded, so a look-ahead can be undone (2026-08-29)
+
+A number that ends at a `..` (or a field `.`) emits TWO tokens from one scan: the lexer
+returns the NUMBER and QUEUES the follow-up in the replay buffer. Only the queued token was
+recorded — `cont()` remembers when `link == memory.len()`, which a queue makes false — so the
+number was the one token the buffer did not hold, and a look-ahead that reverted over it
+replayed `i`, `+`, `..`. The `+` was left with one operand: `(s[i + 1..])` was refused with
+*"missing argument for parameter 'v2' of `OpAddInt`"* (loft#1164). `LOFT_TRACE_LEX=1` prints
+the replay sequence and shows the missing integer directly.
+
+The number is now inserted BEFORE the queued token and stepped over, so the live sequence is
+unchanged and the buffer says what was read. Four conditions had to hold at once — a
+look-ahead (the tuple-literal classifier, which runs only for a parenthesised expression
+assigned to a plain variable), a slice, and a number immediately before the `..` — which is
+why `s[2..]`, `s[i..]`, `s[i + j..]` and every unparenthesised spelling were unaffected. The
+`.` queue beside it (`n.v.0.0`) takes the same path and was latent; one home covers both.
+
+`lexer::test::link_revert_replays_a_queued_number_split` asserts the replayed sequence at the
+mechanism, beside the existing `link_revert_repeatable_same_region`.
+
+### The `data_ptr` invariant is stated once, where the pointer lives (2026-08-29)
+
+Ten `unsafe` derefs of `State::data_ptr` each carried their own SAFETY note in seven wordings,
+two of which named a mechanism that does not exist (*"cleared at exit"* — nothing clears it;
+`execute_argv` stores its `&Data` and the only null written is the struct initialiser). The
+`is_null()` guard each site carries covers "no program has run yet" and a parallel worker,
+and says nothing about whether the `Data` is still there. What makes every deref sound is the
+CALLER: a `State` must not outlive the `Data` it was run against, which both local-owning
+callers get from drop order by declaring the `Data` first. That is now written once on the
+field, and the sites cite it. Found via the `rust/access-invalid-pointer` code-scanning alert,
+which is a false positive as a memory-safety finding and was right about the comment.
+
 ### 81 assertions the corpus never ran, and the wrong line one of them reported (2026-08-23)
 
 **Instrument.** `LOFT_TRACE_ASSERTS=<path>` appends `file:line` for every `assert` that

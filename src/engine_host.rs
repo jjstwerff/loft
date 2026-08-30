@@ -2483,6 +2483,31 @@ pub mod browser {
         stores.put(stack, false);
     }
 
+    /// `kernel_swap_step() -> integer` in the browser: always 0, "run normally".
+    ///
+    /// The shared `client_loop` calls this EVERY turn, so it is not optional the way the
+    /// swap surface looks from outside — and it was the one `n_kernel_*` the browser kernel
+    /// never registered, which turned every `run_client` page into a panic the moment its
+    /// loop began (loft#1189).  Nothing saw it because the committed bundle predated the
+    /// call.
+    ///
+    /// Zero is the honest answer rather than a placeholder: the browser swap is PAGE-driven
+    /// — `n_swap_start` above refuses, so this build can never enter the frozen (1) or
+    /// handed-over (2) phases the native driver reports.  The page boots a new instance and
+    /// discards this one; the loft program inside never observes the handover.
+    pub fn n_kernel_swap_step(stores: &mut Stores, stack: &mut DbRef) {
+        stores.put(stack, 0_i64);
+    }
+
+    /// `swap_retired() -> boolean` in the browser: always false, for the same reason.
+    ///
+    /// A reconnect wrapper asks this to tell "the server vanished, redial" from "I retired
+    /// after a swap, exit".  A page never takes the second exit, so the answer that keeps a
+    /// wrapper redialling is the correct one.
+    pub fn n_swap_retired(stores: &mut Stores, stack: &mut DbRef) {
+        stores.put(stack, false);
+    }
+
     /// `post(msg) -> boolean` — the local-event enqueue in the browser:
     /// touch/key input becomes an events-class message on the client queue
     /// (`cid: -1` = local origin).  False = no client kernel is booted.

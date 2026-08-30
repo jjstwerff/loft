@@ -45,32 +45,13 @@ fn native_suite_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Docs files that are known to fail in `--native` mode.
-/// See PROBLEMS.md for details on each issue number.
+/// Files in `tests/docs/` that `native_dir` must not compile.
 ///
-/// Doc files to skip in native mode.
-const NATIVE_SKIP: &[&str] = &[
-    // (empty) — "25-generics.loft" was skipped here for the @PLN25/@PLN85
-    // Family-D residual (a generic `-> T?` (Optional) return kept the
-    // parametric `Optional(Reference(tv))` type instead of substituting T,
-    // mistyping the return slot — rustc E0308 on native).  FIXED by #493
-    // cell 5 (commit 64d94c50: `substitute_type` gained an `Optional` arm).
-    // Verified both the scalar-T (`last_element<integer/text>`, already in
-    // this file) and a struct-T instantiation compile + run correctly on
-    // `--native`; the skip is removed so `native_dir` now gates this file
-    // as a regression guard for cell 5.
-    //
-    // 14-image (`use imaging`) + 21-random (`use random`): test-backed on BOTH
-    // backends via `tests/doc_lib_examples.rs` (subprocess through the real `loft`
-    // binary, interpret == native).  Skipped in THIS in-process harness because it
-    // builds native code without `out.native_cabi = native_cabi_enabled()` (unlike
-    // src/test_runner.rs:838), so it emits the legacy `extern crate <pkg>` path and
-    // rustc E0463s (no rlib) while the link provides the C-ABI cdylib.  NOT @P389
-    // (resolved by C-ABI): the `loft` binary compiles two native packages fine.
-    // A test-fidelity follow-up (set native_cabi here) would let these run inline too.
-    "14-image.loft",
-    "21-random.loft",
-];
+/// Empty, and staying empty is the point: every page the site publishes is a
+/// program that runs on both backends, so an entry here is a page whose code a
+/// reader cannot trust.  Add one only with the open issue that explains it, and
+/// delete it the day that issue closes.
+const NATIVE_SKIP: &[&str] = &[];
 
 /// Script files to skip in native mode.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
@@ -770,6 +751,63 @@ fn run_native_jobs(
     Ok(())
 }
 
+/// Build and run one example through the real `loft --native` binary, the way a
+/// user does, and require exit 0.
+///
+/// This file's own emit path builds a **self-contained crate**: it generates the
+/// `.rs` itself and hands rustc loft's own rlib and nothing else. An example that
+/// imports a library therefore does not link — `use random` leaves
+/// `can't find crate for loft_random` (E0463) — because the flags that would
+/// resolve it are missing: the package's `-L native=<build cache>`,
+/// `-l dylib=loft_<pkg>` and the two rpaths, plus the C-ABI codegen switch
+/// `Output::native_cabi` that decides which call form is emitted for a library
+/// call in the first place.
+///
+/// Those flags are not a constant. They are derived per package by
+/// `src/native_utils.rs`, which is `pub(crate)` — an integration test cannot call
+/// it, and re-deriving them here would be a SECOND copy of package resolution,
+/// free to drift from the one the `loft` binary actually uses. Delegating keeps
+/// one home for that logic and tests the command a user types.
+///
+/// The trade is real and is why this is not the default path: no shared binary
+/// cache, no cross-file rustc parallelism, and a cdylib rebuild when the
+/// library's artefact is stale. It is worth it only for the files the emit path
+/// cannot build at all.
+///
+/// Returns `Ok(false)` when `rustc` is absent, matching `compile_native_job`.
+fn run_via_loft_binary(entry: &Path) -> std::io::Result<bool> {
+    if std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        println!(
+            "  rustc not found — skipping native test for {}",
+            entry.display()
+        );
+        return Ok(false);
+    }
+    // Bounded, because `--native` shells out to rustc and cargo, either of which
+    // can hang; the rest of this file inherits the suite watchdog instead.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--native")
+        .arg(entry)
+        .env("LOFT_TIMEOUT", "300")
+        .output()?;
+    if !out.status.success() {
+        eprintln!(
+            "`loft --native {}` failed (exit {:?}):\n{}{}",
+            entry.display(),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        return Err(Error::from(std::io::ErrorKind::Other));
+    }
+    println!("  delegated  {}", entry.display());
+    Ok(true)
+}
+
 /// Compile and run every `.loft` file in `tests/docs/` through the native Rust
 /// backend (`--native` mode), skipping files listed in `NATIVE_SKIP`.
 ///
@@ -825,10 +863,35 @@ fn native_features() -> std::io::Result<()> {
     files.sort();
     let rlib_info = find_loft_rlib();
     let mut jobs = Vec::new();
+    let mut delegated: Vec<PathBuf> = Vec::new();
     for entry in files {
+        // An example that imports a library is built by the `loft` binary rather than
+        // by this file's emit path, which cannot link one — see `run_via_loft_binary`.
+        // Selected by the `use` RULE, not by filename, so the next library example is
+        // covered without an edit here.
+        let imports_library = std::fs::read_to_string(&entry)
+            .map(|src| src.lines().any(|l| l.trim_start().starts_with("use ")))
+            .unwrap_or(false);
+        if imports_library {
+            delegated.push(entry);
+            continue;
+        }
         jobs.push(prepare_native_test(&entry)?);
     }
-    run_native_jobs(jobs, rlib_info)
+    // Both halves run before either verdict is returned, so a failure in one does not
+    // hide a failure in the other.
+    let emitted = run_native_jobs(jobs, rlib_info);
+    let mut failed: Vec<String> = Vec::new();
+    for entry in &delegated {
+        if run_via_loft_binary(entry).is_err() {
+            failed.push(entry.display().to_string());
+        }
+    }
+    if !failed.is_empty() {
+        eprintln!("delegated native failures: {}", failed.join(", "));
+        return Err(Error::from(std::io::ErrorKind::Other));
+    }
+    emitted
 }
 
 /// Compile and run every `.loft` file in `tests/scripts/` through the native Rust

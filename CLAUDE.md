@@ -378,6 +378,11 @@ strict: [formal/README.md](doc/claude/formal/README.md) (rules + deviations driv
 
 **Plans / roadmap:** [plans/README.md](doc/claude/plans/README.md) · [PLANNING.md](doc/claude/PLANNING.md) backlog ·
 [ROADMAP.md](doc/claude/ROADMAP.md) by milestone · [BROADENING.md](doc/claude/BROADENING.md) beyond games ·
+[WEB_STACK.md](doc/claude/WEB_STACK.md) the **better-PHP** end-to-end design — a client that calls a
+web service (JSON + auth) and its counterpart HTTPS server (Let's Encrypt with rotation, auth,
+SQL, a JSON and an HTML page), the four libraries they need, the sandbox profile for
+third-party scripts, and how each part is verified on instruments the repo already has;
+printable with `make pdf-doc` ·
 [lib_plans/README.md](doc/claude/lib_plans/README.md) (legacy) · [STACKTRACE.md](doc/claude/STACKTRACE.md) · [SANDBOX.md](doc/claude/SANDBOX.md).
 
 **Libraries / registry / packages:** `LIBRARIES.md` (generated on demand — `make libcatalogue`, not
@@ -399,7 +404,14 @@ halves: `make libraries-review` says which libraries owe a review or have moved 
 watermark, `make features-review` does the same for the `@F` catalogue, `scripts/doc-review.sh
 --since` drills into one library's functions — all three REPORT, none gates) · [COMPATIBILITY.md](doc/claude/COMPATIBILITY.md) (the breaking-change policy, @PLN102 arc A) · [MOVING.md](doc/claude/MOVING.md) ·
 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) ·
-[DOC.md](doc/claude/DOC.md) · [LAVITION.md](doc/claude/LAVITION.md) · [PROMPTS.md](doc/PROMPTS.md).
+[DOC.md](doc/claude/DOC.md) (how `gendoc` renders a topic) ·
+[USER_DOCS.md](doc/claude/USER_DOCS.md) — the design for the documentation a DISTRIBUTION
+owes its users: the three tiers a reader's three questions need (what is there / how do I
+start / what is the signature), the one-home rule that kills the drift already measured
+between a library's guide and its copy in this repo, the REPL+debugger panel for the doc
+pages (`src/wasm_debug.rs` is built and the pages expose only ▶ Run), and the README's
+repositioning from one-game project to distribution ·
+[LAVITION.md](doc/claude/LAVITION.md) · [PROMPTS.md](doc/PROMPTS.md).
 
 **Skills** (`.claude/skills/`): `loft-write` (.loft authoring) · `loft-debug` (runtime crashes) ·
 `loft-test` · `loft-codegen` · `loft-ship` (library cross-target + publish) · `engineering-rigor` /

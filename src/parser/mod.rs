@@ -321,6 +321,18 @@ pub struct Parser {
     /// could only peek the NEXT token, which cannot tell the whole RHS from the LAST
     /// operand of one — the hole that let `b = 1 + &a;` compile.
     pub(crate) amp_head: bool,
+    /// The local an assignment is writing, for the duration of that assignment's right-hand
+    /// side; `u16::MAX` outside one.  Paired with [`Parser::assign_replaces`], which says
+    /// whether the write REPLACES the target (`=`, which repoints it at a fresh store) or
+    /// appends to what it already holds (`+=`).
+    ///
+    /// A comprehension RHS reads both to keep `I-Comp`'s promise that the destination still
+    /// holds its old value while the loop runs — see
+    /// [`Parser::comprehension_reads_target`].
+    pub(crate) assign_target: u16,
+    /// Whether [`Parser::assign_target`] is being REPLACED (`=`) rather than appended to.
+    /// Meaningless while `assign_target` is `u16::MAX`.
+    pub(crate) assign_replaces: bool,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -635,6 +647,20 @@ pub struct Parser {
     /// A COUNTER rather than a flag: what a caller wants to know is whether the stretch
     /// of source IT parsed contained one, which is the difference between two readings.
     unresolved_names: u32,
+    /// How many times pass 1 declined to TYPE something because an operand's type was not
+    /// linked yet — the sibling of [`Self::unresolved_names`], and the half it cannot see.
+    ///
+    /// A call to a function declared further down resolves its NAME (definitions are
+    /// recorded before bodies are parsed), so the counter above stays still; what is missing
+    /// is the callee's RETURN TYPE. `call_op_as` then defers and returns `Type::Unknown`
+    /// WITHOUT building the operator, so `1 + late(0)` is left as the bare `1`; the `&&`
+    /// path leaves the operand in place but mistyped. Either way pass 2 re-parses and gets
+    /// it right — unless the stretch of source is one that is parsed ONCE, which is what a
+    /// parameter default is (loft#1170, the same collapse loft#1086 closed for names).
+    ///
+    /// A COUNTER for the same reason as its sibling: the question is whether the stretch of
+    /// source a caller parsed contained one, which is a difference between two readings.
+    unresolved_types: u32,
     /// @PLN115 — record each resolved identifier occurrence during parse.  DEFAULT
     /// OFF (only the LSP parse sets it, S3); zero-cost when off.  See
     /// `doc/claude/plans/115-resolution-index/`.
@@ -907,7 +933,44 @@ static OPERATORS: &[&[&str]] = &[
 ];
 
 static SKIP_TOKEN: [&str; 8] = ["}", ".", "<", ">", "^", "+", "-", "#"];
-static SKIP_WIDTH: [&str; 10] = ["}", ".", "x", "X", "o", "b", "e", "j", "d", "f"];
+/// Tokens that END a `{x:…}` spec rather than starting its WIDTH expression.  The radix
+/// LETTERS are deliberately absent: [`radix_for`] is their one home, and this list plus
+/// that function is the whole domain.
+static SKIP_WIDTH: [&str; 2] = ["}", "."];
+
+/// Which radix does the letter closing a `{x:…}` spec select — and, by the same answer,
+/// is there a radix letter here at all?  `None` means the token starts a WIDTH expression.
+///
+/// @FR-F-Spec — the one home for the radix half of a spec.
+///
+/// One function because it is one question asked twice: the spec parser must decide
+/// whether to parse a width before it can read the radix.  While those two decisions came
+/// from two lists they disagreed — the radix reader accepted `J`, `json` and any case of
+/// either, and the skip list named only `j`.  So the width expression consumed the rest:
+/// `{p:json}` reported *"Unknown variable 'json'"*, and with a variable of that name in
+/// scope it silently took that variable's value as the WIDTH and rendered the loft form
+/// instead of the JSON the author asked for.
+///
+/// `-1` is the JSON pseudo-radix (`OutputState::db_format` reads its sign); `1` is
+/// scientific notation.
+pub(crate) fn radix_for(id: &str) -> Option<i32> {
+    let lower = id.to_lowercase();
+    if lower == "j" || lower == "json" {
+        Some(-1)
+    } else if id == "x" || id == "X" {
+        Some(16)
+    } else if id == "b" {
+        Some(2)
+    } else if id == "o" {
+        Some(8)
+    } else if id == "e" {
+        Some(1)
+    } else if id == "d" || id == "f" {
+        Some(10)
+    } else {
+        None
+    }
+}
 
 pub(crate) struct OutputState<'a> {
     pub(crate) radix: i32,
@@ -1038,6 +1101,7 @@ impl Parser {
             parsed_sources: Vec::new(),
             speculative_type_refs: std::collections::HashSet::new(),
             unresolved_names: 0,
+            unresolved_types: 0,
             data,
             database: Stores::new(),
             lexer: Lexer::default(),
@@ -1066,6 +1130,8 @@ impl Parser {
             pending_param_positions: Vec::new(),
             amp_pending: false,
             amp_head: false,
+            assign_target: u16::MAX,
+            assign_replaces: false,
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,
@@ -2259,7 +2325,65 @@ impl Parser {
             // skip, and the narrowness is load-bearing rather than conservative: the
             // signature-time path already served it, and a second buffer is one store leaked
             // per closure — `717-closure-struct-return.loft` caught exactly that.
-            if def.name().starts_with("n___lambda_") && !self.adopted_ret_defs.contains(&d) {
+            //
+            // loft#1177 / loft#1178 — a DECLARED `-> vector<…>` is included too, and the
+            // sentence above needed correcting to say so: the signature-time path does not
+            // serve a lambda at all (it excludes them by name, *"separate parse path, no
+            // earlier callers"*), so *"already served"* was only ever true of the returns
+            // that need no buffer.  A struct and a record-enum are those — a declared
+            // `-> P` lambda carries no hidden attribute and answers correctly — while a
+            // VECTOR is delivered through a backing store the caller supplies, so pass 2
+            // GREW `__vdb_1` and `fn(v: integer) -> vector<integer> { [v] }` aborted the
+            // compiler on the H5 contract.  `Vector` because that is the former measured to
+            // grow one; a second buffer on the others is the leak per closure that
+            // `717-closure-struct-return.loft` pins.
+            //
+            // Every declared-collection LAMBDA is reserved for, and the two things that
+            // stopped that from shipping are closed: `State::fn_return` releases the buffer a
+            // callee did not hand back (loft#1179) and the native dispatch now asks the same
+            // question of the value that came back, so a reservation nobody fills costs
+            // nothing on either backend.  Predicting which bodies fill it cannot work — the
+            // pass-1 tail of `{ xs = [1, 2]; xs.map(…) }` is `Var(xs)`, the exact spelling of
+            // the bodies that need no buffer, and pass 2 lowers the `map` into a fresh store
+            // (loft#1178).  The two passes are not looking at the same tail.
+            //
+            // A CAPTURE tail was carved out here as *"a fact rather than a prediction"*, and it
+            // is neither: it is the same pass-1 read this sweep exists to stop trusting.  Pass 1
+            // does not desugar a comprehension, so `{ cap.v.map(…) }` leaves the very tail
+            // `{ cap.xs }` leaves — a projection off the capture — while pass 2 lowers it into a
+            // fresh store and grows the attribute.  Reserving for the capture tail as well costs
+            // nothing: `classify_ret_promotion` still answers `SkipCaptured` for a body that
+            // really does hand back the capture, so the buffer stays unfilled and out of the
+            // return deps, which is what lets `State::fn_return` (loft#1179) and the native
+            // dispatch's same value-question release it.  loft#1182's guard measures that.
+            let delivers_a_collection =
+                matches!(def.returned().ret_promo_base(), Type::Vector(_, _));
+            // loft#1188 — a declared `-> S` / record-enum lambda is reserved for too, and for
+            // the reason #675 gave: what pass 1 can classify is not a property of the
+            // SPELLING but of what was RESOLVED when it read the body.  `fn(v: integer) -> P
+            // { q.p }` reserves nothing while `Q.p` is a forward reference — pass 1 types the
+            // tail `Unknown`, so the #306 view materialisation never fires — and pass 2, which
+            // has the resolved field, mints `__ref_1` and grows the arity.  Declaration order
+            // is free in loft, so the two orderings have to compile the same; and the type is
+            // resolved HERE, between the passes, which is the whole reason this sweep exists.
+            //
+            // A record tail rooted in a CAPTURE is included, where the collection one above is
+            // not, and the difference is a fact about the two legs rather than an omission: a
+            // `-> S` return DELIVERS a copy (#306 materialises the view into the buffer), while
+            // `-> vector<…> { q.xs }` hands back the capture's own store and has nothing to
+            // place (loft#1182, `formal/closures.md` D-clo-14).
+            //
+            // A lambda pass 1 already served carries a hidden heap attribute and is skipped by
+            // the guard below, so this cannot mint a second buffer.
+            let delivers_a_record = matches!(
+                def.returned().ret_promo_base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            );
+            if def.name().starts_with("n___lambda_")
+                && !self.adopted_ret_defs.contains(&d)
+                && !delivers_a_collection
+                && !delivers_a_record
+            {
                 continue;
             }
             let ret = def.returned().clone();
@@ -2498,7 +2622,8 @@ impl Parser {
         (0..self.data.definitions()).any(|g| {
             matches!(self.data.def_type(g), DefType::Generic)
                 && !self.data.def(g).attributes().is_empty()
-                && Self::extract_type_var(&self.data.def(g).attributes()[0].typedef) == type_nr
+                && Self::extract_type_var(&self.data, &self.data.def(g).attributes()[0].typedef)
+                    == type_nr
         })
     }
 
@@ -5687,7 +5812,7 @@ impl Parser {
         if attrs.is_empty() {
             return false;
         }
-        let tv_nr = Self::extract_type_var(&attrs[0].typedef);
+        let tv_nr = Self::extract_type_var(&self.data, &attrs[0].typedef);
         // `Type::contains_def` is the keystone-backed answer to "does this type mention
         // `d_nr`?" — `any_node` over `Type::for_each_child`, so it descends every
         // child-bearing variant and a new one extends ONE match.  The hand-rolled
@@ -5743,7 +5868,8 @@ impl Parser {
         if types.is_empty() || types[0].is_unknown() {
             return Type::Unknown(0);
         }
-        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes()[0].typedef);
+        let tv_nr =
+            Self::extract_type_var(&self.data, &self.data.def(g_nr).attributes()[0].typedef);
         if tv_nr == u32::MAX {
             return Type::Unknown(0);
         }
@@ -5866,7 +5992,8 @@ impl Parser {
             return u32::MAX;
         }
         // Find the type variable def_nr and resolve the concrete type T maps to.
-        let tv_nr = Self::extract_type_var(&self.data.def(g_nr).attributes()[0].typedef);
+        let tv_nr =
+            Self::extract_type_var(&self.data, &self.data.def(g_nr).attributes()[0].typedef);
         if tv_nr == u32::MAX {
             return u32::MAX;
         }
@@ -6072,7 +6199,23 @@ impl Parser {
         let outer_vars = std::mem::replace(&mut self.vars, vars);
         let outer_context = self.context;
         self.context = d_nr;
-        let code = self.rewrite_generic_type_defaults(code, concrete);
+        let before_work: std::collections::HashSet<u16> =
+            self.vars.work_texts().into_iter().collect();
+        let mut code = self.rewrite_generic_type_defaults(code, concrete);
+        // loft#1175 — a work buffer minted by the rewrite above is not declared at the top
+        // level, so `scopes::check` would scope it to the ARGUMENT block it appears in and
+        // free it there, before the callee fills it.  Hoisting a top-level `Set` is the same
+        // replay `patch_tret_callers` and `retarget_parametric_*` already do for a buffer
+        // minted after the parse; without it `--native` declared the `String` inside the
+        // argument block and emitted an empty `OpCreateStack`, which does not compile.
+        if let Value::Block(bl) = &mut code {
+            for wt in self.vars.work_texts() {
+                if !before_work.contains(&wt) {
+                    bl.operators
+                        .insert(0, v_set(wt, Value::Text(String::new())));
+                }
+            }
+        }
         let vars = std::mem::replace(&mut self.vars, outer_vars);
         self.context = outer_context;
         self.data.definitions[d_nr as usize].code = code;
@@ -6572,23 +6715,46 @@ impl Parser {
         ))
     }
 
-    /// Extract the type variable `def_nr` from a type tree.
-    /// Returns the `def_nr` of the first `Reference` that refers to the type variable,
-    /// or `u32::MAX` if not found.
-    pub(crate) fn type_var_of(tp: &Type) -> u32 {
-        Self::extract_type_var(tp)
+    /// The type VARIABLE a type mentions — the `def_nr` of the first type-var
+    /// placeholder anywhere in the tree, or `u32::MAX` when it names none.
+    ///
+    /// Enforces @FR-G-Gen's `fn f<T>(x: …T…)` ellipsis: `T` may sit anywhere inside a
+    /// parameter type, so this descends every former the keystone knows.
+    ///
+    /// The read half of the question the DECLARATION already answers with
+    /// `arguments[0].typedef.contains_def(tv_nr)`: *"does the first parameter carry
+    /// the type variable?"*.  Both descend through [`Type::for_each_child`], so a
+    /// declaration the parser accepts is one an instantiation can reach.  Asked with a
+    /// hand-rolled descent that knew only `vector<T>`, the two disagreed on five
+    /// formers — a legal `fn f<T>(x: T?, …)` was accepted at its declaration and
+    /// reported as *"Unknown function"* at every call.
+    ///
+    /// The leaf is a type-var PLACEHOLDER, not any `Reference`, so a first parameter
+    /// that also names a concrete struct — `(P, T)` — answers with `T` rather than
+    /// with whichever the walk reached first.
+    pub(crate) fn type_var_of(data: &Data, tp: &Type) -> u32 {
+        Self::extract_type_var(data, tp)
     }
 
-    fn extract_type_var(tp: &Type) -> u32 {
-        match tp {
-            Type::Reference(d, _) => *d,
-            Type::Vector(inner, _) => Self::extract_type_var(inner),
-            _ => u32::MAX,
-        }
+    fn extract_type_var(data: &Data, tp: &Type) -> u32 {
+        let mut found = u32::MAX;
+        tp.any_node(&mut |t| match t {
+            Type::Reference(d, _) if data.is_type_var_placeholder(*d) => {
+                found = *d;
+                true
+            }
+            _ => false,
+        });
+        found
     }
 
     /// Unify a template parameter type with a concrete argument type to extract
     /// what the type variable `tv_nr` resolves to.
+    ///
+    /// The binding half of @FR-G-Mono — *"a call `f(ā)` with concrete argument types C̄
+    /// specialises f"* — and the read twin of the declaration check that @FR-G-Gen's
+    /// `…T…` is satisfied.  Both descend `Type::for_each_child`, so a declaration the
+    /// parser accepts is one an instantiation can reach.
     /// E.g. template `vector<T>` + concrete `vector<integer>` → `integer`.
     fn resolve_type_var(template_tp: &Type, tv_nr: u32, concrete_tp: &Type) -> Type {
         // `Rewritten(T)` is a value-construction marker (e.g. `P { v: 99 }`
@@ -6614,14 +6780,28 @@ impl Parser {
                 Type::Text(_) => Type::Text(crate::data::Deps::none()),
                 other => other.clone(),
             },
-            Type::Vector(inner, _) => {
-                if let Type::Vector(c_inner, _) = concrete_tp {
-                    Self::resolve_type_var(inner, tv_nr, c_inner)
-                } else {
-                    Type::Unknown(0)
-                }
+            // A `T?` template against an argument that is not spelled `Optional`.
+            // @PLN25 gives `τ?` and `τ` one runtime layout and `Type::optional`
+            // normalises the wrapper away for a scalar, so a nullable `integer`
+            // argument arrives as `Integer(nullable)` rather than as
+            // `Optional(Integer)` — the same shape, one spelling apart.  Peel the
+            // template and unify against the base; the nullability of the binding is
+            // the template's to state, not the argument's to carry.
+            Type::Optional(inner) if !matches!(concrete_tp, Type::Optional(_)) => {
+                Self::resolve_type_var(inner, tv_nr, concrete_tp.base())
             }
-            _ => Type::Unknown(0),
+            // Every other former descends through the keystone pairing, so a type
+            // variable under a `(T, U)`, a `fn(T) -> T`, an `iterator<T>`, a `T?` or
+            // a `vector<T>` is found the same way.  `None` is "these two types do not
+            // relate", which is what an unbindable argument is.
+            _ => match template_tp.zip_children(concrete_tp) {
+                Some(pairs) => pairs
+                    .into_iter()
+                    .map(|(t, c)| Self::resolve_type_var(t, tv_nr, c))
+                    .find(|r| !r.is_unknown())
+                    .unwrap_or(Type::Unknown(0)),
+                None => Type::Unknown(0),
+            },
         }
     }
 
@@ -7155,49 +7335,19 @@ impl Parser {
         })
     }
 
+    /// `[T ↦ C]` over one type — @FR-G-Mono's *"applied throughout"*, for the signature
+    /// half.  Its twin for the variable table is `Function::subst_type`.
     fn substitute_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
         match tp {
             Type::Reference(d, _) if d == tv_nr => concrete.clone(),
-            Type::Vector(inner, deps) => Type::Vector(
-                Box::new(Self::substitute_type(*inner, tv_nr, concrete)),
-                deps,
-            ),
-            // Plan-17 phase 01 — substitute through tuple element types so a
-            // generic `<T: Bound>` returning `(T, T)` (or any tuple shape
-            // containing T) monomorphises correctly.  Without this, the
-            // signature stayed `(DbRef, DbRef)` (the parametric T form)
-            // even when params became `i64`, and native codegen rejected
-            // the body's tuple literal with E0308.
-            Type::Tuple(elems) => Type::Tuple(
-                elems
-                    .into_iter()
-                    .map(|e| Self::substitute_type(e, tv_nr, concrete))
-                    .collect(),
-            ),
-            // #493 — substitute through an `Optional` wrapper so a generic
-            // `<T>` returning `T?` (or with a `T?` param) monomorphises: without
-            // this arm `last_element<T>(…) -> T?` kept the parametric
-            // `Optional(Reference(tv))` return, typing the return slot as a 12 B
-            // DbRef while the body yields the 8 B scalar — a stale/garbage DbRef
-            // read on the interpreter (DA `get_stack<DbRef>` OOB) and an E0308 on
-            // native.  Mirrors the Vector/Tuple arms above; `Type::optional` is
-            // idempotent so it never double-wraps.
-            Type::Optional(inner) => Type::optional(Self::substitute_type(*inner, tv_nr, concrete)),
-            // loft#1032 — substitute through an iterator so a generic returning
-            // `iterator<T>` monomorphises, the way `vector<T>`, `(T, T)` and `T?`
-            // already do.  formal/interfaces.md `(G-Mono)` requires `[T ↦ C]` to reach
-            // "attribute, RETURN, and body types", so leaving this arm out was a
-            // deviation, not a boundary: the return stayed `iterator<Reference(tv)>`,
-            // which typed the caller's generator slot as a bare `DbRef` (native:
-            // `expected DbRef, found Box<dyn LoftCoroutine>`) and left the loop
-            // variable at `T`, so a yielded value could be neither summed nor
-            // formatted at a fully concrete instantiation.  Both halves of the type
-            // are rewritten — the STATE half mentions `T` whenever the step does.
-            Type::Iterator(step, state) => Type::Iterator(
-                Box::new(Self::substitute_type(*step, tv_nr, concrete)),
-                Box::new(Self::substitute_type(*state, tv_nr, concrete)),
-            ),
-            other => other,
+            // Every former descends through the keystone, so `[T ↦ C]` reaches a type
+            // variable wherever it sits — `vector<T>`, `(T, T)`, `T?`, `iterator<T>`,
+            // `fn(T) -> T`, and whatever the next `Type` variant is.  The four arms
+            // this replaces were added one defect at a time (Plan-17 for the tuple,
+            // #493 for the optional, loft#1032 for the iterator) and each was the same
+            // omission a former further out; `Type::map_children` is exhaustive, so
+            // the next variant fails the build here rather than staying parametric.
+            other => other.map_children(&mut |c| Self::substitute_type(c.clone(), tv_nr, concrete)),
         }
     }
 
@@ -7537,6 +7687,40 @@ impl Parser {
     /// Runs AFTER type substitution, so a nested generic (`concrete` still a type
     /// variable — `fn outer<S>(s: S?) { inner(s?) }`) re-marks the site and stays
     /// deferred until the outer instantiation names a real type.
+    /// Push the hidden `&text` work buffers a monomorph's fn-ref call needs and the
+    /// template could not know about — loft#1175.
+    ///
+    /// The count is a function of the fn-type's RETURN, which only becomes concrete at
+    /// substitution, so this asks [`Data::fnref_text_buffers`] again with the monomorph's
+    /// own table and pushes what it now answers.  Same count, same order and same builder
+    /// as the four parse-time sites, so the callee's slot layout has one description.
+    ///
+    /// **`args.len() == params.len()` is what says the buffers are still missing.** The
+    /// visible arguments are all a parse-time site pushes when the count was zero; a site
+    /// whose return was ALREADY concrete text pushed its buffers then and arrives longer,
+    /// so it is left alone rather than served twice.
+    ///
+    /// The variables come from `caller_text_buf`, not the shared `__work_N` counter: this
+    /// mint happens after both passes, and taking it from the shared counter would shift
+    /// every later `__work_N` (loft#662's class, the reason
+    /// `collections::callback_call_ref` already mints this way).
+    fn push_deferred_fnref_buffers(&mut self, v_nr: u16, args: &mut Vec<Value>) {
+        let Type::Function(params, ret, _) = self.vars.tp(v_nr).clone() else {
+            return;
+        };
+        if args.len() != params.len() {
+            return;
+        }
+        let n = self.data.fnref_text_buffers(params.len(), &ret);
+        if n == 0 {
+            return;
+        }
+        let work_vars: Vec<u16> = (0..n)
+            .map(|_| self.vars.caller_text_buf(&mut self.lexer))
+            .collect();
+        self.push_fnref_text_buffers(args, &work_vars);
+    }
+
     fn rewrite_generic_type_defaults(&mut self, val: Value, concrete: &Type) -> Value {
         match val {
             // loft#1020 — the deferred `== null` / `!= null`.  `bl.result` came through
@@ -7601,6 +7785,22 @@ impl Parser {
                     // rather than dropping the value: the call is already an error.
                     None => Value::Block(bl),
                 }
+            }
+            // loft#1175 — the hidden `&text` work buffers a fn-ref call needs, which the
+            // TEMPLATE could not count.  `Data::fnref_text_buffers` reads the count off the
+            // fn-type's RETURN, and inside a template that return is the type variable, so
+            // every such site was lowered with zero.  Substitution rewrites the type and
+            // leaves the count behind — `(G-Mono)`'s recurring class — and the `text`
+            // monomorph then enters its callee one buffer short: a corrupt frame the
+            // interpreter faults on.  Answered here, where `T` is real and the fn-ref
+            // variable's type in the monomorph's own table is already concrete.
+            Value::CallRef(v_nr, args) => {
+                let mut args: Vec<Value> = args
+                    .into_iter()
+                    .map(|a| self.rewrite_generic_type_defaults(a, concrete))
+                    .collect();
+                self.push_deferred_fnref_buffers(v_nr, &mut args);
+                Value::CallRef(v_nr, args)
             }
             // Everything else just carries children.  Recursion goes through the
             // `Value::for_each_child_mut` keystone rather than being re-enumerated here:
@@ -10260,6 +10460,12 @@ impl Parser {
         // behaviours are guarded (`pln102_*` in tests/issues.rs); widen this predicate and
         // that pair is what tells you whether the diagnostic path still works.
         if self.first_pass && !types.is_empty() && types.iter().any(Type::is_unknown) {
+            // Returning here leaves `code` as the bare LEFT operand — the operator is never
+            // built — which is invisible to every later reading of the tree.  Pass 2 rebuilds
+            // it, so this is only a collapse where the source is parsed once; record it so
+            // the one caller that is (a parameter default) can tell.  See
+            // `Parser::unresolved_types`.
+            self.unresolved_types = self.unresolved_types.saturating_add(1);
             return Type::Unknown(0);
         }
         // Comparing two tuples is decided element by element, BEFORE the `possible` loop —
@@ -11057,27 +11263,237 @@ impl Parser {
     /// rode the buffer, so no delivery was emitted and the store
     /// `fn_call_ref` allocates at runtime leaked on both backends.  Convert
     /// exactly as plain calls do (`call_dependencies`): map visible-param
-    /// indices through the actual argument types; out-of-range (hidden /
-    /// grown) indices drop — the adaptive fn-ref ABI allocates those buffers
-    /// at runtime, so the value arrives OWNED.
-    fn fnref_result_type(ret: Type, types: &[Type]) -> Type {
-        match ret {
-            Type::Text(d) => {
-                Type::Text(Deps::frame(Self::resolve_deps(types, d.as_attr_indices())))
+    /// indices through the actual argument types.
+    ///
+    /// **An index naming no visible argument names the CLOSURE, and `fn_var` is where the
+    /// caller can reach it** (loft#1180).  Dropping those indices outright — on the stated
+    /// grounds that the fn-ref ABI allocates such buffers at runtime, *"so the value arrives
+    /// OWNED"* — is true of a hidden work buffer and false of `__closure`, which is the
+    /// CALLER's own record.  A lambda handing back what it captured then read as owned, so
+    /// the bind ADOPTED the capture and scope exit released it: the captured variable
+    /// answered EMPTY from the second call onward, on both backends, with nothing saying so.
+    /// This is loft#1114's sentence in a third position — *a dep dropped as uninteresting is
+    /// not a dep that was never there.*
+    ///
+    /// Only for a fn-ref that CAPTURES, which is what `fn_var` carries: a non-capturing slot
+    /// has no closure record to borrow from, so its dropped indices really are the runtime
+    /// buffers and dropping them is right.  The predicate is sound HERE, where the fn-ref is
+    /// a caller LOCAL whose type was inferred at the bind and whose deps therefore name the
+    /// closure — it is inert one frame down, where the same slot is a parameter with a
+    /// DECLARED fn-type that carries no deps whatever is passed (loft#1176 measured that).
+    ///
+    /// ⚠ **And only for a COLLECTION return, which is where the capture actually crosses.**
+    /// A struct, record-enum or text return is materialised into a fresh copy before it
+    /// leaves the callee, so `fn(i: integer) -> P { cap }` hands the caller its own record
+    /// and is correct as it stands; a collection return hands back the STORE.  Without that
+    /// restriction the dep is a pure over-approximation and it costs: the out-of-range index
+    /// is `__closure` for `{ cap }` and `{ q.xs }` AND for `{ sr_make(k) }`, whose result is
+    /// a fresh store built from a captured value, so a dep-index test alone cannot separate
+    /// them and reading it as a borrow leaks every struct-returning capturing lambda —
+    /// eleven stores of them in `717-closure-struct-return.loft`.
+    /// `v_nr` when it holds a CAPTURING fn-ref, and `None` otherwise — the closure a
+    /// [`fnref_result_type`](Self::fnref_result_type) dep can name.
+    ///
+    /// The fn-ref TYPE's own deps are exactly the capture question, and they mean it in this
+    /// position: a caller local's fn-type was INFERRED at the bind, so a capturing lambda
+    /// leaves the closure record in them and a non-capturing one leaves them empty.
+    fn capturing_fnref_var(vars: &crate::variables::Function, v_nr: u16) -> Option<u16> {
+        matches!(vars.tp(v_nr).base(), Type::Function(_, _, d) if !d.is_empty()).then_some(v_nr)
+    }
+
+    /// The return type a fn-ref VALUE publishes to whoever holds it — the deps a CALLER can
+    /// act on, and only those.
+    ///
+    /// A definition's return deps are ATTR-space indices into its own parameter list, and a
+    /// caller can name only the visible ones.  Of the rest exactly ONE is something the
+    /// caller reaches: `__closure`, the record the caller allocated and still owns.  Every
+    /// other hidden attribute — `ref_return`'s `__ref_N`, a text work buffer — is an
+    /// allocation the CALLEE makes and hands over, so a return tied to it arrives owned.
+    ///
+    /// Publishing both as *"an index the caller cannot name"* is what made `{ cap }` and
+    /// `{ sr_make(k) }` read the same downstream, and the only way to read the first as a
+    /// borrow was then to read the second as one too — every struct-returning capturing
+    /// lambda into a leak.  [`Argument::hidden`](crate::data::Argument::hidden) is the
+    /// distinction, and its own doc already states the conclusion: *"not a user-declared
+    /// parameter — should be excluded from dep propagation."*  Dropping those indices here
+    /// changes nothing else, because [`fnref_result_type`](Self::fnref_result_type) drops
+    /// every out-of-range index anyway; what it buys is that the one index left over means
+    /// what the caller reads it to mean.
+    fn published_ret_type(&self, d_nr: u32, ret: Type) -> Type {
+        let Some(dep) = ret.deps_ref() else {
+            return ret;
+        };
+        let def = self.data.def(d_nr);
+        // A JOIN counts as well as a plain place, and the hand-up is what pays for it.  Read
+        // as OWNED, the arm that yields the CAPTURE is a use-after-free the moment the caller
+        // rebinds (loft#1186's present arm, and loft#1181's mechanism one shape over).  Read
+        // as a borrow, the arm that MINTS leaks — which is why this used to answer only for a
+        // tail that cannot join.  `OpFreeRefOrHandUp` gives that mint an owner at the one
+        // place the callee knows it is handing back its own store, so the borrow reading is
+        // now the right one for both arms.  See `formal/closures.md` D-clo-13, @PLN150.
+        let place_tail = self.tail_is_a_place(def) || self.tail_joins_with_a_place(def);
+        let kept: Vec<u16> = dep
+            .as_attr_indices()
+            .iter()
+            .copied()
+            .filter(|a| match def.attributes().get(*a as usize) {
+                // A hidden buffer is the callee's own allocation, handed over: OWNED.
+                Some(at) if at.hidden => false,
+                // The caller's own record — a borrow, but only where the tail READS it.
+                Some(at) if at.name == "__closure" => place_tail,
+                // A visible parameter: the caller maps it through its own argument.
+                Some(_) => true,
+                // Past the attribute list: the same closure question in a grown spelling.
+                None => place_tail,
+            })
+            .collect();
+        if kept.len() == dep.as_attr_indices().len() {
+            return ret;
+        }
+        ret.with_deps(&crate::data::Deps::attrs(kept))
+    }
+
+    /// Is this body's tail a PLACE — a slot, or a field / element / capture read out of one?
+    ///
+    /// The question [`published_ret_type`](Self::published_ret_type) asks about the closure:
+    /// a tail that READS the closure hands back the captured store itself, so the caller
+    /// borrows.  A tail that JOINS — a `??`, an `if`, a `match` — may hand back a fresh store
+    /// on one arm and the capture on another, and the union its deps carry then names the
+    /// closure for a value that is often the callee's own.  Neither static reading serves both
+    /// arms: read as a borrow the minting arm leaks, read as owned the capture arm is released
+    /// while its variable is still live.  Answering only for the tail that cannot join keeps
+    /// the reading positive and UNDER-approximating, which is the direction every ownership
+    /// proof in this file takes — a shape it cannot read keeps the behaviour it already had.
+    ///
+    /// Reads through the projection ops and `OpGetDbRef`, which is how a capture is read out
+    /// of the closure record.
+    fn tail_is_a_place(&self, def: &crate::data::Definition) -> bool {
+        self.tail_place_root(def).is_some()
+    }
+
+    /// Does this body's tail JOIN, with at least one arm a place?
+    ///
+    /// The `??` / `if` / `match` shape [`tail_is_a_place`](Self::tail_is_a_place) deliberately
+    /// answered `false` for, back when a borrow reading leaked the minting arm.  Kept as its
+    /// own question rather than folded into `tail_place_root`: that one answers *"which
+    /// variable IS the tail"*, and a join has no single answer — asking it separately leaves
+    /// every non-join tail reading exactly as before.
+    ///
+    /// Looks through the value-block wrappers a lowered `??` puts in the way, and asks only
+    /// about the ARMS: a join two of whose arms mint is not this question.
+    fn tail_joins_with_a_place(&self, def: &crate::data::Definition) -> bool {
+        let Value::Block(bl) = def.code() else {
+            return false;
+        };
+        let Some(tail) = bl.operators.last() else {
+            return false;
+        };
+        let mut node = tail.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                Value::Insert(steps) | Value::Parallel(steps) => match steps.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::Block(inner) => match inner.operators.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::If(_, t, e) => {
+                    return self.node_place_root(t).is_some() || self.node_place_root(e).is_some();
+                }
+                _ => return false,
             }
-            Type::Vector(to, d) => Type::Vector(
-                to,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            ),
-            Type::Reference(to, d) => Type::Reference(
-                to,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            ),
-            Type::Enum(to, true, d) => Type::Enum(
-                to,
-                true,
-                Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
-            ),
+        }
+    }
+
+    /// [`tail_place_root`](Self::tail_place_root) for an arbitrary node rather than a body's
+    /// tail — the arm-level question [`tail_joins_with_a_place`](Self::tail_joins_with_a_place)
+    /// asks.
+    fn node_place_root(&self, node: &Value) -> Option<u16> {
+        let (get_field, get_vector, get_dbref) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+            self.data.def_nr("OpGetDbRef"),
+        );
+        let mut node = node.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                Value::Insert(steps) => node = steps.last()?.unspan(),
+                Value::Block(bl) => node = bl.operators.last()?.unspan(),
+                Value::Var(v) | Value::TupleGet(v, _) => return Some(*v),
+                Value::Call(d, args) if *d == get_field || *d == get_vector || *d == get_dbref => {
+                    node = args.first()?.unspan();
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// The root variable of a PLACE tail — `None` when the tail is not a place.
+    fn tail_place_root(&self, def: &crate::data::Definition) -> Option<u16> {
+        let Value::Block(bl) = def.code() else {
+            return None;
+        };
+        let tail = bl.operators.last()?;
+        let (get_field, get_vector, get_dbref) = (
+            self.data.def_nr("OpGetField"),
+            self.data.def_nr("OpGetVector"),
+            self.data.def_nr("OpGetDbRef"),
+        );
+        let mut node = tail.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                // `ref_return`'s delivery wrapper: the steps that prepare a buffer, then the
+                // value actually handed back.  The LAST element is the answer — a body that
+                // clears a buffer and then returns a place is the shape loft#1182 names,
+                // where the buffer is declared and ignored.
+                Value::Insert(steps) => node = steps.last()?.unspan(),
+                Value::Var(v) | Value::TupleGet(v, _) => return Some(*v),
+                Value::Call(d, args) if *d == get_field || *d == get_vector || *d == get_dbref => {
+                    node = args.first()?.unspan();
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn fnref_result_type(ret: Type, types: &[Type], fn_var: Option<u16>) -> Type {
+        let visible = |d: &Deps| Deps::frame(Self::resolve_deps(types, d.as_attr_indices()));
+        // The CLOSURE half.  Every index left in a PUBLISHED return type that names no
+        // visible argument names `__closure` — [`published_ret_type`](Self::published_ret_type)
+        // drops the callee's own hidden buffers before the type ever leaves the lambda — so
+        // an out-of-range index here is the caller's own record and the value is a BORROW of
+        // it.  A store handed back that way is the capture itself, whatever its type:
+        // `(L-CapHeap)` names struct and vector in one breath, and the caller may read it,
+        // never take it.
+        let borrows_closure = |d: &Deps| {
+            fn_var.is_some()
+                && d.as_attr_indices()
+                    .iter()
+                    .any(|a| *a as usize >= types.len())
+        };
+        // `visible`, plus the fn-ref slot when the return borrows the closure it carries.
+        let through = |d: &Deps| {
+            let mut out = Self::resolve_deps(types, d.as_attr_indices());
+            if borrows_closure(d)
+                && let Some(v) = fn_var
+                && !out.contains(&v)
+            {
+                out.push(v);
+            }
+            Deps::frame(out)
+        };
+        match ret {
+            // Text is COPIED out through a work buffer rather than handed back, so the
+            // caller's value is its own however the callee reached it.
+            Type::Text(d) => Type::Text(visible(&d)),
+            Type::Vector(to, d) => Type::Vector(to, through(&d)),
+            Type::Reference(to, d) => Type::Reference(to, through(&d)),
+            Type::Enum(to, true, d) => Type::Enum(to, true, through(&d)),
             other => other,
         }
     }
@@ -15672,8 +16088,8 @@ mod plan86_nesting_guard_tests {
     /// levels to ≈8–9 MB — which overflowed the former 8 MB thread here and turned
     /// the ASan gate red (a guard that fires correctly, starved of stack).  64 MB
     /// clears 128 ASan-inflated levels with margin, while a runaway (broken guard →
-    /// 2000 levels ≈ 128 MB under ASan) still overflows, so a regressed guard is
-    /// caught either by the asserts or by an overflow.
+    /// 2000 levels ≈ 128 MB under ASan) still overflows, so a BROKEN guard is caught
+    /// either by the asserts or by an overflow.
     #[test]
     fn deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash() {
         let (has_error, has_msg) = std::thread::Builder::new()

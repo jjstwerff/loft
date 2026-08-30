@@ -2055,7 +2055,21 @@ use #count instead"
         if !self.first_pass {
             let is_text = matches!(tp, Type::Text(_));
             let is_bool = matches!(tp, Type::Boolean);
-            if state.radix != 10 && (is_text || is_bool) {
+            // @FR-F-Spec — an integer renders through `ops::format_long`, which implements
+            // the four radixes the rule lists (`b` 2, `o` 8, decimal 10, `x`/`X` 16) and
+            // ends in `panic!("Unknown radix")` for anything else.  `get_radix` answers two
+            // more: `e` (scientific, 1) and `j` (JSON, -1).  Neither means anything for an
+            // integer and both reached that panic, so `println("{n:e}")` — a plain source
+            // program — aborted the interpreter.  Refuse them here, where the value's type
+            // is known, instead of at a renderer that has only the radix number left.
+            if matches!(tp, Type::Integer(_)) && !matches!(state.radix, 2 | 8 | 10 | 16) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`{}` is not an integer format — use `x`, `X`, `b`, `o` or `d`",
+                    if state.radix == -1 { "j" } else { "e" }
+                );
+            } else if state.radix != 10 && (is_text || is_bool) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
@@ -2069,6 +2083,39 @@ use #count instead"
                     "Zero-padding has no effect on text"
                 );
             }
+        }
+        // @FR-F-Spec composes with @FR-F-Render: a spec TUNES ⟦v⟧, so the width, the
+        // alignment and the pad token apply to whatever the value's type renders as.  Most
+        // arms below carry them into their own renderer.  Two families cannot:
+        // `OpAppendCharacter` takes only the accumulator and the value, and
+        // `OpFormatDatabase` has room for the two `db_format` bits and nothing else — so a
+        // `{c:>5}` or a `{v:>12}` was rendered unpadded and nothing said the spec had been
+        // dropped (loft#1165, loft#1166).
+        //
+        // Render into a scratch text with the padding REMOVED, then format that text with
+        // it.  The composition is the rule, and it reaches every such type at once rather
+        // than widening one op signature per family.  The flags that belong to the RENDER
+        // — `#` and the `:j` radix, which `db_format` carries — stay on the inner call;
+        // only the field-shaping ones move out.
+        if !self.first_pass
+            && state.width != Value::Int(0)
+            && matches!(
+                tp,
+                Type::Character | Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, _, _)
+            )
+        {
+            let wv = self.vars.work_text(&mut self.lexer);
+            let inner = OutputState {
+                width: Value::Int(0),
+                dir: crate::parser::OUTPUT_DEFAULT.dir,
+                token: crate::parser::OUTPUT_DEFAULT.token,
+                ..state
+            };
+            let mut rendered = vec![v_set(wv, Value::Text(String::new()))];
+            self.append_data(tp, &mut rendered, wv, append_value, format, inner);
+            list.extend(rendered);
+            self.append_data_text(list, start, var, Value::Var(wv), state);
+            return;
         }
         match tp {
             Type::Integer(_) => {
@@ -3937,7 +3984,7 @@ use #count instead"
         let attrs = self.data.def(self.context).attributes();
         let tv = attrs
             .iter()
-            .map(|a| Self::type_var_of(&a.typedef))
+            .map(|a| Self::type_var_of(&self.data, &a.typedef))
             .find(|t| *t != u32::MAX)
             .unwrap_or(u32::MAX);
         if tv == u32::MAX {

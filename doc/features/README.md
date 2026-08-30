@@ -56,6 +56,7 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@F40](F40.md) | File & directory I/O (+ durable-store binding) |
 | [@F41](F41.md) | Environment & arguments (env vars, arguments(), program dirs, path resolution) |
 | [@F42](F42.md) | JSON — json_parse, JsonValue, Type.parse, to_json |
+| [@F43](F43.md) | Random numbers (rand_seed / rand / rand_indices) |
 | [@F44](F44.md) | Logging & diagnostics API (log_*, print, assert, panic) |
 | [@F45](F45.md) | `sizeof()` |
 | [@F46](F46.md) | Type aliases (`type X = …`) |

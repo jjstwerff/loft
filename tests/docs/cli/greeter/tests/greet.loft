@@ -1,0 +1,4 @@
+use greeter::*;
+fn test_greet_names_the_person() {
+  assert(greet("Ada") == "hello, Ada!", "greet builds the sentence");
+}

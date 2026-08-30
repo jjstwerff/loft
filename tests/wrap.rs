@@ -37,21 +37,18 @@ use common::cached_default;
 /// (e.g. two `cargo test` invocations at once) is the caller's responsibility.
 static WRAP_LOCK: Mutex<()> = Mutex::new(());
 
-/// Files in `tests/docs/` that are known to be broken (open issues).
-/// `dir` skips these so that all other docs files are still exercised.
-/// Remove an entry here once the underlying issue is fixed.
-const SUITE_SKIP: &[&str] = &[
-    // Library-backed doc examples: `14-image` (`use imaging`) + `21-random`
-    // (`use random`).  Skipped HERE because this embedded interpreter harness
-    // can't provision a #native library's cdylib against its own loft-ffi (it
-    // never builds the `.so`).  They are NOT untested: `tests/doc_lib_examples.rs`
-    // drives the real `loft` binary as a subprocess on BOTH backends (interpret
-    // == native) — the highest-fidelity check.  gendoc still renders their HTML.
-    // (This is a test-infra gap, NOT @P389 — that two-native-package link bug is
-    // resolved by the C-ABI rework; `loft --native` links both fine.)
-    "14-image.loft",
-    "21-random.loft",
-];
+/// Files in `tests/docs/` that `dir` must not run.
+///
+/// Empty, and staying empty is the point: every page the site publishes is a
+/// program that runs, so an entry here is a page whose code a reader cannot
+/// trust.  Add one only with the open issue that explains it, and delete it the
+/// day that issue closes.
+///
+/// It held `14-image` and `21-random` for years, because a doc page that
+/// `use`s a library cannot be built by this embedded harness — which is the
+/// wrong place to solve that: a library's guide belongs in the library, where
+/// its own CI runs it.  Both moved out (@PLN149 step 9), and the list emptied.
+const SUITE_SKIP: &[&str] = &[];
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
@@ -62,11 +59,6 @@ const WASM_SKIP: &[&str] = &[
     // #268 (wasip2 codegen calls undeclared `loft_host_print`).  (Also moot today
     // — `wasm_dir` sweeps tests/docs, not tests/scripts.)  Un-skip when #268 lands.
     "191-source-dir.loft",
-    // Library-backed (`use imaging` / `use random`): the wasm bridge for these
-    // native packages is not wired for the doc harness — same reason they are in
-    // SUITE_SKIP / NATIVE_SKIP.  Validated via the `loft` binary; HTML rendered.
-    "14-image.loft",
-    "21-random.loft",
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then

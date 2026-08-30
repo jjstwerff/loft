@@ -781,6 +781,27 @@ pub const KERNEL_FUNCTIONS_WASM: &[(&str, Call)] = &[
     // @PLN18 08-S6 — the living-page swap (page-driven; see wasm.rs).
     ("n_swap_world", crate::engine_host::browser::n_swap_world),
     ("n_swap_start", crate::engine_host::browser::n_swap_start),
+    // The two the SHARED loop calls whether or not a page can swap: `client_loop` asks
+    // `kernel_swap_step()` on every turn, and a reconnect wrapper asks `swap_retired()`.
+    // Leaving them off registered a panicking stub instead, so every browser `run_client`
+    // aborted as its loop began (loft#1189).
+    (
+        "n_kernel_swap_step",
+        crate::engine_host::browser::n_kernel_swap_step,
+    ),
+    (
+        "n_swap_retired",
+        crate::engine_host::browser::n_swap_retired,
+    ),
+    // Implemented in `browser` since the kernel landed and never listed here — the shared
+    // `client_loop` fills every `Event` with it, so a browser page reached the panicking stub
+    // on its first event (loft#1189).  `engine_host_kernel::the_browser_kernel_supplies_every
+    // _native_the_client_path_calls` is the guard that this list and the lib's `#native`
+    // declarations agree.
+    (
+        "n_kernel_client_event_status",
+        crate::engine_host::browser::n_kernel_client_event_status,
+    ),
 ];
 
 pub fn init(state: &mut State) {

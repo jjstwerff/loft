@@ -410,6 +410,71 @@ the advisory full-drift check). Either take the file upstream, or declare it in 
 `UNRELEASED_FILES` **with a tracking reference** — a row without one is refused, since knowing
 about it is what the previous arrangement already had.
 
+## 2c. The guide — `docs/01-getting-started.loft`
+
+A reference tells a reader what a function's type is. It does not tell them **where to
+start**, and those are different questions asked by different people: one has already decided
+to use the library, the other has not. The API reference is generated and complete; the guide
+is written and short, and only one of them can be either.
+
+**One file, in the package, in the topic format the language pages use** — `@NAME` / `@TITLE`,
+prose in `//` comments, code between. That format is not decoration: the guide is a **running
+loft program**, so an example that stops working stops compiling. A guide that cannot rot is
+the only kind worth a reader's trust.
+
+**Your CI runs it, in its own step.** Not `loft test` — that scans `tests/`, and a guide is a
+program, not a suite, which is why the guides written before this rule existed were never
+executed by anything. The `Guide` step in `library-ci-reusable.yml` runs every `docs/*.loft`
+on **both backends** and diffs the two outputs; a package with no guide says so and passes.
+Run it yourself the same way:
+
+```sh
+LOFT_DENY_WARNINGS=1 loft --interpret docs/01-getting-started.loft
+LOFT_DENY_WARNINGS=1 loft --native    docs/01-getting-started.loft
+```
+
+Warnings are denied there as they are in the suite, so a guide that teaches an idiom the
+compiler warns about does not ship.
+
+It is rendered in two places from that one file, with no further work: `loft doc <name>`
+locally, and `doc/lib-<name>-guide.html` on the published site, linked from the library's
+card. Writing the file is the whole of what it takes to appear there.
+
+### What goes in it, in order
+
+1. **What it is, in one paragraph — and what it is not.** Name the neighbouring library a
+   reader might have wanted instead. This is the paragraph that saves the wrong reader ten
+   minutes, and it is the one most guides skip.
+2. **The smallest complete program that does something**, with its real output. Not a
+   fragment: something a reader can paste and run.
+3. **The three or four calls that carry the library**, each with a worked example. Not the
+   whole surface — that is the reference's job, and duplicating it here creates a second home
+   that drifts.
+4. **The one thing that surprises people.** Every library has one. `graphics`'s is that
+   `rgb()` and a hand-written hex literal differ in the alpha byte; `markdown`'s is that three
+   of `render`'s four arguments are URL rewriting and `""` turns each off. It is invisible
+   from the signature, which is exactly why the reference cannot carry it.
+5. **Where to go next** — the reference, and the package's own tests, which are the
+   best-explained calls in it.
+
+### `main` must call every section
+
+Split the guide into a function per section if you like — it reads better than one long
+`main`. But **`main` has to call each of them**, because nothing else does. A zero-parameter
+function that no one calls still compiles, so a renamed API is still caught; its **asserts
+never run**, and those are the half that checks the example is *right* rather than merely
+*spelled correctly*.
+
+Measured, not hypothetical: `graphics`'s guide defines `drawing_shapes()` and `aa_example()`
+and `main` calls neither, so two of its three sections have never executed an assertion. The
+page reads as verified and one third of it is.
+
+### What it is not
+
+Not the reference: no attempt at completeness, and no per-function catalogue. Not the README
+either — the README is what GitHub shows and is read before installing; the guide is read
+after, by someone with the package in hand. Where they overlap, the README is the shorter one.
+
 ## 3. Pre-release checklist
 
 **Declare your three compatibility levels first.** They are required before a package may be

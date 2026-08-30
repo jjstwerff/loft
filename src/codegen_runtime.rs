@@ -287,7 +287,7 @@ pub fn from_loft_ref(stores: &mut Stores, r: loft_ffi::LoftRef) -> DbRef {
     }
 }
 use crate::vector;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(not(host_fs))]
 use std::fs::{File, OpenOptions};
 #[cfg(not(host_fs))]
@@ -5140,6 +5140,182 @@ pub struct CallGuard;
 impl Drop for CallGuard {
     fn drop(&mut self) {
         cr_call_pop();
+    }
+}
+
+// The return buffers a fn-ref dispatch arm allocated and the callee DELIVERED through,
+// innermost frame last.  The `--native` half of the interpreter's `State::fnref_bufs`
+// (`formal/closures.md`, loft#1183): a fn-ref call site is the only owner its heap return
+// buffer will ever have, because the destination's static type may say it owns nothing, so
+// the store is owned by the frame that holds it and travels up with the return value.
+//
+// A frame's own buffers are the entries above the mark [`FnRefBufGuard`] took at entry —
+// a watermark rather than a frame number, so nothing has to agree about depth.
+thread_local! {
+    static FNREF_BUFS: RefCell<Vec<(DbRef, u64)>> = const { RefCell::new(Vec::new()) };
+}
+
+// The length of `FNREF_BUFS`, mirrored so a frame can take its mark and test it against
+// the list without borrowing one: a program that never delivers a fn-ref return buffer —
+// which is nearly every program, on nearly every call — pays two `Cell` reads.
+thread_local! {
+    static FNREF_LEN: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Record what a fn-ref dispatch arm's return buffer became, once the call has answered.
+///
+/// The callee either DELIVERED through the buffer — the returned store IS the buffer, and
+/// it now needs an owner — or handed back some other store, leaving the buffer unused and
+/// this call site the only thing that can release it.  Which of the two happened is a
+/// run-time fact, exactly as `State::fn_return` reads it (loft#1179): compare the stores.
+///
+/// The delivered one is remembered against the frame that is running, and
+/// [`FnRefBufGuard`] releases it when that frame ends.
+pub fn cr_fnref_buf(cell: &std::cell::UnsafeCell<Stores>, returned: DbRef, buf: DbRef) {
+    if returned.store_nr != buf.store_nr {
+        OpFreeRef(cell, buf, "__vc_hbuf");
+        return;
+    }
+    let serial = {
+        let stores: &mut Stores = unsafe { &mut *cell.get() };
+        stores
+            .allocations
+            .get(buf.store_nr as usize)
+            .map_or(0, |s| s.alloc_serial)
+    };
+    FNREF_BUFS.with(|b| {
+        let mut list = b.borrow_mut();
+        list.push((buf, serial));
+        FNREF_LEN.with(|n| n.set(u32::try_from(list.len()).unwrap_or(u32::MAX)));
+    });
+}
+
+/// The allocation counter, for a fn-ref call site to snapshot before it dispatches.
+///
+/// Paired with [`cr_fnref_minted`], this is the `--native` half of the question
+/// `State::release_fnref_bufs` asks: was the store that came back MINTED inside the call, or
+/// was it already there?  Slot numbers are reused, so nothing else can answer it.
+#[must_use]
+pub fn cr_alloc_serial(cell: &std::cell::UnsafeCell<Stores>) -> u64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores.stores_allocated
+}
+
+/// Give an owner to a store a fn-ref callee MINTED and handed back.
+///
+/// The callee does not free what it returns, and the caller may be a forwarding function whose
+/// return type says nothing about it — so without this the store is owned by nobody
+/// (loft#1185).  A store whose stamp is at or below `since` was already there when the call
+/// began: a capture, or an argument, belonging to a frame further up and not ours to place.
+///
+/// Registered against the running frame, so [`FnRefBufGuard`] releases it exactly as it
+/// releases a delivered return buffer.
+pub fn cr_fnref_minted(
+    cell: &std::cell::UnsafeCell<Stores>,
+    returned: DbRef,
+    since: u64,
+    closure: DbRef,
+) {
+    if returned.store_nr == u16::MAX || returned.rec == 0 {
+        return;
+    }
+    // The closure RECORD is never this call's mint, whatever the stamps say: it belongs to
+    // whoever built the closure, and a capture read out of it answers a `DbRef` into that same
+    // store.  Registering it hands the caller's own record to this frame's release — `1181`
+    // reported twelve use-after-free reads of `__closure_4`, all "killed by the free of
+    // `var_r`", on `--native` alone.
+    if closure.store_nr != u16::MAX && returned.store_nr == closure.store_nr {
+        return;
+    }
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let Some(slot) = stores.allocations.get(returned.store_nr as usize) else {
+        return;
+    };
+    if slot.free || slot.alloc_serial <= since {
+        return;
+    }
+    let serial = slot.alloc_serial;
+    FNREF_BUFS.with(|b| {
+        let mut list = b.borrow_mut();
+        if list.iter().any(|(d, _)| d.store_nr == returned.store_nr) {
+            return;
+        }
+        list.push((returned, serial));
+        FNREF_LEN.with(|n| n.set(u32::try_from(list.len()).unwrap_or(u32::MAX)));
+    });
+}
+
+/// Releases the fn-ref return buffers a frame delivered into, when that frame ends.
+///
+/// The `--native` counterpart of `State::release_fnref_bufs`, and it answers the same
+/// question one step coarser.  The interpreter compares the store that came back against
+/// each buffer and hands only THAT one up; here the returned value is not visible at drop
+/// time, so the test is the function's declared return TYPE — a frame that can hand a heap
+/// value back leaves its buffers to its caller, and every other frame releases them.
+///
+/// Both directions of that difference are safe.  A buffer handed up is freed by an
+/// ancestor rather than here, never before the value can be read; and the chain always
+/// terminates, because every instrumented frame carries this guard and `main` returns
+/// `void`.  What it costs is watermark: a heap-returning frame that delivers through a
+/// fn-ref many times holds every one of those buffers until its caller ends, where the
+/// interpreter would have released all but the one it returned.
+///
+/// A store the frame already released itself leaves a stale handle here; [`OpFreeRef`]
+/// skips a freed slot, so the hand-up cannot turn into a double free.
+pub struct FnRefBufGuard {
+    cell: *const std::cell::UnsafeCell<Stores>,
+    mark: u32,
+    hands_up: bool,
+}
+
+impl FnRefBufGuard {
+    /// Arm the guard for the frame now entering.  `hands_up` is whether this function's
+    /// declared return type is a heap value, which is the only way a buffer it delivered
+    /// into can still be reachable after it ends.
+    #[must_use]
+    pub fn new(cell: &std::cell::UnsafeCell<Stores>, hands_up: bool) -> Self {
+        Self {
+            cell: std::ptr::from_ref(cell),
+            mark: FNREF_LEN.with(Cell::get),
+            hands_up,
+        }
+    }
+}
+
+impl Drop for FnRefBufGuard {
+    fn drop(&mut self) {
+        if self.hands_up || FNREF_LEN.with(Cell::get) == self.mark {
+            return;
+        }
+        let mine: Vec<(DbRef, u64)> = FNREF_BUFS.with(|b| {
+            let mut list = b.borrow_mut();
+            let from = usize::try_from(self.mark)
+                .unwrap_or(usize::MAX)
+                .min(list.len());
+            let mine = list.split_off(from);
+            FNREF_LEN.with(|n| n.set(u32::try_from(list.len()).unwrap_or(u32::MAX)));
+            mine
+        });
+        // SAFETY: the pointer is the `cell` argument of the frame this guard belongs to,
+        // which outlives the guard — the guard is a local of that same frame.
+        let cell = unsafe { &*self.cell };
+        for (buf, serial) in mine {
+            // The frame may have released the store ITSELF — its static type can read the
+            // value as owned — and slot numbers are reused, so a bare `store_nr` here would
+            // eventually free somebody else's live store.  The serial is what makes the
+            // handle name one allocation: a slot that is free, or that has since been
+            // handed to a different allocation, is not the one this entry remembered.
+            // `State::release_fnref_bufs` carries the same guard on the interpreter side —
+            // without it, `1181` reported twelve use-after-free reads on `--native` alone.
+            {
+                let stores: &mut Stores = unsafe { &mut *cell.get() };
+                match stores.allocations.get(buf.store_nr as usize) {
+                    Some(slot) if !slot.free && slot.alloc_serial == serial => {}
+                    _ => continue,
+                }
+            }
+            OpFreeRef(cell, buf, "__vc_hbuf");
+        }
     }
 }
 

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Running your program — Loft, a programming language for small browser games</title>
+  <meta name="description" content="How to run loft — one file, the REPL, and checking your work.">
+<link rel="canonical" href="https://loft-lang.org/loft/34-running.html">
+<meta property="og:title" content="Running your program — Loft, a programming language for small browser games">
+<meta property="og:description" content="How to run loft — one file, the REPL, and checking your work.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/34-running.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Running your program — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="How to run loft — one file, the REPL, and checking your work.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <span class="cur">Running your program</span> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Running your program</h1>
+<article>
+<p>The pages before this one show how to WRITE loft. This one shows how to RUN it. You need one command to start, and everything else is optional.</p>
+<h2 id="run-a-file">Run a file</h2>
+<p>Put your program in a file ending in <code>.loft</code> and pass it to loft:</p>
+<pre><code>  $ loft hello.loft
+  hello, world!
+</code></pre>
+<p>That is the whole thing. There is no build step to run first and no project to set up. A single file is a complete program.</p>
+<h2 id="give-your-program-some-arguments">Give your program some arguments</h2>
+<p>Put them after the file name, and declare one <code>vector&lt;text&gt;</code> parameter on <code>main</code> to read them:</p>
+<pre><code>  fn main(args: vector&lt;text&gt;) {
+    for who in args { println("hello, {who}!"); }
+  }
+</code></pre>
+<pre><code>  $ loft greet.loft Ada Grace
+  hello, Ada!
+  hello, Grace!
+</code></pre>
+<p>That one parameter is the only shape <code>main</code> accepts. Any other — a plain <code>text</code>, two of them — is refused, because nothing would fill it.</p>
+<h2 id="try-something-without-making-a-file">Try something without making a file</h2>
+<p>Type <code>loft</code> on its own and you get a prompt where you can type one line at a time and see the answer straight away:</p>
+<pre><code>  $ printf '2 + 3\n' | loft repl --fresh
+  5
+</code></pre>
+<p>Typed by hand it looks like this — start it, then type at the prompt:</p>
+<pre><code>  loft
+  loft&gt; 2 + 3
+  5
+</code></pre>
+<p>This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea. Your session is remembered, so you can close it and come back later — <code>--fresh</code> is how you ask for a clean one instead.</p>
+<h2 id="two-ways-to-run-and-why-you-usually-ignore-this">Two ways to run, and why you usually ignore this</h2>
+<p>loft can run your program in two ways. It compiles your program to a fast program first when it can, and otherwise it reads and runs your program directly. The second way is called interpreting.</p>
+<p>You do not have to choose. loft picks for you, and the ANSWER is the same either way — that is a rule the language holds itself to, not a hope. You can ask for one on purpose when you want to:</p>
+<pre><code>  $ loft --interpret hello.loft
+  hello, world!
+</code></pre>
+<p>A downloaded loft always interprets. That is normal and not something to fix.</p>
+<h2 id="stop-a-program-that-runs-too-long">Stop a program that runs too long</h2>
+<p>A loop with a mistake in it can run forever. Give loft a time limit and it stops the program for you:</p>
+<pre><code>  $ loft --timeout 10 hello.loft
+  hello, world!
+</code></pre>
+<p>This is worth using whenever you run something for the first time.</p>
+<h2 id="check-your-work-without-running-it">Check your work without running it</h2>
+<p>Sometimes you only want to know whether the program is correct so far:</p>
+<pre><code>  $ loft check hello.loft
+  ok
+</code></pre>
+<p>This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing.</p>
+<h2 id="when-loft-tells-you-something-is-wrong">When loft tells you something is wrong</h2>
+<p>A message from loft names the file, the line, and what to do. Some messages can also show you the exact replacement to write:</p>
+<pre><code>  $ loft --explain --interpret hello.loft
+  hello, world!
+</code></pre>
+<p>That prints the suggested fix under each message. It only shows you the fix; it changes nothing, so it is always safe to run.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>A program is just a file with a <code>main</code> function in it, like this one. Everything above is how you would run this file.</p>
+<pre><code>  greeting = <span class="st">"hello"</span>;
+  who = <span class="st">"world"</span>;
+  message = <span class="st">"{greeting}, {who}!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(message == <span class="st">"hello, world!"</span>, <span class="st">"string interpolation builds the message"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(message);
+}</code></pre>
+<section id="loft-panel" class="loft-panel" hidden>
+<h2>Run it yourself</h2>
+<p class="lp-note">This page is a loft program. It runs here, in your browser — press Run, then ask it something.</p>
+<div class="lp-bar"><button id="lp-run" disabled>▶ Run</button><button id="lp-step" disabled>Step</button><button id="lp-resume" disabled>Resume</button><span id="lp-status" class="lp-status">loading…</span></div>
+<pre id="lp-output" class="lp-output"></pre>
+<div id="lp-frame" class="lp-frame" hidden></div>
+<div id="lp-callables" class="lp-callables" hidden></div>
+<div class="lp-prompt"><span class="lp-caret">&gt;</span><input id="lp-input" type="text" autocomplete="off" spellcheck="false" disabled placeholder="an expression — it is evaluated where the program stopped"></div>
+<div id="lp-log" class="lp-log"></div>
+<details class="lp-lines"><summary>Stop on a line</summary><ol id="lp-src" class="lp-src"></ol></details>
+</section>
+<pre id="lp-source" hidden>// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Running your program
+// @TITLE: How to run loft — one file, the REPL, and checking your work.
+// The pages before this one show how to WRITE loft. This one shows how to RUN it.
+// You need one command to start, and everything else is optional.
+// ## Run a file
+// Put your program in a file ending in '.loft' and pass it to loft:
+//
+//     $ loft hello.loft
+//     hello, world!
+//
+// That is the whole thing. There is no build step to run first and no project
+// to set up. A single file is a complete program.
+// ## Give your program some arguments
+// Put them after the file name, and declare one `vector&lt;text&gt;` parameter on 'main'
+// to read them:
+//
+//     fn main(args: vector&lt;text&gt;) {
+//       for who in args { println("hello, {who}!"); }
+//     }
+//
+//     $ loft greet.loft Ada Grace
+//     hello, Ada!
+//     hello, Grace!
+//
+// That one parameter is the only shape 'main' accepts. Any other — a plain 'text',
+// two of them — is refused, because nothing would fill it.
+//
+// ## Try something without making a file
+// Type 'loft' on its own and you get a prompt where you can type one line at a
+// time and see the answer straight away:
+//
+//     $ printf '2 + 3\n' | loft repl --fresh
+//     5
+//
+// Typed by hand it looks like this — start it, then type at the prompt:
+//
+//     loft
+//     loft&gt; 2 + 3
+//     5
+//
+// This is called a REPL, which is short for "read, evaluate, print, loop".
+// It is the quickest way to check what a function does or try an idea.
+// Your session is remembered, so you can close it and come back later —
+// '--fresh' is how you ask for a clean one instead.
+// ## Two ways to run, and why you usually ignore this
+// loft can run your program in two ways. It compiles your program to a fast
+// program first when it can, and otherwise it reads and runs your program
+// directly. The second way is called interpreting.
+//
+// You do not have to choose. loft picks for you, and the ANSWER is the same
+// either way — that is a rule the language holds itself to, not a hope.
+// You can ask for one on purpose when you want to:
+//
+//     $ loft --interpret hello.loft
+//     hello, world!
+//
+// A downloaded loft always interprets. That is normal and not something to fix.
+// ## Stop a program that runs too long
+// A loop with a mistake in it can run forever. Give loft a time limit and it
+// stops the program for you:
+//
+//     $ loft --timeout 10 hello.loft
+//     hello, world!
+//
+// This is worth using whenever you run something for the first time.
+// ## Check your work without running it
+// Sometimes you only want to know whether the program is correct so far:
+//
+//     $ loft check hello.loft
+//     ok
+//
+// This reports mistakes and runs nothing. It is fast, and it is a good habit
+// while you are still writing.
+// ## When loft tells you something is wrong
+// A message from loft names the file, the line, and what to do. Some messages
+// can also show you the exact replacement to write:
+//
+//     $ loft --explain --interpret hello.loft
+//     hello, world!
+//
+// That prints the suggested fix under each message. It only shows you the fix;
+// it changes nothing, so it is always safe to run.
+
+fn main() {
+  // A program is just a file with a `main` function in it, like this one.
+  // Everything above is how you would run this file.
+  greeting = "hello";
+  who = "world";
+  message = "{greeting}, {who}!";
+  assert(message == "hello, world!", "string interpolation builds the message");
+  println(message);
+}
+</pre>
+<style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>
+<script type="module" src="loft-panel.js"></script>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

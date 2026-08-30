@@ -761,6 +761,7 @@ impl Stores {
         // leaked store's allocation site is attributable for EVERY path (reuse/copy
         // included), not only `OpDatabase`. Read before the mutable slot borrow.
         let alloc_pc = self.alloc_pc;
+        let serial = self.stores_allocated;
         let store = &mut self.allocations[slot as usize];
         // @P317 — enrich the tripwire: this fires when the free-bitmap and the
         // per-store `free` flag disagree (a double-free, an rc under-count, or a
@@ -775,6 +776,11 @@ impl Stores {
         );
         store.free = false;
         store.pinned = false;
+        // The monotonic stamp: `stores_allocated` was bumped for THIS allocation just above,
+        // so the slot carries a value no other live slot has and no reuse of this one repeats.
+        // `State::release_fnref_bufs` compares it against a per-call snapshot to tell a store
+        // the callee MINTED from one that was already there (loft#1185).
+        store.alloc_serial = serial;
         store.set_created_at(alloc_pc);
         store.last_op_at = 0;
         let rec = if size == u32::MAX {
@@ -2095,7 +2101,6 @@ impl Stores {
             logger: self.logger.clone(),
             had_fatal: false,
             runtime_error: None,
-            format_fault_tag: None,
             // #255 / @PLN9: a parallel worker's file ops must resolve paths the
             // same way as the main thread — carry the anchor + mode.
             source_dir: self.source_dir.clone(),

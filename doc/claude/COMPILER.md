@@ -142,6 +142,8 @@ This allows inline format expressions like `"result: {value:>10}"` to be tokenis
 
 Special case: `1..4` tokenises as `Integer(1)`, `Token("..")`, `Integer(4)` — the lexer uses a look-ahead to avoid consuming `..` as part of a float.
 
+**That case emits TWO tokens from ONE scan**, and it is the only place that does. Having read `1..`, the number lexer cannot return both, so it returns the `Integer` as the live token and QUEUES the `..` in the replay buffer. A number that ends at a field dot (`n.v.0.0`, `r.0.x`) does the same with a `.`. Both tokens must reach the buffer — see the invariant under Backtracking below.
+
 ### Backtracking with `Link` / `revert`
 
 The lexer supports arbitrary lookahead through a memory buffer:
@@ -155,6 +157,8 @@ lexer.revert(link);         // restore position; replay buffered tokens
 `link()` increments a reference count. While any link is alive all consumed tokens are buffered. `Link` implements `Drop` to decrement the count; when the count reaches zero the buffer is discarded.
 
 The parser uses this to speculatively attempt a parse path (e.g. checking whether an identifier is a type name or a variable) and backtrack on failure.
+
+**The invariant: the buffer must hold every token the scan consumed, in the order it read them.** A revert replays from the buffer, so a token the scan produced but did not record is simply gone from the re-read. The one scan that produces two tokens (a number ending at `..` or a field `.`, above) is where that can go wrong: `cont()` records a freshly-scanned token, and the queued follow-up is written into the buffer by the number lexer itself, so the NUMBER has to be inserted in front of it rather than treated as already-buffered. Without that, `i + 1..` replayed as `i`, `+`, `..` and left the `+` with one operand — a parse that only fails when a look-ahead happens to span the number (`lexer::test::link_revert_replays_a_queued_number_split`).
 
 ### Key lexer methods
 
@@ -313,9 +317,9 @@ enums apart, so the mint must stay unconditional. Guarded by the name-collision 
 
 ### The H5 two-pass contract — the lazy-append law
 
-`assert_pass2_def_attr_stable` (`src/parser/mod.rs`, debug-assertions only —
-see [DEBUG.md § the calibration run](DEBUG.md#the-debug-assertions-calibration-run-target-da)
-for why ordinary builds never check it) pins the cross-pass contract:
+`assert_pass2_def_attr_stable` (`src/parser/mod.rs`) pins the cross-pass contract. It is a
+plain `assert!`, so it runs in EVERY build — an ordinary `cargo build --bin loft` aborts on
+it, which is what a user sees when a program trips it:
 
 > **Pass-1 facts are frozen — every pass-1 def number and attr index must be
 > identical after pass 2.  Pass 2 may only APPEND name-keyed synthetic facts
@@ -336,6 +340,36 @@ Everything else stays fatal — notably `__ref_N` / `__retbuf` growth, the
 pass-2-only def or attr.  The appends are safe precisely because they are
 name-keyed and trailing: call sites are re-parsed in pass 2 against the final
 attr list, and no pass-1 number moves.
+
+The snapshot is taken AFTER `reserve_late_return_buffers`, which is what lets a buffer be
+reserved between the passes for a return type pass 1 could not classify (#675). That is also
+the limit of what this check can see: it compares COUNTS. A fix aimed at the count can leave
+the two passes agreeing on how many attributes there are and disagreeing about which VARIABLE
+is the argument — which is the next contract.
+
+### Argument geometry — the attribute list and the slot list are one list
+
+`check_argument_geometry` (`src/state/codegen.rs`) pins the contract *inside* one function:
+
+> **A call site lowers its argument list from the definition's ATTRIBUTES; the callee places
+> its argument slots in `Function::arguments()` order, which is variable-NUMBER order.  The
+> two are the same list, in the same order.**
+
+Nothing made them agree. A return-buffer promotion that retires one argument variable and
+makes a later-numbered one the argument in its place breaks the correspondence silently: the
+call site writes the closure into the return buffer's slot, the body reads its `__closure`
+from the buffer's, and the program answers a zeroed record or a captured integer of `0` — on
+the interpreter only, because `--native` builds its argument list from the attributes alone
+and never consults the variable order (loft#1188, and the collection leg of loft#1178).
+
+The condition is a **type** disagreement at a position, not a name one. Two hidden scratch
+buffers of the same type are interchangeable — the caller pushes two empty `&text`s and the
+callee fills whichever it was handed — and the stdlib's `text::resolve` carries exactly that
+pair in swapped order and answers correctly on both backends. A type disagreement cannot be
+benign in the same way: the slot holds a value of another shape, so every read of it reads
+another argument's bytes. Only a definition whose argument count equals its attribute count is
+compared, because a `#rust` / `#native` body has attributes and no variable table and a
+promoted `text` parameter is redirected to a shadow local.
 
 ### Reading a verdict off the IR — read the TYPE, not the shape
 

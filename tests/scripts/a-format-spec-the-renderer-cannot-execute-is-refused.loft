@@ -1,0 +1,63 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @FR-F-Spec — a spec the value's renderer cannot execute is REFUSED, not run.
+//
+// Two shapes, both of which reached the back end before anyone could say the spec was wrong.
+//
+// **A width that is not a number.**  The width slot parses a full expression, so a variable can
+// supply it.  It used to accept whatever that expression produced.  `{n:0>5}` — how a reader
+// coming from Rust spells zero-pad-right — parses as the comparison `0 > 5`, and a BOOLEAN went
+// to the width: `--interpret` rendered the number with no padding at all and said nothing,
+// while `--native` handed the bool to `ops::format_long_with_tag` and the program failed with
+// rustc's own `E0308 expected i64, found bool`, naming loft's internals rather than the spec.
+//
+// It is the residual of a defect already fixed one position over.  `string_states` was made to
+// consume the FLAGS in any order precisely because an out-of-order flag was "simply left in the
+// stream for the WIDTH expression to find" — and a `0` fill is left there for the same reason,
+// because the pad-character branch can only claim a token and a digit lexes as an Integer.
+//
+// **A radix the renderer has no arm for.**  `ops::format_long` implements the four radixes the
+// rule lists and ends in `panic!("Unknown radix")`.  The spec reader answers two more, `e`
+// (scientific) and `j` (JSON), neither of which means anything for an integer — so
+// `println("{n:e}")`, an ordinary source program with no unsafe corner in it, aborted the
+// interpreter on a Rust panic.
+//
+// Both are refusals rather than silent behaviour on purpose: L9's rule beside these arms
+// already says that *a specifier that can never have any effect on the value type is always a
+// bug*, and the rule was right — it had simply only ever been asked about `text` and `boolean`.
+//
+// @falsified-at: d9aa10ac — interpret exit 1 -> 0, native exit 1 -> 0.  The EXIT channel is
+// what scores this file and the `refusals` column reads 0 on both trees, which is not a miss:
+// the count comes from a plain run, and a file with no `main` runs nothing there.  Under
+// `--tests` the control fails because three of these four errors do not exist on it — `{n:0>5}`
+// compiles silently and `{n:e}` reaches its panic only at run time, which no `@EXPECT_ERROR`
+// can see — so the file is red there and green here.
+//
+// ⚠ The rule is asked here of the INTEGER renderer only.  `character` drops a whole spec and a
+// vector/struct hole drops its width and alignment, both silently and both still open; they are
+// not pinned here, so this file cannot be read as saying the question is closed.
+
+// @EXPECT_ERROR: a format width must be a number
+fn test_a_comparison_is_not_a_width() {
+  n = 7;
+  println("{n:0>5}");
+}
+
+// @EXPECT_ERROR: a format width must be a number
+fn test_a_comparison_is_not_a_width_with_a_non_zero_fill() {
+  n = 7;
+  println("{n:5>3}");
+}
+
+// @EXPECT_ERROR: is not an integer format
+fn test_scientific_is_not_an_integer_radix() {
+  n = 255;
+  println("{n:e}");
+}
+
+// @EXPECT_ERROR: is not an integer format
+fn test_json_is_not_an_integer_radix() {
+  n = 255;
+  println("{n:j}");
+}

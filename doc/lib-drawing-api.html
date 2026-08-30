@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>drawing API — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The public API of the loft library drawing — every function, struct and enum it exports, with its documentation.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-drawing-api.html">
+<meta property="og:title" content="drawing API — Loft, a programming language for small browser games">
+<meta property="og:description" content="The public API of the loft library drawing — every function, struct and enum it exports, with its documentation.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-drawing-api.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="drawing API — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The public API of the loft library drawing — every function, struct and enum it exports, with its documentation.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>drawing API</h1>
+<article>
+<p><a href="lib-drawing.html">← drawing</a> · version 0.2.0</p>
+<p class="lib-legend">39 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">PaintKind</span></code></pre>
+<p>How a mark is filled, if it is filled at all.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Paint</span></code></pre>
+<p>A mark's fill descriptor.</p>
+<p><code>Stroked</code> is the absence of a fill, not a fill of nothing: it is what sends a <code>Poly</code> down the pen path instead of the polygon path, and the two produce completely different pictures from the same points.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">OpKind</span></code></pre>
+<p>What an op does.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Op</span></code></pre>
+<p>One entry in the ordered draw program.</p>
+<p>⚠ <code>pts</code> are FRACTIONS of the paper (0..1, origin top-left, y down), never pixels.  The scale to pixels happens once, at the raster call, because the paper size is a property of the scene and the supersample factor is a property of the renderer — neither belongs in a parsed mark.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Elem</span></code></pre>
+<p>A named group of marks and the box they cover, in paper fractions.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Landmark</span></code></pre>
+<p>A <code>landmark &lt;name&gt; = &lt;value&gt;</code> line.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Sketch</span></code></pre>
+<p>A parsed scene: the paper, the ordered draw program, and everything the parser could measure or could not accept.</p>
+<p>⚠ NOT called <code>Scene</code>: <code>mesh3d::Scene</code> owns that name and <code>graphics</code> depends on mesh3d, so the collision is a hard error — the same trap <code>graphics::Coord</code> hit with <code>Point</code>.  Reach for <code>Sketch</code> in <code>.draw</code> code and the 3-D names stay where they belong.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">grey</span>(gl: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>A grey level in 0..1 as an opaque colour, rounded HALF TO EVEN.</p>
+<p>Python's <code>round</code> is half-to-even and <code>draw.py</code> uses it here, so <code>fill=0.5</code> is 128 and not 127 — a difference of one level that no eye would find and a byte diff would.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">PointList</span></code></pre>
+<p>Every <code>(x,y)</code> on a line, with the two suffixes a point may carry.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">read_points</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">PointList</span></code></pre>
+<p><code>\(\s*(n)\s*,\s*(n)\s*\)\s*(~?)\s*(?:@\s*(n))?</code>, found repeatedly along the line.</p>
+<p>Scanning for points rather than splitting the line is what lets the same grammar carry options: <code>rgb=140,104,62</code> has no parentheses, so it is not a point, and no separator has to be agreed between the two.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">circle_pts</span>(cx: <span class="ty"><a href="stdlib-types.html">float</a></span>, cy: <span class="ty"><a href="stdlib-types.html">float</a></span>, r: <span class="ty"><a href="stdlib-types.html">float</a></span>, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>, flat: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>The outline of a <code>Circle</code>, as <code>draw.py</code> builds it: <code>n</code> segments round the centre with the FIRST point repeated at the end, so the polygon closes itself and Pillow adds no edge of its own.</p>
+<p><code>flat</code> squashes the vertical radius; the <code>W/H</code> factor keeps the circle round on non-square paper, since the coordinates are fractions of each axis.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">smooth_applies</span>(pts: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;raster::<span class="en">Pt</span>&gt;, flags: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">boolean</a></span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Does this outline curve at all?  Fewer than three points, or no <code>~</code>, and the control points ARE the polyline — which is what keeps a plain <code>Poly</code> unchanged.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">smooth_pts</span>(pts: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;raster::<span class="en">Pt</span>&gt;, flags: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">boolean</a></span>&gt;,</code></pre>
+<p>Expand control points to a dense polyline.</p>
+<p>A point flagged <code>~</code> curves (its tangent is half the neighbour chord); a corner uses the segment chord, which makes that segment exactly straight.  So one outline mixes straight runs and curves, and a segment between two corners is a line however many <code>~</code> the rest of the outline has.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">smooth_vals</span>(vals: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;, closed: <span class="ty"><a href="stdlib-types.html">boolean</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">float</a></span>&gt;</code></pre>
+<p>The per-point widths carried across the same expansion, interpolated linearly.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">parse_scene</span>(src: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Sketch</span></code></pre>
+<p>Parse a whole <code>.draw</code> source.</p>
+<p>The command order below is <code>draw.py</code>'s, and it is not alphabetical or tidy — <code>Circle</code> is tried before <code>Poly</code>, <code>Line</code> last of all.  Keep it: a grammar this loose is defined by the order its alternatives are tried in, and re-sorting it silently re-reads lines that sit in two alternatives.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render</span>(sc: const <span class="en">Sketch</span>) -&gt; graphics::<span class="en">Canvas</span></code></pre>
+<p>Draw a parsed scene: at <code>SUPERSAMPLE</code>x, then resampled down with Lanczos.</p>
+<p>A transparent background renders on transparent pixels so the resample anti-aliases edges against ALPHA rather than against white — which is what makes the result a sprite that can be composited over anything, with no colour-key hack.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_file</span>(src: <span class="ty"><a href="stdlib-types.html">text</a></span>, out: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Sketch</span></code></pre>
+<p>Render a <code>.draw</code> file to a PNG, answering the parsed scene so the caller can report what it could not accept.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Pt</span></code></pre>
+<p>A point in canvas pixels, before Pillow truncates it to a whole pixel.</p>
+<p>The truncation is <code>(int)</code> on a C double — toward ZERO, so <code>-0.4</code> lands on 0 and not on -1.  Keep coordinates fractional right up to the rasteriser and the port and the oracle round the same way.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">pt</span>(px: <span class="ty"><a href="stdlib-types.html">float</a></span>, py: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="en">Pt</span></code></pre>
+<p>Build a point without spelling the field names.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">round_up</span>(ru_v: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p><code>ROUND_UP</code> from <code>Draw.c</code> — half AWAY from zero.</p>
+<p>Not <code>floor(f + 0.5)</code>: the sign lives outside, so the negative side mirrors the positive one exactly (<code>ROUND_UP(-0.5)</code> is -1, not 0).</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">round_down</span>(rd_v: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p><code>ROUND_DOWN</code> from <code>Draw.c</code> — <code>ceil(f - 0.5)</code>, mirrored about zero.</p>
+<p>The mirroring is the whole subtlety: <code>ROUND_DOWN(-0.45)</code> is **0**, because the <code>ceil</code> runs on <code>|f| - 0.5</code> and the sign is applied afterwards.  Take the obvious <code>ceil(-0.95)</code> instead and a span that should end on column 0 ends on column -1, which clips away and draws nothing.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fill_poly</span>(cv: graphics::<span class="en">Canvas</span>, pts: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Pt</span>&gt;, ink: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p>Fill a polygon the way <code>ImageDraw.polygon(pts, fill=…)</code> does.</p>
+<p>The outline closes itself only when the last point is not already the first — a circle handed in with its start repeated gets no extra edge, which is how <code>draw.py</code> passes one.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">wide_line</span>(cv: graphics::<span class="en">Canvas</span>, wx0: <span class="ty"><a href="stdlib-types.html">float</a></span>, wy0: <span class="ty"><a href="stdlib-types.html">float</a></span>, wx1: <span class="ty"><a href="stdlib-types.html">float</a></span>, wy1: <span class="ty"><a href="stdlib-types.html">float</a></span>,</code></pre>
+<p>One thick segment, the way <code>ImageDraw.line(…, width=w)</code> draws it for <code>w &gt; 1</code>.</p>
+<p>Pillow does not stroke — it builds a four-cornered quad around the segment and fills that, with the two half-widths rounded APART (<code>ROUND_UP</code> one side, <code>ROUND_DOWN</code> the other) so an even width still lands on whole pixels.  A polyline is therefore a series of independent quads with no joins, and the overlap at a bend is what rounds the corner.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">thin_line</span>(cv: graphics::<span class="en">Canvas</span>, pts: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Pt</span>&gt;, ink: <span class="ty"><a href="stdlib-types.html">integer</a></span>)</code></pre>
+<p><code>line32</code> from <code>Draw.c</code> — Bresenham, and it stops one pixel SHORT of the end.</p>
+<p><code>draw_lines</code> puts that missing pixel back after the last segment, which is why this is a polyline call rather than a segment one: split it into segments and each one grows a pixel Pillow never drew.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Scan</span></code></pre>
+<p>A parse position and what was read there.</p>
+<p>A scan either lands (<code>ok</code>) or does not, and the caller needs BOTH the value and where to carry on from, so every reader answers all three at once.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">scan_fail</span>() -&gt; <span class="en">Scan</span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">is_digit</span>(b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">is_word_byte</span>(b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>A regex <code>\w</code>: letters, digits and underscore.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">is_space_byte</span>(b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>A regex <code>\s</code>: space, tab, and the line endings a stray <code>\r</code> leaves behind.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">at</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>The byte at <code>i</code>, or -1 past either end — a value no byte can take, so a caller never has to bound-check before asking.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">lower_byte</span>(b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>ASCII lowercase of one byte.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">skip_space</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span></code></pre>
+<p>Past any run of spaces starting at <code>i</code>.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">matches_at</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>, word: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Does <code>s</code> carry <code>word</code> at byte <code>i</code>, ignoring case?  (<code>word</code> must be lowercase.)</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">word_boundary</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>A regex <code>\b</code> before byte <code>i</code>: position 0, or a non-word byte to the left.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">read_number</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Scan</span></code></pre>
+<p>A regex <code>([-\d.]+)</code> — a run of digits, dots and minus signs, read as a number.</p>
+<p>The character class is what <code>draw.py</code> writes, so this is deliberately loose: the run is taken first and converted second, and a run that is not a number fails the scan rather than being silently read as zero.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">read_unsigned</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Scan</span></code></pre>
+<p>A regex <code>([\d.]+)</code> — digits and dots, no sign.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">read_uint</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, i: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Scan</span></code></pre>
+<p>A regex <code>(\d+)</code> — digits only.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">find_option</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, key: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Scan</span></code></pre>
+<p>The first <code>\b&lt;key&gt;\s*=\s*</code> on the line, answering where its VALUE starts.</p>
+<p>This is the shape every option regex in <code>draw.py</code> opens with, and the word-boundary is load-bearing rather than decorative: without it <code>w=</code> would also be found inside <code>w2=</code>, which is a different option with a different meaning.  <code>key</code> must be lowercase; the match is not.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">find_word_from</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>, word: <span class="ty"><a href="stdlib-types.html">text</a></span>, start: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Scan</span></code></pre>
+<p>The first occurrence of a lowercase <code>word</code> at or after <code>start</code>, ignoring case — a regex literal with no boundary condition, which is what <code>Circle</code> and <code>Line</code> open with.</p>
+<p>The <code>start</code> is what makes a failed parse behave like <code>re.search</code>: a command whose first occurrence does not parse is retried from the NEXT one rather than given up on.</p>
+</div>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

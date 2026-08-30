@@ -4,10 +4,26 @@
 // @F48 — the `loft` CLI: engine behind the `loft api-surface` subcommand (@PLN102 C1).
 
 //! @PLN102 C1 commit 4 — the STRICT, tier-aware API diff: two canonical surfaces
-//! ([`crate::api_surface::Member`]) → a [`Verdict`]. **Identical-or-added is the whole
-//! rule:** every existing public symbol present byte-for-byte + additions-only → `Superset`
-//! (a drop-in); ANY change to an existing public symbol → `Break`, naming it. No "compatible
-//! widening" grace — that IS the strictness.
+//! ([`crate::api_surface::Member`]) → a [`Verdict`]. **What a caller can observe is the
+//! rule:** every existing public symbol present, plus additions → `Superset` (a drop-in);
+//! anything an existing call site can see change → `Break`, naming it.
+//!
+//! The test is *observable by a caller*, not *byte-identical*, and the difference is not a
+//! grace note — a rendering that changes while every call keeps compiling and keeps meaning
+//! what it meant is not a break, and reporting one is its own defect: the only remedy the
+//! report offers is to raise `api_compatible_with`, so a false positive here makes a library
+//! publish a withdrawal it never made. Two changes are additive for that reason, each
+//! measured against a real release that would otherwise have been failed:
+//! * an aggregate gaining a **method** — nothing constructed or called stops working
+//!   (`server` 0.3.1 → 0.5.0), see [`aggregate_break`];
+//! * a function gaining a **trailing optional parameter** — every existing call still
+//!   compiles and still binds the same way (`graphics` 0.8.1 → 0.9.0, loft#1191), see
+//!   [`signature_break`]. [COMPATIBILITY.md § Per-surface](../doc/claude/COMPATIBILITY.md)
+//!   states this one directly: under **Stdlib API**, "a new optional parameter" is additive.
+//!
+//! Everything else stays strict, and both of those carve narrowly: an added FIELD breaks
+//! (a literal construction must supply it), and a parameter that is required, or optional but
+//! inserted before an existing one, breaks (it re-binds every positional call).
 //!
 //! Tier-aware, via **sealed inlining.** A consumer can neither name nor construct a *sealed*
 //! type (only read a value's fields through a public signature that returns it), so a sealed
@@ -53,7 +69,12 @@ pub fn diff(old: &[Member], new: &[Member]) -> Verdict {
                 // string while leaving every existing use valid. Measured on real libraries:
                 // `server` 0.3.1 -> 0.5.0 added the method `bound` and read as a break, which
                 // would have failed a purely additive release had this been a gate.
-                if let Some(reason) = aggregate_break(sig, new_sig) {
+                let reason = if matches!(*kind, "fn" | "method" | "operator") {
+                    signature_break(sig, new_sig)
+                } else {
+                    aggregate_break(sig, new_sig)
+                };
+                if let Some(reason) = reason {
                     breaks.push(format!("changed {kind} `{name}` — {reason}"));
                 }
             }
@@ -67,14 +88,140 @@ pub fn diff(old: &[Member], new: &[Member]) -> Verdict {
     }
 }
 
+/// Why a FUNCTION signature changed in a way a caller can observe, or `None` when the change
+/// is one the caller never sees: parameters APPENDED to the end, each of them optional.
+///
+/// [COMPATIBILITY.md § Per-surface](../doc/claude/COMPATIBILITY.md) states it directly — under
+/// **Stdlib API**, *"a new optional parameter"* is additive, and the regression beside it is
+/// *"a signature change that breaks existing calls"*. A trailing default breaks none: every
+/// call written against the shorter list still compiles and still means what it meant.
+///
+/// Both halves of that are load-bearing, and each is a real failure the other would let past:
+/// * **TRAILING**, because parameters bind by POSITION. A default inserted before an existing
+///   parameter re-binds every call site — `f(1, 2)` starts feeding `2` to the new parameter —
+///   which is the silent version of the failure and worse than the loud one.
+/// * **OPTIONAL**, because an appended REQUIRED parameter stops every existing call compiling.
+///
+/// What it does not see: a changed default VALUE. The surface records that a parameter is
+/// optional, not what it falls back to, so `= false` becoming `= true` reads as no change
+/// while every call that omitted it silently gets a different answer. That is a real gap and
+/// a pre-existing one — the surface never carried the value — filed separately rather than
+/// widened into here, because rendering a value means rendering an arbitrary expression.
+fn signature_break(old_sig: &str, new_sig: &str) -> Option<String> {
+    let (Some((old_p, old_r)), Some((new_p, new_r))) =
+        (split_signature(old_sig), split_signature(new_sig))
+    else {
+        return Some("shape changed".to_string());
+    };
+    if old_r != new_r {
+        return Some(format!("return type `{old_r}` became `{new_r}`"));
+    }
+    if new_p.len() < old_p.len() {
+        return Some(format!(
+            "parameters dropped from {} to {}",
+            old_p.len(),
+            new_p.len()
+        ));
+    }
+    for (i, old_param) in old_p.iter().enumerate() {
+        if new_p[i] != *old_param {
+            return Some(format!(
+                "parameter {} `{old_param}` became `{}`",
+                i + 1,
+                new_p[i]
+            ));
+        }
+    }
+    let required: Vec<&String> = new_p[old_p.len()..]
+        .iter()
+        .filter(|p| !p.ends_with(" = default"))
+        .collect();
+    if required.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "added required parameter(s) {}",
+            required
+                .iter()
+                .map(|p| format!("`{p}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
+/// Split `(a: integer, b: hash<x, y>) -> R` into its parameter list and return type.
+///
+/// Depth-aware on `<>`, because a generic type argument carries commas of its own and a naive
+/// split would tear `hash<x, y>` in half and report two parameters where there is one.
+fn split_signature(sig: &str) -> Option<(Vec<String>, String)> {
+    let rest = sig.trim().strip_prefix('(')?;
+    let close = {
+        let (mut depth, mut at) = (0usize, None);
+        for (i, c) in rest.char_indices() {
+            match c {
+                '(' | '<' => depth += 1,
+                '>' => depth = depth.saturating_sub(1),
+                ')' if depth == 0 => {
+                    at = Some(i);
+                    break;
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        at?
+    };
+    let inner = &rest[..close];
+    let returns = rest[close + 1..]
+        .trim()
+        .strip_prefix("->")?
+        .trim()
+        .to_string();
+    let mut params = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                params.push(inner[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = inner[start..].trim();
+    if !tail.is_empty() {
+        params.push(tail.to_string());
+    }
+    Some((params, returns))
+}
+
 /// Why an aggregate's member list changed in a way a consumer can observe, or `None` when the
 /// change is purely additive.
 ///
 /// The distinction that matters is what a consumer may do with the type:
 /// * a **removed** member, or one whose type changed, breaks every existing use;
 /// * an added **method** (`name: fn`) is additive — nothing that compiled stops compiling;
-/// * an added **field** is NOT, because a consumer constructing the aggregate literally
-///   (`Server { … }`) must now supply it.
+/// * an added **field** is NOT, because it changes what a whole-record read answers:
+///   `{s:j}` gains a key, and so does any reflection walk.
+///
+/// ⚠ That last one is NOT "a literal must now supply it", which this comment used to say and
+/// which is false for **every** field in loft, not merely a defaulted one: a struct literal
+/// may omit anything. Measured — `S { }` compiles, and each omitted field takes its declared
+/// default or its type's zero. The reason matters because it is what a reader checks the
+/// verdict against, and checking against the false one leads to the conclusion that a
+/// defaulted field is additive (loft#1192, closed on this measurement).
+///
+/// The rules do not settle it cleanly, which is why the verdict stays where it is rather
+/// than moving on one reading. [COMPATIBILITY.md § Per-surface](../doc/claude/COMPATIBILITY.md)
+/// has two rows that point opposite ways for this exact change: under **Stdlib API** a
+/// *"different result for the same inputs"* is a regression, and the serialised form is
+/// different; under **On-disk + wire**, *"new optional fields with defaults"* is additive.
+/// Moving the verdict is a design decision about which surface a loft struct is, not a fix.
+/// Contrast the PARAMETER case, where one rule said "a new optional parameter" is additive
+/// with nothing against it — that one was unambiguous, and [`signature_break`] follows it.
 ///
 /// Anything whose shape this cannot parse falls back to "changed", so an unrecognised
 /// rendering is reported rather than waved through — the conservative direction for a check

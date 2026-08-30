@@ -92,9 +92,35 @@ with the closure's environment in scope.
 
 ## Deviations
 
-OPEN: **1** — a lambda that BINDS its return value to a local first leaks one store
-(D-clo-7, below; the value half of that entry is closed). D-clo-8 — a captured
-`vector<(…)>` unpacked rather than shared — was opened and closed 2026-08-28. Closed: both
+OPEN: **1** — a lambda's `??`-default store discarded INLINE leaks one store per call
+(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed).
+
+⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
+Each was a call site that allocated a return buffer and could not say whether what came back
+IS that buffer: D-clo-13 across the two arms of a `??`, D-clo-12 across the frame a
+forwarding function puts in the way, and loft#1183 across two assignments to one local. Every
+static reading is right for one case and wrong for the other, which is what says the question
+is not statically answerable at all — so the answer is not to answer it. **The store is owned
+by the frame that HOLDS it, and ownership travels with the return value:** `fn_return` hands
+the delivered buffer up one frame instead of forgetting it, and the caller's own return
+releases it. BOTH backends do that now — the interpreter through `release_fnref_bufs`, and
+`--native` through `codegen_runtime::FnRefBufGuard`, which reads the frame's declared return
+type where the interpreter reads the store that came back (loft#1183, closed).
+
+⚠ **That closed ONE of the three, and the difference named what the other two were about.**
+The hand-up answers for a store the CALL SITE allocated; D-clo-12 and D-clo-13 hand back a
+store the call site never made — the closure's capture, or the callee's own mint — and give it
+to a caller whose type reads it as owned. D-clo-13 is now closed too, by the same
+owner-by-possession rule reaching one step further: the callee already computes, at run time
+and in one place, that the store it is handing back is the store it minted, and
+`OpFreeRefOrHandUp` attaches an owner there (loft#1186). D-clo-12 remains, and its distance is
+exactly the frame in the way: a forwarding function's return type is computed once for every
+caller, so no per-argument fact reaches it. @PLN150. Measured repairs that do NOT work are
+recorded on each issue.
+D-clo-11 — a captured STRUCT taken by the caller's bind — D-clo-10 — a captured collection
+taken the same way — D-clo-9 — a captured record FREED by a caller that lifted a fn-ref tail
+— and D-clo-8 — a captured `vector<(…)>` unpacked rather than shared — were opened and closed
+on 2026-08-29, 2026-08-29, 2026-08-29 and 2026-08-28. Closed: both
 lambda forms capture identically (D-clo-1), the
 stored-short-lambda combinator crash is now a clean diagnostic (D-clo-2) — both closed
 2026-07-04 —
@@ -142,6 +168,347 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > short lambda through `map`/`any`/`all`/`sort_by`/`filter` (D-clo-2's fix named
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
+
+> **D-clo-16 — OPENED AND CLOSED (2026-08-29, loft#1188): a declared-RECORD lambda aborted the
+> compiler when the holder struct was declared before its field's type.** `(L-Escape)` promises
+> `g = fn(v: integer) -> P { q.p }` works, and it did — written one way. Moving `struct P` below
+> `struct Q { xs: vector<integer>, p: P }`, a change with no meaning in a language whose
+> declaration order is free, aborted on the two-pass contract: *"grew a pass-2-only attribute
+> `__ref_1`"*.
+>
+> D-clo-15's sentence, one rung out. What pass 1 can classify is a property of what was RESOLVED
+> when it read the body, never of the SPELLING: a field typed by a forward reference is `Unknown`
+> while pass 1 reads the tail, so the #306 view materialisation that gives this lambda its return
+> buffer never fires there, and pass 2 — which has the resolved field — mints the buffer and grows
+> the arity. No predicate over the pass-1 tail can separate the two orderings, because the two
+> passes are not reading the same type. So the reservation goes where every type IS resolved,
+> which is what `reserve_late_return_buffers` exists for (#675), and every declared-record lambda
+> is reserved for.
+>
+> A CAPTURE tail is included here where D-clo-14 excludes it from the collection leg, and the
+> asymmetry is a fact about the two deliveries rather than an oversight: a `-> P` return hands
+> back an owned COPY (#306 materialises the view into the buffer), while `-> vector<…> { q.xs }`
+> hands back the capture's own store and has nothing to place.
+>
+> The reserved buffer is BOUND, not renamed onto, and that half is load-bearing. The placeholder
+> is minted between the passes, before pass 2 appends the `__closure` argument, so renaming the
+> attribute onto the work-ref the tail mints puts the callee's argument slots out of the attribute
+> order the CALL SITE lowers against — measured, `CallRef` wrote the closure into the buffer's slot
+> and every call answered a zeroed record. Guard
+> `tests/scripts/1188-a-declared-record-lambda-gets-its-buffer.loft`, whose cells assert the VALUE
+> for that reason: a fix that only stops the abort still passes an exit-code channel.
+
+> **D-clo-15 — OPENED AND CLOSED (2026-08-29, loft#1178): a declared-collection lambda whose
+> tail pass 2 REPLACES aborted the compiler.** `(L-Escape)` says a closure is an ordinary
+> value that may be stored, passed and returned, and `(L-Apply)` that calling one is a call;
+> `g = fn(v: integer) -> vector<integer> { xs = [1, 2]; xs.map(…) }` is both, and it did not
+> compile at all — `H5 two-pass contract: grew a pass-2-only attribute __vdb_2`.
+>
+> The reservation was read off the PASS-1 tail, and this body defeats that read outright: its
+> pass-1 tail is `Var(xs)`, a named local that already owns a store — the exact spelling of
+> the bodies that must NOT get a buffer — while pass 2 lowers the `map` into a fresh one. The
+> two passes are not looking at the same tail, so no predicate over the pass-1 one can
+> separate the rows. Reserving for EVERY declared-collection lambda is what compiles them
+> all, and the two things that blocked it are now closed: `State::fn_return` releases the
+> buffer a callee did not hand back (D-clo-7's fix) and the native dispatch now asks the same
+> question of the VALUE that came back rather than of the deps that declared an intent. The
+> one exception is a fact rather than a prediction — a CAPTURE tail has nothing to deliver
+> (D-clo-14).
+>
+> Two defects had to come out of the way, and each is its own sentence:
+>
+> - a lambda nested in another lambda's body left `last_closure_work_var` set, so the OUTER
+>   fn-ref was mapped to a closure variable living in the INNER lambda's table and `--native`
+>   emitted `var_??` for it. The named-function reset states the same rule one scope out
+>   (*"a lambda inside make_adder leaks last_closure_work_var into the next function
+>   parsed"*); a lambda inside a lambda is that leak within one body.
+> - `--native` could not compile the map row: the desugar's `_map_result_1` is built INSIDE
+>   the comprehension block and handed back from outside it, and a Rust `let` lives where the
+>   emission first reaches it. The interpreter cannot have that — a local is a frame slot
+>   wherever it is written — so it is a property of the EMISSION. Every VIEW a `return` names
+>   is now bound up front, the cure loft#731 gave the iteration scratch for the identical
+>   error. A view only: #354 measured the other half, and hoisting a heap local that OWNS its
+>   store re-inits a fresh one per call that the matched free no longer covers.
+>
+> Guard: `tests/scripts/1178-a-declared-collection-lambda-gets-its-buffer.loft`, which carries
+> all seven rows of the issue's table because the reservation is now unconditional and the
+> rows that must NOT fill a buffer are what says the runtime free carries them.
+
+> **D-clo-14 — OPENED AND CLOSED (2026-08-29, loft#1182): a lambda handing back a place read
+> out of a CAPTURE reserved a return buffer it then ignored.** `(L-CapHeap)` says the captured
+> store belongs to the frame that made it, so there is nothing for the callee to place — and
+> `ref_return`'s ladder had no verdict for that and fell through to `Grow`, so
+> `fn(v: integer) -> vector<integer> { q.xs }` grew a hidden `q` buffer the body never fills.
+>
+> The two backends then disagreed, and that disagreement is the entry. `--interpret` was clean
+> because `State::fn_return` releases any buffer the callee did not hand back (D-clo-7's fix),
+> a RUNTIME check that does not care what the deps claim. `--native` reads the deps:
+> `arm_frees_buf` frees an unfilled `__vc_hbuf` only when the candidate's return deps do NOT
+> name a hidden heap attr, and they do, because the buffer exists. One store leaked per call.
+>
+> `classify_text_dep` has answered this exact question since @PLN85 — `TextDep::SkipCaptured`,
+> *"captured closure var — read from the closure record; never promoted"*. One notion, two
+> ladders, and only the text one could see it. The ref ladder now carries the same verdict.
+>
+> Guard: `tests/scripts/1182-a-captured-place-tail-reserves-no-buffer.loft`, whose native row
+> moves on the leak channel and whose interpret row is INERT — a backend divergence can only
+> move one, which is why `make falsify`'s conservative AND reports NOT falsified for it.
+
+> **D-clo-11 — OPENED AND CLOSED (2026-08-29, loft#1181): a captured STRUCT was TAKEN by the
+> caller's bind, and the same dep was dropped TWICE on its way to the call site.**
+> `(L-CapHeap)` names struct and vector in one breath, so D-clo-10's *"only for a COLLECTION
+> return"* was never a rule — it was where the measurement stopped. `r = s(1)` on
+> `s = fn(v: integer) -> P { cap }` adopted the captured record and the rebind released it;
+> `LOFT_STRICT_STORES=1` reported the use-after-free, and a SECOND capturing lambda in the
+> same function turned it into a wrong answer by landing its closure record on the freed slot.
+>
+> That entry's stated reason — *"a struct return is MATERIALISED into a fresh copy before it
+> leaves the callee"* — is false, and the IR says so in one line: the lambda's body is
+> `return OpGetDbRef(__closure, 0)`. Nothing copies.
+>
+> Two independent drops, and the issue's two recorded repair attempts each failed on the
+> other one:
+>
+> - **the fn-ref VARIABLE kept pass 1's type.** Pass 1 has not parsed the body, so the type
+>   it publishes says the result is owned; pass 2 knows better. `is_equal` collapses deps, so
+>   `change_var_type`'s equality early-return kept the uninformed answer and the call site
+>   never saw the dep at all. A fn-ref slot now ADOPTS a refined return dep, for the reason
+>   the `#663` element width beside it is adopted — same base type, so the frame the two
+>   passes lay out is unchanged.
+> - **`fnref_result_type` read *"an index naming no visible argument"* as the closure.** True
+>   of `__closure` and false of `ref_return`'s `__ref_N`, and BOTH are out of range: `{ cap }`
+>   borrows and `{ sr_make(k) }` owns, spelled identically. D-clo-10 recorded that as
+>   *"no dep-index test can separate them"*, and that is true of a RANGE test and false of a
+>   NAME test — `Argument::hidden` already carries the distinction and its own doc already
+>   states the conclusion (*"should be excluded from dep propagation"*). A lambda now
+>   publishes a return type whose leftover out-of-range index can only be the closure, which
+>   is what lets the borrow be read without over-approximating the mint into a leak.
+>
+> ⚠ **The closure is read only where the lambda's tail is a PLACE** — a slot, or a field /
+> element / capture read out of one. A tail that JOINS hands back the capture on one arm and
+> a fresh store on the other while carrying ONE dep list, and neither reading is right twice:
+> as a borrow the minting arm leaks four stores, as owned the capture arm is released while
+> its variable is live. That is D-clo-13, and the restriction is what keeps this entry from
+> trading one defect for the other.
+>
+> Guard: `tests/scripts/1181-a-captured-struct-is-not-the-callers-to-take.loft`, whose
+> falsification row moves on ONE cell — the over-free is silent until something reuses the
+> slot, so the direct-rebind cells pass on the control build and are scored by
+> `LOFT_STRICT_STORES=1` instead.
+
+> **D-clo-12 — OPENED AND CLOSED (2026-08-29 / 2026-08-30, loft#1185): a FORWARDING function
+> froze the capture its fn-ref argument handed back.** `fn call_it(f: fn(integer) -> P, v: integer) -> P { f(v) }`
+> called with a capture-returning lambda releases the captured record on the caller's rebind.
+> Inside `call_it` the slot is a PARAMETER with a DECLARED fn-type, which carries no deps
+> whatever closure is passed, so the closure read D-clo-11 installed is inert one frame down
+> — the same predicate seen from the other side that D-clo-9 measured for monomorphs.
+> D-clo-9 resolved it at the CALL SITE, where the caller named the closure it passed; here
+> the forwarding function's return type is computed ONCE for every caller, so no per-argument
+> fact can reach it. Both routes that entry proposed were measured and neither works: reading
+> a fn-typed PARAMETER as capturing moves nothing, because the dep still never reaches the
+> published `-> P`.
+>
+> **So the value is COPIED before it escapes** — `classify_reference_delivery` answers
+> `MaterializeView` for a tail that calls through a fn-ref parameter, the same rewrite it
+> already applies to a tail pointing into something the callee frees. The caller then owns an
+> ordinary fresh record and the capture is untouched, at the cost of one record copy on the
+> forwarding path, which is the cost this entry named.
+>
+> The copy alone would orphan the other arm: a forwarded lambda that MINTS its return leaves a
+> store nobody owns once the copy is taken. `Store::alloc_serial` — a monotonic stamp compared
+> against a snapshot taken when the fn-ref call began — separates a store minted DURING the
+> call from a capture that predates it, and the minted one joins the hand-up list loft#1183
+> established. That comparison is the whole of what no static dep list could answer, and slot
+> numbers being reused is why nothing cheaper can stand in for it.
+>
+> Guard: `tests/scripts/1185-a-forwarded-fnref-result-is-not-the-callers.loft`, with the mint
+> row as its control.
+>
+> ⚠ **The BOUND spelling is not closed**: `{ r = f(v); r }` binds before returning, so the tail
+> is a `Var` and no tail-shaped rule reaches it — 4 use-after-free reads either side. Reaching
+> it means unpicking NRVO, since `r` is itself the return buffer there and a copy would target
+> its own source. @PLN150.
+
+> **D-clo-12 / D-clo-13 — the two are ONE question, and every static reading of it has now
+> been measured in both directions (2026-08-30).** The question is: *does a fn-ref call hand
+> back a store the caller may free?* The callee answers it per RUN — a capture on one arm, its
+> own mint on the other — and each static answer trades one defect for the other:
+>
+> | reading | capture arm | mint arm |
+> |---|---|---|
+> | OWNED (today) | use-after-free (loft#1186 present, loft#1185) | clean |
+> | BORROW (`place_tail` true) | clean | leaks one store per call |
+>
+> Both rows are measured on both backends. The mint row is not an artefact of the `??`: the
+> forwarding case's `call_it(fresh, 1)` — the row loft#1185 records as clean — is the same mint
+> under the same reading, and a borrow there has nothing to free it either.
+>
+> A third reading was tried and is ruled out for a different reason: letting
+> `capturing_fnref_var` answer for a fn-typed PARAMETER, so a forwarding frame's tail borrows
+> the closure its argument carries. Measured, it moves nothing — loft#1185 keeps its seven
+> use-after-free reads on both backends — because the dep never reaches the forwarding
+> function's PUBLISHED return: `fn call_it(f: fn(integer) -> P, v) -> P` still declares a bare
+> `-> P`. The tail's dep is a FRAME dep on `f`, and nothing converts it to the attribute index
+> a caller could map. So the forwarding case is not one predicate short; the fact has no route
+> through a return type computed once for every caller.
+>
+> **So the answer is not a dep list, and it is not a return BUFFER either** (see the D-clo-13
+> entry below: the store handed back was never the call site's buffer). The fact exists at
+> RUN time and in ONE place — the callee's own `OpFreeRefIfDistinct(w, ret)`, which compares
+> the store it minted against the store it is returning. What is missing is a channel from
+> there to the caller's free, and the tree already has the shape of one: `@PLN90` #495's
+> `witness_vars` / `_own_store_<name>`, a per-run witness for a local whose ownership differs
+> per PATH. Here it would differ per CALL, so the witness has to be set from the callee's
+> answer rather than from the caller's own assignments. That is a plan, not a predicate —
+> **@PLN150**, which carries the measured table above, the three ruled-out repairs, and both
+> candidate channels.
+
+> **D-clo-12 / D-clo-13 — the static reading was RE-MEASURED against this tree (2026-08-29),
+> and the cure is now decided.**  Setting `published_ret_type`'s `place_tail` unconditionally
+> true — that is, answering the closure question for a JOIN tail as well — makes loft#1186's
+> PRESENT arm clean on both backends and leaks four stores on the ABSENT arm, one per call, on
+> both.  So D-clo-13's claim is not a historical note about the tree it was written on: it
+> holds after loft#1179's runtime free and after loft#1183's hand-up, and no reading of one dep
+> list serves both arms.  loft#1185 is unmoved by that switch (still seven use-after-free reads
+> on both backends), because a forwarding frame's return type is computed once for every
+> caller and carries nothing about the closure its ARGUMENT held.
+>
+> **The cure is the one loft#1186 names, and it is an ABI change rather than a classification
+> fix: the fn-ref call site mints its heap return buffer as a CALLER LOCAL** — the symmetric
+> twin of `push_fnref_text_buffers` / `fnref_text_buffer_vars`, with
+> `Data::fnref_text_buffers`' widest-candidate-then-trim shape as the precedent.  Today the
+> buffer is allocated inside `State::fn_call_ref` at run time, which is why `fnref_bufs` has to
+> track it by frame depth at all.  With a caller local:
+>
+> - the call's RESULT is published as a borrow of that buffer, so a destination local never
+>   adopts whatever store came back — which is what closes both of D-clo-13's arms at once:
+>   the absent arm's fresh store is the buffer (freed at the caller's scope exit) and the
+>   present arm's capture is simply not the caller's to free;
+> - a FORWARDING frame gets the same buffer in its own scope, so `return f(v)` is a return of a
+>   borrow of a local and the existing #306 materialise copies it into the forwarder's own
+>   return buffer — D-clo-12 closes as a consequence, at the cost of one record copy;
+> - `--native`'s dispatch arm stops needing `__vc_hbuf` at all, which is loft#1183's remaining
+>   half.
+>
+> The cost is one heap buffer per fn-ref call site that may receive a heap delivery, and one
+> extra record copy on the forwarding path.  The `&text` half has paid exactly that since
+> loft#1116.
+>
+> **D-clo-13 — OPENED AND CLOSED (2026-08-29 / 2026-08-30, loft#1186): a lambda whose tail
+> JOINS a capture with a mint had one dep list for two ownerships.** `fn(n: integer) -> P { cap ?? P { v: -1 } }` hands
+> back the captured record when the subject is present and a store of its OWN when it is
+> absent.
+>
+> ⚠ **The absent arm was written here as handing back the call site's return buffer, and it
+> does not** (re-measured 2026-08-30, `7dfafc22`). The emitted body takes `__retbuf`, never
+> writes it, mints `__ref_p2_1` with `OpDatabase`, and keeps that store precisely when it is
+> the one being returned — its own `if __ref_p2_1 != __ret_1 { free }`. So the store the
+> borrow reading leaks is a CALLEE MINT, and no rule about who owns a call site's return
+> buffer can reach it: a caller-owned buffer the callee ignores changes nothing about the
+> store that actually comes back. The re-measurement is on the issue, together with what it
+> leaves standing — the callee computes *"the store I minted is the one I am returning"* in
+> one place, which is where an owner could be attached without a new ABI. Read as owned, the present arm is a use-after-free; read as
+> a borrow, the absent arm leaks one store per call. The NAMED twin is clean on BOTH arms and
+> says what the cure is: a direct call site mints the return buffer as a caller LOCAL that
+> scope exit frees, so whichever arm runs the buffer has an owner. The fn-ref path has no
+> such local. The cure is the symmetric twin of `push_fnref_text_buffers` — a fn-ref call site
+> that may receive a heap delivery owns that buffer the way it already owns its `&text` ones,
+> with `Data::fnref_text_buffers`' widest-candidate-then-trim shape as the precedent for the
+> adaptive ABI.
+
+> **The cure was not a third reading of the dep list.** The callee already computes the
+> answer, at run time and in one place: the two operands of the free that guards its own mint
+> name ONE store exactly when it is handing that store back. `OpFreeRefOrHandUp` is that free
+> with an owner on the adoption leg — the store joins the list a delivered return buffer uses
+> and `release_fnref_bufs` carries it up, by the rule loft#1183 already established. The
+> distinct leg is untouched, so a function whose return does not borrow keeps the op it had.
+>
+> With the mint owned, the BORROW reading is right for both arms, and `published_ret_type` now
+> keeps the `__closure` index for a JOIN tail with a place arm as well as for a tail that
+> cannot join. `--native` needed one more thing to agree: a REFERENCE-returning fn-ref call
+> was handed the null sentinel where the interpreter has always allocated a buffer, so the
+> store the callee materialised had no owner on that backend alone. It gets a real buffer now,
+> which is also what makes the comparison askable there.
+>
+> Guard: `tests/scripts/1186-a-join-tail-hands-its-mint-an-owner.loft`, whose both-arms cell —
+> one closure, one call site, the arm decided by the argument — moves on BOTH channels at
+> `c3545888`: use-after-free reads interpreted, a leak natively.
+>
+> ⚠ **loft#1185 is NOT closed by this**, and the difference is the point: a forwarding frame's
+> return type is computed once for every caller, so the fact never reaches it. That is D-clo-12
+> and @PLN150's second channel.
+
+> **D-clo-10 — OPENED AND CLOSED (2026-08-29, loft#1180): a captured COLLECTION was TAKEN by
+> the caller's bind.** `(L-CapHeap)` says a captured heap value is SHARED — the caller may read
+> it, never take it. `r = g(7)` on `g = fn(v: integer) -> vector<integer> { cap }` adopted the
+> store and released it at scope exit, so `cap` answered EMPTY from the second call onward, on
+> both backends, with nothing saying so.
+>
+> `fnref_result_type` maps a fn-ref call's return deps through the caller's actual arguments
+> and DROPPED any index naming no visible one, on the stated grounds that *"the adaptive fn-ref
+> ABI allocates those buffers at runtime, so the value arrives OWNED"*. That is true of a
+> hidden work buffer and false of `__closure`, which is the CALLER's own record — D-clo-7's
+> sentence one more time, *a dep dropped as uninteresting is not a dep that was never there*,
+> in a third position after the `??`-lift (loft#1114) and the fn-ref tail (loft#1176). The
+> dropped index now becomes a dep on the fn-ref VARIABLE, which is where the caller reaches
+> its closure.
+>
+> Two restrictions, both measurements rather than caution:
+>
+> - only for a CAPTURING slot, read off the fn-ref TYPE's own deps. That predicate means what
+>   it says HERE, where the slot is a caller local whose type was INFERRED at the bind; it is
+>   inert one frame down, where the same slot is a parameter with a DECLARED fn-type
+>   (loft#1176 measured that, and the two entries are the same predicate seen from both sides).
+> - only for a COLLECTION return. ⚠ **Both halves of this restriction were wrong, and D-clo-11
+>   closed it a few hours later.** A struct return is NOT materialised into a fresh copy —
+>   the lambda's body is `return OpGetDbRef(__closure, 0)` and nothing copies — so
+>   `fn(i: integer) -> P { cap }` was a use-after-free, not a value that "was always right".
+>   And *"no dep-index test can separate them"* is true of a RANGE test only: the
+>   out-of-range index is `__closure` for `{ cap }` and `__ref_N` for `{ sr_make(k) }`, and
+>   `Argument::hidden` tells them apart by NAME. The leak this restriction was avoiding —
+>   eleven stores in `717-closure-struct-return.loft` — is real and is what the name test
+>   removes.
+>
+> ⚠ The captured-FIELD spelling (`{ q.xs }`) answers correctly now and still LEAKS one store
+> per call on `--native` — loft#1182, a different mechanism: `ref_return` promotes the borrowed
+> local into the return attribute, so the callee declares it delivers through a buffer it then
+> ignores. The INLINE spelling was correct throughout, which is why this was first filed as a
+> leak — nothing binds the result, so nothing adopts it.
+>
+> Guard: `tests/scripts/1180-a-captured-collection-is-not-the-callers-to-take.loft`.
+
+> **D-clo-9 — OPENED AND CLOSED (2026-08-29, loft#1176): a captured record was FREED by a
+> caller that lifted a fn-ref tail.** `(L-CapHeap)` says a captured heap value is SHARED, and
+> a value the outer scope still names cannot be released by somebody else's scope exit.
+>
+> `fn once(x: P, f: fn(P) -> P) -> P { f(x) }` hands back a fresh store, the caller's own
+> argument, or a record the closure CAPTURED, and its `-> P` reads the same in all three.
+> The caller decided from `returns_borrowed_view`, the DEPS proxy: a capture-returning
+> lambda's return dep names the hidden `__closure` attribute, and a hidden attr reads as
+> *"not a borrow"*. So the caller lifted the result and freed it — the captured record
+> answered another value on the next iteration and garbage once the scope ended, on BOTH
+> backends. This is D-clo-7's licence exactly (*"a dep dropped as uninteresting is not a dep
+> that was never there"*), in the direct-`Call` position rather than the `??` one that entry
+> closed, and the `__retbuf` exemption made it worse: `{ f(x) }` never delivers INTO that
+> buffer, so the premise that the lifted temp is the caller's own allocation is false there.
+>
+> The mirror image was live at the same time and is what the issue was filed for: the
+> GENERIC spelling of the same source under-lifted, because the freshness proof it uses is
+> read off the monomorph's body and a fn-ref's callee is a runtime value there — one leaked
+> record per inline call. **One resolution answers both.** The callee's fact is unreachable
+> from inside the callee and reachable at the CALL SITE, where the caller named the closure
+> it passed: `fnref_target` resolves the definition and its own body-shaped freshness proof
+> decides. Both ownership reads are needed and neither is redundant — the deps proxy catches
+> a lambda handing back its own PARAMETER, the body proof catches one handing back a CAPTURE.
+> An unresolved or ambiguous slot declines, which costs the leak that was already there.
+>
+> ⚠ **The fn-ref must be a caller LOCAL.** `fnref_target` maps variable slots, so one held in
+> a struct field (`once(P { n: 41 }, h.f)`) resolves to nothing and declines — one leaked
+> record per call, unchanged by this fix and recorded here rather than left implicit.
+>
+> Guard: `tests/scripts/1176-a-monomorph-whose-tail-is-a-fn-ref-call.loft`, whose two halves
+> fail on DIFFERENT channels (the over-lift on an assertion, the under-lift on the exit leak)
+> and whose header says which of them the falsification row can and cannot score.
 
 > **D-clo-8 — OPENED AND CLOSED (2026-08-28, loft#1131): a captured `vector<(…)>` was
 > UNPACKED instead of shared.** `(L-CapHeap)` says a captured heap value is SHARED, and the
@@ -207,11 +574,33 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > does not arrive owned: **a dep dropped as uninteresting is not a dep that was never there.**
 > The lift now declines for a CAPTURING fn-ref and still fires for one that captures nothing.
 >
-> **OPEN: the leak.** A lambda that BINDS its return to a local (`d = q ?? P{}; d`) leaks one
-> store, as does a lambda's `??`-default store discarded inline. Neither needs a capture and
-> the NAMED twin is clean for both, which is what separates them from this entry: a direct
-> call site mints the return buffer as a caller LOCAL it frees at scope exit, while the
-> fn-ref path has `fn_call_ref` allocate a store the rebinding body never adopts.
+> **The leak — first half CLOSED (2026-08-29, loft#1179), second half OPEN.** Both halves
+> are the same sentence: *a direct call site mints the return buffer as a caller LOCAL it
+> frees at scope exit, and the fn-ref path had no equivalent.*
+>
+> CLOSED — a lambda that BINDS its return to a local (`d = q ?? P{}; d`) leaked one store per
+> call. `fn_call_ref` allocates one store per hidden return attribute because it cannot know
+> which function the slot holds, and a callee that delivers its return some other way — it
+> minted its own store, or the delivery slot was rebound to a borrow — left that store owned
+> by nobody. `--native` never had it: its dispatch passes the null sentinel for a Reference
+> return and frees an unfilled `__vc_hbuf` for a vector one, which is the same fact this side
+> was missing. `State::fn_return` now releases every buffer the returning frame's call site
+> allocated, keeping the one the callee handed back — identified by STORE, because a callee
+> that delivered through the buffer may answer a record or a position inside it.
+>
+> That one free also closed loft#1180 (a lambda returning a captured struct's vector FIELD,
+> both spellings) and made loft#1178's reservation safe to widen: reserving a return buffer
+> for EVERY declared-collection lambda was already correct on `--native`, and the only thing
+> wrong with it here was the unowned buffer.
+>
+> **OPEN: a lambda's `??`-default store discarded INLINE.** `g = fn(q: P?) -> P { q ?? P{} }`
+> called as `g(null).n` leaks the default arm's store, one per call, on BOTH backends; the
+> BOUND spelling is clean, and so is the named twin. The lambda's return dep names its
+> parameter on the subject arm, so `returns_borrowed_view` calls the whole thing a borrow and
+> `callref_owned_return` declines — the mint arm pays for the borrow arm's caution. It is a
+> JOIN, and the direct-call branch beside it already knows what to do with one
+> (`use_analysis::ownership_of`, lifting a `Join` only where the following bind is the runtime
+> guard); the `CallRef` route does not ask.
 >
 > Guarded by `tests/scripts/1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft`.
 

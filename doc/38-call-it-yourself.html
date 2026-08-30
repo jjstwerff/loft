@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Call it yourself — Loft, a programming language for small browser games</title>
+  <meta name="description" content="A page you drive, not one you read">
+<link rel="canonical" href="https://loft-lang.org/loft/38-call-it-yourself.html">
+<meta property="og:title" content="Call it yourself — Loft, a programming language for small browser games">
+<meta property="og:description" content="A page you drive, not one you read">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/38-call-it-yourself.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Call it yourself — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="A page you drive, not one you read">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="cur">Call it yourself</span> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Call it yourself</h1>
+<article>
+<p>Every other page here shows you loft.  This one hands it to you. The functions below are compiled and live in the panel at the bottom of the page: type a call, press enter, and loft answers.  Nothing is a transcript — the number you see is the one your browser just computed.</p>
+<h2 id="what-to-try-first">What to try first</h2>
+<p><code>fib(10)</code> is the shortest way to be sure the panel is real.  Change the 10 and the answer changes; ask for <code>fib(30)</code> and you will wait a moment, because this is the naive recursion and it really does make that many calls.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">fib</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  <span class="kw">if</span> n &lt; <span class="nm">2</span> {
+    <span class="kw">return</span> n;
+  }
+  <span class="fn-call">fib</span>(n - <span class="nm">1</span>) + <span class="fn-call">fib</span>(n - <span class="nm">2</span>)
+}</code></pre>
+<h2 id="numbers-with-a-shape">Numbers with a shape</h2>
+<p><code>nth_prime(1)</code> is 2, <code>nth_prime(10)</code> is 29.  Try to guess <code>nth_prime(100)</code> before you ask for it — the primes thin out faster than most people expect.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">is_prime</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {
+  <span class="kw">if</span> n &lt; <span class="nm">2</span> {
+    <span class="kw">return</span> <span class="kw">false</span>;
+  }
+  d = <span class="nm">2</span>;
+  while d * d &lt;= n {
+    <span class="kw">if</span> n % d == <span class="nm">0</span> {
+      <span class="kw">return</span> <span class="kw">false</span>;
+    }
+    d += <span class="nm">1</span>;
+  }
+  <span class="kw">true</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">nth_prime</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  found = <span class="nm">0</span>;
+  candidate = <span class="nm">1</span>;
+  while found &lt; n {
+    candidate += <span class="nm">1</span>;
+    <span class="kw">if</span> <span class="fn-call">is_prime</span>(candidate) {
+      found += <span class="nm">1</span>;
+    }
+  }
+  candidate
+}</code></pre>
+<h2 id="text-goes-in">Text goes in</h2>
+<p><code>vowels("your name here")</code> counts the vowels in whatever you type.  The argument is a text and the answer is a number, which is the shape the panel renders today — see the note at the end of the page.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">vowels</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  n = <span class="nm">0</span>;
+  <span class="kw">for</span> c <span class="kw">in</span> s {
+    <span class="kw">if</span> c == <span class="ch">'a'</span> || c == <span class="ch">'e'</span> || c == <span class="ch">'i'</span> || c == <span class="ch">'o'</span> || c == <span class="ch">'u'</span> {
+      n += <span class="nm">1</span>;
+    }
+  }
+  n
+}</code></pre>
+<h2 id="a-struct-comes-back">A struct comes back</h2>
+<p><code>stats(3, 17)</code> answers <code>{"lo":3,"hi":17,"span":14}</code> — a whole record, rendered as JSON, from one call.  Give it the arguments in the wrong order and it still answers correctly, which is the point of it.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Span</span> {
+  lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  span: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">stats</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Span</span> {
+  lo = <span class="kw">if</span> a &lt; b { a } <span class="kw">else</span> { b };
+  hi = <span class="kw">if</span> a &lt; b { b } <span class="kw">else</span> { a };
+  <span class="en">Span</span> { lo: lo, hi: hi, span: hi - lo }
+}</code></pre>
+<h2 id="pausing-inside-a-run">Pausing inside a run</h2>
+<p>The panel can also stop the program mid-flight.  Click a line number in the code above to set a breakpoint, press Run, and the panel lists the variables that line can see — then the same prompt evaluates against THAT frame, so a call like <code>fib(step)</code> uses the <code>step</code> the paused function is holding.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">walk_to</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  total = <span class="nm">0</span>;
+  step = <span class="nm">0</span>;
+  while step &lt; <span class="kw">limit</span> {
+    step += <span class="nm">1</span>;
+    total += <span class="fn-call">fib</span>(step);
+  }
+  total
+}</code></pre>
+<h2 id="what-the-panel-cannot-do-yet">What the panel cannot do yet</h2>
+<p>An expression whose value is a text or a vector answers <code>&lt;unavailable&gt;</code> rather than a value: the browser evaluator reads a result off the paused frame, and only a number, a character, a boolean or a struct survives that trip (loft#1187).  So <code>vowels("hello")</code> answers 2 and <code>stats(1, 9)</code> answers a record, while a function returning a text does not — which is why every function on this page hands back one of the shapes that works.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>The demonstration comes first and the checks follow it, so a reader who presses Run sees an answer straight away — the panel stops on main's LAST line, and a program whose only print IS that line would pause with nothing shown yet.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"</span>hello\<span class="st">")={vowels(\"</span>hello\<span class="st">")}\n"</span>);</code></pre>
+<p>The page is a real program, so these run on both backends like every other page here, and an example that stops being true stops compiling.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">10</span>) == <span class="nm">55</span>, <span class="st">"fib(10)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">1</span>) == <span class="nm">1</span> &amp;&amp; <span class="fn-call">fib</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"fib base cases"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">nth_prime</span>(<span class="nm">1</span>) == <span class="nm">2</span>, <span class="st">"the first prime is 2"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">nth_prime</span>(<span class="nm">10</span>) == <span class="nm">29</span>, <span class="st">"the tenth prime is 29"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">is_prime</span>(<span class="nm">1</span>) &amp;&amp; <span class="fn-call">is_prime</span>(<span class="nm">2</span>) &amp;&amp; !<span class="fn-call">is_prime</span>(<span class="nm">9</span>), <span class="st">"is_prime edges"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">"hello"</span>) == <span class="nm">2</span>, <span class="st">"hello has two vowels"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">""</span>) == <span class="nm">0</span>, <span class="st">"no text, no vowels"</span>);
+  s = <span class="fn-call">stats</span>(<span class="nm">17</span>, <span class="nm">3</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s.lo == <span class="nm">3</span> &amp;&amp; s.hi == <span class="nm">17</span> &amp;&amp; s.span == <span class="nm">14</span>, <span class="st">"stats orders its arguments"</span>);</code></pre>
+<p>fib(1..4) is 1 + 1 + 2 + 3.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">walk_to</span>(<span class="nm">4</span>) == <span class="nm">7</span>, <span class="st">"walk_to sums the first four"</span>);
+}</code></pre>
+<section id="loft-panel" class="loft-panel" hidden>
+<h2>Run it yourself</h2>
+<p class="lp-note">This page is a loft program. It runs here, in your browser — press Run, then ask it something.</p>
+<div class="lp-bar"><button id="lp-run" disabled>▶ Run</button><button id="lp-step" disabled>Step</button><button id="lp-resume" disabled>Resume</button><span id="lp-status" class="lp-status">loading…</span></div>
+<pre id="lp-output" class="lp-output"></pre>
+<div id="lp-frame" class="lp-frame" hidden></div>
+<div id="lp-callables" class="lp-callables" hidden></div>
+<div class="lp-prompt"><span class="lp-caret">&gt;</span><input id="lp-input" type="text" autocomplete="off" spellcheck="false" disabled placeholder="an expression — it is evaluated where the program stopped"></div>
+<div id="lp-log" class="lp-log"></div>
+<details class="lp-lines"><summary>Stop on a line</summary><ol id="lp-src" class="lp-src"></ol></details>
+</section>
+<pre id="lp-source" hidden>// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Call it yourself
+// @TITLE: A page you drive, not one you read
+// Every other page here shows you loft.  This one hands it to you.
+// The functions below are compiled and live in the panel at the bottom of the
+// page: type a call, press enter, and loft answers.  Nothing is a transcript —
+// the number you see is the one your browser just computed.
+// ## What to try first
+// `fib(10)` is the shortest way to be sure the panel is real.  Change the 10 and
+// the answer changes; ask for `fib(30)` and you will wait a moment, because this
+// is the naive recursion and it really does make that many calls.
+fn fib(n: integer) -&gt; integer {
+  if n &lt; 2 {
+    return n;
+  }
+  fib(n - 1) + fib(n - 2)
+}
+
+// ## Numbers with a shape
+// `nth_prime(1)` is 2, `nth_prime(10)` is 29.  Try to guess `nth_prime(100)`
+// before you ask for it — the primes thin out faster than most people expect.
+fn is_prime(n: integer) -&gt; boolean {
+  if n &lt; 2 {
+    return false;
+  }
+  d = 2;
+  while d * d &lt;= n {
+    if n % d == 0 {
+      return false;
+    }
+    d += 1;
+  }
+  true
+}
+
+fn nth_prime(n: integer) -&gt; integer {
+  found = 0;
+  candidate = 1;
+  while found &lt; n {
+    candidate += 1;
+    if is_prime(candidate) {
+      found += 1;
+    }
+  }
+  candidate
+}
+
+// ## Text goes in
+// `vowels("your name here")` counts the vowels in whatever you type.  The
+// argument is a text and the answer is a number, which is the shape the panel
+// renders today — see the note at the end of the page.
+fn vowels(s: text) -&gt; integer {
+  n = 0;
+  for c in s {
+    if c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' {
+      n += 1;
+    }
+  }
+  n
+}
+
+// ## A struct comes back
+// `stats(3, 17)` answers `{"lo":3,"hi":17,"span":14}` — a whole record, rendered
+// as JSON, from one call.  Give it the arguments in the wrong order and it still
+// answers correctly, which is the point of it.
+struct Span {
+  lo: integer,
+  hi: integer,
+  span: integer,
+}
+
+fn stats(a: integer, b: integer) -&gt; Span {
+  lo = if a &lt; b { a } else { b };
+  hi = if a &lt; b { b } else { a };
+  Span { lo: lo, hi: hi, span: hi - lo }
+}
+
+// ## Pausing inside a run
+// The panel can also stop the program mid-flight.  Click a line number in the
+// code above to set a breakpoint, press Run, and the panel lists the variables
+// that line can see — then the same prompt evaluates against THAT frame, so a
+// call like `fib(step)` uses the `step` the paused function is holding.
+fn walk_to(limit: integer) -&gt; integer {
+  total = 0;
+  step = 0;
+  while step &lt; limit {
+    step += 1;
+    total += fib(step);
+  }
+  total
+}
+
+// ## What the panel cannot do yet
+// An expression whose value is a text or a vector answers `&lt;unavailable&gt;` rather
+// than a value: the browser evaluator reads a result off the paused frame, and
+// only a number, a character, a boolean or a struct survives that trip
+// (loft#1187).  So `vowels("hello")` answers 2 and `stats(1, 9)` answers a
+// record, while a function returning a text does not — which is why every
+// function on this page hands back one of the shapes that works.
+fn main() {
+  // The demonstration comes first and the checks follow it, so a reader who presses
+  // Run sees an answer straight away — the panel stops on main's LAST line, and a
+  // program whose only print IS that line would pause with nothing shown yet.
+  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"hello\")={vowels(\"hello\")}\n");
+  // The page is a real program, so these run on both backends like every other page
+  // here, and an example that stops being true stops compiling.
+  assert(fib(10) == 55, "fib(10)");
+  assert(fib(1) == 1 &amp;&amp; fib(0) == 0, "fib base cases");
+  assert(nth_prime(1) == 2, "the first prime is 2");
+  assert(nth_prime(10) == 29, "the tenth prime is 29");
+  assert(!is_prime(1) &amp;&amp; is_prime(2) &amp;&amp; !is_prime(9), "is_prime edges");
+  assert(vowels("hello") == 2, "hello has two vowels");
+  assert(vowels("") == 0, "no text, no vowels");
+  s = stats(17, 3);
+  assert(s.lo == 3 &amp;&amp; s.hi == 17 &amp;&amp; s.span == 14, "stats orders its arguments");
+  // fib(1..4) is 1 + 1 + 2 + 3.
+  assert(walk_to(4) == 7, "walk_to sums the first four");
+}
+</pre>
+<style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>
+<script type="module" src="loft-panel.js"></script>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

@@ -562,8 +562,17 @@ println("json={o:j}");            // JSON format
 println("pretty={o:#}");          // pretty-printed multi-line
 println("padded={n:>5}");         // right-align width 5
 println("zero={n:03}");           // zero-padded width 3
-println("{{literal braces}}");    // escape { } by doubling
+println("{{literal braces}}");    // escape { } by doubling — see the warning below
 ```
+
+**A literal `{` in a string is an interpolation hole.** `"[{r:1,g:2}]"` is read as a hole
+named `r` with the spec `1,g:2`, and the error names the FORMATTER, not the brace. Any text
+containing braces — JSON, a rendered struct, a code sample — must double them: `{{` and `}}`.
+
+**A format spec tunes what the value RENDERS as, so it works on every type**, not just
+numbers and text: `{c:>5}` pads a character, `{v:>12}` a vector, `{p:*^16}` a struct. The
+flags that choose the rendering (`#`, `:j`) are separate from width and alignment and combine
+with them.
 
 ### Backtick strings (`` `...` ``)
 
@@ -736,6 +745,12 @@ short names (`i`, `e`, `n`) are fine and read better.
 Use `_` for an unused loop variable to keep the build warning-clean.
 
 ---
+
+## Reserved words with no implementation
+
+`debug_assert` is a reserved keyword and does nothing yet — using it in any position is a
+compile error naming the reservation. Use `assert(cond, "message")`, and do not use
+`debug_assert` as a variable name. `sizeof(Type)` IS implemented (`sizeof(integer)` is 8).
 
 ## Builtin names — shadowing rules (@PLN22 Phase 2)
 
@@ -1036,6 +1051,23 @@ when-to-reach-for-which:
 
 ---
 
+## The entry point, and reading arguments
+
+```loft
+fn main() { println("hi"); }                 // the usual form
+fn main(args: vector<text>) {                // the invocation arguments
+  for a in args { println(a); }              // `loft p.loft Ada Grace` → Ada, Grace
+}
+```
+
+**One `vector<text>` parameter is the ONLY supported shape.** It works on both backends.
+Any other spelling is accepted by the parser and never filled — `main(who: text)` reads
+`""`, `main(a: integer, b: integer)` reads garbage, and a `text` among two parameters
+crashes with a corrupt store reference (loft#1172). There is no `args()` builtin.
+
+A file with no `main` is a library: the interpreter runs nothing, and `--native`
+compile-checks it rather than linking.
+
 ## CLI invocation
 
 ```bash
@@ -1044,7 +1076,7 @@ loft --native --path /path/to/repo/ file.loft               # compile + run nati
 loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 ```
 
-**`--path` must end with a trailing slash.**
+`--path` takes the directory containing `default/`; a trailing slash is optional.
 
 ---
 
@@ -1057,7 +1089,6 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] `len`, `sorted`, `ticks`, `round`, `map`, `filter`, `reduce` not used as variable names
 - [ ] All `use` imports appear before any other declarations
 - [ ] No `long` type / no `l` literal suffix — `integer` is i64; literals are plain (`86400000`), `f.size` compares with `0`
-- [ ] `--path` ends with `/` in CLI calls
 - [ ] String type in struct fields is `text`, not `string`
 - [ ] No `character == text` comparisons — use `"{c}" == t`
 - [ ] Never reassign a text parameter — copy to local first

@@ -492,6 +492,26 @@ rebuild-native-cdylibs:
 TEST_SCRATCH := /var/tmp/loft-test-scratch-$(shell printf '%s' "$(CURDIR)" | cksum | cut -d' ' -f1)
 TEST_ENV := TMPDIR=$(TEST_SCRATCH) LOFT_TMPDIR=$(TEST_SCRATCH)
 
+# How many loft gates are live on this box right now, counting this checkout's own
+# claim — the divisor the CI throttle shares its parallelism by.
+#
+# `ci-guard` already DETECTS a sibling gate and it is already mutual (every run scans
+# `../*/` for a live claim).  What it did was warn, and a warning does not stop two
+# gates asking the box for 2 x $(nproc) rustc processes at once.  On 24 threads and
+# 61 GiB that is the shape that reaches the memory ceiling: rustc peaks over a GiB on
+# the big crates, and `user@1000.service` is `ManagedOOMMemoryPressure=kill` at 90%
+# (`/etc/systemd/oomd.conf.d/50-relax.conf`), so the kill lands on whatever the slice
+# is running — an agent session as readily as the compile that caused it.
+#
+# Counted, not assumed: a claim whose pid is dead does not count, the same liveness
+# test `ci-guard` uses, so a killed run cannot throttle every later one.
+# ⚠ Deduplicated by REALPATH, and that is not a detail: `../*/` matches this checkout
+# too, so a naive loop counts our own claim twice and halves the box for a gate that is
+# alone on it.  Measured while writing this — no claims answered 1, one live claim
+# answered 3.  `ci-guard`'s own sibling loop skips self the same way.
+CI_LIVE_GATES = $$( n=0; seen=""; for f in .ci-running ../*/.ci-running; do [ -f "$$f" ] || continue; d=$$(cd "$$(dirname "$$f")" 2>/dev/null && pwd -P) || continue; case " $$seen " in *" $$d "*) continue;; esac; seen="$$seen $$d"; kill -0 "$$(cat "$$f" 2>/dev/null)" 2>/dev/null && n=$$((n+1)); done; [ $$n -lt 1 ] && n=1; echo $$n )
+
+
 # Speed REPORT for the slow tests — never a gate.  `speed` measures the tests
 # that carry a `// @speed` annotation, one at a time (parallel wall-clock is
 # mostly contention), best of two runs, and prints what drifted.  `speed-discover`
@@ -578,6 +598,8 @@ iter:
 # `make wasm-html-test`) afterwards if you need the --html variant back.
 wasm:
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg --release -- --features wasm --no-default-features
+	@./scripts/wasm_bundle_stamp.sh > doc/pkg-src.stamp
+	@echo "  wrote doc/pkg-src.stamp ($$(cut -c1-12 doc/pkg-src.stamp)…)"
 
 # @PLN117 — the THREADED gallery bundle: par() over real Web Worker threads.
 # Same shape as `make wasm` but with the wasm-threads recipe (see `wasm-mt` for
@@ -1892,6 +1914,9 @@ ci: ci-guard
 	# touching the wasm bundle.  Other dev-only suites (test-packages,
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	mkdir -p $(TEST_SCRATCH) && export $(TEST_ENV) && \
+	gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); [ $$jobs -lt 2 ] && jobs=2; \
+	export CARGO_BUILD_JOBS=$$jobs NEXTEST_TEST_THREADS=$$jobs; \
+	{ [ "$${gates:-1}" -gt 1 ] && echo "make ci: THROTTLED to $$jobs of $$(nproc) threads — $$gates gates live on this box" || echo "make ci: $$jobs of $$(nproc) threads (sole gate)"; } | tee -a result.txt && \
 	$(MAKE) rebuild-native-cdylibs >> result.txt 2>&1 && \
 	cargo fmt -- --check >> result.txt 2>&1 && \
 	cargo clippy -- -D warnings >> result.txt 2>&1 && \
@@ -1905,6 +1930,8 @@ ci: ci-guard
 	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random >> result.txt 2>&1 && \
 	python3 scripts/gen_target_surface.py --check >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
+	gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); [ $$jobs -lt 2 ] && jobs=2; export NEXTEST_TEST_THREADS=$$jobs; \
+	echo "make ci: tests on $$jobs thread(s), $$gates gate(s) live" >> result.txt && \
 	cargo nextest run --profile ci >> result.txt 2>&1 && \
 	echo 'CI-RESULT: ALL GATES PASSED' >> result.txt || \
 	{ echo 'CI-RESULT: FAILED — see the last failing command above in result.txt' >> result.txt; rm -f .ci-running; exit 1; }
@@ -2054,9 +2081,38 @@ bench:
 	cargo build --release -q
 	bash bench/run_bench.sh --warmup
 
-pdf:
+.PHONY: doc doc-packages
+# The whole doc site, the way the release builds it (@PLN149).
+#
+# `gendoc` alone is not that: tiers 1 and 3 — the library guide and the source browser —
+# render the EXTRACTED package under `~/.loft/registry/`, which the registry index does
+# not carry.  On a box whose cache is empty every page still generates, and 42 of them
+# say "not on this build box" instead of showing the source.  Filling the cache first is
+# what makes a local build and the published site the same artefact.
+doc: doc-packages  ## Build doc/*.html the way the release does (cache first, then gendoc)
 	cargo run --bin gendoc
-	typst compile doc/loft-reference.typ doc/loft-reference.pdf
+
+doc-packages:  ## Fetch every published package the doc build renders (no-op once cached)
+	@cargo build --release --bin loft
+	@scripts/fetch-doc-packages.sh target/release/loft
+
+# Typst stamps a creation date into the PDF, so an unchanged document still produces a
+# different file on every build and a COMMITTED pdf churns in every diff.  Pinning
+# SOURCE_DATE_EPOCH to the source's last commit makes the output depend on the content
+# alone: rebuild without editing and git reports nothing.
+pdf: doc
+	SOURCE_DATE_EPOCH=$$(git log -1 --format=%ct -- doc/loft-reference.typ) \
+	  typst compile doc/loft-reference.typ doc/loft-reference.pdf
+
+# Print one design document as its own PDF.  The Markdown stays the single source;
+# `scripts/md2typ.py` renders it, so the two cannot drift.
+#   make pdf-doc DOC=doc/claude/WEB_STACK.md OUT=doc/web-stack
+DOC ?= doc/claude/WEB_STACK.md
+OUT ?= doc/web-stack
+pdf-doc:
+	python3 scripts/md2typ.py $(DOC) $(OUT).typ
+	SOURCE_DATE_EPOCH=$$(git log -1 --format=%ct -- $(DOC)) \
+	  typst compile $(OUT).typ $(OUT).pdf
 
 test-native:
 	@cargo build --release -q

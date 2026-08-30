@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>random source — Loft, a programming language for small browser games</title>
+  <meta name="description" content="The loft source of the random library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<link rel="canonical" href="https://loft-lang.org/loft/lib-random-src.html">
+<meta property="og:title" content="random source — Loft, a programming language for small browser games">
+<meta property="og:description" content="The loft source of the random library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/lib-random-src.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="random source — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="The loft source of the random library — every file it ships, highlighted, with each public item linked to its definition, its worked example and its call sites.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>random source</h1>
+<article>
+<p><a href="lib-random.html">← random</a> · <a href="lib-random-api.html">API reference</a> · version 0.3.2</p>
+<p class="lib-legend">5 file(s), 536 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
+<h2 id="items">Public items</h2>
+<p class="lib-legend">A <em>worked example</em> is a call site the author chose as the thing to read first. <em>Call sites</em> are every line naming the item, found mechanically over the source with comments excluded — so an item with no worked example is not an item nobody uses.</p>
+<table class="lib-table">
+<tr><th>Item</th><th>Defined</th><th>Worked example</th><th>Call sites</th></tr>
+<tr><td><code>rand</code> <span class="search-kind">fn</span></td><td><a href="#src-random-loft-L11">11</a></td><td><a href="#tests-worked-examples-loft-L30">RND-001</a></td><td><a href="#tests-15-random-loft-L11">11</a> <a href="#tests-15-random-loft-L16">16</a> <a href="#tests-15-random-loft-L18">18</a> <a href="#tests-15-random-loft-L20">20</a> <a href="#tests-15-random-loft-L23">23</a> <a href="#tests-15-random-loft-L24">24</a> … (34 total)</td></tr>
+<tr><td><code>rand_seed</code> <span class="search-kind">fn</span></td><td><a href="#src-random-loft-L21">21</a></td><td><a href="#tests-worked-examples-loft-L30">RND-001</a></td><td><a href="#tests-15-random-loft-L8">8</a> <a href="#tests-15-random-loft-L22">22</a> <a href="#tests-15-random-loft-L25">25</a> <a href="#tests-15-random-loft-L26">26</a> <a href="#tests-15-random-loft-L27">27</a> <a href="#tests-15-random-loft-L29">29</a> … (30 total)</td></tr>
+<tr><td><code>rand_indices</code> <span class="search-kind">fn</span></td><td><a href="#src-random-loft-L28">28</a></td><td><a href="#tests-worked-examples-loft-L30">RND-001</a></td><td><a href="#tests-15-random-loft-L36">36</a> <a href="#tests-15-random-loft-L37">37</a> <a href="#tests-15-random-loft-L41">41</a> <a href="#tests-15-random-loft-L42">42</a> <a href="#tests-15-random-loft-L50">50</a> <a href="#tests-15-random-loft-L53">53</a> … (21 total)</td></tr>
+<tr><td><code>RandStream</code> <span class="search-kind">struct</span></td><td><a href="#src-random-loft-L52">52</a></td><td>—</td><td><a href="#src-random-loft-L62">62</a> <a href="#src-random-loft-L69">69</a> <a href="#src-random-loft-L76">76</a> <a href="#src-random-loft-L97">97</a> <a href="#tests-worked-examples-loft-L26">26</a> <a href="#tests-worked-examples-loft-L65">65</a></td></tr>
+<tr><td><code>seed_stream</code> <span class="search-kind">fn</span></td><td><a href="#src-random-loft-L62">62</a></td><td><a href="#tests-worked-examples-loft-L99">RND-003</a></td><td><a href="#tests-16-randstream-loft-L7">7</a> <a href="#tests-16-randstream-loft-L14">14</a> <a href="#tests-16-randstream-loft-L24">24</a> <a href="#tests-16-randstream-loft-L29">29</a> <a href="#tests-16-randstream-loft-L34">34</a> <a href="#tests-16-randstream-loft-L37">37</a> … (29 total)</td></tr>
+<tr><td><code>get</code> <span class="search-kind">fn</span></td><td><a href="#src-random-loft-L76">76</a></td><td><a href="#tests-worked-examples-loft-L68">RND-002</a></td><td><a href="#src-random-loft-L104">104</a> <a href="#tests-16-randstream-loft-L8">8</a> <a href="#tests-16-randstream-loft-L9">9</a> <a href="#tests-16-randstream-loft-L17">17</a> <a href="#tests-16-randstream-loft-L20">20</a> <a href="#tests-16-randstream-loft-L25">25</a> … (39 total)</td></tr>
+<tr><td><code>indices</code> <span class="search-kind">fn</span></td><td><a href="#src-random-loft-L97">97</a></td><td><a href="#tests-worked-examples-loft-L99">RND-003</a></td><td><a href="#tests-16-randstream-loft-L54">54</a> <a href="#tests-16-randstream-loft-L80">80</a> <a href="#tests-16-randstream-loft-L91">91</a> <a href="#tests-16-randstream-loft-L96">96</a> <a href="#tests-16-randstream-loft-L98">98</a> <a href="#tests-16-randstream-loft-L101">101</a> … (8 total)</td></tr>
+</table>
+<h2 id="src-random-loft">src/random.loft</h2>
+<pre class="src"><code><span id="src-random-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="src-random-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="src-random-loft-L3"><span class="cm">// --- Random ---</span></span>
+<span id="src-random-loft-L4"><span class="cm">// Random number generation functions.</span></span>
+<span id="src-random-loft-L5"></span>
+<span id="src-random-loft-L6"><span class="cm">// Returns a random integer in [lo, hi] (inclusive).</span></span>
+<span id="src-random-loft-L7"><span class="cm">// Returns null when lo &gt; hi or when either argument is null.</span></span>
+<span id="src-random-loft-L8"><span class="cm">// Draws from the ONE hidden generator every call site shares — see `rand_seed`.</span></span>
+<span id="src-random-loft-L9"><span class="cm">// Example: @RND-001 — why a seeded global sequence is not yours, and what a</span></span>
+<span id="src-random-loft-L10"><span class="cm">// RandStream gives instead.</span></span>
+<span id="src-random-loft-L11"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rand</span>(lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>?;</span>
+<span id="src-random-loft-L12">#native</span>
+<span id="src-random-loft-L13"></span>
+<span id="src-random-loft-L14"><span class="cm">// Seeds the thread-local random number generator with the given value.</span></span>
+<span id="src-random-loft-L15"><span class="cm">// Call this before rand() or rand_indices() to get reproducible sequences — but</span></span>
+<span id="src-random-loft-L16"><span class="cm">// note that it fixes what the GENERATOR produces, not what you receive: it is</span></span>
+<span id="src-random-loft-L17"><span class="cm">// shared, so one `rand()` from anywhere else shifts everything after it.  When</span></span>
+<span id="src-random-loft-L18"><span class="cm">// reproducibility is a requirement rather than a convenience, own a stream.</span></span>
+<span id="src-random-loft-L19"><span class="cm">// Example: @RND-001 — a foreign draw between two of yours, and the same</span></span>
+<span id="src-random-loft-L20"><span class="cm">// interruption against a RandStream.</span></span>
+<span id="src-random-loft-L21"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rand_seed</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>);</span>
+<span id="src-random-loft-L22">#native</span>
+<span id="src-random-loft-L23"></span>
+<span id="src-random-loft-L24"><span class="cm">// Returns a vector of n integers [0, 1, ..., n-1] in a random order.</span></span>
+<span id="src-random-loft-L25"><span class="cm">// Useful for random iteration, shuffling, or sampling without replacement.</span></span>
+<span id="src-random-loft-L26"><span class="cm">// Returns an empty vector when n is 0 or null.</span></span>
+<span id="src-random-loft-L27"><span class="cm">// Example: @RND-001 — this draws from the shared global generator too.</span></span>
+<span id="src-random-loft-L28"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">rand_indices</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;;</span>
+<span id="src-random-loft-L29">#native</span>
+<span id="src-random-loft-L30"></span>
+<span id="src-random-loft-L31"><span class="cm">// --- RandStream: owned random streams (the value tier) ---</span></span>
+<span id="src-random-loft-L32"><span class="cm">//</span></span>
+<span id="src-random-loft-L33"><span class="cm">// The global rand()/rand_seed() above share ONE hidden generator — right for casual</span></span>
+<span id="src-random-loft-L34"><span class="cm">// use, wrong when the RNG is part of your STATE. A RandStream is an independent,</span></span>
+<span id="src-random-loft-L35"><span class="cm">// deterministic stream you OWN: seed it, carry it (a plain struct — it saves, replays</span></span>
+<span id="src-random-loft-L36"><span class="cm">// and syncs with your data), and draw from it without any other call site reordering</span></span>
+<span id="src-random-loft-L37"><span class="cm">// your sequence. Typical uses: a game's per-level generation stream vs its combat</span></span>
+<span id="src-random-loft-L38"><span class="cm">// stream; several simulations alive in one process; replay/lockstep determinism.</span></span>
+<span id="src-random-loft-L39"><span class="cm">//</span></span>
+<span id="src-random-loft-L40"><span class="cm">// Pure loft, no native: L'Ecuyer's (1988) combined LCG — two Lehmer streams over</span></span>
+<span id="src-random-loft-L41"><span class="cm">// distinct primes via Schrage's method, combined. Period ~2.3e18, classical</span></span>
+<span id="src-random-loft-L42"><span class="cm">// statistical quality, and every intermediate product stays far below loft's</span></span>
+<span id="src-random-loft-L43"><span class="cm">// overflow-trapping 2^63.</span></span>
+<span id="src-random-loft-L44"><span class="cm">//</span></span>
+<span id="src-random-loft-L45"><span class="cm">// A struct parameter is a store link, so draws advance the stream through the</span></span>
+<span id="src-random-loft-L46"><span class="cm">// default receiver — methods-way call sites:</span></span>
+<span id="src-random-loft-L47"><span class="cm">//</span></span>
+<span id="src-random-loft-L48"><span class="cm">//   r = seed_stream(7);</span></span>
+<span id="src-random-loft-L49"><span class="cm">//   v = r.get(1, 6);          // a die roll from THIS stream</span></span>
+<span id="src-random-loft-L50"><span class="cm">//   p = r.indices(52);        // a shuffled deck from THIS stream</span></span>
+<span id="src-random-loft-L51"></span>
+<span id="src-random-loft-L52"><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">RandStream</span> {</span>
+<span id="src-random-loft-L53">  s1: <span class="ty"><a href="stdlib-types.html">integer</a></span>,   <span class="cm">// Lehmer state A in [1, 2147483562]</span></span>
+<span id="src-random-loft-L54">  s2: <span class="ty"><a href="stdlib-types.html">integer</a></span>,   <span class="cm">// Lehmer state B in [1, 2147483398]</span></span>
+<span id="src-random-loft-L55">}</span>
+<span id="src-random-loft-L56"></span>
+<span id="src-random-loft-L57"><span class="cm">// Seed an independent stream. Any integer seed is valid (negative and zero included);</span></span>
+<span id="src-random-loft-L58"><span class="cm">// equal seeds give equal streams, different seeds give decorrelated streams.</span></span>
+<span id="src-random-loft-L59"><span class="cm">// Example: @RND-001 — the reason to prefer this over `rand_seed`.</span></span>
+<span id="src-random-loft-L60"><span class="cm">// Example: @RND-003 — equal seeds replay exactly, so a recorded seed is a</span></span>
+<span id="src-random-loft-L61"><span class="cm">// recorded run.</span></span>
+<span id="src-random-loft-L62"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">seed_stream</span>(seed: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">RandStream</span> {</span>
+<span id="src-random-loft-L63">  a = seed % <span class="nm">2147483562</span> ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L64">  <span class="kw">if</span> a &lt; <span class="nm">0</span> { a = -a; }</span>
+<span id="src-random-loft-L65">  t = seed % <span class="nm">2147483398</span> ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L66">  <span class="kw">if</span> t &lt; <span class="nm">0</span> { t = -t; }</span>
+<span id="src-random-loft-L67">  <span class="cm">// decorrelate s2 from s1 for small seeds with one cheap Lehmer-style mix</span></span>
+<span id="src-random-loft-L68">  mix = ((a + <span class="nm">1</span>) * <span class="nm">40014</span>) % <span class="nm">2147483563</span> ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L69">  <span class="en">RandStream</span> { s1: a + <span class="nm">1</span>, s2: ((t + mix) % <span class="nm">2147483398</span> ?? <span class="nm">0</span>) + <span class="nm">1</span> }</span>
+<span id="src-random-loft-L70">}</span>
+<span id="src-random-loft-L71"></span>
+<span id="src-random-loft-L72"><span class="cm">// A random integer in [lo, hi] (inclusive) from THIS stream, advancing it.</span></span>
+<span id="src-random-loft-L73"><span class="cm">// Returns null when lo &gt; hi (the same contract as the global rand()).</span></span>
+<span id="src-random-loft-L74"><span class="cm">// Example: @RND-002 — assigning a stream COPIES it, passing one to a function</span></span>
+<span id="src-random-loft-L75"><span class="cm">// LINKS it, so a helper that draws spends the caller's sequence.</span></span>
+<span id="src-random-loft-L76"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">get</span>(self: <span class="en">RandStream</span>, lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>? {</span>
+<span id="src-random-loft-L77">  <span class="kw">if</span> lo &gt; hi { <span class="kw">return</span> <span class="kw">null</span>; }</span>
+<span id="src-random-loft-L78">  <span class="cm">// L'Ecuyer combined LCG, Schrage's method (all products &lt; 2^31 * 40692 — trap-safe)</span></span>
+<span id="src-random-loft-L79">  k1 = self.s1 / <span class="nm">53668</span> ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L80">  n1 = <span class="nm">40014</span> * (self.s1 - k1 * <span class="nm">53668</span>) - k1 * <span class="nm">12211</span>;</span>
+<span id="src-random-loft-L81">  <span class="kw">if</span> n1 &lt; <span class="nm">0</span> { n1 += <span class="nm">2147483563</span>; }</span>
+<span id="src-random-loft-L82">  k2 = self.s2 / <span class="nm">52774</span> ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L83">  n2 = <span class="nm">40692</span> * (self.s2 - k2 * <span class="nm">52774</span>) - k2 * <span class="nm">3791</span>;</span>
+<span id="src-random-loft-L84">  <span class="kw">if</span> n2 &lt; <span class="nm">0</span> { n2 += <span class="nm">2147483399</span>; }</span>
+<span id="src-random-loft-L85">  self.s1 = n1;</span>
+<span id="src-random-loft-L86">  self.s2 = n2;</span>
+<span id="src-random-loft-L87">  z = (n1 - n2) % <span class="nm">2147483562</span> ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L88">  <span class="kw">if</span> z &lt; <span class="nm">1</span> { z += <span class="nm">2147483562</span>; }</span>
+<span id="src-random-loft-L89">  lo + ((z - <span class="nm">1</span>) % (hi - lo + <span class="nm">1</span>) ?? <span class="nm">0</span>)</span>
+<span id="src-random-loft-L90">}</span>
+<span id="src-random-loft-L91"></span>
+<span id="src-random-loft-L92"><span class="cm">// A random permutation of [0, 1, ..., n-1] from THIS stream (Fisher-Yates), advancing</span></span>
+<span id="src-random-loft-L93"><span class="cm">// it by exactly n - 1 draws. Empty when n is 0, negative or null (the same contract</span></span>
+<span id="src-random-loft-L94"><span class="cm">// as rand_indices()).</span></span>
+<span id="src-random-loft-L95"><span class="cm">// Example: @RND-003 — a shuffle is a countable number of draws, so inserting one</span></span>
+<span id="src-random-loft-L96"><span class="cm">// shifts the rest of the sequence by a known amount rather than adding noise.</span></span>
+<span id="src-random-loft-L97"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">indices</span>(self: <span class="en">RandStream</span>, n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {</span>
+<span id="src-random-loft-L98">  out: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];</span>
+<span id="src-random-loft-L99">  <span class="kw">if</span> !n { <span class="kw">return</span> out; }</span>
+<span id="src-random-loft-L100">  <span class="kw">if</span> n &lt;= <span class="nm">0</span> { <span class="kw">return</span> out; }</span>
+<span id="src-random-loft-L101">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..</span>n { out += [i]; }</span>
+<span id="src-random-loft-L102">  j = n - <span class="nm">1</span>;</span>
+<span id="src-random-loft-L103">  while j &gt; <span class="nm">0</span> {</span>
+<span id="src-random-loft-L104">    k = <span class="fn-call">get</span>(self, <span class="nm">0</span>, j) ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L105">    <span class="kw">if</span> k &lt; <span class="bi"><a href="stdlib-text.html">len</a></span>(out) &amp;&amp; j &lt; <span class="bi"><a href="stdlib-text.html">len</a></span>(out) {</span>
+<span id="src-random-loft-L106">      t = out[j] ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L107">      out[j] = out[k] ?? <span class="nm">0</span>;</span>
+<span id="src-random-loft-L108">      out[k] = t;</span>
+<span id="src-random-loft-L109">    }</span>
+<span id="src-random-loft-L110">    j -= <span class="nm">1</span>;</span>
+<span id="src-random-loft-L111">  }</span>
+<span id="src-random-loft-L112">  out</span>
+<span id="src-random-loft-L113">}</span>
+</code></pre>
+<h2 id="tests-15-random-loft">tests/15-random.loft</h2>
+<pre class="src"><code><span id="tests-15-random-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-15-random-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-15-random-loft-L3"><span class="cm">// Random numbers: rand, rand_seed, rand_indices.</span></span>
+<span id="tests-15-random-loft-L4"><span class="kw">use</span> random;</span>
+<span id="tests-15-random-loft-L5"></span>
+<span id="tests-15-random-loft-L6"><span class="kw">fn</span> <span class="fn-call">main</span>() {</span>
+<span id="tests-15-random-loft-L7">  <span class="cm">// --- rand: values stay within [lo, hi] ---</span></span>
+<span id="tests-15-random-loft-L8">  random::<span class="fn-call">rand_seed</span>(<span class="nm">42</span>);</span>
+<span id="tests-15-random-loft-L9">  ok = <span class="kw">true</span>;</span>
+<span id="tests-15-random-loft-L10">  <span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..200</span> {</span>
+<span id="tests-15-random-loft-L11">    r = random::<span class="fn-call">rand</span>(<span class="nm">10</span>, <span class="nm">20</span>);</span>
+<span id="tests-15-random-loft-L12">    <span class="kw">if</span> r &lt; <span class="nm">10</span> || r &gt; <span class="nm">20</span> {</span>
+<span id="tests-15-random-loft-L13">      ok = <span class="kw">false</span>;</span>
+<span id="tests-15-random-loft-L14">    }</span>
+<span id="tests-15-random-loft-L15">  }</span>
+<span id="tests-15-random-loft-L16">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ok, <span class="st">"rand stays in [10, 20]"</span>);</span>
+<span id="tests-15-random-loft-L17">  <span class="cm">// --- rand: single-value range always returns that value ---</span></span>
+<span id="tests-15-random-loft-L18">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(random::<span class="fn-call">rand</span>(<span class="nm">7</span>, <span class="nm">7</span>) == <span class="nm">7</span>, <span class="st">"rand single value"</span>);</span>
+<span id="tests-15-random-loft-L19">  <span class="cm">// --- rand: lo &gt; hi returns null ---</span></span>
+<span id="tests-15-random-loft-L20">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!random::<span class="fn-call">rand</span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"rand invalid range (lo&gt;hi) is null"</span>);</span>
+<span id="tests-15-random-loft-L21">  <span class="cm">// --- rand_seed: reproducible sequence ---</span></span>
+<span id="tests-15-random-loft-L22">  random::<span class="fn-call">rand_seed</span>(<span class="nm">99</span>);</span>
+<span id="tests-15-random-loft-L23">  a = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>);</span>
+<span id="tests-15-random-loft-L24">  b = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>);</span>
+<span id="tests-15-random-loft-L25">  random::<span class="fn-call">rand_seed</span>(<span class="nm">99</span>);</span>
+<span id="tests-15-random-loft-L26">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>) == a, <span class="st">"rand_seed reproducible: first value matches"</span>);</span>
+<span id="tests-15-random-loft-L27">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>) == b, <span class="st">"rand_seed reproducible: second value matches"</span>);</span>
+<span id="tests-15-random-loft-L28">  <span class="cm">// --- rand_seed: different seeds produce different values ---</span></span>
+<span id="tests-15-random-loft-L29">  random::<span class="fn-call">rand_seed</span>(<span class="nm">1</span>);</span>
+<span id="tests-15-random-loft-L30">  s1 = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-15-random-loft-L31">  random::<span class="fn-call">rand_seed</span>(<span class="nm">2</span>);</span>
+<span id="tests-15-random-loft-L32">  s2 = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-15-random-loft-L33">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s1 != s2, <span class="st">"different seeds give different values"</span>);</span>
+<span id="tests-15-random-loft-L34">  <span class="cm">// --- rand_indices: length ---</span></span>
+<span id="tests-15-random-loft-L35">  random::<span class="fn-call">rand_seed</span>(<span class="nm">7</span>);</span>
+<span id="tests-15-random-loft-L36">  vi = random::<span class="fn-call">rand_indices</span>(<span class="nm">10</span>);</span>
+<span id="tests-15-random-loft-L37">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(vi) == <span class="nm">10</span>, <span class="st">"rand_indices(10) has length 10"</span>);</span>
+<span id="tests-15-random-loft-L38">  <span class="cm">// --- rand_indices: is a permutation of 0..n-1 ---</span></span>
+<span id="tests-15-random-loft-L39">  random::<span class="fn-call">rand_seed</span>(<span class="nm">42</span>);</span>
+<span id="tests-15-random-loft-L40">  n = <span class="nm">20</span>;</span>
+<span id="tests-15-random-loft-L41">  perm = random::<span class="fn-call">rand_indices</span>(n);</span>
+<span id="tests-15-random-loft-L42">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(perm) == n, <span class="st">"rand_indices permutation length"</span>);</span>
+<span id="tests-15-random-loft-L43">  <span class="kw">for</span> expected <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="tests-15-random-loft-L44">    found = <span class="kw">false</span>;</span>
+<span id="tests-15-random-loft-L45">    <span class="kw">for</span> x <span class="kw">in</span> perm {</span>
+<span id="tests-15-random-loft-L46">      <span class="kw">if</span> x == expected {</span>
+<span id="tests-15-random-loft-L47">        found = <span class="kw">true</span>;</span>
+<span id="tests-15-random-loft-L48">      }</span>
+<span id="tests-15-random-loft-L49">    }</span>
+<span id="tests-15-random-loft-L50">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(found, <span class="st">"rand_indices missing value {expected}"</span>);</span>
+<span id="tests-15-random-loft-L51">  }</span>
+<span id="tests-15-random-loft-L52">  <span class="cm">// --- rand_indices: empty input ---</span></span>
+<span id="tests-15-random-loft-L53">  ev = random::<span class="fn-call">rand_indices</span>(<span class="nm">0</span>);</span>
+<span id="tests-15-random-loft-L54">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(ev) == <span class="nm">0</span>, <span class="st">"rand_indices(0) is empty"</span>);</span>
+<span id="tests-15-random-loft-L55">  <span class="cm">// --- rand_indices: different seeds give different orderings ---</span></span>
+<span id="tests-15-random-loft-L56">  random::<span class="fn-call">rand_seed</span>(<span class="nm">1</span>);</span>
+<span id="tests-15-random-loft-L57">  ra = random::<span class="fn-call">rand_indices</span>(<span class="nm">10</span>);</span>
+<span id="tests-15-random-loft-L58">  random::<span class="fn-call">rand_seed</span>(<span class="nm">9999</span>);</span>
+<span id="tests-15-random-loft-L59">  rb = random::<span class="fn-call">rand_indices</span>(<span class="nm">10</span>);</span>
+<span id="tests-15-random-loft-L60">  diff = <span class="kw">false</span>;</span>
+<span id="tests-15-random-loft-L61">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..10</span> {</span>
+<span id="tests-15-random-loft-L62">    <span class="kw">if</span> ra[i] != rb[i] {</span>
+<span id="tests-15-random-loft-L63">      diff = <span class="kw">true</span>;</span>
+<span id="tests-15-random-loft-L64">    }</span>
+<span id="tests-15-random-loft-L65">  }</span>
+<span id="tests-15-random-loft-L66">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(diff, <span class="st">"rand_indices: different seeds give different orders"</span>);</span>
+<span id="tests-15-random-loft-L67">  <span class="cm">// --- rand_indices: same seed gives same ordering ---</span></span>
+<span id="tests-15-random-loft-L68">  random::<span class="fn-call">rand_seed</span>(<span class="nm">123</span>);</span>
+<span id="tests-15-random-loft-L69">  rc = random::<span class="fn-call">rand_indices</span>(<span class="nm">8</span>);</span>
+<span id="tests-15-random-loft-L70">  random::<span class="fn-call">rand_seed</span>(<span class="nm">123</span>);</span>
+<span id="tests-15-random-loft-L71">  rd = random::<span class="fn-call">rand_indices</span>(<span class="nm">8</span>);</span>
+<span id="tests-15-random-loft-L72">  same = <span class="kw">true</span>;</span>
+<span id="tests-15-random-loft-L73">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..8</span> {</span>
+<span id="tests-15-random-loft-L74">    <span class="kw">if</span> rc[i] != rd[i] {</span>
+<span id="tests-15-random-loft-L75">      same = <span class="kw">false</span>;</span>
+<span id="tests-15-random-loft-L76">    }</span>
+<span id="tests-15-random-loft-L77">  }</span>
+<span id="tests-15-random-loft-L78">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(same, <span class="st">"rand_indices: same seed gives same order"</span>);</span>
+<span id="tests-15-random-loft-L79">}</span>
+<span id="tests-15-random-loft-L80"></span>
+<span id="tests-15-random-loft-L81"><span class="kw">fn</span> <span class="fn-call">test_rand_in_range</span>() {</span>
+<span id="tests-15-random-loft-L82">  random::<span class="fn-call">rand_seed</span>(<span class="nm">42</span>);</span>
+<span id="tests-15-random-loft-L83">  ok = <span class="kw">true</span>;</span>
+<span id="tests-15-random-loft-L84">  <span class="kw">for</span> _i <span class="kw">in</span> <span class="nm">0..200</span> {</span>
+<span id="tests-15-random-loft-L85">    r = random::<span class="fn-call">rand</span>(<span class="nm">10</span>, <span class="nm">20</span>);</span>
+<span id="tests-15-random-loft-L86">    <span class="kw">if</span> r &lt; <span class="nm">10</span> || r &gt; <span class="nm">20</span> { ok = <span class="kw">false</span> }</span>
+<span id="tests-15-random-loft-L87">  }</span>
+<span id="tests-15-random-loft-L88">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ok, <span class="st">"rand out of range"</span>);</span>
+<span id="tests-15-random-loft-L89">}</span>
+<span id="tests-15-random-loft-L90"></span>
+<span id="tests-15-random-loft-L91"><span class="kw">fn</span> <span class="fn-call">test_rand_single_value</span>() {</span>
+<span id="tests-15-random-loft-L92">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(random::<span class="fn-call">rand</span>(<span class="nm">7</span>, <span class="nm">7</span>) == <span class="nm">7</span>, <span class="st">"single value"</span>);</span>
+<span id="tests-15-random-loft-L93">}</span>
+<span id="tests-15-random-loft-L94"></span>
+<span id="tests-15-random-loft-L95"><span class="kw">fn</span> <span class="fn-call">test_rand_invalid_range</span>() {</span>
+<span id="tests-15-random-loft-L96">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!random::<span class="fn-call">rand</span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"invalid range should be null"</span>);</span>
+<span id="tests-15-random-loft-L97">}</span>
+<span id="tests-15-random-loft-L98"></span>
+<span id="tests-15-random-loft-L99"><span class="kw">fn</span> <span class="fn-call">test_rand_seed_reproducible</span>() {</span>
+<span id="tests-15-random-loft-L100">  random::<span class="fn-call">rand_seed</span>(<span class="nm">99</span>);</span>
+<span id="tests-15-random-loft-L101">  a = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>);</span>
+<span id="tests-15-random-loft-L102">  b = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>);</span>
+<span id="tests-15-random-loft-L103">  random::<span class="fn-call">rand_seed</span>(<span class="nm">99</span>);</span>
+<span id="tests-15-random-loft-L104">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>) == a, <span class="st">"first value must match"</span>);</span>
+<span id="tests-15-random-loft-L105">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000</span>) == b, <span class="st">"second value must match"</span>);</span>
+<span id="tests-15-random-loft-L106">}</span>
+<span id="tests-15-random-loft-L107"></span>
+<span id="tests-15-random-loft-L108"><span class="kw">fn</span> <span class="fn-call">test_rand_different_seeds</span>() {</span>
+<span id="tests-15-random-loft-L109">  random::<span class="fn-call">rand_seed</span>(<span class="nm">1</span>);</span>
+<span id="tests-15-random-loft-L110">  a = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-15-random-loft-L111">  random::<span class="fn-call">rand_seed</span>(<span class="nm">2</span>);</span>
+<span id="tests-15-random-loft-L112">  b = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-15-random-loft-L113">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a != b, <span class="st">"different seeds should give different values"</span>);</span>
+<span id="tests-15-random-loft-L114">}</span>
+<span id="tests-15-random-loft-L115"></span>
+<span id="tests-15-random-loft-L116"><span class="kw">fn</span> <span class="fn-call">test_rand_indices_length</span>() {</span>
+<span id="tests-15-random-loft-L117">  random::<span class="fn-call">rand_seed</span>(<span class="nm">7</span>);</span>
+<span id="tests-15-random-loft-L118">  v = random::<span class="fn-call">rand_indices</span>(<span class="nm">10</span>);</span>
+<span id="tests-15-random-loft-L119">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(v) == <span class="nm">10</span>, <span class="st">"size {len(v)}"</span>);</span>
+<span id="tests-15-random-loft-L120">}</span>
+<span id="tests-15-random-loft-L121"></span>
+<span id="tests-15-random-loft-L122"><span class="kw">fn</span> <span class="fn-call">test_rand_indices_permutation</span>() {</span>
+<span id="tests-15-random-loft-L123">  random::<span class="fn-call">rand_seed</span>(<span class="nm">42</span>);</span>
+<span id="tests-15-random-loft-L124">  n = <span class="nm">20</span>;</span>
+<span id="tests-15-random-loft-L125">  v = random::<span class="fn-call">rand_indices</span>(n);</span>
+<span id="tests-15-random-loft-L126">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(v) == n, <span class="st">"wrong size"</span>);</span>
+<span id="tests-15-random-loft-L127">  <span class="kw">for</span> expected <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="tests-15-random-loft-L128">    found = <span class="kw">false</span>;</span>
+<span id="tests-15-random-loft-L129">    <span class="kw">for</span> x <span class="kw">in</span> v { <span class="kw">if</span> x == expected { found = <span class="kw">true</span> } }</span>
+<span id="tests-15-random-loft-L130">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(found, <span class="st">"missing {expected}"</span>);</span>
+<span id="tests-15-random-loft-L131">  }</span>
+<span id="tests-15-random-loft-L132">}</span>
+<span id="tests-15-random-loft-L133"></span>
+<span id="tests-15-random-loft-L134"><span class="kw">fn</span> <span class="fn-call">test_rand_indices_zero</span>() {</span>
+<span id="tests-15-random-loft-L135">  v = random::<span class="fn-call">rand_indices</span>(<span class="nm">0</span>);</span>
+<span id="tests-15-random-loft-L136">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(v) == <span class="nm">0</span>, <span class="st">"expected empty vector"</span>);</span>
+<span id="tests-15-random-loft-L137">}</span>
+<span id="tests-15-random-loft-L138"></span>
+<span id="tests-15-random-loft-L139"><span class="kw">fn</span> <span class="fn-call">test_rand_indices_different_orderings</span>() {</span>
+<span id="tests-15-random-loft-L140">  random::<span class="fn-call">rand_seed</span>(<span class="nm">1</span>);</span>
+<span id="tests-15-random-loft-L141">  a = random::<span class="fn-call">rand_indices</span>(<span class="nm">10</span>);</span>
+<span id="tests-15-random-loft-L142">  random::<span class="fn-call">rand_seed</span>(<span class="nm">9999</span>);</span>
+<span id="tests-15-random-loft-L143">  b = random::<span class="fn-call">rand_indices</span>(<span class="nm">10</span>);</span>
+<span id="tests-15-random-loft-L144">  diff = <span class="kw">false</span>;</span>
+<span id="tests-15-random-loft-L145">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..10</span> { <span class="kw">if</span> a[i] != b[i] { diff = <span class="kw">true</span> } }</span>
+<span id="tests-15-random-loft-L146">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(diff, <span class="st">"expected different orderings"</span>);</span>
+<span id="tests-15-random-loft-L147">}</span>
+<span id="tests-15-random-loft-L148"></span>
+<span id="tests-15-random-loft-L149"><span class="kw">fn</span> <span class="fn-call">test_rand_indices_reproducible</span>() {</span>
+<span id="tests-15-random-loft-L150">  random::<span class="fn-call">rand_seed</span>(<span class="nm">123</span>);</span>
+<span id="tests-15-random-loft-L151">  a = random::<span class="fn-call">rand_indices</span>(<span class="nm">8</span>);</span>
+<span id="tests-15-random-loft-L152">  random::<span class="fn-call">rand_seed</span>(<span class="nm">123</span>);</span>
+<span id="tests-15-random-loft-L153">  b = random::<span class="fn-call">rand_indices</span>(<span class="nm">8</span>);</span>
+<span id="tests-15-random-loft-L154">  same = <span class="kw">true</span>;</span>
+<span id="tests-15-random-loft-L155">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..8</span> { <span class="kw">if</span> a[i] != b[i] { same = <span class="kw">false</span> } }</span>
+<span id="tests-15-random-loft-L156">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(same, <span class="st">"seeded rand_indices should be reproducible"</span>);</span>
+<span id="tests-15-random-loft-L157">}</span>
+</code></pre>
+<h2 id="tests-16-randstream-loft">tests/16-randstream.loft</h2>
+<pre class="src"><code><span id="tests-16-randstream-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-16-randstream-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-16-randstream-loft-L3"><span class="cm">// RandStream (the value tier): owned, independent, deterministic random streams.</span></span>
+<span id="tests-16-randstream-loft-L4"><span class="kw">use</span> random;</span>
+<span id="tests-16-randstream-loft-L5"></span>
+<span id="tests-16-randstream-loft-L6"><span class="kw">fn</span> <span class="fn-call">main</span>() {</span>
+<span id="tests-16-randstream-loft-L7">  r = random::<span class="fn-call">seed_stream</span>(<span class="nm">7</span>);</span>
+<span id="tests-16-randstream-loft-L8">  a = r.<span class="fn-call">get</span>(<span class="nm">1</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L9">  b = r.<span class="fn-call">get</span>(<span class="nm">1</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L10">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a != b, <span class="st">"the stream advances through the receiver"</span>);</span>
+<span id="tests-16-randstream-loft-L11">}</span>
+<span id="tests-16-randstream-loft-L12"></span>
+<span id="tests-16-randstream-loft-L13"><span class="kw">fn</span> <span class="fn-call">test_stream_in_range</span>() {</span>
+<span id="tests-16-randstream-loft-L14">  r = random::<span class="fn-call">seed_stream</span>(<span class="nm">42</span>);</span>
+<span id="tests-16-randstream-loft-L15">  ok = <span class="kw">true</span>;</span>
+<span id="tests-16-randstream-loft-L16">  <span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..200</span> {</span>
+<span id="tests-16-randstream-loft-L17">    v = r.<span class="fn-call">get</span>(<span class="nm">10</span>, <span class="nm">20</span>);</span>
+<span id="tests-16-randstream-loft-L18">    <span class="kw">if</span> v &lt; <span class="nm">10</span> || v &gt; <span class="nm">20</span> { ok = <span class="kw">false</span>; }</span>
+<span id="tests-16-randstream-loft-L19">  }</span>
+<span id="tests-16-randstream-loft-L20">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ok, <span class="st">"get stays in [10, 20]"</span>);</span>
+<span id="tests-16-randstream-loft-L21">}</span>
+<span id="tests-16-randstream-loft-L22"></span>
+<span id="tests-16-randstream-loft-L23"><span class="kw">fn</span> <span class="fn-call">test_stream_single_value</span>() {</span>
+<span id="tests-16-randstream-loft-L24">  r = random::<span class="fn-call">seed_stream</span>(<span class="nm">1</span>);</span>
+<span id="tests-16-randstream-loft-L25">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r.<span class="fn-call">get</span>(<span class="nm">7</span>, <span class="nm">7</span>) == <span class="nm">7</span>, <span class="st">"single-value range returns it"</span>);</span>
+<span id="tests-16-randstream-loft-L26">}</span>
+<span id="tests-16-randstream-loft-L27"></span>
+<span id="tests-16-randstream-loft-L28"><span class="kw">fn</span> <span class="fn-call">test_stream_invalid_range</span>() {</span>
+<span id="tests-16-randstream-loft-L29">  r = random::<span class="fn-call">seed_stream</span>(<span class="nm">1</span>);</span>
+<span id="tests-16-randstream-loft-L30">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!r.<span class="fn-call">get</span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"lo &gt; hi is null (the global rand contract)"</span>);</span>
+<span id="tests-16-randstream-loft-L31">}</span>
+<span id="tests-16-randstream-loft-L32"></span>
+<span id="tests-16-randstream-loft-L33"><span class="kw">fn</span> <span class="fn-call">test_stream_reproducible</span>() {</span>
+<span id="tests-16-randstream-loft-L34">  r1 = random::<span class="fn-call">seed_stream</span>(<span class="nm">99</span>);</span>
+<span id="tests-16-randstream-loft-L35">  a = r1.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L36">  b = r1.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L37">  r2 = random::<span class="fn-call">seed_stream</span>(<span class="nm">99</span>);</span>
+<span id="tests-16-randstream-loft-L38">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r2.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) == a, <span class="st">"same seed: first draw matches"</span>);</span>
+<span id="tests-16-randstream-loft-L39">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r2.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) == b, <span class="st">"same seed: second draw matches"</span>);</span>
+<span id="tests-16-randstream-loft-L40">}</span>
+<span id="tests-16-randstream-loft-L41"></span>
+<span id="tests-16-randstream-loft-L42"><span class="kw">fn</span> <span class="fn-call">test_streams_isolated</span>() {</span>
+<span id="tests-16-randstream-loft-L43">  <span class="cm">// THE property the global tier cannot give: drawing from one stream never</span></span>
+<span id="tests-16-randstream-loft-L44">  <span class="cm">// perturbs another — interleaved draws equal the plain sequence.</span></span>
+<span id="tests-16-randstream-loft-L45">  plain = random::<span class="fn-call">seed_stream</span>(<span class="nm">5</span>);</span>
+<span id="tests-16-randstream-loft-L46">  p1 = plain.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L47">  p2 = plain.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L48">  p3 = plain.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L49">  inter = random::<span class="fn-call">seed_stream</span>(<span class="nm">5</span>);</span>
+<span id="tests-16-randstream-loft-L50">  noise = random::<span class="fn-call">seed_stream</span>(<span class="nm">777</span>);</span>
+<span id="tests-16-randstream-loft-L51">  i1 = inter.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L52">  noise.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L53">  i2 = inter.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L54">  noise.<span class="fn-call">indices</span>(<span class="nm">20</span>);</span>
+<span id="tests-16-randstream-loft-L55">  i3 = inter.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L56">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(i1 == p1 &amp;&amp; i2 == p2 &amp;&amp; i3 == p3, <span class="st">"streams are isolated"</span>);</span>
+<span id="tests-16-randstream-loft-L57">}</span>
+<span id="tests-16-randstream-loft-L58"></span>
+<span id="tests-16-randstream-loft-L59"><span class="kw">fn</span> <span class="fn-call">test_streams_decorrelated</span>() {</span>
+<span id="tests-16-randstream-loft-L60">  a = random::<span class="fn-call">seed_stream</span>(<span class="nm">1</span>);</span>
+<span id="tests-16-randstream-loft-L61">  b = random::<span class="fn-call">seed_stream</span>(<span class="nm">2</span>);</span>
+<span id="tests-16-randstream-loft-L62">  diff = <span class="kw">false</span>;</span>
+<span id="tests-16-randstream-loft-L63">  <span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..8</span> {</span>
+<span id="tests-16-randstream-loft-L64">    <span class="kw">if</span> a.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) != b.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) { diff = <span class="kw">true</span>; }</span>
+<span id="tests-16-randstream-loft-L65">  }</span>
+<span id="tests-16-randstream-loft-L66">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(diff, <span class="st">"different seeds give different streams"</span>);</span>
+<span id="tests-16-randstream-loft-L67">}</span>
+<span id="tests-16-randstream-loft-L68"></span>
+<span id="tests-16-randstream-loft-L69"><span class="kw">fn</span> <span class="fn-call">test_stream_negative_seed</span>() {</span>
+<span id="tests-16-randstream-loft-L70">  a = random::<span class="fn-call">seed_stream</span>(-<span class="nm">12345</span>);</span>
+<span id="tests-16-randstream-loft-L71">  v = a.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">100</span>);</span>
+<span id="tests-16-randstream-loft-L72">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v &gt;= <span class="nm">0</span> &amp;&amp; v &lt;= <span class="nm">100</span>, <span class="st">"negative seeds are valid"</span>);</span>
+<span id="tests-16-randstream-loft-L73">  b = random::<span class="fn-call">seed_stream</span>(-<span class="nm">12345</span>);</span>
+<span id="tests-16-randstream-loft-L74">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">100</span>) == v, <span class="st">"and reproducible"</span>);</span>
+<span id="tests-16-randstream-loft-L75">}</span>
+<span id="tests-16-randstream-loft-L76"></span>
+<span id="tests-16-randstream-loft-L77"><span class="kw">fn</span> <span class="fn-call">test_stream_indices_permutation</span>() {</span>
+<span id="tests-16-randstream-loft-L78">  r = random::<span class="fn-call">seed_stream</span>(<span class="nm">42</span>);</span>
+<span id="tests-16-randstream-loft-L79">  n = <span class="nm">20</span>;</span>
+<span id="tests-16-randstream-loft-L80">  v = r.<span class="fn-call">indices</span>(n);</span>
+<span id="tests-16-randstream-loft-L81">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(v) == n, <span class="st">"wrong size"</span>);</span>
+<span id="tests-16-randstream-loft-L82">  <span class="kw">for</span> expected <span class="kw">in</span> <span class="nm">0..</span>n {</span>
+<span id="tests-16-randstream-loft-L83">    found = <span class="kw">false</span>;</span>
+<span id="tests-16-randstream-loft-L84">    <span class="kw">for</span> x <span class="kw">in</span> v { <span class="kw">if</span> x == expected { found = <span class="kw">true</span> } }</span>
+<span id="tests-16-randstream-loft-L85">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(found, <span class="st">"missing {expected}"</span>);</span>
+<span id="tests-16-randstream-loft-L86">  }</span>
+<span id="tests-16-randstream-loft-L87">}</span>
+<span id="tests-16-randstream-loft-L88"></span>
+<span id="tests-16-randstream-loft-L89"><span class="kw">fn</span> <span class="fn-call">test_stream_indices_zero</span>() {</span>
+<span id="tests-16-randstream-loft-L90">  r = random::<span class="fn-call">seed_stream</span>(<span class="nm">1</span>);</span>
+<span id="tests-16-randstream-loft-L91">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(r.<span class="fn-call">indices</span>(<span class="nm">0</span>)) == <span class="nm">0</span>, <span class="st">"n = 0 is empty"</span>);</span>
+<span id="tests-16-randstream-loft-L92">}</span>
+<span id="tests-16-randstream-loft-L93"></span>
+<span id="tests-16-randstream-loft-L94"><span class="kw">fn</span> <span class="fn-call">test_stream_indices_reproducible</span>() {</span>
+<span id="tests-16-randstream-loft-L95">  r1 = random::<span class="fn-call">seed_stream</span>(<span class="nm">123</span>);</span>
+<span id="tests-16-randstream-loft-L96">  a = r1.<span class="fn-call">indices</span>(<span class="nm">8</span>);</span>
+<span id="tests-16-randstream-loft-L97">  r2 = random::<span class="fn-call">seed_stream</span>(<span class="nm">123</span>);</span>
+<span id="tests-16-randstream-loft-L98">  b = r2.<span class="fn-call">indices</span>(<span class="nm">8</span>);</span>
+<span id="tests-16-randstream-loft-L99">  same = <span class="kw">true</span>;</span>
+<span id="tests-16-randstream-loft-L100">  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..8</span> { <span class="kw">if</span> a[i] != b[i] { same = <span class="kw">false</span> } }</span>
+<span id="tests-16-randstream-loft-L101">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(same, <span class="st">"seeded indices reproducible"</span>);</span>
+<span id="tests-16-randstream-loft-L102">}</span>
+<span id="tests-16-randstream-loft-L103"></span>
+<span id="tests-16-randstream-loft-L104"><span class="kw">fn</span> <span class="fn-call">test_stream_vs_global_independent</span>() {</span>
+<span id="tests-16-randstream-loft-L105">  <span class="cm">// a stream is untouched by the GLOBAL generator and vice versa</span></span>
+<span id="tests-16-randstream-loft-L106">  r1 = random::<span class="fn-call">seed_stream</span>(<span class="nm">31</span>);</span>
+<span id="tests-16-randstream-loft-L107">  random::<span class="fn-call">rand_seed</span>(<span class="nm">1000</span>);</span>
+<span id="tests-16-randstream-loft-L108">  a = r1.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>);</span>
+<span id="tests-16-randstream-loft-L109">  r2 = random::<span class="fn-call">seed_stream</span>(<span class="nm">31</span>);</span>
+<span id="tests-16-randstream-loft-L110">  random::<span class="fn-call">rand_seed</span>(<span class="nm">2000</span>);</span>
+<span id="tests-16-randstream-loft-L111">  random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">10</span>);</span>
+<span id="tests-16-randstream-loft-L112">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r2.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) == a, <span class="st">"global calls never move a stream"</span>);</span>
+<span id="tests-16-randstream-loft-L113">}</span>
+</code></pre>
+<h2 id="tests-17-abi-width-loft">tests/17-abi-width.loft</h2>
+<pre class="src"><code><span id="tests-17-abi-width-loft-L1"><span class="cm">// ABI-width cells — negative and beyond-i32 values must cross the</span></span>
+<span id="tests-17-abi-width-loft-L2"><span class="cm">// native boundary intact (the old i32 extern truncated them silently).</span></span>
+<span id="tests-17-abi-width-loft-L3"><span class="kw">use</span> random;</span>
+<span id="tests-17-abi-width-loft-L4"></span>
+<span id="tests-17-abi-width-loft-L5"><span class="kw">fn</span> <span class="fn-call">main</span>() {</span>
+<span id="tests-17-abi-width-loft-L6">  random::<span class="fn-call">rand_seed</span>(<span class="nm">7</span>);</span>
+<span id="tests-17-abi-width-loft-L7">  ok = <span class="kw">true</span>;</span>
+<span id="tests-17-abi-width-loft-L8">  <span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..200</span> {</span>
+<span id="tests-17-abi-width-loft-L9">    r = random::<span class="fn-call">rand</span>(-<span class="nm">20</span>, -<span class="nm">10</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-17-abi-width-loft-L10">    <span class="kw">if</span> r &lt; -<span class="nm">20</span> || r &gt; -<span class="nm">10</span> { ok = <span class="kw">false</span>; }</span>
+<span id="tests-17-abi-width-loft-L11">  }</span>
+<span id="tests-17-abi-width-loft-L12">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ok, <span class="st">"rand stays in [-20, -10]"</span>);</span>
+<span id="tests-17-abi-width-loft-L13">  wide = random::<span class="fn-call">rand</span>(<span class="nm">1099511627776</span>, <span class="nm">1099511627776</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-17-abi-width-loft-L14">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(wide == <span class="nm">1099511627776</span>, <span class="st">"rand(2^40, 2^40) returns 2^40 exactly, got {wide}"</span>);</span>
+<span id="tests-17-abi-width-loft-L15">  lo_wide = random::<span class="fn-call">rand</span>(<span class="nm">1099511627776</span>, <span class="nm">1099511627876</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-17-abi-width-loft-L16">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lo_wide &gt;= <span class="nm">1099511627776</span> &amp;&amp; lo_wide &lt;= <span class="nm">1099511627876</span>, <span class="st">"wide range stays in bounds, got {lo_wide}"</span>);</span>
+<span id="tests-17-abi-width-loft-L17">  mixed = random::<span class="fn-call">rand</span>(-<span class="nm">3</span>, <span class="nm">3</span>) ?? -<span class="nm">99</span>;</span>
+<span id="tests-17-abi-width-loft-L18">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mixed &gt;= -<span class="nm">3</span> &amp;&amp; mixed &lt;= <span class="nm">3</span>, <span class="st">"sign-crossing range in bounds, got {mixed}"</span>);</span>
+<span id="tests-17-abi-width-loft-L19">  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"probe_wide ok"</span>);</span>
+<span id="tests-17-abi-width-loft-L20">}</span>
+</code></pre>
+<h2 id="tests-worked-examples-loft">tests/worked-examples.loft</h2>
+<pre class="src"><code><span id="tests-worked-examples-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>
+<span id="tests-worked-examples-loft-L2"><span class="cm">// SPDX-License-Identifier: LGPL-3.0-or-later</span></span>
+<span id="tests-worked-examples-loft-L3"><span class="cm">//</span></span>
+<span id="tests-worked-examples-loft-L4"><span class="cm">// Worked examples for the `random` library (@PLN141).  Each `test_*` below is a</span></span>
+<span id="tests-worked-examples-loft-L5"><span class="cm">// REAL, run-every-CI demonstration of a contract the signature cannot state; the</span></span>
+<span id="tests-worked-examples-loft-L6"><span class="cm">// function documents itself by CITING the tag with `// Example: @RND-00N`, and</span></span>
+<span id="tests-worked-examples-loft-L7"><span class="cm">// `check_doc_drift.sh examples` fails if a citation goes dangling (no test carries</span></span>
+<span id="tests-worked-examples-loft-L8"><span class="cm">// the tag).  These are teaching examples, distinct from the per-function assertion</span></span>
+<span id="tests-worked-examples-loft-L9"><span class="cm">// suites in `15-random.loft` and `16-randstream.loft`.</span></span>
+<span id="tests-worked-examples-loft-L10"><span class="cm">//</span></span>
+<span id="tests-worked-examples-loft-L11"><span class="cm">// The library offers the same three operations twice — once on a hidden global</span></span>
+<span id="tests-worked-examples-loft-L12"><span class="cm">// generator, once on a `RandStream` you own — and the whole question is which one</span></span>
+<span id="tests-worked-examples-loft-L13"><span class="cm">// a given call site needs.  Nothing in the types distinguishes them, and the two</span></span>
+<span id="tests-worked-examples-loft-L14"><span class="cm">// differ in exactly the way that matters: whether some OTHER call site can change</span></span>
+<span id="tests-worked-examples-loft-L15"><span class="cm">// what you get.</span></span>
+<span id="tests-worked-examples-loft-L16"><span class="cm">//</span></span>
+<span id="tests-worked-examples-loft-L17"><span class="cm">// The assertions below compare streams against each other rather than against</span></span>
+<span id="tests-worked-examples-loft-L18"><span class="cm">// hard-coded draws.  That is the honest oracle here: the contract is "these two</span></span>
+<span id="tests-worked-examples-loft-L19"><span class="cm">// sequences agree" / "this one moved", never "the third value is 313456", and</span></span>
+<span id="tests-worked-examples-loft-L20"><span class="cm">// pinning the constants would pin the algorithm the docs call an implementation</span></span>
+<span id="tests-worked-examples-loft-L21"><span class="cm">// detail.</span></span>
+<span id="tests-worked-examples-loft-L22"><span class="kw">use</span> random;</span>
+<span id="tests-worked-examples-loft-L23"></span>
+<span id="tests-worked-examples-loft-L24"><span class="cm">// A callee that draws: the parameter example below needs a real call boundary,</span></span>
+<span id="tests-worked-examples-loft-L25"><span class="cm">// not an inline block.</span></span>
+<span id="tests-worked-examples-loft-L26"><span class="kw">fn</span> <span class="fn-call">wex_draw</span>(r: <span class="en">RandStream</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="tests-worked-examples-loft-L27">  r.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span></span>
+<span id="tests-worked-examples-loft-L28">}</span>
+<span id="tests-worked-examples-loft-L29"></span>
+<span id="tests-worked-examples-loft-L30"><span class="cm">// @RND-001 — `rand_seed` does NOT make the sequence yours.  The global tier is one</span></span>
+<span id="tests-worked-examples-loft-L31"><span class="cm">// hidden generator shared by every call site in the process, so seeding it fixes</span></span>
+<span id="tests-worked-examples-loft-L32"><span class="cm">// the sequence the GENERATOR produces, not the sequence YOU receive: one `rand()`</span></span>
+<span id="tests-worked-examples-loft-L33"><span class="cm">// from anywhere else — a library you called, a logging helper, a second feature</span></span>
+<span id="tests-worked-examples-loft-L34"><span class="cm">// added next month — consumes a value and shifts everything after it.  The symptom</span></span>
+<span id="tests-worked-examples-loft-L35"><span class="cm">// is the worst kind: a program that is reproducible until it is not, with nothing</span></span>
+<span id="tests-worked-examples-loft-L36"><span class="cm">// at the call site changed.  `seed_stream` answers a stream you own, and no other</span></span>
+<span id="tests-worked-examples-loft-L37"><span class="cm">// call site can reach it.  Reach for the global for casual, throwaway randomness;</span></span>
+<span id="tests-worked-examples-loft-L38"><span class="cm">// reach for a stream the moment reproducibility is a requirement.</span></span>
+<span id="tests-worked-examples-loft-L39"><span class="kw">fn</span> <span class="fn-call">test_seeding_the_global_does_not_make_it_yours</span>() {</span>
+<span id="tests-worked-examples-loft-L40">  <span class="cm">// Baseline: seed, take two draws, nothing else in between.</span></span>
+<span id="tests-worked-examples-loft-L41">  random::<span class="fn-call">rand_seed</span>(<span class="nm">42</span>);</span>
+<span id="tests-worked-examples-loft-L42">  clean_first = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L43">  clean_second = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L44"></span>
+<span id="tests-worked-examples-loft-L45">  <span class="cm">// Same seed, same two draws — but one foreign call slipped in between.</span></span>
+<span id="tests-worked-examples-loft-L46">  random::<span class="fn-call">rand_seed</span>(<span class="nm">42</span>);</span>
+<span id="tests-worked-examples-loft-L47">  mine_first = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L48">  random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">5</span>);                       <span class="cm">// somebody else's die roll</span></span>
+<span id="tests-worked-examples-loft-L49">  mine_second = random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L50"></span>
+<span id="tests-worked-examples-loft-L51">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mine_first == clean_first, <span class="st">"the first draw still matches — the damage is downstream"</span>);</span>
+<span id="tests-worked-examples-loft-L52">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mine_second != clean_second,</span>
+<span id="tests-worked-examples-loft-L53">         <span class="st">"the second does NOT: a foreign draw consumed the value that was going to be mine"</span>);</span>
+<span id="tests-worked-examples-loft-L54"></span>
+<span id="tests-worked-examples-loft-L55">  <span class="cm">// The same interruption against a stream you own changes nothing.</span></span>
+<span id="tests-worked-examples-loft-L56">  own = random::<span class="fn-call">seed_stream</span>(<span class="nm">42</span>);</span>
+<span id="tests-worked-examples-loft-L57">  own_first = own.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L58">  own_second = own.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L59">  replay = random::<span class="fn-call">seed_stream</span>(<span class="nm">42</span>);</span>
+<span id="tests-worked-examples-loft-L60">  r_first = replay.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L61">  random::<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">5</span>);                       <span class="cm">// the same foreign call</span></span>
+<span id="tests-worked-examples-loft-L62">  random::<span class="fn-call">rand_seed</span>(<span class="nm">999</span>);                   <span class="cm">// and a foreign RESEED, for good measure</span></span>
+<span id="tests-worked-examples-loft-L63">  r_second = replay.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L64">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r_first == own_first &amp;&amp; r_second == own_second,</span>
+<span id="tests-worked-examples-loft-L65">         <span class="st">"a RandStream is untouched by anything happening on the global one"</span>);</span>
+<span id="tests-worked-examples-loft-L66">}</span>
+<span id="tests-worked-examples-loft-L67"></span>
+<span id="tests-worked-examples-loft-L68"><span class="cm">// @RND-002 — assigning a stream COPIES it; passing one to a function LINKS it.</span></span>
+<span id="tests-worked-examples-loft-L69"><span class="cm">// The two are opposite, and the type is `RandStream` either way.  `r2 = r1` forks:</span></span>
+<span id="tests-worked-examples-loft-L70"><span class="cm">// both replay the same sequence from that point, so it is how you checkpoint a</span></span>
+<span id="tests-worked-examples-loft-L71"><span class="cm">// stream before a speculative run — and it is also how you accidentally end up with</span></span>
+<span id="tests-worked-examples-loft-L72"><span class="cm">// two "different" streams handing out identical numbers.  A `RandStream` PARAMETER</span></span>
+<span id="tests-worked-examples-loft-L73"><span class="cm">// is a store link, so a callee's draw advances the caller's stream: that is what</span></span>
+<span id="tests-worked-examples-loft-L74"><span class="cm">// makes `r.get(...)` work as a method at all, and it means a helper that draws is</span></span>
+<span id="tests-worked-examples-loft-L75"><span class="cm">// spending your sequence, not its own.</span></span>
+<span id="tests-worked-examples-loft-L76"><span class="kw">fn</span> <span class="fn-call">test_assignment_forks_a_stream_but_a_parameter_shares_it</span>() {</span>
+<span id="tests-worked-examples-loft-L77">  r1 = random::<span class="fn-call">seed_stream</span>(<span class="nm">9</span>);</span>
+<span id="tests-worked-examples-loft-L78">  r2 = r1;                                  <span class="cm">// a COPY, taken before any draw</span></span>
+<span id="tests-worked-examples-loft-L79">  a1 = r1.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L80">  b1 = r2.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L81">  a2 = r1.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L82">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b1 == a1, <span class="st">"the copy replays from where it was taken — it is a snapshot"</span>);</span>
+<span id="tests-worked-examples-loft-L83">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a2 != a1, <span class="st">"while the original has moved on"</span>);</span>
+<span id="tests-worked-examples-loft-L84">  b2 = r2.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L85">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b2 == a2, <span class="st">"the fork keeps producing the same sequence, independently"</span>);</span>
+<span id="tests-worked-examples-loft-L86"></span>
+<span id="tests-worked-examples-loft-L87">  <span class="cm">// A parameter is the other way round: the callee draws from YOUR stream.</span></span>
+<span id="tests-worked-examples-loft-L88">  caller = random::<span class="fn-call">seed_stream</span>(<span class="nm">9</span>);</span>
+<span id="tests-worked-examples-loft-L89">  oracle = random::<span class="fn-call">seed_stream</span>(<span class="nm">9</span>);</span>
+<span id="tests-worked-examples-loft-L90">  expect_first = oracle.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L91">  expect_second = oracle.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L92">  got_inside = <span class="fn-call">wex_draw</span>(caller);</span>
+<span id="tests-worked-examples-loft-L93">  got_after = caller.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L94">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(got_inside == expect_first, <span class="st">"the callee drew the caller's next value"</span>);</span>
+<span id="tests-worked-examples-loft-L95">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(got_after == expect_second,</span>
+<span id="tests-worked-examples-loft-L96">         <span class="st">"and the caller's stream ADVANCED — a helper that draws spends your sequence"</span>);</span>
+<span id="tests-worked-examples-loft-L97">}</span>
+<span id="tests-worked-examples-loft-L98"></span>
+<span id="tests-worked-examples-loft-L99"><span class="cm">// @RND-003 — a stream's position is state you can count, which is what makes</span></span>
+<span id="tests-worked-examples-loft-L100"><span class="cm">// replay work in practice.  Equal seeds replay exactly, so a recorded seed is a</span></span>
+<span id="tests-worked-examples-loft-L101"><span class="cm">// recorded run.  But every draw moves the stream, including the ones you did not</span></span>
+<span id="tests-worked-examples-loft-L102"><span class="cm">// write as `get`: `indices(n)` runs a Fisher-Yates shuffle and therefore consumes</span></span>
+<span id="tests-worked-examples-loft-L103"><span class="cm">// exactly `n - 1` draws.  So inserting a shuffle into a sequence does not add</span></span>
+<span id="tests-worked-examples-loft-L104"><span class="cm">// noise, it shifts everything after it by a known amount — which is why a replay</span></span>
+<span id="tests-worked-examples-loft-L105"><span class="cm">// that "drifted" is usually a draw someone added, not a broken seed, and why a</span></span>
+<span id="tests-worked-examples-loft-L106"><span class="cm">// stream used for level generation should not be the one used for combat.</span></span>
+<span id="tests-worked-examples-loft-L107"><span class="kw">fn</span> <span class="fn-call">test_every_draw_moves_the_stream_including_a_shuffle</span>() {</span>
+<span id="tests-worked-examples-loft-L108">  <span class="cm">// Equal seeds replay exactly.</span></span>
+<span id="tests-worked-examples-loft-L109">  a = random::<span class="fn-call">seed_stream</span>(<span class="nm">3</span>);</span>
+<span id="tests-worked-examples-loft-L110">  b = random::<span class="fn-call">seed_stream</span>(<span class="nm">3</span>);</span>
+<span id="tests-worked-examples-loft-L111">  <span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..5</span> {</span>
+<span id="tests-worked-examples-loft-L112">    <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((a.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>) == (b.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>), <span class="st">"equal seeds replay exactly"</span>);</span>
+<span id="tests-worked-examples-loft-L113">  }</span>
+<span id="tests-worked-examples-loft-L114"></span>
+<span id="tests-worked-examples-loft-L115">  <span class="cm">// indices(5) costs 5 - 1 = 4 draws, no more and no less.</span></span>
+<span id="tests-worked-examples-loft-L116">  via_shuffle = random::<span class="fn-call">seed_stream</span>(<span class="nm">3</span>);</span>
+<span id="tests-worked-examples-loft-L117">  via_shuffle.<span class="fn-call">indices</span>(<span class="nm">5</span>);</span>
+<span id="tests-worked-examples-loft-L118">  after_shuffle = via_shuffle.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L119"></span>
+<span id="tests-worked-examples-loft-L120">  via_draws = random::<span class="fn-call">seed_stream</span>(<span class="nm">3</span>);</span>
+<span id="tests-worked-examples-loft-L121">  <span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..4</span> { via_draws.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>); }</span>
+<span id="tests-worked-examples-loft-L122">  after_draws = via_draws.<span class="fn-call">get</span>(<span class="nm">0</span>, <span class="nm">1000000</span>) ?? <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L123">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(after_shuffle == after_draws, <span class="st">"a shuffle of 5 is exactly four draws' worth of stream"</span>);</span>
+<span id="tests-worked-examples-loft-L124"></span>
+<span id="tests-worked-examples-loft-L125">  <span class="cm">// And it really is a permutation, not a sample.</span></span>
+<span id="tests-worked-examples-loft-L126">  perm = random::<span class="fn-call">seed_stream</span>(<span class="nm">3</span>).<span class="fn-call">indices</span>(<span class="nm">5</span>);</span>
+<span id="tests-worked-examples-loft-L127">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(perm) == <span class="nm">5</span>, <span class="st">"one entry per index"</span>);</span>
+<span id="tests-worked-examples-loft-L128">  seen = <span class="nm">0</span>;</span>
+<span id="tests-worked-examples-loft-L129">  <span class="kw">for</span> want <span class="kw">in</span> <span class="nm">0..5</span> {</span>
+<span id="tests-worked-examples-loft-L130">    <span class="kw">for</span> got <span class="kw">in</span> perm { <span class="kw">if</span> got == want { seen += <span class="nm">1</span>; } }</span>
+<span id="tests-worked-examples-loft-L131">  }</span>
+<span id="tests-worked-examples-loft-L132">  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(seen == <span class="nm">5</span>, <span class="st">"every index 0..4 appears exactly once"</span>);</span>
+<span id="tests-worked-examples-loft-L133">}</span>
+</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

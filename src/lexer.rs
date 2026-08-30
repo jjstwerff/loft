@@ -2156,10 +2156,10 @@ impl Lexer {
             };
             res = n;
         }
-        // Remember/discard only for a token freshly scanned at the edge with nothing
-        // queued behind it.  `at_edge && link == memory.len()` excludes both a replay
-        // (`at_edge` was false) and a mid-scan queue like `5..10` / `n.v.0.0` (the
-        // number lexer pushed a follow-up token, leaving `link < memory.len()`).
+        // Remember a token freshly scanned at the edge.  A replay (`at_edge` was false)
+        // is already in the buffer and must not be appended twice — two look-aheads
+        // starting at the same position desynced the real parse when it was
+        // (`link_revert_repeatable_same_region`).
         if at_edge && self.link == self.memory.len() {
             if self.count_links() > 0 {
                 self.memory.push(res.clone());
@@ -2168,6 +2168,19 @@ impl Lexer {
                 self.memory.clear();
                 self.link = 0;
             }
+        } else if at_edge && self.link < self.memory.len() && self.count_links() > 0 {
+            // A mid-scan QUEUE: reading `1..` or `n.v.0.0`, the number lexer emits two
+            // tokens from one scan — it pushes the follow-up (`..` / `.`) into the buffer
+            // and returns the NUMBER as the live token.  So the number is the one token
+            // the buffer does not hold, and a revert to any point before it replays the
+            // follow-up alone: `i + 1..` came back as `i`, `+`, `..`, and the `+` was left
+            // with one operand (loft#1164).
+            //
+            // Insert it BEFORE the queued token and step over it, which leaves the live
+            // sequence unchanged — the next `cont()` still replays the follow-up — and
+            // makes the buffer say what was actually read.
+            self.memory.insert(self.link, res.clone());
+            self.link += 1;
         }
         self.peek = res;
     }
@@ -2858,6 +2871,35 @@ mod test {
         }
         lex.cont();
         assert!(lex.has_token("+="));
+    }
+
+    #[test]
+    fn link_revert_replays_a_queued_number_split() {
+        // A number that ends at a `..` or a field `.` emits TWO tokens from one scan: the
+        // lexer returns the NUMBER and queues the follow-up in the replay buffer.  Both
+        // must survive a revert, or an expression re-read after a look-ahead loses its
+        // operand — `(s[i + 1..])` came back as `i`, `+`, `..` and left the `+` with one
+        // side (loft#1164).
+        let mut lex = Lexer::from_str("i + 1..4", "queued_split");
+        assert_eq!(lex.peek().has, LexItem::Identifier("i".into()));
+
+        // Look ahead over the whole expression, the way a tuple-literal classifier does.
+        let l = lex.link();
+        for _ in 0..5 {
+            lex.cont();
+        }
+        lex.revert(l);
+
+        // The replay must be what was READ, number included.
+        assert_eq!(lex.peek().has, LexItem::Identifier("i".into()));
+        lex.cont();
+        assert_eq!(lex.peek().has, LexItem::Token("+".into()));
+        lex.cont();
+        assert_eq!(lex.peek().has, LexItem::Integer(1, false));
+        lex.cont();
+        assert_eq!(lex.peek().has, LexItem::Token("..".into()));
+        lex.cont();
+        assert_eq!(lex.peek().has, LexItem::Integer(4, false));
     }
 
     #[test]

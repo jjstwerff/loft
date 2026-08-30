@@ -128,10 +128,75 @@ without a guard.
 
 ## Deviations
 
-OPEN: **0** — D-iter-1 was opened and CLOSED on 2026-08-22, by re-measuring the `OPEN: 0`
-this line used to carry. The zero is back, and it now rests on a corpus that varies the
-element type (`tests/scripts/1074-combinators-over-tuple-elements.loft`) rather than on one
-that never did.
+OPEN: **0** — and the zero is new, not the one this line used to carry. That one was
+re-measured on 2026-08-30 and did not hold: it rested on a corpus that varies the element
+TYPE (`tests/scripts/1074-combinators-over-tuple-elements.loft`) but never varies what the
+comprehension READS. Every cell drew from a source the destination does not name, so
+`I-Comp`'s "fresh result, source untouched" clause was pinned only where it is trivially
+true. Varying that one axis broke all THREE destination kinds at once — a local, a struct
+field and a `+=` — and all three are now closed with their own guards. D-iter-1 remains
+CLOSED.
+
+> **D-iter-2 — CLOSED (2026-08-30). A comprehension assigned to a struct FIELD it reads.**
+> `s.v = [for i in 0..s.v.len() { s.v[i] * 2 }]` answered `[]` on both backends, silently.
+> The whole-vector field replace emits `OpClearVector(s.v)` ahead of the comprehension's
+> own ops, so the field was empty before the loop read it. Sweeps like its local sibling —
+> body-only gives `[0,0,0]`, a foreign source gives `[1,3,4]` — with one control that
+> shaped the cure: reading a SIBLING field (`s.v = [for … s.w …]`) is correct, so the test
+> is on the FIELD EXPRESSION, not the struct's base variable.
+> Fixed (loft#1195) by the fresh-buffer route below.
+>
+> **D-iter-3 — CLOSED (2026-08-30). A comprehension appended with `+=` to a vector it
+> reads.** `a += [for i in 0..a.len() { a[i] * 2 }]` never terminated: it built into `a`'s
+> own store while the bound re-read that store's growing length (`--native` overflowed in
+> `store.rs` instead). Unbounded allocation, not merely a hang.
+>
+> Its boundary is NARROWER than the other two, and the difference is instructive: the BODY
+> reading the destination is fine, because `+=` leaves the existing elements at their own
+> indices, so only the loop's TERMINATION condition — the bound, or the source being the
+> destination — was ever affected. The two body-only cells answer the same values under the
+> fresh-buffer model as they did built in place, which is what made the cure additive.
+> Fixed (loft#1196) by the same route.
+>
+> **The cure both took, and why it was already there.** `map` and `filter` build into a
+> buffer of their own and let the destination's assignment deliver it, so
+> `s.v = s.v.map(…)` and `a += a.map(…)` were correct on every cell throughout. The
+> comprehension now takes that same route whenever it reads a destination it cannot serve
+> by deferring a repoint — the reference route was the oracle, and the two spellings of one
+> operation now agree.
+
+> **D-iter-4 — CLOSED (2026-08-30). A comprehension assigned to a LOCAL it reads.**
+> `a = [for i in 0..a.len() { a[i] * 2 }]` answered `[]`, and the shape needed neither a
+> loop, a call, a struct nor a tuple. `#501`'s watermark reuse builds a comprehension
+> straight into its destination, and the fresh store `create_vector` splices in for a `=`
+> repoints the destination BEFORE the loop — so the source, the range bound, the `if`
+> guard and the body all resolved through the empty result being built.
+>
+> **The filed scope was one of six cells.** Sweeping which PART does the reading says the
+> source need not be the destination at all:
+>
+> | cell | answered |
+> |---|---|
+> | `a = [for i in 0..a.len() { a[i]*2 }]` — bound + body | `[]` |
+> | `a = [for x in a { x*2 }]` — the source IS `a` | `[]` |
+> | `a = [for i in 0..3 { a[i]*2 }]` — body only | `[0,0,0]`, length right |
+> | `a = [for i in 0..a.len() { i*2 }]` — bound only | `[]` |
+> | `a = [for x in b { x + a[0] }]` — a FOREIGN source, body reads `a` | `[1,3,4]` |
+> | `a = [for i in 0..3 if a[i] > 7 { i }]` — the `if` guard | `[]` |
+>
+> The foreign-source cell is the sharpest: `b` drives the loop, the length is right, and
+> every value is read out of the half-built result. The const-fill and const-unroll
+> shortcuts (loft#884) build through the destination too and carried the same defect.
+>
+> Fixed (loft#1194) by holding back the ONE op that repoints the destination until after
+> the loop, and snapshotting what the destination holds so the loop's reads resolve
+> through that. The snapshot is what makes a SURROUNDING loop work: `OpDatabase` reuses
+> the slot's store (`clear` + `claim`), so on a second execution of the same site the
+> buffer store IS the one the destination was left pointing at — reordering alone left the
+> reported "pop the last element" worklist idiom still empty. `.map` / `.filter` on the
+> same vector were correct throughout (they already mint their own result), as was a
+> `&`-alias read; both are controls in
+> `tests/scripts/1194-a-comprehension-reads-its-destination.loft`.
 
 > **D-iter-1 — CLOSED (2026-08-22). Every combinator was broken over a TUPLE element.**
 > `xs.map(|t| { t.0 * 10 })` on a `vector<(integer, integer)>` answers
@@ -190,6 +255,19 @@ that never did.
 - **Empty/null (`I-Empty` / `I-NullSrc`)** — `for x in [] { … }` and a `for` over a null
   collection both run the body zero times and continue.
 - **Fresh result (`I-Comp`)** — `ys = xs.map(f)` leaves `xs` unchanged (a new store, `H-Alloc`).
+- **The destination is a legal source (`I-Comp`)** — `a = [for i in 0..a.len() { a[i]*2 }]`
+  reads what `a` held when the statement began, never the result being built, whichever part
+  does the reading (source, range bound, `if` guard, body) and however many times the
+  statement is executed. The cell to run is a comprehension whose source is a FOREIGN vector
+  and whose BODY reads the destination: it keeps the right length while every value is wrong,
+  so a length- or emptiness-only check passes on it. **Run it for all three destination
+  kinds** — a local, a struct field, and `+=` — because one mechanism serves them and they
+  broke together; and run each inside a surrounding LOOP, since a buffer reused across
+  executions of the same site fails only on the second one.
+- **A comprehension and its combinator agree** — `xs = xs.map(f)` and
+  `xs = [for x in xs { f(x) }]` answer the same thing, on the same destination kinds. The
+  combinators were correct while the comprehension was not, for every cell above, so this
+  pairing is the cheapest oracle the doc has for this rule.
 
 Any program where the interpreter and `--native` disagree on an iteration's order, length,
 element values, or the source's immutability is the definitional error this doc names.

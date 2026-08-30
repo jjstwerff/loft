@@ -1,0 +1,5 @@
+fn main(args: vector<text>) {
+  for who in args {
+    println("hello, {who}!");
+  }
+}

@@ -1290,6 +1290,37 @@ impl Parser {
             }
             self.lexer.token(")");
         }
+        // The entry point takes nothing, or the invocation arguments as one `vector<text>`.
+        //
+        // `State::execute_argv` fills exactly that one shape: it pushes a TEXT vector before
+        // the return address when `main` declares a single vector parameter, and pushes
+        // nothing otherwise.  Every other signature was still accepted and simply never
+        // filled — `main(who: text)` read `""`, two integers read whatever the frame held,
+        // and a `text` among two crashed on a corrupt store reference.  A `vector` of any
+        // OTHER element type is the same fault one step on: the text vector is pushed into a
+        // slot typed for something else (loft#1172).
+        //
+        // Refused rather than filled, because none of these shapes does anything today: there
+        // is no argument to lose.  Reading them is `args: vector<text>`.
+        if !self.default && !self.first_pass && fn_name == "main" {
+            let visible: Vec<&crate::data::Argument> = arguments
+                .iter()
+                .filter(|a| !a.name.starts_with("__work_") && !a.name.starts_with("__ref_"))
+                .collect();
+            let supported = visible.is_empty()
+                || (visible.len() == 1
+                    && matches!(&visible[0].typedef,
+                                Type::Vector(inner, _) if matches!(inner.base(), Type::Text(_))));
+            if !supported {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`main` takes no parameters, or one `vector<text>` for the invocation \
+                     arguments — `fn main(args: vector<text>)`.  Any other signature is never \
+                     filled, so it would read empty or worse"
+                );
+            }
+        }
         // validate that the type variable appears in the first parameter.
         if is_generic && !arguments.is_empty() {
             let tv_nr = self.data.def_nr(&type_var_name);
@@ -1510,8 +1541,8 @@ impl Parser {
         // case from Phase 07.  Safe after P236's fix (work-ref unification across If
         // branches in `parser/control.rs::unify_if_branches_work_refs`); without it,
         // `min_max(...) -> (integer, integer) { if cond { (a, b) } else { (c, d) } }`
-        // regressed on `--native` because each branch's separate synthetic-struct
-        // work-ref dropped the if/else's value.
+        // loses the if/else's value on `--native`, because each branch's separate
+        // synthetic-struct work-ref drops it.
         //
         // Everywhere ELSE the boxing is pure cost: it turns `(float, float, float)`
         // into a store record claimed and freed on every call, so the SAME arithmetic
@@ -2212,6 +2243,7 @@ impl Parser {
                 // out to need a temporary is re-parsed from here into a function of its own.
                 let value_start = self.lexer.link();
                 let unresolved_before = self.unresolved_names;
+                let unresolved_types_before = self.unresolved_types;
                 let mut t = Value::Var(arguments.len() as u16);
                 // loft#1067 — the parameter's declared type is the expected type for its
                 // DEFAULT, exactly as it is for an argument a caller passes: a default is
@@ -2294,10 +2326,19 @@ impl Parser {
                 let dflt_fn = self.default_fn_name(fn_name, arguments, &attr_name);
                 let named_a_forward_reference =
                     self.first_pass && self.unresolved_names != unresolved_before;
+                // The same collapse reached WITHOUT losing a name.  A call to a function
+                // declared below resolves its name — definitions are recorded before bodies
+                // are parsed — while its RETURN TYPE is not linked yet, so the counter above
+                // stays still and pass 1 froze a reading it would have got right on the
+                // second: `= 1 + late(0)` stored the bare `1`, and `= true && late(0)`
+                // answered `false` and left the interpreter a short stack (loft#1170).
+                let typed_against_a_forward_declaration =
+                    self.first_pass && self.unresolved_types != unresolved_types_before;
                 let hoisted_in_pass_1 =
                     !self.first_pass && self.minted_default_nr(&dflt_fn, arguments) != u32::MAX;
                 if !matches!(typedef, Type::RefVar(_))
                     && (named_a_forward_reference
+                        || typed_against_a_forward_declaration
                         || hoisted_in_pass_1
                         || !default_replayable_in_place(&t, site))
                 {
@@ -2311,7 +2352,12 @@ impl Parser {
                     let (params, call_args) = self
                         .hoisted_default_signature(&dflt_fn, arguments)
                         .unwrap_or_else(|| {
-                            if named_a_forward_reference {
+                            // A tree that LOST a node cannot be asked which earlier
+                            // parameters the default reads, and an unresolved TYPE drops one
+                            // the same way `call_op_as` does — so both take them all.  An
+                            // over-wide signature is wasteful where a short one fails to
+                            // compile.
+                            if named_a_forward_reference || typed_against_a_forward_declaration {
                                 Self::every_earlier_parameter(arguments, &injected)
                             } else {
                                 Self::default_fn_params(&t, arguments, &injected)

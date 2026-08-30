@@ -1294,6 +1294,21 @@ Both `"..."` and `` `...` `` strings support format specifiers using `{...}`:
 
 Escape `{` and `}` as `{{` and `}}`.
 
+A spec tunes what the value RENDERS as, so the width, the alignment and the pad character
+work on every type — a character, a vector, a struct and a record-carrying enum pad exactly
+as text and numbers do:
+
+```
+"[{c:>5}]"        // a character   → [    x]
+"[{v:>12}]"       // a vector      → [       [1,2]]
+"[{p:*^16}]"      // a struct      → [***{r:1,g:2}****]
+```
+
+Two rules decide the edges. The flags that choose the RENDERING itself — `#` and `:j` — are
+not field-shaping, so they combine with a width rather than competing with it. And a null
+character renders as nothing, so `"{c:>3}"` on one is three pad characters: a width pads
+whatever the value rendered as, and nothing is still a rendering.
+
 For-expressions can be used inside strings to produce formatted lists:
 ```
 "values: {for x in 1..7 {x*2}:02}"   // produces [02,04,06,08,10,12]

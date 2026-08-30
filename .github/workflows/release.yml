@@ -179,6 +179,17 @@ jobs:
             target
           key: ubuntu-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
 
+      # Two of the four documentation tiers render the EXTRACTED package rather than
+      # the registry index: the guide (`docs/*.loft`) and the source browser.  This
+      # runner starts with an empty `~/.loft/registry`, and without this step gendoc
+      # still succeeds — it publishes 42 "not on this build box" pages OVER the source
+      # browsers in the checkout, and every library card reports "no guide" for the
+      # packages that ship one.  Nothing goes red; the tier simply is not there.
+      - name: Fetch the registry packages the doc build renders
+        run: |
+          cargo build --release --bin loft
+          scripts/fetch-doc-packages.sh target/release/loft
+
       - name: Generate HTML docs
         run: cargo run --bin gendoc
 

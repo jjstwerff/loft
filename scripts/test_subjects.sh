@@ -35,7 +35,6 @@ HEAVY_BINARIES=(
   ir_schema_roundtrip  #  360s /   8 tests — IR codec over every tests/scripts file
   exit_codes           #  210s /  26 tests — spawns a process per case
   codegen_emitter      #  187s /  21 tests — rustc per case
-  doc_lib_examples     #  132s /   2 tests — compiles every doc example
   multiplayer_v5       #  126s /   5 tests — networked, serialised
   engine_host_audience #   93s /   1 test  — one long host session
   html_wasm            #  114s /  20 tests — wasm-pack per case

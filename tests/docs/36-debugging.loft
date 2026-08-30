@@ -1,0 +1,73 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Debugging
+// @TITLE: Stop your program on a line and look at what it is really doing.
+// When a program does the wrong thing, the usual reaction is to add printing to
+// it, run it, read the output, and take the printing out again. loft gives you a
+// better tool: stop the program on the line you care about and look around.
+//
+// The program used below is 'count.loft'. It adds 1, 2 and 3 into a total.
+// ## Stop on a line
+// Say 'debug', then your file, then a colon and a line number:
+//
+//     $ printf ':continue\n' | loft debug count.loft:4
+//     paused in main | total = 0, i = 1
+//
+// The program runs until it reaches line 4 and then waits for you. The line it
+// prints tells you where you are and what every local variable holds right now.
+//
+// Line 4 is inside a loop that goes round three times, so the program stops
+// there three times. ':continue' means "carry on until you reach this line
+// again", not "run to the end" — which is why the examples below say
+// ':continue' more than once when they want the program to finish.
+// ## Look at a value
+// Type the name of a variable and press enter. Any expression works, not just a
+// name — it is worked out where the program is paused:
+//
+//     $ printf 'total\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+//     0
+//
+// This is the part that replaces printing. You do not have to guess in advance
+// which values you will want; ask for them when you are there.
+// ## Move one step at a time
+// Four commands move the program forward:
+//
+// - ':step' runs the next line, going INTO any function it calls
+// - ':next' runs the next line, going OVER any function it calls
+// - ':finish' runs until the current function returns
+// - ':continue' carries on to the next time this line is reached
+//
+//     $ printf ':step\ntotal\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+//     1
+//
+// After that single ':step' the total is 1, because the loop has now added its
+// first number. Each stop prints the same "paused" line, so you can watch a
+// value change as the loop goes round.
+// ## Change a value while it is running
+// You can write to a local, not only read it. This answers "would it work if
+// this were right?" without editing the file and starting again:
+//
+//     $ printf 'total = 100\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+//     total=106
+//     run finished
+//
+// The program carries on with the value you gave it. It finished with 106
+// instead of 6, because the loop still had 2 and 3 to add after the change.
+// ## Getting out
+// ':continue' carries on. ':quit' stops right away. ':help' lists every command
+// if you forget one.
+// ## Typing, or feeding it a script
+// Every example here pipes its commands in, which is how they are checked
+// automatically — the output you see above is compared against what the command
+// really prints. Run 'loft debug count.loft:4' on its own and you get the
+// '(dbg)' prompt to type at instead. The commands are the same either way.
+
+fn main() {
+  // This is what `count.loft` does — the program the examples above debug.
+  total = 0;
+  for i in 1..4 {
+    total += i;
+  }
+  assert(total == 6, "1 + 2 + 3 is 6, which is what the debugger shows you");
+  println("total={total}");
+}

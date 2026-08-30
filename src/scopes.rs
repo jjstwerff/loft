@@ -508,6 +508,12 @@ fn record_cause(map: &mut HashMap<u16, Disturbance>, view: u16, d: Disturbance) 
 
 /// @PLN130 F2 + F8 — every VIEW binding that is live across a disturbance of its container.
 ///
+/// This is @FR-B-View's materialise clause: a struct-typed projection aliases without `&`, and
+/// where the container is DISTURBED (@FR-B-Disturb) while the view is still LIVE the binding
+/// gives up the alias, takes its own copy at the bind, and the author is told.  Answering it
+/// is this walk's whole job; the two users of the verdict — `scan_set`'s dep strip and the
+/// interpreter's materialising emitters — act on it.
+///
 /// Two disturbances, one question. A RESHAPE (`v.remove(i)`, `e#remove`) renumbers the
 /// positions inside the container's store, and a view is a `DbRef` pinned to one — so a view
 /// live across it silently starts naming a different element (probes 03-07, 29: a pure READ
@@ -562,10 +568,19 @@ fn record_cause(map: &mut HashMap<u16, Disturbance>, view: u16, d: Disturbance) 
 /// a later read or write of a shaken view is what condemns it. A view whose last use precedes
 /// the disturbance keeps its alias and writes through, which is the rustc rule.
 ///
-/// Known lower bound: a view bound inside a nested block that is used on a LATER iteration of
-/// an enclosing loop is not tracked, because the frame closes with the block. A disturbance
-/// anywhere inside a loop shakes every view held from outside it before the body is walked, so
-/// the ordinary loop shapes are covered; this one is not, and it keeps today's behaviour.
+/// A block frame ends the views the block OWNS, which is not the same as the views bound in
+/// it. Re-binding an outer local inside a nested block gives a view that outlives the block,
+/// and dropping it at the close is what let loft#1184 through — `a = w.inner` in a loop body,
+/// `w = Outer{inner: a}` on the next turn, every heap field of `a` empty from the second
+/// iteration on. So a view goes into the frame that owns its VARIABLE (the block it was first
+/// bound in), and a LOOP is walked twice: the first pass could only shake views that already
+/// existed, and the second supplies the use that condemns one the body itself bound. Two
+/// passes reach the fixpoint, because the second binds exactly the views the first did.
+///
+/// Known lower bound: only a `Var` names a container, so a disturbance reached through some
+/// other expression is not recognised — [`reshaped_containers`] and [`established_stores`] are
+/// both lower bounds, and a missed case keeps today's behaviour rather than inventing a new
+/// one.
 fn collect_views_to_materialise(
     code: &Value,
     function: &Function,
@@ -590,9 +605,18 @@ fn collect_views_to_materialise(
 struct ViewWalk<'a> {
     function: &'a Function,
     data: &'a Data,
-    /// One frame per open block: the views bound in it, and the container each one views.
-    /// A view bound inside a block dies when that block closes.
+    /// One frame per open block: the views the block OWNS, and the container each one views.
+    /// A view dies when the block that owns its VARIABLE closes — which is where the variable
+    /// was first bound, not necessarily where this binding was written (see `bound_at`).
     open: Vec<Vec<(u16, u16)>>,
+    /// The frame depth each variable was first BOUND at, which is the block that owns it.
+    ///
+    /// A view goes into the frame that owns its VARIABLE, not the block the binding statement
+    /// happens to sit in — the two differ whenever an outer local is re-bound inside a nested
+    /// block, and the variable then outlives that block. A hoisted `Set(v, Null)` declaration
+    /// is skipped: it is emitted at function scope for every ref- and text-typed local, so
+    /// counting it would put EVERY view at function scope and undo the frame model.
+    bound_at: HashMap<u16, usize>,
     /// Views whose container has been disturbed since the bind, and by what. Being shaken is
     /// not yet a verdict — it becomes one at the next use.
     shaken: HashMap<u16, Disturbance>,
@@ -625,6 +649,7 @@ impl ViewWalk<'_> {
             function,
             data,
             open: vec![Vec::new()],
+            bound_at: HashMap::new(),
             shaken: HashMap::new(),
             out: HashMap::new(),
             cross_frame,
@@ -663,6 +688,17 @@ impl ViewWalk<'_> {
                 // body come out live across a removal at the bottom of it.
                 self.disturb(stmt);
                 self.scoped(&b.operators);
+                // The BACK EDGE. The shake above could only reach views that already existed;
+                // a view the body itself binds is disturbed by the same statements one turn
+                // later, and nothing had seen it yet. So shake again and re-walk — the second
+                // pass is what supplies the USE that condemns it (loft#1184). One extra pass
+                // reaches the fixpoint: it binds exactly the views the first pass bound, so a
+                // third would read the same state.
+                let before: HashSet<u16> = self.shaken.keys().copied().collect();
+                self.disturb(stmt);
+                if self.shaken.keys().any(|v| !before.contains(v)) {
+                    self.scoped(&b.operators);
+                }
             }
             Value::If(cond, t, e) => {
                 // The condition is evaluated before either branch and is not part of one.
@@ -709,6 +745,7 @@ impl ViewWalk<'_> {
     /// One statement, in the order its parts take effect: what it disturbs, then what it
     /// uses, then what it (re)binds.
     fn leaf(&mut self, stmt: &Value) {
+        self.note_binding_depth(stmt);
         self.disturb(stmt);
         // Reading or writing a shaken view is what makes the disturbance matter.
         self.note_uses(stmt);
@@ -725,10 +762,27 @@ impl ViewWalk<'_> {
                 self.function.tp(*v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) && let Some(container) = base_container_var(rhs.unspan(), self.data)
-                && let Some(frame) = self.open.last_mut()
             {
-                frame.push((*v, container));
+                // The view belongs to the frame that owns its VARIABLE. Re-binding an outer
+                // local inside a nested block gives a view that outlives the block, and
+                // dropping it at the block's close is what let loft#1184 through: `a =
+                // w.inner` in a loop body, `w = Outer{inner: a}` on the next turn.
+                let depth = self.bound_at.get(v).copied().unwrap_or(self.open.len());
+                let idx = depth.min(self.open.len()).saturating_sub(1);
+                self.open[idx].push((*v, container));
             }
+        }
+    }
+
+    /// Note where each variable is first BOUND, which is [`Self::leaf`]'s frame for a view of it.
+    ///
+    /// A `Set(v, Null)` is the hoisted declaration every ref- and text-typed local gets at
+    /// function scope, not a binding, so it is not what owns the variable.
+    fn note_binding_depth(&mut self, stmt: &Value) {
+        if let Value::Set(v, rhs) = stmt.unspan()
+            && !matches!(rhs.unspan(), Value::Null)
+        {
+            self.bound_at.entry(*v).or_insert(self.open.len());
         }
     }
 
@@ -4218,7 +4272,7 @@ impl Scopes {
                 // SURGICAL: only unwrap when the Insert's leading op is a lift
                 // `Set(__lift_N, …)`.  Other span-wrapped Inserts (closure-record
                 // construction, etc.) MUST keep their span — unwrapping them
-                // broadly regressed the closure-in-struct-field cases (`invalid
+                // broadly breaks closure-in-struct-field construction (`invalid
                 // fn-ref` in native codegen, @P258/@P259 territory).
                 //
                 // The A5.6 null-init preamble ([`Self::is_null_init_preamble`]) is the
@@ -5172,6 +5226,23 @@ impl Scopes {
     /// Enforces @FR-O-Derived: free placement is DERIVED, not decided — a local is freed
     /// iff it owns its store and does not transfer it out, once, at scope exit.  A
     /// per-site heuristic anywhere else in codegen is the bug that rule names.
+    /// Does `d_nr`'s published return BORROW the closure it carries?
+    ///
+    /// The one question that decides whether a store this function mints and hands back will
+    /// have an owner at the call site.  `published_ret_type` keeps the `__closure` index only
+    /// where the caller is meant to read the result as a borrow, so its presence here IS the
+    /// caller's reading — asked off the same attribute list, so the two cannot drift.
+    fn return_borrows_closure(data: &Data, d_nr: u32) -> bool {
+        if d_nr == u32::MAX || d_nr >= data.definitions() {
+            return false;
+        }
+        let def = data.def(d_nr);
+        let Some(idx) = def.attributes().iter().position(|a| a.name == "__closure") else {
+            return false;
+        };
+        u16::try_from(idx).is_ok_and(|i| def.returned.depend().contains(&i))
+    }
+
     fn free_vars(
         &mut self,
         is_return: bool,
@@ -5531,7 +5602,18 @@ impl Scopes {
             let tmp = function.add_temp_var(&name, tp);
             self.var_scope.insert(tmp, self.scope);
             self.var_order.push(tmp);
-            let free_if = data.def_nr("OpFreeRefIfDistinct");
+            // loft#1186 / @PLN150 — when this function's PUBLISHED return names its
+            // `__closure`, its callers read the result as a borrow, and the not-distinct leg
+            // then leaves the store the callee minted owned by nobody: the callee does not
+            // free it (it is the value it returns) and the caller will not (it borrows).
+            // `OpFreeRefOrHandUp` is `OpFreeRefIfDistinct` with an owner on that leg.  The
+            // distinct leg is identical, so a function whose return does not borrow keeps
+            // exactly the op it had.
+            let free_if = data.def_nr(if Self::return_borrows_closure(data, self.d_nr) {
+                "OpFreeRefOrHandUp"
+            } else {
+                "OpFreeRefIfDistinct"
+            });
             let mut result = Vec::with_capacity(ls.len() + null_arm_record_sources.len() + 2);
             result.push(v_set(tmp, expr.clone()));
             for &src in &null_arm_record_sources {
@@ -7260,6 +7342,62 @@ impl Scopes {
         }
     }
 
+    /// loft#1176 — does a monomorph whose tail is a call THROUGH A FN-REF hand back a
+    /// store this caller must own?
+    ///
+    /// [`Definition::monomorph_return_is_fresh`] reads the callee's body and answers
+    /// `false` for a tail like `f(x)`: what comes back is the fn-ref target's fact, and
+    /// inside the monomorph `f` is a runtime value with no definition to ask.  The fact
+    /// is not unreachable, only unreachable from THERE — at this call site the caller
+    /// wrote which closure it passed, so `fnref_target` resolves it and the same
+    /// body-shaped question is put to the definition that actually runs.
+    ///
+    /// **The resolved target must pass BOTH ownership reads, and the pair is not
+    /// redundant.**  `returns_borrowed_view` is the deps proxy and catches a lambda
+    /// handing back its own PARAMETER; it does not catch one handing back a CAPTURE,
+    /// because the dep then names the hidden `__closure` attribute and a hidden attr is
+    /// read as "not a borrow" (loft#1114).  `monomorph_return_is_fresh` is what closes
+    /// that: the capture arrives as a place read rooted at `__closure`, which is an
+    /// argument, so the body-shaped proof refuses it.  Measured — the concrete twin
+    /// `fn once_p(x: P, f: fn(P) -> P) -> P { f(x) }` lifted on the deps proxy alone and
+    /// CORRUPTED the captured record on both backends (`formal/closures.md` D-clo-9);
+    /// this route declines that same shape.
+    ///
+    /// Every unresolved position answers `false`, which leaves the leak that was already
+    /// there.  That is the direction this whole gate takes when it cannot name what it
+    /// would be freeing: a wrong `true` frees a store the caller still holds.
+    fn monomorph_fnref_return_is_fresh(
+        &self,
+        val: &Value,
+        data: &Data,
+        def: &crate::data::Definition,
+    ) -> bool {
+        let Some(slots) = def.monomorph_fnref_return_slots() else {
+            return false;
+        };
+        let Value::Call(_, args) = val.unspan() else {
+            return false;
+        };
+        slots.iter().all(|&slot| {
+            // A parameter's variable slot IS its argument position; a hidden argument the
+            // lowering appends sits after every visible one, so a slot in range names the
+            // value the caller wrote.
+            let Some(arg) = args.get(slot as usize) else {
+                return false;
+            };
+            let Value::Var(fn_var) = arg.unspan() else {
+                return false;
+            };
+            let target = match self.fnref_target.get(fn_var).copied() {
+                Some(d) if d != u32::MAX => data.def(d),
+                _ => return false,
+            };
+            target.code != Value::Null
+                && !target.returns_borrowed_view()
+                && target.monomorph_return_is_fresh()
+        })
+    }
+
     /// Check whether a scanned argument at position `arg_idx` is an inline
     /// struct-returning call that needs lifting to a temporary variable.
     /// Returns the struct definition number if lifting is needed, None
@@ -7305,6 +7443,31 @@ impl Scopes {
         match returned {
             Type::Reference(d, _) => Some(Self::reopt(opt, Type::Reference(*d, Deps::none()))),
             Type::Enum(d, true, _) => Some(Self::reopt(opt, Type::Enum(*d, true, Deps::none()))),
+            // loft#1177 — a COLLECTION return is the same question with the same answer, and
+            // it was missing: the arms named the two aggregate shapes a closure was known to
+            // return and `_ => None` read as *"nothing else needs owning"*, which a
+            // store-backed collection contradicts.  A lambda handing back a `vector` / keyed
+            // collection used INLINE (`len(g(7))`) therefore had its store owned by nothing —
+            // one leaked record per call, where the bound form `r = g(7)` was always clean.
+            // The dep list is rebuilt empty for the same reason the two arms above rebuild
+            // theirs: `returns_borrowed_view` has already refused a callee that hands back a
+            // view, so what reaches here is a store the caller must own.
+            Type::Vector(inner, _) => {
+                Some(Self::reopt(opt, Type::Vector(inner.clone(), Deps::none())))
+            }
+            Type::Hash(d, k, _) => Some(Self::reopt(opt, Type::Hash(*d, k.clone(), Deps::none()))),
+            Type::Sorted(d, k, _) => {
+                Some(Self::reopt(opt, Type::Sorted(*d, k.clone(), Deps::none())))
+            }
+            Type::Index(d, k, _) => {
+                Some(Self::reopt(opt, Type::Index(*d, k.clone(), Deps::none())))
+            }
+            Type::Radix(d, k, _) => {
+                Some(Self::reopt(opt, Type::Radix(*d, k.clone(), Deps::none())))
+            }
+            Type::Trie(d, k, _) => Some(Self::reopt(opt, Type::Trie(*d, k.clone(), Deps::none()))),
+            // Everything else is a value the caller does not own a store for — a scalar
+            // lives in the slot, and a `text` is freed by its own delivery path.
             _ => None,
         }
     }
@@ -7576,10 +7739,26 @@ impl Scopes {
             // indistinguishable to `returns_borrowed_view` and lifting on that would double
             // free the first.  The proof is positive and under-approximating: a shape it
             // cannot read stays unlifted, which costs the leak that was already there.
-            let lift_owned_return = def.name.starts_with("n_")
-                || (def.name.starts_with("t_")
-                    && (def.attr_names.contains_key("__retbuf")
-                        || def.monomorph_return_is_fresh()));
+            // loft#1176 — a tail that is a call THROUGH A FN-REF is such a shape read from
+            // the wrong frame, and it is decided by [`Self::monomorph_fnref_return_is_fresh`]
+            // ALONE, ahead of every gate below.  That ordering is the fix rather than a
+            // tidy-up.  The gates below all read facts carried by THIS
+            // callee's signature, and none of them can carry the caller's closure: `-> P`
+            // says the same thing whether the closure mints, hands back the caller's own
+            // argument, or hands back a record it CAPTURED.  Reached through the `n_` arm
+            // the last of those was lifted and freed — the captured record answered
+            // another value on the next read and garbage once the scope ended, on both
+            // backends — while `__retbuf`'s exemption made it worse: `{ f(x) }` never
+            // delivers INTO that buffer, so the premise that the lifted temp is the
+            // caller's own allocation is simply false here.
+            let lift_owned_return = if def.has_fnref_return_site() {
+                self.monomorph_fnref_return_is_fresh(val, data, def)
+            } else {
+                def.name.starts_with("n_")
+                    || (def.name.starts_with("t_")
+                        && (def.attr_names.contains_key("__retbuf")
+                            || def.monomorph_return_is_fresh()))
+            };
             if lift_owned_return && def.code != Value::Null {
                 // The same `returns_borrowed_view()` question its struct-enum sibling below
                 // asks, and for the same reason: an EMPTY return dep (or one naming only a

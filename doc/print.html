@@ -32,14 +32,12 @@
 <li><a href="#11-index">Index</a> — <span class="toc-desc">Fast lookup and range queries over records</span></li>
 <li><a href="#12-hash">Hash</a> — <span class="toc-desc">Instant key lookup with a hash table</span></li>
 <li><a href="#13-file">File</a> — <span class="toc-desc">File system — text, binary, and directory access.</span></li>
-<li><a href="#14-image">Image</a> — <span class="toc-desc">Reading and writing PNG images with the imaging library</span></li>
 <li><a href="#15-lexer">Lexer</a> — <span class="toc-desc">Lexer library.</span></li>
 <li><a href="#16-parser">Parser</a> — <span class="toc-desc">Parsing Loft source code programmatically</span></li>
 <li><a href="#17-libraries">Libraries</a> — <span class="toc-desc">Library system — importing and using external loft modules.</span></li>
 <li><a href="#18-locks">Store Locks</a> — <span class="toc-desc">Immutability with const and runtime store locks</span></li>
 <li><a href="#19-threading">Parallel execution</a> — <span class="toc-desc">Parallel processing with the par(...) for-loop clause</span></li>
 <li><a href="#20-logging">Logging</a> — <span class="toc-desc">Recording events with the logging system</span></li>
-<li><a href="#21-random">Random</a> — <span class="toc-desc">Random numbers, seeding, and shuffled indices</span></li>
 <li><a href="#22-time">Time</a> — <span class="toc-desc">Wall-clock time and elapsed time</span></li>
 <li><a href="#23-safety">Safety</a> — <span class="toc-desc">Language traps and how to avoid them</span></li>
 <li><a href="#24-json">JSON</a> — <span class="toc-desc">JSON parsing and generation</span></li>
@@ -50,7 +48,12 @@
 <li><a href="#29-match">Match</a> — <span class="toc-desc">Pattern matching with match expressions</span></li>
 <li><a href="#30-formatting">Formatting</a> — <span class="toc-desc">Format strings — interpolation, alignment, and number bases</span></li>
 <li><a href="#31-ref-forward">Reference parameter forwarding</a> — <span class="toc-desc">Forwarding &amp; parameters between functions</span></li>
-<li><a href="#32-time">Time library</a> — <span class="toc-desc">The time library — dates and times as epoch milliseconds.</span></li>
+<li><a href="#33-features">Feature catalogue</a> — <span class="toc-desc">Every language and tooling feature, with what each one is for.</span></li>
+<li><a href="#34-running">Running your program</a> — <span class="toc-desc">How to run loft — one file, the REPL, and checking your work.</span></li>
+<li><a href="#35-testing">Testing your code</a> — <span class="toc-desc">How to write and run tests — a function whose name starts with test.</span></li>
+<li><a href="#36-debugging">Debugging</a> — <span class="toc-desc">Stop your program on a line and look at what it is really doing.</span></li>
+<li><a href="#37-projects">Projects and libraries</a> — <span class="toc-desc">Growing from one file into a package other code can use.</span></li>
+<li><a href="#38-call-it-yourself">Call it yourself</a> — <span class="toc-desc">A page you drive, not one you read</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
@@ -61,6 +64,7 @@
 <li class="toc-indent"><a href="#stdlib-collections">Collections</a></li>
 <li class="toc-indent"><a href="#stdlib-output-and-diagnostics">Output and Diagnostics</a></li>
 <li class="toc-indent"><a href="#stdlib-vector-aggregates">Vector aggregates</a></li>
+<li class="toc-indent"><a href="#stdlib-assertions-that-report-both-sides">Assertions that report both sides</a></li>
 <li class="toc-indent"><a href="#stdlib-field-iteration-support-types">Field iteration support types</a></li>
 <li class="toc-indent"><a href="#stdlib-file-system">File System</a></li>
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
@@ -379,7 +383,7 @@
   <span class="st">"{host}:{port}:{tls}"</span>
 }</code></pre>
 <h2 id="reference-parameters-and-defaults">Reference Parameters and Defaults</h2>
-<p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller<code>s variable and can read or write it. Without </code>&amp;<code>, Loft copies the value in, so changes inside the function stay local. Default values (written </code>= value' after the type) are substituted when the caller omits that argument.</p>
+<p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller's variable and can read or write it. Without <code>&amp;</code>, Loft copies the value in, so changes inside the function stay local. Default values (written <code>= value</code> after the type) are substituted when the caller omits that argument.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">add</span>(a:  &amp; <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>) {
   a += b + c;
 }</code></pre>
@@ -545,7 +549,7 @@
 <p>You can fill a vector with many copies of the same value using <code>; count</code> syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples.</p>
 <h2 id="passing-vectors-to-functions">Passing vectors to functions</h2>
 <p>When you pass a vector to a function, the function receives a <strong>slice</strong> — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with <code>+=</code> inside the function creates a local copy that the caller never sees.</p>
-<p>To let a function append to the caller<code>s vector, mark the parameter with </code>&amp;'. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
+<p>To let a function append to the caller's vector, mark the parameter with <code>&amp;</code>. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
 <pre><code>fn append_one(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
 </code></pre>
 <p>Without <code>&amp;</code>, only element-level mutations are visible to the caller:</p>
@@ -573,7 +577,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 </section>
 <section class="print-section" id="08-struct">
 <h1>Structs</h1>
-<p>A struct groups related values under one name. Instead of keeping a product<code>s name, price, and stock count in three separate variables that can drift out of sync, you bundle them together into a Product struct. Each piece of data inside the struct is called a field. You read and write fields using dot notation: </code>product.price'. Here is a simple product record. All four fields are plain integers or text.</p>
+<p>A struct groups related values under one name. Instead of keeping a product's name, price, and stock count in three separate variables that can drift out of sync, you bundle them together into a Product struct. Each piece of data inside the struct is called a field. You read and write fields using dot notation: <code>product.price</code>. Here is a simple product record. All four fields are plain integers or text.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Product</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
   price: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
@@ -1200,83 +1204,6 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <p>Writing to a read-only or invalid path also returns a FileResult. Always check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
 <pre><code>}</code></pre>
 </section>
-<section class="print-section" id="14-image">
-<h1>Image</h1>
-<p>PNG support is not built into loft — it lives in the <code>imaging</code> library, one of the installable packages in the loft registry. Add it to your project once with</p>
-<pre><code>loft install imaging
-</code></pre>
-<p>and import it at the top of any file with <code>use imaging;</code>. The library gives you three things: a <code>Pixel</code> struct (red / green / blue, each 0–255), an <code>Image</code> struct (name, width, height, and a flat <code>vector&lt;Pixel&gt;</code>), and the functions to move between an <code>Image</code> in memory and a <code>.png</code> file on disk.</p>
-<pre><code>file(path).png()        decode a PNG file into an Image (null if it cannot be read)
-image.save_png(path)    encode an Image back to a PNG file (true on success)
-pixel.value()           pack r,g,b into a single 0xRRGGBB integer
-</code></pre>
-<p>Because the library builds a small native (Rust) helper the first time you use it, the very first run compiles that helper — later runs are instant.</p>
-<p><code>#cwd</code> opts this program into cwd-relative paths so the bundled example file below resolves against the working directory (see 13-file). It must appear before the <code>use</code> line, which itself must come before any definition.</p>
-<pre><code>#cwd
-<span class="kw">use</span> imaging;</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="loading-a-png">Loading a PNG</h2>
-<p><code>file(path).png()</code> reads and decodes the whole file in one call. Afterwards the width, height, file name, and every pixel are already in memory.</p>
-<pre><code>  img = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example/map.png"</span>).<span class="fn-call">png</span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.width == <span class="nm">256</span>, <span class="st">"width={img.width}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.height == <span class="nm">256</span>, <span class="st">"height={img.height}"</span>);</code></pre>
-<p><code>img.name</code> is just the file name, without the directory part.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.name == <span class="st">"map.png"</span>, <span class="st">"name={img.name}"</span>);</code></pre>
-<p><code>img.data</code> is a flat <code>vector&lt;Pixel&gt;</code> laid out row by row, so its length is always width * height.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(img.data) == img.width * img.height, <span class="st">"pixel count {len(img.data)}"</span>);</code></pre>
-<h2 id="the-pixel-struct">The Pixel Struct</h2>
-<p>Each element of <code>img.data</code> is a <code>Pixel</code> with three channels — r, g, and b — each an integer from 0 (no intensity) to 255 (full intensity). <code>pixel.value()</code> packs the three channels into one 0xRRGGBB integer, handy for comparison or storage.</p>
-<pre><code>  first = img.data[<span class="nm">0</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first.r &gt;= <span class="nm">0</span> &amp;&amp; first.r &lt;= <span class="nm">255</span>, <span class="st">"red channel in range: {first.r}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first.<span class="fn-call">value</span>() == first.r * <span class="nm">0x10000</span> + first.g * <span class="nm">0x100</span> + first.b,
-    <span class="st">"packed colour = {first.value()}"</span>);</code></pre>
-<h2 id="reading-a-pixel-by-coordinate">Reading a Pixel by Coordinate</h2>
-<p>The pixel at column x, row y lives at index <code>y * width + x</code>. Here we read the centre pixel of the 256x256 image.</p>
-<pre><code>  centre = img.data[<span class="nm">128</span> * img.width + <span class="nm">128</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(centre.r &gt;= <span class="nm">0</span> &amp;&amp; centre.g &gt;= <span class="nm">0</span> &amp;&amp; centre.b &gt;= <span class="nm">0</span>, <span class="st">"centre pixel is valid"</span>);</code></pre>
-<h2 id="scanning-every-pixel">Scanning Every Pixel</h2>
-<p>A <code>for</code> loop over <code>img.data</code> visits every pixel in row order. Count how many pixels are "bright" using a simple average-of-channels brightness.</p>
-<pre><code>  bright = <span class="nm">0</span>;
-  <span class="kw">for</span> px <span class="kw">in</span> img.data {
-    brightness = (px.r + px.g + px.b) / <span class="nm">3</span>;
-    <span class="kw">if</span> brightness &gt; <span class="nm">200</span> {
-      bright += <span class="nm">1</span>
-    }
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bright &gt;= <span class="nm">0</span> &amp;&amp; bright &lt;= <span class="bi"><a href="stdlib-text.html">len</a></span>(img.data), <span class="st">"bright pixel count: {bright}"</span>);</code></pre>
-<h2 id="building-and-saving-an-image">Building and Saving an Image</h2>
-<p>You can also create an <code>Image</code> from scratch: fill a <code>vector&lt;Pixel&gt;</code>, wrap it in an <code>Image</code> with a matching width and height, and call <code>save_png</code>. Here we make a 2x2 swatch — red, green, blue, and grey — and write it to a scratch file.</p>
-<pre><code>  swatch = imaging::<span class="en">Image</span> {
-    name: <span class="st">"swatch"</span>,
-    width: <span class="nm">2</span>,
-    height: <span class="nm">2</span>,
-    data: [
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">255</span>, g: <span class="nm">0</span>,   b: <span class="nm">0</span> },
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">0</span>,   g: <span class="nm">255</span>, b: <span class="nm">0</span> },
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">0</span>,   g: <span class="nm">0</span>,   b: <span class="nm">255</span> },
-      imaging::<span class="en">Pixel</span> { r: <span class="nm">128</span>, g: <span class="nm">128</span>, b: <span class="nm">128</span> }
-    ]
-  };</code></pre>
-<p>Write to a scratch file in the working directory, then delete it below so the example leaves nothing behind. A cwd-relative path (with <code>#cwd</code>) works on every OS — a hard-coded <code>/tmp/…</code> would not exist on Windows.</p>
-<pre><code>  scratch = <span class="st">"loft-doc-swatch.png"</span>;
-  saved = swatch.<span class="fn-call">save_png</span>(scratch);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(saved, <span class="st">"save_png reported success"</span>);</code></pre>
-<h2 id="round-tripping">Round-Tripping</h2>
-<p>Load the file we just wrote and confirm the pixels survived the encode/decode cycle unchanged.</p>
-<pre><code>  reloaded = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(scratch).<span class="fn-call">png</span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reloaded.width == <span class="nm">2</span> &amp;&amp; reloaded.height == <span class="nm">2</span>, <span class="st">"reloaded dimensions"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reloaded.data[<span class="nm">0</span>].r == <span class="nm">255</span> &amp;&amp; reloaded.data[<span class="nm">0</span>].g == <span class="nm">0</span> &amp;&amp; reloaded.data[<span class="nm">0</span>].b == <span class="nm">0</span>,
-    <span class="st">"reloaded red pixel"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reloaded.data[<span class="nm">3</span>].r == <span class="nm">128</span> &amp;&amp; reloaded.data[<span class="nm">3</span>].g == <span class="nm">128</span> &amp;&amp; reloaded.data[<span class="nm">3</span>].b == <span class="nm">128</span>,
-    <span class="st">"reloaded grey pixel"</span>);</code></pre>
-<p>Clean up the scratch file.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(scratch);</code></pre>
-<h2 id="error-handling">Error Handling</h2>
-<p><code>png()</code> returns null when the file does not exist or is not a decodable PNG. Always check the result with <code>!img</code> before you touch its fields.</p>
-<pre><code>  missing = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_image.png"</span>).<span class="fn-call">png</span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!missing, <span class="st">"png() of a missing file is null"</span>);
-}</code></pre>
-</section>
 <section class="print-section" id="15-lexer">
 <h1>Lexer</h1>
 <p>The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.</p>
@@ -1727,73 +1654,6 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"logging test passed"</span>);
 }</code></pre>
 </section>
-<section class="print-section" id="21-random">
-<h1>Random</h1>
-<p>Randomness lives in the <code>random</code> library, an installable package in the loft registry. Add it to a project once with</p>
-<pre><code>loft install random
-</code></pre>
-<p>and import it at the top of your file with <code>use random;</code>. The library gives you three functions, all backed by a fast PCG-64 generator:</p>
-<pre><code>rand(lo, hi)      a uniform random integer in [lo, hi] inclusive; null if lo &gt; hi
-rand_seed(seed)   seed the generator so a run is reproducible
-rand_indices(n)   a vector holding 0, 1, ..., n-1 in a random order
-</code></pre>
-<p>The generator is thread-local and starts from a fixed default seed, so results are reproducible across runs unless you seed it with something varying (for example <code>rand_seed(now() as integer)</code>).</p>
-<pre><code><span class="kw">use</span> random;</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="basic-random-integers">Basic Random Integers</h2>
-<p><code>rand(lo, hi)</code> returns a uniformly distributed integer between lo and hi, both included. Seed first with <code>rand_seed</code> when you want a repeatable sequence.</p>
-<pre><code>  <span class="fn-call">rand_seed</span>(<span class="nm">42</span>);
-  roll = <span class="fn-call">rand</span>(<span class="nm">1</span>, <span class="nm">6</span>);       <span class="cm">// a simulated die roll, 1..6</span>
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(roll &gt;= <span class="nm">1</span> &amp;&amp; roll &lt;= <span class="nm">6</span>, <span class="st">"die roll out of range: {roll}"</span>);</code></pre>
-<h2 id="reproducibility">Reproducibility</h2>
-<p>The same seed always produces the same sequence — essential for tests and for replaying a game from a saved seed.</p>
-<pre><code>  <span class="fn-call">rand_seed</span>(<span class="nm">0</span>);
-  a = <span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">999</span>);
-  <span class="fn-call">rand_seed</span>(<span class="nm">0</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">rand</span>(<span class="nm">0</span>, <span class="nm">999</span>) == a, <span class="st">"the same seed must reproduce the sequence"</span>);</code></pre>
-<p><code>rand</code> returns null when the range is empty (lo &gt; hi), so you can detect a bad range with <code>!</code> instead of getting a crash.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">rand</span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"an inverted range returns null"</span>);</code></pre>
-<h2 id="random-ordering-rand-indices">Random Ordering: rand_indices</h2>
-<p><code>rand_indices(n)</code> returns a vector containing 0, 1, ..., n-1 in a random order. Use it to visit another collection in random order without copying the data.</p>
-<pre><code>  <span class="fn-call">rand_seed</span>(<span class="nm">7</span>);
-  order = <span class="fn-call">rand_indices</span>(<span class="nm">5</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(order) == <span class="nm">5</span>, <span class="st">"rand_indices(5) has five entries"</span>);</code></pre>
-<p>Every value 0..4 appears exactly once — it is a permutation, not a sample with repeats. We verify that by marking each position as seen.</p>
-<pre><code>  seen = [<span class="kw">for</span> _ <span class="kw">in</span> <span class="nm">0..5</span> { <span class="kw">false</span> }];
-  <span class="kw">for</span> idx <span class="kw">in</span> order {
-    seen[idx] = <span class="kw">true</span>
-  }
-  all_seen = <span class="kw">true</span>;
-  <span class="kw">for</span> s <span class="kw">in</span> seen {
-    <span class="kw">if</span> !s {
-      all_seen = <span class="kw">false</span>
-    }
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(all_seen, <span class="st">"rand_indices must cover every position exactly once"</span>);</code></pre>
-<h2 id="sampling-without-replacement">Sampling Without Replacement</h2>
-<p>Take the first k entries of a shuffled index vector to pick k distinct items.</p>
-<pre><code>  items = [<span class="st">"apple"</span>, <span class="st">"banana"</span>, <span class="st">"cherry"</span>, <span class="st">"date"</span>, <span class="st">"elderberry"</span>];
-  <span class="fn-call">rand_seed</span>(<span class="nm">1</span>);
-  indices = <span class="fn-call">rand_indices</span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(items));</code></pre>
-<p>Note on null-flow: indexing a vector by a *variable* (here <code>indices[i]</code>) yields a NULLABLE element — <code>text?</code> — because the compiler cannot prove the index is in range. Appending a <code>text?</code> to the non-null <code>picked</code> would change its type, so we supply a fallback with <code>?? ""</code>; the value is never actually null here.</p>
-<pre><code>  picked = <span class="st">""</span>;
-  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..3</span> {
-    <span class="kw">if</span> i &gt; <span class="nm">0</span> {
-      picked += <span class="st">", "</span>
-    }
-    picked += items[indices[i]] ?? <span class="st">""</span>
-  }</code></pre>
-<p><code>picked</code> now holds 3 distinct fruit names in a random order.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(picked) &gt; <span class="nm">0</span>, <span class="st">"should have picked some items: {picked}"</span>);</code></pre>
-<p>The same guard is needed for numbers — use <code>?? 0</code> when accumulating an integer that you read through a variable index.</p>
-<pre><code>  values = [<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>, <span class="nm">40</span>, <span class="nm">50</span>];
-  total = <span class="nm">0</span>;
-  <span class="kw">for</span> i <span class="kw">in</span> order {
-    total += values[i] ?? <span class="nm">0</span>
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">150</span>, <span class="st">"every value summed once: {total}"</span>);
-}</code></pre>
-</section>
 <section class="print-section" id="22-time">
 <h1>Time</h1>
 <p>Loft provides two time functions:</p>
@@ -1985,7 +1845,7 @@ elapsed_ms  = elapsed_us / 1000
 }</code></pre>
 <h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
 <p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Text arguments are auto-wrapped through <code>json_parse</code> internally.</p>
-<p>A field the JSON does not mention — and a field written <code>null</code> — gets the DECLARED type<code>s absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field </code>integer?<code> / </code>float?' if you need to tell "absent" from "zero" apart:</p>
+<p>A field the JSON does not mention — and a field written <code>null</code> — gets the DECLARED type's absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field <code>integer?</code> / <code>float?</code> if you need to tell "absent" from "zero" apart:</p>
 <pre><code>struct Reading { id: integer, drift: float? }
 r = Reading.parse("{}")     // r.id == 0, r.drift == null
 </code></pre>
@@ -2041,7 +1901,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
 <h2 id="a-missing-field-gets-its-own-declared-absence">A missing field gets its own declared absence</h2>
-<p>When a field is absent from the JSON, it gets the absent value its DECLARATION allows — not the type<code>s null sentinel. A plain field cannot hold null, so it takes its empty value: 0 for a number, "" for text, false for a boolean. Declare the field </code>T?<code> when "the document did not say" has to be tellable from "the document said zero", and check it with </code>!<code> or </code>??' before use.</p>
+<p>When a field is absent from the JSON, it gets the absent value its DECLARATION allows — not the type's null sentinel. A plain field cannot hold null, so it takes its empty value: 0 for a number, "" for text, false for a boolean. Declare the field <code>T?</code> when "the document did not say" has to be tellable from "the document said zero", and check it with <code>!</code> or <code>??</code> before use.</p>
 <pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.name == <span class="st">""</span>, <span class="st">"a missing `text` field is empty: [{partial.name}]"</span>);
@@ -2605,83 +2465,462 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b3.items[<span class="nm">1</span>].val == <span class="nm">99</span>, <span class="st">"zero item replaced"</span>);
 }</code></pre>
 </section>
-<section class="print-section" id="32-time">
-<h1>Time library</h1>
-<p>@ARGS: --lib tests/fixtures/libs</p>
-<p>The <code>time</code> library represents a point in time as a plain <code>integer</code> (i64) holding milliseconds since the Unix epoch — the same unit <code>now()</code> returns.  All calendar math is UTC and uses the proleptic Gregorian calendar, so results are identical on the interpreter, <code>--native</code>, and WebAssembly.  Import it with <code>use time;</code> and call its free functions with the <code>time::</code> prefix.</p>
-<p>Timezone model: field accessors and formatters are UTC.  For local-day bucketing pass a fixed UTC offset in minutes (<code>to_local</code> / <code>local_day</code> / <code>today</code>).  There is no timezone database and no daylight-saving handling — a fixed offset only.</p>
-<pre><code><span class="kw">use</span> time;</code></pre>
-<h2 id="parsing-and-field-access">Parsing and field access</h2>
-<p><code>parse</code> reads an ISO date "YYYY-MM-DD", optionally followed by a time. The accessors return UTC calendar fields; <code>weekday</code> is 0=Mon..6=Sun.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_fields</span>() {
-  d = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">year</span>(d) == <span class="nm">2026</span>, <span class="st">"year"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month</span>(d) == <span class="nm">5</span>, <span class="st">"month"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">day</span>(d) == <span class="nm">25</span>, <span class="st">"day"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday</span>(d) == <span class="nm">0</span>, <span class="st">"2026-05-25 is a Monday"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">weekday_name</span>(d) == <span class="st">"Mon"</span>, <span class="st">"weekday name"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">month_name</span>(d) == <span class="st">"May"</span>, <span class="st">"month name"</span>);</code></pre>
-<pre><code>  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">hour</span>(t) == <span class="nm">14</span>, <span class="st">"hour"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">minute</span>(t) == <span class="nm">30</span>, <span class="st">"minute"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">second</span>(t) == <span class="nm">7</span>, <span class="st">"second"</span>);</code></pre>
-<p>The "T...Z" ISO form parses to the same instant as the space form.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25T14:30:07Z"</span>) == t, <span class="st">"ISO T/Z form"</span>);</code></pre>
-<p>Malformed input parses to null — test with <code>!</code>.</p>
-<pre><code>  bad = time::<span class="fn-call">parse</span>(<span class="st">"not-a-date"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"garbage is null"</span>);
-}</code></pre>
-<h2 id="formatting">Formatting</h2>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_formatting</span>() {
-  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 14:30:07"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(t) == <span class="st">"2026-05-25"</span>, <span class="st">"format_date"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_time</span>(t) == <span class="st">"14:30"</span>, <span class="st">"format_time"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_seconds</span>(t) == <span class="st">"14:30:07"</span>, <span class="st">"format_seconds"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(t) == <span class="st">"2026-05-25 14:30"</span>, <span class="st">"format_datetime"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_iso</span>(t) == <span class="st">"2026-05-25T14:30:07Z"</span>, <span class="st">"format_iso"</span>);
-}</code></pre>
-<h2 id="arithmetic-and-differences">Arithmetic and differences</h2>
-<p>Stepping never desynchronises across leap years — the math is exact.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_arithmetic</span>() {
-  jan1 = time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_weeks</span>(jan1, <span class="nm">1</span>)) == <span class="st">"2026-01-08"</span>, <span class="st">"add_weeks"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_days</span>(jan1, <span class="nm">365</span>)) == <span class="st">"2027-01-01"</span>, <span class="st">"add_days"</span>);</code></pre>
-<p>Leap-day boundary.</p>
-<pre><code>  feb28 = time::<span class="fn-call">parse</span>(<span class="st">"2024-02-28"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">add_days</span>(feb28, <span class="nm">1</span>)) == <span class="st">"2024-02-29"</span>, <span class="st">"leap day"</span>);</code></pre>
-<pre><code>  dec31 = time::<span class="fn-call">parse</span>(<span class="st">"2026-12-31"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">days_between</span>(jan1, dec31) == <span class="nm">364</span>, <span class="st">"days_between"</span>);</code></pre>
-<pre><code>  hourly = time::<span class="fn-call">seconds_between</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 00:00:00"</span>),
-                                 time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01 01:00:00"</span>));
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hourly == <span class="nm">3600</span>, <span class="st">"seconds_between"</span>);
-}</code></pre>
-<h2 id="week-boundaries-and-iso-week-numbering">Week boundaries and ISO week numbering</h2>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_weeks</span>() {</code></pre>
-<p>start_of_week snaps back to Monday 00:00.</p>
-<pre><code>  wed = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-27"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">start_of_week</span>(wed)) == <span class="st">"2026-05-25"</span>, <span class="st">"Monday of week"</span>);</code></pre>
-<p>2026-01-01 is a Thursday -&gt; ISO week 1 of 2026.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>)) == <span class="nm">2026</span>, <span class="st">"iso_year"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(time::<span class="fn-call">parse</span>(<span class="st">"2026-01-01"</span>)) == <span class="nm">1</span>, <span class="st">"iso_week"</span>);</code></pre>
-<p>2021-01-01 is a Friday -&gt; still ISO week 53 of 2020.</p>
-<pre><code>  jan1_2021 = time::<span class="fn-call">parse</span>(<span class="st">"2021-01-01"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_year</span>(jan1_2021) == <span class="nm">2020</span>, <span class="st">"iso_year rollback"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">iso_week</span>(jan1_2021) == <span class="nm">53</span>, <span class="st">"iso_week 53"</span>);
-}</code></pre>
-<h2 id="local-day-at-a-fixed-offset">Local day at a fixed offset</h2>
-<p>23:30 UTC at +120 minutes is 01:30 the next local day.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">show_local</span>() {
-  t = time::<span class="fn-call">parse</span>(<span class="st">"2026-05-25 23:30:00"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_datetime</span>(time::<span class="fn-call">to_local</span>(t, <span class="nm">120</span>)) == <span class="st">"2026-05-26 01:30"</span>, <span class="st">"to_local"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(time::<span class="fn-call">format_date</span>(time::<span class="fn-call">local_day</span>(t, <span class="nm">120</span>)) == <span class="st">"2026-05-26"</span>, <span class="st">"local_day"</span>);
-}</code></pre>
+<section class="print-section" id="33-features">
+<h1>Feature catalogue</h1>
+<p>GENERATED by tools/features/gen.loft — DO NOT EDIT. @NAME: Feature catalogue @TITLE: Every language and tooling feature, with what each one is for.</p>
+<p>Everything loft can do, in one list.  Each entry has a page of its own with what it is, how it aids you, and a runnable example — see <code>doc/features/</code> in the repository, where <code>@F2</code> is <code>F2.md</code>.</p>
+<p>The catalogue is generated from the <code>loft-lang/features</code> issue tracker, which is the single source of truth: every entry is an issue, so nothing here can drift from what was decided without the drift guard failing.</p>
+<h2 id="language-features">Language features</h2>
+<ul>
+<li><strong>@F1</strong> — Nullable value semantics — in-band sentinels + null-fallback arithmetic</li>
+<li><strong>@F2</strong> — <code>??</code> null-coalescing operator (incl. <code>?? return</code>)</li>
+<li><strong>@F3</strong> — Primitive scalar types (integer, float, single, boolean, character)</li>
+<li><strong>@F4</strong> — Ranged/width integer types (u8/i8/u16/i16/i32/u32)</li>
+<li><strong>@F5</strong> — Type conversions — implicit, format-only, and explicit <code>as</code></li>
+<li><strong>@F6</strong> — <code>vector&lt;T&gt;</code> — append, index, slice, comprehensions, aggregates, map/filter/reduce</li>
+<li><strong>@F7</strong> — <code>hash&lt;T[keys]&gt;</code> keyed collection</li>
+<li><strong>@F8</strong> — <code>sorted&lt;T[keys]&gt;</code> collection</li>
+<li><strong>@F9</strong> — <code>index&lt;T[keys]&gt;</code> B-tree index (asc/desc, multi-key)</li>
+<li><strong>@F10</strong> — <code>iterator&lt;T&gt;</code> values</li>
+<li><strong>@F11</strong> — Tuples — anonymous fixed-arity <code>(T1, T2, …)</code></li>
+<li><strong>@F12</strong> — Struct records — fields, <code>= default</code>, <code>computed</code>, <code>limit</code>/<code>not null</code>/<code>assert</code></li>
+<li><strong>@F13</strong> — Simple enums (ordered value types)</li>
+<li><strong>@F14</strong> — Polymorphic struct-enums (per-variant fields)</li>
+<li><strong>@F15</strong> — Enum-scoped variant names + context inference</li>
+<li><strong>@F16</strong> — Functions &amp; declarations (<code>pub</code>, parameters, return)</li>
+<li><strong>@F17</strong> — Named arguments + default parameter values</li>
+<li><strong>@F18</strong> — <code>const</code> parameters</li>
+<li><strong>@F19</strong> — Method dispatch via <code>self</code> / <code>both</code></li>
+<li><strong>@F20</strong> — Variant-based dynamic dispatch</li>
+<li><strong>@F21</strong> — References <code>&amp;T</code> — parameters + write-back bindings</li>
+<li><strong>@F22</strong> — Closures &amp; lambdas (value capture, cross-scope)</li>
+<li><strong>@F23</strong> — Function references as first-class values</li>
+<li><strong>@F24</strong> — Higher-order functions (map / filter / reduce)</li>
+<li><strong>@F25</strong> — Generics — single type variable <code>&lt;T&gt;</code>, inferred</li>
+<li><strong>@F26</strong> — Interfaces &amp; bounded generics (<code>&lt;T: A + B&gt;</code>, operator interfaces)</li>
+<li><strong>@F27</strong> — <code>if</code> / <code>else</code> as an expression</li>
+<li><strong>@F28</strong> — <code>for</code>-in loops — ranges, loop attributes, filtered, <code>rev()</code></li>
+<li><strong>@F29</strong> — Pattern matching — enum/scalar/tuple, guards, or-patterns, exhaustiveness</li>
+<li><strong>@F30</strong> — <code>is</code> variant check (+ field capture)</li>
+<li><strong>@F31</strong> — <code>break</code> / <code>continue</code> + labelled forms</li>
+<li><strong>@F32</strong> — Custom iterators via <code>fn next(self) -&gt; T?</code></li>
+<li><strong>@F33</strong> — <code>par(...)</code> parallel for-loop</li>
+<li><strong>@F34</strong> — Coroutines / generators — <code>yield</code>, <code>yield from</code></li>
+<li><strong>@F35</strong> — String literals — <code>{expr}</code> interpolation + backtick multiline</li>
+<li><strong>@F36</strong> — String formatting / format specifiers (+ for-expressions)</li>
+<li><strong>@F37</strong> — Operator set — arithmetic/comparison/logical/bitwise/unary, <code>**</code></li>
+<li><strong>@F38</strong> — Arithmetic safety — overflow/÷0 → null, nullable peers</li>
+<li><strong>@F39</strong> — Math &amp; trigonometry library</li>
+<li><strong>@F40</strong> — File &amp; directory I/O (+ durable-store binding)</li>
+<li><strong>@F41</strong> — Environment &amp; arguments (env vars, arguments(), program dirs, path resolution)</li>
+<li><strong>@F42</strong> — JSON — json_parse, JsonValue, Type.parse, to_json</li>
+<li><strong>@F43</strong> — Random numbers (rand_seed / rand / rand_indices)</li>
+<li><strong>@F44</strong> — Logging &amp; diagnostics API (log_*, print, assert, panic)</li>
+<li><strong>@F45</strong> — <code>sizeof()</code></li>
+<li><strong>@F46</strong> — Type aliases (<code>type X = …</code>)</li>
+<li><strong>@F47</strong> — Library imports / module system (<code>use</code> forms, <code>pub</code>)</li>
+<li><strong>@F48</strong> — The <code>loft</code> CLI — run a program, <code>--interpret</code> / <code>--native</code>, <code>--timeout</code>, <code>--help</code></li>
+<li><strong>@F49</strong> — REPL — interactive sessions</li>
+<li><strong>@F50</strong> — Introspection — <code>loft introspect</code> (bytecode / native Rust / slot tables)</li>
+<li><strong>@F51</strong> — Debugger — breakpoints, frame capture, scripted RPC</li>
+<li><strong>@F52</strong> — Source formatter — canonical <code>.loft</code> output</li>
+<li><strong>@F53</strong> — Native-binary backend (<code>--native</code> → rustc)</li>
+<li><strong>@F54</strong> — Browser / WASM target (<code>--html</code> / <code>--native-wasm</code>)</li>
+<li><strong>@F55</strong> — Package management (<code>loft install</code>, <code>loft.toml</code>, lockfile)</li>
+<li><strong>@F56</strong> — Live code reload — patch a running program</li>
+<li><strong>@F88</strong> — Stack traces (stack_trace)</li>
+<li><strong>@F89</strong> — Test runner (fn test_*, loft --tests / loft test)</li>
+<li><strong>@F92</strong> — Direct C binding — <code>#c "symbol" "signature"</code>, no rustc and no glue crate</li>
+<li><strong>@F93</strong> — Paged &amp; remote store loading — read part of a dataset over HTTP range</li>
+<li><strong>@F94</strong> — Type-directed interpolation — a type receives the literal/hole boundary</li>
+<li><strong>@F95</strong> — Value structs (<code>value struct</code>) — copy semantics, stored inline</li>
+<li><strong>@F96</strong> — <code>x?</code> default-fallback operator — discharge a nullable to its type default</li>
+<li><strong>@F97</strong> — <code>len</code> vs <code>size</code> — logical count vs bytes occupied</li>
+<li><strong>@F98</strong> — <code>spatial&lt;T[x,y]&gt;</code> — position-keyed collection for proximity queries</li>
+<li><strong>@F99</strong> — Sequence match patterns — alternation, optionals, repetition, capture</li>
+<li><strong>@F100</strong> — Dead-code lint — a local never read, and a write whose value is lost</li>
+<li><strong>@F101</strong> — The build phase — <code>loft build</code>, declared targets, zero-config defaults</li>
+<li><strong>@F102</strong> — Android target — <code>--native-android</code>, APK packaging, GL surface and touch input</li>
+<li><strong>@F103</strong> — <code>deliver</code> / <code>expose</code> — hand a loft value to JavaScript with no copy</li>
+<li><strong>@F104</strong> — <code>store_reclaim()</code> — give a store's unused file space back</li>
+<li><strong>@F105</strong> — Custom <code>to_text</code> format hook — a type owns how it prints</li>
+<li><strong>@F106</strong> — Copy and move semantics — when two names share data, and when they do not</li>
+<li><strong>@F107</strong> — Type reflection — the declared shape of a type, as data</li>
+<li><strong>@F108</strong> — Lazy store binding — a collection fetches on a miss</li>
+<li><strong>@F109</strong> — <code>#superseded</code> — steer callers to a newer form without breaking the old one</li>
+<li><strong>@F110</strong> — Diagnostic suggestions — what to write instead, checked by running it</li>
+<li><strong>@F111</strong> — <code>for f in s#fields</code> — a compile-time loop over a struct's scalar fields</li>
+<li><strong>@F112</strong> — <code>store_release()</code> — say a record is finished, and stop holding it in memory</li>
+<li><strong>@F113</strong> — Associated types — an interface names a companion type</li>
+<li><strong>@F114</strong> — <code>x[i]</code> on a library type — <code>OpIndex</code> dispatch</li>
+<li><strong>@F115</strong> — <code>OpDrop</code> — a type runs code when its scope lets it die</li>
+</ul>
+<h2 id="tooling-and-infrastructure">Tooling and infrastructure</h2>
+<ul>
+<li><strong>@I57</strong> — Lexer</li>
+<li><strong>@I58</strong> — Parser (two-pass recursive descent)</li>
+<li><strong>@I59</strong> — Type resolver</li>
+<li><strong>@I60</strong> — Scope &amp; dependency/lifetime tracker (deps)</li>
+<li><strong>@I61</strong> — Stack slot allocator</li>
+<li><strong>@I62</strong> — IR data model (Value/Type/Data)</li>
+<li><strong>@I63</strong> — Store-resident IR (reader + handle + materializer)</li>
+<li><strong>@I64</strong> — Bytecode compiler (IR -&gt; bytecode)</li>
+<li><strong>@I65</strong> — Bytecode code generator</li>
+<li><strong>@I66</strong> — Bytecode VM / executor</li>
+<li><strong>@I67</strong> — Opcode implementations</li>
+<li><strong>@I68</strong> — Native Rust generator</li>
+<li><strong>@I69</strong> — Word-addressed store</li>
+<li><strong>@I70</strong> — Database — alloc / persistence / journal / snapshot / schema</li>
+<li><strong>@I71</strong> — DbRef pointers &amp; collection keys</li>
+<li><strong>@I72</strong> — Parallel execution runtime</li>
+<li><strong>@I73</strong> — Native function registry</li>
+<li><strong>@I74</strong> — CDylib extension loader</li>
+<li><strong>@I75</strong> — Diagnostics collector</li>
+<li><strong>@I76</strong> — Logger runtime</li>
+<li><strong>@I77</strong> — Registry / manifest / lockfile resolution</li>
+<li><strong>@I78</strong> — Live-reload dispatch</li>
+<li><strong>@I79</strong> — Documentation generator (maintainer tooling)</li>
+<li><strong>@I80</strong> — Tracker indexer (maintainer tooling)</li>
+<li><strong>@I81</strong> — Feature-catalogue sync generator (issues → in-project mirror + example tests)</li>
+<li><strong>@I82</strong> — Sandbox policy &amp; enforcement</li>
+<li><strong>@I83</strong> — Dev server (--serve / --rpc)</li>
+<li><strong>@I84</strong> — Coroutine runtime / yield codec</li>
+<li><strong>@I85</strong> — Engine-host kernel natives</li>
+<li><strong>@I86</strong> — Startup cache &amp; embedded stdlib</li>
+<li><strong>@I87</strong> — Auto-use / lazy library triggers</li>
+<li><strong>@I90</strong> — Shared utilities &amp; data structures</li>
+<li><strong>@I91</strong> — Editor tooling: language server (LSP), debug adapter (DAP), resolution index</li>
+<li><strong>@I116</strong> — Library placement — in-process, a worker, or another machine</li>
+<li><strong>@I117</strong> — Git query natives — a repository as a typed library, not a subprocess</li>
+</ul>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
-  <span class="fn-call">show_fields</span>();
-  <span class="fn-call">show_formatting</span>();
-  <span class="fn-call">show_arithmetic</span>();
-  <span class="fn-call">show_weeks</span>();
-  <span class="fn-call">show_local</span>();
-  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"time library: all checks passed"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"the feature catalogue is generated from the issue tracker"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="34-running">
+<h1>Running your program</h1>
+<p>The pages before this one show how to WRITE loft. This one shows how to RUN it. You need one command to start, and everything else is optional.</p>
+<h2 id="run-a-file">Run a file</h2>
+<p>Put your program in a file ending in <code>.loft</code> and pass it to loft:</p>
+<pre><code>  $ loft hello.loft
+  hello, world!
+</code></pre>
+<p>That is the whole thing. There is no build step to run first and no project to set up. A single file is a complete program.</p>
+<h2 id="give-your-program-some-arguments">Give your program some arguments</h2>
+<p>Put them after the file name, and declare one <code>vector&lt;text&gt;</code> parameter on <code>main</code> to read them:</p>
+<pre><code>  fn main(args: vector&lt;text&gt;) {
+    for who in args { println("hello, {who}!"); }
+  }
+</code></pre>
+<pre><code>  $ loft greet.loft Ada Grace
+  hello, Ada!
+  hello, Grace!
+</code></pre>
+<p>That one parameter is the only shape <code>main</code> accepts. Any other — a plain <code>text</code>, two of them — is refused, because nothing would fill it.</p>
+<h2 id="try-something-without-making-a-file">Try something without making a file</h2>
+<p>Type <code>loft</code> on its own and you get a prompt where you can type one line at a time and see the answer straight away:</p>
+<pre><code>  $ printf '2 + 3\n' | loft repl --fresh
+  5
+</code></pre>
+<p>Typed by hand it looks like this — start it, then type at the prompt:</p>
+<pre><code>  loft
+  loft&gt; 2 + 3
+  5
+</code></pre>
+<p>This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea. Your session is remembered, so you can close it and come back later — <code>--fresh</code> is how you ask for a clean one instead.</p>
+<h2 id="two-ways-to-run-and-why-you-usually-ignore-this">Two ways to run, and why you usually ignore this</h2>
+<p>loft can run your program in two ways. It compiles your program to a fast program first when it can, and otherwise it reads and runs your program directly. The second way is called interpreting.</p>
+<p>You do not have to choose. loft picks for you, and the ANSWER is the same either way — that is a rule the language holds itself to, not a hope. You can ask for one on purpose when you want to:</p>
+<pre><code>  $ loft --interpret hello.loft
+  hello, world!
+</code></pre>
+<p>A downloaded loft always interprets. That is normal and not something to fix.</p>
+<h2 id="stop-a-program-that-runs-too-long">Stop a program that runs too long</h2>
+<p>A loop with a mistake in it can run forever. Give loft a time limit and it stops the program for you:</p>
+<pre><code>  $ loft --timeout 10 hello.loft
+  hello, world!
+</code></pre>
+<p>This is worth using whenever you run something for the first time.</p>
+<h2 id="check-your-work-without-running-it">Check your work without running it</h2>
+<p>Sometimes you only want to know whether the program is correct so far:</p>
+<pre><code>  $ loft check hello.loft
+  ok
+</code></pre>
+<p>This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing.</p>
+<h2 id="when-loft-tells-you-something-is-wrong">When loft tells you something is wrong</h2>
+<p>A message from loft names the file, the line, and what to do. Some messages can also show you the exact replacement to write:</p>
+<pre><code>  $ loft --explain --interpret hello.loft
+  hello, world!
+</code></pre>
+<p>That prints the suggested fix under each message. It only shows you the fix; it changes nothing, so it is always safe to run.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>A program is just a file with a <code>main</code> function in it, like this one. Everything above is how you would run this file.</p>
+<pre><code>  greeting = <span class="st">"hello"</span>;
+  who = <span class="st">"world"</span>;
+  message = <span class="st">"{greeting}, {who}!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(message == <span class="st">"hello, world!"</span>, <span class="st">"string interpolation builds the message"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(message);
+}</code></pre>
+</section>
+<section class="print-section" id="35-testing">
+<h1>Testing your code</h1>
+<p>A test is a function that checks your code still does what you meant. You do not install anything to write one, and there is no special syntax.</p>
+<h2 id="write-a-test">Write a test</h2>
+<p>Give a function a name starting with <code>test</code> and put an <code>assert</code> in it. That is all a test is:</p>
+<pre><code>  fn double(n: integer) -&gt; integer { n * 2 }
+</code></pre>
+<pre><code>  fn test_double_doubles() {
+    assert(double(4) == 8, "double(4) should be 8");
+  }
+</code></pre>
+<p><code>assert</code> takes something that should be true, and a message. If it is true, nothing happens. If it is not, the message is what you will read, so write the message for the person who has to fix it — usually you, later.</p>
+<h2 id="run-your-tests">Run your tests</h2>
+<p>Point loft at the file:</p>
+<pre><code>  $ loft --tests calc.loft
+  test result: ok. 2 passed; 1 file
+</code></pre>
+<p>and it finds every <code>test</code> function and runs it, naming the file and the functions it found.</p>
+<p>Give it a directory instead of a file and it looks in every <code>.loft</code> file underneath. Give it nothing and it starts from where you are:</p>
+<pre><code>  $ loft --tests calc.loft::test_double_doubles
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="run-just-one-test">Run just one test</h2>
+<p>While you are fixing one thing, run only that one. Put <code>::</code> and the test's name after the file:</p>
+<pre><code>  $ loft --tests calc.loft::test_double_of_zero
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="when-a-test-fails">When a test fails</h2>
+<p>A failure names the test and shows your message:</p>
+<pre><code>  FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+  test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+</code></pre>
+<p>The message is the part you wrote, which is why a vague message like "it works" costs you time and a specific one saves it.</p>
+<h2 id="read-the-line-after-the-result">Read the line after the result</h2>
+<p>The end of the report says what the run did NOT do, in square brackets — for example that it ran on the interpreter and did not try the compiled build. That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all.</p>
+<p>To also run your tests the compiled way:</p>
+<pre><code>  $ loft --tests --native calc.loft
+  test result: ok. 2 passed; 1 file
+</code></pre>
+<h2 id="once-you-have-a-project">Once you have a project</h2>
+<p>When your code grows into a project with a <code>loft.toml</code> file (the next page), tests live in a <code>tests/</code> folder and you run them with:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">double</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { n * <span class="nm">2</span> }</code></pre>
+<p>This page is itself run as a test, so the example below really does pass.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">double</span>(<span class="nm">4</span>) == <span class="nm">8</span>, <span class="st">"double(4) should be 8"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">double</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"double(0) should be 0"</span>);</code></pre>
+<p>An assert that holds produces no output at all — silence is success.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"both checks passed"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="36-debugging">
+<h1>Debugging</h1>
+<p>When a program does the wrong thing, the usual reaction is to add printing to it, run it, read the output, and take the printing out again. loft gives you a better tool: stop the program on the line you care about and look around.</p>
+<p>The program used below is <code>count.loft</code>. It adds 1, 2 and 3 into a total.</p>
+<h2 id="stop-on-a-line">Stop on a line</h2>
+<p>Say <code>debug</code>, then your file, then a colon and a line number:</p>
+<pre><code>  $ printf ':continue\n' | loft debug count.loft:4
+  paused in main | total = 0, i = 1
+</code></pre>
+<p>The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what every local variable holds right now.</p>
+<p>Line 4 is inside a loop that goes round three times, so the program stops there three times. <code>:continue</code> means "carry on until you reach this line again", not "run to the end" — which is why the examples below say <code>:continue</code> more than once when they want the program to finish.</p>
+<h2 id="look-at-a-value">Look at a value</h2>
+<p>Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused:</p>
+<pre><code>  $ printf 'total\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  0
+</code></pre>
+<p>This is the part that replaces printing. You do not have to guess in advance which values you will want; ask for them when you are there.</p>
+<h2 id="move-one-step-at-a-time">Move one step at a time</h2>
+<p>Four commands move the program forward:</p>
+<ul>
+<li><code>:step</code> runs the next line, going INTO any function it calls</li>
+<li><code>:next</code> runs the next line, going OVER any function it calls</li>
+<li><code>:finish</code> runs until the current function returns</li>
+<li><code>:continue</code> carries on to the next time this line is reached</li>
+</ul>
+<pre><code>  $ printf ':step\ntotal\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  1
+</code></pre>
+<p>After that single <code>:step</code> the total is 1, because the loop has now added its first number. Each stop prints the same "paused" line, so you can watch a value change as the loop goes round.</p>
+<h2 id="change-a-value-while-it-is-running">Change a value while it is running</h2>
+<p>You can write to a local, not only read it. This answers "would it work if this were right?" without editing the file and starting again:</p>
+<pre><code>  $ printf 'total = 100\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
+  total=106
+  run finished
+</code></pre>
+<p>The program carries on with the value you gave it. It finished with 106 instead of 6, because the loop still had 2 and 3 to add after the change.</p>
+<h2 id="getting-out">Getting out</h2>
+<p><code>:continue</code> carries on. <code>:quit</code> stops right away. <code>:help</code> lists every command if you forget one.</p>
+<h2 id="typing-or-feeding-it-a-script">Typing, or feeding it a script</h2>
+<p>Every example here pipes its commands in, which is how they are checked automatically — the output you see above is compared against what the command really prints. Run <code>loft debug count.loft:4</code> on its own and you get the <code>(dbg)</code> prompt to type at instead. The commands are the same either way.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>This is what <code>count.loft</code> does — the program the examples above debug.</p>
+<pre><code>  total = <span class="nm">0</span>;
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..4</span> {
+    total += i;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">6</span>, <span class="st">"1 + 2 + 3 is 6, which is what the debugger shows you"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"total={total}"</span>);
+}</code></pre>
+</section>
+<section class="print-section" id="37-projects">
+<h1>Projects and libraries</h1>
+<p>One file is a complete loft program, and for a long time that is all you need. When you want to share code between programs, or keep tests beside it, you turn the folder into a package.</p>
+<h2 id="what-a-package-looks-like">What a package looks like</h2>
+<p>A package is a folder with a <code>loft.toml</code> file in it and two sub-folders:</p>
+<pre><code>  greeter/
+    loft.toml          what this package is called
+    src/greeter.loft   the code
+    tests/greet.loft   the tests
+</code></pre>
+<p><code>src</code> is where your code lives and <code>tests</code> is where your tests live. The names matter — loft looks in exactly those places.</p>
+<h2 id="the-manifest">The manifest</h2>
+<p><code>loft.toml</code> names the package and says which file is its front door:</p>
+<pre><code>  [package]
+  name    = "greeter"
+  version = "0.1.0"
+</code></pre>
+<pre><code>  [library]
+  entry = "src/greeter.loft"
+</code></pre>
+<p>The <code>entry</code> file is the one that other code sees. Anything you want to share from it is marked <code>pub</code>:</p>
+<pre><code>  pub fn greet(who: text) -&gt; text { "hello, {who}!" }
+</code></pre>
+<p>Without <code>pub</code> a function is private to the package, which is the default.</p>
+<h2 id="testing-a-package">Testing a package</h2>
+<p>Inside the package folder, <code>loft test</code> finds and runs everything in <code>tests</code>:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<p>The tests reach your code by importing the package by name:</p>
+<pre><code>  use greeter::*;
+  fn test_greet_names_the_person() {
+    assert(greet("Ada") == "hello, Ada!", "greet builds the sentence");
+  }
+</code></pre>
+<p><code>use greeter::*;</code> brings in everything public. Write <code>use greeter;</code> instead and you call it as <code>greeter::greet(...)</code>, which is longer but says where each name came from — useful once you import several packages.</p>
+<h2 id="running-one-test-while-you-work">Running one test while you work</h2>
+<p>Give <code>loft test</code> the file, or the file and one function:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test greet
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="check-it-compiles-without-running-anything">Check it compiles, without running anything</h2>
+<p>Inside the package, <code>loft check</code> compiles everything and reports problems:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft check
+  loft build: `native` ✓
+</code></pre>
+<p>A package that is only a library has no program to start, so there is nothing to run — <code>check</code> still tells you the code compiles, which is what you wanted to know.</p>
+<h2 id="coverage-what-the-tests-did-not-reach">Coverage — what the tests did not reach</h2>
+<p>After the result, <code>loft test</code> tells you which of your functions no test ever entered:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  coverage: all 1 functions were entered by these tests
+</code></pre>
+<p>It is a list, never a percentage and never a gate. A percentage becomes a target, and tests written to move a number check nothing.</p>
+<h2 id="using-someone-else-s-package">Using someone else's package</h2>
+<p>Add it to the manifest under <code>[dependencies]</code> and install:</p>
+<pre><code>  [dependencies]
+  math = "&gt;=0.1"
+</code></pre>
+<pre><code>  loft install
+</code></pre>
+<p>Then <code>use math;</code> in your code. <code>loft install</code> also writes a lock file that records the exact versions, so the same code builds the same way later.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>The package these examples describe is <code>greeter</code>, and this is its one function — a <code>pub fn</code> in <code>src/greeter.loft</code> that its tests import.</p>
+<pre><code>  greeting = <span class="st">"hello, Ada!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(greeting == <span class="st">"hello, Ada!"</span>, <span class="st">"what greet(\"</span><span class="en">Ada</span>\<span class="st">") returns"</span>);
+  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(greeting);
+}</code></pre>
+</section>
+<section class="print-section" id="38-call-it-yourself">
+<h1>Call it yourself</h1>
+<p>Every other page here shows you loft.  This one hands it to you. The functions below are compiled and live in the panel at the bottom of the page: type a call, press enter, and loft answers.  Nothing is a transcript — the number you see is the one your browser just computed.</p>
+<h2 id="what-to-try-first">What to try first</h2>
+<p><code>fib(10)</code> is the shortest way to be sure the panel is real.  Change the 10 and the answer changes; ask for <code>fib(30)</code> and you will wait a moment, because this is the naive recursion and it really does make that many calls.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">fib</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  <span class="kw">if</span> n &lt; <span class="nm">2</span> {
+    <span class="kw">return</span> n;
+  }
+  <span class="fn-call">fib</span>(n - <span class="nm">1</span>) + <span class="fn-call">fib</span>(n - <span class="nm">2</span>)
+}</code></pre>
+<h2 id="numbers-with-a-shape">Numbers with a shape</h2>
+<p><code>nth_prime(1)</code> is 2, <code>nth_prime(10)</code> is 29.  Try to guess <code>nth_prime(100)</code> before you ask for it — the primes thin out faster than most people expect.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">is_prime</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {
+  <span class="kw">if</span> n &lt; <span class="nm">2</span> {
+    <span class="kw">return</span> <span class="kw">false</span>;
+  }
+  d = <span class="nm">2</span>;
+  while d * d &lt;= n {
+    <span class="kw">if</span> n % d == <span class="nm">0</span> {
+      <span class="kw">return</span> <span class="kw">false</span>;
+    }
+    d += <span class="nm">1</span>;
+  }
+  <span class="kw">true</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">nth_prime</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  found = <span class="nm">0</span>;
+  candidate = <span class="nm">1</span>;
+  while found &lt; n {
+    candidate += <span class="nm">1</span>;
+    <span class="kw">if</span> <span class="fn-call">is_prime</span>(candidate) {
+      found += <span class="nm">1</span>;
+    }
+  }
+  candidate
+}</code></pre>
+<h2 id="text-goes-in">Text goes in</h2>
+<p><code>vowels("your name here")</code> counts the vowels in whatever you type.  The argument is a text and the answer is a number, which is the shape the panel renders today — see the note at the end of the page.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">vowels</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  n = <span class="nm">0</span>;
+  <span class="kw">for</span> c <span class="kw">in</span> s {
+    <span class="kw">if</span> c == <span class="ch">'a'</span> || c == <span class="ch">'e'</span> || c == <span class="ch">'i'</span> || c == <span class="ch">'o'</span> || c == <span class="ch">'u'</span> {
+      n += <span class="nm">1</span>;
+    }
+  }
+  n
+}</code></pre>
+<h2 id="a-struct-comes-back">A struct comes back</h2>
+<p><code>stats(3, 17)</code> answers <code>{"lo":3,"hi":17,"span":14}</code> — a whole record, rendered as JSON, from one call.  Give it the arguments in the wrong order and it still answers correctly, which is the point of it.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Span</span> {
+  lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  span: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">stats</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="en">Span</span> {
+  lo = <span class="kw">if</span> a &lt; b { a } <span class="kw">else</span> { b };
+  hi = <span class="kw">if</span> a &lt; b { b } <span class="kw">else</span> { a };
+  <span class="en">Span</span> { lo: lo, hi: hi, span: hi - lo }
+}</code></pre>
+<h2 id="pausing-inside-a-run">Pausing inside a run</h2>
+<p>The panel can also stop the program mid-flight.  Click a line number in the code above to set a breakpoint, press Run, and the panel lists the variables that line can see — then the same prompt evaluates against THAT frame, so a call like <code>fib(step)</code> uses the <code>step</code> the paused function is holding.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">walk_to</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  total = <span class="nm">0</span>;
+  step = <span class="nm">0</span>;
+  while step &lt; <span class="kw">limit</span> {
+    step += <span class="nm">1</span>;
+    total += <span class="fn-call">fib</span>(step);
+  }
+  total
+}</code></pre>
+<h2 id="what-the-panel-cannot-do-yet">What the panel cannot do yet</h2>
+<p>An expression whose value is a text or a vector answers <code>&lt;unavailable&gt;</code> rather than a value: the browser evaluator reads a result off the paused frame, and only a number, a character, a boolean or a struct survives that trip (loft#1187).  So <code>vowels("hello")</code> answers 2 and <code>stats(1, 9)</code> answers a record, while a function returning a text does not — which is why every function on this page hands back one of the shapes that works.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>The demonstration comes first and the checks follow it, so a reader who presses Run sees an answer straight away — the panel stops on main's LAST line, and a program whose only print IS that line would pause with nothing shown yet.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"</span>hello\<span class="st">")={vowels(\"</span>hello\<span class="st">")}\n"</span>);</code></pre>
+<p>The page is a real program, so these run on both backends like every other page here, and an example that stops being true stops compiling.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">10</span>) == <span class="nm">55</span>, <span class="st">"fib(10)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">1</span>) == <span class="nm">1</span> &amp;&amp; <span class="fn-call">fib</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"fib base cases"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">nth_prime</span>(<span class="nm">1</span>) == <span class="nm">2</span>, <span class="st">"the first prime is 2"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">nth_prime</span>(<span class="nm">10</span>) == <span class="nm">29</span>, <span class="st">"the tenth prime is 29"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">is_prime</span>(<span class="nm">1</span>) &amp;&amp; <span class="fn-call">is_prime</span>(<span class="nm">2</span>) &amp;&amp; !<span class="fn-call">is_prime</span>(<span class="nm">9</span>), <span class="st">"is_prime edges"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">"hello"</span>) == <span class="nm">2</span>, <span class="st">"hello has two vowels"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">""</span>) == <span class="nm">0</span>, <span class="st">"no text, no vowels"</span>);
+  s = <span class="fn-call">stats</span>(<span class="nm">17</span>, <span class="nm">3</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s.lo == <span class="nm">3</span> &amp;&amp; s.hi == <span class="nm">17</span> &amp;&amp; s.span == <span class="nm">14</span>, <span class="st">"stats orders its arguments"</span>);</code></pre>
+<p>fib(1..4) is 1 + 1 + 2 + 3.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">walk_to</span>(<span class="nm">4</span>) == <span class="nm">7</span>, <span class="st">"walk_to sums the first four"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="00-performance">
@@ -2922,10 +3161,12 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub interface Ordered</code></pre>
 <p>Types that support the `&lt;` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.</p>
+<p>ONE method is all a type has to define: inside a generic bounded by this, `&gt;`, `&lt;=` and `&gt;=` all derive from `&lt;` — `a &gt; b` is `b &lt; a`, `a &lt;= b` is `!(b &lt; a)`, `a &gt;= b` is `!(a &lt; b)`.  Each evaluates its operands exactly once.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Equatable</code></pre>
 <p>Types that support the `==` equality operator. Satisfied by integer, single, float, text, boolean, and user types defining OpEq.</p>
+<p>`!=` derives from it (`a != b` is `!(a == b)`), so a type defining `op ==` gets both.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Addable</code></pre>
@@ -3365,6 +3606,18 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn tree_walk &lt; T: Walkable &gt; (wk_root: T, cap: integer) -&gt; vector&lt;T&gt;</code></pre>
 <p>Example: @STD-006</p>
+</div>
+<h2 id="stdlib-assertions-that-report-both-sides">Assertions that report both sides</h2>
+<div class="item">
+<pre><code>pub fn assert_eq &lt; AssertValue: Equatable + Printable &gt; (got: AssertValue, want: AssertValue, what: text, file: text, line: integer)</code></pre>
+<p>Assert that two values are equal, naming BOTH of them when they are not.</p>
+<p>`assert(got == want, &quot;…&quot;)` puts the expected value in the CONDITION, so a failure says what was got and leaves the reader to recover what was wanted by reading the expression. This says both.  Works on any type that is `Equatable` (op ==) and `Printable` (to_text) — every built-in scalar, and a user type defining both.</p>
+<p>Failure behaves exactly as `assert` does, because it IS `assert`: the run aborts (and in `--production` logs an error instead), and the reported position is the CALLER's, not this function's.  The file and line are injected by the compiler; do not pass them manually.</p>
+<p>The type variable is spelled `AssertValue` and NOT `T` on purpose.  A type variable's bound stubs are keyed by its NAME (`t_1T_to_text`), so every generic in the program spelling its variable `T` shares one namespace with a user `struct T` — and a bound declaring a method as common as `to_text` or `op ==` then blocks that struct from defining its own.  Measured: with these bounds on `T`, every user struct named `T` formatted as EMPTY and could not declare `to_text` at all.  loft#1153 tracks the collision itself; until it closes, a stdlib generic bound to a common method needs a name no one would write.</p>
+</div>
+<div class="item">
+<pre><code>pub fn assert_ne &lt; AssertValue: Equatable + Printable &gt; (got: AssertValue, want: AssertValue, what: text, file: text, line: integer)</code></pre>
+<p>Assert that two values DIFFER, naming the value both sides share when they do not. The mirror of assert_eq; same bounds, same failure behaviour, same position injection.</p>
 </div>
 <h2 id="stdlib-field-iteration-support-types">Field iteration support types</h2>
 <div class="item">

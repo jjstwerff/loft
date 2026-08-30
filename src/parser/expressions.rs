@@ -1025,6 +1025,37 @@ impl Parser {
         } else if self.lexer.has_token("return") {
             self.parse_return(val);
             Type::Never
+        } else if self.lexer.peek_token("debug_assert") {
+            // `debug_assert` is a RESERVED name with no definition behind it yet: @PLN53 A2.3
+            // adds `debug_assert(test, message)` as the `assert` companion that `--release`
+            // elides, and reserving the word early is what keeps user code from taking it in
+            // the meantime.  Every other keyword either has a parser arm or is defined in the
+            // default library, so without this one a statement starting with `debug_assert`
+            // fell through the whole chain and was reported as a missing `;` — at the
+            // PREVIOUS statement's line, naming neither the word nor the reason (loft#1167).
+            //
+            // Consume the call so one clear refusal is the whole output, rather than the
+            // first of a cascade.
+            self.lexer.has_token("debug_assert");
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`debug_assert` is reserved for a future release and does nothing yet — \
+                     use `assert(…)`, which is checked in every build"
+                );
+            }
+            if self.lexer.has_token("(") {
+                while !self.lexer.peek_token(")") && !self.lexer.peek_token(";") {
+                    let mut arg = Value::Null;
+                    self.expression(&mut arg);
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.has_token(")");
+            }
+            Type::Void
         } else if self.lexer.has_keyword("parallel") {
             self.parse_parallel(val);
             Type::Void
@@ -2160,7 +2191,16 @@ use a separate collection or add after the loop"
         // assignment (`b += &a`) is excluded on purpose: it mutates `b`, it does not
         // give `b` a reference type, so it is not a bind site.
         self.amp_head = op == "=";
+        // Name the destination this assignment writes, for this RHS only, along with
+        // whether it REPLACES it.  A comprehension that reads its own destination needs
+        // both: `=` repoints the target at a fresh store, `+=` appends into what it already
+        // holds, and the two need different deliveries (`I-Comp`).  Saved and restored
+        // because the RHS may contain assignments of its own.
+        let prev_target = std::mem::replace(&mut self.assign_target, var_nr);
+        let prev_replaces = std::mem::replace(&mut self.assign_replaces, op == "=");
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        self.assign_target = prev_target;
+        self.assign_replaces = prev_replaces;
         self.amp_head = false;
         self.expected = prev_read_target;
         // A `& vector` bind (`d = &v` / `d = &self.data`): the source is a vector lvalue
@@ -3811,7 +3851,7 @@ use a separate collection or add after the loop"
             // Only widen when the value genuinely does NOT fit the narrow type — i.e.
             // exactly when the assignment would otherwise be a narrowing error.  A wider
             // value that PROVABLY fits (a constant) needs no widen; widening it anyway
-            // over-widens width-sensitive locals (it regressed the engine_host kernel).
+            // over-widens width-sensitive locals, of which the engine_host kernel is one.
             && !self.int_value_fits(code, f_type)
         {
             self.vars.widen_int(var_nr, &crate::data::I64);

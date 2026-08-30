@@ -1089,7 +1089,18 @@ impl Output<'_> {
         } else {
             None
         };
+        // loft#1185 — a fn-ref callee that MINTS its return hands back a store nobody owns once
+        // the value crosses a forwarding frame.  Snapshot the allocation counter here and ask
+        // `cr_fnref_minted` afterwards; a CAPTURE's stamp predates this and is left alone.
+        // Heap returns only — a text return crosses as an owned `String`.
+        let heap_return = matches!(
+            ret_type.base(),
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+        );
         write!(w, "{{ ")?;
+        if heap_return {
+            write!(w, "let __vc_seq = codegen_runtime::cr_alloc_serial(cell); ")?;
+        }
         for (i, arg) in args.iter().enumerate() {
             let expr = self.generate_expr_buf(arg)?;
             // P265: when the fn-ref's parameter at this index is text,
@@ -1162,6 +1173,9 @@ impl Output<'_> {
             "loft::keys::DbRef::NULL".to_string()
         };
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
+        if heap_return {
+            write!(w, "let __vc_out = ")?;
+        }
         write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, _fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => ")?;
@@ -1205,20 +1219,14 @@ impl Output<'_> {
                 .map(|(i, _)| i)
                 .collect();
             let arm_allocs_buf = vec_hbuf_tp.is_some() && !hidden_heap_attrs.is_empty();
-            let arm_frees_buf = arm_allocs_buf
-                && !matches!(cand_def_pre.returned(),
-                    Type::Vector(_, d) | Type::Reference(_, d) | Type::Enum(_, true, d)
-                    if d.as_attr_indices().iter().any(|i| hidden_heap_attrs.contains(&(*i as usize))));
+            let _ = &cand_def_pre;
             if arm_allocs_buf {
                 let tp = vec_hbuf_tp.unwrap_or_default();
                 write!(
                     w,
                     "{{ let mut __vc_hbuf: DbRef = stores.null_named(\"__vc_hbuf\"); \
-                     __vc_hbuf = OpDatabase(cell, __vc_hbuf, {tp}_i32); "
+                     __vc_hbuf = OpDatabase(cell, __vc_hbuf, {tp}_i32); let __vc_r = "
                 )?;
-                if arm_frees_buf {
-                    write!(w, "let __vc_r = ")?;
-                }
             }
             // Build synthetic args matching this candidate's attribute list.
             // The candidate's attrs are interleaved: user params, then
@@ -1284,11 +1292,29 @@ impl Output<'_> {
             // registered for this candidate).
             self.output_call_user_fn(w, candidate_def, &synthetic)?;
             if arm_allocs_buf {
-                if arm_frees_buf {
-                    write!(w, "; OpFreeRef(cell, __vc_hbuf, \"__vc_hbuf\"); __vc_r }}")?;
-                } else {
-                    write!(w, " }}")?;
-                }
+                // The call site allocated this buffer, so the call site owns whatever it did
+                // not hand over — and WHICH of the two came back is a run-time fact, not a
+                // static one.  The callee's return deps naming the buffer says it MEANT to
+                // deliver through it, and a body whose delivery slot pass 2 rebound to a view
+                // (`r = xs.map(…); r`) declares that and hands back its own store instead.
+                // So ask the value: same store, the caller's result IS the buffer and freeing
+                // it would dangle; different store, nothing owns the buffer and it leaks.
+                //
+                // This is `State::fn_return`'s rule verbatim (loft#1179 — *"keep the one the
+                // callee handed back, identified by STORE"*), and reading it the same way on
+                // both backends is what that fix set out to do.  The static test it replaces
+                // was an over-approximation in one direction only: it kept the buffer for
+                // every callee that DECLARED a delivery, filled or not.
+                //
+                // The KEPT one then needs an owner, and the destination's static type may
+                // say it owns nothing — a local that borrows on one assignment and receives
+                // this store on another (loft#1183).  `cr_fnref_buf` records it against the
+                // running frame and `FnRefBufGuard` releases it there, which is the
+                // interpreter's `release_fnref_bufs` on this side.
+                write!(
+                    w,
+                    "; codegen_runtime::cr_fnref_buf(cell, __vc_r, __vc_hbuf); __vc_r }}"
+                )?;
             }
             if is_text_return {
                 write!(w, ").to_string()")?;
@@ -1297,8 +1323,19 @@ impl Output<'_> {
         }
         write!(
             w,
-            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }} }}"
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
         )?;
+        if heap_return {
+            // The match is the block's value; bind it so the store can be asked about, then
+            // yield it unchanged.
+            write!(
+                w,
+                "; codegen_runtime::cr_fnref_minted(cell, __vc_out, __vc_seq, {closure_expr}); \
+                 __vc_out }}"
+            )?;
+        } else {
+            write!(w, " }}")?;
+        }
         Ok(())
     }
 

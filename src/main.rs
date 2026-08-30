@@ -2615,6 +2615,8 @@ fn bundle_import(indir: &str) -> i32 {
 /// Deliberately syntactic: `publish` does not parse the package, and the question is only
 /// *"is `{}` believable here?"*.  Over-reporting costs a note the author can ignore;
 /// under-reporting is the defect.
+// Its one caller is `registry` gated; the unit tests below reach it directly.
+#[cfg(any(test, feature = "registry"))]
 fn undeclared_source_deps(
     pkg_path: &std::path::Path,
     pkg_name: &str,
@@ -4419,6 +4421,7 @@ fn registry_sync() {
 }
 
 /// The legacy flat-text sync, for an explicitly configured `registry.txt` source.
+#[cfg(feature = "registry")]
 fn registry_sync_flat_file(existing_source: Option<&str>) {
     use loft::registry;
 
@@ -10566,6 +10569,10 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             }
             // For test-only files (no fn main()), generate a main() that calls
             // all zero-parameter user functions as test entry points.
+            //
+            // A file with neither — a LIBRARY, whose `pub fn`s all take arguments — gets no
+            // `main` at all.  The rustc call below reads that off the generated crate and
+            // compile-CHECKS it instead of linking a binary that cannot exist (loft#1171).
             let main_nr = p.data.def_nr("n_main");
             if main_nr >= end_def {
                 use std::io::Write;
@@ -10789,12 +10796,27 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 );
             }
             let binary = scratch.join(format!("loft_native_bin_{}", std::process::id()));
+            // Does the crate that was just generated have an entry point?  Read it off the
+            // artefact rather than re-deriving the decision that produced it: the file is
+            // the fact, and one `fn main` in it is exactly what rustc will look for.
+            let program_has_entry = std::fs::read_to_string(&emit_path)
+                .map(|src| src.contains("\nfn main(") || src.starts_with("fn main("))
+                .unwrap_or(true);
             let mut cmd = std::process::Command::new("rustc");
-            cmd.env("TMPDIR", &scratch)
-                .arg("--edition=2024")
-                .arg("-o")
-                .arg(&binary)
-                .arg(&emit_path);
+            cmd.env("TMPDIR", &scratch).arg("--edition=2024");
+            if program_has_entry {
+                cmd.arg("-o").arg(&binary);
+            } else {
+                // No `main`: there is no program to link.  Check the crate compiles and
+                // stop — which is what a library asked to build as an executable can
+                // honestly answer, and it keeps `loft build` / `loft check` on a
+                // library-only package a clean pass instead of a raw rustc E0601.
+                cmd.arg("--crate-type=lib")
+                    .arg("--emit=metadata")
+                    .arg("-o")
+                    .arg(scratch.join(format!("loft_native_check_{}.rmeta", std::process::id())));
+            }
+            cmd.arg(&emit_path);
             if native_release {
                 cmd.arg("-O");
             }
@@ -11224,6 +11246,15 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             && let Ok(me) = std::env::current_exe()
         {
             cmd.env("LOFT_LIVE_DRIVER", me);
+        }
+        // A crate with no `main` was compile-CHECKED rather than linked, so no binary
+        // exists to run.  Say what happened; reporting a missing file here would describe
+        // the symptom of a decision made two steps earlier (loft#1171).
+        if !binary.exists() && !cached_binary.exists() {
+            eprintln!(
+                "loft: `{abs_file}` defines no `main`, so there is nothing to run — it compiled cleanly."
+            );
+            std::process::exit(0);
         }
         let run_status = cmd.status().unwrap_or_else(|e| {
             eprintln!("loft: failed to run native binary: {e}");

@@ -1,0 +1,100 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `advice[avoidable-copy]` is the BORROW worklist, so it is silent where no borrow exists.
+//
+// A `value struct` (@PLN101) is stored INLINE wherever it lives — a vector element, a record
+// field, a stack slot — so writing one into a container writes its bytes into storage the
+// container already has.  Nothing is allocated, and the rewrite the advice names ("build it in
+// place, or stop using the source afterwards") buys exactly zero.  Unactionable advice is what
+// teaches a reader to stop reading the channel, and it landed where a library is doing the
+// right thing: `time` recommends `DateTime` over a bare epoch integer precisely because it is
+// zero-cost, and a guide demonstrating `[start, later, finish]` collected three notices telling
+// it to restructure (loft#1190).
+//
+// **Two facts have to meet, and the marker is only the first.**  `value struct` says how the
+// value is STORED; it does not say what the value OWNS.  A `value struct` may declare a
+// `vector` or a `text` field, and copying that one really does duplicate a store — measured,
+// `a = VH { xs: [1, 2] }; v = [a]; a.xs += [3]` leaves `v[0].xs` at 2 while `a.xs` is 3.  So
+// the fields are walked, and the last two cells are the CONTROL that says so: a heap-owning
+// `value struct` and a plain struct both keep their notice.
+//
+// The cells assert the VALUES as well as the diagnostics.  A suppression is one edit away from
+// a semantic change — silencing the notice by making the copy a borrow would alias the source —
+// so each cell writes through one side and reads the other.
+//
+// ⚠ **This file does not score the DIAGNOSTIC at all, in either direction, and every route the
+// corpus offers was measured before settling for that.**  An unexpected warning is logged and
+// not failed (`check_diagnostics`: *"Other warnings are not fatal"*), so the silence cannot be
+// asserted here; `make falsify` compares exit / assertions / leak / panic / refusals, none of
+// which move when a notice appears, so it reports this file INERT; and `@EXPECT_WARNING` does
+// not see the copy advice from `loft_suite`'s in-process harness at all — the two controls were
+// written with it and reported *"not emitted"* while the same file through the `loft` binary
+// prints both.  So the whole diagnostic contract lives in
+// `tests/copy_advice_value_struct.rs`, which counts the notices on stderr on both backends,
+// names the two that must fire and the two that must not, and FAILS on the pre-fix build.
+//
+// What this file carries is the half the corpus DOES score: that the suppression did not turn
+// the copy into an alias, and that the controls' programs still answer correctly.
+//
+// @falsified-at: 86764d9f — INERT here by construction, see above; the value cells pass on
+// both builds because the values were never wrong.  The moving channel is the diagnostic one,
+// and it is falsified in the Rust gate: with the suppression disabled, both backends fail on
+// `copy of Stamp`.
+
+value struct Stamp { ms: integer, tick: integer }
+value struct Wrapped { at: Stamp, id: integer }
+value struct Heapy { xs: vector<integer>, n: integer }
+struct Recorded { ms: integer }
+
+fn test_an_inline_value_in_a_vector_is_not_advised() {
+  a = Stamp { ms: 1, tick: 10 };
+  b = Stamp { ms: 2, tick: 20 };
+  v = [a, b];
+  assert(len(v) == 2, "len {len(v)}");
+  assert(v[0].ms == 1 && v[1].ms == 2, "elements {v[0].ms},{v[1].ms}");
+  // The source survives read-only, which is exactly the shape the notice is about — and there
+  // is nothing to say about it here.
+  assert(a.ms == 1 && b.ms == 2, "sources {a.ms},{b.ms}");
+}
+
+fn test_an_inline_value_in_a_field_is_not_advised() {
+  s = Stamp { ms: 7, tick: 70 };
+  w = Wrapped { at: s, id: 3 };
+  assert(w.at.ms == 7, "field {w.at.ms}");
+  assert(s.tick == 70, "source {s.tick}");
+}
+
+fn test_an_inline_value_nested_two_deep_is_not_advised() {
+  s = Stamp { ms: 4, tick: 40 };
+  w = Wrapped { at: s, id: 1 };
+  ws = [w];
+  assert(ws[0].at.tick == 40, "nested {ws[0].at.tick}");
+  assert(w.id == 1, "source {w.id}");
+}
+
+fn test_the_copy_is_still_a_copy() {
+  // Silencing the notice must not turn the copy into an alias: the element is independent.
+  a = Stamp { ms: 1, tick: 10 };
+  v = [a];
+  a.ms = 99;
+  assert(v[0].ms == 1, "the element kept its own bytes: {v[0].ms}, want 1");
+  assert(a.ms == 99, "and the source took the write: {a.ms}");
+}
+
+fn test_a_value_struct_that_owns_a_vector_keeps_its_notice() {
+  // CONTROL — the marker says INLINE, not FREE.  This copy duplicates a store.
+  a = Heapy { xs: [1, 2], n: 1 };
+  v = [a];
+  assert(len(v[0].xs) == 2 && len(a.xs) == 2, "both hold two");
+  assert(a.n == 1, "the source survives read-only, so the notice is right");
+}
+
+fn test_a_plain_struct_keeps_its_notice() {
+  // CONTROL — a plain struct lives in a record reached by a `DbRef`, so the copy allocates one
+  // even with all-scalar fields.
+  c = Recorded { ms: 1 };
+  w = [c];
+  assert(len(w) == 1 && w[0].ms == 1, "element {w[0].ms}");
+  assert(c.ms == 1, "source {c.ms}");
+}

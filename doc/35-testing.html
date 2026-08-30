@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing your code — Loft, a programming language for small browser games</title>
+  <meta name="description" content="How to write and run tests — a function whose name starts with test.">
+<link rel="canonical" href="https://loft-lang.org/loft/35-testing.html">
+<meta property="og:title" content="Testing your code — Loft, a programming language for small browser games">
+<meta property="og:description" content="How to write and run tests — a function whose name starts with test.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/35-testing.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Testing your code — Loft, a programming language for small browser games">
+<meta name="twitter:description" content="How to write and run tests — a function whose name starts with test.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <span class="cur">Testing your code</span> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Testing your code</h1>
+<article>
+<p>A test is a function that checks your code still does what you meant. You do not install anything to write one, and there is no special syntax.</p>
+<h2 id="write-a-test">Write a test</h2>
+<p>Give a function a name starting with <code>test</code> and put an <code>assert</code> in it. That is all a test is:</p>
+<pre><code>  fn double(n: integer) -&gt; integer { n * 2 }
+</code></pre>
+<pre><code>  fn test_double_doubles() {
+    assert(double(4) == 8, "double(4) should be 8");
+  }
+</code></pre>
+<p><code>assert</code> takes something that should be true, and a message. If it is true, nothing happens. If it is not, the message is what you will read, so write the message for the person who has to fix it — usually you, later.</p>
+<h2 id="run-your-tests">Run your tests</h2>
+<p>Point loft at the file:</p>
+<pre><code>  $ loft --tests calc.loft
+  test result: ok. 2 passed; 1 file
+</code></pre>
+<p>and it finds every <code>test</code> function and runs it, naming the file and the functions it found.</p>
+<p>Give it a directory instead of a file and it looks in every <code>.loft</code> file underneath. Give it nothing and it starts from where you are:</p>
+<pre><code>  $ loft --tests calc.loft::test_double_doubles
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="run-just-one-test">Run just one test</h2>
+<p>While you are fixing one thing, run only that one. Put <code>::</code> and the test's name after the file:</p>
+<pre><code>  $ loft --tests calc.loft::test_double_of_zero
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<h2 id="when-a-test-fails">When a test fails</h2>
+<p>A failure names the test and shows your message:</p>
+<pre><code>  FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+  test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+</code></pre>
+<p>The message is the part you wrote, which is why a vague message like "it works" costs you time and a specific one saves it.</p>
+<h2 id="read-the-line-after-the-result">Read the line after the result</h2>
+<p>The end of the report says what the run did NOT do, in square brackets — for example that it ran on the interpreter and did not try the compiled build. That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all.</p>
+<p>To also run your tests the compiled way:</p>
+<pre><code>  $ loft --tests --native calc.loft
+  test result: ok. 2 passed; 1 file
+</code></pre>
+<h2 id="once-you-have-a-project">Once you have a project</h2>
+<p>When your code grows into a project with a <code>loft.toml</code> file (the next page), tests live in a <code>tests/</code> folder and you run them with:</p>
+<pre><code>  $ cd greeter &amp;&amp; loft test
+  test result: ok. 1 passed; 1 file
+</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">double</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { n * <span class="nm">2</span> }</code></pre>
+<p>This page is itself run as a test, so the example below really does pass.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">double</span>(<span class="nm">4</span>) == <span class="nm">8</span>, <span class="st">"double(4) should be 8"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">double</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"double(0) should be 0"</span>);</code></pre>
+<p>An assert that holds produces no output at all — silence is success.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"both checks passed"</span>);
+}</code></pre>
+<section id="loft-panel" class="loft-panel" hidden>
+<h2>Run it yourself</h2>
+<p class="lp-note">This page is a loft program. It runs here, in your browser — press Run, then ask it something.</p>
+<div class="lp-bar"><button id="lp-run" disabled>▶ Run</button><button id="lp-step" disabled>Step</button><button id="lp-resume" disabled>Resume</button><span id="lp-status" class="lp-status">loading…</span></div>
+<pre id="lp-output" class="lp-output"></pre>
+<div id="lp-frame" class="lp-frame" hidden></div>
+<div id="lp-callables" class="lp-callables" hidden></div>
+<div class="lp-prompt"><span class="lp-caret">&gt;</span><input id="lp-input" type="text" autocomplete="off" spellcheck="false" disabled placeholder="an expression — it is evaluated where the program stopped"></div>
+<div id="lp-log" class="lp-log"></div>
+<details class="lp-lines"><summary>Stop on a line</summary><ol id="lp-src" class="lp-src"></ol></details>
+</section>
+<pre id="lp-source" hidden>// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Testing your code
+// @TITLE: How to write and run tests — a function whose name starts with test.
+// A test is a function that checks your code still does what you meant.
+// You do not install anything to write one, and there is no special syntax.
+// ## Write a test
+// Give a function a name starting with 'test' and put an 'assert' in it.
+// That is all a test is:
+//
+//     fn double(n: integer) -&gt; integer { n * 2 }
+//
+//     fn test_double_doubles() {
+//       assert(double(4) == 8, "double(4) should be 8");
+//     }
+//
+// 'assert' takes something that should be true, and a message. If it is true,
+// nothing happens. If it is not, the message is what you will read, so write
+// the message for the person who has to fix it — usually you, later.
+// ## Run your tests
+// Point loft at the file:
+//
+//     $ loft --tests calc.loft
+//     test result: ok. 2 passed; 1 file
+//
+// and it finds every 'test' function and runs it, naming the file and the
+// functions it found.
+//
+// Give it a directory instead of a file and it looks in every '.loft' file
+// underneath. Give it nothing and it starts from where you are:
+//
+//     $ loft --tests calc.loft::test_double_doubles
+//     test result: ok. 1 passed; 1 file
+//
+// ## Run just one test
+// While you are fixing one thing, run only that one. Put '::' and the test's
+// name after the file:
+//
+//     $ loft --tests calc.loft::test_double_of_zero
+//     test result: ok. 1 passed; 1 file
+//
+// ## When a test fails
+// A failure names the test and shows your message:
+//
+//     FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+//     test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+//
+// The message is the part you wrote, which is why a vague message like "it
+// works" costs you time and a specific one saves it.
+// ## Read the line after the result
+// The end of the report says what the run did NOT do, in square brackets —
+// for example that it ran on the interpreter and did not try the compiled
+// build. That is deliberate. A run that says only "ok" cannot tell you
+// whether the other half was checked or never ran at all.
+//
+// To also run your tests the compiled way:
+//
+//     $ loft --tests --native calc.loft
+//     test result: ok. 2 passed; 1 file
+//
+// ## Once you have a project
+// When your code grows into a project with a 'loft.toml' file (the next page),
+// tests live in a 'tests/' folder and you run them with:
+//
+//     $ cd greeter &amp;&amp; loft test
+//     test result: ok. 1 passed; 1 file
+
+fn double(n: integer) -&gt; integer { n * 2 }
+
+// This page is itself run as a test, so the example below really does pass.
+fn main() {
+  assert(double(4) == 8, "double(4) should be 8");
+  assert(double(0) == 0, "double(0) should be 0");
+  // An assert that holds produces no output at all — silence is success.
+  println("both checks passed");
+}
+</pre>
+<style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>
+<script type="module" src="loft-panel.js"></script>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

@@ -1244,7 +1244,7 @@ fn analyze_fn_survival(
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
-            survival_class(src, copy_end, loop_surv, &u, function)
+            survival_class(src, copy_end, loop_surv, &u, function, data)
         } else {
             (
                 CopyClass::Implicit,
@@ -1273,7 +1273,7 @@ fn analyze_fn_survival(
         // Flag OFF → the original phase-1 classification verbatim (byte-identical). Flag ON →
         // the bound-vs-unbound survival split.
         let (class, reason) = if survival_on {
-            survival_class(src, copy_end, loop_surv, &u, function)
+            survival_class(src, copy_end, loop_surv, &u, function, data)
         } else {
             (CopyClass::Implicit, "record deep-copy (OpCopyRecord)")
         };
@@ -1322,6 +1322,59 @@ fn analyze_fn_survival(
     (rows, plans, move_plans)
 }
 
+/// Does duplicating a value of this type allocate?
+///
+/// A `value struct` (@PLN101) is stored INLINE wherever it lives — a vector element, a record
+/// field, a stack slot — so writing one into a container writes its bytes into storage the
+/// container already has. Nothing is allocated, and there is no borrow to reach for instead:
+/// the destination's storage IS those bytes.
+///
+/// **Two facts have to meet, and the marker is only the first.** `value struct` says how the
+/// value is STORED; it does not say what the value OWNS. A `value struct` may declare a
+/// `vector` or a `text` field, and copying that one really does duplicate a store — measured:
+/// `a = VH { xs: [1, 2] }; v = [a]; a.xs += [3]` leaves `v[0].xs` at 2 while `a.xs` is 3, which
+/// is a deep copy by any reading. So the fields are walked, and any heap-owning one anywhere
+/// beneath answers `false`.
+///
+/// A plain (non-`value`) struct answers `false` even with all-scalar fields: it lives in a
+/// record reached by a `DbRef`, so a copy allocates that record. That is the `RS` half of
+/// loft#1190, and it keeps its notice.
+fn copy_allocates_nothing(data: &Data, tp: &Type) -> bool {
+    fn inline_and_free(data: &Data, tp: &Type, seen: &mut Vec<u32>) -> bool {
+        match tp.base() {
+            Type::Integer(_)
+            | Type::Float
+            | Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Null => true,
+            // A plain enum is a discriminant; a STRUCT-enum (`Type::Enum(_, true, _)`) carries a
+            // record payload and is reached by a `DbRef`, so it allocates.
+            Type::Enum(_, false, _) => true,
+            Type::Reference(d, _) => {
+                let d = *d;
+                if !data.is_value_struct(d) {
+                    return false;
+                }
+                if seen.contains(&d) {
+                    // A value struct cannot contain itself by value, so a cycle here means the
+                    // types are still being resolved. Answer the conservative way — a copy that
+                    // might allocate keeps its notice.
+                    return false;
+                }
+                seen.push(d);
+                let ok = (0..data.attributes(d))
+                    .all(|a| inline_and_free(data, &data.attr_type(d, a), seen));
+                seen.pop();
+                ok
+            }
+            _ => false,
+        }
+    }
+    matches!(tp.base(), Type::Reference(d, _) if data.is_value_struct(*d))
+        && inline_and_free(data, tp, &mut Vec::new())
+}
+
 /// @PLN90 — the bound-vs-unbound survival split for a construction / record copy. The
 /// silent/indicate line is keyed on the copy's SOURCE FATE, never on the emitting op
 /// (COPY_DIAGNOSTICS.md § bound vs unbound):
@@ -1344,6 +1397,7 @@ fn survival_class(
     loop_surv: bool,
     u: &Uses,
     function: &Function,
+    data: &Data,
 ) -> (CopyClass, &'static str) {
     let Some(s) = src else {
         return (
@@ -1352,6 +1406,17 @@ fn survival_class(
         );
     };
     // The copy's OWN read of the source is at a position <= copy_end, so a use strictly after
+    // loft#1190 — a source that allocates NOTHING when duplicated is `Implicit` whatever its
+    // fate.  The `Avoidable` class is the borrow worklist, and there is no borrow to reach for
+    // here: an inline value's storage IS the destination's bytes, so `[a, b]` writes them where
+    // they belong and a move would save nothing.  Advice that names a rewrite buying zero is
+    // what teaches a reader to stop reading the channel.
+    if copy_allocates_nothing(data, function.tp(s)) {
+        return (
+            CopyClass::Implicit,
+            "inline value with no heap part — the copy allocates nothing and no borrow could avoid it",
+        );
+    }
     // is a genuine later use — the source survives, an independent duplicate now coexists.
     let survives_straight = u.last_use_pos.get(&s).is_some_and(|&p| p > copy_end);
     if !survives_straight && !loop_surv {

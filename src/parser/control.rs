@@ -244,6 +244,12 @@ enum RetPromotion {
     /// promotion would change the call ABI for locals the NRVO machinery
     /// cannot host (e.g. a call-result vector).
     MergeOnly,
+    /// loft#1182 — a CAPTURED closure variable, read out of the closure record: never
+    /// promoted, which is what [`TextDep::SkipCaptured`] has said about the text half all
+    /// along.  There is no store to place — the capture belongs to the frame that made it —
+    /// so growing a buffer for it declares a delivery the body then ignores, and
+    /// `--native`'s dispatch keeps that buffer because the candidate's return deps name it.
+    SkipCaptured,
     /// An inner work ref that is not — and is not ADOPTED by (cluster I-d) —
     /// the site's value: stays a plain local; the outer call deep-copies its
     /// record into the destination before scope exit frees it.  Sentinel sweep
@@ -2128,7 +2134,7 @@ impl Parser {
             // semantics). The EXPLICIT `return v` / `return b.v` already does this
             // (parse_return), suite-proven. Narrowed by the two tail predicates to
             // whole-arg / struct-field tails: index / call tails stay on the rename
-            // path (the over-broad cut regressed the suite). `ls` is carried for
+            // path, which already delivers them correctly. `ls` is carried for
             // the alloc-failure fallback rename.
             Delivery::CopyBorrow(ls.to_vec())
         } else {
@@ -2240,6 +2246,26 @@ impl Parser {
     /// `block_result` carried; mirrors `classify_vector_delivery`.
     fn classify_reference_delivery(&self, ls: &[u16], l: &[Value]) -> RefDelivery {
         if l.last()
+            .is_some_and(|tail| Self::tail_calls_a_fnref_parameter(tail, &self.vars))
+        {
+            // loft#1185 — the tail calls through a fn-ref PARAMETER, so what comes back may be
+            // the capture of whatever closure the caller passed: a store this frame does not
+            // own and its caller cannot name.
+            //
+            // The fact exists one frame UP, where the closure was named, and it cannot travel
+            // down: this function's return type is computed ONCE for every caller, so no
+            // per-argument dep reaches it.  Reading the result as a borrow instead is not
+            // available either — the same parameter carries a closure that MINTS, and a borrow
+            // there leaks the mint (`call_it(fresh, 1)`, measured clean today).
+            //
+            // So the value is COPIED before it escapes, which is what `MaterializeView` already
+            // does for a tail that points into something the callee frees.  The caller then owns
+            // an ordinary fresh record and the capture is untouched, at the cost of one record
+            // copy on the forwarding path — the cost `formal/closures.md` D-clo-12 already
+            // named for closing this.
+            return RefDelivery::MaterializeView;
+        }
+        if l.last()
             .is_some_and(|tail| self.return_projects_into_local(tail))
         {
             // The tail POINTS INTO something the callee frees, so it cannot be
@@ -2284,6 +2310,38 @@ impl Parser {
         } else {
             // Owned / arg-borrow: rename the tail's work-ref(s) onto `__retbuf`.
             RefDelivery::Rename(ls.to_vec())
+        }
+    }
+
+    /// Is this tail a call through a fn-typed PARAMETER?
+    ///
+    /// The one shape whose returned store the frame can say nothing about: a fn-ref LOCAL's
+    /// type carries the closure it was built with, so a call through it publishes a dep the
+    /// caller can map, while a PARAMETER's type is the declared `fn(…) -> τ` and carries
+    /// nothing about any closure — which is exactly why loft#1185's fact has no route.
+    ///
+    /// Looks through the wrappers a tail can be sitting in, and asks only about the call
+    /// itself: a tail that merely CONTAINS such a call somewhere is not this question.
+    fn tail_calls_a_fnref_parameter(tail: &Value, vars: &crate::variables::Function) -> bool {
+        let mut node = tail.unspan();
+        loop {
+            match node {
+                Value::Return(inner) => node = inner.unspan(),
+                Value::Insert(steps) | Value::Parallel(steps) => match steps.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::Block(bl) => match bl.operators.last() {
+                    Some(last) => node = last.unspan(),
+                    None => return false,
+                },
+                Value::CallRef(v, _) => {
+                    return *v < vars.count()
+                        && vars.is_argument(*v)
+                        && matches!(vars.tp(*v).base(), Type::Function(_, _, _));
+                }
+                _ => return false,
+            }
         }
     }
 
@@ -11692,7 +11750,7 @@ impl Parser {
     /// COPY the explicit `return v` path (`parse_return`) and the struct-field
     /// tail (`tail_is_struct_field_read`, #415) both perform.  Narrowed to a
     /// bare `Var` that is a vector argument: index / call / field tails keep
-    /// their existing handling (the over-broad cut regressed the suite — A.2).
+    /// their existing handling, which already gives them value semantics (A.2).
     fn tail_whole_arg_vector(&self, l: &[Value]) -> Option<u16> {
         let mut v = l.last()?;
         loop {
@@ -12181,6 +12239,19 @@ impl Parser {
                 && self.data.def(self.context).attributes()[a as usize].hidden;
             return RetPromotion::MergeAttr { a, chain_site };
         }
+        // A CAPTURE has nothing to place either, and for the same reason the attribute rung
+        // above gives: the store belongs to the frame that made it, and the body reads it out
+        // of the closure record.  `classify_text_dep` has answered this exact question with
+        // `TextDep::SkipCaptured` since @PLN85 — one notion, and the ref ladder could not see
+        // it, so `{ q.xs }` grew a hidden `q` buffer that the body then ignores.  The
+        // interpreter hid that: `State::fn_return` releases any buffer the callee did not hand
+        // back (loft#1179), a runtime check that does not care what the deps claim.  `--native`
+        // reads the deps instead — `arm_frees_buf` frees an unfilled `__vc_hbuf` only when the
+        // candidate's return deps do NOT name a hidden heap attr, and they do, because the
+        // buffer exists — so it leaked one store per call (loft#1182).
+        if self.captured_names.iter().any(|(name, _)| name == n) {
+            return RetPromotion::SkipCaptured;
+        }
         // A reassigned returned LOCAL must NOT be NRVO-promoted — but a NAMED
         // local at a vector fn's body tail still DELIVERS: it falls through to
         // the `Bind` copy leg (reassignment is irrelevant to a single
@@ -12282,7 +12353,29 @@ impl Parser {
             || a1b_site
             || (ctx.site == RetSite::MidReturn
                 && matches!(ctx.ret.ret_promo_base(), Type::Vector(_, _))));
+        // loft#1188 — a LAMBDA whose buffer was RESERVED between the passes BINDS to it instead
+        // of renaming onto it.  The placeholder is minted before pass 2 appends the `__closure`
+        // argument, and the work-ref this tail mints comes after BOTH; the rename retires the
+        // placeholder and makes that later var the argument, which puts the callee's argument
+        // slots out of the attribute order the CALL SITE lowers against.  Measured on both
+        // legs: `CallRef` wrote the closure into the buffer's slot, so a record return answered
+        // a zeroed record, and a CAPTURE inside a comprehension-tailed collection lambda read
+        // its integer as 0 — silently, and only on the interpreter, because `--native` derives
+        // its argument list from the attributes alone.  Binding keeps the reserved var, so the
+        // geometry is the one a lambda whose types all resolved in pass 1 already has.
+        let lambda_binds_reserved_buffer = !ctx.is_plain_fn
+            && matches!(
+                ctx.ret.ret_promo_base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            )
+            && self
+                .data
+                .def(self.context)
+                .attr_names
+                .contains_key("__retbuf")
+            && self.vars.var("__retbuf") != u16::MAX;
         if allow_rename
+            && !lambda_binds_reserved_buffer
             && let Some(&buf_attr) = self.data.def(self.context).attr_names.get("__retbuf")
         {
             return RetPromotion::Rename {
@@ -12309,7 +12402,7 @@ impl Parser {
             return RetPromotion::SkipJoinArm;
         }
         // loft#938 gate 5 of 5 — the classification that EMITS the delivery into `__retbuf`.
-        if ctx.is_plain_fn
+        if (ctx.is_plain_fn || lambda_binds_reserved_buffer)
             && matches!(
                 ctx.ret.ret_promo_base(),
                 Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
@@ -12586,6 +12679,7 @@ impl Parser {
                     | RetPromotion::SkipReassigned
                     | RetPromotion::MergeOnly
                     | RetPromotion::SkipInnerRef
+                    | RetPromotion::SkipCaptured
                     | RetPromotion::SkipJoinArm => {}
                     // loft#974 — a shape that carries its own delivery takes the borrow
                     // fact and nothing else: no buffer rename, no bind, no arity growth.
@@ -13533,8 +13627,13 @@ impl Parser {
                     && param_types.is_empty()
                 {
                     // @PLN85 L1 — callee-attr-space deps must not leak into the
-                    // caller (see `fnref_result_type`).
-                    let ret_type = Box::new(Self::fnref_result_type(*ret_type, &[]));
+                    // caller (see `fnref_result_type`), and an index naming no visible
+                    // argument names the closure this slot carries (loft#1180).
+                    let ret_type = Box::new(Self::fnref_result_type(
+                        *ret_type,
+                        &[],
+                        Self::capturing_fnref_var(&self.vars, v_nr),
+                    ));
                     // P227: a text-returning fn-ref call carries its target's `&text`
                     // work buffers at caller-function scope, because a `&text` is a
                     // pointer into the CALLER's frame — the callee cannot conjure one
@@ -14153,8 +14252,13 @@ impl Parser {
         };
         // @PLN85 L1 — callee-attr-space deps must not leak into the caller
         // (see `fnref_result_type`): map visible-param deps through the actual
-        // argument types, drop hidden/grown indices (the value arrives OWNED).
-        let ret_type = Box::new(Self::fnref_result_type(*ret_type, types));
+        // argument types; an index naming no visible argument names the closure this slot
+        // carries, and only a CAPTURING slot has one (loft#1180).
+        let ret_type = Box::new(Self::fnref_result_type(
+            *ret_type,
+            types,
+            Self::capturing_fnref_var(&self.vars, v_nr),
+        ));
         // P227 — see the zero-argument twin above: the call site pushes the widest
         // candidate's `&text` buffer count and the dispatcher pops the excess, because a
         // `&text` points into the CALLER's frame and only the caller can supply one that
