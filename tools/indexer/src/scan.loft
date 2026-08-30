@@ -281,6 +281,16 @@ fn tag_is_valid(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) 
 // `sorted<>` keys must come from a struct field.
 struct TagSlot { name: text }
 
+// A DISTINCT element type for the link set, and the distinctness is the point.
+//
+// Two collections over ONE element type are a linked collection group — several routes to a
+// SINGLE record set (@FR-Col-Group) — so `tags` and `links` both declared over `TagSlot` were
+// not two sets at all.  Measured: filling only `tags` left `links.len() == 2`, and after one
+// insert into each both held every record.  `distinct_tags` and `link_targets` therefore both
+// reported |tags union links|, and the JSON was wrong rather than merely miscounted — the tag
+// bucket loop ran `emit_tag_bucket` for every LINK TARGET as well, and the link loop for every
+// tag.  Giving the two sets their own element types is what makes them two sets.
+
 // Wrapper so the `sorted` collection can be a STRUCT FIELD —
 // loft's two-pass parser infers `sorted<TagSlot[name]>` more
 // reliably for struct fields than for plain locals (a local
@@ -288,9 +298,11 @@ struct TagSlot { name: text }
 // later `+= [TagSlot{...}]` raised "cannot change type from
 // sorted<...> to vector<...>" because the literal append was
 // re-typed as vector mid-flight).
+struct LinkSlot { name: text }
+
 struct DistinctSets {
     tags: sorted<TagSlot[name]>,
-    links: sorted<TagSlot[name]>
+    links: sorted<LinkSlot[name]>
 }
 
 // File extensions worth scanning.  Matches scan.sh's grep
@@ -1067,7 +1079,7 @@ fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
     }
     for lr in links {
         if sets.links[lr.target] == null {
-            sets.links += [TagSlot{name: lr.target}];
+            sets.links += [LinkSlot{name: lr.target}];
         }
     }
     // Populate summary counts that scan with the existing data.
