@@ -131,6 +131,14 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
                `has_default(τ)` is a STATIC side-condition — where it fails, `e?` is a
                COMPILE error, never a runtime one (§ Defaults below).  The pairing is the
                mnemonic: `??` = the default YOU give, `?` = the default the TYPE gives.
+  (N-NotPlace) a DISCHARGE is a VALUE, not a PLACE:  `e?` / `e ?? d` on the LEFT of an
+               assignment is a COMPILE error, for `=` and for every compound operator.
+               It FOLLOWS from (N-Default) — the discharge answers the slot on the present
+               path and a FRESHLY CONSTRUCTED default on the absent one, so a write through
+               it reaches nothing whenever the slot is null.  Name the slot itself.  A
+               discharge INSIDE a longer place is untouched: `b.i?.x += 1` writes through,
+               because `.x` after the discharge names an interior place ([heap.md](heap.md)
+               H-View) — it is the OUTERMOST node that decides.
   (N-Match)    match e { null ⇒ …,  x ⇒ …(x:τ)… }      eliminates τ?, binds the τ arm
   (N-Store)    storing  e:τ?  into a  τ  slot without discharge is REJECTED — a WARNING for
                most τ (the null is representable-and-distinct in τ's non-null form), a hard
@@ -325,6 +333,38 @@ o?                        // 0        (τ = integer here — `?` discharges the 
 struct P { x: integer, y: integer }
 q: P? = null;
 q?                        // P{x:0, y:0}
+```
+
+**A discharge is a value, so it cannot be assigned to (`(N-NotPlace)`).** `e?` *is*
+`e ?? construct_default(τ)`, and on the absent path that is a value the program constructs
+on the spot. A write through it would therefore land in a temporary nothing can read back —
+so the left of an assignment refuses it, for `=` and for every compound operator alike. This
+is a consequence of `(N-Default)`, not an extra restriction on top of it, and the workaround
+is always the shorter spelling: **name the slot itself**. `b.d += [rec]` appends to a
+nullable vector field and maintains its collection group; `b.d? += [rec]` is the error.
+
+The boundary is the **outermost node of the target**, and that is what makes the rule narrow
+enough to be useful. A discharge in the MIDDLE of a place still writes through, because what
+follows it names an interior place ([heap.md](heap.md) `H-View`):
+
+```loft
+struct I { x: integer }
+struct H { i: I? }
+h = H { i: I { x: 1 } };
+h.i?.x += 1;              // 2        — the target is `.x`, an interior place; the `?` is a READ
+h.i? = I { x: 9 };        // COMPILE ERROR — here the discharge IS the target
+```
+
+**Falsifying program** (obeying `(N-NotPlace)` and reading `?` as a write-through disagree):
+
+```loft
+struct N { d: vector<integer>? }
+b = N { };                // `d` is null
+b.d? += [7];              // COMPILE ERROR
+                          // reading `?` as "write through the slot" predicts len(b.d?) == 1;
+                          // the pre-refusal compiler answered 0 — the append landed in the
+                          // freshly-constructed default and was discarded (loft#1205)
+b.d += [7];               // the spelling that works, on a null slot and a present one alike
 ```
 
 ### Null-flow — the general laws, across EVERY type (@PLN102, 2026-07-11)

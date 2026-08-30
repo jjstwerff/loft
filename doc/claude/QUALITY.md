@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 339 | 322 | **17** |
+| 340 | 323 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -496,6 +496,11 @@ reason.
 loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displace`, the
 pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it
 unspans before matching `Set`, so it lands on the peeling side and leaves the opaque column
+alone.
+
+loft#1205 moved it to 340 · 323 · 17 with `parser::null_discharge_target`, which tells a NULL
+DISCHARGE on the left of an assignment (`Block("ncc")`, or the bare-variable `If`) from a real
+place; it unspans before matching, so it lands on the peeling side and leaves the opaque column
 alone.
 
 loft#1194/#1195 moved the table twice: 337 · 319 · 18 → 337 · 320 · **17**, then

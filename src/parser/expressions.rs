@@ -114,6 +114,30 @@ fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     }
 }
 
+/// Is this assignment target the result of a NULL DISCHARGE — `x?`, `x ?? d`, `x ?? return`?
+///
+/// A discharge is a VALUE, not a place: `(N-Default)` defines `e?` as `e ?? construct_default(τ)`
+/// (@FR-N-Default, [formal/types.md](../../doc/claude/formal/types.md)), so it answers the slot on
+/// the present path and a FRESH default on the absent one.  A write through it therefore lands in
+/// a temporary whenever the value is null — and on the present path a compound assignment
+/// re-evaluates the whole discharge, violating @FR-E-Asgn-Compound's evaluate-the-place-once step
+/// (loft#1205).  The two lowerings the discharge produces are the two arms here:
+///
+/// * a NON-trivial subject binds a `__ncc_N`/`ncr_N` temp inside a named block
+///   (`build_null_coalesce_default` / `build_null_coalesce_return`);
+/// * a bare-variable subject is read twice for free, so it lowers to a plain `if` with no temp.
+///
+/// The `if` half asks [`lhs_base_var`] rather than restating its test: that is the one home for
+/// *which* `if` on the left of an assignment IS a place (loft#980's variant-field guard resolves
+/// to its receiver; a discharge resolves to nothing), so the two answers cannot drift apart.
+fn null_discharge_target(v: &Value, data: &crate::parser::Data) -> bool {
+    match v.unspan() {
+        Value::Block(bl) => bl.name == "ncc" || bl.name == "ncr",
+        Value::If(_, _, _) => lhs_base_var(v, data) == u16::MAX,
+        _ => false,
+    }
+}
+
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
 /// Descent comes from `Value::for_each_child`, the one place that knows the IR
@@ -4621,6 +4645,33 @@ use a separate collection or add after the loop"
         let mut to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
             if self.lexer.has_token(op) {
+                // loft#1205 — a NULL DISCHARGE is not a place (@FR-N-NotPlace).  Refuse it here,
+                // where every assignment form still shares one target, because the shapes that
+                // reach the per-type paths below each answer differently and none of them
+                // answers correctly: a vector field appended the record TWICE, the same write on
+                // a null slot vanished, a `text` target reached codegen through a minted work
+                // variable and took the process down with it, and an `integer` one was refused
+                // by arithmetic dispatch — *"Not implemented operation + for type integer"* — a
+                // message about the operator when the target is what is wrong.  Consume the
+                // right-hand side so the statement is finished before returning, matching the
+                // tuple-compound refusal above.
+                if null_discharge_target(&to, &self.data) {
+                    if !self.first_pass {
+                        diagnostic_at!(
+                            self.lexer,
+                            &stmt_start_pos,
+                            Level::Error,
+                            "the left side of this assignment is a discharged value, not a \
+                             place — `?` / `??` answers the slot when it holds a value and a \
+                             FRESH default when it does not, so there is nothing to write \
+                             through. Name the slot itself — `x {op} …`, without the \
+                             discharge"
+                        );
+                    }
+                    let mut discard = Value::Null;
+                    self.expression(&mut discard);
+                    return Type::Void;
+                }
                 // Mark the variable as defined only once we have confirmed the `=` token
                 // is actually present. Doing this before the token check caused any bare
                 // `Value::Var` (e.g. `{cd}` inside a format string) to be marked defined

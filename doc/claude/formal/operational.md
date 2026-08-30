@@ -326,7 +326,15 @@ compound assignment can target, including a struct field at a nonzero offset rea
 a call-index (`w[idx()].y += 5` calls `idx()` once, and reads/writes the same element's `y`)
 and nested indices (`m[i()][j()] += n` evaluates `i()` once and `j()` once, not per read/write
 or per nesting level). Contrast `E-Asgn`: a plain `x = v` already writes its place once, so
-there is no double-eval to close. [DESIGN_DECISIONS.md C92](../DESIGN_DECISIONS.md); verified
+there is no double-eval to close.
+
+**"Every place" is not every left-hand side.** A NULL DISCHARGE — `e?`, `e ?? d` — is a value,
+not a place ([types.md](types.md) `(N-Default)` / `(N-NotPlace)`), so it is refused on the left
+rather than being a place this rule then has to evaluate once. Reading it as one is what
+loft#1205 was: `b.d? += [rec]` built the record INTO the destination and appended the
+destination to itself (two records where the author wrote one), skipped the collection-group
+maintenance because the discharged spelling is not the field spelling the group test compares,
+and on a null slot lost the write entirely. [DESIGN_DECISIONS.md C92](../DESIGN_DECISIONS.md); verified
 both backends — `tests/scripts/pln102-f2-place-once.loft`.
 
 ---
