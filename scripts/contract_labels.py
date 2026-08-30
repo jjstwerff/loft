@@ -185,6 +185,13 @@ def main():
     verdict, unjudged = judgements(source)
     where = "this push" if a.event else f"{a.base}..HEAD"
 
+    if not verdict and not unjudged:
+        # Nothing here fixes an issue, so there is nothing to judge and nothing
+        # to act on.  Say that in one line rather than reporting an empty table.
+        if not a.report:
+            print(f"  no `Fixes #N` in {where} — nothing to judge")
+        return 0
+
     if not a.report:
         print(f"=== `Contract:` trailers on {where} ===")
         if not verdict:
@@ -205,11 +212,11 @@ def main():
                       "settled nor strained.  Add `Contract: settled|strained — <why>` to "
                       "the commit, or set the label on the issue by hand.")
     elif not a.report:
-        print("\n  every fix on this branch carries a verdict")
+        print(f"\n  every fix in {where} carries a verdict")
 
     if a.apply:
         apply_labels(verdict)
-    elif verdict:
+    elif verdict and not a.report:
         print("\n  (dry run — re-run with --apply to write these labels)")
 
     return 1 if unjudged and a.report else 0
