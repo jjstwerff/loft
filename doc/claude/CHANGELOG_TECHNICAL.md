@@ -36,6 +36,39 @@ place and stays refused. The seed reads the place twice, so it is built on the p
 `w[idx()]? += 1` calls `idx()` once, where off the original spelling it called twice and read
 one element while writing the next. `operational.md` states it as `@FR-E-Asgn-Discharge`.
 
+### An un-discharged nullable appended to a collection warns and stores (2026-08-30)
+
+`d.c += s` with `s: vector<integer>?` into a dense `vector<integer>` FIELD panicked the
+interpreter writing a read-only const store, and `--native` emitted `set_int(…, v)` with a
+`DbRef` for `v` — E0308, so the program could not be built. A KEYED destination took the same
+value silently. Neither symptom named the statement: the interpreter reported a position inside
+`default/05_coroutine.loft`, which the program does not use (loft#1210).
+
+**The rule decides the severity, and it is not a refusal.** `(N-Store)`'s split is
+REPRESENTABILITY (`formal/types.md`, per-type table): a hard error only where the null sentinel
+collides with a real value of τ — the narrow widths `u8…u32`, and nothing else — and a WARNING
+everywhere the null is representable-and-distinct, where the store compiles and runs. A
+collection is out-of-band (`nullref`), so it warns. Measured against two siblings before
+shipping: `d.c = s` already stores a nullable vector into a dense field and works, and
+`return s` warns and works, so a refusal on `+=` would have made three operators disagree.
+
+The issue's own reading pointed the other way — it takes the dense LOCAL as the reference route
+and infers the FIELD should refuse. The local is refused by a DIFFERENT rule: @PLAN52 makes a
+bare `local += elem` ambiguous whatever its source type. `1210b` pins both, and they report
+different diagnostics.
+
+**Cure: peel the source where `convert` already peels it for `=`.** `s_type` is what the routes
+below read to choose between concat, single-element push and the keyed fill, and an `Optional`
+matched none of them — so the value fell to the push, which writes what it is handed as one
+element of the element type.
+
+**Not fixed here: loft#1215.** That push site never compares `s_type` with `elm_tp` at all, so a
+source matching neither the element nor the collection type is written raw — `float` stores the
+IEEE-754 bits of the value read back as an i64, `boolean` stores 8705, `text` panics the
+allocator, and `--native` rejects all three. A probe at its head found **no `.loft` file in the
+repository reaches it** (all of `tests/scripts/` plus 176 files across `tests/docs/`, `default/`,
+`tests/lib/`, `examples/`), so it serves no correct program and funnels the broken ones.
+
 ### A nullable collection appends a non-literal source (2026-08-30)
 
 `n.v += src` on a `vector<τ>?` field was refused as *"No matching operator 'Add' on

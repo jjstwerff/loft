@@ -110,6 +110,20 @@ For a **collection** the `?` was always redundant — `b.d += [r]` on a null fie
 the empty collection first — and that spelling was correct throughout. `(a ?? d) += e` stays
 refused: it names two values and no place.
 
+### Appending a nullable value to a collection says so, instead of crashing
+
+```loft
+struct D { c: vector<integer> }
+s: vector<integer>? = [1, 2];
+d.c += s;                    // was: interpreter panic; `--native` would not compile
+```
+
+Now it warns — *"a nullable `vector<integer>?` is stored into … the non-null type
+`vector<integer>`"* — and appends, which is what the same value does when you write
+`d.c = s`. A keyed field took the value silently before and now warns too. The warning names
+the two cures it always had: `d.c += s?` or `d.c += s ?? []`. Appending a value that really is
+null appends nothing.
+
 ### Appending to a nullable collection works
 
 ```loft

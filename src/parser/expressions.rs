@@ -2836,6 +2836,58 @@ use a separate collection or add after the loop"
             *code = Value::Insert(Vec::new());
             return Type::Void;
         }
+        // @PLN25 (N-Store), loft#1210 — an UN-DISCHARGED nullable source appended to a
+        // non-null collection.  `(N-Store)` rejects storing `e:τ?` into a `τ` slot, and the
+        // rule is already enforced one place-kind over: the same store into a dense LOCAL is
+        // refused with a message naming both cures.  A FIELD destination asked nobody, so the
+        // value was written raw — the interpreter panicked writing a read-only const store and
+        // `--native` emitted `set_int(…, v)` with a `DbRef` for `v`, neither of which describes
+        // the statement that caused it.  A keyed field took the null quietly instead.
+        //
+        // Placed here because it is the ONE point where both destinations are still in play:
+        // the vector-push, the vector-concat and the keyed-fill routes are all downstream, so a
+        // check at any of them is a third copy of the same question.  Discharging is what the
+        // reader is told to do (`c += s?` / `c += s ?? []`), and `n_store_violation` names it.
+        //
+        // The BASE has to be acceptable for this to be the null's fault rather than an
+        // ordinary type error: a `text?` appended to a `vector<integer>` is a mismatch that
+        // discharging does not fix, and it keeps the plain message it already had.
+        let nullable_append_source = op == "+="
+            && !self.first_pass
+            && !s_type.is_unknown()
+            && matches!(&s_type, Type::Optional(_))
+            && crate::parser::vectors::is_collection(f_type.base())
+            && {
+                let base = s_type.base().clone();
+                base.is_equal(f_type.base())
+                    || matches!(f_type.base(), Type::Vector(elm, _) if (**elm).is_equal(&base))
+                    || matches!(&base, Type::Vector(elm, _)
+                        if crate::parser::vectors::is_keyed(f_type.base())
+                            && (**elm).is_equal(&f_type.base().content()))
+            };
+        if nullable_append_source {
+            // The rule decides the severity, and it is not a refusal.  `(N-Store)`'s split is
+            // REPRESENTABILITY: a hard error only where the null sentinel collides with a real
+            // value of τ — the narrow widths, and nothing else — and a warning everywhere the
+            // null is representable-and-distinct, where the store COMPILES AND RUNS.  A
+            // collection is stored out-of-band (`nullref`), so it is on the warning side, and
+            // `d.c = s` one operator over already warns and proceeds.
+            if self.n_store_violation(&s_type, f_type.base(), "the appended value", None) {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            // So make it proceed.  The append routes below read `s_type` to choose between
+            // concat, single-element push and the keyed fill, and an `Optional` matched none of
+            // them: the value fell to the push, which writes whatever it is given as ONE
+            // element of the element type.  A `vector<integer>?` was written where an `integer`
+            // belongs — the interpreter panicked into a read-only const store and `--native`
+            // emitted `set_int(…, v)` with a `DbRef` for `v`, neither naming the statement.  A
+            // keyed destination took it quietly.  Peeling here is what `convert` already does
+            // for `=`, so both operators reach the same reading of the same value.
+            let peeled = s_type.base().clone();
+            self.convert(code, &s_type, &peeled);
+            s_type = peeled;
+        }
         // C54.A incremental 2a — if the variable carries an annotated
         // target type `: Long` with a narrower `Integer` RHS
         // (e.g. `x: u32 = 100` where `u32` promoted to Long), run
