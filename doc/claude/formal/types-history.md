@@ -1,0 +1,468 @@
+# formal/types-history.md — the deviation register for [types.md](types.md)
+
+> **The rules are next door.**  [types.md](types.md) states what must always be true of the
+> language; this file is its TIMELINE — every place the code was measured not to do it, when,
+> what it cost, and what closed it.  The two are apart because a contract a reader has to skim
+> past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
+> state (how many are open, and which); everything below is the record behind it.
+
+OPEN: **0** — `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
+default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
+exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
+record.  Per-situation mitigation catalogue:
+[../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Chk-Yield — OPENED AND CLOSED (2026-08-28, loft#1130): `yield` carried no expected type
+
+`(T-Chk)` is the **single** carrier of an expected type, *"pushed structurally into
+sub-expressions"*, and a `yield` hands a value out of the function against a type the
+declaration already names — the same position `return` occupies. It was not a push site at
+all: `yield e` parsed `e` in synthesis mode only.
+
+A collection literal cannot synthesise its KIND — `[K { … }]` is a `vector<K>` wherever it
+stands, and `(T-Chk-Vec)` is what says otherwise — so a keyed literal yielded from a generator
+was BUILT as a vector:
+
+```loft
+fn g() -> iterator<hash<A[k]>> { yield [A { k: 1, v: 11 }, A { k: 2, v: 22 }]; }
+//  len 1, and c[1] misses — both backends, no diagnostic
+fn ok() -> iterator<hash<A[k]>> { a: hash<A[k]> = [ … ]; yield a; }   // len 2, c[1] found
+```
+
+The bound route was correct because a declared local reads its destination from `var_tp` and
+never needed the channel. `hash` lost length AND lookup, `index` / `trie` / `spatial` stuck at
+length 1, `sorted` and `vector` were correct — five kinds, one missing push site.
+
+`yield` and the block tail / `return` now share ONE admission list
+(`Parser::seed_leaving_value_hint`): they are two spellings of one act against one declared
+type. The census of this channel's remaining push sites — ten of them, carrying six different
+admission lists, none admitting `Type::Tuple` — is [QUALITY.md § B6t](../QUALITY.md); the
+general rule LOFT.md already states is *the expected type wherever there is one*.
+
+⚠ **The incident-shaped patch that stood in for the rule was one screen above the fix.** The
+same `yield` branch already rewrote a bare `Value::Int(d_nr)` into a full fn-ref when the
+element type was `Function` (@P328) — a per-type repair of exactly the missing channel, which
+is what a missing `(T-Chk)` push site looks like from inside one bug.
+
+Guard: `tests/scripts/1130-a-yielded-collection-literal-takes-its-declared-kind.loft`, all six
+kinds plus the bound route, each cell with its own element struct.
+
+### D-Var-Join — OPENED AND CLOSED (2026-08-27, loft#1117): an `if` whose arms are two variants of one enum was refused
+
+`(C-Var)` licenses `Reference(S) ⤳ Enum(E)` for `S ∈ variants(E)` and licenses NOTHING between
+two variants; `(T-Chk-Var)` checks each variant against the enum. So two arms that are two
+variants join to `E`, and asking whether one converts to its SIBLING is a question the relation
+does not answer. `parse_if` asked exactly that — it handed the THEN arm's type down as the else
+arm's expected type — and refused a legal program, on both backends, at parse time:
+
+```loft
+enum E { A { x: integer = 1 }, B { x: integer = 2 } }
+
+fn pick_if(c: boolean)    -> E { if c { E::A { x: 7 } } else { E::B { x: 9 } } }   // ERROR: expected A, got B on else
+fn pick_match(k: integer) -> E { match k { 0 => E::A { x: 7 }, _ => E::B { x: 9 } } }   // fine
+fn pick_return(c: boolean)-> E { if c { return E::A { x: 7 }; } E::B { x: 9 } }         // fine
+```
+
+Two spellings of one program disagreeing is what made this a deviation rather than a design
+choice — and `match` lowers to the very node `if` builds, so the accepting spelling was already
+running the code the refused one could not reach.
+
+**Fixed as a JOIN, not as a conversion.** `parse_block` no longer asks `convert` about a sibling
+arm (`sibling_variants`) and lets it keep its OWN type; `parse_if` then joins two differing
+variants to their enum. Both halves are load-bearing:
+
+* without the first, the refusal stands;
+* without the second, `v: A = if c { E::A { … } } else { E::B { … } }` is ACCEPTED and a slot
+  declared as one variant holds another, read at this variant's offsets — loft#980's class,
+  silent. The widening makes that declaration fail where it should, naming the real conflict
+  (*"cannot change type from A to E"*) instead of blaming the else arm.
+
+Two arms of the SAME variant widen nothing, so a variant-typed destination stays legal for
+them — that was verified against a release control, having been broken by an earlier attempt
+that widened unconditionally. Guarded by
+`tests/scripts/1117-an-if-joins-two-variants-to-their-enum.loft` (falsified at `cd263f7c`:
+interpret exit 1 → 0, native exit 1 → 0). The four refusals that must SURVIVE — a sibling
+enum's variant, an unrelated struct, an integer, and the variant-typed destination — were each
+re-measured against that control.
+
+### D-Null-Join — OPENED AND CLOSED (2026-08-26, loft#1103): a nullable in a LATER branch arm stored into a non-null slot in silence
+
+`(N-Store)` says storing `e:τ?` into a `τ` slot without discharge is REJECTED, and `(N-Decl)`
+says a declared slot is a commitment that FORBIDS a later nullable write.  Four spellings of that
+store were refused.  The same store written in a later branch ARM compiled, and the non-null slot
+held `null` — both backends, so a rule/code divergence and not a backend split:
+
+```loft
+fn maybe(k: integer) -> integer? { if k > 5 { 7 } else { null } }
+
+x: integer = maybe(k);                            // ERROR, correctly
+x: integer = if k == 9 { maybe(k) } else { 1 };   // ERROR, correctly  (the FIRST arm)
+x: integer = if k == 9 { 1 } else { maybe(k) };   // compiles; x is `integer` and holds null
+```
+
+The variable is genuinely non-null — the IR reads `x(1):integer` and `LOFT_VAR_TABLE` agrees, so
+nothing was widened to `integer?` behind the declaration. The same hole reaches a RETURN
+(`fn c(k) -> integer { if k == 9 { 1 } else { maybe(k) } }` returns null), a non-null FIELD, a
+`text` slot, a struct slot, and — worst — a NARROW width, where this rule keeps a hard error
+precisely because *"the null would collide with a real value"*: `x: u8 = if k == 9 { 1 as u8 }
+else { maybe8(k) }` compiles and `x` is null.
+
+**Mechanism.** The FIRST arm's type becomes the join type, and a later arm is checked against the
+first arm's type rather than against the declaration, so its `Optional` is dropped instead of
+reported (`parse_if` hands the else arm the then arm's type as its expected type — the loft#978
+site in `src/parser/control.rs`). `(N-Join)` — *"made OPTIONAL iff some `τᵢ` is optional"* — is
+the rule the join is missing; the declared destination should then take `(N-Decl)` + `(N-Store)`
+against that join, exactly as the direct spelling does.
+
+A LITERAL null in a later arm IS caught, by a different mechanism — the DN1 null-arm walkers
+match the `OpConv*FromNull` spelling. So this is the same shape QUALITY.md § B6g names: one
+notion with two spellings, and only one of them is looked for. Nothing asks about a
+nullable-TYPED value at a join.
+
+⚠ **This entry is why the `OPEN: 0` above needed re-measuring.** The register recorded `(N-Store)`
+as *"CLOSED + verified both backends"*; that zero is bounded by its oracle, and every cell here is
+a BRANCH JOIN while the verified spelling is the direct one.
+
+Tracked as **loft#1103**. Workaround (verified both backends): discharge inside the arm
+(`else { maybe(k) ?? 0 }`) or at the join (`(if … else …) ?? 0`).
+
+x: integer = if k == 9 { 1 } else { maybe(k) };   // compiled; x was `integer` and held null
+```
+
+The variable was genuinely non-null — the IR read `x(1):integer` and `LOFT_VAR_TABLE` agreed, so
+nothing had been widened behind the declaration.  The same hole reached a RETURN, a non-null
+FIELD, a `text` slot, a struct slot, and — worst — a NARROW width, where this rule keeps a hard
+error precisely because *"the null would collide with a real value"*: `x: u8 = if k == 9 { 1 as
+u8 } else { maybe8(k) }` compiled and `x` was null, indistinguishable from `255`.
+
+**Mechanism.** The FIRST arm's type became the join type.  `merge_dependencies` is
+`a.joined_deps(b)` — it keeps `a`'s shape and merges only the borrow set — and `a` is the then
+arm, so a later arm's `Optional` was dropped rather than joined.  The arm's own type was erased
+before that even: `parse_if` hands the else arm the THEN arm's type as its expected type, and
+`block_result` returns that expected type (the loft#978 site).
+
+Closed by `(N-Join)` — *"made OPTIONAL iff some `τᵢ` is optional"* — in the two places a join is
+formed: the else arm keeps its own nullability through `block_result`, and `parse_if` /
+`parse_match` widen the join when any arm is optional.  **The widening is all that was added; the
+REPORTING is unchanged**, which is what keeps the three site verdicts distinct instead of
+flattening them: a declared slot is refused by `(N-Decl)`, a return and a field WARN and hold the
+null by `(N-Store)`, and a narrow width is refused wherever it appears.  Each now answers in a
+branch exactly as it already answered for the direct spelling.
+
+**One home, six producers.**  A `match` reaches the join through six arm sites — the ordinary
+arm, the wildcard, the struct and enum arms, the vector-match arm — all spelling
+`result_type.joined_deps(&self.arm_join_type(…))`.  They fold through one `join_arm_into` rather
+than six copies of the rule, because a per-site fix answers the same question six times and
+drifts at the first one anybody forgets.  An `else if` CHAIN needed carrying separately: it keeps
+its SHAPE out of the join deliberately (loft#936), so only what it BORROWED was being read.
+
+⚠ **This entry is why the `OPEN: 0` above needed re-measuring.**  The register recorded
+`(N-Store)` as *"CLOSED + verified both backends"*; that zero was bounded by its oracle, and every
+cell here is a BRANCH JOIN while the verified spelling is the direct one.  **A zero is only as
+strong as the spellings its oracle contains.**
+
+⚠ **The class, and it is the third instance in a week: one notion, two spellings, one looked
+for.**  A `null` LITERAL in a later arm was ALWAYS caught — by the DN1 walkers, which match the
+`OpConv*FromNull` node a literal lowers to.  A nullable-TYPED value produces no null-shaped node
+at all, so nothing asked about it.  The blindness cannot be found from the symptom: searching for
+the spelling you DO match returns every site that gets it right, and the sites that get it wrong
+contain nothing to search for.  Asking the TYPE is the spelling-free form of the question.  See
+`IMPLEMENTATIONS.md` § *One notion, how many SPELLINGS?* for the other two instances.
+
+**Measured.**  Thirteen cells, both backends identical, covering every spelling in the issue plus
+the narrow width.  Emitted IR over the corpus: **3 of 970** programs change, two of them these
+guards.  The third is `25-nullable-branch-join.loft`, and it is worth reading — the file exists
+to assert THIS RULE (*"@PLN25 — branch-join widening: `integer ⊔ integer? = integer?`"*), and it
+was GREEN while its own `pick_local` inferred `x` as plain `integer`.  The assertions passed
+because the runtime answered null anyway; the emitted type disagreed with the title of the file
+testing it.  **A green gate is not coverage** — it checked the value and never the type it was
+named for, and the fix is what brings the IR to what the file already claimed.  Guards:
+`tests/scripts/1103-a-nullable-in-a-later-branch-arm.loft` (the value half — the join really is
+`τ?`, the null arrives, and the non-null joins beside it did not move) and
+`tests/scripts/1103b-a-nullable-branch-arm-refused.loft` (the refusals — six `@EXPECT_ERROR`s,
+none of which fire on a control binary built at `9c1a0e4e`).  **Neither half implies the other,
+and the value half alone is VACUOUS**: it declares the nullable type the rules require, and a
+join that wrongly types non-null still stores into a nullable slot happily, so it passes on the
+pre-fix binary.  Only the refusal file scores the change.
+
+### D-Opt-Zero — CLOSED (2026-08-24): a nullable field defaults to its BASE ZERO, not null
+
+`(D-Opt)` says `construct_default(τ?) = null` — *"an optional's default IS null"* — and
+`(D-Rec)` composes it: a field with no `= expr` takes `construct_default` of its own type.
+The code does not do that for a scalar or text base. Measured on **both** backends, so this
+is a rule/code divergence and not a backend split:
+
+```loft
+struct S { a: integer?, b: text?, c: boolean?, d: Colour? }
+s = S {};                       // a=0   b=''   c=false   d=null
+```
+
+Only the enum base answers `null`. `data::to_default` handles it as
+`Type::Optional(inner) => to_default(inner, data)` and states the choice outright: base-zero
+is *"the settled design call"* (@PLN25), because a bare `null` would fall to the `_` arm and
+render as native unit into a scalar slot (E0308) — and the field is still writable to null
+through an explicit `= null`.
+
+**So the disagreement is real and deliberate, which is the awkward part**: a decision was
+taken in code and `(D-Opt)` was never updated to match, exactly as
+[`formal/layout.md`'s `L-Tuple`] was left naming a function a rename had removed. The
+doctrine says the CODE changes to match the rules, so this stays OPEN rather than being
+written away — but the decision behind it has a stated reason and a plan number, and the
+resolution is a design call the owner should make, not a silent edit in either direction:
+
+- amend `(D-Opt)` to state base-zero for a scalar/text base and `null` for the rest, or
+- change `to_default` and give the E0308 problem a different answer.
+
+**Resolved by the owner (2026-08-24): the rule stands — a nullable value in a field is null
+at the start.** `to_default`'s `Optional` arm now builds the base type's null SENTINEL
+through the new `data::to_null`, which is the `OpConv…FromNull` op for that base. Those ops
+already existed and already produced the same sentinels as the runtime's
+`Stores::set_default_value_nullable` (`i64::MIN`, `255` for the tri-state boolean,
+`char::from(0)`), so the two paths now agree instead of contradicting each other.
+
+The E0308 objection was real but misdirected: a bare `Value::Null` does render as native
+unit, and the answer is the TYPED null op rather than the base's zero. Nothing needed
+inventing.
+
+**What the old behaviour rested on, checked:** the code cited *"an omitted field gets the
+zero value for its type (LOFT.md § constructors; 06-structs.loft locks it)"*. `LOFT.md` has
+no such section and does not contain that sentence, and `06-structs.loft` declares no
+nullable field at all. The only thing actually locking it was one half of
+`issues::issue_332_nullable_narrow_field_null_roundtrip`, written on the strength of those
+two citations; it now asserts the rule instead, across omitted / assigned / re-nulled for
+`i16?`, `i32?` and `integer?`.
+
+**Blast radius: one test in 4 434.** Verified on both backends for `i8? u8? i16? u16? i32?
+integer? float? single? boolean? text? character?` and an enum, a reference and a vector —
+and the non-nullable defaults (`0`, `false`, `""`) are unchanged.
+
+⚠ `character?` is the one base whose null is indistinguishable from its zero: both are
+`char::from(0)`, which is also what the runtime writes (its content-type-6 arm ignores
+`nullable`). Consistent between the two paths, so not a divergence — but it means
+`character?` cannot represent absence distinctly. Separate question, not opened here.
+
+Found by citing: the `D-*` family has one home (`data::to_default` + `Data::has_default`),
+and writing *"enforces `@FR-D-Opt`"* on it is what forced the comparison.
+
+### DN-SE-inline — CLOSED (2026-08-22): a nullable struct-enum in INLINE storage
+The representation rule above derives `τ?`'s null from `τ`'s storage, and gives a reference the
+out-of-band `nullref`. A struct-enum is carried as a `DbRef`, so `Shape?` takes the reference
+sentinel — which loft#1065 measured it did NOT: several sites answered "what is this type's
+null" without telling a struct-enum from a value enum, and it took the value enum's `255`
+BYTE into a handle slot. `--interpret` then read the slot back as a live ref (its own
+store-lifetime guard fired) and `--native` refused to compile (`non-primitive cast: u8 as
+DbRef`). **Closed for a LOCAL, a parameter and a return** by discriminating `Enum(_, true, _)`
+from `Enum(_, false, _)` at each site, plus `base()` where a shape was read without peeling
+`Optional` (six sites; guard `tests/scripts/1065-nullable-struct-enum.loft`).
+
+**INLINE storage closed too** (loft#1071) — a struct FIELD and a `vector<Shape?>` element are
+a four-byte record pointer inside the holder's record, which cannot hold the twelve-byte
+sentinel at all. The rule says the representation follows the base type's STORAGE, and it does
+here: absence is pointer `0`, which is what the field prime already writes. Three sites had to
+agree on that one word — the construction (`Box { s: null }`), the assignment (`b.s = null`,
+which had been silently a no-op), and the test, which must read the stored WORD because
+`OpGetField` answers a sub-reference whose own record is the HOLDER's and so is never null. No
+`__nullable<…>` tag was needed: a record pointer already has an in-band absent value, exactly
+as a narrow scalar does, so the element rides the `Optional` marker like a scalar element.
+
+Iteration closed with it: `for e in v { e == null }` binds a sub-reference to the element
+SLOT, so it reads that slot's word. Which of the two a `Var` is turns on what it VIEWS,
+followed through the DEP CHAIN — a loop variable's own dep names itself, and only its
+declaration's dep names the vector, so reading the first link answers no.
+
+This entry is also the answer to the "OPEN: 0" line above having been too strong: the rule was
+written, and the code disagreed with it for a whole type former, in both directions at once.
+
+### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
+`(N-Dense)` now holds for scalars + struct fields, not just vector elements: a plain
+`integer`/`text`/`bool`/`float`/`char` field/local/return is NON-null by default (nullability
+rides `?`/`Optional`), and `not null` is redundant — stripped from in-tree source; the parser
+still ACCEPTS it for backward compat pending the registry republish (task #4), and (since #546)
+WARNS "deprecated and has no effect" rather than staying silent. `a.x = null`
+on `x: integer` is now a compile error ("declare it `integer?`"). Landed: the DN1 default flip
+(PR #471, default-on; `LOFT_PLN25_OFF` opts the whole model out) + the F2 field-attribute flip for
+ALL scalars + the `not null` source strip + parser no-op. Enforced by `(N-Store)`/`(N-Decl)` at
+return / field / typed-store / index / call-argument sites — the last (a nullable `τ?` passed
+into a non-null PARAMETER) closed 2026-07-16 (`callarg_nstore_enabled`, `src/keys.rs`; the
+identical warn/error split at the `process_call_args` chokepoint, opt-out
+`LOFT_NO_CALLARG_NSTORE`). Both backends.
+
+### DN2 — CLOSED (2026-07-02): no implicit `S? ⤳ S` unwrap
+The implicit `Enum(__nullable<S>) ⤳ Reference(S)` (and scalar `τ? ⤳ τ`) unwrap is gone — a `τ?`
+cannot reach a `τ` slot without a discharge. Verified: `x: S? = …; y: S = x` (no `?`) is a compile
+error ("cannot change type from S to S?"); `?? default` / `match` are the only elims
+(`(N-Coal)`/`(N-Match)`). Closed by the `(N-Store)` / `change_var` teeth (DN1) + the DN5 `as`-cast
+closure. Both backends.
+
+### DN3 — CLOSED (2026-07-02): fit-failing ops type `τ?`  ·  overflow-arith = decided edge
+A fit-failing op now TYPES its result `τ?` (the runtime already nulled per `E-Uncomp`/C80), so an
+un-discharged result stored into non-null storage is a compile error — the developer must guard,
+`?? d`, or declare the target `τ?`. **DONE:** integer `/` and `%` (the division root-cause fix — the
+`handle_operator` arithmetic-branch wrap); `v[i]` / `s[i]` indexing (the index flip, default-on,
+with const / iter-var / `if i < len` guard fit-proofs); and **text→numeric parse** (`(N-Parse)`:
+`s as integer` / `as float` / `as single` now type `integer?` / `float?` / `single?` — a bad parse
+is a reachable fault, exactly like `÷0` and OOB). The `as` handler in `parser/operators.rs` wraps a
+`Text`-source numeric cast in `Optional`; discharge with `?? d`, `as τ?`, or `match`. In-tree
+consumers migrated (lib/lexer number/escape accessors already return `τ?`; the test scripts +
+audience-demo servers `?? 0`). The runtime "may produce null" warnings are RETIRED (the type +
+`(N-Store)` is the enforcement). Regressions: `25-division-nullable.loft`, `25-index-nullable.loft`,
+`inc17_text_to_integer_requires_as` + `102` reject twins; both backends. **DECIDED EDGE (not a
+deviation) — overflow arithmetic** `a*b`/`a+b`/`a-b` stays NON-null: overflow → the null sentinel +
+continue (C80, no trap), NOT `τ?`. The fault is extraordinary (operands ~3×10⁹) while the op is
+ubiquitous, so forcing discharge on all arithmetic is disproportionate + (given no traps) would
+block a game over a fault its player never hits —
+[DESIGN_DECISIONS C85](../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--). Range-tracking keeps provably-fit multiplies exact.
+
+### DN4 — CLOSED (2026-07-02, F5 cutover): `as` to a narrower type enforces the range
+`400 as u8` was UB (the cast asserted the *type* but left an out-of-range value in a `u8`
+slot). Now per `(N-Cast)`/`(N-Cast?)`: **`as u8` requires a PROVABLE fit** (`400 as u8`, and
+`b: integer; b as u8`, are **compile errors** — "use `as u8?`"), and **`as u8?` is the CHECKED
+cast** (value or `null`, never out-of-range) — a pure parse-time range-guard desugar (`OpLeInt`
++ `if` + `OpConvIntFromNull`, no new runtime op; the guard types as a full nullable integer so
+the `i64::MIN` sentinel keeps full width). Range-tracking makes masked values provably-fit, so
+`(x & 255) as u8` / `(non-neg) % c as u8` need no `?`. **Enforcement is UNCONDITIONAL** — the
+interim `LOFT_NO_DN4` opt-out (which reverted to the silent width-tag) is RETIRED, so DN4 is
+consistent with its nullness sibling DN5. Validated both backends (`tests/dn4_cast.rs`: the
+value matrix, the compile-error cases, and the opt-out-retired guard).
+
+### DN5 — CLOSED (2026-07-02, F3): `as τ` no longer launders `null` / `τ?` into a non-null scalar
+`null as integer`, `x:integer? as integer`, `(a/b) as integer`, `v[i] as integer` used to
+type-check and store `null` into a non-null slot (bypassing `(N-Store)`). Now a `Null`/`Optional`
+source cast to a non-null scalar (no `?`) is a **compile error** directing to `as τ?` (checked →
+`null`) or `?? d`; `as τ?` types `Optional<τ>` so the laundering stays closed downstream
+(`z: τ = (e as τ?)` still requires a discharge). This is the **nullness dimension of DN4** — the
+two are ONE domain-containment fit-check at the `as` chokepoint (`operators.rs`): a scalar
+target's domain is its value RANGE × nullness, and `null` is the reserved out-of-domain element
+(so `is_narrowing_int` peels `Optional` — a nullable source no longer slips past the range
+check). A `null as S` heap ref stays legal (`is_non_null_scalar` is scalar-only). Regression:
+`tests/scripts/102-expected-errors.loft` twins + the `25-*-nullable.loft` accept paths.
+
+### Refinement (2026-07-10): implicit checked narrowing into a NULLABLE narrow target
+DN4's `as`-required rule is for a **non-null** narrow target. Coercing an integer / `integer?`
+into a **nullable** narrow target (`Optional<narrow>`, e.g. `u8?`) needs **no explicit `as`**:
+`convert` routes it through the same `dn4_checked_cast` range-guard (in-range → the value,
+out-of-range → `null`). This is sound without ceremony because the target is nullable — an
+out-of-range value becomes a VISIBLE `null`, never the silent truncation that `as u8` into a
+non-null slot would be. Only nullable narrow targets are affected; a non-null `u8` still
+requires an explicit `as`. Guard: `tests/scripts/25-nullable-narrow-implicit-checked.loft`
+(both backends).
+
+### DN6 — CLOSED (2026-07-02, F4): the inferred `null`-join widens to `τ?` instead of rejecting
+Per `(N-Join)` an INFERRED `a = null; a = 5` (no annotation) now infers `a : integer?` — the join
+of `null` and the scalar — via `change_var_type` (`variables/mod.rs`). `var_tp == null` is
+inherently the inferred case (a variable cannot be annotated `null`), so the widen never overrides
+an explicit non-null contract: annotated `a: integer = null` still rejects, as does the reverse
+`a = 5; a = null`; a widened `τ?` into a non-null slot still requires a discharge. **Scoped to
+INLINE scalars** (Integer/Boolean/Float/Single/Character): the retroactive widen reuses the slot
+the first `= null` allocated, sound only when Null and `τ?` share it (an in-slot sentinel).
+`Text` — the one heap-backed scalar — is EXCLUDED (its Null slot is not a text?-heap slot;
+widening it underflowed `fn_return`'s discard / native E0308), so a text null-start must annotate
+`s: text? = null`. Regression: `tests/scripts/25-null-join.loft` + reject twins in
+`102-expected-errors.loft`.
+
+### DN3-Float — CLOSED (2026-07-11, shipped default-on, @PLN102 #559): float/single `/`, `%`, and domain-partial functions type `τ?`
+
+> This is the **float instance** of the general **§ Null-flow laws** (N-Domain / N-Prop /
+> N-Cast / N-Store) above — those laws hold for every type; this entry records the float
+> classification (which ops) and the conversion set.
+
+DN3 typed integer `/`/`%`, indexing, and text-parse `τ?`, but its division wrap is **gated
+to `Type::Integer`** (`src/parser/operators.rs:2300`), so float/single `/`/`%` — and the
+domain-partial float functions — keep a **non-null** `float`/`single` return while
+producing null (a reserved NaN) at runtime. The type therefore **lies** about a null the
+integer side already surfaces: `f.g = 1.0 / b` and `f.g = ln(-1.0)` store null straight
+into a non-null `float` field with no diagnostic, where the integer `s.f = 10 / y`
+equivalent is a compile error. Return types freeze at contract 1, so the honest signature
+is chosen now (pre-freeze-only).
+
+**Rule.** A float/single op types its result `τ?` **iff it can yield the reserved NaN-null
+from an input a normal program reaches** — the DN3 boundary read across to floats, with
+[C85](../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)
+(overflow → non-null) as its complement:
+
+- **`τ?`:** `/` and `%` (÷0 — mirror of integer `/`; the existing `divisor_provably_nonzero`
+  proof keeps `x / 2.0` and a guarded `if b != 0.0` non-null); `sqrt` (arg `< 0`);
+  `ln`/`log`/`log2`/`log10` (arg `≤ 0`); `asin`/`acos` (arg outside `[-1, 1]`); `pow` (base
+  `< 0` ∧ fractional exp — resolved 2026-07-11: a genuine domain error, folded in). A
+  **provably-in-domain argument blocks the `τ?`** — not just a literal constant (`sqrt(4.0)`,
+  `sqrt(PI)`, `ln(2.0)`) but any expression the sign/interval lattice proves in-domain
+  (`sqrt(dx*dx + dy*dy)`, `sqrt(max(x, 0.01))`, `asin(clamp(e, -1, 1))` all stay non-null,
+  @PLN102 #581, 2026-07-16 — [design](../plans/102-stability-contract/soften-nullflow-discharge.md));
+  an argument that is **not** provably in-domain is `τ?` (bare `sqrt(x)` on an unknown-sign `x`
+  stays nullable). A constant *out-of-domain* argument (`sqrt(-1.0)`) may warn
+  *"always null"*, the parallel of the existing constant-`/0` warning.
+- **Non-null (C85-style decided edge):** `sin`/`cos`/`tan`/`atan`/`atan2`/`exp`/`abs`/
+  `ceil`/`floor`/`round` — a *finite* argument is always finite; NaN arises only from an
+  `±inf` argument, itself reachable only through a C85 overflow, so forcing `?` on the
+  ubiquitous op is disproportionate.
+
+**Runtime is UNCHANGED** — null + continue (C80); **no runtime error is added** (owner:
+*"a null is fine, errors never"*). Two type-level rules do the work, refining DN3 **across
+the shipped integer model** (@PLN25) too — the runtime *already* propagates the null
+sentinel through arithmetic (`n+5` / `n*5` / `5-n` / `abs(n)` on a null `n` all stay null,
+both backends), so the type only has to stop lying:
+
+- **(N-Prop) — nullability propagates through arithmetic.** An arithmetic op with any
+  nullable operand yields a nullable result: `integer? + integer → integer?`,
+  `float - float? → float?` (either operand position). Already true for `text? + text`; now
+  uniform over `integer` / `float` / `single`. **C85 is untouched** — non-null × non-null
+  stays non-null (overflow → sentinel silently, no `?` forced); propagation fires only when
+  an operand is *already* nullable, so the two compose (non-null arithmetic stays non-null;
+  a null, once present, stays visible).
+- **(N-Warn) — a nullable into a non-null slot is a WARNING, not an error — EXCEPT narrow
+  width types.** The relaxation applies where the target's null pattern is available in its
+  *non-null* form: `integer` (reserves `i64::MIN` even non-null — a stored null reads back as
+  null), `float`/`single` (NaN), `text` (out-of-band). There the program still compiles + runs
+  (the slot holds null) and the warning nudges toward `?? d` / `match` — a warning because a
+  hard error would break every existing non-null store of a `sqrt` / float-`/` result
+  (compatibility) and Goal F reserves warnings as the programmer-billing channel; this RELAXES
+  DN3's current integer *hard error* to a warning. **Narrow width integers**
+  (`u8`/`i8`/`u16`/`i16`/`i32`/`u32`) spend their whole width on real values (a non-null `u8`
+  holds `255`), so they have no spare bit-pattern for null — a null there is unrepresentable
+  and would silently corrupt to a real value. They **keep the hard error** (`?? d`, or widen
+  the target to `u8?`). Split principle: *warn iff the null is representable-and-observable in
+  the non-null slot* — the in-band-sentinel property C85 already relies on. Narrow stores
+  already error (DN1/DN4/DN5), so keeping them costs zero compatibility.
+
+Together, a `float?` rides through inference, arithmetic, comparison, interpolation, and
+calls, and is nudged only at a non-null STORAGE site (field / return / explicitly-typed
+local / call-argument). Mechanism (shipped): the
+`div_nullable` gate was extended to `Float`/`Single` (the nullable runtime peers
+`OpDiv{Float,Single}Nullable` + the `??`-swap, phase 4f.5); the domain-partial function return
+types in `default/01_code.loft` are `float?`/`single?`. **Shipped, default-on 2026-07-11
+(@PLN102 #559), verified both backends; the pow / domain-proving forks and the conversion set
+are recorded in
+[../plans/102-stability-contract/float-null-domain-typing.md](../plans/102-stability-contract/float-null-domain-typing.md).**
+
+### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding
+
+D2 was framed as a deviation to *remove* by widening the IR (`Value::Int` → i64) so the default
+integer is "i64 end-to-end." That framing is **declined** — see
+[DESIGN_DECISIONS.md C83](../DESIGN_DECISIONS.md#c83--the-internal-representation-follows-the-user-visible-contract-never-widen-storage-for-implementation-convenience).
+The reconciliation:
+
+- **The user-visible contract is met.** `integer` *is* i64 everywhere a user can observe it — a
+  boundary matrix (graduated to `tests/scripts/438-integer-i64-user-visible.loft`) confirms a
+  value above i32 range survives arithmetic (`* / % -`), bare literals, struct fields, vector
+  elements, fn args/returns, comparison, negation, tuples, and field mutation, **identically on
+  the interpreter and `--native`**. The runtime computes on `i64` throughout.
+- **The internal model is *supposed* to be compact.** `Value::Int(i32)`/`Value::Long(i64)` is a
+  deliberate value-size encoding (i32 for the small-value majority, i64 when needed), and
+  `forced_size = None` marks the full i64 range. Per **C83** the internal representation *follows*
+  the user-visible contract and is memory-bandwidth-conscious — it is **never widened for
+  implementation convenience**. Blanket i64 storage would double every integer node/field for
+  zero user-visible gain; the earlier "widen `Value::Int`" attempt was correctly **reverted** (it
+  introduced a silent `as i32` truncation in a narrow storage path — solving the wrong problem).
+- **The rule, restated to match the intended design:** *the default `integer` denotes the i64
+  value range; storage uses the smallest sufficient encoding, with `forced_size = None` /
+  `Long` as the full-range carriers.* Under this rule the code is **conformant** — `forced_size`
+  as the full-integer marker is the intended encoding, not a width hack to remove. Narrowing is
+  range-driven (this already closed D3/D5); signedness is correct (`i8` does not fit `u8`); the
+  parser agrees with codegen. Guard: `d2_signed_narrowing_i8_to_u8_needs_cast` (tests/issues.rs)
+  + the i64 user-visible regression above.
+
+**If** a *user-visible* i64 truncation is ever found (a value a user can observe being clipped),
+that narrow path is fixed — still without blanket widening (C83 § Revisit). The site audit in
+[plans/88-integer-i64.md](../plans/88-integer-i64.md) remains the reference for any such targeted
+fix. @PLN88's storage-rework rungs are **not** pursued (off the path per C83).

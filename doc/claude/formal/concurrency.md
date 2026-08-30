@@ -107,8 +107,6 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
 - **The hash-order difference (`C-Order`) is a spec'd edge, not a deviation** — it is stated in
   the rule and is consistent across backends; it is a property of hashing, not a divergence.
 
----
-
 ## Conformance
 
 - **N-independence (`C-Det`)** — `for a in xs par(b = square(a), N) { sum += b }` computes the

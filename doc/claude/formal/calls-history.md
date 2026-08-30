@@ -1,0 +1,250 @@
+# formal/calls-history.md — the deviation register for [calls.md](calls.md)
+
+> **The rules are next door.**  [calls.md](calls.md) states what must always be true of the
+> language; this file is its TIMELINE — every place the code was measured not to do it, when,
+> what it cost, and what closed it.  The two are apart because a contract a reader has to skim
+> past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
+> state (how many are open, and which); everything below is the record behind it.
+
+OPEN: **0**. Five deviations have been carried and closed (D-call-1 … D-call-5); otherwise
+this is a *rules* doc — it shrinks operational.md's D-op-1 and adds no code deviation of its
+own.
+
+⚠ All three are the SAME rule, `(F-Return)` / `(F-Block)`, and all three were *"the tail's
+value was dropped"*: D-call-1 dropped it because the block's type disagreed with the
+signature, D-call-2 because a block reaching the expression parser is typed `Void`, and
+D-call-3 because a var stood in for the tail expression and could not carry one of its
+values. A zero here means no KNOWN survivor of that class, not that the class is closed —
+each was found by moving an axis the previous one held fixed.
+
+> **D-call-5 — OPENED AND CLOSED (2026-08-26, loft#1100).** `(N-Store)` did not hold for a
+> nullable tail reaching a non-null `text` return: one backend RAN it and the other REFUSED
+> to compile it.
+>
+> ```loft
+> fn maybe(k: integer) -> text? { if k == 0 { null } else { "z" } }
+> fn f(k: integer) -> text { a = "ab"; match k { -1 => maybe(k), _ => a } }
+> ```
+>
+> `--interpret` warned and answered; `--native` — the DEFAULT backend — failed in rustc with
+> `E0716` (`E0308` for the `if` spelling, once the arms' Rust representations disagree too),
+> on a program the compiler had already type-checked, since it warned about it.
+>
+> **The issue filed this as a design call** — *"the two answers the language currently gives
+> this program are warn-and-coerce and refuse, and it has to pick one"* — **and the rules had
+> already picked.** `types.md` writes `(N-Store)` as *"a WARNING (nudge, compiles + runs, the
+> slot holds null) when the null is REPRESENTABLE-AND-DISTINCT in τ's non-null form"*, and its
+> per-type table puts `text` in that class (out-of-band on the heap); the narrow integer
+> widths are the sole error case, because their sentinel collides with a real value. Refusing
+> was never the other half of a choice — it was the deviation. This is the second time in a
+> week an issue's *"design call"* was settled by a rule already written (loft#1002 and
+> `(Slice-Open)` was the first), and the cheap move is to read the rule BEFORE deliberating.
+>
+> `do_if_acc` promotes a per-arm text accumulator, and its nullability term declined to
+> promote exactly here — deliberately. The rewrite retypes the tail as the accumulator, after
+> which `block_result`'s `(N-Store)` check compares two non-null types and says nothing, so
+> declining was what KEPT the diagnostic; without the accumulator each arm stays
+> `&*(callee(…))`, a borrow of the `Str` temporary the callee returned, dead at the arm's
+> `}`. One tail type answered two questions, and the gate could only serve one.
+>
+> Closed by separating them: report the store from the tail's OWN type BEFORE the rewrite,
+> then promote (`parse_block`, citing `@FR-N-Store`). **A diagnostic describes the SOURCE
+> program; which lowering the compiler picks for it cannot decide whether the program is
+> diagnosed** — that is the transferable half, and it is why one edit closed a refusal and a
+> silence at once. It also removes the term loft#1099 found to be non-pass-stable, so the
+> gate no longer depends on an inference the two passes disagree about.
+>
+> Measured, nine cells on both backends. Four were REFUSED natively and now compile and answer
+> what the interpreter answers (`match`-call, `if`-call, three-arm, and the cell that actually
+> REACHES the null — which answers `null` on both, the *"slot holds null"* half). Three cells
+> that already compiled now also WARN where they were silent: the `match` null literal (the
+> asymmetry D-call-4 recorded), a three-arm variant, and a call BOUND to a variable first.
+> Untouched: a declared-`text?` return, and a non-null call arm.
+>
+> ⚠ **One silent cell survives and it is NOT this gate.** `if k == 9 { a } else { maybe(k) }`
+> — the nullable call in the ELSE arm — compiles, answers `null` correctly on both backends,
+> and reports nothing, because `parse_if` hands the else arm the THEN arm's type as its
+> expected type (the loft#978 note), so the `Optional` is erased before any store check sees
+> it. A value that is right with a diagnostic missing is a coverage gap, not a wrong answer;
+> the fix belongs at the join, not here.
+>
+> Emitted IR over the corpus: **4 of 968** programs change, and three are this fix's guard, the
+> loft#1101 guard and the loft#1099 guard, whose shape now promotes. The one existing program
+> is `947-feature-worked-examples.loft`, where the delta is a `__work_cN` counter shift plus
+> ONE `OpFreeRef` moving five places within a run of scope-exit frees — all of distinct
+> stores, so their order is inert, and the file is green including the wrap leak gate.
+>
+> Guard `tests/scripts/1100-a-nullable-call-arm-in-a-non-null-text-return.loft` — eight cells,
+> and its first job is to be a program `--native` ACCEPTS: on a control binary built at
+> `159e0b42` the whole file fails in rustc before an assertion runs.
+
+> **D-call-4 — OPENED AND CLOSED (2026-08-26, loft#1099).** `(F-Arity)` exempts a
+> compiler-inserted slot from the user-facing requirement — *"a return buffer is not a user
+> parameter"* — on the premise that the slot is THERE for every call. A two-pass parser owes
+> that premise an invariant it does not state: **the compiler-inserted slots a function takes
+> are fixed before any call to it is lowered.** A `-> text` function whose tail is a `match`
+> with a `null` arm broke it:
+>
+> ```loft
+> fn f(k: integer) -> text { a = "ab"; match k { -1 => null, _ => a } }
+> ```
+>
+> ```
+> H5 two-pass contract: def `n_f` (#710) grew a pass-2-only attribute `___acc_1`
+> (pass1=2, pass2=3) that is not a documented lazy append — a real cross-pass divergence
+> ```
+>
+> `do_if_acc` promotes a per-arm text accumulator and `text_return` makes it a hidden `&text`
+> parameter, so the verdict decides ARITY. One of its terms reads the tail's INFERRED type,
+> and that is not pass-stable: instrumented, it is `Optional(Text)` on pass 1 and `Text` on
+> pass 2 from IR the two passes leave byte-identical. The accumulator was therefore minted on
+> pass 2 alone, and the compiler aborted rather than lower a call against a signature that had
+> moved. The `if` spelling of the same program was stable throughout, which is what says this
+> is about the inference and not about the null arm.
+>
+> **The cure was already written down two blocks up, for the same hazard.** `do_tret_bind`
+> promotes its own hidden `&text` buffer and carries a gate whose comment states the rule and
+> the method: *"Rather than enumerate which tail shapes lower stably, make pass 2 FOLLOW pass
+> 1: promote on pass 2 only if pass 1 already minted the `__tret` attribute."* `do_if_acc` now
+> carries the twin (`def_has_acc_attr`). It generalises where a per-term repair would not:
+> the unstable term is fixed for every tail shape at once, including ones nobody has hit.
+>
+> ⚠ **This is the second time in three days a fix was found by reading the code beside the
+> defect rather than the defect.** loft#1096's belief was written in its own leg's comment,
+> and this one's cure was written in its sibling's. `ownership.md`'s D-own-9 draws the first
+> half of that lesson; this is the second.
+>
+> Guard `tests/scripts/1099-a-text-match-tail-with-a-null-arm.loft`, which fails on a
+> pristine tree at `66fb9bb4` before it can run a single assertion (the parse aborts) —
+> so its first job is to be a program the compiler accepts, and only then to check every
+> arm's value on both backends. Controls: a DECLARED-nullable return, which keeps its
+> accumulator on its own disjunct (loft#741 is what losing it costs), and a `match` with no
+> null arm. Emitted IR over the corpus: **1 of 900** programs changes — the guard itself —
+> so every existing text tail already answered the same on both passes.
+>
+> Two things it did NOT close, both measured and both pre-existing — **and D-call-5 below
+> closed BOTH the same day, with one edit.** A nullable tail into a non-null `text` return
+> reported `(N-Store)` for the `if` spelling and stayed SILENT for a `match` whose arm is the
+> null literal; and a `match` arm that CALLS a `-> text?` function into a non-null `text`
+> return compiled on `--interpret` and failed `--native` with `E0716` (loft#1100). They read
+> as an accept/reject bug and a diagnostic-coverage gap, which is why they were recorded
+> apart. They are one defect: the report and the promotion were reading the SAME tail type,
+> so whichever the gate chose, the other was lost.
+
+> **D-call-3 — OPENED AND CLOSED (2026-08-26, loft#1097).** `(F-Return)` did not hold for a
+> COLLECTION tail join with a `null` arm:
+>
+> ```loft
+> fn f(k: integer) -> vector<integer> { a = [1,2]; b = [3,4]; if k < 0 { null } else if k == 0 { a } else { b } }
+> ```
+>
+> `f(-1)` answered `[1,2]` — `== null` read **false** while `len` read **2**, one value with
+> two answers, on both backends and with no diagnostic. Two arms naming a local means there is
+> a store to free before the return, so `scopes::free_vars` demotes the tail `if` to a
+> STATEMENT and appends `Return(Var(ret_var))`: the expression still RUNS, and its value is
+> discarded exactly as D-call-2's block tail was.
+>
+> `ret_var` comes from `returned_var_null_unified`, which folds a `null` arm onto its
+> sibling's var — and states its own premise: *"the work-ref null-inits at function entry and
+> a null arm never allocates into it, so `Return(Var(v))` yields the same null the sentinel
+> did"*. True of a RECORD work-ref, which `gen_set_first_ref_null` sentinel-inits. **False of
+> a collection**, whose owned local gets `OpInitRef` + `OpDatabase` and whose promoted buffer
+> arrives ALIVE from the caller — so on the null path that var is a live, populated vector.
+> `(E-Null)` is what it costs: the sentinel is a real, observable, RESERVED value, and a
+> populated vector is not it. Closed by hoisting the tail's value to a temp when the fold
+> lands on a collection (`scopes::free_vars`), the shape the null-arm RECORD join beside it
+> already used — the frees still run between the value and the return.
+>
+> ⚠ **That same premise had already failed once, at a different site, and this is what makes
+> it a class rather than a cell.** loft#1096 (`ownership.md` D-own-9, the day before) is
+> `scopes::free_vars` reading *"a buffer not yet minted on this path is the null sentinel,
+> which `free` ignores"* — the identical belief about a collection buffer's null-path
+> contents, costing a use-after-free instead of a wrong value. **One wrong belief, two sites,
+> two defects.** Grep the belief, not the symptom: any site reasoning that a collection slot
+> holds the sentinel on a path that did not write it is suspect.
+>
+> Two more faults met at this tail and are fixed with it, both from the `Bind` leg's
+> whole-tail copy `OpClearVector(buf); OpAppendVector(buf, <the join>)` — which answers the
+> buffer on every path and evaluates the join AFTER the clear. An arm whose value IS the
+> buffer answered what the clear had just emptied (`[]`), and an arm that had already
+> delivered into the buffer was appended to itself and came back DOUBLED (`[3,4,5,3,4,5]`).
+> Both are cured by the CONDITIONAL delivery that leg's own note names as what would close it
+> — `materialize_vector_arms_into`, one arm at a time — plus leaving alone an arm whose value
+> is a VIEW of the buffer, whose answer is already in it.
+>
+> Guard `tests/scripts/1097-a-null-arm-in-a-collection-tail-join.loft`: all three faults
+> falsified on a pristine tree at `d98e60ef` (5 of 7 cells red), with a no-null-arm join and
+> the RECORD family — where the fold's premise HOLDS — as the controls that keep the repair
+> from widening. Fixes loft#1097. The leak left behind (a `match` tail needing a null arm, a
+> local arm AND a literal arm, one store per call) is loft#1098: a lifetime fault with its own
+> trigger, not this rule.
+
+> **D-call-1 — OPENED AND CLOSED (2026-08-22).** `(F-Drop)` did not exist, and the edge it
+> now names is where the two backends parted: a function DECLARED void whose body ends in a
+> value ran on `--interpret` and would not compile on `--native`, which surfaced as a bare
+> rustc `E0308` quoting a temporary `.rs` file under the message "native compilation failed
+> (codegen bug)". `--native` is the default backend, so `loft t.loft` failed this way for an
+> ordinary shape — a build-asset script whose last expression is a call returning `boolean`.
+>
+> Filed (loft#1075) as a design call between "emit it as a statement" and "refuse it", on the
+> reading that the rules could not express the edge. Half of that was right: the RULE was
+> missing, which is why `(F-Drop)` is written above. The choice was not open, because the IR
+> had already made it — `parse_block` wraps a value-typed statement in `Value::Drop` when the
+> enclosing function is declared void, so both backends receive `drop n_f();` and the discard
+> is the shipped answer. What differed was the BLOCK's type: every statement but the last
+> reaches the `t = Type::Void` at the foot of the statement loop, so a dropped TAIL left the
+> block typed `boolean` in a function whose signature is `()`, and the native emitter takes
+> the signature from the declared return and the trailing default value from the block's
+> inferred type. The tell was next door — `f();` with a semicolon always worked on both
+> backends, from the same IR, because the `;` sent the statement round the loop to that reset.
+> One token deciding whether a program compiles is what says the block type, not the emitter,
+> was the thing that was wrong.
+>
+> The fix is one statement — the block type follows the drop — and it repaired the
+> interpreter too: a dropped struct-literal tail was held to program exit ("1 stores not
+> freed"), which the same wrong block type had been keeping alive.
+>
+> It is GATED on the function-body context, and both attempts that were not are why. A
+> `result` of `Void` reaches the drop meaning two different things, and only one of them is
+> a decision. The other is a placeholder something else will fill in, and there are two of
+> those: a LAMBDA declares no return type either, so its body carries the same `Void` while
+> its return type is INFERRED from this very block type — flattening it gave every stored
+> short `|x| { … }` a void return, which `parse_map` refuses with D-clo-2's *"cannot infer
+> the type of the function passed to `map`"*; and a `{ … }` in STATEMENT position is parsed
+> against `Void` even when it is the TAIL of an enclosing block, where it is the value that
+> block yields — flattening that made `x = {{ …; n }}` infer void, which is the shape the
+> Rust test harness writes around every `.expr(…)`. Both were found by the suite, not by
+> reasoning.
+>
+> `unused_must_use` and `path_statements` also join the generated file's allow-list: a
+> `#[must_use]` runtime op or a bare local reached as a statement is loft doing what the IR
+> told it, and the warnings were reaching users quoting generated Rust — pre-existing on
+> both trees, found by this matrix, and the same class of leak as the error. Guard `tests/scripts/void-fn-value-tail.loft`, confirmed
+> to fail on a pristine tree at 655ff4dd with 13 `E0308`s on `--native` while `--interpret`
+> ran it clean. Fixes loft#1075.
+
+> **D-call-2 — OPENED AND CLOSED (2026-08-22).** `(F-Block)` did not hold: a `{ … }` block
+> whose value someone reads dropped its own tail, so `fn f() -> integer { { 5 } }` answered
+> `null` on `--interpret` and `0` on `--native`, and `fn g() -> integer { n = 5; { n } }`
+> answered `5` on one backend and `0` on the other — silently, with the function
+> type-checking, because the block's TYPE is its tail's type and only the value was thrown
+> away. Every `{ … }` reaching `expression` is parsed against `Void` (a statement, as far as
+> that site can tell), and the parse site cannot know which statement turns out to be the
+> last one. The drop is undone after the statement loop, where the block's type is already
+> the value it yields.
+>
+> Two boundaries, each measured rather than argued. **Depth**: a first version asked the
+> question of the block one level DOWN and repaired `{ { 5 } }` while `{ { { 5 } } }` still
+> answered null; asking it of the block's OWN tail holds at any depth. **Context**: the
+> repair is restricted to a bare `{ … }`, the only context handed a `Void` it did not mean —
+> a `for` / `while` / `parallel for` / `fields` body gets one because it IS a statement, and
+> undoing the drop there leaked one store per round, reopening loft#725. Guard
+> `tests/scripts/nested-block-in-value-position.loft`, confirmed to fail at the preceding
+> commit on both backends. Fixes loft#1076.
+
+- **Conformance is differential** — call/return is enforced across the two backends by the
+  @PLN89 oracle (D-op-1); recursion, nested calls, and struct returns are in its corpus
+  (`17-tuples-recursion`, `21-deep-recursion-large-data`, `08-nrvo-mixed-return-paths`). The
+  parameter contract (`F-Param*`) is exactly what the ownership register (ownership.md, 0 open)
+  and the sandbox raw-write rule ([capabilities.md](capabilities.md), 0 open) are built on, so it
+  has the strongest standing cross-checks in the spec.

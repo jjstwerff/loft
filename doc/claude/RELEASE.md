@@ -927,6 +927,41 @@ For each feature and bug-fix entry in CHANGELOG.md under `[Unreleased]`:
 - Confirm the user-visible behaviour is correctly described.
 - If the feature has no user documentation, add it (either a new `.loft` example or an update to an existing one).
 
+### 5b — A contract doc carries the contract, not its own history
+
+Every doc that says what is TRUE — the language reference, the formal rules, the tooling
+guides — is read by SKIMMING, and a doc that narrates its own repairs cannot be skimmed.  The
+history is worth keeping: it is what stops the next reader re-deriving a decision, and it is
+where a rule's deviation register lives.  It is simply not what the contract doc is for.
+
+One companion file per doc, named so it is recognisable at a glance:
+
+```
+<doc>.md            the contract, plus the CURRENT state — what is open, what is pending
+<doc>-history.md    the timeline — what changed, when, what it cost, and what closed it
+```
+
+Run the report and work the head of the list:
+
+```bash
+python3 scripts/doc_history_report.py            # every contract doc, worst first
+python3 scripts/doc_history_report.py <doc.md>   # the lines it flagged, and why
+```
+
+It is a REPORT, not a gate, and it has to be: whether a date is timeline or contract is a
+judgement — *"`@F7` shipped in 1.1"* is a compatibility FACT that belongs in the contract — and
+a gate over a judgement gets satisfied rather than obeyed.  Two rules make the split hold:
+
+- **The latest state stays in the contract doc.**  A reader must not have to open the companion
+  to learn that two deviations are open.  Keep the count and one line per open item; move the
+  narrative.  A companion nobody has to read to know where things stand is the point.
+- **MOVE, never copy.**  `scripts/rule_tags.py` resolves `@FR-` citations by scanning
+  `doc/claude/formal/*.md`, so a companion beside its rules doc keeps every citation resolving
+  — but a register that exists in two files defines its entries twice, and the checker says so.
+
+For a doc near the top of the report, either move its history into the companion or record in
+the release notes why it stays.
+
 ### 6 — Validate DEVELOPERS.md caveats and language-comparison pages
 
 - **`doc/DEVELOPERS.md`**: re-read the compiler pipeline description and all "caveat" or "known limitation" callouts.  Update any that are stale relative to source changes in this release.
