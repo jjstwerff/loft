@@ -2013,16 +2013,7 @@ impl Parser {
         if let Some(d) = self.data.nullable_struct_payload(tp) {
             return Type::Reference(d, Deps::share_sentinel());
         }
-        // …and the same for a nullable COLLECTION, which is the other half of that rule and
-        // was the half left behind: `.base()`, so `vector<τ>?` / `hash<τ[k]>?` share exactly
-        // as their dense twins do.  Unpeeled it fell to `_ => tp.clone()`, the attribute kept
-        // the collection type and was stored INLINE, and the body's read came back an
-        // `OpGetField` where the dense capture reads an `OpGetDbRef` — so an append inside
-        // the lambda was taken for a STRUCT FIELD append, resolved its parent against
-        // `Type::Null`, and asked `Data::def` for `u32::MAX`: an internal compiler error on
-        // three lines of ordinary source (loft#1209).  loft#1114 wrote the rule and closed
-        // the `S?` half; the collection spelling is the same fact.
-        match tp.base() {
+        match tp {
             Type::Reference(d, _) => Type::Reference(*d, Deps::share_sentinel()),
             Type::Hash(c, _, _)
             | Type::Sorted(c, _, _)
