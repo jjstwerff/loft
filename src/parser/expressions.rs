@@ -4116,11 +4116,49 @@ use a separate collection or add after the loop"
         // dense-destination direction is loft#1210, where the interpreter panics writing a
         // read-only store and `--native` emits Rust that will not compile.  Widening the
         // destination must not quietly widen the source with it.
+        // loft#1228 — …unless the right-hand side ALREADY appended into the destination.
+        //
+        // A vector literal is parsed with the left-hand PLACE as its accumulator.  For a bare
+        // variable or a struct field `build_vector_list` builds the elements straight into it
+        // and hands back a `Value::Insert`, which the guard below excludes — that is why both
+        // of those place-kinds were always correct.  A TUPLE ELEMENT is neither, so the literal
+        // opens a block by ADOPTING the place's store (`_vec_N = t.0`) and builds into that;
+        // the block is a `Value::Block`, the exclusion misses it, and this concat then appends
+        // the destination to ITSELF.
+        //
+        // Measured: `t.0 += [7]` on an empty element answered `[7, 7]`, on `[1, 2]` it answered
+        // `[1, 2, 7, 1, 2, 7]`, and `+= [7, 8]` answered `[7, 8, 7, 8]` — the correct result
+        // concatenated with itself, which is the signature of one append too many rather than
+        // of a wrong element.  `(E-Asgn-Compound)` is the rule: the place is addressed exactly
+        // once, and here it was the accumulator AND the destination.
+        //
+        // The test is that the block's head adopts exactly `to`.  A destination is a PLACE, so
+        // it can never be the fresh-storage temp the adopt exists for, and the two cannot be
+        // confused.
+        //
+        // Gated on the PLACE-KIND, not on the adopt shape alone: a CAPTURED collection
+        // (`OpGetDbRef`) reaches the same shape and NEEDS the append — suppressing it there
+        // sent the write into the const store (`505-collection-capture.loft`: *"Write to
+        // read-only store … (CONST_STORE init)"*).  The shape is shared; the correct lowering
+        // is not.
+        //
+        // The place-kind is asked through [`extract_nested_tuple_lhs`], which is the one home
+        // for what a tuple place looks like, because a tuple projection has TWO IR spellings —
+        // a bare `TupleGet` at depth 1 and a `Block[Set(w, …), TupleGet(w, idx)]` chain deeper —
+        // and matching `TupleGet` here saw only the first.  Measured: with that narrower test
+        // `t.0 += [7]` was fixed while `n.0.0 += [7]` still answered `[7, 7]`.  QUALITY.md's
+        // `spellings` screen is what named it — the audit row moved, and the cell built to
+        // answer *why* found the half-fix.
+        let rhs_built_into_place = extract_nested_tuple_lhs(to).is_some()
+            && matches!(code.unspan(), Value::Block(bl)
+                if matches!(bl.operators.first().map(Value::unspan), Some(Value::Set(_, adopted))
+                    if adopted.unspan() == to.unspan()));
         if !self.first_pass
             && op == "+="
             && let Type::Vector(elm_tp, _) = &f_type.base().clone()
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
+            && !rhs_built_into_place
         {
             if !s_type.is_equal(f_type.base()) {
                 diagnostic!(
