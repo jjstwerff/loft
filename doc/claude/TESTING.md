@@ -2864,6 +2864,20 @@ backends and sixteen test binaries leaked (`placement_parity`, `n2_cdylib`, `lea
 corpus). Only the suite could find that, so a lifetime change is not verified by its matrix —
 the matrix says the defect is closed, the suite says nothing else opened.
 
+**A fix that makes a dropped statement start EXECUTING is invisible on the diagnostic
+channel.** Sweeping the corpus for a change's new DIAGNOSTICS can only find programs the change
+newly refuses — never programs whose VALUES it changed, which is the whole population when the
+fix turns a silent no-op into a real effect. Measured on loft#1221: a ~2000-file sweep for two
+new diagnostics reported a clear blast radius, and `make ci` then found a corpus test whose
+assertion had been passing BECAUSE of the defect — a linked group filled through both members
+doubled its vector once the second append stopped being dropped. The right instrument is a
+differential: run the same program on both binaries and compare STDOUT. Reach for it whenever a
+fix makes something start happening rather than start reporting.
+
+Its visibility is the second half of the lesson: the keyed member of that group dedups by key
+and read the same either way, so only the VECTOR member's length moved. A consumer asserting on
+the keyed member sees nothing at all.
+
 **The defect's own EMISSION PATH decides which syntactic position exercises it.** A guard is
 written in whatever position reads naturally — usually a lookup straight inside an `assert` —
 and that position may never reach the code the defect lives in. loft#1217's broken branch is in
