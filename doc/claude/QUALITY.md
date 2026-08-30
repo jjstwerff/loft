@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 338 | 321 | **17** |
+| 339 | 322 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -492,6 +492,11 @@ loft#1186 moved it to 336 · 318 with the two predicates the join reading needed
 before they match, so they land on the peeling side and leave the opaque column where it was;
 loft#1185 to 337 · 319 with `parser::tail_calls_a_fnref_parameter`, which unspans for the same
 reason.
+
+loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displace`, the
+pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it
+unspans before matching `Set`, so it lands on the peeling side and leaves the opaque column
+alone.
 
 loft#1194/#1195 moved the table twice: 337 · 319 · 18 → 337 · 320 · **17**, then
 338 · 321 · 17 as `parser::field_place` entered it — a new site that discriminates `Var` from
@@ -2323,7 +2328,14 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 659 | 300 | 5 | **354** |
+| 660 | 301 | 5 | **354** |
+
+loft#1200 moved it to 660 · 301 with `scopes::nullable_locals_that_displace`.  It asks BOTH
+questions on purpose and so lands on the seeing-through side: `Type::Optional` names the
+spelling it is looking for, and `.base()` peels it to ask what the storage is.  The opaque
+column did not move, which is the useful half of the reading — the site was written knowing
+`layout(τ) = layout(τ?)`, and the defect it closes existed because a NEIGHBOURING site
+(`owned_refs`' tracking) is on the opaque side and never saw a nullable local at all.
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were

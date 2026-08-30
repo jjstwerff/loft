@@ -9,6 +9,38 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A nullable heap-record local releases what its reassignment displaces (2026-08-30)
+
+`@FR-O-Latest` makes ownership a property of the latest assignment, and a `c: S?` reassigned
+from a call kept every store it displaced — unbounded in a loop, both backends, values right
+throughout, so only the leak channel spoke.
+
+The dense twin is clean for the reason that names the defect: a `-> S` callee is handed a
+`__retbuf` and fills the store the local ALREADY owns, so nothing is displaced. A nullable
+RECORD return gets no such buffer — `-> S?` is a synthetic `__nullable<S>` with its own
+delivery, and giving it a buffer as well leaks one record per call — so every call mints and
+the caller owes the release. `vector<T>?` and `text?` are clean because both do reuse one
+buffer (loft#1200).
+
+**The free cannot be static, and that is the substance of the fix.** The local's first store is
+normally an inline mint into a work-ref, so the local and that work-ref name ONE store; freeing
+through the local double-frees it against the work-ref's own scope-exit free — latent
+everywhere and an observable wrong answer where the local is returned. One static site cannot
+separate the first iteration from the rest. The cure is a per-RUN witness: a boolean per
+qualifying local, false at entry, set true only by a MINTING CALL, with the displaced-store
+free conditional on it. That flag records SOLE ownership, which is strictly narrower than the
+existing `owned_refs` fact — an inline mint into a work-ref is owned and still not solely
+owned.
+
+Two enabling halves beside it: `owned_refs` was keyed on an UNPEELED shape so a nullable local
+was never tracked at all (`@FR-L-Null` — `layout(τ) = layout(τ?)`), and the free's gate wanted
+ownership established at the current loop depth where this shape establishes it one level out.
+
+Measured wider than filed: the loop is not the axis (straight-line leaks too) and neither is
+the callee's spelling (a dense `-> S` call into an `S?` local leaks the same). Two shapes stay
+open on `formal/ownership.md` D-own-16, which this narrows to the condition they share — the
+assigned value READS the local it assigns.
+
 ### A mapped lambda's collection does not own the buffer it was delivered through (2026-08-30)
 
 `@FR-O-Owner` says every heap store has exactly one owner, and `xs.map(|x| { [x, x + 1] })`

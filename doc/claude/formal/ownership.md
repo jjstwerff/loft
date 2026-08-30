@@ -174,8 +174,9 @@ closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 rec
 witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
 D-own-11 opened and closed 2026-08-26, D-own-7
 opened and closed 2026-08-23, and D-own-6 before it; D-own-25 opened and closed
-2026-08-30 with loft#1201; the five original D-own deviations
-remain resolved.  Read those entries for what their oracles vary before treating any zero
+2026-08-30 with loft#1201, and D-own-16 was NARROWED the same day by loft#1200 to the one
+condition its two surviving shapes share — the assigned value READS the local it assigns; the
+five original D-own deviations remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
 axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
 rather than from an oracle at all, and how its second face was found by varying the POSITION
@@ -574,7 +575,7 @@ and the owning shape does not.  Guard:
 `tests/scripts/1121-a-backed-default-does-not-allocate-a-store-it-overwrites.loft`, which scores
 that 0 beside the leak.
 
-### D-own-16 — OPEN (2026-08-27): a SELF-referential join never frees the store it displaces
+### D-own-16 — OPEN, NARROWED 2026-08-30 (2026-08-27): a value that READS the local it assigns never frees the store it displaces
 
 `(O-Deps)` places a free from the deps a value carries.  A local reassigned from a join over
 ITSELF gets none placed: `c = mk(i) ?? c` retains every displaced store, nine of ten over ten
@@ -590,26 +591,43 @@ assigned, so freeing the displaced store before the assignment is a use-after-fr
 that takes it, and only a per-execution comparison can tell the two apart.  That is what
 `OpBindOrCopy` exists for, and the reassignment does not reach it.
 
-**A SECOND repair measured and reverted (2026-08-30, loft#1200) — do not re-run this one
-either.**  The entry reads as though the JOIN were the mechanism.  It is not: the plain
-reassignment `c = mk(i)` leaks identically with no join anywhere, and so does the
-straight-line spelling with no loop, so the shape is really *a nullable heap-record local
-never releasing what its reassignment displaced*.  Two blockers were found and both are real
-— `owned_refs` is keyed on an UNPEELED shape so a nullable local is never tracked at all, and
-the transition free's gate wants ownership established at the CURRENT loop depth where this
-shape establishes it one level out.  Fixing both closes seven leak shapes.
+**NARROWED 2026-08-30 (loft#1200): the wider half is CLOSED, and the route to it is this
+entry's own conclusion carried out.**  The entry reads as though the JOIN were the mechanism.
+It is not — the plain reassignment `c = mk(i)` leaks identically with no join anywhere, and so
+does the straight-line spelling with no loop — so what it described is *a nullable
+heap-record local never releasing what its reassignment displaced*.  The dense twin is clean
+because its callee is handed a `__retbuf` and fills the store the local ALREADY owns, so
+nothing is displaced; a nullable RECORD return gets no buffer (`-> S?` is a synthetic
+`__nullable<S>` carrying its own delivery, and giving it a buffer as well leaks one record per
+call), so every call mints.  `vector<T>?` and `text?` are clean for the dense record's reason:
+both reuse one buffer.
 
-**And it is still wrong, for a reason that raises the bar rather than lowering it.**  The
-local's first store is normally an inline mint into a work-ref — `c: S? = S { x: 5 }` lowers
-to `c = { Object -> __ref_p2_1 }` — so `c` and that work-ref name ONE store.  A free placed
-BEFORE the reassignment releases it through `c`, and the work-ref's own scope-exit
-`OpFreeRef` then releases it again: latent everywhere, and an observable wrong answer where
-the local is RETURNED (`fn build() -> S? { c: S? = S{x:5}; for … { c = mk(i); } c }` answered
-garbage under `LOFT_POISON=1` on both backends).  One static site cannot separate the first
-iteration, where the store is still the work-ref's, from the rest.  So the conclusion of this
-entry stands with more evidence behind it: **the answer is a per-RUN witness, not a sharper
-static predicate** — the `rbuf_witness` flag is the mechanism, and D-own-19's path-sensitive
-half is the precedent for wiring one.
+**A STATIC free was tried first and is wrong — do not re-run it.**  The local's first store is
+normally an inline mint into a work-ref (`c: S? = S { x: 5 }` lowers to
+`c = { Object -> __ref_p2_1 }`), so the local and that work-ref name ONE store.  Freeing
+through the local before the reassignment double-frees it against the work-ref's own
+scope-exit free: latent everywhere, and an observable wrong ANSWER where the local is returned
+(`fn build() -> S? { c: S? = S{x:5}; for … { c = mk(i); } c }` handed back garbage under
+`LOFT_POISON=1` on both backends).  One static site cannot separate the first iteration, where
+the store is still the work-ref's, from the rest.
+
+**The cure is this entry's own sentence, carried out.**  A per-RUN witness — a boolean per
+qualifying local (`__lbo_<name>`), false at entry, set true only by a MINTING CALL and false by
+anything else — makes the free conditional on the local actually being the store's sole owner.
+It is `rbuf_witness` one scope in, and D-own-19's path-sensitive half is the precedent.  Note
+the flag records SOLE ownership, which is strictly narrower than `owned_refs`: an inline mint
+into a work-ref is `Owned` and still not solely owned.
+
+Two halves were needed beside it and both were real: `owned_refs` is keyed on an UNPEELED
+shape, so a nullable local was never tracked at all (@FR-L-Null — `layout(τ) = layout(τ?)`, so
+a `?` cannot change who frees a store), and the free's gate wanted ownership established at the
+CURRENT loop depth where this shape establishes it one level out.
+
+What REMAINS open here is narrower than the entry was filed with, and it is the same condition
+in both surviving shapes: **the assigned value READS the local it assigns** — a call taking it
+(`c = bump(c, i)`) and the self-referential join below.  The free is emitted before the
+assignment, so taking it there hands the callee, or the join's borrow arm, a store that is
+already gone; closing them needs the release to happen after the value is computed.
 
 **Measured and REVERTED — do not re-run this.**  `Ownership::classify`'s var-cycle back-edge
 answers `Borrowed { base: u16::MAX }`, which reads as *"no nameable witness"*, and the obvious

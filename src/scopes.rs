@@ -128,6 +128,11 @@ struct Scopes {
     /// `None` unless the body actually reaches a displacing site (`displaces_return_buffer`),
     /// so a function that cannot leak pays no slot.
     rbuf_witness: Option<(u16, u16)>,
+    /// loft#1200 — the per-LOCAL ownership witness: a nullable heap-record local that is
+    /// reassigned from a minting call, mapped to the boolean that records whether the store
+    /// it currently holds is this frame's SOLE property.  The static answer is not available
+    /// (see `nullable_locals_that_displace`), so the displaced-store free reads this instead.
+    local_owns: HashMap<u16, u16>,
     /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
     /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
     /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
@@ -1423,6 +1428,7 @@ fn run_scan_phase(
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         rbuf_witness: None,
+        local_owns: HashMap::new(),
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
@@ -1447,6 +1453,17 @@ fn run_scan_phase(
         scopes.var_order.push(flag);
         scopes.rbuf_witness = Some((buf, flag));
     }
+    // loft#1200 — the same construction one scope in: a boolean per nullable heap-record LOCAL
+    // that a minting call reassigns, recording whether the store it holds is this frame's sole
+    // property.  Minted BEFORE the scan for the reason the buffer's is: the first assignment
+    // that has to maintain it already needs a flag to write.
+    for v in nullable_locals_that_displace(orig_code, &function, data) {
+        let name = format!("__lbo_{}", function.name(v));
+        let flag = function.add_temp_var(&name, &Type::Boolean);
+        scopes.var_scope.insert(flag, 0);
+        scopes.var_order.push(flag);
+        scopes.local_owns.insert(v, flag);
+    }
     let mut code = scopes.scan(orig_code, &mut function, data);
     // The witness starts FALSE: on entry the buffer holds the CALLER's store, which this
     // function must never release.  A transition site is reachable with no prior assignment at
@@ -1456,6 +1473,18 @@ fn run_scan_phase(
         && let Value::Block(bl) = &mut code
     {
         bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+    }
+    // Every per-local witness starts FALSE for the same reason: before the local's first
+    // assignment there is no store of its own to release, and an uninitialised boolean slot
+    // would read as garbage and free one.
+    if !scopes.local_owns.is_empty()
+        && let Value::Block(bl) = &mut code
+    {
+        let mut flags: Vec<u16> = scopes.local_owns.values().copied().collect();
+        flags.sort_unstable();
+        for flag in flags.into_iter().rev() {
+            bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+        }
     }
     // lift vars from `scan_args` are assigned inside conditional branches but
     // their `OpFreeRef` lives at function exit; prepend the null-inits so codegen
@@ -4440,6 +4469,21 @@ impl Scopes {
                 Value::Null,
             ));
         }
+        // loft#1200 — the displaced-store free for a nullable heap-record local, GUARDED by
+        // the per-local witness.  See `nullable_locals_that_displace` for why the guard is a
+        // runtime flag and not a predicate: the local's first store is shared with a work-ref
+        // that frees it too, and no static site separates that iteration from the rest.
+        if transition_free.is_none()
+            && was_in_scope
+            && let Some(&flag) = self.local_owns.get(&v)
+            && mints_a_store_the_target_does_not_hold(value, v, ov, data)
+        {
+            transition_free = Some(v_if(
+                Value::Var(flag),
+                call("OpFreeRef", v, data),
+                Value::Null,
+            ));
+        }
         // A record ENUM is the second spelling of a struct-like heap store, and this
         // transition — and the `owned_refs` tracking below that licenses it — reads the
         // same @FR-O-Latest fact for both.  The two blocks above already pair the
@@ -4947,13 +4991,24 @@ impl Scopes {
         // NOT adopt a fresh store) leaves `v` holding whatever it held, so the flag is left
         // alone; every other assignment sets it to the same @FR-O-Latest verdict `owned_refs`
         // records statically.
-        let witness_update = match self.rbuf_witness {
+        let mut witness_update = match self.rbuf_witness {
             Some((buf, flag)) if buf == v && !delivers_into_buffer(value, v, ov, data) => {
                 let owned = matches!(self.ref_rhs_ownership(value, data), RefRhs::Owned);
                 Some(v_set(flag, Value::Boolean(owned)))
             }
             _ => None,
         };
+        // loft#1200 — the per-local witness records SOLE ownership, which is a narrower
+        // question than `owned_refs`'s.  An inline mint into a work-ref is `Owned` and still
+        // not solely owned: the work-ref frees it too.  Only a MINTING CALL hands the local a
+        // store nothing else names, so that is the one shape that sets the flag true.
+        if let Some(&flag) = self.local_owns.get(&v) {
+            let sole = mints_a_store_the_target_does_not_hold(value, v, ov, data);
+            witness_update = Some(match witness_update {
+                Some(prev) => Value::Insert(vec![prev, v_set(flag, Value::Boolean(sole))]),
+                None => v_set(flag, Value::Boolean(sole)),
+            });
+        }
         if prefix.is_empty() && ls.is_empty() && witness_update.is_none() {
             Value::Set(v, Box::new(set_value))
         } else {
@@ -8097,6 +8152,79 @@ fn hidden_return_buffer_var(d_nr: u32, function: &Function, data: &Data) -> Opti
     let name = def.attributes().get(idx)?.name.clone();
     let v = function.var(&name);
     (v != u16::MAX).then_some(v)
+}
+
+/// Which nullable heap-record LOCALS are reassigned from a call that mints?
+///
+/// The pre-scan answer to *"is a runtime ownership witness worth a slot here?"*, asked once
+/// per function in the shape [`displaces_return_buffer`] already uses.  A body that reaches no
+/// such site pays nothing.
+///
+/// **Why a witness and not a predicate.** A nullable RECORD return gets no delivery buffer —
+/// `-> S?` is a synthetic `__nullable<S>` carrying its own delivery, and giving it a buffer as
+/// well leaks one record per call — so every call MINTS and the caller owes the release of
+/// what it displaces.  A static free at the reassignment cannot be placed, because the local's
+/// FIRST store is normally an inline mint into a work-ref (`c: S? = S { x: 5 }` lowers to
+/// `c = { Object -> __ref_p2_1 }`): the local and that work-ref name ONE store, and freeing
+/// through the local double-frees it against the work-ref's own scope-exit free.  One static
+/// site cannot separate the first iteration from the rest, which is what `formal/ownership.md`
+/// D-own-16 records; the flag answers it per RUN.
+fn nullable_locals_that_displace(code: &Value, function: &Function, data: &Data) -> Vec<u16> {
+    fn walk(node: &Value, seen: &mut HashSet<u16>, out: &mut Vec<u16>, data: &Data) {
+        if let Value::Set(t, val) = node.unspan() {
+            // A SECOND assignment is what displaces; the first allocates.
+            if !seen.insert(*t)
+                && mints_a_store_the_target_does_not_hold(val, *t, *t, data)
+                && !out.contains(t)
+            {
+                out.push(*t);
+            }
+        }
+        node.unspan()
+            .for_each_child(&mut |c| walk(c, seen, out, data));
+    }
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    walk(code, &mut seen, &mut out, data);
+    out.retain(|&v| {
+        v < function.count()
+            && matches!(function.tp(v), Type::Optional(_))
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && function.tp(v).depend().is_empty()
+            && !function.is_skip_free(v)
+            && !function.is_argument(v)
+    });
+    out
+}
+
+/// Does this call hand back a store the target does NOT already hold?
+///
+/// The complement of [`displaces_owned_through_fresh_callee`]'s NRVO shape.  There the target
+/// sits at the callee's return-buffer attribute, so the callee fills the store the target
+/// already owns and nothing is displaced.  Here the callee MINTS: it has no return buffer at
+/// all — which is every nullable RECORD return — or it was handed someone else's.
+///
+/// The target must not be READ anywhere in the call: the free is emitted before the
+/// assignment, so a call that still reads the old value would be handed a freed store.
+fn mints_a_store_the_target_does_not_hold(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
+    let Value::Call(fn_nr, args) = value.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if !def.is_loft_defined() || !def.return_adopts_fresh_store() {
+        return false;
+    }
+    let names_v = |x: &Value| matches!(x.unspan(), Value::Var(w) if *w == v || *w == ov);
+    if def
+        .hidden_return_buffer_attr()
+        .is_some_and(|i| args.get(i).is_some_and(names_v))
+    {
+        return false;
+    }
+    args.iter().all(|a| !a.reads_var(v) && !a.reads_var(ov))
 }
 
 /// Does this body ever displace a store held by the return-buffer parameter `v`?
