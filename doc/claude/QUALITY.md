@@ -2328,14 +2328,16 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 660 | 301 | 5 | **354** |
+| 660 | 302 | 5 | **353** |
 
-loft#1200 moved it to 660 · 301 with `scopes::nullable_locals_that_displace`.  It asks BOTH
-questions on purpose and so lands on the seeing-through side: `Type::Optional` names the
-spelling it is looking for, and `.base()` peels it to ask what the storage is.  The opaque
-column did not move, which is the useful half of the reading — the site was written knowing
-`layout(τ) = layout(τ?)`, and the defect it closes existed because a NEIGHBOURING site
-(`owned_refs`' tracking) is on the opaque side and never saw a nullable local at all.
+Two moving checkouts, and the two movements are independent.  loft#1200 added
+`scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
+purpose — `Type::Optional` names the spelling it is looking for, and `.base()` peels it to ask
+what the storage is.  loft#1204 then REPAIRED a site out of the opaque column, which is the
+movement the column exists to report.  The two readings agree about the useful half: the
+`#1200` site was written knowing `layout(τ) = layout(τ?)`, and the defect it closes existed
+because a NEIGHBOURING site (`owned_refs`' tracking) is on the opaque side and never saw a
+nullable local at all.
 
 (gated by `doc_hygiene::quality_optional_table_matches_the_audit`, the arrangement the `unspan`
 and `spellings` tables have — it read 637 · 367 until the sibling checkout's four commits were
@@ -2374,7 +2376,9 @@ formers, four formers and one now descend through it.  Closing loft#1175 then to
 its place — the movement is what the column is for, not the level.  That is the column to watch — a site
 that derives from the keystone cannot be opaque to a wrapper the keystone knows about, so
 moving a body from `opaque` to `keystone` closes the question for every future variant rather
-than for `Optional` alone.
+than for `Optional` alone.  loft#1204 then moved it to 659 · 301 · 353: fixing
+`link_shared_nullable_views` gave it the `Optional` arm it was missing, so the very body the
+per-test unit was built to catch left the opaque column by being repaired.
 
 a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
 every count here is a snapshot of two moving checkouts, so re-run the tool rather than
@@ -3953,7 +3957,7 @@ written down now, each beside the rule it corrects —
 | `rule_tags.py` in a gate | ✅ done — `doc_hygiene::every_rule_citation_resolves` shells out to the same command a person runs, so gate and tool cannot drift. Proven to fire; skips (not fails) without `python3` |
 | a tool for the axis a matrix HELD FIXED | ✅ done — `scripts/matrix_axes.py`, derived rather than declared (the declared form is falsified by D-own-6). `file <path>` censuses one guard against the language's own domains; `cross <A> <B>` names the value PAIRS no corpus file reaches, which is the shape every failure B6m counted actually had. Scored 6 of 6 against hand answers written before it was built, and that scoring found two detector bugs — a grouping paren read as an argument list, and `strip()` erasing the code inside an interpolation. Its depth ranking was falsified by its own oracle and removed. All REPORTS. See B6q |
 | a tool for the DUPLICATION question over the IR tree | ✅ done — `scripts/ir_walker_audit.py`, seven modes. `walkers` counts who hand-rolls `Value`'s tree shape instead of deriving from the keystone; `producers` / `dead` intersect a construction screen with an 854-program corpus census to find variants nothing can build; `unspan` finds sites a `Span` hides a shape from; `reach` says which of them production actually runs (B6b); `spellings` asks the question one level up — who resolves a projection by OP NAME and so cannot see its `TupleGet` spelling (B6g); `optional` asks the same question over the TYPE former — who resolves a shape without peeling `τ?`, plus the caller-side `.base()` list (B6p). All REPORTS. Each was **scored against answers already found by hand before it shipped** — the first was rejected twice for failing to reproduce them, and `reach` went through three candidate call matchers on an 11-cell oracle — the `make profile-corpus` discipline, applied to a new instrument |
-| the `optional` screen's UNIT — a function, where it should be a shape TEST | ⚠ **open, and measured**: the four sites B7h fixed all sit in its "see through the wrapper" bucket, because each function peels `Optional` somewhere else in its body. `handle_field` peels `td` and then matches `exp_tp` bare; `generate_set` peels for the keyed kinds and then matches `Reference`/`Enum` bare. So the screen's 354 opaque is a FLOOR over functions with no peel at all, and the class it exists to find hides in the 300. Splitting it per shape test is the change; the count it reports today is not wrong, it answers a narrower question than its name |
+| the `optional` screen's UNIT — a function, where it should be a shape TEST | ✅ **done (B7i)** — scored 10/10 against a hand oracle written first, and the change found three faults in the detector itself plus loft#1204 on the first queue row read. The former note, kept because it is the measurement that motivated it: ⚠ **open, and measured**: the four sites B7h fixed all sit in its "see through the wrapper" bucket, because each function peels `Optional` somewhere else in its body. `handle_field` peels `td` and then matches `exp_tp` bare; `generate_set` peels for the keyed kinds and then matches `Reference`/`Enum` bare. So the screen's 354 opaque is a FLOOR over functions with no peel at all, and the class it exists to find hides in the 300. Splitting it per shape test is the change; the count it reports today is not wrong, it answers a narrower question than its name |
 | a gate over the executable files under `doc/` | ✅ **a REPORT, not a gate** — `make doc-probes` (`scripts/doc_probe_sweep.sh`) runs all 857 and names the hard faults (B6o). It cannot gate: the files carry no expected values, and some fault on purpose. It found the 857 (not 877 — 20 were cache DIRECTORIES) and it scores crash channels only |
 | the negative-control gate's LEAK channel | ⚠ **blind for the corpus's standard guard shape** — `falsify.sh` reads "stores not freed" off stderr, which only a `main`-ful `--interpret` run prints; `--tests` does not leak-check at all (that gate lives in `tests/wrap.rs`). So a leak guard written `main`-less scores INERT on both trees and is recorded as a LOCK. Measured on `a-nullable-return-joins-its-branch-arms.loft`, which `make ci` failed while falsify read `0|0|none|none` (B6p). Warning written into the tool's header; the cure — a leak check on `--tests` — is a decision about every library's `loft test` |
 
@@ -4226,6 +4230,69 @@ more than the row it did not move.**  Its counts are unchanged by this walk (659
 is not the unit — the shape TEST is.  Listed in C as the next instrument change, because this
 walk is the second time a `τ?` opacity has been found by hand in a function the screen calls
 clean.
+
+#### B7i — the `optional` screen's unit changed to the shape TEST, and the first thing it found (2026-08-30)
+
+Picked because C named it: the four writers B7h fixed by hand all sat in the screen's
+"see through the wrapper" bucket, because each function peels `Optional` SOMEWHERE in its
+body while a second shape test inside it stays bare.  A function is not the unit of this
+question — the shape TEST is.
+
+**Scored against a hand oracle written before the detector, 10 of 10.**  Six cells that MUST
+flag (the three pre-fix writers, two bare tests each) and four that must NOT (the four
+spellings of a legitimate peel: in the scrutinee, in a tuple scrutinee, bound to a local under
+a new name, and bound to a local under the SAME name — `let tp = tp.base()`).  Run on the
+pre-fix tree at `2bb7a7e1^`, where B7h had already established the answers by hand, and again
+here, where the three fixed sites leave the queue and their siblings stay.
+
+⚠ **Three detector faults, each found by the oracle or by reading the queue's own top row.**
+Each was the failure the screen exists to find, in the screen:
+
+| fault | how it read | found by |
+|---|---|---|
+| the per-test pass inherited the FUNCTION unit's gate | `wrap_dense_default_as_some` — one of the five writers `@FR-L-Null-Tag` names — was invisible, because the old unit's three regexes want a `Type::X` followed by `=>`, `\|` or a `let`, and a tuple pattern is none of those | control 7 absent, then probed rather than assumed — [[check-an-instruments-zero]] |
+| a `match`'s arm BODIES and GUARDS counted as its patterns | `borrow_root`'s `match val.unspan()` — over a `Value`, not a `Type` — inherited the `Type::` list of a `matches!` in one arm's guard and went to the HEAD of the disagreement queue, one function apparently peeling in one place and not the other | reading the top row |
+| `type_discriminated` cannot see the LAST alternative of a `\|`-chain | it needs a trailing `=>` or `\|`, and `\| Type::Trie(d, _, dep) = &in_type` ends in the binding `=`.  `Trie` dropped out of `for_type` and `index_type`, splitting the keyed family into a five-variant list and a four-variant one and MANUFACTURING a "these homes are short by Trie" finding out of the detector's own short list | reading two of the sites it accused |
+
+The third is the sharpest: the instrument for "one notion, two spellings" had a list that was
+short by one spelling, and the finding it invented was that other people's lists were short.
+Only opening the accused sites separates the two.
+
+**The ranking is what makes 707 sites readable.**  The flat queue is a floor over every body
+with a peel anywhere; the useful question is the project's own recurring shape — group the
+tests by the variant LIST they spell, keep the lists of three or more (a shorter one is a
+generic test, not a shared notion), and report the groups where some homes peel and some do
+not.  **19 lists disagree, over 98 bare sites**, and a disagreement is a claim that two homes
+answer one question differently.  The `data.rs` definitions in it are NOT hits — `is_dbref`
+and `is_scalar` are layout predicates over a bare `Type` by design, with the peel at the
+caller (`ref_tuple_element_ok` is `is_scalar(tp.base())`) — which is what the caller-half
+table already exists to read.
+
+**loft#1204, from the first row read.**  `link_shared_nullable_views` is the rewrite that
+points a keyed view at a nullable sibling's `__nullable<S>`, and both of its halves ask an
+unpeeled type.  So a member spelled `hash<S[k]>?` — or a vector spelled `vector<S?>?` — falls
+to `_ => None`, the view stays over `S` while the vector is over `__nullable<S>`, and the
+declaration silently builds a SECOND independent collection that every insert misses.  Twelve
+cells: all five keyed kinds broken in both spellings, on both backends, byte-identical.
+`@FR-Col-Group` settles it without a design call — membership is a fact about the pair, and
+`hash<S[k]>?` is a collection over `S` in that struct — so the rule's clarification list gains
+the axis rather than the rule changing.
+
+⚠ **The fourth row is the CONTROL that names the cause rather than the symptom.**  A
+`?`-keyed member beside a DENSE `vector<E>` reads 1: plain group forming was never blind to
+the `?`, so the defect is confined to the rewrite and the fix belongs in it, not in the
+pairing test.  Both of the rewrite's call sites carried it — `parse_struct` and
+`parse_variant` — measured apart against the control binary, because falsify's assert count
+is 1 either way (a failed assert stops the run) and cannot tell one cell from six.
+
+⚠ **A test file's "axes HELD FIXED" note was a stale measurement, and it pointed away from
+this.**  `1158`'s header recorded *"the rewrite covers `hash` and no other kind — measured:
+`sorted<E[k]>` beside `vector<E?>` is two independent collections in BOTH orders"* and drew
+the reasonable conclusion that the nullable-element axis was not worth moving.  Re-measured:
+ten cells, five kinds, both orders, all complete.  The note describes the state before a fix
+that landed in its own PR — `collections.md` already lists that fix among `Col-Group`'s
+instances.  A held-fixed note is a claim with a date on it, and this one would have stopped
+the walk that found loft#1204.
 
 #### B2 — open, and the owner's call
 

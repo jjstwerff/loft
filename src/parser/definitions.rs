@@ -3548,6 +3548,12 @@ impl Parser {
     /// declaration silently builds a SECOND, independent collection that every insert through
     /// the vector misses (loft#927, one axis over).
     ///
+    /// **The `?` a member carries on ITSELF is not part of the question.**  `Optional(τ)` is
+    /// τ's slot plus a compile-time bit (@FR-L-Null), so `hash<S[k]>?` and `vector<S?>?` name
+    /// the same element type their dense spellings do and belong to the same group.  Both
+    /// halves below peel before they ask, and the rewrite restores the wrapper, so a member
+    /// keeps the nullability its author wrote and still joins.
+    ///
     /// A DENSE vector sibling's element is `Reference(S)`, not the `Enum`, so nothing matches
     /// and the rewrite is a no-op — which is also what makes it inert with the `LOFT_E2_SYNTH`
     /// gate off.  The trigger is the `?` the author wrote (`vector<S?>`), gate or no gate.
@@ -3556,7 +3562,14 @@ impl Parser {
         // payload struct `S` -> its `__nullable<S>` enum, gathered from nullable vector siblings.
         let mut nullable_of: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for a in 0..n {
-            if let Type::Vector(inner, _) = self.data.attr_type(d_nr, a)
+            // A nullable FIELD still has the element type the pairing is about: `?` is a
+            // compile-time bit over the same slot (@FR-L-Null), so `vector<S?>?` carries the
+            // `__nullable<S>` this gather looks for exactly as `vector<S?>` does.
+            let declared = match self.data.attr_type(d_nr, a) {
+                Type::Optional(inner) => *inner,
+                other => other,
+            };
+            if let Type::Vector(inner, _) = declared
                 && let Type::Enum(nd, true, _) = *inner
                 // ONLY the synth `__nullable<S>` enum — not an arbitrary user struct-enum
                 // element (`vector<Shape>`), whose `variant_of(.., "Some")` would be MAX.
@@ -3575,7 +3588,15 @@ impl Parser {
             return;
         }
         for a in 0..n {
-            let rewritten = match self.data.attr_type(d_nr, a) {
+            // Which record set a view indexes is a question about its ELEMENT, so it is asked
+            // of the peeled type and the wrapper is restored below: a member declared
+            // `hash<S[k]>?` is a collection over `S` in this struct and is therefore a member
+            // of the group (@FR-Col-Group), and it keeps the nullability its author wrote.
+            let (declared, nullable_field) = match self.data.attr_type(d_nr, a) {
+                Type::Optional(inner) => (*inner, true),
+                other => (other, false),
+            };
+            let rewritten = match declared {
                 Type::Hash(el, keys, deps) => {
                     nullable_of.get(&el).map(|&nd| Type::Hash(nd, keys, deps))
                 }
@@ -3594,7 +3615,8 @@ impl Parser {
                 _ => None,
             };
             if let Some(t) = rewritten {
-                self.data.definitions[d_nr as usize].attributes[a].typedef = t;
+                self.data.definitions[d_nr as usize].attributes[a].typedef =
+                    if nullable_field { Type::optional(t) } else { t };
             }
         }
     }

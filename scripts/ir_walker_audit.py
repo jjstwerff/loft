@@ -892,6 +892,192 @@ def type_verbs():
     return out
 
 
+# ── the per-TEST unit ─────────────────────────────────────────────────────────
+# A FUNCTION is not the unit of this question; a shape TEST is.  `handle_field` peels
+# `td` and then matches `exp_tp` bare, so a screen that absolves a body for peeling
+# ANYWHERE reports the site that carries the defect as clean — measured, twice, on
+# sites later found by hand (loft#1106, loft#1198).  Each `match` / `let` / `matches!`
+# that names a `Type` variant is scored on ITS OWN scrutinee.
+LET_START = re.compile(r"(?<![A-Za-z0-9_])(?:if\s+let|while\s+let|let)(?![A-Za-z0-9_])")
+MATCH_START = re.compile(r"(?<![A-Za-z0-9_])match(?![A-Za-z0-9_])")
+MATCHES_START = re.compile(r"(?<![A-Za-z0-9_])matches!\s*\(")
+# A local bound FROM a peel: the scrutinee is then a peeled value under another name.
+# Both spellings occur and both are common — `let base = t.base()` and the same-name
+# rebinding `let tp = tp.base().clone()`.
+PEEL_BIND = re.compile(
+    r"(?<![A-Za-z0-9_])let\s+(?:mut\s+)?(?:\(([^)]{0,120})\)|([A-Za-z_][A-Za-z0-9_]*))"
+    r"\s*(?::[^=;]{0,80})?=\s*[^;]{0,240}?\.(?:base|peel_optional)\s*\(\s*\)"
+)
+IDENT_ONLY = re.compile(r"^[&*\s(]*([A-Za-z_][A-Za-z0-9_]*)(?:\.clone\(\))?[\s)]*$")
+
+
+def _balanced(code, i, opener="(", closer=")"):
+    """Offset just past the `closer` matching the `opener` at `code[i]`, or len(code)."""
+    depth = 0
+    while i < len(code):
+        if code[i] == opener:
+            depth += 1
+        elif code[i] == closer:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(code)
+
+
+def _scan_to(code, i, stops):
+    """Offset of the first char in `stops` at paren/bracket depth 0, from `i`.
+
+    `<` and `>` are deliberately NOT tracked: they are ambiguous between a generic and a
+    comparison, and a wrong guess ends a scrutinee in the middle of itself.  Every stop
+    this is asked for (`{`, `;`, `&&`) is unreachable inside a type argument anyway.
+    """
+    depth = 0
+    while i < len(code):
+        c = code[i]
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif depth == 0:
+            if c in stops:
+                return i
+            if c == "&" and "&&" in stops and code[i : i + 2] == "&&":
+                return i
+        i += 1
+    return len(code)
+
+
+def _top_level_eq(code, i, end):
+    """Offset of the binding `=` of a `let` pattern — not `==`, `=>`, `<=`, `>=`, `!=`."""
+    depth = 0
+    while i < end:
+        c = code[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "=" and depth == 0:
+            if code[i + 1 : i + 2] in ("=", ">") or code[i - 1 : i] in ("=", "<", ">", "!"):
+                i += 2
+                continue
+            return i
+        i += 1
+    return -1
+
+
+# Over PATTERN text every `Type::X` is a discrimination, so no trailing context is
+# needed — and requiring one loses the LAST alternative of a `|`-chain, which
+# `type_discriminated` does: `| Type::Trie(d, _, dep) = &in_type` ends in the binding
+# `=`, not in `=>` or `|`.  That dropped `Trie` from `for_type` and `index_type` and
+# split the keyed family into a five-variant list and a four-variant one — manufacturing
+# a "these homes are short by Trie" finding out of the detector's own short list.
+PATTERN_VARIANT = re.compile(r"(?<![A-Za-z0-9_])Type::([A-Za-z][A-Za-z0-9_]*)")
+
+
+def pattern_variants(pats):
+    """The `Type` variants a shape test's PATTERNS name."""
+    return set(PATTERN_VARIANT.findall(pats))
+
+
+def arm_patterns(block):
+    """The PATTERN halves of a match's arms — no bodies, no guards.
+
+    Both exclusions are load-bearing, and each was a false positive before it was made.
+    An arm BODY that constructs a `Type::` is not a discrimination, and a nested `match`
+    or `matches!` inside one belongs to itself.  A GUARD is a test in its own right and is
+    scored as one: crediting `borrow_root`'s `matches!(… Type::Reference | …)` guard to the
+    `match val.unspan()` it hangs off made a `Value` match read as a bare `Type` test, and
+    put the pair at the head of the disagreement queue — one function appearing to peel in
+    one place and not the other, when the two are not the same test at all.
+    """
+    out, i, depth, arm = [], 0, 0, 0
+    while i < len(block):
+        c = block[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and block[i : i + 2] == "=>":
+            pat = block[arm:i]
+            guard = re.search(r"(?<![A-Za-z0-9_])if(?![A-Za-z0-9_])", pat)
+            out.append(pat[: guard.start()] if guard else pat)
+            j = i + 2
+            while j < len(block) and block[j].isspace():
+                j += 1
+            if j < len(block) and block[j] == "{":
+                j = _balanced(block, j, "{", "}")
+            else:
+                j = _scan_to(block, j, ",")
+            i, arm, depth = j + 1, j + 1, 0
+            continue
+        i += 1
+    return "\n".join(out)
+
+
+def shape_tests(code):
+    """Yield (offset, kind, scrutinee, patterns) for each site that discriminates a `Type`.
+
+    Three forms, because the language offers three: a `match`, a `let`/`if let`/`while let`
+    pattern (including the `&&`-chained let-chain, which is how the parser writes most of
+    them), and `matches!`.  A test is only yielded when its PATTERN half names a `Type`
+    variant — a `match` over something else is not a shape test.
+    """
+    out, match_spans = [], []
+    for m in MATCH_START.finditer(code):
+        brace = _scan_to(code, m.end(), "{")
+        if brace >= len(code):
+            continue
+        end = _balanced(code, brace, "{", "}")
+        match_spans.append((brace, end))
+        out.append([m.start(), "match", code[m.end() : brace], (brace + 1, end - 1)])
+    for m in MATCHES_START.finditer(code):
+        end = _balanced(code, m.end() - 1)
+        inner = code[m.end() : end - 1]
+        comma = _scan_to(inner, 0, ",")
+        out.append([m.start(), "matches!", inner[:comma], inner[comma + 1 :]])
+    for m in LET_START.finditer(code):
+        stop = _scan_to(code, m.end(), "{;")
+        eq = _top_level_eq(code, m.end(), stop)
+        if eq < 0:
+            continue
+        pat = code[m.end() : eq]
+        if "Type::" not in pat:
+            continue
+        rhs_end = _scan_to(code, eq + 1, "{;&")
+        out.append([m.start(), "let", code[eq + 1 : rhs_end], pat])
+    for row in out:
+        if row[1] == "match":
+            lo, hi = row[3]
+            row[3] = arm_patterns(code[lo:hi])
+    for off, kind, scrut, pats in out:
+        if TYPE_ARM.search(pats) or TYPE_LET.search(pats) or "Type::" in pats:
+            yield off, kind, scrut, pats
+
+
+def peel_bound(code, upto):
+    """Locals bound from a peel before `upto` — `let base = t.base()`, `let tp = tp.base()`."""
+    names = set()
+    for m in PEEL_BIND.finditer(code, 0, upto):
+        if m.group(2):
+            names.add(m.group(2))
+        else:
+            names.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
+    return names
+
+
+def test_sees(scrut, pats, peeled):
+    """Does THIS test see a `τ?`, on its own scrutinee and its own patterns?"""
+    if "Type::Optional" in pats:
+        return True
+    if PEEL_CALL.search(scrut):
+        return True
+    m = IDENT_ONLY.match(scrut)
+    return bool(m) and m.group(1) in peeled
+
+
 def audit_optional():
     """Who can see through the `τ?` wrapper, and who resolves a shape without it?
 
@@ -908,23 +1094,40 @@ def audit_optional():
     each opaque verb defined in `data.rs`, who peels the receiver before asking and who
     does not.  Disagreement between two callers of ONE opaque verb is the shape that bites.
 
-    ⚠ Three limits, all of them lower-bound in the same direction — a body that peels
-    ANYWHERE reads as seeing, even where a second match in it stays bare (the B6f caveat);
-    `fn_bodies` nests, so an outer body inherits a nested helper's peel; and `.base()` is
-    also `use_analysis::Class::base`, whose callers are named under the table rather than
-    silently counted.  So `opaque` is a floor, never a ceiling.
+    The UNIT of the second half is the shape TEST, not the function.  A body that peels
+    ANYWHERE used to read as seeing, which cleared every site loft#1198 was found at by hand:
+    `handle_field` peels `td` and then matches `exp_tp` bare.  Each `match` / `let` /
+    `matches!` is now scored on ITS OWN scrutinee, with a peel counted when it is in the
+    scrutinee, in an `Optional` arm, or in the binding of a local the scrutinee names
+    (`let base = t.base()` and the same-name `let tp = tp.base()` are both common).
+
+    ⚠ The bias flips with the unit, so read the two halves differently.  The FUNCTION count
+    is a floor: it under-reports.  The per-TEST count over-reports instead — a parameter its
+    caller already peeled, or a scrutinee returned by a function that peels, cannot be seen
+    from here.  That is why the ranking exists: a bare test is weak evidence on its own, and a
+    LIST spelled bare in one home and peeled in another is a claim about two homes.
     """
-    rows, verbs, on_type = [], {}, type_verbs()
+    rows, verbs, on_type, tests = [], {}, type_verbs(), []
     for path in rust_files():
         for name, start, body in functions(path):
             code = code_only(body)
             variants = type_discriminated(code)
-            if not variants:
-                continue
             verdict = classify_optional(code)
-            rows.append((f"{rel(path)}:{start}", name, verdict, len(variants)))
-            if verdict == "opaque" and os.path.basename(path) == "data.rs" and name in on_type:
-                verbs[name] = f"{rel(path)}:{start}"
+            if variants:
+                rows.append((f"{rel(path)}:{start}", name, verdict, len(variants)))
+                if verdict == "opaque" and os.path.basename(path) == "data.rs" and name in on_type:
+                    verbs[name] = f"{rel(path)}:{start}"
+            # NOT gated on `variants`: the function unit's three regexes want a `Type::X`
+            # followed by `=>`, `|` or a `let`, and a tuple pattern
+            # (`let (Type::Enum(..), Type::Reference(..)) = …`) is none of those.
+            # `wrap_dense_default_as_some` — one of the five writers @FR-L-Null-Tag names —
+            # is invisible to the function unit for exactly that reason, so gating the
+            # sharper pass on the blunter one would inherit its blind spot.
+            for off, kind, scrut, pats in shape_tests(code):
+                sees = test_sees(scrut, pats, peel_bound(code, off))
+                line = start + code[:off].count("\n") + 1
+                spelled = tuple(sorted(pattern_variants(pats)))
+                tests.append((f"{rel(path)}:{line}", name, kind, sees, verdict, spelled))
 
     seen = len(rows)
     sees = sum(1 for r in rows if r[2] == "sees")
@@ -960,8 +1163,44 @@ def audit_optional():
         shown = " ".join(bare[:3]) + (f" +{len(bare) - 3}" if len(bare) > 3 else "")
         print(f"  {verb:<22}{peeled:>7}{len(bare):>6}   {shown}")
     print()
-    print("  A hit is a site to READ: ask whether a `τ?` can arrive there at all, and")
-    print("  whether the catch-all it falls to is the answer the rules give for `τ`.")
+    blind = [t for t in tests if not t[3] and t[4] != "opaque"]
+    # The disagreement ranking: group by the variant LIST a test spells and keep the ones
+    # where some homes peel and some do not.  Two homes answering one question differently is
+    # a claim, where a whole group spelled bare is only a convention.  Lists shorter than three
+    # are dropped — a single-variant `Type::Reference(..)` test is a generic shape question,
+    # not a shared notion, and including them buried the signal under 276 rows.
+    lists = {}
+    for site, name, kind, sees, _v, spelled in tests:
+        if len(spelled) < 3:
+            continue
+        lists.setdefault(spelled, {True: [], False: []})[sees].append((site, name, kind))
+    dis = {k: v for k, v in lists.items() if v[True] and v[False]}
+    print(f"  shape TESTS naming a `Type` variant                : {len(tests)}")
+    print(f"    the test itself sees through the wrapper        : {sum(1 for t in tests if t[3])}")
+    print(f"    opaque on its OWN scrutinee                     : {sum(1 for t in tests if not t[3])}")
+    print(f"    ← of those, inside a body the function unit clears: {len(blind)}")
+    print()
+    print("  the queue the FUNCTION unit cannot produce — an opaque test in a body that")
+    print("  peels somewhere else.  A hit is a site to READ: ask whether a `τ?` can arrive")
+    print("  there, and whether what it falls to is the answer the rules give for `τ`.")
+    for site, name, kind, _s, _v, _sp in sorted(blind):
+        print(f"  {site:<44} {name:<40} {kind}")
+    print()
+    print(f"  hand-spelled LISTS (3+ variants) whose homes DISAGREE : {len(dis)}")
+    print(f"    bare tests inside them                             : {sum(len(v[False]) for v in dis.values())}")
+    print("  Read a disagreement as a claim that two homes answer one question differently.")
+    print("  A `data.rs` VERB in this list is not a hit on its own: `is_dbref` / `is_scalar`")
+    print("  are layout predicates over a bare `Type` by design, with the peel at the caller")
+    print("  (`ref_tuple_element_ok` is `is_scalar(tp.base())`) — read those through the")
+    print("  caller table above instead.")
+    for spelled, v in sorted(dis.items(), key=lambda kv: (-len(kv[1][False]), kv[0])):
+        print(f"  == {'+'.join(spelled)}   [peel {len(v[True])} / bare {len(v[False])}]")
+        for site, name, kind in v[True]:
+            print(f"     peel  {site:<40} {name} ({kind})")
+        for site, name, kind in v[False]:
+            print(f"     BARE  {site:<40} {name} ({kind})")
+    print()
+    print("  functions with NO peel at all (the old unit's list, unchanged):")
     for site, name, verdict, n in sorted(rows, key=lambda r: (r[2] != "opaque", -r[3], r[0])):
         if verdict != "opaque":
             continue

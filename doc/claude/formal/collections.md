@@ -194,20 +194,23 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
                 to a single record set, provided at least one of them is keyed.  A record
                 entering through any member is in every member, by any write route.  Membership
                 is a fact about the PAIR — not about declaration order, not about which member
-                is written first, and not about whether the element is dense (vector<E>) or
-                nullable (vector<E?>).
+                is written first, not about whether the element is dense (vector<E>) or
+                nullable (vector<E?>), and not about whether a MEMBER itself is nullable
+                (hash<E[k]>? is a collection over E in that struct, so it is a member).
                 Two members neither of which is keyed (two plain vectors) are INDEPENDENT.
 ```
 
-Five fixes are all instances of this one rule, which is why it is written here rather than left
+Six fixes are all instances of this one rule, which is why it is written here rather than left
 to the issues: `trie`/`spatial` were absent from the pairing test (loft#927); the `others` link
 ran one way, so which member maintained the rest depended on declaration order (loft#843); the
 test asked only whether the field being ADDED was keyed, so a plain `vector<E>` declared second
 formed no group (loft#1158); only `hash` had its element rewritten to a nullable sibling's
-`__nullable<E>`, so the other four kinds no longer matched by content; and a whole vector VALUE
+`__nullable<E>`, so the other four kinds no longer matched by content; a whole vector VALUE
 (`data = rows()`) reached only the member it was assigned to, because the bulk write never
 passed the per-record chokepoint that maintains the group (loft#1152, and loft#1159 for the
-same route into a KEYED member).
+same route into a KEYED member); and the same nullable-element rewrite asked both of its halves
+with a bare variant test, so a member spelled `hash<S[k]>?` — or a vector spelled
+`vector<S?>?` — fell out of the set entirely (loft#1204).
 
 Every one of them **failed silently** — the pairing was never refused, a second independent
 collection was built instead, and `len` of the empty view is a legal value.  That is the shape
@@ -238,6 +241,7 @@ tests/scripts/a-collection-group-does-not-depend-on-declaration-order.loft;
 tests/scripts/1158-a-group-forms-whichever-member-is-declared-first.loft;
 tests/scripts/1152-a-vector-value-into-a-group-reaches-every-member.loft;
 tests/scripts/1159-a-keyed-collection-filled-from-a-vector-value.loft;
+tests/scripts/a-nullable-keyed-member-joins-its-group.loft;
 tests/scripts/1160-a-variant-binding-write-means-the-field-write.loft;
 tests/scripts/927-trie-spatial-linked-group.loft;
 tests/scripts/901-linked-group-fill.loft.
