@@ -2328,7 +2328,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 660 | 303 | 5 | **352** |
+| 660 | 304 | 5 | **351** |
 
 Two moving checkouts, and the two movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
@@ -2380,7 +2380,12 @@ than for `Optional` alone.  loft#1204 then moved it to 659 · 301 · 353: fixing
 `link_shared_nullable_views` gave it the `Optional` arm it was missing, so the very body the
 per-test unit was built to catch left the opaque column by being repaired.  B7j then moved it
 to 659 · 302 · 352 the same way, by giving `collection_element` the peel its sibling
-`is_keyed_collection` already had.
+`is_keyed_collection` already had.  loft#1206 moved it once more, to 659 · 303 · 351, for the
+third time by REPAIR rather than by addition: `assign_var_nr` decides whether a text `+=` gets
+the variable it writes through, its own router already asked through `.base()`, and the
+disagreement between the two was an internal compiler error on `n.t += "cd"` for a `text?`
+field.  Three consecutive movements of this column have been a body leaving it because it was
+wrong, which is the pattern the column is worth watching for.
 
 a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
 every count here is a snapshot of two moving checkouts, so re-run the tool rather than

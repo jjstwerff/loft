@@ -33,6 +33,18 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### Appending to a nullable text field works
+
+```loft
+struct Row { note: text? }
+r.note += "cd";              // was: internal compiler error
+```
+
+One append to a `text?` struct field took the compiler down, on both backends. The dense
+`text` field beside it and the `text?` local were always fine. Appending to a field that is
+*actually* null still leaves it null — `+=` propagates — and `--native` now agrees with the
+interpreter about that, which it did not while the crash was hiding the shape.
+
 ### A vector rebuilt from itself keeps its contents
 
 The ordinary "drop the last element" idiom quietly produced an **empty** vector:

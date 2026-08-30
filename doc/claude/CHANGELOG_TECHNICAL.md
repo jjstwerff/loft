@@ -9,6 +9,22 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Appending to a `text?` struct field is no longer an internal compiler error (2026-08-30)
+
+`n.t += "cd"` on a `t: text?` field was an ICE on both backends — the plainest thing the field
+can do. Two sites decide a text `+=` and they read the type differently: the router peels the
+optional (@PLN25 slice (c)) and sends the statement down the text-append path, while the site
+that mints the temp the append writes THROUGH matched `Type::Text` unpeeled and answered "no
+variable". The append then emitted a store to variable 65535 and the scope pass asserted on it
+(loft#1206). One notion, two spellings.
+
+**Cure: the minter peels too, and the temp is typed the way the field is.** The second half is
+what the first uncovered: `--native` decides whether an append propagates a null from the
+DESTINATION VARIABLE's static type, so a dense temp told it there was nothing to propagate and
+native appended onto the null sentinel — `"\0cd"`, reported non-null — where the interpreter
+left the field null. The temp holds what the field holds, null included, so it carries the
+field's type and both backends read one fact.
+
 ### A nullable heap-record local releases what its reassignment displaces (2026-08-30)
 
 `@FR-O-Latest` makes ownership a property of the latest assignment, and a `c: S?` reassigned

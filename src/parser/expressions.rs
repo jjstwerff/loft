@@ -5300,6 +5300,15 @@ use a separate collection or add after the loop"
 
     /// Determine the variable number for an assignment target.
     /// For text `+=`, creates a unique temporary variable.
+    ///
+    /// `.base()` on the text test, because a `text?` accumulator appends exactly like a
+    /// dense one — the same reading `parse_assign_op_inner`'s routing already takes
+    /// (@PLN25 slice (c)).  Spelled `Type::Text` here and `f_type.base()` there, the two
+    /// disagreed about one notion: the router sent a nullable field's `+=` down the
+    /// text-append path while this left it with no variable to append THROUGH, so
+    /// `n.t += "cd"` on a `t: text?` field emitted `Set(65535, …)` and the scope pass
+    /// asserted on it — an internal compiler error on both backends for an ordinary
+    /// append to an ordinary field (loft#1206).
     pub(crate) fn assign_var_nr(
         &mut self,
         code: &mut Value,
@@ -5309,10 +5318,21 @@ use a separate collection or add after the loop"
     ) -> u16 {
         if let Value::Var(v_nr) = *code {
             v_nr
-        } else if op == "+=" && matches!(f_type, Type::Text(_)) {
-            let v = self
-                .vars
-                .unique("field", &Type::Text(Deps::none()), &mut self.lexer);
+        } else if op == "+=" && matches!(f_type.base(), Type::Text(_)) {
+            // The temp holds what the field holds, NULL INCLUDED, so it is typed the way
+            // the field is.  `--native` decides whether an append propagates a null from
+            // the DESTINATION VARIABLE's static type (`generation/text.rs::append_text`),
+            // while the interpreter tests the value it finds at run time; typed dense, the
+            // temp told native there was nothing to propagate and `n.t += "cd"` on a null
+            // `text?` field appended onto the null sentinel — `"\0cd"`, reported non-null,
+            // where the interpreter left the field null.  One notion, two spellings, and a
+            // shape that only became reachable when the `+=` above stopped being an ICE.
+            let tmp_tp = if matches!(f_type, Type::Optional(_)) {
+                Type::Optional(Box::new(Type::Text(Deps::none())))
+            } else {
+                Type::Text(Deps::none())
+            };
+            let v = self.vars.unique("field", &tmp_tp, &mut self.lexer);
             *code = Value::Var(v);
             *parent_tp = Type::Null;
             v
