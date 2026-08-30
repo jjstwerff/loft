@@ -164,7 +164,13 @@ fn write_seed(store: &mut Store, claim: u32, seed: u64) {
 /// `stride` is recorded once, on creation: every entry of a given hash is the same
 /// element type, so the width cannot change under it.
 pub fn ensure_table(hash: &DbRef, stride: u32, stores: &mut [Store]) -> u32 {
-    let existing = keys::store(hash, stores).get_u32_raw(hash.rec, hash.pos);
+    // loft#1213 — `collection_rec`, not `get_u32_raw`: a field left ABSENT rather than empty
+    // holds the reserved absent id, and read raw that is a non-zero "existing table" whose
+    // every access is out of bounds.  Mapped to `0` it means what it should — no table yet —
+    // so the claim below runs and the slot is written with a real one.  That is materialising
+    // an absent destination on WRITE, which is what the vector side has always done through
+    // this same accessor (`vector_append`).
+    let existing = keys::store(hash, stores).collection_rec(hash.rec, hash.pos);
     if existing != 0 {
         return existing;
     }
@@ -207,7 +213,9 @@ pub fn alloc_entry(hash: &DbRef, stride: u32, owner: u32, stores: &mut [Store]) 
 }
 
 pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
-    let mut claim = keys::store(hash, stores).get_u32_raw(hash.rec, hash.pos);
+    // loft#1213 — read the slot through `collection_rec` so an ABSENT field reads as "no
+    // table" and takes the branch below, rather than as a table at the reserved id.
+    let mut claim = keys::store(hash, stores).collection_rec(hash.rec, hash.pos);
     if claim == 0 {
         // Reached only when the entry was allocated somewhere else — a SECONDARY index
         // over another collection's records.  Stride 0 records that: this table

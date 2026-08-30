@@ -2979,6 +2979,13 @@ impl Store {
     /// the twenty-odd sites that dereference a slot. Reading the raw value there instead
     /// takes `u32::MAX` for a record number: `get_u32_raw(MAX, 4)` is out of bounds, and a
     /// missed site is a SIGSEGV rather than a wrong answer.
+    ///
+    /// That prediction came true where the accessor had not reached: every call site was in
+    /// `vector.rs`, and the KEYED family read its slots raw, so appending to a `hash<E[k]>?`
+    /// field left absent dereferenced the marker (loft#1213). The keyed side now asks the same
+    /// question through the same accessor — `hash::ensure_table` and `hash::add` on the write
+    /// side — and `Stores::find` states it once above its kind dispatch, so a lookup on an
+    /// absent collection misses instead of following the marker.
     #[inline]
     pub fn collection_rec(&self, rec: u32, fld: u32) -> u32 {
         let v = self.get_u32_raw(rec, fld);

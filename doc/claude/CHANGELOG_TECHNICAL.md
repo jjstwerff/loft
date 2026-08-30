@@ -36,6 +36,25 @@ place and stays refused. The seed reads the place twice, so it is built on the p
 `w[idx()]? += 1` calls `idx()` once, where off the original spelling it called twice and read
 one element while writing the next. `operational.md` states it as `@FR-E-Asgn-Discharge`.
 
+### An absent keyed field materialises on append instead of dereferencing its marker (2026-08-30)
+
+A `τ?` collection slot holds `DbRef::ABSENT_REC` when the field was never constructed, and
+`Store::collection_rec` is the one accessor that maps it back to `0` — absent and empty are the
+same answer to *"which record holds this collection's elements?"*. All twenty of its call sites
+were in `vector.rs`. The keyed family read its slots raw, so `n.h += src` on an absent
+`hash<E[k]>?` field followed `rec=4294967295` into a store that has no such record: a panic on
+both backends, byte-identical, where the vector field one declaration over was correct
+(loft#1213).
+
+Two sites, each proved necessary by a cell rather than by reading: the DEDUP lookup inside
+`insert_keyed_copy` reaches `Stores::find`, which every keyed kind funnels through — stating the
+absent test once above its kind dispatch fixes `sorted` and `index` and leaves `hash` still
+crashing — and the table claim on the write side, `hash::ensure_table` / `hash::add`, which is
+what materialises the destination the way `vector_append` always has.
+
+The controls say the axis is the field's STATE: the same declaration constructed `{ h: [] }`, the
+dense `hash<E[k]>` beside it, and an absent `vector<E>?` were all correct throughout.
+
 ### An explicit `??` coalesce is refused as an assignment target (2026-08-30)
 
 `(E-Asgn-Discharge)` already said an explicit `(a ?? d)` names two values and no place and takes

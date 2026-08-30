@@ -33,6 +33,22 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### Appending to a keyed field you never constructed works
+
+```loft
+struct N { h: hash<E[k]>? }
+
+n = N { };          // the field is absent, not empty
+n.h += rows;        // crashed the program
+```
+
+An absent collection field and an empty one are the same thing to an append — there are no
+records either way, and the append builds the collection. The vector side had always read it
+that way; the keyed side followed the "no collection here" marker as if it were a record, and
+the first lookup took the program down. `hash`, `sorted` and `index` all did it, on both
+backends. Constructing the field empty (`N { h: [] }`) was the workaround and is no longer
+needed.
+
 ### `x ?? d += e` now says what is wrong with it
 
 `?` and `??` build the same thing internally and mean different things on the left of an
