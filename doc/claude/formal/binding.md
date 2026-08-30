@@ -254,12 +254,7 @@ source: [../plans/40-const-fields/const-model.md](../plans/40-const-fields/const
                           ALLOWED (it re-points the slot; it does not touch the old
                           value).  The read-only dual of B-Ref-Alias: where `&` opts
                           a binding INTO write-through aliasing, `const` on the type
-                          opts it OUT of every through-write.  "Every" includes a
-                          write reached through a NULL DISCHARGE — `h.i?.x = …`
-                          binds to `h` exactly as `h.i.x = …` does — because the
-                          rule is about the write's ROOT, and a discharge does not
-                          change which binding the write reaches
-                          ([types.md](types.md) `N-NotPlace`).
+                          opts it OUT of every through-write.
   (Const-ScalarCollapse)  a by-value SCALAR (`integer` / `float` / `single` /
                           `boolean` / `character`) has no interior distinct from its
                           binding, so it freezes FULLY under EITHER axis:

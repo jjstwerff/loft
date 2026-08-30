@@ -99,75 +99,19 @@ fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
 fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     match v.unspan() {
         Value::Var(nr) => *nr,
-        // Exactly two `if`s reach the left of an assignment, and both name their place through
-        // the THEN arm.  loft#980's variant-field guard — `if tag(c) ∈ declaring { c } else
-        // { null }` — carries the receiver there, and a bare-variable NULL DISCHARGE carries
-        // its SUBJECT there (`v?.x = …`, whose else arm is the type's default instead of the
-        // sentinel).  The subject is what a write through the discharge reaches on the path
-        // that reaches anything, so resolving to it is what keeps `const` binding through
-        // `h.i?.x = …`: while this answered "no variable at all", `validate_write` had no base
-        // to check and mutated a `const` parameter in silence (loft#1205).
-        Value::If(_, then, _) => lhs_base_var(then, data),
-        // …and a discharge whose subject is NOT a bare variable binds it to a temp inside an
-        // `ncc`/`ncr` block instead.  Only a discharge block is seen through: a
-        // `fn_ref_field_read` / `tuple_unbox` block is a different question, and answering it
-        // here would be guessing.
-        Value::Block(_) => {
-            null_discharge_subject(v, data).map_or(u16::MAX, |s| lhs_base_var(s, data))
+        // loft#980 — see through the variant-field guard `if tag(c) ∈ declaring { c } else
+        // { null }`: the receiver is the THEN arm.  Recognised by its ELSE arm being the
+        // zero-argument null sentinel, so an ordinary `if` on the left of an assignment is
+        // still not a place and is still refused.
+        Value::If(_, then, els)
+            if matches!(els.unspan(), Value::Call(d, a)
+                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
+        {
+            lhs_base_var(then, data)
         }
         Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0], data),
         _ => u16::MAX,
     }
-}
-
-/// The SUBJECT a NULL DISCHARGE was applied to — `e` in `e?`, `e ?? d`, `e ?? return` — when
-/// `v` is one, and `None` when it is not.
-///
-/// ONE home for the two shapes the discharge lowering produces, because two different questions
-/// read it and they used to answer from separate matchers: whether an assignment TARGET is a
-/// discharge (@FR-N-NotPlace — it is a value, so it is refused) and which variable a place
-/// ROOTED in one writes ([`lhs_base_var`], so `const` still binds through it).  A non-trivial
-/// subject is bound to a `__ncc_N` / `ncr_N` temp by the block's own head statement; a bare
-/// VARIABLE subject can be read twice for free, so it lowers to a plain `if` with no temp and
-/// the subject stands in the then arm.
-fn null_discharge_subject<'a>(v: &'a Value, data: &crate::parser::Data) -> Option<&'a Value> {
-    match v.unspan() {
-        Value::Block(bl) if bl.name == "ncc" || bl.name == "ncr" => {
-            match bl.operators.first().map(Value::unspan) {
-                Some(Value::Set(_, subject)) => Some(subject),
-                _ => None,
-            }
-        }
-        // loft#980's variant-field guard is the other `if` that reaches a left-hand side; its
-        // zero-argument null-sentinel ELSE arm is what tells the two apart.
-        Value::If(_, then, els)
-            if !matches!(els.unspan(), Value::Call(d, a)
-                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
-        {
-            Some(then)
-        }
-        _ => None,
-    }
-}
-
-/// Is this assignment target the result of a NULL DISCHARGE — `x?`, `x ?? d`, `x ?? return`?
-///
-/// A discharge is a VALUE, not a place: `(N-Default)` defines `e?` as `e ?? construct_default(τ)`
-/// (@FR-N-Default, [formal/types.md](../../doc/claude/formal/types.md)), so it answers the slot on
-/// the present path and a FRESH default on the absent one.  A write through it therefore lands in
-/// a temporary whenever the value is null — and on the present path a compound assignment
-/// re-evaluates the whole discharge, violating @FR-E-Asgn-Compound's evaluate-the-place-once step
-/// (loft#1205).  The two lowerings the discharge produces are the two arms here:
-///
-/// * a NON-trivial subject binds a `__ncc_N`/`ncr_N` temp inside a named block
-///   (`build_null_coalesce_default` / `build_null_coalesce_return`);
-/// * a bare-variable subject is read twice for free, so it lowers to a plain `if` with no temp.
-///
-/// Both are read off [`null_discharge_subject`], the one home for what a discharge looks like,
-/// which [`lhs_base_var`] also consults — so "is this target a discharge?" and "what does a
-/// write through a discharge reach?" cannot drift apart.
-fn null_discharge_target(v: &Value, data: &crate::parser::Data) -> bool {
-    null_discharge_subject(v, data).is_some()
 }
 
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
@@ -4677,33 +4621,6 @@ use a separate collection or add after the loop"
         let mut to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
             if self.lexer.has_token(op) {
-                // loft#1205 — a NULL DISCHARGE is not a place (@FR-N-NotPlace).  Refuse it here,
-                // where every assignment form still shares one target, because the shapes that
-                // reach the per-type paths below each answer differently and none of them
-                // answers correctly: a vector field appended the record TWICE, the same write on
-                // a null slot vanished, a `text` target reached codegen through a minted work
-                // variable and took the process down with it, and an `integer` one was refused
-                // by arithmetic dispatch — *"Not implemented operation + for type integer"* — a
-                // message about the operator when the target is what is wrong.  Consume the
-                // right-hand side so the statement is finished before returning, matching the
-                // tuple-compound refusal above.
-                if null_discharge_target(&to, &self.data) {
-                    if !self.first_pass {
-                        diagnostic_at!(
-                            self.lexer,
-                            &stmt_start_pos,
-                            Level::Error,
-                            "the left side of this assignment is a discharged value, not a \
-                             place — `?` / `??` answers the slot when it holds a value and a \
-                             FRESH default when it does not, so there is nothing to write \
-                             through. Name the slot itself — `x {op} …`, without the \
-                             discharge"
-                        );
-                    }
-                    let mut discard = Value::Null;
-                    self.expression(&mut discard);
-                    return Type::Void;
-                }
                 // Mark the variable as defined only once we have confirmed the `=` token
                 // is actually present. Doing this before the token check caused any bare
                 // `Value::Var` (e.g. `{cd}` inside a format string) to be marked defined
