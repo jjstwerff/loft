@@ -9263,10 +9263,19 @@ fn check_ref_leaks(
     // ref-returning call's work ref is released when it doesn't alias
     // the assigned var; the armed-corpus sweep's ~130 "no OpFreeRef"
     // false positives were all this shape).
+    // ⚠ `OpFreeRefOrHandUp` belongs here for the same reason the other three do, and its
+    // absence is what made this assert fire on `n___lambda_3`'s `__ref_p2_1` — a store that
+    // IS released, by an op this list had never heard of.  loft#1186 added it (D-clo-13) as
+    // `OpFreeRefIfDistinct` with an owner on the not-distinct leg, on the EMIT side only:
+    // three files emit it and nineteen name its sibling, so every matcher keyed on the op
+    // NAME went blind to the new spelling at once.  A free-op list is a claim about a
+    // NOTION — "this op releases its first argument" — and each new spelling of that notion
+    // has to arrive here too, or the assert reports a leak the compiler does not have.
     let free_ops = [
         data.def_nr("OpFreeRef"),
         data.def_nr("OpFreeRefTag"),
         data.def_nr("OpFreeRefIfDistinct"),
+        data.def_nr("OpFreeRefOrHandUp"),
     ];
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, &free_ops, &mut freed);
