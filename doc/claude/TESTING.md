@@ -2878,6 +2878,12 @@ Its visibility is the second half of the lesson: the keyed member of that group 
 and read the same either way, so only the VECTOR member's length moved. A consumer asserting on
 the keyed member sees nothing at all.
 
+The differential has two traps of its own, both paid for. Compare like-for-like PROFILES — a
+release-against-debug diff accused that change of a SIGSEGV which was the known release-only
+loft#1216. And it is blind to every `test_`-only file: those have no `main`, so `--interpret`
+runs nothing in them and they diff clean whatever changed. `tests/wrap.rs` is what covers those,
+and it is what caught the case the corrected differential still missed.
+
 **The defect's own EMISSION PATH decides which syntactic position exercises it.** A guard is
 written in whatever position reads naturally — usually a lookup straight inside an `assert` —
 and that position may never reach the code the defect lives in. loft#1217's broken branch is in
