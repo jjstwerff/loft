@@ -9,6 +9,29 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A captured record enum is not the caller's to take (2026-08-30)
+
+`@FR-L-CapHeap` says a captured heap value is SHARED — the caller may read it, never take
+it — and three deviations had already made that hold for a record, a collection and a
+struct. The record ENUM is the second spelling of a struct-like heap store, and it kept the
+old behaviour: `r = g(1)` on `g = fn(v: integer) -> Shape { cap }` adopted the captured
+record, and the next iteration's rebind released it while `cap` still named it.
+
+The cause was one arm above the machinery: `block_result` picks a return's delivery from a
+chain of `else if`s keyed on the type former, and the record arm spelled `Type::Reference`
+by hand — so `Type::Enum(td, true, _)` matched no arm at all, got no delivery, and
+published an empty return dep, which is what `returns_borrowed_view` reads as OWNED. That
+is the keyed-collection story of loft#1140 one former over. Opening the gate exposed three
+more sites downstream that had specialised to the traffic it let through, and closing the
+use-after-free without them would have traded it for a leak (loft#1202).
+
+The boundary is the type FORMER, not the tail: every tail shape that reads the closure — a
+bare capture, a field projected out of a captured holder, a capture on one arm of a join,
+and a capture handed back from a lambda passed inline to `map` — was the same fault, while
+every shape that does not read the closure was already correct. `--native` answered
+correctly throughout, which is what kept it out of sight.
+
+
 ### A format spec tunes what the value renders as, whatever its type (2026-08-29)
 
 `@FR-F-Spec` tunes ⟦v⟧ and `@FR-F-Render` says what ⟦v⟧ is per type, so the two COMPOSE —

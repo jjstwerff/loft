@@ -27,14 +27,19 @@
 // a borrow: a record enum the lambda MINTS is still the caller's to own, and reading that
 // as a borrow leaks one store per call.  They are cells here, not prose.
 //
-// @falsified-at: 7b099d78 — interpret exit 0 -> 101 (the arena guard panics on the freed
-// record), interpret 4 store-guard panics -> 0.
-// ⚠ The channel this file is scored on is `LOFT_STORE_GUARD=1` / a debug-assertions build,
-// NOT the value channel and NOT the exit leak: the over-free is SILENT until something
-// reuses the released slot, and on `--native` the four cells answered correctly on a
-// pre-fix build throughout.  `make falsify` reads exit/assert/leak/panic, so it scores
-// this file only when the control build carries those assertions — build it with
-// `RUSTFLAGS='-C debug-assertions=on'`, which is what the nightly gate does.
+// @falsified-at: 7b099d78 — interpret exit 101 -> 0, interpret 1 panic -> 0
+// (`Freed record 1 (size=-99) accessed at fld 8`).  Native did NOT move: exit 0 -> 0.
+// ⚠ Two things that measurement says about how to read this file.
+//   - The channel is `LOFT_STORE_GUARD=1` on a DEBUG-ASSERTIONS build, not the value
+//     channel and not the exit leak.  The over-free is silent until something reuses the
+//     released slot, and on `--native` every cell answered correctly on the pre-fix build.
+//     `make falsify` builds a plain dev binary, where `[profile.dev.package.loft]` compiles
+//     those assertions out, so it scores this file only when the control is built with
+//     `RUSTFLAGS='-C debug-assertions=on'` — which is what the nightly gate does, and is
+//     how the line above was measured.
+//   - It is ONE panic, not four, because the process dies on the first cell.  So a control
+//     run scores the FIRST failing cell only; the other three were measured individually as
+//     standalone probes before this file was written, and each was the same fault.
 // ⚠ The value cell below is the one that moves WITHOUT the guard, and it needs a second
 // capturing lambda to reuse the released slot — the same construction loft#1181 needed
 // for its `Reference` twin, and for the same reason.
