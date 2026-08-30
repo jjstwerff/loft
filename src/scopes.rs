@@ -4573,10 +4573,24 @@ impl Scopes {
         while let Type::RefVar(inner) = record_target {
             record_target = inner.base();
         }
-        if matches!(
+        // The WITNESS PAIRING below asks *did the callee adopt the buffer I handed it, or
+        // mint its own?*, and that question is the same for a vector: a `vector<T>` is
+        // delivered through a `__ref_N` exactly as a record is, and its per-iteration free
+        // has the same two cases to tell apart.  Without it a vector local bound from such
+        // a call got a PLAIN `OpFreeRef`, which in the adoption case releases the caller's
+        // own buffer — reused every iteration, so the next one wrote into a freed store
+        // (loft#1201; the record spelling beside it was already correct).
+        //
+        // The two dep-STRIPS in this block do NOT generalise and keep the record-shaped
+        // test they had: both exist for `gen_set_first_ref_call_copy`, the Reference-only
+        // deep-copy path, and a vector never reaches it.
+        let record_shaped = matches!(
             record_target,
             Type::Reference(_, _) | Type::Enum(_, true, _)
-        ) && let Value::Call(fn_nr, _) = unspanned_value
+        );
+        let vector_shaped = matches!(record_target, Type::Vector(_, _));
+        if (record_shaped || vector_shaped)
+            && let Value::Call(fn_nr, _) = unspanned_value
             // A loft-defined callee — an `n_` global OR a `t_` method / generic
             // monomorph (@PLN85 generic-tuple-return-fix.md — a generic tuple return
             // is a `t_<Type>_<fn>` monomorph; without `t_` the adopts-fresh /
@@ -4593,7 +4607,8 @@ impl Scopes {
             // owned path then deep-copies the borrow into `v`'s store and frees it at
             // scope exit; without this the displaced owned store is orphaned (it was
             // bound to `v`, not to the source retbuf the cleanup guards) and leaks.
-            if !publishes_through_ref
+            if record_shaped
+                && !publishes_through_ref
                 && self.displaced_owned.contains(&ov)
                 && !function.tp(v).depend().is_empty()
             {
@@ -4602,7 +4617,7 @@ impl Scopes {
                     function.make_independent(v, d);
                 }
             }
-            if !adopts_fresh_store && !publishes_through_ref {
+            if record_shaped && !adopts_fresh_store && !publishes_through_ref {
                 // codegen will take gen_set_first_ref_call_copy —
                 // OpConvRefFromNull +
                 // OpDatabase + lock-args + OpCopyRecord deep-copy into a
@@ -4651,7 +4666,18 @@ impl Scopes {
             // so the buffer and the caller's slot alias whenever the callee
             // returned the buffer it was handed — the majority shape, and the
             // one `file()` has (`result = File{..}; result`).
-            if (adopts_fresh_store || publishes_through_ref)
+            // ⚠ A VECTOR pairs whatever `adopts_fresh_store` says, and the asymmetry is
+            // the whole point.  The flag means *the callee mints its own store rather than
+            // filling the one I passed*, so for a RECORD its false case is safe on its own:
+            // `gen_set_first_ref_call_copy` interposes a deep copy, and `v` and the buffer
+            // cannot alias.  A vector has no such copy path — it is PutRef-ALIASED to the
+            // work-ref argument — so there the false case is the one where they DEFINITELY
+            // alias, and a plain `OpFreeRef(v)` releases the caller's own buffer.  Hoisted
+            // out of a loop and reused every iteration, that buffer is then written after
+            // the free (loft#1201).  `OpFreeRefIfDistinct` answers both cases at run time
+            // and is conservative in the direction that matters: it frees exactly as the
+            // plain free did when the stores DIFFER, and only skips when they alias.
+            if (adopts_fresh_store || publishes_through_ref || vector_shaped)
                 && let Value::Call(_, args) = unspanned_value
             {
                 for arg in args {
@@ -4694,8 +4720,18 @@ impl Scopes {
                             if av == v {
                                 continue;
                             }
-                            if (publishes_through_ref && function.is_argument(v))
-                                || (v_scope <= av_scope && v_scope != u16::MAX)
+                            // A vector admitted here ONLY by the alias case below
+                            // (`!adopts_fresh_store`, no `&`) takes the inner-slot branch
+                            // and nothing else.  Making the BUFFER's own free conditional
+                            // on the slot is the opposite trade and is wrong for it: the
+                            // slot may have no free of its own, and then neither store is
+                            // released.  Measured — widening both branches leaked across
+                            // sixteen suites (loft#1201).
+                            let vector_alias_only =
+                                vector_shaped && !adopts_fresh_store && !publishes_through_ref;
+                            if !vector_alias_only
+                                && ((publishes_through_ref && function.is_argument(v))
+                                    || (v_scope <= av_scope && v_scope != u16::MAX))
                             {
                                 self.paired_witness.entry(av).or_insert(v);
                             } else if v_scope != u16::MAX

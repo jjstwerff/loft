@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A mapped lambda's collection does not own the buffer it was delivered through (2026-08-30)
+
+`@FR-O-Owner` says every heap store has exactly one owner, and `xs.map(|x| { [x, x + 1] })`
+gave one store two: the caller allocates a single `__ref_N` delivery buffer, hoists it out of
+the loop and reuses it, and the callee fills it and hands it back — so the per-iteration yield
+slot IS that buffer, and reading it as an owner released the caller's buffer at the end of
+every iteration.
+
+The deciding fact was already computed, and the two type formers need opposite readings of it.
+`return_adopts_fresh_store` answers *does the callee mint its own store, or fill the one I
+passed?*  For a `Reference` its false case is safe alone, because a deep copy is interposed
+and the slot cannot alias the buffer; a vector has no copy path — it is aliased to the
+work-ref argument — so there false is exactly the aliasing case. The pairing that emits the
+runtime-conditional `OpFreeRefIfDistinct(slot, buffer)` never reached the vector spelling
+(loft#1201).
+
+Two things the measurement corrected in the report. On `--native`, the default backend, this
+is a WRONG ANSWER rather than a latent hole: the recycled buffer is appended to, so a `map`
+asking for six rows of three answered one row with six elements, silently. And the
+named-function control that made it look like a lambda question was clean only by accident —
+its yield slot's dep was a callee ATTRIBUTE index resolved against the caller's VARIABLE
+table, so adding two unrelated locals moved it onto a `text`. The real axis is the return
+former: struct clean, vector broken.
+
 ### A captured record enum is not the caller's to take (2026-08-30)
 
 `@FR-L-CapHeap` says a captured heap value is SHARED — the caller may read it, never take

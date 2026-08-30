@@ -2810,6 +2810,24 @@ assert the read through the OLD name as well as the new one. loft#1160's first f
 record to the right field and every subject-side cell went green, while reading the binding
 back inside the block that wrote through it still answered 0.
 
+**A passing cell can pass for no reason, and then the axis it establishes is fiction.**
+loft#1201's matrix had `xs.map(pair)` clean beside a faulting `xs.map(|x| …)`, which reads as
+a lambda-vs-named-function boundary. The named cell was clean because its yield slot carried
+a dep whose index was a callee ATTRIBUTE number resolved against the CALLER's variable table —
+adding two unrelated locals to the caller moved that dep onto a `text` local. Non-empty was
+all that suppressed the free. The real axis was the RETURN FORMER (struct clean, vector
+broken), one the matrix never varied. **Test a control's cleanliness the way you test a
+failure**: perturb something the fact should not depend on — an unrelated local, a reordering,
+a rename — and see whether the cell still passes for the reason you think it does.
+
+**A green boundary matrix says nothing about a fix's BLAST RADIUS.** The matrix varies the
+axes of the DEFECT; a fix's risk is everything else that reaches the same site. loft#1201's
+first repair widened two ownership pairings at once: all 30 cells stayed green on both
+backends and sixteen test binaries leaked (`placement_parity`, `n2_cdylib`, `leak`,
+`leak_cases`, `nullable_ret_buffer`, `ownership_oracle`, `alias_link_baseline` and the script
+corpus). Only the suite could find that, so a lifetime change is not verified by its matrix —
+the matrix says the defect is closed, the suite says nothing else opened.
+
 ---
 
 ## Diagnostic tiers — what `--deny-warnings` may fail on

@@ -173,7 +173,8 @@ closed 2026-08-27 with loft#1118; D-own-13's second face
 closed 2026-08-27 with loft#1107 and its first face the day before; D-own-12 records the two
 witness spellings closed there and points at D-own-11 for the other two; D-own-9, D-own-10 and
 D-own-11 opened and closed 2026-08-26, D-own-7
-opened and closed 2026-08-23, and D-own-6 before it; the five original D-own deviations
+opened and closed 2026-08-23, and D-own-6 before it; D-own-25 opened and closed
+2026-08-30 with loft#1201; the five original D-own deviations
 remain resolved.  Read those entries for what their oracles vary before treating any zero
 here as a measurement: each rested on a Join corpus that pinned one axis, and moving that
 axis found a fresh family every time — which is exactly how D-own-8 arrived, from a consumer
@@ -181,6 +182,62 @@ rather than from an oracle at all, and how its second face was found by varying 
 of the same join.  Face B is also this register's clearest case of a leak MASKING a wrong
 answer: the interpreter retained what `--native` recycled, so the defect was filed at its
 mildest symptom and the `silent-wrong` half only appeared once the retention was removed.
+
+### D-own-25 — OPENED AND CLOSED (2026-08-30, loft#1201): one delivery buffer, two owners, because a vector reads the adopt flag the other way round
+
+`@FR-O-Owner` says every heap store has exactly one owner.  `xs.map(|x| { [x, x + 1] })` gave
+one store two.  The caller allocates a single `__ref_N` delivery buffer, hoists it out of the
+loop and reuses it every iteration; the lambda fills it and hands it back, so the
+comprehension's per-iteration yield slot IS that buffer.  Read as an owner, the slot took a
+plain `OpFreeRef` at the end of each iteration — releasing the caller's own buffer, which the
+next iteration then wrote into.
+
+**The fact was already computed and the two type formers need OPPOSITE readings of it.**
+`Definition::return_adopts_fresh_store` answers *does the callee mint its own store, or fill
+the one I passed?*  For a `Reference` its FALSE case is safe on its own, because
+`gen_set_first_ref_call_copy` interposes a deep copy and the slot cannot alias the buffer.  A
+vector has no such copy path — it is PutRef-ALIASED to the work-ref argument — so for a vector
+FALSE is precisely the case where the two DO alias.  The witness pairing that emits the
+runtime-conditional `OpFreeRefIfDistinct(slot, buffer)` was gated on
+`adopts_fresh_store || publishes_through_ref` and on a `Reference | Enum(_, true, _)` shape,
+so the vector spelling reached neither.  It now pairs whatever the flag says, which is
+conservative in the direction that matters: `OpFreeRefIfDistinct` frees exactly as the plain
+free did when the stores DIFFER and only skips when they alias.
+
+⚠ **There are TWO pairings and only one of them is sound here — measured, not reasoned.**
+`paired_witness[buffer] = slot` makes the BUFFER's free conditional on the slot;
+`witness_buffer[slot] = buffer` makes the SLOT's free conditional on the buffer.  They are
+not symmetric.  The second is right for this shape: the slot is inner-scoped and dies every
+iteration while the buffer is function-scoped and released once, so skipping the slot's free
+in the aliasing case loses nothing.  The first is the opposite trade, and for a vector
+admitted by the alias case it is wrong — the slot may carry no free of its own, and then
+NEITHER store is released.  Widening both branches at once was tried first and leaked across
+sixteen test binaries (`placement_parity`, `n2_cdylib`, `leak`, `leak_cases`,
+`nullable_ret_buffer`, `ownership_oracle`, `alias_link_baseline` and the script corpus), while
+every cell of the hand-built boundary matrix stayed green — the suite found it and the matrix
+could not, because the matrix varies the DEFECT's axes and not the fix's blast radius.
+
+⚠ **The named-function twin was clean by ACCIDENT, and that is the finding worth keeping.**
+`xs.map(pair)` passed throughout, which is what made this look like a lambda question.  Its
+yield slot carried a dep — but the index was a CALLEE ATTRIBUTE number resolved against the
+CALLER's variable table, so the name it pointed at was whatever local happened to occupy that
+slot.  Adding two unrelated locals to the caller moved the dep from `_elm_1` to `b`, a `text`.
+A dep in the wrong space is not a fact; it was non-empty, and non-empty is what suppressed the
+free.  So the corpus contained a passing cell whose pass meant nothing, and the axis it
+appeared to establish (*lambda vs named function*) was not the axis at all — the axis is the
+RETURN FORMER, and the boundary was measured at struct-clean / vector-broken.
+
+⚠ **It is a wrong ANSWER on `--native`, not only a latent hole.** The issue was filed from
+`--interpret` as *"a latent soundness hole, not a wrong answer today"*, and that is true
+there — the released store is not reused before it is read, so poison is the interpreter's
+only channel.  On `--native`, the default backend, the recycled buffer is handed straight back
+and appended to: a `map` asking for six rows of three answered row 1 with SIX elements.  A
+wrong LENGTH, silently, with nothing to say so.
+
+Guard: `tests/scripts/1201-a-mapped-lambdas-collection-does-not-own-the-buffer.loft`, whose
+controls are the named function and the stored fn-ref (a `CallRef` allocates its buffer at run
+time, so nothing there can alias), the other return formers, `filter`, and an explicit
+comprehension.
 
 ### D-own-21 — CLOSED (2026-08-29, loft#1150): three faces of one list that read `Hash` and not `Optional(Hash)`
 
