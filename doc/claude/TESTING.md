@@ -2820,6 +2820,20 @@ broken), one the matrix never varied. **Test a control's cleanliness the way you
 failure**: perturb something the fact should not depend on — an unrelated local, a reordering,
 a rename — and see whether the cell still passes for the reason you think it does.
 
+**And the mirror: an assertion can read RED while nothing is wrong.** A checker that
+over-approximates is described as "stricter, never blinder", which is the right default and is
+not free — the cost is a false abort, and on a gate that stops at the first failure a false
+abort hides every real finding behind it. `check_text_return_path` counted a free on a loop's
+BREAK arm as reaching the code the break jumps over, so
+`for v in it { if done { free(v); break; } return v; }` — the shape of every early-returning
+loop over a text source — read as freeing the value it returns. It hard-failed the nightly
+debug-assertions gate on a program with nothing wrong with it, and the programs behind it went
+unchecked for as long as it stood. **Before believing an assertion, check that the path it
+names is a path that actually reaches the site**: here the fix was to separate the two ways an
+arm can decline to fall through — a `Return` hands its frees nowhere, a `Break` hands them to
+what follows the LOOP — because collapsing them either way is wrong in one direction or the
+other.
+
 **A green boundary matrix says nothing about a fix's BLAST RADIUS.** The matrix varies the
 axes of the DEFECT; a fix's risk is everything else that reaches the same site. loft#1201's
 first repair widened two ownership pairings at once: all 30 cells stayed green on both

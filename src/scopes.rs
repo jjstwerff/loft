@@ -9143,9 +9143,13 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
         return;
     }
     let mut freed: HashSet<u16> = HashSet::new();
+    // A `break` at function level has no loop to leave, so this set stays empty; it exists
+    // so the walker can hand a break arm's frees to the loop that encloses it.
+    let mut breaks: HashSet<u16> = HashSet::new();
     check_text_return_path(
         ir,
         &mut freed,
+        &mut breaks,
         free_text_nr,
         data.def_nr("OpNullRefSentinel"),
         function,
@@ -9153,23 +9157,50 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
     );
 }
 
-/// True when control cannot fall out of `node` — every path through it returns.
-/// A free inside such a node is released on that path only, so it can never
-/// reach a `Return` that follows the node.
+/// True when control cannot fall through `node` to the statement AFTER it.
 ///
-/// Answers `false` for anything it cannot prove, including `Loop` (which
-/// normally leaves via `Break`).  That is the safe direction: an unproven
-/// terminator keeps its frees in the continuation set, which can only make the
-/// check stricter, never blinder.
+/// Two ways out qualify, and they differ in where the frees go rather than in
+/// whether they fall through:
+///
+/// - a `Return` leaves the function, so a free on that path reaches nothing;
+/// - a `Break` leaves the LOOP, so a free on that path reaches what follows the
+///   loop and NOT the rest of the loop body.  The `Loop` arm of the walker is
+///   what carries those frees past the loop, so counting `Break` here loses no
+///   strictness — it only stops a break arm's frees being charged to the body
+///   statements the break jumps over.
+///
+/// Missing the `Break` case is a FALSE POSITIVE, not a blind spot, and it fired:
+/// `for v in it { if done { free(v); break; } return v; }` — the shape every
+/// early-returning loop over a text generator has — read as freeing `v` on the
+/// path reaching its own `Return`, and hard-failed the debug-assertions gate on
+/// a program with nothing wrong with it.
+///
+/// Answers `false` for anything it cannot prove, including `Loop` itself.  That
+/// stays the safe direction: an unproven terminator keeps its frees in the
+/// continuation set, which makes the check stricter rather than blinder.
 #[cfg(debug_assertions)]
 fn always_returns(node: &Value) -> bool {
     match node.unspan() {
         Value::Return(_) => true,
-        // Anything after a `Return` in the same block is dead, so one
-        // top-level `Return` terminates the whole block.
         Value::Block(bl) => bl.operators.iter().any(always_returns),
         Value::Insert(ops) => ops.iter().any(always_returns),
         Value::If(_, t, f) => always_returns(t) && always_returns(f),
+        _ => false,
+    }
+}
+
+/// True when control cannot fall through `node` to the statement after it — by
+/// RETURNING or by BREAKING.  Paired with [`always_returns`], which separates the
+/// two: a return's frees reach nothing, a break's reach what follows the loop.
+#[cfg(debug_assertions)]
+fn never_falls_through(node: &Value) -> bool {
+    match node.unspan() {
+        Value::Return(_) | Value::Break(_) => true,
+        // Anything after a `Return` or `Break` in the same block is dead, so one
+        // top-level terminator terminates the whole block.
+        Value::Block(bl) => bl.operators.iter().any(never_falls_through),
+        Value::Insert(ops) => ops.iter().any(never_falls_through),
+        Value::If(_, t, f) => never_falls_through(t) && never_falls_through(f),
         _ => false,
     }
 }
@@ -9181,13 +9212,14 @@ fn always_returns(node: &Value) -> bool {
 fn check_text_return_path(
     node: &Value,
     freed: &mut HashSet<u16>,
+    breaks: &mut HashSet<u16>,
     free_text_nr: u32,
     null_nr: u32,
     function: &Function,
     fn_name: &str,
 ) {
-    let walk = |n: &Value, set: &mut HashSet<u16>| {
-        check_text_return_path(n, set, free_text_nr, null_nr, function, fn_name);
+    let walk = |n: &Value, set: &mut HashSet<u16>, brk: &mut HashSet<u16>| {
+        check_text_return_path(n, set, brk, free_text_nr, null_nr, function, fn_name);
     };
     match node.unspan() {
         Value::Call(d_nr, args) if *d_nr == free_text_nr => {
@@ -9198,7 +9230,7 @@ fn check_text_return_path(
         Value::Return(inner) => {
             // The return expression runs BEFORE the return itself, so a free
             // inside it counts against this very return.
-            walk(inner, freed);
+            walk(inner, freed, breaks);
             let ret_var = returned_var_null_unified(inner, null_nr);
             if ret_var != u16::MAX && matches!(function.tp(ret_var), Type::Text(_)) {
                 assert!(
@@ -9214,43 +9246,66 @@ fn check_text_return_path(
         }
         Value::If(cond, t, f) => {
             // The condition runs on both paths; each arm gets its own.
-            walk(cond, freed);
+            walk(cond, freed, breaks);
             let mut then_freed = freed.clone();
-            walk(t, &mut then_freed);
+            walk(t, &mut then_freed, breaks);
             let mut else_freed = freed.clone();
-            walk(f, &mut else_freed);
-            // Only an arm that can fall through hands its frees to what follows.
-            if !always_returns(t) {
-                freed.extend(then_freed);
-            }
-            if !always_returns(f) {
-                freed.extend(else_freed);
+            walk(f, &mut else_freed, breaks);
+            // Where an arm's frees go is decided by HOW it leaves.  Falling through hands
+            // them to the next statement; RETURNING hands them nowhere, since the function
+            // is over; BREAKING hands them to what follows the LOOP, which is what `breaks`
+            // carries out to the enclosing `Loop` arm.  Collapsing the last two — treating a
+            // break like a return — would lose a real free, and treating it like a
+            // fall-through charges it to body statements the break jumps over, which is the
+            // false positive this split exists to remove.
+            let mut arm = |a: &Value, arm_freed: HashSet<u16>, freed: &mut HashSet<u16>| {
+                if always_returns(a) {
+                } else if never_falls_through(a) {
+                    breaks.extend(arm_freed);
+                } else {
+                    freed.extend(arm_freed);
+                }
+            };
+            arm(t, then_freed, freed);
+            arm(f, else_freed, freed);
+        }
+        Value::Block(bl) => {
+            for op in &bl.operators {
+                walk(op, freed, breaks);
             }
         }
-        Value::Block(bl) | Value::Loop(bl) => {
+        Value::Loop(bl) => {
+            // A loop is left either by falling out of its body or by a BREAK, and both
+            // continuations resume AFTER the loop — so both sets are unioned here.  The
+            // break set is fresh per loop, which is what keeps an inner loop's breaks from
+            // reaching the outer loop's continuation.
+            let mut body_freed = freed.clone();
+            let mut body_breaks = HashSet::new();
             for op in &bl.operators {
-                walk(op, freed);
+                walk(op, &mut body_freed, &mut body_breaks);
             }
+            freed.extend(body_breaks);
+            freed.extend(body_freed);
         }
         Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
             for op in ops {
-                walk(op, freed);
+                walk(op, freed, breaks);
             }
         }
         Value::Call(_, args) | Value::CallRef(_, args) => {
             for a in args {
-                walk(a, freed);
+                walk(a, freed, breaks);
             }
         }
         Value::Iter(_, create, next, extra_init) => {
-            walk(create, freed);
-            walk(next, freed);
-            walk(extra_init, freed);
+            walk(create, freed, breaks);
+            walk(next, freed, breaks);
+            walk(extra_init, freed, breaks);
         }
         Value::Set(_, inner)
         | Value::TuplePut(_, _, inner)
         | Value::Drop(inner)
-        | Value::Yield(inner) => walk(inner, freed),
+        | Value::Yield(inner) => walk(inner, freed, breaks),
         _ => {}
     }
 }
@@ -9267,7 +9322,7 @@ fn check_text_return_path(
 #[cfg(all(test, debug_assertions))]
 mod text_return_path_tests {
     use super::check_text_return_path;
-    use crate::data::{Deps, Type, Value, v_block, v_if};
+    use crate::data::{Deps, Type, Value, v_block, v_if, v_loop};
     use crate::variables::Function;
     use std::collections::HashSet;
 
@@ -9294,7 +9349,16 @@ mod text_return_path_tests {
     fn check(body: Vec<Value>) {
         let ir = v_block(body, Type::Text(Deps::none()), "body");
         let mut freed = HashSet::new();
-        check_text_return_path(&ir, &mut freed, FREE_TEXT, NULL_SENTINEL, &vars(), "probe");
+        let mut breaks = HashSet::new();
+        check_text_return_path(
+            &ir,
+            &mut freed,
+            &mut breaks,
+            FREE_TEXT,
+            NULL_SENTINEL,
+            &vars(),
+            "probe",
+        );
     }
 
     /// Straight-line use-after-free: the plainest shape the check exists for.
@@ -9358,6 +9422,68 @@ mod text_return_path_tests {
             v_block(vec![free(TA), ret(TB)], Type::Never, "then"),
             v_block(vec![free(TB), ret(TA)], Type::Never, "else"),
         )]);
+    }
+
+    /// A BREAK arm's free does not reach the loop body that follows it — the shape every
+    /// early-returning loop over a text source has, and the one that read as a
+    /// use-after-free before `never_falls_through` learned about `Break`:
+    ///
+    /// ```text
+    /// loop { ta = next(); if done { free(ta); break; } return ta; }
+    /// ```
+    ///
+    /// The arm that frees is the arm that LEAVES, so it can never reach the `return`.
+    /// Correct code — the check must stay silent.
+    #[test]
+    fn free_in_a_break_arm_does_not_reach_the_bodys_return() {
+        check(vec![v_loop(
+            vec![
+                v_if(
+                    Value::Var(TB),
+                    v_block(vec![free(TA), Value::Break(0)], Type::Never, "then"),
+                    Value::Null,
+                ),
+                ret(TA),
+            ],
+            "loop",
+        )]);
+    }
+
+    /// The control for the cell above, and the reason it cannot be written as "skip a loop".
+    /// Here the free FALLS THROUGH inside the same loop body and the `return` follows it, so
+    /// the free really is on the path that returns `ta`.  The two differ only by the `break`.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_without_a_break_still_reaches_the_bodys_return() {
+        check(vec![v_loop(
+            vec![
+                v_if(
+                    Value::Var(TB),
+                    v_block(vec![free(TA)], Type::Void, "then"),
+                    Value::Null,
+                ),
+                ret(TA),
+            ],
+            "loop",
+        )]);
+    }
+
+    /// A break arm's free is still charged to what follows the LOOP, which is where that
+    /// path actually resumes.  Counting `Break` as a terminator must not lose this.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn a_break_arms_free_still_reaches_after_the_loop() {
+        check(vec![
+            v_loop(
+                vec![v_if(
+                    Value::Var(TB),
+                    v_block(vec![free(TA), Value::Break(0)], Type::Never, "then"),
+                    Value::Null,
+                )],
+                "loop",
+            ),
+            ret(TA),
+        ]);
     }
 }
 
