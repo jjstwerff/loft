@@ -355,6 +355,12 @@ h.i?.x += 1;              // 2        — the target is `.x`, an interior place;
 h.i? = I { x: 9 };        // COMPILE ERROR — here the discharge IS the target
 ```
 
+The write still has to be resolved to the binding it REACHES, though, and a discharge does not
+change that binding: `h.i?.x = …` roots at `h` exactly as `h.i.x = …` does, so
+[binding.md](binding.md) `(Const-Value)` keeps rejecting it on a `const h`. While the resolver
+stopped at the discharge and answered "no binding at all", it did not — a `const` parameter was
+mutated in silence, and the caller saw the new value (loft#1205).
+
 **Falsifying program** (obeying `(N-NotPlace)` and reading `?` as a write-through disagree):
 
 ```loft

@@ -21,18 +21,23 @@
 // cell reading only the vector's length sees half the answer.  @FR-Col-Group's failure mode is
 // a zero, never an error.
 //
-// @falsified-at: 251d405f — INERT against the parent, and deliberately so: every cell here is
-//   a spelling that already worked, which is what the file is for.  Its real control is the
-//   OVER-REACHING fix, and that one was built and measured rather than predicted — widening
-//   `null_discharge_target` from the outermost node to "the LHS mentions a discharge anywhere"
-//   (`any_node`) refuses `ho1205.inner?.x += 1` and this file exits 1.  The refusal file still
-//   passes on that build, all four cells matched, so the negative half alone could not have
-//   caught it.  Each assertion was also mutated in turn on the shipped build and each fails
-//   (`len(look) == 0` and `inner?.x == 1` shown to report their own message).
+// @falsified-at: 251d405f — exit 0 -> 1: the `text`-behind-a-discharge cell does not COMPILE on
+//   the parent, which reports "the left side of this assignment is a value, not a variable. A
+//   file-scope `NAME: text = …` is a CONSTANT" about code this file does not contain.  The rest
+//   of the file is INERT against that build on purpose — those cells are the spellings that
+//   already worked, and what they guard is the fix not over-reaching.  That control was built
+//   and measured rather than predicted: widening `null_discharge_target` from the outermost node
+//   to "the LHS mentions a discharge anywhere" (`any_node`) refuses `ho1205.inner?.x += 1` and
+//   this file exits 1, while the refusal file still passes there with every cell matched — so
+//   the negative half alone could not have caught it.  Each assertion was also mutated in turn
+//   on the shipped build and each fails (`len(look) == 0` and `inner?.x == 1` shown to report
+//   their own message).
 
 struct Ed1205 { k: integer, nm: text }
 struct Gp1205 { look: hash<Ed1205[k]>, data: vector<Ed1205>? }
 struct In1205 { x: integer }
+struct It1205 { nm: text }
+struct Ht1205 { i: It1205? }
 struct Ho1205 { inner: In1205? }
 
 // The cure the diagnostic names, on a group whose vector member starts EMPTY.
@@ -75,6 +80,15 @@ fn main() {
   ho1205 = Ho1205 { inner: In1205 { x: 1 } };
   ho1205.inner?.x += 1;
   assert(ho1205.inner?.x == 2, "an interior discharge still names a place and writes through");
+
+  // A `text` member behind the same interior discharge.  Scored beside the `integer` one
+  // because the two took DIFFERENT paths and only one of them worked: a text write is
+  // intercepted before the general dispatch and turned away when its place names no binding,
+  // and an `ncc`-rooted place named none — so this line reported that a file-scope `NAME: text`
+  // is a constant, about code nobody had written.
+  tw1205 = Ht1205 { i: It1205 { nm: "ab" } };
+  tw1205.i?.nm = "cd";
+  assert(tw1205.i?.nm == "cd", "a text member behind an interior discharge is written too");
 
   // ---- the discharge as a READ, both arms ----
   rd1205 = Gp1205 { data: [] };

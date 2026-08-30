@@ -27,10 +27,14 @@
 //   prints INERT (its own BULK path skips an annotation-scored file for exactly this reason).
 //   The channel that moves is `check_diagnostics`.  Run through the 251d405f binary the whole
 //   file reports ONE diagnostic — "Not implemented operation + for type integer" at the `??`
-//   cell — so all FOUR `@EXPECT_ERROR` lines go unmatched and `tests/wrap.rs` fails the file.
-//   The other three cells report nothing at all on that build: they compiled, and answered 2 /
-//   SIGSEGV'd / lost the write at RUNTIME.
+//   cell — so all FIVE `@EXPECT_ERROR` lines go unmatched and `tests/wrap.rs` fails the file.
+//   The other four report nothing at all on that build: they compiled, and answered 2 /
+//   SIGSEGV'd / lost the write / mutated the `const` parameter at RUNTIME.  The `const` cell
+//   was measured on its own too, since this file aborts before reaching it there: the same
+//   function over a `const` parameter printed 99 on the control with no diagnostic at all.
 
+struct Ic1205 { x: integer }
+struct Nc1205 { i: Ic1205? }
 struct Dt1205 { k: integer, nm: text }
 struct Nb1205 { d: vector<Dt1205>?, t: text?, n: integer? }
 
@@ -74,9 +78,22 @@ fn test_1205_plain_assign_to_a_discharged_local_is_refused() {
   assert(true, "unreached");
 }
 
+// The FIFTH answer, and the one that is not about the target being a discharge at all: here the
+// discharge sits INSIDE the place (`h.i?.x`), so the target IS a place and the write is legal —
+// but `const` has to keep binding through it.  It did not: `lhs_base_var` walked the place to
+// find the binding a write reaches, hit the `ncc` block and answered "no variable", so
+// `validate_write` had nothing to check and the write went through.  A `const` parameter was
+// mutated, in silence, and the caller saw 99.  The dense twin one field over — `h.i.x = 99` with
+// `i: I` — was refused the whole time, which is what named the discharge as the cause.
+// @EXPECT_ERROR: Cannot modify const parameter 'h1205e'
+fn cn1205_touch(h1205e: const Nc1205) {
+  h1205e.i? .x = 99;
+}
+
 fn main() {
   test_1205_vector_field_compound_is_refused();
   test_1205_text_field_compound_is_refused();
   test_1205_coalesce_spelling_is_refused();
   test_1205_plain_assign_to_a_discharged_local_is_refused();
+  cn1205_touch(Nc1205 { i: Ic1205 { x: 1 } });
 }
