@@ -33,6 +33,48 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### A vector rebuilt from itself keeps its contents
+
+The ordinary "drop the last element" idiom quietly produced an **empty** vector:
+
+```loft
+st: vector<integer> = [1, 2, 3, 4, 5];
+st = [for q in 0..(st.len() - 1) { st[q] ?? 0 }];   // was []; now [1,2,3,4]
+```
+
+A comprehension builds a fresh vector and hands it over, so everything inside it — the
+source, the range bound, the `if` guard, the body — should read what the variable held
+when the line started.  It was reading the empty result being built instead.
+
+The source did not even have to be the vector being assigned.  This kept the right
+length and got every value wrong, which is the version that survives a test suite:
+
+```loft
+a = [7, 8, 9];
+b = [1, 2, 3];
+a = [for x in b { x + (a[0] ?? 0) }];   // was [1,3,4]; now [8,9,10]
+```
+
+It was found in a breadth-first search whose worklist used the pop idiom: the search
+stopped after one expansion, so sets that really were connected were reported as
+disconnected, and nothing anywhere threw.  A worklist holding a single item gives the
+same answer either way, which is why small cases looked fine.
+
+The same defect had two more faces, and both are fixed with it.  Assigned to a struct
+**field** it reads, the comprehension emptied the field the same way.  Appended with
+**`+=`** to a vector whose length it measured, it never finished at all — the loop's own
+appends grew the length it was testing, so the program hung (and `--native` overflowed),
+climbing in memory the whole time:
+
+```loft
+s.v = [for i in 0..s.v.len() { s.v[i] ?? 0 }];   // was []; now the elements
+a  += [for i in 0..a.len()   { a[i]  ?? 0 }];    // hung; now appends a copy
+```
+
+`.map` and `.filter` onto their own receiver were correct all along, on all three —
+`s.v = s.v.map(…)` and `a += a.map(…)` both did the right thing.  That is what the
+comprehension now does too, so the two spellings of one operation finally agree.  The
+temporary (`t = [for …]; a = t;`) was the workaround and still works.
 ### A width or an alignment now works on every kind of value
 
 `"{name:>10}"` has always padded text and numbers.  On a **character**, a **vector**, a

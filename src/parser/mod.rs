@@ -321,6 +321,18 @@ pub struct Parser {
     /// could only peek the NEXT token, which cannot tell the whole RHS from the LAST
     /// operand of one — the hole that let `b = 1 + &a;` compile.
     pub(crate) amp_head: bool,
+    /// The local an assignment is writing, for the duration of that assignment's right-hand
+    /// side; `u16::MAX` outside one.  Paired with [`Parser::assign_replaces`], which says
+    /// whether the write REPLACES the target (`=`, which repoints it at a fresh store) or
+    /// appends to what it already holds (`+=`).
+    ///
+    /// A comprehension RHS reads both to keep `I-Comp`'s promise that the destination still
+    /// holds its old value while the loop runs — see
+    /// [`Parser::comprehension_reads_target`].
+    pub(crate) assign_target: u16,
+    /// Whether [`Parser::assign_target`] is being REPLACED (`=`) rather than appended to.
+    /// Meaningless while `assign_target` is `u16::MAX`.
+    pub(crate) assign_replaces: bool,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -1118,6 +1130,8 @@ impl Parser {
             pending_param_positions: Vec::new(),
             amp_pending: false,
             amp_head: false,
+            assign_target: u16::MAX,
+            assign_replaces: false,
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,
