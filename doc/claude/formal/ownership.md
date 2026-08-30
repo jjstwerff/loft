@@ -590,6 +590,27 @@ assigned, so freeing the displaced store before the assignment is a use-after-fr
 that takes it, and only a per-execution comparison can tell the two apart.  That is what
 `OpBindOrCopy` exists for, and the reassignment does not reach it.
 
+**A SECOND repair measured and reverted (2026-08-30, loft#1200) — do not re-run this one
+either.**  The entry reads as though the JOIN were the mechanism.  It is not: the plain
+reassignment `c = mk(i)` leaks identically with no join anywhere, and so does the
+straight-line spelling with no loop, so the shape is really *a nullable heap-record local
+never releasing what its reassignment displaced*.  Two blockers were found and both are real
+— `owned_refs` is keyed on an UNPEELED shape so a nullable local is never tracked at all, and
+the transition free's gate wants ownership established at the CURRENT loop depth where this
+shape establishes it one level out.  Fixing both closes seven leak shapes.
+
+**And it is still wrong, for a reason that raises the bar rather than lowering it.**  The
+local's first store is normally an inline mint into a work-ref — `c: S? = S { x: 5 }` lowers
+to `c = { Object -> __ref_p2_1 }` — so `c` and that work-ref name ONE store.  A free placed
+BEFORE the reassignment releases it through `c`, and the work-ref's own scope-exit
+`OpFreeRef` then releases it again: latent everywhere, and an observable wrong answer where
+the local is RETURNED (`fn build() -> S? { c: S? = S{x:5}; for … { c = mk(i); } c }` answered
+garbage under `LOFT_POISON=1` on both backends).  One static site cannot separate the first
+iteration, where the store is still the work-ref's, from the rest.  So the conclusion of this
+entry stands with more evidence behind it: **the answer is a per-RUN witness, not a sharper
+static predicate** — the `rbuf_witness` flag is the mechanism, and D-own-19's path-sensitive
+half is the precedent for wiring one.
+
 **Measured and REVERTED — do not re-run this.**  `Ownership::classify`'s var-cycle back-edge
 answers `Borrowed { base: u16::MAX }`, which reads as *"no nameable witness"*, and the obvious
 reading is that the cycle arm's base is the variable itself, so naming it would make the join
