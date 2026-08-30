@@ -342,7 +342,9 @@ both backends — `tests/scripts/pln102-f2-place-once.loft`.
                       `place? = e` therefore means `place = e` — a plain assignment has
                       no read to discharge.
                       An explicit `(a ?? d)` names two values and no place; it takes no
-                      assignment at all.
+                      assignment at all.  ENFORCED at the assignment dispatcher, above
+                      `assign_var_nr` — reached any later, a `text` target is an ICE
+                      rather than a diagnostic (loft#1212).
 ```
 
 **In words.** `x? += 3` on a null `x` is `3`, not null: the `?` picked what to read, the

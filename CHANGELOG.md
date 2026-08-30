@@ -33,6 +33,27 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### `x ?? d += e` now says what is wrong with it
+
+`?` and `??` build the same thing internally and mean different things on the left of an
+assignment. `x?` names one place and says what to read when it is null; `x ?? d` names two
+values and no place at all, so there is nothing to write through — on the null path it hands
+back a fresh default that the write lands in and nothing can read back.
+
+Only the first was handled. The second reached the machinery below it and each type answered
+its own way, none of them right:
+
+```loft
+g.data ?? [] += [Ec { k: 7 }];   // the field appended to ITSELF — one record became four,
+                                 // and the keyed sibling of its group never saw the record
+b.d ?? [] += [Ec { k: 9 }];      // null field: the write simply disappeared
+b.n ?? 0 += 1;                   // "Not implemented operation + for type integer"
+b.t ?? "" += "cd";               // internal compiler error
+```
+
+All four are now one message that names the two spellings that do work — `x += …`, or
+`x? += …` when the read needs discharging.
+
 ### `const` holds through a `?` inside the place
 
 A `const` parameter could be modified after all, if the write went through a nullable field on

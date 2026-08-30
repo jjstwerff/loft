@@ -36,6 +36,25 @@ place and stays refused. The seed reads the place twice, so it is built on the p
 `w[idx()]? += 1` calls `idx()` once, where off the original spelling it called twice and read
 one element while writing the next. `operational.md` states it as `@FR-E-Asgn-Discharge`.
 
+### An explicit `??` coalesce is refused as an assignment target (2026-08-30)
+
+`(E-Asgn-Discharge)` already said an explicit `(a ?? d)` names two values and no place and takes
+no assignment at all. The rule was written when loft#1205's peel landed; the enforcing site was
+not. `Parser::last_place_discharge` tells the postfix `x?` from the explicit `??` — the two build
+identical IR — and only its TRUE branch had a site, so the explicit spelling fell through to the
+pre-#1205 path and reproduced all four of that issue's wrong answers on the other spelling: a
+present vector field appended to itself with its keyed sibling never re-indexed, a null one
+losing the write, a `text` target an ICE, a scalar one an arithmetic message about the operator
+(loft#1212).
+
+The refusal sits at the one point every assignment form still shares a target, ABOVE
+`assign_var_nr` — that is what separates the `text` face's diagnostic from its ICE, since the
+text `+=` path mints a work variable before anything downstream can object.
+
+Both halves read one predicate, `null_discharge_subject`: the peel takes the postfix branch, this
+takes the explicit one, so the two spellings cannot drift into disagreeing about what a discharge
+looks like.
+
 ### `const` binds through a discharge interior to an assignment place (2026-08-30)
 
 `lhs_base_var` is the one home for *which binding does this write reach*, and it walks the place

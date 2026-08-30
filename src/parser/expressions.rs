@@ -4724,6 +4724,44 @@ use a separate collection or add after the loop"
         let mut to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
             if self.lexer.has_token(op) {
+                // loft#1212 — an EXPLICIT `??` coalesce is not a place.  `(E-Asgn-Discharge)`
+                // (@FR-E-Asgn-Discharge) says so in as many words: *"an explicit `(a ?? d)`
+                // names two values and no place; it takes no assignment at all"*, and
+                // `(N-Default)` says why — on the absent path the coalesce answers a FRESHLY
+                // CONSTRUCTED default, so a write through it lands somewhere nothing can read
+                // back.  The rule was written and the site was missing, so the statement fell
+                // through to the machinery below and produced four different wrong answers,
+                // all on both backends: a present vector field was appended to ITSELF and its
+                // keyed sibling never re-indexed (`vec=4 hash=1` where the group holds two),
+                // a null one lost the write in silence, a `text` target reached codegen
+                // through a minted work variable and raised an ICE, and a scalar was turned
+                // away by arithmetic dispatch — *"Not implemented operation + for type
+                // integer"* — a message about the operator when the target is what is wrong.
+                //
+                // Refused HERE, at the one point every assignment form still shares a target,
+                // because each per-type path below answers its own way and `assign_var_nr`
+                // mints the text work variable that turns the `text` face into an ICE.  The
+                // postfix `x?` is the OTHER branch of this gate and is a place: it names one
+                // slot and says what to READ when that slot is null, so it peels below.
+                // Consume the right-hand side so the statement is finished before returning,
+                // matching the tuple-compound refusal above.
+                if !self.last_place_discharge && null_discharge_subject(&to, &self.data).is_some() {
+                    if !self.first_pass {
+                        diagnostic_at!(
+                            self.lexer,
+                            &stmt_start_pos,
+                            Level::Error,
+                            "the left side of this assignment is a `??` coalesce, which names \
+                             two values and no place — on the null path it answers a fresh \
+                             default, so there is nothing to write through. Name the place \
+                             itself (`x {op} …`), with `?` if the read needs discharging \
+                             (`x? {op} …`)"
+                        );
+                    }
+                    let mut discard = Value::Null;
+                    self.expression(&mut discard);
+                    return Type::Void;
+                }
                 // Mark the variable as defined only once we have confirmed the `=` token
                 // is actually present. Doing this before the token check caused any bare
                 // `Value::Var` (e.g. `{cd}` inside a format string) to be marked defined
