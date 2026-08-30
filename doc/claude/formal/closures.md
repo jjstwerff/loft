@@ -308,6 +308,38 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > travel differently: a return dep parametric in the fn-ref argument, or a per-argument
 > re-derivation at the call site.
 
+> **D-clo-12 / D-clo-13 — the two are ONE question, and every static reading of it has now
+> been measured in both directions (2026-08-30).** The question is: *does a fn-ref call hand
+> back a store the caller may free?* The callee answers it per RUN — a capture on one arm, its
+> own mint on the other — and each static answer trades one defect for the other:
+>
+> | reading | capture arm | mint arm |
+> |---|---|---|
+> | OWNED (today) | use-after-free (loft#1186 present, loft#1185) | clean |
+> | BORROW (`place_tail` true) | clean | leaks one store per call |
+>
+> Both rows are measured on both backends. The mint row is not an artefact of the `??`: the
+> forwarding case's `call_it(fresh, 1)` — the row loft#1185 records as clean — is the same mint
+> under the same reading, and a borrow there has nothing to free it either.
+>
+> A third reading was tried and is ruled out for a different reason: letting
+> `capturing_fnref_var` answer for a fn-typed PARAMETER, so a forwarding frame's tail borrows
+> the closure its argument carries. Measured, it moves nothing — loft#1185 keeps its seven
+> use-after-free reads on both backends — because the dep never reaches the forwarding
+> function's PUBLISHED return: `fn call_it(f: fn(integer) -> P, v) -> P` still declares a bare
+> `-> P`. The tail's dep is a FRAME dep on `f`, and nothing converts it to the attribute index
+> a caller could map. So the forwarding case is not one predicate short; the fact has no route
+> through a return type computed once for every caller.
+>
+> **So the answer is not a dep list, and it is not a return BUFFER either** (see the D-clo-13
+> entry below: the store handed back was never the call site's buffer). The fact exists at
+> RUN time and in ONE place — the callee's own `OpFreeRefIfDistinct(w, ret)`, which compares
+> the store it minted against the store it is returning. What is missing is a channel from
+> there to the caller's free, and the tree already has the shape of one: `@PLN90` #495's
+> `witness_vars` / `_own_store_<name>`, a per-run witness for a local whose ownership differs
+> per PATH. Here it would differ per CALL, so the witness has to be set from the callee's
+> answer rather than from the caller's own assignments. That is a plan, not a predicate.
+
 > **D-clo-12 / D-clo-13 — the static reading was RE-MEASURED against this tree (2026-08-29),
 > and the cure is now decided.**  Setting `published_ret_type`'s `place_tail` unconditionally
 > true — that is, answering the closure question for a JOIN tail as well — makes loft#1186's
