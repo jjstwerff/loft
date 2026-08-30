@@ -3878,7 +3878,13 @@ impl Parser {
     /// already, while a `vector` carries a whole `Type` and only a record element (a struct,
     /// or the `__nullable<S>` enum a nullable vector holds) can be shared with a sibling.
     fn collection_element(tp: &Type) -> Option<u32> {
-        match tp {
+        // Peeled, because a member's own `?` is not part of what the group is: `Optional(τ)`
+        // is τ's slot plus a compile-time bit (@FR-L-Null) and the group forms at runtime for
+        // a nullable member exactly as for a dense one.  Its sibling test
+        // `is_keyed_collection` peels through `is_keyed`, so a bare match here made the two
+        // halves of one home disagree — a `hash<S[k]>?` was dropped before `keyed` was even
+        // consulted, and both advices went silent on a group that really exists.
+        match tp.base() {
             Type::Sorted(e, _, _)
             | Type::Index(e, _, _)
             | Type::Hash(e, _, _)

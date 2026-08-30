@@ -94,6 +94,32 @@ fn it_reaches_a_struct_enum_variant() {
 }
 
 #[test]
+fn a_member_carrying_its_own_question_mark_is_still_a_member() {
+    // `Optional(τ)` is τ's slot plus a compile-time bit (@FR-L-Null), and the group forms at
+    // runtime for a nullable member exactly as for a dense one — so the advice owes the same
+    // answer for both spellings.  `collection_element` matched the unpeeled type while its
+    // sibling `is_keyed_collection` peeled, so a `?` member was dropped from the group before
+    // `keyed` was consulted and BOTH advices went silent on a group that really exists.
+    // Quiet on a real group is the one failure this lint cannot afford: the declaration is
+    // the only place the question is decidable.
+    //
+    // The cure is at the shared home, so it moves BOTH advices over that question — the
+    // sibling `advice[linked-group-double-fill]` was measured silent on the same two
+    // spellings and speaks now. This file pins the half it owns.
+    for (name, fields) in [
+        ("q_keyed", "a: vector<Ga>, tick: integer, b: hash<Ga[k]>?"),
+        ("q_vector", "a: vector<Ga>?, tick: integer, b: hash<Ga[k]>"),
+        ("q_both", "a: vector<Ga>?, tick: integer, b: hash<Ga[k]>?"),
+    ] {
+        let err = diagnostics_of(name, &body(fields));
+        assert!(
+            err.contains(CODE),
+            "silent on a group whose member carries a `?` ({fields}); stderr={err}"
+        );
+    }
+}
+
+#[test]
 fn it_is_quiet_when_the_members_are_adjacent() {
     // The idiom. Firing here is what would make the advice noise on correct code.
     let err = diagnostics_of(

@@ -2328,7 +2328,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 660 | 302 | 5 | **353** |
+| 660 | 303 | 5 | **352** |
 
 Two moving checkouts, and the two movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
@@ -2378,7 +2378,9 @@ that derives from the keystone cannot be opaque to a wrapper the keystone knows 
 moving a body from `opaque` to `keystone` closes the question for every future variant rather
 than for `Optional` alone.  loft#1204 then moved it to 659 · 301 · 353: fixing
 `link_shared_nullable_views` gave it the `Optional` arm it was missing, so the very body the
-per-test unit was built to catch left the opaque column by being repaired.
+per-test unit was built to catch left the opaque column by being repaired.  B7j then moved it
+to 659 · 302 · 352 the same way, by giving `collection_element` the peel its sibling
+`is_keyed_collection` already had.
 
 a site is a finding when a `τ?` can arrive there, not merely because it does not peel —
 every count here is a snapshot of two moving checkouts, so re-run the tool rather than
@@ -4293,6 +4295,53 @@ ten cells, five kinds, both orders, all complete.  The note describes the state 
 that landed in its own PR — `collections.md` already lists that fix among `Col-Group`'s
 instances.  A held-fixed note is a claim with a date on it, and this one would have stopped
 the walk that found loft#1204.
+
+#### B7j — auditing the fixed rewrite's siblings: two more, one fixed and one filed (2026-08-30)
+
+The class B7i closed is *a declaration-time question about an ELEMENT asked of an unpeeled
+type*, so the sibling audit is the immediate next step ([[audit-the-siblings-of-a-fixed-rewrite]]).
+`advise_group_apart` is called on the line after `link_shared_nullable_views`, and it delegates
+to `collection_groups` — whose own doc says it is *"one home for 'which fields are a group', so
+the two advices over that question ... cannot disagree about what a group is."*
+
+**The two halves of that one home disagreed.**  `is_keyed_collection` delegates to `is_keyed`,
+which peels; `collection_element` beside it matched bare.  So a `hash<S[k]>?` member was
+dropped from the group before `keyed` was ever consulted, and BOTH advices — `linked-group-apart`
+and `linked-group-double-fill` — went silent on a group that demonstrably forms at runtime.
+Quiet on a real group is the one failure these lints cannot afford, because the declaration is
+the only place the question is decidable.  Fixed at the shared home, so both advices move
+together; pinned by `group_apart_lint::a_member_carrying_its_own_question_mark_is_still_a_member`
+over three spellings (`?` keyed, `?` vector, both), falsified by reverting the peel.
+
+**And a value defect the same probe turned up, filed rather than fixed (loft#1205).**
+`b.d? += [rec]` on a nullable vector FIELD appends the record TWICE and gives its keyed sibling
+nothing.  The separating controls are what make it readable: the same declaration written
+`b.d += [rec]` is correct throughout, and a nullable LOCAL takes the same write spelling
+correctly — so it is neither the field's nullability nor the `?` itself, but the `?`-discharged
+place.  The IR says why: the place lowers as a re-evaluable BLOCK, the RHS literal's backing var
+is set to that same block, and the record is built INTO the destination and then appended to
+itself.  `group_reindex_after_vector_write`'s structural `args[0] == to` test cannot recognise
+the discharged spelling either, which is the keyed half.
+
+`(E-Asgn-Compound)` settles the direction — the addressing sub-expressions evaluate exactly
+once, *"for every place a compound assignment can target"* — so it is a deviation, the same rule
+loft#1145 closed under, one place-spelling over.  It is FILED rather than fixed because the two
+admissible cures (hoist the place to a `_place` temp, or refuse `x? +=` as an lvalue when
+`x +=` already works) are a design call, and either wants its own matrix over every operator and
+place spelling on both backends.
+
+⚠ **Three sites of the same row read CLEAN, and the reason ranks the rest.**  `keyed_field_kt`,
+`index_type` and the `for`-loop element type all agree with their dense controls, because a `?`
+on a keyed collection is DISCHARGED at the point of use — by the time those run they hold a
+dense type.  The `?` survives where a type is read from a DECLARATION, or from an expression
+that has not passed a discharge (`?`, `??`, `match`, a non-null parameter store).  That is the
+reading rule for the remaining bare sites, and it is why both defects here sit at declaration
+time and at an lvalue place rather than on the use path.
+
+⚠ **One probe in this pass was VACUOUS and only its control said so.**  A key-field write
+through an element of a nullable keyed collection, routed via a parameter, produced no advice —
+and none for the DENSE control either, so the probe never reached `note_key_field_write` at all.
+[[a-count-of-zero-must-prove-it-ran]]; the cell is withdrawn rather than reported as clean.
 
 #### B2 — open, and the owner's call
 
