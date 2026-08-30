@@ -338,7 +338,9 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > there to the caller's free, and the tree already has the shape of one: `@PLN90` #495's
 > `witness_vars` / `_own_store_<name>`, a per-run witness for a local whose ownership differs
 > per PATH. Here it would differ per CALL, so the witness has to be set from the callee's
-> answer rather than from the caller's own assignments. That is a plan, not a predicate.
+> answer rather than from the caller's own assignments. That is a plan, not a predicate —
+> **@PLN150**, which carries the measured table above, the three ruled-out repairs, and both
+> candidate channels.
 
 > **D-clo-12 / D-clo-13 — the static reading was RE-MEASURED against this tree (2026-08-29),
 > and the cure is now decided.**  Setting `published_ret_type`'s `place_tail` unconditionally
