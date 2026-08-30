@@ -3207,8 +3207,45 @@ impl Parser {
         }
         let keyed_tp = self.vars.tp(vec).clone();
         let kt = self.keyed_known_type(&keyed_tp)?;
-        let test = self.cl("OpVectorIsNull", &[Value::Var(vec)]);
-        let mint = self.cl("OpDatabase", &[Value::Var(vec), Value::Int(i32::from(kt))]);
+        self.keyed_place_materialise(&Value::Var(vec), kt, &keyed_tp)
+    }
+
+    /// The same guarded build for a keyed PLACE rather than a keyed local — the emission
+    /// itself, so the two place-kinds cannot drift about what "build the empty one first"
+    /// produces.
+    ///
+    /// A VARIABLE is repointed by `OpDatabase` directly, which takes the variable it fills.
+    /// A TUPLE ELEMENT cannot be: it is a slot inside the tuple, and `OpDatabase` names a
+    /// variable, so the store is built in a `__kvb_N` accumulator and put into the slot with
+    /// the same `TuplePut` an ordinary `t.0 = h` uses. That assignment is what loft#1225's
+    /// first half taught to accept a keyed collection at all — before it, this materialisation
+    /// could not have been written, because the statement it ends with was an ICE.
+    ///
+    /// `None` for any other place. A struct FIELD is deliberately not here: its slot is
+    /// addressable, so the runtime materialises it in place through `collection_rec`
+    /// (loft#1213), and a second build from the parser would orphan the first.
+    pub(crate) fn keyed_place_materialise(
+        &mut self,
+        place: &Value,
+        kt: u16,
+        keyed_tp: &Type,
+    ) -> Option<Value> {
+        let test = self.cl("OpVectorIsNull", std::slice::from_ref(place));
+        let mint = match place.unspan() {
+            Value::Var(v) => self.cl("OpDatabase", &[Value::Var(*v), Value::Int(i32::from(kt))]),
+            Value::TupleGet(tuple_var, idx) => {
+                let (tuple_var, idx) = (*tuple_var, *idx);
+                let base = keyed_tp.base().clone();
+                let kvb = self.vars.work_keyed(&base, &mut self.lexer);
+                let db = self.cl("OpDatabase", &[Value::Var(kvb), Value::Int(i32::from(kt))]);
+                Value::Insert(vec![
+                    v_set(kvb, Value::Null),
+                    db,
+                    Value::TuplePut(tuple_var, idx, Box::new(Value::Var(kvb))),
+                ])
+            }
+            _ => return None,
+        };
         Some(crate::data::v_if(test, mint, Value::Null))
     }
 

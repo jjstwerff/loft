@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 341 | 324 | **17** |
+| 342 | 325 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -524,6 +524,15 @@ loft#1205 moved it to 340 · 323 · 17 with the two predicates the `?`-on-a-plac
 `if`, and `parser::place_store`, which tells a local from a heap read.  Both unspan before they
 match, for the reason the column exists: each is deciding what an assignment WRITES, and a
 `Span` that hid the shape would leave the statement writing nothing.
+
+loft#1225 moved it to 342 · 325 · **17** with `parser::keyed_place_materialise`, which tells a
+VARIABLE destination from a TUPLE ELEMENT one — the two need different builds, because a
+variable is repointed by `OpDatabase` directly and a tuple element is a slot that has to be
+filled through an accumulator and a `TuplePut`.  It unspans for the same reason the two above
+do: it is deciding where a collection gets BUILT, and a `Span` hiding the shape would answer
+`None` and leave the write with no store to land in.  The third column is unchanged, which is
+the half of this row that matters — a new site that peels is neutral, a new site that does not
+is the finding.
 
 **Six false-positive classes, and 41 → 10.** The precision work and the fixes are separate,
 and conflating them is how a backlog gets "cleared" with nothing fixed:
@@ -1431,7 +1440,7 @@ already found by hand, which is what makes the other sixteen worth reading.
 
 | functions resolving a projection by OP NAME | ALSO handling `TupleGet` | seeing only the call spelling |
 |---:|---:|---:|
-| 43 | **8** | 35 |
+| 43 | **9** | 34 |
 
 (`./scripts/ir_walker_audit.py spellings`, gated by `doc_hygiene::quality_spellings_table_matches_the_audit`
 so the row cannot go stale — the same arrangement the `unspan` table has.)
@@ -1465,6 +1474,13 @@ and now panics with its bare twin, which is the two spellings agreeing rather th
 defect — but the place-kind itself has no materialisation, so it is filed apart. The predicate
 above is not what is blind to it; `keyed_local_materialise` answers only for a keyed LOCAL, and
 a tuple element is not a variable.
+
+The second half of loft#1225 then moved the row the other way, to 43 · **9** · 34, without
+adding a site: `parser::towards_set` gained a `TupleGet` arm and crossed from the blind column
+into the handling one.  That is the screen reporting a fix rather than a hazard, and it is the
+direction to expect — the neighbouring route the paragraph above recorded as broken was broken
+BECAUSE that site could see only one spelling of its destination, so teaching it the other is
+what closed the keyed half of loft#1225.
 
 ⚠ **The row reads 38 · 5 · 33 and the paragraph above it says 18 · 2 · 16, mostly because the
 SCREEN was widened rather than because sites appeared.** It has moved four times in one merge —

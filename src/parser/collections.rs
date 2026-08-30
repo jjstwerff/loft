@@ -1085,6 +1085,25 @@ impl Parser {
             // what `(N-Default)` says a write to a null collection does.
             let materialise = match coll.unspan() {
                 Value::Var(v) => self.keyed_local_materialise(*v),
+                // …and a TUPLE ELEMENT, which owns no store either and cannot be repointed by
+                // `OpDatabase`: it is a slot inside the tuple, so the build goes through a
+                // `__kvb_N` accumulator and a `TuplePut` (loft#1225).  The element type comes
+                // off the tuple's own type rather than from `f_type`, which here names the
+                // collection's ELEMENT and not the collection.
+                Value::TupleGet(tuple_var, idx) => {
+                    let (tuple_var, idx) = (*tuple_var, *idx);
+                    match self.vars.tp(tuple_var).clone() {
+                        Type::Tuple(elems) if (idx as usize) < elems.len() => {
+                            let elem_tp = elems[idx as usize].clone();
+                            if elem_tp.peel_optional().1 {
+                                self.keyed_place_materialise(&coll, db_tp as u16, &elem_tp)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                }
                 _ => None,
             };
             let set = self.cl("OpSetKeyed", &[coll, val.clone(), Value::Int(tp_val)]);

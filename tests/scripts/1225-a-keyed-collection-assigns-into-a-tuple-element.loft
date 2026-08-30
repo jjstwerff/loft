@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// loft#1225 (part) — a KEYED collection assigns into a tuple element, as its vector twin does.
+// loft#1225 (part) — a KEYED collection assigns into a tuple element, and a keyed WRITE to a
+// null tuple element builds the collection first.
 //
 // `t.0 = h` where the element is a `hash<E[k]>?` was an internal compiler error — *"TuplePut:
 // unsupported element type"* — on three lines of ordinary source.  `TuplePut`'s element match
@@ -18,15 +19,39 @@
 // The VECTOR control is the separating one: it was correct throughout, because it is the arm
 // the keyed kinds should have been sharing.
 //
-// NOT fixed here, and the rest of loft#1225: a keyed collection in a tuple element that is
-// NULL is still never materialised, so `t.0[k] = v` faults and `t.0 += [x]` is silently lost.
-// That is a materialisation site, not a write encoding — a tuple element is a frame slot with
-// no `place_store` route, where a FIELD materialises through its addressable slot — and it
-// travels with its own fix.  The cells below therefore build their collection FIRST and assign
-// it in, which is the shape this half makes work.
+// The MATERIALISATION rides on that.  A keyed write to a tuple element that is null had no
+// store to write into — `t.0[k] = v` faulted on a NULL DbRef — and could not be given one until
+// the assignment above worked, because building the empty collection ENDS in exactly that
+// statement.  A variable is repointed by `OpDatabase` directly; a tuple element is a slot, so
+// the store is built in a `__kvb_N` accumulator and put in with `TuplePut`.  Emission is shared
+// with the LOCAL case (loft#1214) so the two place-kinds cannot drift about what "build the
+// empty one first" produces.
+//
+// The keyed cells below use THREE DISTINCT KEYS deliberately.  A keyed collection dedups by
+// key, so a double-insert reads the same length as a single one — a one-key cell would have
+// scored this fix green whether or not the write happened once, which is the count-where-
+// identity-is-meant trap.  Three keys and a lookup by value is what makes the length mean
+// something.
+//
+// NOT fixed here, and the rest of loft#1225: the keyed APPEND spelling (`t.0 += [e]`) at a
+// tuple element is still silently lost — it reaches `new_record`, which is given a variable
+// number and has no place for a tuple destination.  The VECTOR spelling is lost there too and
+// is blocked behind loft#1228: `t.0 += [x]` on a tuple element appends every element TWICE
+// (dense and shipped), so materialising it would answer 2 where 1 is meant.
+//
+// @falsified-at: 6e91d9e6 — interpret exit 101 -> 0, interpret panicked -> clean, native exit
+//   1 -> 0, native panicked -> clean.  That control carries the ASSIGNMENT half and not the
+//   materialisation, so the cells that move against it are the keyed writes to a null tuple
+//   element, and they die in `src/database/allocation.rs`.
 //
 // @falsified-at: e2ea6a93 — interpret exit 101 -> 0, interpret panicked -> clean, native exit
-//   101 -> 0, native panicked -> clean.
+//   101 -> 0, native panicked -> clean.  The control before EITHER half, where the file dies
+//   in `src/state/codegen.rs` on the `TuplePut` ICE instead.
+//
+//   Two controls because the file scores two fixes that had to land in order: the assignment
+//   had to accept a keyed collection before the materialisation could be written, since
+//   building the empty collection ENDS in exactly that statement.  One control cannot say
+//   both halves were broken, and against the later one the earlier half is already fixed.
 //
 //   The PANIC channel is the one that moves, and BOTH backends move on it — the ICE is raised
 //   in bytecode codegen, which `--native` reaches too, so this is not one of the one-backend
@@ -38,6 +63,29 @@ struct E1225 { k: integer, nm: text }
 struct P1225 { x: integer, y: integer }
 
 fn main() {
+  // ---- the MATERIALISATION: a keyed write to a NULL tuple element ----
+  // Three distinct keys, and one read back by value: a keyed collection dedups, so a length
+  // alone cannot tell one insert from two.
+  tm1225: (hash<E1225[k]>?, integer) = (null, 5);
+  tm1225.0[1] = E1225 { k: 1, nm: "one" };
+  tm1225.0[2] = E1225 { k: 2, nm: "two" };
+  tm1225.0[3] = E1225 { k: 3, nm: "three" };
+  assert(len(tm1225.0?) == 3, "a null keyed tuple element is built by the write, once per key");
+  assert(tm1225.0?[2].nm == "two", "and every record is reachable by its own key");
+  assert(tm1225.0?[3].nm == "three", "including the last");
+
+  // The discharged spelling of the same write agrees with the bare one (loft#1214's rule at
+  // this place-kind).
+  tdi1225: (hash<E1225[k]>?, integer) = (null, 5);
+  tdi1225.0?[7] = E1225 { k: 7, nm: "seven" };
+  assert(len(tdi1225.0?) == 1, "and the discharged spelling writes through to the same slot");
+
+  // A tuple element that is EMPTY rather than null — the control that says the axis is the
+  // element's VALUE, not the place-kind.
+  te1225: (hash<E1225[k]>?, integer) = ([], 5);
+  te1225.0[4] = E1225 { k: 4, nm: "four" };
+  assert(len(te1225.0?) == 1, "an empty keyed tuple element was never broken");
+
   // hash — the filed spelling.
   h1225: hash<E1225[k]>? = null;
   h1225[2] = E1225 { k: 2, nm: "two" };
