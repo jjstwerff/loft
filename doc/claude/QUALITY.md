@@ -4952,6 +4952,45 @@ behaviour change per site and needs its own probe.  They stay on the checklist r
 swept, because "these lists are equal today" is not the same claim as "these are one rule" — and
 a merge that couples two rules which must stay free to differ is worse than the duplication.
 
+### The heap-record family — one declared home, four sites that drifted off it (2026-08-30)
+
+**The family:** *"is this a struct-like heap record?"* — `Type::Reference(d, _)` and
+`Type::Enum(d, true, _)`, the two spellings of one notion. The declared home is
+`Type::heap_def_nr`, which already documents itself as *"the definition number for
+struct-like heap types (Reference or struct-enum)"*.
+
+**The measurement** (`grep`, this tree): **13** sites ask through `heap_def_nr`; **27** more
+spell the pair by hand. A further 37 spell `Reference | Vector | Enum(_, true, _)`, which is a
+DIFFERENT question — *"is this carried on the heap at all"*, collections included — and is
+correctly not this family.
+
+The 27 are not the problem; a hand-spelled pair is right. **The problem is a site that spells
+only `Type::Reference` where the family is meant**, because that reads as a deliberate
+narrowing and is indistinguishable from one. loft#1202 found four, all in the return-ownership
+path, and they compounded:
+
+| site | what it decided | what the record enum got |
+|---|---|---|
+| `control.rs::block_result` — the record arm of the return-DELIVERY chain | which delivery a return takes | **no arm at all** — no delivery, so no return dep, so the caller read a borrow as OWNED and freed a lambda's capture |
+| `scopes.rs` — the ownership-transition free (@FR-O-Latest) | free what an assignment displaces | no free: a local that owned a store and was then assigned a view leaked it |
+| `scopes.rs` — the `owned_refs` TRACKING beside it | maintains the fact the block above reads | never updated, which made the two blocks that DID pair the spellings dead for a record enum as well |
+| `scopes.rs` — the inline-call lift | give an unbound call result a name to free | the enum arm carried only `!returns_borrowed_view()`, so a `__retbuf` delivery was not lifted: one orphaned store per evaluation |
+
+**The shape worth carrying forward.** Only the first site was reachable by a user program
+before the fix — the other three were *downstream of a gate that never opened for this
+spelling*, so they had quietly specialised to the traffic the gate let through. Opening the
+gate is what made them visible, and each showed up as a NEW failure of an existing test rather
+than by reading: the first by the nightly debug-assertions gate, the rest by
+`tests/data/ownership_corpus.loft`. That is the argument for widening a narrow shape test
+**and then running the whole suite**, rather than reading the neighbours and declaring them
+fine: a specialised downstream site looks correct in isolation because, for the traffic it
+has ever seen, it is.
+
+Two of the four are now folded onto `heap_def_nr` (the delivery arm, and the lift — which was
+literally two adjacent arms asking one question with two different predicates). The other two
+are hand-spelled pairs matching the two blocks beside them, which is the local convention
+there.
+
 ### A stray NUL byte made four files invisible to `grep` — now gated
 
 While tracing site 2 above, `grep -rn` insisted `ShowDb::has_visible_field` existed

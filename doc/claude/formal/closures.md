@@ -169,6 +169,66 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-17 — OPENED AND CLOSED (2026-08-30, loft#1202): a captured record ENUM was TAKEN by
+> the caller's bind, because no delivery was ever classified for it.** `@FR-L-CapHeap` says a
+> captured heap value is SHARED — the caller may read it, never take it — and D-clo-11 made
+> that hold for a `Reference`. A record enum is the SECOND spelling of a struct-like heap
+> store, and it kept the old behaviour: `r = g(1)` on `g = fn(v: integer) -> Shape { cap }`
+> adopted the captured record, the next iteration's rebind released it, and the arena guard
+> reported the use-after-free directly while `cap` still named the store.
+>
+> The cause is one arm above everything the issue had ruled out. `block_result` picks a
+> return's DELIVERY from a chain of `else if`s keyed on the type former, and the record arm
+> spelled `let Type::Reference(td, ls) = t.base()` by hand. `Type::Enum(td, true, _)` matched
+> that arm, the vector arm and the keyed arm alike: **none of them**. With no delivery there
+> is no `ref_return`, with no `ref_return` no return dep, and an empty dep list is what
+> `Def::returns_borrowed_view` reads as OWNED. That is loft#1140's story one former over —
+> *"the five KEYED kinds reached no arm above, so no delivery was classified for them"* — and
+> the pass BELOW the arm had been built for both spellings all along (`ref_return` rebuilds
+> `Type::Enum(td, true, dep)` on the line after its `Reference` twin), which is why every
+> function-shaped repair the issue proposed was looking downstream of a gate that never
+> opened. The arm now asks `Type::heap_def_nr`, the one home for *"which record definition
+> does this type name"*, so a hand-written pattern cannot drift from it again.
+>
+> ⚠ **Opening that gate exposed two more sites where the same two spellings had drifted,
+> and closing the UAF without them would have traded it for a leak.** Both were found by
+> the acceptance corpus rather than by reading, and both are the same shape as the first:
+>
+> - the **ownership-transition free** (`scopes.rs`, @FR-O-Latest): a local that OWNED a
+>   store and is then assigned a VIEW must release what it displaced. Two of the four
+>   blocks in that chain paired `Reference` with `Enum(_, true, _)` and two did not — and
+>   one of the two was the `owned_refs` TRACKING that licenses the others, so the paired
+>   blocks were dead for a record enum as well.
+> - the **inline-call lift** (`scopes.rs`): the `Reference` arm lifts when the callee
+>   delivers through a `__retbuf`, because the temp is then the caller's own buffer; the
+>   record-enum arm beside it asked only `!returns_borrowed_view()`, which a `__retbuf`
+>   delivery fails. The two arms are now ONE arm over `heap_def_nr`, with the lifted temp
+>   keeping the spelling it arrived with.
+>
+> The lesson is the entry's own: a promotion pass that had been built for both spellings
+> all along was gated by a hand-written pattern that admitted one, and the sites DOWNSTREAM
+> of that gate had quietly specialised to the traffic it let through. Widening the gate is
+> what makes them visible, so the widening and the three repairs are one change.
+>
+> ⚠ **The filed cell was one of four, and the four broke together.** Varying the tail shape
+> over the forms that READ the closure — a bare capture, a field projected out of a captured
+> holder, a capture on one arm of an `if` join, and a capture handed back from a lambda passed
+> INLINE to `map` (D-clo-5's axis) — every one was a use-after-free, and every shape that does
+> NOT read the closure (a mint, a forwarded parameter, the struct twin) was clean. So the
+> boundary is the type former, not the tail: the issue's single repro was the cell that
+> happened to be in a test file.
+>
+> ⚠ **`--native` answered correctly on all four throughout**, which is what kept this out of
+> sight: the release is silent until something reuses the slot. The channel is a
+> debug-assertions build or `LOFT_STORE_GUARD=1`, and the guard's header says so, because
+> `make falsify` builds a plain dev binary where those assertions are compiled out.
+>
+> Guard: `tests/scripts/1202-a-captured-record-enum-is-not-the-callers-to-take.loft`, whose
+> controls are the two minting shapes (reading either as a borrow leaks one store per call —
+> the leak that narrowed the earlier `Reference` repair to collections), a named function
+> forwarding an enum parameter, and both arms of a `-> Shape?` return, which reaches the arm
+> through the same `.base()` peel.
+
 > **D-clo-16 — OPENED AND CLOSED (2026-08-29, loft#1188): a declared-RECORD lambda aborted the
 > compiler when the holder struct was declared before its field's type.** `(L-Escape)` promises
 > `g = fn(v: integer) -> P { q.p }` works, and it did — written one way. Moving `struct P` below

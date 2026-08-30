@@ -4440,8 +4440,16 @@ impl Scopes {
                 Value::Null,
             ));
         }
+        // A record ENUM is the second spelling of a struct-like heap store, and this
+        // transition — and the `owned_refs` tracking below that licenses it — reads the
+        // same @FR-O-Latest fact for both.  The two blocks above already pair the
+        // spellings; these two did not, so a record-enum local that OWNED a store and is
+        // then assigned a VIEW never freed what it displaced (loft#1202).
         if was_in_scope
-            && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
+            && matches!(
+                function.tp(v),
+                Type::Reference(_, d) | Type::Enum(_, true, d) if !d.is_empty()
+            )
             && self.owned_refs.get(&v) == Some(&self.loops.len())
             && matches!(
                 self.ref_rhs_ownership(value, data),
@@ -4458,7 +4466,10 @@ impl Scopes {
             transition_free = Some(call("OpFreeRef", v, data));
         }
         // Track the LATEST assignment's ownership for this var.
-        if matches!(function.tp(v), Type::Reference(_, _)) {
+        if matches!(
+            function.tp(v),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) {
             match self.ref_rhs_ownership(value, data) {
                 RefRhs::Owned => {
                     self.owned_refs.insert(v, self.loops.len());
@@ -7797,35 +7808,36 @@ impl Scopes {
                     }
                     crate::use_analysis::Own::Borrowed { .. } => false,
                 };
-                if let Type::Reference(d_nr, _) = returned
+                // An inline-unbound call whose result is a struct-like heap store —
+                // a `Reference` or a record ENUM, the two spellings `heap_def_nr`
+                // answers for — binds its result to nothing, so nothing frees it.
+                // Lifting it into a `__lift_N` gives `get_free_vars` a name to emit
+                // the `OpFreeRef` against.  The lifted temp keeps the spelling it
+                // arrived with.
+                //
+                // Three ways to be the caller's to free, and the second is the one a
+                // dep list reads backwards:
+                //   - EMPTY dep (`fn mk() -> H { Bytes{…} }`) — fresh, owned.
+                //   - a dep naming the HIDDEN `__ref_N`/`__retbuf` the callee
+                //     delivered through.  That reads as a borrow and is not one: the
+                //     buffer is the CALLER's own allocation, so the lift's copy-path
+                //     free (`0x8000` source-free) claims it exactly as the bound
+                //     `h = f()` case does.  Declining here orphans one store per
+                //     evaluation (#490 kt=65 on native, loft#1202 on both backends).
+                //   - the ORACLE says owned where the deps proxy cannot (@FR-O-Oracle).
+                // A dep naming a VISIBLE parameter (`fn field_of_arg(d) -> H { d.value }`)
+                // IS a borrow: lifting it would dangle the caller's own argument.
+                //
+                // ⚠ Asked ONCE for both spellings on purpose.  These were two arms, and
+                // the record-enum one carried only `!returns_borrowed_view()` — so a
+                // struct-enum callee delivering through a `__retbuf` fell through the
+                // second bullet above and leaked, while its `Reference` twin did not.
+                if returned.heap_def_nr().is_some()
                     && (!def.returns_borrowed_view()
                         || def.attr_names.contains_key("__retbuf")
                         || lift_by_oracle)
                 {
-                    return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
-                }
-                // @P303 / #490 — a user fn returning a heap struct-enum that the
-                // caller OWNS leaks its result temp when used directly as a call
-                // argument (or discarded); lift it like the Reference case above
-                // so `get_free_vars` emits its `OpFreeRef`.  The owned-vs-borrowed
-                // split is the canonical `returns_borrowed_view()` fact:
-                //   - EMPTY dep (`fn mk() -> H { Bytes{…} }`) — fresh, owned.
-                //   - HIDDEN work-ref dep (`fn f() -> H { mk().x }`, dep → the
-                //     `__ref_N`/`__retbuf` the callee reallocated) — a fresh store
-                //     delivered through the caller's hidden buffer; the caller owns
-                //     it and the lift's copy-path free (`0x8000` source-free) claims
-                //     it exactly like the `h = f()` bound case does.
-                // Both are `returns_borrowed_view() == false` → lift.  A dep naming
-                // a VISIBLE param (`fn field_of_arg(d) -> H { d.value }`) IS a
-                // borrow → true → must NOT lift (freeing it dangles the caller's
-                // arg).  Was `dep.is_empty()`, which missed the hidden-work-ref
-                // case: on native the caller freed the by-value-stale `__ref_N`
-                // (never delivered back) instead of the reallocated store, leaking
-                // one enum store per inline use (#490 kt=65).
-                if let Type::Enum(d_nr, true, _) = returned
-                    && !def.returns_borrowed_view()
-                {
-                    return Some(Self::reopt(opt, Type::Enum(*d_nr, true, Deps::none())));
+                    return Some(Self::reopt(opt, returned.with_deps(&Deps::none())));
                 }
                 // Plan-57: a user fn returning a CAPTURING closure (`fn(...) -> T`
                 // whose fn-ref carries a fresh closure record) leaks its result temp

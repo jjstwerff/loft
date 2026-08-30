@@ -1960,7 +1960,7 @@ impl Parser {
                 let delivery = self.classify_vector_delivery(ls, l, context);
                 let elm_ty = (**elm).clone();
                 self.dispatch_vector_delivery(delivery, &elm_ty, l);
-            } else if let Type::Reference(td, ls) = t.base() {
+            } else if let Some(td) = t.base().heap_def_nr() {
                 // @PLN85 D-own-1 — Reference return sub-thicket: classify ONCE from
                 // the deps fact + tail shape, then dispatch to the ONE mechanism
                 // (rename via ref_return, or materialise-copy a borrowed-local view).
@@ -1971,8 +1971,21 @@ impl Parser {
                 // view (`xs = g.c; e = xs[i]; e`) was returned raw while its
                 // block-local copy store was freed (the elision-borrower UAF;
                 // silently stale without LOFT_POISON).
-                let td = *td;
-                let delivery = self.classify_reference_delivery(ls, l);
+                //
+                // The arm asks `heap_def_nr`, the one home for *"which record definition
+                // does this type name"*, rather than spelling `Type::Reference` itself.
+                // A record enum is the SECOND spelling of a struct-like heap store — the
+                // whole promotion pass below it was built for both (`ref_return` rebuilds
+                // `Type::Enum(td, true, dep)` beside `Type::Reference(td, dep)`) — and a
+                // hand-written pattern here could only see the first, so a record-enum
+                // return reached no arm at all and no delivery was ever classified for
+                // it.  That is `is_keyed`'s story one former over: with no delivery there
+                // is no return dep, and an empty dep list is what `returns_borrowed_view`
+                // reads as OWNED, so a lambda handing back a captured enum had the caller
+                // free the capture — @FR-L-CapHeap, whose *"a captured heap value is
+                // SHARED"* this arm is what enforces for a record return (loft#1202,
+                // `formal/closures.md` D-clo-17).
+                let delivery = self.classify_reference_delivery(&t.base().depend(), l);
                 self.dispatch_reference_delivery(delivery, td, l);
             } else if crate::parser::vectors::is_keyed(t) {
                 // Enforces @FR-O-Move's second clause for the keyed kinds — *if the return
