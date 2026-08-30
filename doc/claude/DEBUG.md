@@ -1393,6 +1393,26 @@ deep-copied into a record that is never null. The `for` STATEMENT terminates on 
 why it was the only correct row in the report — and it became the shared home rather than a
 sixth repair.
 
+**A flag cleared at the start of a parse cannot survive its own left-hand side.** The shape is
+`self.flag = false; parse(); read self.flag`, and it breaks when `parse()` RE-ENTERS the same
+function for a sub-expression: the nested entry runs the clear again and erases what the outer
+one had already recorded. `last_place_discharge` is cleared so an earlier statement's answer
+cannot be read as this one's, and `parse_assign` is re-entered for every index and call
+argument a left side contains — so `b.d? += […]` kept its answer only because nothing is parsed
+after its `?`, while `h?[k] = v` reached the place check having forgotten its `?` and was
+refused as an explicit coalesce (loft#1214). The cure is to SAVE on entry and RESTORE on exit,
+which confines each nesting level to its own answer instead of letting the innermost win. Worth
+grepping for whenever a per-statement flag is read after a parse that can recurse.
+
+**Check that the precedent you are about to copy is itself sound.** A fix that says *"do what
+the working twin does"* rests on that twin being right, and it is cheap to ask. loft#1214's
+keyed materialisation was about to copy the vector local's, so the vector local's was
+measured first: it mints its backing UNCONDITIONALLY at the append site, so a loop re-executes
+it and every earlier iteration's elements are thrown away (loft#1220 — `len` 1 instead of 3, on
+the shipped build). The copy would have inherited it. Two minutes on the control turned up a
+`sev:high` `silent-wrong` defect and changed the fix from *"copy the twin"* to *"guard the mint
+on the destination actually being null"*, which is what the rule said in the first place.
+
 ---
 
 ## Using the Test Framework for Quick Iteration
