@@ -27,7 +27,7 @@
 // the SOURCE shape and not the nullable field.
 //
 // The keyed LOCAL row is the second control and it lives in
-// `1207b-a-keyed-local-still-requires-brackets.loft`, because a firing `@EXPECT_ERROR` stops a
+// `1207b-a-keyed-local-and-its-nullable-twin-agree.loft`, because a firing `@EXPECT_ERROR` stops a
 // file before it runs.  Dense and nullable AGREE there that `+= [elem]` is required, so a cell
 // that moves means the peel reached FURTHER than the defect.
 //

@@ -1,0 +1,79 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#1207's CONTROL half. A keyed LOCAL and its nullable twin answer a vector source THE SAME
+// WAY — they accept one the collection can hold and refuse one it cannot — so the `?` on the
+// declaration buys nothing either direction.
+//
+// The fix for loft#1207 peels the optional inside `is_collection`, so a `vector<τ>?` stops being
+// the one collection that predicate denied. The risk a peel carries is reaching FURTHER than the
+// defect, and this file is where that would show: the two spellings must move together, and a
+// cell where the nullable one is MORE permissive than the dense one means the peel admitted a
+// shape the language refuses.
+//
+// ⚠ THIS FILE PINNED THE WRONG BEHAVIOUR UNTIL loft#1237, and the way it went wrong is worth
+// keeping. It asserted that BOTH locals refuse a vector source, and said the refusal was "the
+// documented spelling" — but `formal/collections.md` states what `(Col-Insert)`'s source may be,
+// and a `vector` OF elements is the third licensed shape, placed one by one by a keyed kind
+// (loft#1159). The rule names exactly two shapes it does NOT license — a whole keyed collection
+// into another, and a bare element into a vector — and this is neither. So the refusal was a
+// deviation, the file was pinning it, and the guard read green while a keyed FIELD accepted the
+// very same statement.
+//
+// A control is only as good as the reason under it: this one held "dense and nullable AGREE",
+// which was right and is kept, on top of "and both refuse", which was never a rule. The cells
+// below therefore test the agreement in BOTH directions, which is stronger than the original —
+// an accept cell and a refuse cell, so a peel that widened either spelling alone still fails it.
+//
+// In its own file because a firing `@EXPECT_ERROR` stops a file before it runs; the positive
+// half — every cell the loft#1207 fix is FOR — is
+// `1207-a-nullable-collection-appends-a-non-literal-source.loft`, and the place-kind matrix for
+// the accept cells is `1237-a-keyed-local-takes-a-vector-of-its-elements.loft`.
+//
+// @falsified-at: eb14372e — MEASURED, and the channel is `check_diagnostics`, not the exit.
+//   Both refuse cells report the same diagnostic on the parent as on this build, which is the
+//   POINT of a control: it is the cell that must not move. What makes the file falsifiable is
+//   the opposite build — with the peel widened to admit an unholdable source, both
+//   `@EXPECT_ERROR` lines go unmatched and `tests/wrap.rs` fails the file. The two ACCEPT cells
+//   are the half that does move: on the parent of loft#1237 they are refused and the file stops
+//   before its assertions.
+
+struct Ek1207b { k: integer, nm: text }
+struct Fk1207b { j: integer }
+
+// ---- the ACCEPT half: a vector of the element type, which `(Col-Insert)` licenses ----
+
+fn test_1207b_dense_keyed_local_takes_a_vector_of_its_elements() {
+  src1207b: vector<Ek1207b> = [Ek1207b { k: 1, nm: "one" }, Ek1207b { k: 2, nm: "two" }];
+  h1207b: hash<Ek1207b[k]> = [];
+  h1207b += src1207b;
+  assert(len(h1207b) == 2, "a dense keyed local places each record: {len(h1207b)}");
+  got1207b = h1207b[2];
+  assert(got1207b.nm == "two", "and by key, not merely counted: {got1207b.nm}");
+}
+
+fn test_1207b_nullable_keyed_local_takes_a_vector_of_its_elements() {
+  src1207c: vector<Ek1207b> = [Ek1207b { k: 3, nm: "three" }, Ek1207b { k: 4, nm: "four" }];
+  h1207c: hash<Ek1207b[k]>? = [];
+  h1207c += src1207c;
+  assert(len(h1207c?) == 2, "the nullable twin answers the same: {len(h1207c?)}");
+}
+
+// ---- the REFUSE half: a source the collection cannot hold, refused by `C-Only` ----
+// Both cells must refuse, and the `?` must not buy the second one past it.
+
+// @EXPECT_ERROR: cannot change type from hash
+fn test_1207b_dense_keyed_local_refuses_an_unholdable_vector() {
+  bad1207b: vector<Fk1207b> = [Fk1207b { j: 1 }];
+  d1207b: hash<Ek1207b[k]> = [];
+  d1207b += bad1207b;
+  assert(len(d1207b) == 1, "unreached");
+}
+
+// @EXPECT_ERROR: cannot change type from hash
+fn test_1207b_nullable_keyed_local_refuses_an_unholdable_vector() {
+  bad1207c: vector<Fk1207b> = [Fk1207b { j: 2 }];
+  d1207c: hash<Ek1207b[k]>? = [];
+  d1207c += bad1207c;
+  assert(len(d1207c?) == 1, "unreached");
+}
