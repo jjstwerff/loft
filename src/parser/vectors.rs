@@ -4339,8 +4339,39 @@ impl Parser {
             Value::Var(v) => *v,
             _ => return None,
         };
-        if v >= self.vars.count() || self.vars.is_argument(v) || self.keyed_local(v) {
+        if v >= self.vars.count() || self.vars.is_argument(v) {
             return None;
+        }
+        // The KEYED half of `D-tup-4`, closed with the copy the keyed family already has.
+        // `OpReplaceKeyed` is what a STRUCT literal emits for a keyed member (`S { h: a }`),
+        // and a tuple RETURN copies through the synthetic `__tuple<…>` record — so both
+        // siblings `(T-Cons)` names were already independent and only the tuple LITERAL
+        // aliased.  The register left this open because the shape was a codegen ICE; that is
+        // fixed (loft#1225's `TuplePut` arm), and what remained was reaching for the copy.
+        //
+        // The copy keeps the SOURCE's nullability.  `keyed_known_type` is nullability-agnostic
+        // so the store type is the same either way, but a tuple's element slot is `τ?` when
+        // the source is, and a dense-typed copy loses its ownership dep entering that slot —
+        // which leaks the copy's store.
+        if self.keyed_local(v) {
+            let keyed_tp = self.vars.tp(v).clone();
+            let kt = self.keyed_known_type(&keyed_tp)?;
+            let o = self.create_unique("tupcopy", &keyed_tp);
+            if o == u16::MAX {
+                return None;
+            }
+            self.vars.defined(o);
+            let db = self.cl("OpDatabase", &[Value::Var(o), Value::Int(i32::from(kt))]);
+            let copy = self.cl(
+                "OpReplaceKeyed",
+                &[Value::Var(v), Value::Var(o), Value::Int(i32::from(kt))],
+            );
+            let ops = vec![v_set(o, Value::Null), db, copy, Value::Var(o)];
+            // DEPENDING on `o`, exactly as the vector branch's result does: that dep is what
+            // tells the scope pass the copy's store has an owner in this frame.
+            let owned_tp = keyed_tp.depending(o);
+            *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
+            return Some(owned_tp);
         }
         let Type::Vector(b, _) = tp else {
             return None;
@@ -4391,12 +4422,17 @@ impl Parser {
         if b.name != "tuple_member_copy" {
             return None;
         }
-        // The block ends `OpAppendVector(backing, source, elem_tp); backing`, and the SOURCE is
-        // the only part of it the record's own copy still needs.
+        // The block ends `OpAppendVector(backing, source, elem_tp); backing` for a VECTOR
+        // member and `OpReplaceKeyed(source, backing, tp); backing` for a KEYED one, and the
+        // SOURCE is the only part of either that the record's own copy still needs.  The source
+        // sits at a DIFFERENT argument position in the two, which is why this cannot be a
+        // name-agnostic `args.get(1)`.
         b.operators.iter().rev().find_map(|op| match op.unspan() {
-            Value::Call(d, args) if self.data.def(*d).name() == "OpAppendVector" => {
-                args.get(1).cloned()
-            }
+            Value::Call(d, args) => match self.data.def(*d).name() {
+                "OpAppendVector" => args.get(1).cloned(),
+                "OpReplaceKeyed" => args.first().cloned(),
+                _ => None,
+            },
             _ => None,
         })
     }

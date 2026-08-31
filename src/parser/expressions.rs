@@ -1209,6 +1209,22 @@ impl Parser {
                         v = Value::FnRef(d_nr as i32, u16::MAX, Box::new((**elem_tp).clone()));
                     }
                 }
+                // A tuple YIELD materialises into the coroutine's buffer, and that buffer
+                // copies its members — so a member the tuple literal already wrapped in a
+                // frame-local copy (`tuple_member_copy`) is copied TWICE and the wrapper's
+                // store is claimed by nobody.  loft#1109 records the same fact for the RETURN
+                // path and unwraps it at `synthetic_tuple_return`; a yield does not go through
+                // that rewrite, so it unwraps here.  Without it a generator yielding a keyed
+                // collection leaks one store per kind.
+                if !self.first_pass
+                    && let Value::Tuple(members) = v.unspan_mut()
+                {
+                    for m in members.iter_mut() {
+                        if let Some(src) = self.tuple_member_copy_source(m) {
+                            *m = src;
+                        }
+                    }
+                }
                 *val = Value::Yield(Box::new(v));
                 Type::Void
             }
