@@ -2881,7 +2881,16 @@ impl Parser {
             self.data.vector_def(&mut self.lexer, &in_t);
         }
         let tp = if keyed_dest {
-            self.vars.tp(vec).clone()
+            // `.base()` — a CONSTRUCTED literal is never absent, so it does not wear the
+            // destination's nullability.  A keyed literal is built THROUGH its destination
+            // (loft#703), so it reports the destination variable's type; taken whole, a
+            // `hash<E[k]>?` destination made the literal's own type `Optional(Hash(…))`, and
+            // loft#1210's `(N-Store)` append gate then read the construction as an
+            // un-discharged nullable SOURCE and warned about code that is correct — a
+            // `warning`, which is the tier that GATES a library's CI (loft#1229).  The vector
+            // branch below has always constructed its type fresh, which is why only the keyed
+            // spelling carried this.
+            self.vars.tp(vec).base().clone()
         } else {
             Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()))
         };

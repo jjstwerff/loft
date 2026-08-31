@@ -2367,13 +2367,20 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 660 | 306 | 5 | **349** |
+| 660 | 307 | 5 | **348** |
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
 purpose — `Type::Optional` names the spelling it is looking for, and `.base()` peels it to ask
 what the storage is.  loft#1204, loft#1207 and loft#1212 then REPAIRED sites out of the opaque
-column, which is the movement this column exists to report.
+column, which is the movement this column exists to report.  loft#1229 is another: `parse_vector`
+crosses from opaque to seeing-through, because a keyed literal reported its DESTINATION
+variable's type whole — so a `hash<E[k]>?` destination gave the constructed literal the type
+`Optional(Hash(…))`, and loft#1210's append gate read that construction as an un-discharged
+nullable SOURCE and warned about correct code.  A constructed collection is never absent, so the
+literal takes `.base()`.  This is the family shape the paragraph below describes, one more time:
+the VECTOR branch three lines down had always built its type fresh, and only the keyed sibling
+carried the destination's wrapper.
 
 ⚠ **The queue this column names is not "349 bodies to read".**  Every repair in it so far was
 one member of a PREDICATE FAMILY peeled while its siblings were not — `is_keyed` (d1220a1b),
