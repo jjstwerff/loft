@@ -204,3 +204,68 @@ fn generated_toolchain_entry_parses_and_drives_self_update() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Splicing a toolchain entry must never date the index EARLIER than it already is.
+///
+/// `updated` says when the index last changed, and a toolchain entry is normally
+/// submitted well after the release it names -- 2026.8.0 was published on the 1st and
+/// submitted on the 31st -- with libraries landing in between.  Writing the release's
+/// own `published` stamp into `updated` therefore moved the index's date BACKWARDS,
+/// behind packages it already carried.  Nothing in the client compares the field, so
+/// this could only ever be caught by a reader of the diff; it was, on the first real
+/// submission, which is one submission later than a test costs.
+#[test]
+#[cfg(unix)]
+fn splicing_the_toolchain_entry_never_moves_updated_backwards() {
+    let dir = std::env::temp_dir().join("loft_splice_updated_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let version = "2026.7.2";
+    // `--published` is older than the index's own `updated`, the ordering that bit.
+    let _ = generated_toolchain_entry(&dir, version);
+
+    let index = dir.join("index.json");
+    let newer = "2026-08-29T22:22:51Z";
+    std::fs::write(
+        &index,
+        format!("{{\"schema_version\": 1, \"updated\": \"{newer}\", \"packages\": {{}}}}"),
+    )
+    .unwrap();
+
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = std::process::Command::new("python3")
+        .arg(root.join("scripts/gen-toolchain-entry.py"))
+        .args(["--version", version])
+        .arg("--dir")
+        .arg(&dir)
+        .args(["--published", "2026-07-31T00:00:00Z"])
+        .arg("--splice-into")
+        .arg(&index)
+        .current_dir(&root)
+        .output()
+        .expect("run gen-toolchain-entry.py --splice-into");
+    assert!(
+        out.status.success(),
+        "splice failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Read it back through the parser that consumes the index in production, so the
+    // test cannot pass on a file the client would reject.
+    let text = std::fs::read_to_string(&index).unwrap();
+    let spliced = loft::registry_index::parse_index(&text).expect("spliced index parses");
+    assert_eq!(
+        spliced.updated, newer,
+        "a splice dated the index earlier than the packages it already held"
+    );
+    // Non-vacuity: the entry really did land, so the assertion above is about the
+    // timestamp and not about a splice that quietly did nothing.
+    let pkg = spliced
+        .packages
+        .get("loft")
+        .expect("the entry must actually be spliced in");
+    assert!(
+        pkg.versions.contains_key(version),
+        "the spliced entry must carry {version}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

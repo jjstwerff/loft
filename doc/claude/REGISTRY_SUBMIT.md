@@ -197,6 +197,16 @@ placeholder.  Reuse a tag the catalogue already carries (`geometry`
 one, so your library lands in a group somebody browses.  The same three
 fields are required in a `submissions/` file (§ 4 below).
 
+> **A third, learned submitting the toolchain entry:** do not write the artifact's
+> own `published` stamp into the index's `updated`.  That field says when the INDEX
+> last changed, and a toolchain entry is normally submitted well after the release it
+> names — 2026.8.0 was published on the 1st and submitted on the 31st — with libraries
+> landing in between, so it dated the index a month earlier than packages it already
+> carried.  Nothing in the client compares the field, so the only thing that could
+> catch it was a reader of the diff; `gen-toolchain-entry.py` takes the later of the
+> two now, under
+> `mock_registry::splicing_the_toolchain_entry_never_moves_updated_backwards`.
+>
 > **Two things a programmatic edit gets wrong** (learned publishing crypto
 > 0.3.3): for a **multi-package repo** (e.g. `loft-libs-core`), copy the existing
 > entries' **`subpath`** field (`"subpath": "crypto"`) — `loft package` omits it,
@@ -445,14 +455,20 @@ verifies every `binaries` hash by download, so the exemption does not leave the
 binaries — the things users actually run — unchecked.
 
 > **Both landed in [loft-lang/registry#22](https://github.com/loft-lang/registry/pull/22),
-> which is still OPEN — so as of 2026-08-31 neither exists and `loft` is in no index.**
-> Verified end-to-end that day in a throwaway clone, because a doc that says a gate
-> works is the thing that stops anyone checking: with #22's validator, splicing
-> 2026.8.0's entry passes all four gates and gate 2b downloads each platform zip and
-> re-checks its sha256; with `main`'s validator, the same index reproduces
-> `` `loft package` failed: exit status 1 `` exactly.  The PR is MERGEABLE and carries
-> no CI of its own — the registry runs validation on submission PRs, not on changes to
-> the validator, so nothing will ever go green here to signal that it is ready.  This paragraph described them as current
+> merged 2026-08-31** — before which `loft` was in no index at all, and had never been.
+> The gates were verified end-to-end first, in a throwaway clone, because a doc that
+> says a gate works is the thing that stops anyone checking: with #22's validator,
+> splicing 2026.8.0's entry passes every gate and gate 2b downloads each platform zip
+> and re-checks its sha256; with the pre-#22 validator, the same index reproduces
+> `` `loft package` failed: exit status 1 `` exactly.  #22 sat open for weeks partly
+> because it carries no CI of its own — the registry validates submission PRs, not
+> changes to the validator, so nothing was ever going to go green to signal it was
+> ready.
+>
+> The first toolchain submission is
+> [loft-lang/registry#31](https://github.com/loft-lang/registry/pull/31) (`loft
+> 2026.8.0`), opened the same day; `validate` passed in 2m37s.  It needs the maintainer
+> step — **merge, then re-sign** — before `loft self-update` can resolve anything.  This paragraph described them as current
 > from the day it was written; the live validator had no toolchain case at all —
 > gate 3 skipped only a package with no `homepage`, and the toolchain has one — so
 > the first real submission (2026.8.0) failed on `` `loft package` failed: exit

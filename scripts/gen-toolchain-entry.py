@@ -184,7 +184,13 @@ def splice(index_path: pathlib.Path, entry: dict, ver: str) -> None:
         # `yanked` is the maintainer's, not ours to reset.
         entry["yanked"] = existing.get("yanked", [])
     packages["loft"] = entry
-    index["updated"] = entry["versions"][ver]["published"]
+    # `updated` says when the INDEX last changed, so it may never move backwards.  A
+    # toolchain entry is usually submitted well after the release it names -- 2026.8.0
+    # was published on the 1st and submitted on the 31st -- and libraries land in
+    # between, so writing the release's own timestamp here would date the index earlier
+    # than packages it already carries.  Take the later of the two.
+    published = entry["versions"][ver]["published"]
+    index["updated"] = max(index.get("updated", ""), published)
     # `ensure_ascii=False`, because this file gets SIGNED after a human reads the
     # diff.  Python's default escapes every non-ASCII character, and the registry
     # index is full of them -- em dashes in package descriptions and API docs.  The
