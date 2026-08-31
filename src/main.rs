@@ -4328,7 +4328,6 @@ fn cache_warm(argv: &[String], from: usize) {
     let home = loft_home();
     let build_cache = home.join("build-cache");
     let registry = home.join("registry");
-    let key = loft::cache::native_artifact_cache_key();
     let mut entries: Vec<String> = std::fs::read_dir(&build_cache)
         .map(|rd| {
             rd.flatten()
@@ -4338,18 +4337,57 @@ fn cache_warm(argv: &[String], from: usize) {
         })
         .unwrap_or_default();
     entries.sort();
+    // Keep only the NEWEST version of each wanted package.  A bare `use <pkg>` in a script with
+    // no manifest above it resolves to the newest installed, so the older trees on disk are
+    // generations nothing in this run can select — warming them is pure waste, and it showed:
+    // the first gate run through here rebuilt `graphics` seventeen times, once per version back
+    // to 0.1.0, and printed a warning for each.  A package that is actually PINNED by a
+    // manifest is the case this heuristic can miss, and missing it costs one first build in the
+    // test that needs it — the cost this command exists to move, not to create.
+    let mut newest: std::collections::BTreeMap<String, (Vec<u64>, String)> =
+        std::collections::BTreeMap::new();
     for name in entries {
         // `<pkg>-<ver>` — the package name is everything before the LAST hyphen.
-        let Some((pkg, _ver)) = name.rsplit_once('-') else {
+        let Some((pkg, ver)) = name.rsplit_once('-') else {
             continue;
         };
         if !wanted.contains(pkg) {
             continue;
         }
-        let profile = build_cache.join(&name).join("release");
-        if loft::cache::native_artifact_fingerprint_matches(&profile, key) {
-            continue; // already this generation — a test would hit the cache
+        // Compare numerically, not lexically: `0.10.0` is newer than `0.9.0`.
+        let parts: Vec<u64> = ver
+            .split(['.', '-', '+'])
+            .map(|c| c.parse::<u64>().unwrap_or(0))
+            .collect();
+        let e = newest.entry(pkg.to_string());
+        match e {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert((parts, name.clone()));
+            }
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                if parts > o.get().0 {
+                    o.insert((parts, name.clone()));
+                }
+            }
         }
+    }
+    for (_pkg, (_parts, name)) in newest {
+        let Some((pkg, _ver)) = name.rsplit_once('-') else {
+            continue;
+        };
+        // ⚠ NO staleness pre-filter here, deliberately.  The obvious optimisation — skip a
+        // package whose stamp already matches — needs to know WHICH key the loader compares,
+        // and there is more than one: the cdylib check is keyed on the loft-ffi ABI
+        // (`loft_ffi_fingerprint`), while loft's own wasm runtime rlib is keyed on
+        // `loft_build_fingerprint`, a content hash of the binary.  Asking with the wrong one
+        // SILENTLY SKIPS a package that is genuinely stale, which is the one failure this
+        // command must not have — measured: a pre-filter on `native_artifact_cache_key`
+        // reported a stale `random` as current and warmed nothing.
+        //
+        // `resolve_native_lib` is the one home for that question and already returns fast on a
+        // hit, so asking it unconditionally is both correct and cheap (0.1s for the whole set
+        // when everything is warm).  Duplicating its test bought nothing and could only be
+        // wrong.
         let pkg_dir = registry.join(&name);
         if !pkg_dir.is_dir() {
             continue; // a build tree whose package is gone; `loft cache prune` owns that
