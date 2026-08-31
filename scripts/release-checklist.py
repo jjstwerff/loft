@@ -747,12 +747,14 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
             "`loft install <lib>` works with the tagged binary against the live registry",
             f"bin/loft install regex   # using the {version} binary",
             "trust-root / signing-key skew is the classic release break, and nothing "
-            "tests the SHIPPED binary against the LIVE index",
+            "tests the SHIPPED binary against the LIVE index.  Refresh first: a cached "
+            "index predating the splice reports the empty-index message, which reads "
+            "like the submission failed",
         ),
         Item(
             "M-verify-anchored",
             "`loft verify-self` now reports the SIGNED-INDEX anchor",
-            "bin/loft verify-self",
+            "bin/loft verify-self   # after `loft self-update --dry-run --refresh`",
             "must say `matches the release published in the signed registry index` — at "
             "tag time it can only say `matches the manifest it shipped with`, and that "
             "upgrade is the proof the splice landed",

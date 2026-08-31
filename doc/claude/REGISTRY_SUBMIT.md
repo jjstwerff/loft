@@ -467,8 +467,24 @@ binaries — the things users actually run — unchecked.
 >
 > The first toolchain submission is
 > [loft-lang/registry#31](https://github.com/loft-lang/registry/pull/31) (`loft
-> 2026.8.0`), opened the same day; `validate` passed in 2m37s.  It needs the maintainer
-> step — **merge, then re-sign** — before `loft self-update` can resolve anything.  This paragraph described them as current
+> 2026.8.0`), opened, validated (2m37s) and merged the same day, then signed with
+> `registry-sign.sh --expect loft@2026.8.0` — which reported *"exactly loft@2026.8.0 —
+> nothing else added, removed or altered"*, re-downloaded the 18.5 MB source archive to
+> re-check its sha256, and passed the trust gate.  Since that commit the published
+> bundle answers the third question for the first time:
+>
+> ```
+> $ bin/loft verify-self
+>   ok      files: 21 file(s) match
+>   ok      stdlib set: 6 file(s), none added
+>   ok      origin: matches the signed registry index
+> matches the release published in the signed registry index
+> ```
+>
+> **Expect a lag when you check.**  The index is cached under a TTL, so a client whose
+> cache predates the merge reports `no releases published to compare against` — the
+> same words as an empty index, which reads as a failed submission.  Pass `--refresh`
+> (`loft self-update --dry-run --refresh`) when verifying a release you just published.  This paragraph described them as current
 > from the day it was written; the live validator had no toolchain case at all —
 > gate 3 skipped only a package with no `homepage`, and the toolchain has one — so
 > the first real submission (2026.8.0) failed on `` `loft package` failed: exit

@@ -790,11 +790,14 @@ ordering — the owner never publishes an empty release and then waits for binar
 > attempted and **rejected by the registry's own validator**, which had no toolchain
 > case — gate 3 re-packages a source tree with `loft package`, and loft's repo root
 > has no `loft.toml`, so it failed with `` `loft package` failed: exit status 1 ``.
-> The fix is [loft-lang/registry#22](https://github.com/loft-lang/registry/pull/22)
-> (gate 2b + a narrow gate-3 exemption), **merged 2026-08-31**, and the first toolchain
-> submission is [registry#31](https://github.com/loft-lang/registry/pull/31) (`loft
-> 2026.8.0`), green on the registry's own `validate`.  It still needs the maintainer
-> step — merge, then re-sign — before `self-update` resolves anything.
+> Both are closed as of 2026-08-31: [registry#22](https://github.com/loft-lang/registry/pull/22)
+> (gate 2b + a narrow gate-3 exemption) merged, and [registry#31](https://github.com/loft-lang/registry/pull/31)
+> (`loft 2026.8.0`, the first toolchain entry there has ever been) merged and signed.
+> `loft self-update --dry-run --refresh` now answers `2026.8.0 is the newest release`,
+> and the published bundle's `verify-self` reports `matches the release published in the
+> signed registry index`.  **Pass `--refresh` when you check**: the index is cached under
+> a TTL, and a cache predating the merge says `no releases published to compare against`
+> — the same words as an empty index.
 >
 > The whole chain was verified end-to-end on 2026-08-31 in a throwaway clone, rather
 > than assumed: splicing 2026.8.0's entry and running #22's validator passes all four
