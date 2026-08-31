@@ -757,7 +757,7 @@ Test harness: `tests/binary_io_matrix.rs` (32 cross-mode cells,
 
 | Function | Description |
 |----------|-------------|
-| `files(self: File) -> vector<File>` | Returns the entries inside a directory. The `File` must have `format == Format.Directory`. Use to iterate over all files in a folder. |
+| `files(self: File) -> vector<File>` | Returns the entries inside a directory, sorted by path — the same order as `list_dir`, so an index means the same entry in either listing. The `File` must have `format == Format.Directory`; anything else lists as `[]` (never null, unlike `list_dir`). |
 
 ### Filesystem Operations
 
@@ -787,8 +787,8 @@ loft-level existence check.
 | `rmdir(path: text) -> FileResult` | Removes an EMPTY directory; `NotEmpty` when it still holds entries. A recursive removal is the caller's walk — `list_dir`, `delete`, then `rmdir` deepest-first. |
 | `is_dir(path: text) -> boolean` | Returns `true` if the path exists and is a directory. |
 | `is_file(path: text) -> boolean` | Returns `true` if the path exists and is a regular file. |
-| `list_dir(path: text) -> vector<text>` | Entry names (base names, sorted) of a directory; empty when not a readable directory. |
-| `read_bytes(path: text) -> vector<u8>` | Reads the whole file as raw bytes; empty on missing/unreadable. Binary-exact (round-trips with `write_bytes`). |
+| `list_dir(path: text) -> vector<text>?` | Entry names (base names, sorted) of a directory. **Null** when the path is missing or is not a readable directory; `[]` means the directory really is empty. Discharge with `?? []`. |
+| `read_bytes(path: text) -> vector<u8>?` | Reads the whole file as raw bytes. **Null** when the file is missing or unreadable; `[]` means the file really is empty. Binary-exact (round-trips with `write_bytes`). Discharge with `?? []`. |
 | `write_bytes(path: text, bytes: vector<u8>) -> boolean` | Writes raw bytes to a file, truncating existing content; `true` on success. |
 | `set_file_size(self: File, size: integer) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
 

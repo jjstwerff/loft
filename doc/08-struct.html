@@ -160,7 +160,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">1</span>, <span class="st">"'&amp;' binds a live link"</span>);</code></pre>
 <h2 id="sizeof">sizeof</h2>
 <p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (post-2c i64 storage)"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (i64 storage)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u8</a></span>) == <span class="nm">1</span>, <span class="st">"u8: 1 byte (packed)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u16</a></span>) == <span class="nm">2</span>, <span class="st">"u16: 2 bytes (packed)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="en">Colour</span>) == <span class="nm">3</span>, <span class="st">"Colour: 3 × u8 = 3 bytes"</span>);
@@ -382,7 +382,7 @@ fn main() {
   // 'sizeof(Type)' returns the packed byte size used when the type is stored
   // as a struct field or vector element. Range-constrained integer types like
   // u8 and u16 report their packed size, not the 4-byte stack slot size.
-  assert(sizeof(integer) == 8, "integer: 8 bytes (post-2c i64 storage)");
+  assert(sizeof(integer) == 8, "integer: 8 bytes (i64 storage)");
   assert(sizeof(u8) == 1, "u8: 1 byte (packed)");
   assert(sizeof(u16) == 2, "u16: 2 bytes (packed)");
   assert(sizeof(Colour) == 3, "Colour: 3 × u8 = 3 bytes");

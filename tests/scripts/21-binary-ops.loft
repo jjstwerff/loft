@@ -74,6 +74,13 @@ fn main() {
   {
     f = file("test_loft_13_a.bin");
     assert(f#size == 10, "set_size extends: size grows to requested length");
+    // Read the padding back.  The size alone cannot witness what the extension
+    // CONTAINS, so this line is what makes the comment above a checked claim:
+    // the two written bytes survive and the eight gained ones are zero.
+    f#format = LittleEndian;
+    assert(f#read(2) as text == "Hi", "set_size extends: the original bytes survive");
+    f#next = 2;
+    assert(f#read(8) as integer == 0, "set_size extends: the padding is null bytes");
   }
   assert(delete("test_loft_13_a.bin").ok(), "delete after extend test");
   // Set size to zero empties the file

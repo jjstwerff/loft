@@ -2433,7 +2433,7 @@ Write '&' to get a live link where a bind would otherwise copy.
 'sizeof(Type)' returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.
 
 ```rust
-  assert(sizeof(integer) == 8, "integer: 8 bytes (post-2c i64 storage)");
+  assert(sizeof(integer) == 8, "integer: 8 bytes (i64 storage)");
   assert(sizeof(u8) == 1, "u8: 1 byte (packed)");
   assert(sizeof(u16) == 2, "u16: 2 bytes (packed)");
   assert(sizeof(Colour) == 3, "Colour: 3 × u8 = 3 bytes");
@@ -3180,7 +3180,7 @@ A file handle lets you read and write files without worrying about when the OS o
 
 === Inspecting the File System
 
-`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns a `FileResult` enum; use `.ok()` to check success. Clean up any leftover files from a previous interrupted run. `\#cwd` opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default) — see \@PLN9.
+`file(path)` creates a File handle without opening anything yet. `f\#format` is the mode the handle will read and write in. Two of its values answer what the path IS — Directory, and NotExists for a path with nothing at it. The other three are modes you choose: TextFile (UTF-8 text, and the default for any file that exists), LittleEndian (binary, bytes stored least-significant first — common on most PCs) and BigEndian (binary, most-significant first — common in network protocols). It does not inspect content: a PNG you have not set a format on reads as TextFile, so `\#format` cannot tell you a file is text. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns a `FileResult` enum; use `.ok()` to check success. Clean up any leftover files from a previous interrupted run. `\#cwd` opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default).
 
 ```rust
 #cwd
@@ -3212,7 +3212,7 @@ Asking for the format of a directory path returns Directory, not a file format. 
   assert(c[1] == "    terrain = [", "Line was '{c[1]}'");
 ```
 
-`exists` and `delete` are safe to call when the file is absent. `delete` returns false rather than crashing when nothing is there.
+`exists` and `delete` are safe to call when the file is absent. Nothing crashes: `delete` answers `FileResult.NotFound`, whose `.ok()` is false.
 
 ```rust
   assert(!exists("test.bin"), "File should not exist before the test.");
@@ -3221,7 +3221,7 @@ Asking for the format of a directory path returns Directory, not a file format. 
 
 === Writing a Text or Binary File
 
-Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f\#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value (u8, u16, i32, integer, single, float, or text). An `integer` is 8 bytes wide (see the size assertions below).
+Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f\#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value: u8, i8, u16, i16, u32, i32, integer, single, float, boolean, or text. Cast to the width you mean — an uncast `integer` writes 8 bytes, which is rarely the record width a binary format wants, so the compiler asks you to say it. Write `as integer` where the 8 bytes are deliberate.
 
 ```rust
  {f = file("test.bin");
@@ -3230,11 +3230,11 @@ Wrapping the file handle in a block ensures the file closes the moment the block
   f += 0 as u8;
   f += 1 as u8;
   f += 0x203 as u16;
-  f += 0x4050607;
-  f += 0x8090a0b0c0d0e0f;
+  f += 0x4050607 as integer;
+  f += 0x8090a0b0c0d0e0f as integer;
 ```
 
-`f\#size` returns the total number of bytes written so far. Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.
+`f\#size` returns the total number of bytes written so far. An integer is 8 bytes, so the total is 1 + 1 + 2 + 8 + 8 = 20.
 
 ```rust
   assert(f#size == 20, "Should have written 20 bytes.");
@@ -3274,7 +3274,7 @@ The file was written as BigEndian, so reading the same 4 bytes as LittleEndian p
   assert(f#next == 4, "Next read starts at byte 4.");
 ```
 
-Seek to byte 20 to skip past the integers and read the text directly. (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)
+Seek to byte 20 to skip past the integers and read the text directly. (The u8+u8+u16+integer+integer header is 1+1+2+8+8 = 20 bytes, so the text starts there.)
 
 ```rust
   f#next = 20;
@@ -3310,7 +3310,7 @@ You can seek back to any position and re-read.
   f#format = LittleEndian;
   ints =[1, 2, 3, 4];
   f += ints;
-  assert(f#size == 32, "Four integers = 32 bytes (8 each, post-2c)");
+  assert(f#size == 32, "Four integers = 32 bytes (8 each)");
 ```
 
 Truncate to the first two integers.
@@ -3318,6 +3318,14 @@ Truncate to the first two integers.
 ```rust
   f#size = 16;
   assert(f#size == 16, "Truncated to 16 bytes");
+```
+
+Growing works the same way, and the bytes you gain are zero.
+
+```rust
+  f#size = 24;
+  f#next = 16;
+  assert(f#read(8) as integer == 0, "The extension reads as zero bytes.");
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin after vector write test.");
 ```
@@ -3350,29 +3358,60 @@ Read the count, then use it to read exactly that many floats directly into a str
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
 ```
 
+=== Directories
+
+`is\_dir(path)` and `is\_file(path)` answer the question directly, without going through a handle. `files()` lists a directory as File handles, so every entry carries its own path and format; `list\_dir(path)` gives you just the names. Both are sorted by name, so an index means the same entry on every machine — but they disagree on a path that is not a directory: `files()` answers an empty list and `list\_dir` answers null, so discharge that one with `?? \[\]`.
+
+```rust
+  dir = file("tests/example");
+  assert(is_dir("tests/example"), "the example directory is a directory");
+  assert(!is_file("tests/example"), "a directory is not a file");
+  entries = dir.files();
+  assert(len(entries) > 0, "the example directory is not empty");
+  assert((entries[0] ?? file("")).path == "tests/example/config", "first entry path");
+```
+
+`mkdir(path)` creates one level and `mkdir\_all(path)` creates every missing level. `mkdir\_all` is idempotent — a directory that already exists is Ok, which is what makes it safe to call on the way into a run.
+
+```rust
+  assert(mkdir_all("tests/example").ok(), "mkdir_all on an existing directory is Ok");
+  assert(!mkdir("tests/example").ok(), "mkdir on an existing directory is not Ok");
+```
+
+There is no way to remove a directory: `delete` is a file operation and answers FileResult.IsDirectory when you point it at one.
+
 === Error handling
 
-File operations that can fail return a `FileResult` enum. Call `.ok()` to check success. The program does not crash on failure — you decide what to do.
+Filesystem operations that can fail return a `FileResult`, and it is an enum with five variants, not a boolean. `.ok()` is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.
 
 ```rust
   result = delete("this_file_does_not_exist.txt");
   assert(!result.ok(), "delete missing file returns not-ok");
+  why = match result {
+    Ok => "deleted",
+    NotFound => "there was nothing there",
+    PermissionDenied => "the OS refused",
+    IsDirectory => "that is a directory",
+    Other => "it failed for another reason"
+  };
+  assert(why == "there was nothing there", "delete on a missing file is NotFound");
 ```
 
-Reading a non-existent file produces an empty result, not a crash.
+A handle to a path with nothing at it is safe to hold and safe to read. Nothing crashes: the format is NotExists and `lines()` is empty. A sized `f\#read` on it answers null rather than a value you might mistake for data, and says so on stderr.
 
 ```rust
   ghost = file("no_such_file.txt");
   assert(ghost#format == NotExists, "non-existent file has NotExists format");
+  assert(len(ghost.lines()) == 0, "lines() on a missing file is empty");
 ```
 
-`move` reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains `..` (loft\#712).
+`move` reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains `..`.
 
 ```rust
   assert(!move("any.txt", "../escape.txt").ok(), "move with a missing source fails");
 ```
 
-Writing to a read-only or invalid path also returns a FileResult. Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir\_all`.
+One asymmetry to know: `f += value` is a statement and reports nothing. If the path cannot be opened for writing, the bytes are dropped and the run carries on with a message on stderr. Use `f.write(text)` when you need the write itself to answer a FileResult, and check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir\_all`.
 
 ```rust
 }
