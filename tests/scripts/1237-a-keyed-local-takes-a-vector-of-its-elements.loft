@@ -64,6 +64,20 @@ fn main() {
   cgot = c1237[41];
   assert(cgot.nm == "b40", "and by key from inside the closure: {cgot.nm}");
 
+  // ---- the NULLABLE keyed local, which must answer exactly as the dense one does ----
+  // loft#1207's peel is what let a `vector<τ>?` be seen as a collection at all, and its control
+  // (`1207b`) holds the two spellings together on the REFUSE side. This is the same agreement on
+  // the accept side, and it lives here because that file stops at its expected error and can
+  // carry no assertion of its own (`wrap.rs` R1).
+  n1237: hash<E1237[k]>? = [];
+  n1237 += rows1237(60);
+  assert(len(n1237?) == 2, "the nullable twin takes them the same way: {len(n1237?)}");
+  // Bound first rather than written `n1237?[61]`: that spelling is loft#1208's, where the `?`
+  // and the index are read as a `??` default the program never wrote.
+  nd1237 = n1237?;
+  ngot = nd1237[61];
+  assert(ngot.nm == "b60", "and each is reachable by key: {ngot.nm}");
+
   // ---- the FIELD, which already worked and must keep working ----
   d1237 = D1237 { h: [] };
   d1237.h += rows1237(50);
