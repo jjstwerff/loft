@@ -1784,7 +1784,13 @@ pub(crate) fn add_native_extern_flags(
                     // dynamic loader expands it at run time.  Windows has no RPATH
                     // (the arm above); it stages the DLL beside the binary instead.
                     cmd.arg(format!("-Clink-arg=-Wl,-rpath,{}", so_dir.display()));
+                    // `$ORIGIN` is the ELF spelling and Mach-O does not know it; the dyld
+                    // form is `@loader_path`.  Both are emitted, because a linker ignores an
+                    // rpath entry it cannot parse and the cost of the spare one is a string.
                     cmd.arg("-Clink-arg=-Wl,-rpath,$ORIGIN");
+                    if cfg!(target_os = "macos") {
+                        cmd.arg("-Clink-arg=-Wl,-rpath,@loader_path");
+                    }
                 }
             }
             continue;
