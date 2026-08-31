@@ -89,7 +89,7 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.<span class="fn-call">describe</span>() == <span class="st">"circle with radius 1"</span>, <span class="st">"describe circle: {c.describe()}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r.<span class="fn-call">describe</span>() == <span class="st">"rect 4 by 5"</span>, <span class="st">"describe rect: {r.describe()}"</span>);</code></pre>
 <h2 id="stubs-for-missing-implementations">Stubs for missing implementations</h2>
-<p>If a variant intentionally has no implementation of a method, the compiler emits a warning ("no implementation of <code>area</code> for variant <code>Rect</code>"). Provide an empty-body stub to silence it: fn area(self: SomeVariant) -&gt; float { } Give the stub a real body — <code>{ 0.0 }</code> — when anything reads its result. An empty body silences the warning, but what it hands back is not a value you can test: it is not null, and it is not the same on both backends.</p>
+<p>If a variant intentionally has no implementation of a method, the compiler emits a warning ("no implementation of <code>area</code> for variant <code>Rect</code>"). Provide an empty-body stub to silence it: fn area(self: SomeVariant) -&gt; float { } Give the stub a real body — <code>{ 0.0 }</code> — when anything reads its result. An empty body silences the warning and hands back the type's default (0.0 for a float, 0 for an integer, "" for text), which is the same on both backends. That is a real value, not a marker: it is not null, so there is nothing to test for, and a caller cannot tell it from a computed 0.0.</p>
 <h2 id="match-expressions-on-enums">Match expressions on enums</h2>
 <p>Match picks a code path based on the active variant. You must handle every variant, or include a <code>_</code> wildcard arm that catches the rest.</p>
 <pre><code>  axis = match d {
@@ -247,8 +247,10 @@ fn main() {
   // empty-body stub to silence it:
   //   fn area(self: SomeVariant) -&gt; float { }
   // Give the stub a real body — '{ 0.0 }' — when anything reads its result. An
-  // empty body silences the warning, but what it hands back is not a value you can
-  // test: it is not null, and it is not the same on both backends.
+  // empty body silences the warning and hands back the type's default (0.0 for a
+  // float, 0 for an integer, "" for text), which is the same on both backends.
+  // That is a real value, not a marker: it is not null, so there is nothing to
+  // test for, and a caller cannot tell it from a computed 0.0.
 
   // ## Match expressions on enums
   // Match picks a code path based on the active variant. You must handle

@@ -2573,7 +2573,7 @@ If a variant intentionally has no implementation of a method, the compiler emits
 fn area(self: SomeVariant) -> float { }
 ```
 
-Give the stub a real body — '{ 0.0 }' — when anything reads its result. An empty body silences the warning, but what it hands back is not a value you can test: it is not null, and it is not the same on both backends.
+Give the stub a real body — '{ 0.0 }' — when anything reads its result. An empty body silences the warning and hands back the type's default (0.0 for a float, 0 for an integer, "" for text), which is the same on both backends. That is a real value, not a marker: it is not null, so there is nothing to test for, and a caller cannot tell it from a computed 0.0.
 
 === Match expressions on enums
 
