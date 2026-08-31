@@ -1652,15 +1652,37 @@ impl Parser {
             let elm = (**elm).clone();
             return self.vector_db_init(&elm, v_nr, absent, true);
         }
-        // A KEYED capture is NOT given one here, and the measurement is why.  A keyed local
-        // has no wrapper — its store IS the collection — so the slot it would gain is the one
-        // `OpDatabase` hands it, and that word is the keyed store's own header rather than a
-        // "which record holds the collection" slot.  Minting it makes `h == null` answer false
-        // (the value changes, which is exactly what this is written to avoid) and the appends
-        // inside the lambda still do not accumulate: two adds read length 1, and one whose
-        // element carries a formatted `text` reads 0.  So the keyed spelling keeps today's
-        // loud failure rather than gaining a quiet wrong one — loft#1233.
-        Vec::new()
+        // A KEYED local has no wrapper record: its store IS the collection, so the slot it must
+        // gain is the one `OpDatabase` hands it.  Built with the guarded emission a keyed WRITE
+        // already uses, and then marked ABSENT — the store exists to be shared, the collection
+        // does not exist yet, and `h == null` is still true.
+        //
+        // The mark is what makes this the same change of REPRESENTATION the vector branch
+        // above makes.  Without it the mint alone is a change of VALUE: `h == null` answers
+        // false straight after the capture, which is the reading this whole function exists to
+        // avoid.
+        //
+        // Guarded on the HANDLE, and NOT through `keyed_local_materialise`, whose guard is
+        // `OpVectorIsNull` — the right test for a WRITE, which wants the empty collection built
+        // whenever there is no collection.  Here the mint leaves the collection ABSENT on
+        // purpose, so that test still answers true afterwards: a closure built inside a loop
+        // would re-mint and re-MARK on every pass, and the second pass's mark would wipe what
+        // the first one's appends had put in.  `OpRefIsNull` asks the question this site means
+        // — does the local have a store at all — and is false from the first pass on.
+        let Some(kt) = self.keyed_known_type(&tp) else {
+            return Vec::new();
+        };
+        let mint = self.cl("OpDatabase", &[Value::Var(v_nr), Value::Int(i32::from(kt))]);
+        let mark = self.cl(
+            "OpSetInt4",
+            &[Value::Var(v_nr), Value::Int(0), Value::Int(absent)],
+        );
+        let test = self.cl("OpRefIsNull", &[Value::Var(v_nr)]);
+        vec![crate::data::v_if(
+            test,
+            Value::Insert(vec![mint, mark]),
+            Value::Null,
+        )]
     }
 
     /// Synthesize an anonymous struct definition for the captured variables

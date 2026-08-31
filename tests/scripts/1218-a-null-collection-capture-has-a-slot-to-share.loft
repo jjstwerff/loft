@@ -26,6 +26,12 @@
 // immediately after the capture and it is still true.  Materialising the COLLECTION instead
 // would have made it false because a lambda mentioned `v`.
 //
+// The KEYED spelling failed the other way — a NULL DbRef fault, because no keyed accessor tests
+// the handle first — and it could not be fixed until loft#1233 was: an append to a CAPTURED
+// keyed collection REPLACED it, dense and nullable alike, so giving the null one a store bought
+// nothing.  With that landed, the keyed cells below join the vector ones.  Its mint is the store
+// `OpDatabase` gives a keyed local, which has no `__vdb` wrapper of its own.
+//
 // The LOOP cell is the second thing the fix had to get right, and it is not about capture at
 // all: the capture is a site that can run MANY times, so an unguarded mint re-points the local
 // on every pass and orphans what the last one built — loft#1219's shape, one site over.  The
