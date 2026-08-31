@@ -2183,6 +2183,32 @@ written before the call that still needed it. The register numbers collided as w
 checkouts had "one home for the fact" and it did not help, because **one home secures the
 QUESTION and says nothing about WHICH VALUE each caller hands it, or WHEN.**
 
+##### 5b. A home that is RIGHT and not asked leaves no trace to screen for
+
+The one-home work has so far been about a question with **N spellings**, where the fix is to make
+the readers agree and the screen is `scripts/rule_predicate_audit.py` finding the duplicated
+variant sets. loft#1250 is the other failure in the family and it is invisible to that screen.
+
+`Variables::const_report_var` maps a promoted `__tp_` text local back to the parameter it came
+from and every other variable to itself. It was written for exactly this, its doc-comment says
+so — and it was asked by **one of the five sites that report a const modification**: the one
+that was already right. The other four read the raw variable, so `fn f(s: const text)` refused
+with *"Cannot modify const parameter `'__tp_s'`"*, naming a variable that appears nowhere in the
+author's program.
+
+**Nothing about that is detectable by looking for drift.** There is no second home, no
+disagreeing spelling, no duplicated variant list — the four silent sites contain nothing to
+match, because what they do is the RAW thing the helper wraps, which is also what every correct
+site that does not need the helper does. The home being right is what makes it invisible.
+
+If a screen for this is worth writing, the shape to look for is: **a `pub(crate)` predicate
+whose doc-comment names a question, with callers performing the raw operation it wraps in the
+same diagnostic or decision.** A weaker but cheaper proxy that would have caught this one: a
+helper with exactly ONE call site and a doc-comment written as a general rule — the mismatch
+between "here is how to answer X" and "answered once" is the signal. Neither is built; the
+observation is recorded because the class is now known to exist and cost a shipped diagnostic
+that named a variable the program does not contain.
+
 ##### 6. Performance is invisible to the whole apparatus
 
 loft#1109 — a 26 % regression on the tuple return introduced by loft#1102 — was found by hand
