@@ -6,12 +6,59 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-Narrow-Asgn` and `D-Null-Elem` were both opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **1** — `D-Narrow-Res` opened 2026-08-31 and is live (below); `D-Narrow-Asgn` and `D-Null-Elem` were opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Narrow-Res — OPEN (2026-08-31, loft#1249): `(N-Reserve)` holds for a packed slot, not a register one
+
+`(N-Reserve)` says a reserved null is a value OF THE TYPE and is excluded from `τ?`'s range
+everywhere the value can be.  loft#334 implemented that for a nullable byte-width FIELD (its
+option 1: *"nullable byte ranges cap at 255 values"*) and the reservation stopped at the store
+layer.  A local is a full i64 slot that never packs, so the sentinel survives there and dies on
+the way to any packed position:
+
+```loft
+x: u8? = 255;            // 255      <- a value the type does not have
+t.a    = 255;            // null
+n = 250;  t.a = n + 5;   // null     <- ordinary in-range arithmetic, destroyed in silence
+```
+
+The last line is the sharp end: `250 + 5` is `255`, a legal `u8`.  Nothing overflows, nothing is
+uncomputable, and the result reaches the field as `null` with no diagnostic.  Measured identical
+on both backends; the register positions that keep 255 are the local, the parameter, the return,
+the vector element read and the cast result, and the packed ones that answer null are the struct
+field and the vector element write.
+
+`IntegerSpec::usable_min/usable_max` already answers which specs spend an edge, precisely (only a
+fixed 1- or 2-byte width whose range exactly fills it — an `i32?` has a spare code outside its
+range and an `integer limit(0,255)?` widens to get one).  **What is missing is not the bound but
+a way to ask "is this target a nullable SLOT?"**, and two cure directions were built, measured
+and rejected on 2026-08-31:
+
+1. **Bound the CAST** (`dn4_checked_cast` reads `usable_*`).  Rejected: `(mat as u8?) ?? 0` is
+   the shipped idiom for *"narrow this, or 0"*, it never keeps a `u8?` at all, and the bound
+   turned its legal `255` into the default.  `hex_field` 0.1.0 asserts exactly that value and
+   failed `scripts/revalidate_libs_local.sh` — the gate `make ci` cannot give, because a language
+   change that retro-breaks a shipped library is invisible to every branch gate.  A lexical peek
+   at the cast cannot separate the two either: a parenthesised `(e as u8?) ?? d` reads `)` at
+   that moment.
+2. **Bound the STORE SEAM** (`declared_range` answers for a nullable narrow alias, so every
+   store guard applies the usable range).  Rejected for a sharper reason: **`Type::Optional` at
+   a write target means two different things.**  An element write `e.m[i] = …` on a
+   `vector<u8>` — a NON-nullable element — presents its target as `integer(0,255)?`, because
+   `(N-Domain)` makes an index expression nullable for the miss.  The guard then bounded a
+   non-null slot by the usable range and wrote the null sentinel into it, which the store
+   flattened to `0`: `hex_field`'s `edge_set_mat` stored `255` as `0` (measured
+   `OpRangeDefault(…, 0, 254, i64::MIN)` emitted for a `vector<u8>` element).
+
+**So closing this needs the index-write conflation resolved first** — a write target's type has
+to say "this slot holds null", not "this read may miss".  That is a separate, larger change with
+its own blast radius, and it is the reason this entry is open rather than closed.  The
+workaround is unchanged and clean: declare the field `not null`, or one width wider.
 
 ### D-Narrow-Asgn — OPENED AND CLOSED (2026-08-31, loft#1246): a narrowing store into a NULLABLE narrow LOCAL was neither refused nor checked
 

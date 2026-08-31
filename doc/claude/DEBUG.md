@@ -1385,6 +1385,30 @@ count the two kinds of guard separately: the question "is this value still valid
 question "is that place reached the same number of times?" are answered by different machinery,
 and a list can be exhaustive in one and empty in the other.
 
+**A bound belongs to where the value LANDS, not to the type that named it.** Two expression
+forms can name the same target type and put the result in different places, and a bound
+attached to the named type then reaches one of them wrongly. `e as u8?` and `e as u8 ?? d`
+both name `u8` and both lower through the same checked-cast helper — but the first stays a
+`u8?`, whose sentinel is reserved, and the second is discharged to a non-null `u8`, which
+reserves nothing. Narrowing the helper's bound to the reserved range was right for the first
+and silently turned `255` into the default for the second (loft#1249) — a value the published
+`hex_field` asserts, so it broke a shipped library. **When a fix makes a shared helper's
+answer depend on a property the callers do not currently pass, that property is the new
+parameter** — deriving it inside the helper from what it already has is the same guess in a
+place the caller cannot see. And when NO caller can supply it either, that is the finding:
+the same attempt moved to the store seam and hit the harder half — `Type::Optional` on a
+write target means *"this slot holds null"* for a `u8?` local and *"this read may miss"* for
+an element of a non-null `vector<u8>`, so one predicate cannot serve both and the fix was
+withdrawn rather than shipped half-right.
+
+**Two coverage instruments each caught a different half of that, and neither was looking for
+it.** `scripts/matrix_axes.py` reported `A9 evaluation count` missing `loop`; writing the
+loop cell needed a non-nullable control, which could only be spelled with the coalesced cast,
+which is what exposed the first half. `scripts/revalidate_libs_local.sh` — the shipped
+libraries, which `make ci` says nothing about — caught the second on a real consumer after a
+full green gate. **Run both before believing a semantic change**: a green `make ci` is not
+evidence about the language's users.
+
 **A precedent transfers along the MECHANISM, not the problem statement.** Before reusing a
 neighbouring solution, ask what its unit of work is — per member, per record, per call, per
 path, per pass — and whether yours has the same one. `keyed_group_clear` solves the same

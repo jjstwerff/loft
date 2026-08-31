@@ -378,6 +378,19 @@ old auto-`τ?` reading. Design record:
               `τ?`.
             Representability is a property of τ (table).  REFINES the old uniform-error
             (N-Store): every type warns EXCEPT the narrow widths, which error.
+
+(N-Reserve) a reserved null is a VALUE OF THE TYPE, so it is excluded from `τ?`'s non-null
+            range — and excluded EVERYWHERE the value can be, not only where the bytes are
+            packed.  `255` is a real `u8` and IS the null of a `u8?`, so a `u8?` ranges over
+            `0..=254` in a local, a field, an element, a parameter and a return alike.  What
+            spends the edge is a SLOT — a place a value is KEPT — and an expression in flight
+            is not one: `e as u8?` yields `255` and `(e as u8?) ?? d` keeps it, because
+            neither ever holds a `u8?`; assign the same cast into a `u8?` and it is null.
+            Which types spend an edge follows from the table above: only a narrow width whose
+            range exactly fills a fixed 1- or 2-byte storage — an `i32?` has a spare code
+            outside its range and an `integer limit(0,255)?` widens to get one, so neither
+            gives anything up.  The COMPLEMENT is the same statement: a NON-null narrow
+            reserves nothing, because it has no null to encode.
 ```
 
 **Per-type null + store verdict** — the verdict follows the *representability* test, not
@@ -515,13 +528,20 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
-the companion [types-history.md](types-history.md).
+**OPEN: 1.**
+- **D-Narrow-Res** — `(N-Reserve)` holds for a packed slot and not for a register one.  A
+  `u8?` FIELD or vector ELEMENT answers `null` for 255, and a `u8?` LOCAL, parameter, return
+  and cast result keep it as a number — so an ordinary in-range `250 + 5` is destroyed on the
+  way into a field, in silence.  loft#1249, with the two cure directions that were measured
+  and rejected.
 
-⚠ **This line read `OPEN: 0` while D-Narrow-Asgn was live, and the oracle under it could not have
-moved it** — `(I-Narrow)` had only two clauses, so the nullable target was not a case the
-rule could be checked against at all.  A register is only as strong as the completeness of
-the rules above it.
+⚠ **This line read `OPEN: 0` while D-Narrow-Asgn and D-Narrow-Res were both live, and the
+oracle under it could not have moved either** — `(I-Narrow)` had only two clauses, so a
+nullable target was not a case the rule could be checked against at all; and the sentinel's
+exclusion from `τ?`'s range was prose in a table rather than a rule, so nothing could be
+checked against it either.  Both gained the clause they were missing — `(I-Narrow-Opt)`, which
+closed D-Narrow-Asgn, and `(N-Reserve)`, which turns an open design question into a stated
+deviation.  A register is only as strong as the completeness of the rules above it.
 
 ## Conformance check (how we know a deviation is real)
 
