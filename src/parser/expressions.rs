@@ -2196,8 +2196,33 @@ use a separate collection or add after the loop"
         // ~1159-1194 handles the same shape for fields after-the-fact;
         // we cannot do that here because the LHS-local path errors out
         // before reaching it.
+        //
+        // loft#1233 — a keyed collection CAPTURED into a closure is a destination this
+        // branch owns too.  It is reached through an `OpGetDbRef` of the closure record
+        // rather than by name, so `var_nr == u16::MAX` and the local gate alone skipped it.
+        // The RHS then parsed as a free-standing `[…]`, which against a keyed hint builds a
+        // WHOLE `hash<E[k]>`, and the assignment REBOUND the capture to that fresh
+        // one-element collection: every append destroyed the previous contents (and the
+        // records the caller put there before the lambda existed), leaving only the last —
+        // silent, both backends.  A one-append test reads correct, which is how it stayed
+        // unfound.
+        //
+        // The other three place kinds all parse this literal per-element already — a local
+        // here, a field through the after-the-fact twin — and the capture's own BARE
+        // spelling (`h += E { … }`) is routed by the `dbref_append_target` arm below.  So
+        // this is the one cell of place-kind × spelling that reached no per-element route,
+        // and the cure is to let the capture in rather than to add a fourth route.
+        //
+        // `is_captured_dbref` alone is too weak — a struct-field read is an `OpGetDbRef`
+        // too.  The gate is the one `dbref_append_target` uses below, so the interception
+        // and the routes it feeds cannot disagree about what a captured collection is.
+        let captured_keyed = var_nr == u16::MAX
+            && self.closure_param != u16::MAX
+            && Self::is_collection_type(f_type)
+            && f_type.depend().contains(&self.closure_param)
+            && self.is_captured_dbref(to);
         if op == "+="
-            && var_nr != u16::MAX
+            && (var_nr != u16::MAX || captured_keyed)
             && crate::parser::vectors::is_keyed(f_type)
             && self.lexer.peek_token("[")
         {
@@ -2215,14 +2240,22 @@ use a separate collection or add after the loop"
                 let mut item_parent = Type::Null;
                 let _ = self.parse_operators(&elm_tp, &mut item, &mut item_parent, 0);
                 if !self.first_pass {
-                    let steps = self.new_record(
-                        &mut Value::Var(var_nr),
-                        f_type,
-                        elm,
-                        var_nr,
-                        &[item],
-                        &elm_tp,
-                    );
+                    // A capture has no owning struct and no name: it is placed by the
+                    // `OpGetDbRef` itself, and `record_new`'s kind dispatch reads the
+                    // COLLECTION type when the field is `u16::MAX` — the same two
+                    // substitutions the `dbref_append_target` routes below make.
+                    let steps = if captured_keyed {
+                        self.new_record(&mut to.clone(), f_type, elm, u16::MAX, &[item], &elm_tp)
+                    } else {
+                        self.new_record(
+                            &mut Value::Var(var_nr),
+                            f_type,
+                            elm,
+                            var_nr,
+                            &[item],
+                            &elm_tp,
+                        )
+                    };
                     all_steps.extend(steps);
                 }
                 if !self.lexer.has_token(",") {
