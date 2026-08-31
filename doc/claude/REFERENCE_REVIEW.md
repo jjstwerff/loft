@@ -108,6 +108,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/06-function.loft` | 2026-08-31 | `1b8c8fa7` |
 | `tests/docs/07-vector.loft` | 2026-08-31 | `9fc947a5` |
 | `tests/docs/08-struct.loft` | 2026-08-31 | `549f8989` |
+| `tests/docs/09-enum.loft` | 2026-08-31 | `caf5845a` |
 
 ## See also
 
