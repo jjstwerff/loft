@@ -854,7 +854,7 @@ examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist
+.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist reference-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
@@ -907,6 +907,17 @@ bug-review:  ## Monthly bug-review aid: which mechanism classes are still produc
 # render as a broken target.  A report says what it found; it does not stop the build.
 release-checklist:  ## Per-release checklist: what CI proved, and what is left for a human
 	@python3 scripts/release-checklist.py $(ARGS) || true
+
+# The pass that validates what the reference PROMISES — the half `A-pdf*` cannot reach.
+# Those checks establish the document is whole, current and correctly versioned; all
+# three stay green on a chapter describing behaviour the language dropped two releases
+# ago.  Continuous by design (watermark per chapter, like `libraries-review`): read a
+# chapter the week its source moves, and the tag-day list is short by construction.
+#   make reference-review                                   # what owes a read
+#   make reference-review ARGS=--verbose                    # + the commits behind each
+#   make reference-review ARGS="--done tests/docs/07-vector.loft"
+reference-review:  ## Which reference chapters owe a human read (and which have MOVED)
+	@python3 scripts/reference-review.py $(ARGS)
 
 # `doc/claude/plans/**/probes/` holds ~860 executable `.loft` files that no suite
 # reaches — the residue of finished investigations, still compiling and running

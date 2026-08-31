@@ -375,10 +375,18 @@ def check_reference_pdf_content():
     succeeds, the page count is still four figures, and the missing page is only missing
     to the reader.
 
-    Three structural questions, each of which can only be answered against the artifact:
-    every topic in the corpus has its heading in the PDF (gendoc emits `@NAME` as the
-    level-1 heading, not `@TITLE`); the Standard Library section is there at all; and no
-    placeholder marker shipped in a document users read offline.
+    So this walks every level-1 part the document has.  The 35 topics, whose headings
+    are the topic files' `@NAME` (gendoc emits that, not `@TITLE`).  The four chapters
+    that are not topics -- Getting Started, vs Rust, vs Python, Roadmap -- each read
+    from a `doc/*.html` file with `if let Ok(...)`, so a missing file takes the chapter
+    with it just as quietly.  The Standard Library chapter, which needs asking about
+    twice: its heading is pushed unconditionally, so the heading proves only that gendoc
+    ran, and an EMPTY chapter carries it just as well as a full one.  And no placeholder
+    marker, in a document that ships to readers offline.
+
+    A presence check can pass on a chapter that was dropped but whose name still occurs
+    in prose.  That is the residual risk here and it is the right way round: the failure
+    it cannot rule out is a false pass on a name collision, not a false alarm.
 
     The stdlib count is EVIDENCE, not a gate.  The reference does not name every
     `pub fn` -- a good share are documented as methods on their receiver instead -- so
@@ -414,8 +422,15 @@ def check_reference_pdf_content():
             + (" …" if len(missing) > 4 else "")
         )
 
-    if "Standard Library" not in text:
-        return FAIL, "the reference carries no Standard Library section"
+    # The parts that are NOT topics.  Four of the five are assembled with
+    # `if let Ok(read_to_string(...))` over a `doc/*.html` file, so a missing file
+    # removes the whole chapter and says nothing -- the same silent drop as a topic,
+    # from a different direction.  `= Standard Library` is the exception: it is pushed
+    # unconditionally, so its heading proves nothing about its contents, which is why
+    # the emptiness check below exists rather than a presence check alone.
+    for part in ("Getting Started", "vs Rust", "vs Python", "Roadmap", "Standard Library"):
+        if part not in text:
+            return FAIL, f"the reference has no `{part}` chapter"
 
     for marker in ("TODO", "FIXME", "TBD", "not yet implemented"):
         if marker in text:
@@ -427,11 +442,48 @@ def check_reference_pdf_content():
         if entry.endswith(".loft"):
             with open(os.path.join(default, entry), encoding="utf-8", errors="replace") as f:
                 fns.update(re.findall(r"^pub fn (\w+)", f.read(), re.M))
-    named = sum(1 for n in fns if n in text)
-    topics = len([e for e in os.listdir(docs) if e.endswith(".loft") and not e.startswith("00-")])
+    # Word boundaries, not `in`: a bare substring test counts `map` as present because
+    # the chapter list contains "Roadmap", which is enough to keep the empty-chapter
+    # guard below from ever reaching 0.  The two agree on the real document (the
+    # functions genuinely appear as words); they disagree exactly where it matters.
+    named = sum(1 for n in fns if re.search(rf"\b{re.escape(n)}\b", text))
+    if named == 0:
+        return FAIL, (
+            "the Standard Library chapter names no stdlib function — the heading is "
+            "emitted unconditionally, so an empty chapter still carries it"
+        )
+    topics = len(
+        [e for e in os.listdir(docs) if e.endswith(".loft") and not e.startswith("00-")]
+    )
     return OK, (
-        f"all {topics} topics present, Standard Library present, no placeholders; "
+        f"{topics} topics + 4 chapters present, no placeholders; "
         f"{named}/{len(fns)} stdlib pub fns named"
+    )
+
+
+def check_reference_review():
+    """How much of the reference has been READ against the language as it behaves.
+
+    The three `A-pdf*` checks establish that the document is whole, current and stamped
+    with this version; not one of them reads a sentence, so all three stay green on a
+    chapter that describes behaviour the language dropped two releases ago.  That is a
+    person's judgement and it stays one -- what a script can do is say how much of it
+    has been done, so the work can happen the week a chapter changes instead of on tag
+    day, where it turns into a skim.  The watermarks live in
+    `doc/claude/REFERENCE_REVIEW.md`; `make reference-review` is the worklist.
+    """
+    code, out = sh(sys.executable, os.path.join(ROOT, "scripts", "reference-review.py"))
+    if code != 0:
+        return UNKNOWN, "scripts/reference-review.py failed"
+    m = re.search(r"(\d+)/(\d+) chapters reviewed at their current source", out)
+    if not m:
+        return UNKNOWN, "could not read the reference-review count"
+    done, total = int(m.group(1)), int(m.group(2))
+    if done == total:
+        return OK, f"all {total} chapters read at their current source"
+    return FAIL, (
+        f"{total - done} of {total} chapters owe a read — `make reference-review`; "
+        f"the A-pdf checks cannot see a chapter that is merely UNTRUE"
     )
 
 
@@ -701,17 +753,15 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         ),
         Item(
             "A-pdf-content",
-            "The reference's CONTENT is whole (topics, stdlib, no placeholders)",
+            "The reference's CONTENT is whole — every chapter, not just a fresh build",
             "cargo run --bin gendoc && make pdf",
             check=check_reference_pdf_content,
         ),
         Item(
-            "M-pdf-read",
-            "Read the reference as a user would",
-            "open doc/loft-reference.pdf",
-            "the automatic checks prove it is whole and current; whether it READS well "
-            "— a new feature explained, a removed one gone, examples that still teach — "
-            "is the half no script can reach, and it ships in all four bundles",
+            "A-reference-review",
+            "Every reference chapter has been read against the shipped language",
+            "make reference-review",
+            check=check_reference_review,
         ),
         Item(
             "A-ignores",

@@ -1234,19 +1234,47 @@ Three checks cover it, and only the first is about regeneration:
   `CARGO_PKG_VERSION`, so bumping `Cargo.toml` without re-running it leaves a
   reference headed "Version «previous»" — freshly dated, correct-looking, and
   wrong on the one page every reader sees first.  A timestamp cannot catch that.
-- **`A-pdf-content`** — what is INSIDE it.  A PDF can be freshly built,
-  correctly versioned, and still be missing a chapter:
-  `documentation::get_topic_sources` builds the topic list with `.ok()` and
-  `filter_map`, so a topic file it cannot read is **dropped silently** and the
-  reference simply comes out one chapter shorter — the build succeeds, the page
-  count is still three figures, and the page is missing only to the reader.  So
-  every topic's `@NAME` (the level-1 heading `gendoc` emits — not `@TITLE`) must
-  appear in the PDF's text, the Standard Library section must be there, and no
-  placeholder marker may ship.  The stdlib count rides along as evidence rather
-  than a gate: the reference documents a good share of functions as methods on
-  their receiver, so "every `pub fn` appears" would be a false failure.
+- **`A-pdf-content`** — what is INSIDE it, chapter by chapter.  A PDF can be
+  freshly built, correctly versioned, and still be missing a chapter, because
+  **every way a chapter enters this document can drop it in silence**:
+  `documentation::get_topic_sources` builds the 35 topics with `.ok()` and
+  `filter_map`, so a topic file it cannot read is skipped; and *Getting
+  Started*, *vs Rust*, *vs Python* and *Roadmap* are each read from a
+  `doc/*.html` file with `if let Ok(…)`, so a missing file takes the chapter
+  with it.  Either way the build succeeds, the page count is still three
+  figures, and the page is missing only to the reader.
 
-`M-pdf-read` carries the half no script reaches — whether it reads well.
+  So the check walks every level-1 part: each topic's `@NAME` (the heading
+  `gendoc` emits — not `@TITLE`) and each of those four chapters must appear in
+  the PDF's text.  *Standard Library* needs asking about twice, because its
+  heading is pushed **unconditionally** — the heading proves only that `gendoc`
+  ran, and an empty chapter carries it just as well as a full one, so the check
+  also requires that the chapter names at least one stdlib function.  It matches
+  on word boundaries: a plain substring test counts `map` as present because the
+  chapter list contains "Road**map**", which is enough to stop that guard ever
+  reaching zero.  Finally, no placeholder marker (`TODO`, `FIXME`, `TBD`, "not
+  yet implemented") may ship in a document read offline.
+
+  The stdlib count rides along as evidence rather than a gate: the reference
+  documents a good share of functions as methods on their receiver, so "every
+  `pub fn` appears" would be a false failure and a percentage would be an
+  invented threshold.  A presence check can still pass on a chapter that was
+  dropped but whose name occurs in prose — that residual is the right way round,
+  a possible false pass on a name collision rather than a false alarm.
+
+None of the three reads a sentence, so all three stay green on a chapter that
+describes behaviour the language dropped two releases ago.  That half is
+[REFERENCE_REVIEW.md](REFERENCE_REVIEW.md) — a per-chapter pass over what the
+reference *promises*, tracked by a watermark so it can be done **early and
+continuously** rather than as a day of reading under tag-day pressure.  Read a
+chapter the week its source moves and the list is short by construction:
+
+```
+make reference-review                                   # what owes a read
+make reference-review ARGS="--done tests/docs/07-vector.loft"
+```
+
+`A-reference-review` reports the count on the release checklist.
 
 ### What the tag pipeline proves about the artifacts
 
