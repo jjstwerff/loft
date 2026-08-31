@@ -290,8 +290,13 @@ def check_draft_assets(version: str, network: bool):
         return UNKNOWN, "could not parse `gh release view`"
     have = {a["name"] for a in data.get("assets", [])}
     want = [f"loft-{version}-src.zip", f"loft-{version}-registry-entry.json"]
-    for t in published_triples():
-        want.append(f"loft-{version}-{t}.zip")
+    try:
+        triples = published_triples()
+    except (RuntimeError, SystemExit) as e:
+        return UNKNOWN, f"cannot read PUBLISHED_TRIPLES ({e})"
+    if not triples:
+        return UNKNOWN, "PUBLISHED_TRIPLES is empty — nothing to expect"
+    want += [f"loft-{version}-{t}.zip" for t in triples]
     missing = [w for w in want if w not in have]
     if missing:
         return FAIL, "draft is missing: " + ", ".join(missing)
@@ -300,15 +305,24 @@ def check_draft_assets(version: str, network: bool):
 
 
 def published_triples() -> list[str]:
-    """The triples the release ships, read from the one place that defines them."""
-    p = os.path.join(ROOT, "src", "self_update.rs")
-    try:
-        with open(p, encoding="utf-8") as f:
-            src = f.read()
-    except OSError:
-        return []
-    m = re.search(r"PUBLISHED_TRIPLES[^=]*=\s*\[(.*?)\]", src, re.S)
-    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+    """The triples a release publishes, through `gen-toolchain-entry.py`'s parser.
+
+    That script already reads `self_update::PUBLISHED_TRIPLES` -- the list the running
+    binary matches its host against -- and it is the one the release entry is built from.
+    Re-implementing the read here would give the checklist its own idea of which bundles
+    to expect, and the first thing a second copy did was return an EMPTY list from a
+    regex that missed the `&[&str]`, which made the draft-assets check pass while
+    verifying nothing.  A restated predicate that can go quiet is worse than no check.
+    """
+    import importlib.util
+
+    path = os.path.join(ROOT, "scripts", "gen-toolchain-entry.py")
+    spec = importlib.util.spec_from_file_location("gen_toolchain_entry", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.published_triples()
 
 
 def check_smoke_ran(version: str, network: bool):
@@ -346,16 +360,19 @@ def check_smoke_ran(version: str, network: bool):
     build = [j for j in jobs if j["name"].startswith("Build ")]
     if not build:
         return UNKNOWN, "the run has no build legs yet"
-    ran, skipped, failed = [], [], []
+    ran, skipped, failed, absent = [], [], [], []
     for j in build:
         leg = j["name"].removeprefix("Build ")
         step = next(
             (s for s in j.get("steps", []) if s["name"] == "Smoke-test the bundle"), None
         )
-        if step is None or step.get("conclusion") not in {"success", "failure"}:
-            failed.append(leg)
+        # No such step at all: this tag was built before the smoke existed.  Reporting
+        # that as a failure is a false red, and a check that is red for a reason nobody
+        # can act on is one everybody learns to scroll past.
+        if step is None:
+            absent.append(leg)
             continue
-        if step["conclusion"] == "failure":
+        if step.get("conclusion") != "success":
             failed.append(leg)
             continue
         ac, ao = sh("gh", "api", f"repos/{REPO}/check-runs/{j['id']}/annotations")
@@ -363,6 +380,13 @@ def check_smoke_ran(version: str, network: bool):
             skipped.append(leg)
         else:
             ran.append(leg)
+    if len(absent) == len(build):
+        return UNKNOWN, (
+            f"this run has no bundle-smoke step — v{version} was built before it "
+            "existed, so its bundles were never executed in CI"
+        )
+    if absent:
+        return FAIL, "no smoke step on: " + ", ".join(absent)
     if failed:
         return FAIL, "smoke did not pass on: " + ", ".join(failed)
     if skipped:
