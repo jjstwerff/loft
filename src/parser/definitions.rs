@@ -1743,6 +1743,7 @@ impl Parser {
                 // hidden out-parameter of its own).  Runs first: the rejection below
                 // consumes this parent's lambda list.
                 self.finalize_capture_storage(self.context);
+                self.box_nested_capture_attrs(self.context);
                 self.reject_shared_mutable_scalar_captures(self.context);
             }
             // reset transient closure state after each function body.

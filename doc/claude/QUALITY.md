@@ -2371,7 +2371,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 660 | 310 | 5 | **345** |
+| 661 | 310 | 5 | **346** |
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
@@ -2391,6 +2391,11 @@ nullable SOURCE and warned about correct code.  A constructed collection is neve
 literal takes `.base()`.  This is the family shape the paragraph below describes, one more time:
 the VECTOR branch three lines down had always built its type fresh, and only the keyed sibling
 carried the destination's wrapper.
+
+loft#1236 adds one opaque body — `box_nested_capture_attrs`, which asks `cell_struct_name`
+whether a capture attribute is a boxable scalar and does not peel: a `τ?` scalar is not boxed
+today and the question is about STORAGE, so the wrapper would answer the same either way.  Named
+here rather than left to be re-derived, because the screen reports a count and not a reason.
 
 loft#1209 is the largest single move the column has recorded, and it is a
 CAPTURE rather than a lowering: `closure_attr_type` and both of `parse_var`'s capture sites asked

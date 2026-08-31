@@ -711,6 +711,16 @@ pub struct Parser {
     /// When a variable is not found in the lambda's scope but exists here, it is a capture.
     /// Empty when not inside a lambda.
     pub(crate) capture_context: Vec<(String, Type)>,
+    /// Which DEFINITION owns each name in [`Parser::capture_context`] — the function whose
+    /// variable table it lives in.
+    ///
+    /// For a lambda directly inside a function every visible name is owned by that function,
+    /// and this says nothing the enclosing context does not.  For a lambda nested inside a
+    /// LAMBDA it is the difference between the enclosing lambda and the scope the name really
+    /// comes from, which is what decides where a mutated capture is boxed: the cell has to be
+    /// minted in the frame that holds the variable, not in the closure that passes it along
+    /// (loft#1236).
+    pub(crate) capture_owner: std::collections::HashMap<String, u32>,
     /// Accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
@@ -1202,6 +1212,7 @@ impl Parser {
             expected: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),
+            capture_owner: std::collections::HashMap::new(),
             captured_names: Vec::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,

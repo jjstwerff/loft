@@ -3811,8 +3811,16 @@ fn record_adopts_capture(data: &Data, function: &Function, record: u32, a: usize
     // A `__cell_<T>` is minted FOR this closure (plan-22 boxes a mutated scalar /
     // text capture into one), so the record is its only possible owner however the
     // original binding was reached — including from a parameter.
+    //
+    // ...as long as it was minted for a binding THIS frame has.  A lambda nested in a lambda
+    // RELAYS the capture outward: the enclosing lambda holds no binding of the name at all and
+    // reads the handle out of its own closure record, so the record it builds is a second
+    // pointer at a cell that belongs further out.  Adopting it freed the cell when the
+    // enclosing lambda returned — on its FIRST call, so the second one read a released store
+    // (loft#1236).
     if let Type::Reference(cell, _) = data.attr_type(record, a)
         && data.def(cell).name.starts_with("__cell_")
+        && function.var(&data.attr_name(record, a)) != u16::MAX
     {
         return true;
     }

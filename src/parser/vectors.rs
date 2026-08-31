@@ -1015,6 +1015,97 @@ impl Parser {
         }
     }
 
+    /// How THIS scope names a capture it holds only because a nested lambda asked for it — a
+    /// read of its own closure record — or `None` when it holds no such thing.
+    ///
+    /// The scope that BUILDS a closure record fills it from what it can name, and a relayed
+    /// capture is not a local here: it arrived through this lambda's own `__closure`
+    /// (loft#1236).  Pass 1 answers `None` (no record is synthesised yet) and emits nothing,
+    /// which costs nothing — pass 1's IR is rebuilt in pass 2.
+    fn relayed_capture_read(&mut self, name: &str) -> Option<Value> {
+        if self.first_pass || self.closure_param == u16::MAX {
+            return None;
+        }
+        let rec = self.data.def(self.context).closure_record();
+        if rec == u32::MAX {
+            return None;
+        }
+        let fnr = self.data.attr(rec, name);
+        if fnr == usize::MAX {
+            return None;
+        }
+        Some(self.get_field(rec, fnr, Value::Var(self.closure_param)))
+    }
+
+    /// Install the capture scope a lambda body is parsed in, and return the enclosing one.
+    ///
+    /// The scope is the enclosing function's variables PLUS, when that function is itself a
+    /// lambda, everything IT can see — a lambda nested in a lambda names the grandparent's
+    /// locals just as the outer one does.  Without the second half the inner body could not
+    /// RESOLVE such a name: where it happened to be a scalar or a collection the resolver made
+    /// a fresh binding instead of refusing, so every write landed in a local that dies with the
+    /// call and `total` read 0 where it owed 62 — silent, and `--native` would not compile it
+    /// (loft#1236).
+    ///
+    /// The enclosing entries go in AFTER the enclosing function's own variables, so a name
+    /// bound in the nearer scope shadows the further one.
+    fn enter_capture_scope(
+        &mut self,
+        outer_vars: &Function,
+        outer_context: u32,
+    ) -> (Vec<(String, Type)>, std::collections::HashMap<String, u32>) {
+        let mut ctx = outer_vars.all_names_and_types();
+        let mut owner: std::collections::HashMap<String, u32> = ctx
+            .iter()
+            .map(|(n, _)| (n.clone(), outer_context))
+            .collect();
+        for (name, tp) in &self.capture_context {
+            if !ctx.iter().any(|(n, _)| n == name) {
+                ctx.push((name.clone(), tp.clone()));
+            }
+            // Ownership stays where the BINDING is, even when the enclosing scope has a
+            // variable of that name: a lambda that names a capture gets a placeholder in its
+            // own table, and a placeholder is a way of reaching the binding rather than being
+            // it.  Reading the table alone made the enclosing lambda the owner and boxed the
+            // cell in the closure instead of in the frame that holds the variable.
+            if let Some(d) = self.capture_owner.get(name) {
+                owner.insert(name.clone(), *d);
+            }
+        }
+        (
+            std::mem::replace(&mut self.capture_context, ctx),
+            std::mem::replace(&mut self.capture_owner, owner),
+        )
+    }
+
+    /// Take, in THIS scope, every capture the lambda just parsed reaches past it for.
+    ///
+    /// A closure record is filled by the scope that BUILDS it, from what that scope can name.
+    /// An inner lambda capturing a grandparent's local therefore needs its enclosing lambda to
+    /// have captured it as well — otherwise there is nothing here to fill the inner record
+    /// from, and `emit_lambda_code` silently skips the field (loft#1236).
+    ///
+    /// Only names this scope does not already bind, and only ones its own capture scope offers:
+    /// a name the inner lambda declared, or one that is a local here, relays nothing.
+    fn relay_nested_captures(&mut self, inner: &[(String, Type)]) {
+        for (name, _) in inner {
+            if self.vars.var(name) != u16::MAX {
+                continue;
+            }
+            let Some((_, ctype)) = self
+                .capture_context
+                .iter()
+                .find(|(n, _)| n == name)
+                .cloned()
+            else {
+                continue;
+            };
+            if !self.captured_names.iter().any(|(n, _)| n == name) {
+                self.captured_names.push((name.clone(), ctype));
+            }
+        }
+    }
+
     pub(crate) fn parse_lambda(&mut self, code: &mut Value) -> Type {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
@@ -1028,8 +1119,7 @@ impl Parser {
         let outer_loop = self.in_loop;
         self.in_loop = false;
         // save outer scope variable names/types for capture detection.
-        let outer_capture =
-            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        let (outer_capture, outer_owner) = self.enter_capture_scope(&outer_vars, outer_context);
         // clear captured_names so we collect only this lambda's captures.
         let outer_captured = std::mem::take(&mut self.captured_names);
 
@@ -1047,6 +1137,12 @@ impl Parser {
             self.context = outer_context;
             self.vars = outer_vars;
             self.in_loop = outer_loop;
+            // …and the capture state, which the short form already restored here.  Left
+            // standing, this lambda's `capture_context` is what the NEXT thing parsed sees as
+            // its enclosing scope.
+            self.capture_context = outer_capture;
+            self.capture_owner = outer_owner;
+            self.captured_names = outer_captured;
             return Type::Unknown(0);
         }
         let d_nr = self.context;
@@ -1131,7 +1227,13 @@ impl Parser {
             // `scalars_to_box` field.  Phase 02d-iii will use this
             // to rewrite outer bindings to hidden cells.  Detection-
             // only at this phase — no behavior change.
-            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            accumulate_scalars_to_box(
+                &mut self.data,
+                outer_context,
+                d_nr,
+                &self.captured_names,
+                &self.capture_owner,
+            );
             // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
             // exists for every scalar-typed mutated capture, so
             // 02d-iii's outer-binding rewrite has a target type to
@@ -1151,6 +1253,7 @@ impl Parser {
                 &mut self.captured_names,
                 &self.data,
                 outer_context,
+                &self.capture_owner,
             );
             self.synthesize_closure_record(d_nr, &lambda_name);
             // #314: remember this lambda so the enclosing body's end
@@ -1161,12 +1264,13 @@ impl Parser {
             }
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
-        drop(captured);
 
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
+        self.capture_owner = outer_owner;
+        self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);
 
@@ -1295,8 +1399,7 @@ impl Parser {
         let outer_loop = self.in_loop;
         self.in_loop = false;
         // save outer scope variable names/types for capture detection.
-        let outer_capture =
-            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        let (outer_capture, outer_owner) = self.enter_capture_scope(&outer_vars, outer_context);
         let outer_captured = std::mem::take(&mut self.captured_names);
 
         self.context = if self.first_pass {
@@ -1309,6 +1412,7 @@ impl Parser {
             self.vars = outer_vars;
             self.in_loop = outer_loop;
             self.capture_context = outer_capture;
+            self.capture_owner = outer_owner;
             self.captured_names = outer_captured;
             return Type::Unknown(0);
         }
@@ -1430,7 +1534,13 @@ impl Parser {
             // `scalars_to_box` field.  Phase 02d-iii will use this
             // to rewrite outer bindings to hidden cells.  Detection-
             // only at this phase — no behavior change.
-            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            accumulate_scalars_to_box(
+                &mut self.data,
+                outer_context,
+                d_nr,
+                &self.captured_names,
+                &self.capture_owner,
+            );
             // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
             // exists for every scalar-typed mutated capture, so
             // 02d-iii's outer-binding rewrite has a target type to
@@ -1450,6 +1560,7 @@ impl Parser {
                 &mut self.captured_names,
                 &self.data,
                 outer_context,
+                &self.capture_owner,
             );
             self.synthesize_closure_record(d_nr, &lambda_name);
             // #314: remember this lambda so the enclosing body's end
@@ -1460,12 +1571,13 @@ impl Parser {
             }
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
-        drop(captured);
 
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
+        self.capture_owner = outer_owner;
+        self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);
 
@@ -1553,16 +1665,31 @@ impl Parser {
                     // a false "never read" warning.  Do NOT call var_usages —
                     // that would interfere with the dead-assignment check.
                     self.vars.set_captured(v_nr);
-                    // loft#1218 — give a NULL collection capture its slot BEFORE the fill
-                    // below copies the handle, or there is nothing for the lambda to share.
-                    let backing = self.null_capture_backing(v_nr);
-                    alloc_steps.extend(backing);
+                }
+                // loft#1236 — fill from however THIS scope NAMES the capture, and its own
+                // closure field comes first: a lambda that names an outer binding gets a
+                // placeholder variable in its own table, which pass 2 never assigns because
+                // the read goes through the record.  Filling from that placeholder handed the
+                // inner record an unallocated slot (an internal compiler error) and, where it
+                // survived, an inline scalar where the outer half had a boxed cell.  A name
+                // this scope really OWNS is not in its record, so it falls through to the
+                // local — which is every one-level capture.
+                let fill = self
+                    .relayed_capture_read(&cap_name)
+                    .or_else(|| (v_nr != u16::MAX).then_some(Value::Var(v_nr)));
+                if let Some(fill) = fill {
+                    if v_nr != u16::MAX {
+                        // loft#1218 — give a NULL collection capture its slot BEFORE the fill
+                        // below copies the handle, or there is nothing for the lambda to share.
+                        let backing = self.null_capture_backing(v_nr);
+                        alloc_steps.extend(backing);
+                    }
                     alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
                         0,
                         Value::Var(w),
-                        Value::Var(v_nr),
+                        fill,
                     ));
                     // P259 / Plan-57 Phase B (Mechanism B): the closure record now
                     // holds a DbRef into the captured heap cell (`Reference(__cell_*,
@@ -2015,6 +2142,86 @@ impl Parser {
                 if is_cell {
                     self.data.retype_capture_attr(rec, a_nr, inline_tp.clone());
                 }
+            }
+        }
+    }
+
+    /// Box the capture attribute of every lambda NESTED inside this function's lambdas, for
+    /// each name this function boxes.
+    ///
+    /// Pass 1 freezes a closure record's storage at the lambda's own end, and a nested lambda
+    /// ends BEFORE the enclosing one — so when the enclosing lambda is what mutates the name,
+    /// the inner record was laid out before anyone knew the binding would be boxed.  The inner
+    /// half then read an inline scalar out of a field the outer half filled with a cell DbRef:
+    /// `OpSetInt(clos, 0, OpGetDbRef(…))` on one side and `OpGetInt(closure, 0)` on the other,
+    /// which wrote a handle through an integer setter and landed on the const store
+    /// (loft#1236).
+    ///
+    /// The repair runs at the OWNER's body end, which is the first moment `scalars_to_box` is
+    /// complete, and walks `fn_lambdas` transitively because a nested lambda is registered
+    /// against its enclosing LAMBDA rather than against this function.  It is the mirror of
+    /// [`Self::finalize_capture_storage`], which un-boxes at the same moment for the binding
+    /// that turned out to carry its own indirection.
+    pub(crate) fn box_nested_capture_attrs(&mut self, parent_d: u32) {
+        if !self.first_pass
+            || parent_d == u32::MAX
+            || (parent_d as usize) >= self.data.definitions.len()
+        {
+            return;
+        }
+        let scalars = self.data.def(parent_d).scalars_to_box().to_vec();
+        if scalars.is_empty() {
+            return;
+        }
+        // Only lambdas NESTED inside this function's lambdas.  A direct child is
+        // `finalize_capture_storage`'s to decide, and it has just run: re-boxing what it
+        // deliberately un-boxed is two indirections for one binding, which is the crash #687
+        // exists to prevent.
+        let direct: Vec<u32> = self.fn_lambdas.get(&parent_d).cloned().unwrap_or_default();
+        let mut todo: Vec<u32> = direct
+            .iter()
+            .filter_map(|d| self.fn_lambdas.get(d).cloned())
+            .flatten()
+            .collect();
+        let mut seen: Vec<u32> = Vec::new();
+        while let Some(lam) = todo.pop() {
+            if seen.contains(&lam) || direct.contains(&lam) {
+                continue;
+            }
+            seen.push(lam);
+            if let Some(inner) = self.fn_lambdas.get(&lam) {
+                todo.extend(inner.iter().copied());
+            }
+        }
+        for name in &scalars {
+            // The same exemption `finalize_capture_storage` applies: a binding that already
+            // carries its own indirection (a hidden `&text` out-parameter) must stay inline.
+            let v_nr = self.vars.var(name);
+            if v_nr != u16::MAX && matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
+                continue;
+            }
+            for lam in &seen {
+                let rec = self.data.def(*lam).closure_record();
+                if rec == u32::MAX {
+                    continue;
+                }
+                let a_nr = self.data.attr(rec, name);
+                if a_nr == usize::MAX {
+                    continue;
+                }
+                let tp = self.data.attr_type(rec, a_nr);
+                if boxed_cell_def(&tp, &self.data).is_some() {
+                    continue;
+                }
+                let Some(cell_name) = cell_struct_name(&tp, &self.data) else {
+                    continue;
+                };
+                let cell_d_nr = self.data.def_nr(&cell_name);
+                if cell_d_nr == u32::MAX {
+                    continue;
+                }
+                self.data
+                    .retype_capture_attr(rec, a_nr, Type::Reference(cell_d_nr, Deps::none()));
             }
         }
     }
@@ -5055,11 +5262,21 @@ fn box_captured_names_for_outer_scalars(
     captured_names: &mut [(String, Type)],
     data: &crate::data::Data,
     outer_context: u32,
+    owner: &std::collections::HashMap<String, u32>,
 ) {
     if outer_context == u32::MAX || (outer_context as usize) >= data.definitions.len() {
         return;
     }
-    let scalars = data.def(outer_context).scalars_to_box().to_vec();
+    // Per NAME, because a lambda nested in a lambda captures from further out than its
+    // enclosing scope: the cell is minted in the frame that HOLDS the variable, so that is
+    // also the definition whose `scalars_to_box` answers for it (loft#1236).
+    let scalars_of = |name: &str| -> Vec<String> {
+        let d = owner.get(name).copied().unwrap_or(outer_context);
+        if d == u32::MAX || (d as usize) >= data.definitions.len() {
+            return Vec::new();
+        }
+        data.def(d).scalars_to_box().to_vec()
+    };
     // #687 — this is PROVISIONAL.  Whether the binding really takes a cell depends on
     // whether it ends up with its own indirection (a hidden `&T` out-parameter), and at
     // the lambda's epilogue that is not settled yet: a text local the function RETURNS is
@@ -5070,7 +5287,7 @@ fn box_captured_names_for_outer_scalars(
     // something now: pass 1 freezes the record's storage, so leaving the un-flipped
     // scalar here would lay the field out as 8B inline instead of a 12B shared DbRef.
     for (name, tp) in captured_names {
-        if !scalars.iter().any(|s| s == name) {
+        if !scalars_of(name).iter().any(|s| s == name) {
             continue;
         }
         if let Some(cell_name) = cell_struct_name(tp, data) {
@@ -5087,12 +5304,21 @@ fn accumulate_scalars_to_box(
     parent_d_nr: u32,
     lambda_d_nr: u32,
     captured_names: &[(String, Type)],
+    owner: &std::collections::HashMap<String, u32>,
 ) {
     if parent_d_nr == u32::MAX || (parent_d_nr as usize) >= data.definitions.len() {
         return;
     }
     let mutated = data.def(lambda_d_nr).mutated_captures().to_vec();
     for name in &mutated {
+        // The cell belongs to the frame that HOLDS the variable.  For a lambda nested in a
+        // lambda that is further out than the enclosing scope, and boxing it in the enclosing
+        // closure instead leaves the owner's local an unboxed scalar while every capture of it
+        // is a cell handle — the two halves of one binding disagreeing (loft#1236).
+        let parent_d_nr = owner.get(name).copied().unwrap_or(parent_d_nr);
+        if parent_d_nr == u32::MAX || (parent_d_nr as usize) >= data.definitions.len() {
+            continue;
+        }
         let Some((_, tp)) = captured_names.iter().find(|(n, _)| n == name) else {
             continue;
         };
