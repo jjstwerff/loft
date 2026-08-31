@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Where a float operation answers null, and where it answers an infinity.
+//
+// The Float chapter teaches the rule in one sentence — a genuine NaN becomes null, an IEEE
+// INFINITY stays a value — and demonstrates the three cells a reader needs to take the lesson
+// away.  It deliberately stops there: the chapter is read by someone meeting floats for the
+// first time, and a page that proves every cell of a boundary teaches less than one that shows
+// the shape of it.
+//
+// This is where the rest of the boundary lives.  The distinction is worth pinning completely
+// because it decides whether a `??` guard does anything: a reader who writes
+// `(a / b) ?? fallback` has written a handled division only on the rows that are null, and on
+// the infinity rows the guard is inert and the infinity propagates through every later sum.
+//
+// The rows below ARE the table in the chapter.  If one of them moves, the chapter is wrong and
+// this file is what says so.
+//
+// @falsified-at: none — this guard states where a boundary IS, and it has been in that place
+//   for as long as the corpus records; there is no build on which it fails, which is what makes
+//   it a LOCK rather than a regression test.  Its value is the opposite direction: it fails the
+//   day someone makes `/` answer null, or makes `ln(0.0)` do so, and the Float chapter's
+//   sentence silently stops being true.
+
+fn the_infinity_rows_are_infinities() {
+  fz = 0.0;
+  fp = 1.0;
+  fn1 = -1.0;
+  assert("{fp / fz}" == "inf", "1.0/0.0: {fp / fz}");
+  assert("{fn1 / fz}" == "-inf", "-1.0/0.0: {fn1 / fz}");
+  assert("{ln(fz)}" == "-inf", "ln(0.0): {ln(fz)}");
+  assert("{log(fz, 2.0)}" == "-inf", "log(0.0, 2.0): {log(fz, 2.0)}");
+}
+
+fn the_null_rows_are_nulls() {
+  fz = 0.0;
+  fp = 1.0;
+  fn1 = -1.0;
+  assert(((fz / fz) ?? -1.0) == -1.0, "0.0/0.0 is null");
+  assert(((fp % fz) ?? -1.0) == -1.0, "1.0 % 0.0 is null");
+  assert((ln(fn1) ?? -1.0) == -1.0, "ln(-1.0) is null");
+  assert((log(fn1, 2.0) ?? -1.0) == -1.0, "log(-1.0, 2.0) is null");
+  assert((sqrt(fn1) ?? -1.0) == -1.0, "sqrt(-1.0) is null");
+  assert((asin(2.0) ?? -1.0) == -1.0, "asin(2.0) is null");
+  assert((acos(2.0) ?? -1.0) == -1.0, "acos(2.0) is null");
+  assert((pow(fn1, 0.5) ?? -1.0) == -1.0, "pow(-1.0, 0.5) is null");
+}
+
+// The consequence the chapter leads with, scored on its own: a `??` is not a defended division.
+fn a_coalesce_rescues_the_nulls_and_not_the_infinities() {
+  fz = 0.0;
+  fp = 1.0;
+  assert(((fp / fz) ?? -1.0) > 1000000.0, "the guard is inert on an infinity");
+  assert(((fp / fz ?? 0.0) + 5.0) > 1000000.0, "and the infinity propagates through a later sum");
+  assert(((sqrt(-1.0) + 5.0) ?? -1.0) == -1.0, "while a null propagates as a null");
+}
