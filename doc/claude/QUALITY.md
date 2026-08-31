@@ -2426,6 +2426,11 @@ column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function
 `.base()`, because the same fn-ref reaches it as `fn(τ) -> ρ` and as `fn(τ) -> ρ?` and a
 capture is a capture either way.
 
+loft#1254 added the empty-stub return classifier on the same side, and the opaque column again
+did not move: it asks whether a stub's return is HANDLE-carried, peeling first for the same
+reason — a stub declared `-> P?` needs the twelve-byte null exactly as `-> P` does, so the
+question is about the storage and not about the wrapper.
+
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
 purpose — `Type::Optional` names the spelling it is looking for, and `.base()` peels it to ask
