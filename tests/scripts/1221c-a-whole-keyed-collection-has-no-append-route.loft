@@ -30,3 +30,29 @@ fn test_1221c_a_whole_keyed_collection_has_no_append_route() {
   d1221c.h += o1221c;
   assert(len(d1221c.h) == 1, "unreached");
 }
+
+// The LOCAL spelling of the same statement, and it is the cell that keeps the refusal from
+// being narrowed back to the FIELD.
+//
+// The two place kinds fail DIFFERENTLY, which is why neither alone settles the question and why
+// this file needs both. A keyed field emits no write and `len` reads 0. Between two locals the
+// statement IS claimed, and what it does is REBIND — the IR is a plain `b = a`, so the
+// destination is repointed at the source's store. From an EMPTY destination that is
+// indistinguishable from a successful merge (`b=1 a=1`), which is exactly how it was read on the
+// way to this file; the two cells that separate it are a POPULATED destination, where the
+// destination's own records are simply gone (`d[1] = …; d += c` leaves `d[1]` ABSENT and the
+// source's `d[9]` present), and mutating the SOURCE afterwards, where the destination follows.
+// Its own `= []` store is orphaned with it — `1 stores not freed at program exit`.
+//
+// So the local was never a merge to preserve, and a build that refuses only the field has been
+// told otherwise by the empty-destination appearance. No `.loft` file in the tree merges two
+// keyed locals, so a whole-corpus differential runs clean over the difference — this cell is
+// the only thing that reports it.
+// @EXPECT_ERROR: cannot append a whole `hash<E1221c[k]>` to another
+fn test_1221c_two_keyed_locals_are_refused_too() {
+  m1221c: hash<E1221c[k]> = [];
+  m1221c[7] = E1221c { k: 7, n: 77 };
+  p1221c: hash<E1221c[k]> = [];
+  p1221c += m1221c;
+  assert(len(p1221c) == 1, "unreached");
+}

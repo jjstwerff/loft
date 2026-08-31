@@ -4572,6 +4572,54 @@ five REPAIRS loft#1207 recorded, where the opaque column fell: [[keystone-claim-
 applies to this table too — a row that improves is a claim to check, and a row that grows
 evenly is the honest reading of a site that was never part of the backlog.
 
+#### B7l — the refusal I nearly narrowed, and the appearance that argued for it (2026-08-31)
+
+A sibling checkout reported that B7k's keyed whole-collection refusal had taken a WORKING
+operation away: `b += a` between two keyed LOCALS answered `b=1 a=1` on the parent build and is
+refused on the fixed one. Measured, and it reproduces. I wrote the narrowing — restrict the
+refusal to `var_nr == u16::MAX`, the field destination where the drop was actually measured —
+built it, and confirmed both cells.
+
+**The narrowing was wrong, and the thing that says so is one more cell.** The sibling then read
+the IR: `b += a` lowers to a plain `b = a`. It REBINDS — the destination is repointed at the
+source's store and takes a dep on it. So `b=1 a=1` is not a merge that worked; it is an alias
+seen from an empty destination, where an alias and a merge produce identical output. Two cells
+separate them, and I ran both rather than taking the reading:
+
+| cell | result | reads as |
+|---|---|---|
+| `b = []; b += a` | `b=1 a=1` | a successful merge |
+| …then `a[2] = …` | `b=2 a=2` | **b follows a — it is an alias** |
+| `d[1] = …; d += c` | `d[1]` ABSENT, `d[9]` present | **the destination's own records are gone** |
+
+The populated-destination cell is the sharper of the two and it was not in the sibling's list:
+the rebind does not merely fail to merge, it DESTROYS what the destination held, silently. So
+the refusal is right at every place kind, the narrowing is reverted, and the comment at the site
+now carries the measurement with a ⚠ saying what a build that re-adds the clause has been told.
+
+⚠ **The corpus could not have caught this in either direction, and that is the transferable
+part.** No `.loft` file in the tree merges two keyed locals, so the whole-corpus differential
+that cleared B7k ran clean over both the original refusal AND the narrowing — the same
+instrument, blind to the same gap, would have blessed either answer.
+[[sweep-must-score-the-changed-channel]] says a sweep must be scored on the channel the change
+can move; this adds the other half — **a sweep can only see shapes the corpus contains**, and
+"the differential is clean" is a statement about the corpus, not about the change. The cell now
+lives in `1221c` because that is the only thing that reports it.
+
+⚠ **A peer's first framing was a design question and their second retracted it.** The first
+message asked the owner to choose between "`h += other_h` means merge, so revisit the refusal"
+and "it stays refused, so the tuple copy needs its own primitive". The IR measurement dissolved
+the question — there is no merge to preserve — and the peer withdrew it unprompted. Worth
+recording because the first framing was reasonable and I had begun acting on it: a design
+question raised from BEHAVIOUR is only as good as the mechanism under the behaviour, and the
+cheapest way to check is to read what the statement lowers to
+([[consult-formal-spec-first]] one level down — the IR, not the rules).
+
+**What it leaves open, which is not mine:** `D-tup-4`'s keyed half needs a keyed collection COPY
+and there is none in the language — the vector cure (`o = []; o += vl; o`) has no keyed mirror,
+because the keyed `+=` was an alias all along. That is plan-sized new parse-time machinery over
+five kinds, on loft#1230.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

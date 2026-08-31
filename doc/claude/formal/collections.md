@@ -91,6 +91,18 @@ Two source shapes the rule deliberately does NOT license, each with its own answ
     joining a collection and says nothing about merging two, so this is refused rather than
     implemented.  Not a permanent decision — the rule could grow a merge — but silence was
     never one of the options, and it is what shipped until loft#1221.
+
+    What it did instead of merging is the reason refusing is rule-CONSISTENT rather than merely
+    safe: at a keyed FIELD it emitted no write at all, and between two keyed LOCALS it REBOUND —
+    the IR is a plain `b = a`, so the destination is repointed at the source's store and takes a
+    dep on it.  From an empty destination that is indistinguishable from a successful merge;
+    from a populated one the destination's own records are gone, and mutating the source
+    afterwards moves the destination.  No rule in this document admits an aliasing rebind, and
+    `(T-Cons)`'s independence requirement for a keyed tuple element says the opposite — so the
+    behaviour was not an unwritten merge waiting to be documented.  A real merge would have to
+    walk the source and insert each record with the dedup `Col-Insert` already performs; there
+    is no such copy anywhere in the language today, which is what `tuples-history.md`'s
+    `D-tup-4` keyed half has been waiting on (loft#1230).
   * **a bare element into a VECTOR.**  Legal by this rule and refused by @PLAN52's ambiguity
     rule instead: `vector<vector<T>> += vector<T>` is both "push one element" and "concatenate",
     so the brackets are required for every element type, not only the ambiguous ones.

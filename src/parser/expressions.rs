@@ -2967,13 +2967,30 @@ use a separate collection or add after the loop"
         if op == "+=" && !self.first_pass && crate::parser::vectors::is_collection(f_type.base()) {
             let dest = f_type.base().clone();
             let kind = self.append_source(&dest, &s_type);
-            // A KEYED destination has no route for the WHOLE collection either — `d.h +=
-            // other_h` between two `hash<E[k]>` silently emitted no write and `len` read 0.
-            // Refused rather than implemented: @FR-Col-Insert is stated over records joining a
-            // collection and says nothing about merging two, so making it work is a design
-            // call and a new op, while making it SAY so costs nothing and is strictly better
-            // than the drop.  The vector twin is the control that keeps this scoped — there
-            // `Whole` IS concatenation, and it must stay.
+            // A keyed destination has no route for the WHOLE collection at any place kind, and
+            // the two place kinds fail differently — which is why neither one alone settles it.
+            // A keyed FIELD emitted no write: `d.h += other_h` left `len` reading 0 in silence.
+            // Between two keyed LOCALS the statement is claimed, and what it does is REBIND:
+            // the IR is a plain `b = a`, so `b` is repointed at `a`'s store and takes a dep on
+            // it.  From an EMPTY destination that reads exactly like a successful merge; from a
+            // POPULATED one the destination's own records are simply gone — measured,
+            // `d[1] = …; d += c` leaves `d[1]` ABSENT and `d[9]` (the source's) present — and
+            // mutating the source afterwards moves the destination, which is the cell that
+            // shows the alias rather than either appearance.  Its own `= []` store is orphaned
+            // (`1 stores not freed`).
+            //
+            // So there is no merge here to preserve.  @FR-Col-Insert is stated over records
+            // joining a collection and says nothing about merging two; no rule admits an
+            // aliasing rebind either, so refusing is the rule-consistent answer at every place
+            // kind, and implementing a real merge is a design call and a new op.
+            //
+            // ⚠ This deliberately does NOT carry a `var_nr == u16::MAX` clause, and a build that
+            // adds one has been told the LOCAL spelling works.  It does not: it looks correct
+            // only from an empty destination, and no `.loft` file in the tree merges two keyed
+            // locals, so a whole-corpus differential runs clean over the difference.
+            //
+            // The vector twin is the control — there `Whole` IS concatenation at every place
+            // kind, it copies rather than rebinds, and it must stay.
             let unroutable_whole = kind == crate::parser::vectors::AppendSource::Whole
                 && crate::parser::vectors::is_keyed(&dest)
                 && !s_type.is_unknown();
