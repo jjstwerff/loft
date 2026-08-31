@@ -56,17 +56,29 @@ fn classify(n: integer) -> text {
   "positive"
 }
 // ## Const and Reference Parameters
-// 'const' on a parameter tells the compiler "this function must never change this value."
-// The compiler enforces it — any assignment to a const parameter is a compile error.
+// Write 'const' with the TYPE, not before the name — 'fn f(s: const text)', not
+// 'fn f(const s: text)', which does not parse. It tells the compiler "this function
+// must never change this value", and the compiler enforces it: assigning to a const
+// parameter is a compile error ("Cannot modify const parameter").
 // '&' is the opposite promise: "this function will modify this value."
-// Declaring '&' without actually writing to the parameter is also a compile error.
+// Declaring '&' without actually writing to the parameter is also a compile error
+// ("Parameter 'a' has & but is never modified; remove the &").
 // These rules make it easy to read a function signature and know what it does to its inputs.
+//
+// 'const' earns its keep on a parameter the function COULD write through — a text, a
+// vector, a struct. On a primitive you never modify it is reported as needless
+// ('needless-const-parameter'), because a plain 'integer' parameter is already a copy
+// and const adds nothing to it.
+
+fn shout(s: const text) -> text {
+  s + "!"
+}
 
 fn scale(a: integer, factor: integer) -> integer {
   a * factor
 }
 // ## Type-Based Dispatch
-// You can define two functions with the same name as integer as their parameter types differ.
+// You can define two functions with the same name as long as their parameter types differ.
 // Loft picks the right one at compile time based on the type of the argument you pass.
 
 fn describe_int(v: integer) -> text {
@@ -77,8 +89,10 @@ fn describe_text(v: text) -> text {
   "text:{v}"
 }
 // ## Function References
-// 'fn <name>' creates a reference to a named function that you can store or pass around.
-// The compiler checks that the name exists and is a function — a typo is a compile error.
+// Writing a function's NAME on its own creates a reference to it that you can store or
+// pass around — 'f = double_it', with no 'fn' in front. ('fn double_it' is refused:
+// "Use the function name directly, without 'fn' prefix".)
+// The compiler checks that the name exists — a typo is a compile error.
 // The result has type 'fn(param_types) -> return_type' and can be:
 //   - stored in a variable,
 //   - called directly with 'f(args)', and
@@ -128,6 +142,8 @@ fn main() {
   // 'scale' uses plain parameters (no 'const', no '&'): it only reads them to
   // compute the product, so the caller's values are never touched.
   assert(scale(3, 7) == 21, "scale(3,7)");
+  // 'shout' promises not to change its text, and the compiler holds it to that.
+  assert(shout("hi") == "hi!", "const parameter: {shout(\"hi\")}");
   // Loft selects the right function based on the type of the argument.
   assert(describe_int(42) == "integer:42", "Integer describe");
   assert(describe_text("hi") == "text:hi", "Text describe");
