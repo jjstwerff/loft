@@ -1551,26 +1551,44 @@ fn source_without_failing_fns(src: &str, diags: &[String], path: &str) -> Option
 }
 
 fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()> {
-    run_test_inner(entry, debug, allow_dump, None)
+    let mut collected: Vec<String> = Vec::new();
+    run_test_inner(entry, debug, allow_dump, None, 0, &mut collected)
 }
 
-/// `override_src` is the isolated re-run (loft#1242): the same file with the cells an error
-/// touched blanked out, so the rest can execute.
+/// How many times a file may be peeled before the harness gives up (loft#1242).
 ///
-/// ⚠ The two `allow`s below are about `debug-assertions = false`, which `Cargo.toml` sets for the
+/// Each round blanks the cells that errored and re-parses, so a file needs one round per LAYER
+/// of masking, not per error. Bounded because a pathological file could otherwise loop: the
+/// limit is far above anything the corpus needs (the deepest real case is two).
+const MAX_PEEL: u32 = 8;
+
+/// `override_src` is the peeled re-run (loft#1242): the same file with the cells an error touched
+/// blanked out, so the rest parses and runs. `depth` counts the peels; `collected` accumulates
+/// EVERY round's diagnostics, because that union is what the declarations are checked against.
+///
+/// The union is the point, not an implementation detail. `Parser::parse` runs pass 2 only when
+/// pass 1 finished clean, so ONE pass-1 error silences every `!first_pass` diagnostic in the file
+/// — `Unknown variable`, the const/ref checks, match exhaustiveness, the whole N-Store family.
+/// A file could therefore assert pass-1 errors OR pass-2 errors and never both, which is the
+/// other half of why the `<n>b-…` split exists. Peeling the pass-1 cell lets the next round reach
+/// pass 2, and checking the union means both are verified against one file's declarations.
+///
+/// Only depth 0 checks, and it checks after the recursion has returned — an inner round's
+/// diagnostics have to be in the union before the verdict is taken.
+///
+/// ⚠ The two `allow`s are about `debug-assertions = false`, which `Cargo.toml` sets for the
 /// `loft` package in EVERY profile: the only uses of `allow_dump`, and the only mutations of
 /// `p_data`, are inside `#[cfg(debug_assertions)]` blocks, so with those compiled out clippy sees
 /// a parameter that merely recurses and a binding never mutated. Both are real in a
-/// debug-assertions build — silencing is right here, deleting them would break that build. On that pass the file's `@EXPECT_ERROR`
-/// declarations have ALREADY been verified against the full parse, and the removed cells are
-/// exactly the ones that produced them — so re-checking would report every one as "not
-/// emitted". The expectations are therefore checked once, on the real source.
+/// debug-assertions build — silencing is right here, deleting them would break that build.
 #[allow(clippy::only_used_in_recursion, unused_mut)]
 fn run_test_inner(
     entry: PathBuf,
     debug: bool,
     allow_dump: bool,
     override_src: Option<String>,
+    depth: u32,
+    collected: &mut Vec<String>,
 ) -> std::io::Result<()> {
     // Idempotent: installs SIGSEGV/SIGABRT handler once per test
     // process so crashes print the last-executed opcode + PC.
@@ -1585,7 +1603,6 @@ fn run_test_inner(
     if std::env::var_os("LOFT_TRACE_SCRIPT").is_some() {
         eprintln!("run {entry:?}");
     }
-    let isolated_run = override_src.is_some();
     let source = match override_src {
         Some(ref t) => t.clone(),
         None => std::fs::read_to_string(&entry)?,
@@ -1646,46 +1663,43 @@ fn run_test_inner(
     // went inert: a file whose diagnostics disappeared entirely never reached
     // `check_diagnostics`, so its `@EXPECT_ERROR` lines were not merely unmatched — they
     // were never looked at (loft#929).
-    // Not on the isolated pass: the cells that produced these diagnostics have been blanked,
-    // so every declaration would read as "not emitted". They were verified on the real source.
-    if !isolated_run
-        && (!p.diagnostics.is_empty()
-            || !expected.is_empty()
-            || !exp_errors.is_empty()
-            || !exp_ann_warns.is_empty())
-    {
-        check_diagnostics(
-            &p.diagnostics.lines(),
-            &expected,
-            &exp_errors,
-            &exp_ann_warns,
-            had_errors,
-        )?;
+    // ⚠ Each round contributes to the union EXACTLY ONCE, and where matters. The post-compile
+    // block below re-reads the same diagnostics (`std::mem::take` of `p.diagnostics`, plus the
+    // lints), so extending here as well would double every parse diagnostic — and a duplicate
+    // has no second `@EXPECT_ERROR` to match, so `check_diagnostics` would report it as
+    // unexpected and fail the file. The extends therefore sit on the three paths that LEAVE this
+    // function: before recursing, before the errors-consumed return, and in the post-compile
+    // block, which already includes the parse diagnostics it took.
+    // Decide whether to peel BEFORE any verdict: an inner round's diagnostics must be in the
+    // union first, or a pass-2 error unmasked by peeling would be reported as unexpected.
+    let reduced = if had_errors && depth < MAX_PEEL {
+        source_without_failing_fns(&source, &p.diagnostics.lines(), &path)
+    } else {
+        None
+    };
+    if let Some(text) = reduced {
+        println!("  errors consumed; running the cells they did not touch");
+        collected.extend(p.diagnostics.lines());
+        let ran = run_test_inner(
+            entry.clone(),
+            debug,
+            allow_dump,
+            Some(text),
+            depth + 1,
+            collected,
+        );
+        if depth == 0 {
+            check_diagnostics(collected, &expected, &exp_errors, &exp_ann_warns, true)?;
+        }
+        return ran;
     }
     // Only skip execution when the file actually has unresolved parse errors.
     // If @EXPECT_ERROR annotations exist but the errors are gone (bug fixed),
     // proceed to execution so the fix can be verified.
     if had_errors {
-        // loft#1242 — the errors are verified; now run the cells they did not touch.
-        //
-        // A refusal used to end the file: an `assert` in any OTHER function was compiled and
-        // never run, so the file passed on the refusal alone and a companion `<n>b-…` file had
-        // to exist purely to hold the runnable half.  The harness already runs each zero-param
-        // function as its own entry point under `catch_unwind`, so the cells ARE independent —
-        // only the parse was shared.  Blank the failing ones and re-run the rest.
-        //
-        // The expectations are checked ONCE, above, against the real source: the cells about to
-        // be removed are exactly the ones that produced them, so re-checking on the isolated
-        // pass would report every `@EXPECT_ERROR` as "not emitted".
-        //
-        // `source_without_failing_fns` returns `None` for every shape it cannot isolate safely,
-        // and then this behaves exactly as it always did.
-        if !isolated_run
-            && let Some(reduced) =
-                source_without_failing_fns(&source, &p.diagnostics.lines(), &path)
-        {
-            println!("  errors consumed; running the cells they did not touch");
-            return run_test_inner(entry, debug, allow_dump, Some(reduced));
+        collected.extend(p.diagnostics.lines());
+        if depth == 0 {
+            check_diagnostics(collected, &expected, &exp_errors, &exp_ann_warns, true)?;
         }
         println!("  ok (errors consumed)");
         return Ok(());
@@ -1737,19 +1751,11 @@ fn run_test_inner(
     for l in diagnostics.lines() {
         println!("{l}");
     }
-    if !isolated_run
-        && (!diagnostics.is_empty()
-            || !expected.is_empty()
-            || !exp_errors.is_empty()
-            || !exp_ann_warns.is_empty())
-    {
-        check_diagnostics(
-            &diagnostics.lines(),
-            &expected,
-            &exp_errors,
-            &exp_ann_warns,
-            true,
-        )?;
+    // The post-compile lints join the union too (`warn_dead_stores` and friends run only on a
+    // clean parse, so they can only ever appear on the round that reaches here).
+    collected.extend(diagnostics.lines());
+    if depth == 0 {
+        check_diagnostics(collected, &expected, &exp_errors, &exp_ann_warns, true)?;
     }
 
     // Discover all zero-parameter user functions as entry points.
