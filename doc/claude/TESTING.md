@@ -2769,10 +2769,21 @@ the control's job is often already done by the harness.
 passing `@EXPECT_ERROR` guard exits 1, so the exit channel reads *"THIS TREE IS NOT CLEAN"* on
 both trees and can never move — which is why the tool used to print NOT FALSIFIED for a guard
 that was working. loft#1224 added the `refusals` and `expect` columns for exactly this, so the
-verdict now comes off the one channel that can move: `interpret expectations matched 4/6 -> 6/6`
-is a falsification, and the unmatched cells name themselves. **Read the column, not the
-verdict line alone** — a file whose annotations match on both trees is a file whose control
-does not fire, and the `expect` pair says so where the exit pair cannot.
+verdict can now come off a channel that moves: `interpret expectations matched 4/6 -> 6/6` is a
+falsification, and the unmatched cells name themselves.
+
+⚠ **But `expect n/m` counts ONE PARSE ROUND, and the SUITE counts the file (loft#1253).** A
+direct `loft` run stops at *"aborting due to 1 previous error"*; `tests/wrap.rs` does not — since
+loft#1242 it attributes each error to its enclosing function, blanks that cell, re-parses, and
+checks against the UNION of every round. `falsify.sh` runs `loft` directly, so a file whose
+first error aborts the parse reads `expect 1/5` with all five cells matching — a number that is
+not merely incomplete but readable as its own opposite, and a reviewer who trusts it goes and
+repairs four cells that were never broken. Whether YOUR file is affected depends on its shape:
+run it directly and look: six independent `const` refusals all report in one round
+(*"aborting due to 6 previous errors"*), so `4/6 -> 6/6` there is exact. **Until loft#1253
+lands, read `expect n/m` as "the FIRST ROUND matched n" and hand-score a multi-cell refusal
+guard**: replace each expected substring in turn with a word the compiler never prints and check
+the suite fails, then restore it — five for five is the proof falsify cannot yet give you.
 
 **The fallback has the same shape as the wrong answer.** `b.c ?? []` on a nullable
 collection field took the wrong branch and answered the empty field: length 0, which is
