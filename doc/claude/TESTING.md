@@ -2784,6 +2784,15 @@ channel moves as well: a file whose declared errors all occur exits 0, one with 
 declaration exits 1. The column now reads `FAIL/6 -> 6/6` — the suite's verdict and a declared
 count, never a guessed fraction, because a guessed fraction is what did the damage.
 
+**A boolean prints `false` for every byte that is not `1`.** So a garbage `u8` in a boolean
+slot renders exactly like the right answer, `!b` reads `true` for it, and only `b == false`
+separates them — the two spellings a reader reaches for first are the two that hide it.
+Measured on loft#1254's empty-body stub, where the value printed `false` on both backends
+while `b == false` was FALSE on the broken one. **Assert the COMPARISON, not the rendering**,
+whenever the subject is a boolean; a guard grepping stdout for `false` passes on the defect.
+The same caution reads across to `character` (codepoint 0 renders as nothing) and to any type
+whose formatter maps several bit-patterns onto one glyph.
+
 **Two `@EXPECT_ERROR` cells declaring the IDENTICAL substring make each other vacuous.** The
 suite matches declarations against the UNION of every parse round (loft#1242), not cell by
 cell, so either annotation consumes either diagnostic: corrupt one and the other still

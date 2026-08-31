@@ -4538,7 +4538,8 @@ fn native_empty_body_returns_the_types_default() -> std::io::Result<()> {
          fn s_int() -> integer { }\n\
          fn s_float() -> float { }\n\
          fn main() {\n\
-         \x20 println(\"bool {s_bool()}\");\n\
+         \x20 b = s_bool();\n\
+         \x20 println(\"bool {b} eq {b == false} not {!b}\");\n\
          \x20 println(\"lim {s_lim()}\");\n\
          \x20 println(\"int {s_int()}\");\n\
          \x20 println(\"float {s_float()}\");\n\
@@ -4553,10 +4554,16 @@ fn native_empty_body_returns_the_types_default() -> std::io::Result<()> {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+    // `bool false` alone is NOT enough, and this is the cell that says why.  A boolean is a
+    // `u8` and anything but `1` FORMATS as `false`, so a garbage byte prints exactly like the
+    // right answer and `!b` reads `true` for it as well — the two spellings a reader reaches
+    // for first both hide it.  `b == false` is the one that does not, so it is what this
+    // asserts: a build returning the `255u8` null prints `false`, answers `!b` true, and
+    // answers `eq false`.
     assert!(
-        stdout.contains("bool false"),
-        "a `boolean` stub takes the type's default `false`, not its `255u8` NULL — a reader \
-         who tests the result for null gets the wrong answer either way round: {stdout}"
+        stdout.contains("bool false eq true not true"),
+        "a `boolean` stub takes the type's default `false`, not its `255u8` NULL — and it has \
+         to be EQUAL to false, not merely print that way: {stdout}"
     );
     assert!(
         stdout.contains("lim 10"),
