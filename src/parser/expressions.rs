@@ -2976,7 +2976,24 @@ use a separate collection or add after the loop"
         // concat, the keyed fill and the record-literal routes are all downstream, so a
         // check at any of them is one more copy of a question this file already asks in
         // four places.  [`Parser::append_source`] is that question's home.
-        if op == "+=" && !self.first_pass && crate::parser::vectors::is_collection(f_type.base()) {
+        // ⚠ A bare `null` source is NOT the classifier's question and is excluded here.
+        // `null` is not a type the destination can or cannot HOLD — it is a value every
+        // element slot has a reading for, and the routes below have handled it since long
+        // before this check: `c += null` appends one absent element, at a nullable element
+        // type and at a dense one alike.  Whether it may occupy a DENSE slot is `(N-Store)`'s
+        // question and belongs to loft#1232, not to a routing refusal.
+        //
+        // Measured the hard way: without this clause the classifier called `null` `Unrelated`
+        // at every element type and refused four shapes the parent accepts — which broke the
+        // published `arguments 0.2.1` on `self.results += null` into a `vector<text?>`.  Five
+        // green `make ci` runs and a whole-corpus value differential said nothing, because no
+        // `.loft` file in this repository appends a bare `null` to a collection; only
+        // `scripts/revalidate_libs_local.sh` sees it.
+        if op == "+="
+            && !self.first_pass
+            && !matches!(s_type, Type::Null)
+            && crate::parser::vectors::is_collection(f_type.base())
+        {
             let dest = f_type.base().clone();
             let kind = self.append_source(&dest, &s_type);
             // A keyed destination has no route for the WHOLE collection at any place kind, and
