@@ -2335,7 +2335,15 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         // a process stuck behind another's long cold build.
         let lock_t = std::time::Instant::now();
         crate::platform::timing_record("lockwait", stem, false, None);
+        // loft#1238 — and tell the TIMEOUT what we are waiting for.  The ledger already
+        // distinguished "still waiting" (a `lockwait` with no `lockheld`) from "waited and
+        // built", but only to a reader who has the ledger AND knows that convention; the kill
+        // message said `phase=parse`, which is true and useless.  Now the process that dies here
+        // says so in the line that reports its death.
+        let waiting = format!("the global native-build lock (for {stem})");
+        crate::timeout::blocked_on(&waiting);
         let _ = f.lock();
+        crate::timeout::unblocked();
         crate::platform::timing_record(
             "lockheld",
             stem,

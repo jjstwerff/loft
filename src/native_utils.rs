@@ -390,6 +390,14 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
         // runner every wasm-shaped process reaches this lock at once after a loft rebuild, so
         // the wall-clock a single run reports can be almost entirely SOMEONE ELSE'S build; a
         // report that folded the two together would name cargo for time cargo did not spend.
+        // loft#1238 — name the wait to the TIMEOUT as well as to the ledger: a process killed
+        // here is queued behind another's cold build, and its kill message used to say
+        // `phase=parse`.
+        let waiting = format!(
+            "the global native-build lock (for the {} wasm runtime rlib)",
+            shape.name()
+        );
+        loft::timeout::blocked_on(&waiting);
         crate::platform::timing_exec(
             "lock",
             shape.name(),
@@ -398,6 +406,7 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
                 let _ = f.lock();
             },
         );
+        loft::timeout::unblocked();
     }
     if fresh(&profile_dir) {
         // A process we waited on just produced it.

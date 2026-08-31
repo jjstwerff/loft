@@ -176,15 +176,66 @@ pub fn deadline_reached() -> bool {
 fn graceful_exit() -> ! {
     let (phase, fn_name, file, line) = report_fields();
     eprintln!(
-        "[timeout] deadline reached after {}s (graceful): phase={} fn={} file={}:{}{}",
+        "[timeout] deadline reached after {}s (graceful): phase={} fn={} file={}:{}{}{}",
         TIMEOUT_SECS.load(Ordering::Relaxed),
         phase,
         fn_name,
         file,
         line,
-        entry_suffix(&fn_name)
+        entry_suffix(&fn_name),
+        blocked_suffix()
     );
     std::process::exit(124);
+}
+
+/// What this process is BLOCKED on, if anything, and since when (loft#1238).
+///
+/// The breadcrumb answers *where in the program are we*; a process waiting on a cross-process
+/// lock is still "in parse" by that measure, and both timeout reports said so — `phase=parse`
+/// for a process that was not parsing, was not going to parse, and would have been unblocked by
+/// nothing it could do. The one fact that explains the kill is the one neither report carried.
+///
+/// Measured: a feature example hit its 60s budget with `lockwait` recorded and no `lockheld`,
+/// i.e. killed while queued behind another process's cold cdylib build. Reading that took the
+/// timing ledger, two lines of it, and knowing the convention that an unmatched `lockwait` means
+/// "still waiting". It should take reading the kill message.
+static BLOCKED: std::sync::Mutex<Option<(String, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+/// Note that this process is about to block on `what` — a cross-process lock, a subprocess build.
+/// Pair with [`unblocked`]. Cheap and inert when no timeout is armed.
+pub fn blocked_on(what: &str) {
+    if !ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut b) = BLOCKED.try_lock() {
+        *b = Some((what.to_string(), std::time::Instant::now()));
+    }
+}
+
+/// Clear the blocked note set by [`blocked_on`].
+pub fn unblocked() {
+    if !ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut b) = BLOCKED.try_lock() {
+        *b = None;
+    }
+}
+
+/// ` blocked=<what> for <n>s` when this process is waiting on something, else empty.
+///
+/// `try_lock` like [`report_fields`]: a held or poisoned mutex costs the note, never the kill.
+fn blocked_suffix() -> String {
+    match BLOCKED.try_lock() {
+        Ok(b) => match &*b {
+            Some((what, since)) => {
+                format!(" blocked={what} for {:.1}s", since.elapsed().as_secs_f64())
+            }
+            None => String::new(),
+        },
+        Err(_) => String::new(),
+    }
 }
 
 /// The `phase` / `fn` / `file` / `line` both timeout reports print, with the
@@ -362,14 +413,15 @@ fn print_breadcrumb_and_abort(timeout: u64, grace: u64) {
     let (phase, fn_name, file, line) = report_fields();
     eprintln!(
         "[timeout] hard-kill after {}s+{}s grace: \
-         phase={} fn={} file={}:{}{}",
+         phase={} fn={} file={}:{}{}{}",
         timeout,
         grace,
         phase,
         fn_name,
         file,
         line,
-        entry_suffix(&fn_name)
+        entry_suffix(&fn_name),
+        blocked_suffix()
     );
     // `process::abort()` raises SIGABRT — useful for debugging
     // (core dump on `ulimit -c`).  Test/CI runs may prefer the
