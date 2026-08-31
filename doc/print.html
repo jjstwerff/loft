@@ -1015,20 +1015,36 @@
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main_ranges</span>() {</code></pre>
 <h2 id="iterating-a-key-range">Iterating a Key Range</h2>
-<p>Use an <code>if</code> guard inside a <code>for</code> loop to visit only records whose key falls within a range. Because the collection is sorted the guard still sees all elements, but the body only runs for the matching ones.</p>
+<p>Give the collection a RANGE in square brackets and the loop starts and stops at the right places, without looking at the records outside it. This is the operation a sorted collection exists for. c[lo..hi]   from lo up to but NOT including hi c[lo..=hi]  from lo up to AND including hi c[lo..]     from lo to the end c[..hi]     from the start up to but not including hi Mind the two spellings: <code>..</code> leaves the last key out, <code>..=</code> keeps it. That is the same rule as a vector slice.</p>
 <pre><code>  d = <span class="en">Dict</span> { words: [
     <span class="en">Word</span> { name: <span class="st">"apple"</span>,      score: <span class="nm">5</span> },
     <span class="en">Word</span> { name: <span class="st">"banana"</span>,     score: <span class="nm">3</span> },
     <span class="en">Word</span> { name: <span class="st">"cherry"</span>,     score: <span class="nm">8</span> },
     <span class="en">Word</span> { name: <span class="st">"date"</span>,       score: <span class="nm">2</span> },
     <span class="en">Word</span> { name: <span class="st">"elderberry"</span>, score: <span class="nm">1</span> }
-  ] };</code></pre>
-<p>Closed range: keys &gt;= "banana" and &lt;= "date".</p>
-<pre><code>  range_total = <span class="nm">0</span>;
-  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"date"</span> {
-    range_total += w.score
+  ] };
+  slice_total = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words[<span class="st">"banana"</span>..=<span class="st">"date"</span>] {
+    slice_total += w.score
   }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(range_total == <span class="nm">13</span>, <span class="st">"banana(3)+cherry(8)+date(2) = {range_total}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(slice_total == <span class="nm">13</span>, <span class="st">"banana(3)+cherry(8)+date(2) = {slice_total}"</span>);
+  half_open = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words[<span class="st">"banana"</span>..<span class="st">"date"</span>] {
+    half_open += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(half_open == <span class="nm">11</span>, <span class="st">"'..' leaves date out: {half_open}"</span>);
+  head_total = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words[..<span class="st">"cherry"</span>] {
+    head_total += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(head_total == <span class="nm">8</span>, <span class="st">"apple(5)+banana(3) = {head_total}"</span>);</code></pre>
+<h2 id="filtering-on-something-that-is-not-the-key">Filtering on something that is NOT the key</h2>
+<p>An <code>if</code> guard inside the loop still works, and it is what you want when the condition is not about the key: the guard sees every element and the body runs only for the matching ones. Use a range when you are selecting BY key, and a guard when you are selecting by anything else.</p>
+<pre><code>  cheap = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.score &lt; <span class="nm">4</span> {
+    cheap += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cheap == <span class="nm">6</span>, <span class="st">"banana(3)+date(2)+elderberry(1) = {cheap}"</span>);</code></pre>
 <h2 id="open-ended-range-tail">Open-ended Range (tail)</h2>
 <p>All records from "cherry" onward to the end of the sorted order.</p>
 <pre><code>  tail_count = <span class="nm">0</span>;
