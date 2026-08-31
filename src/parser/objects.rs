@@ -1064,13 +1064,10 @@ impl Parser {
     ///   bare DbRef — phase 02d-ii's silent gap for exotic
     ///   shapes carries through here.
     pub(crate) fn auto_deref_boxed_scalar(&mut self, code: &mut Value, t: Type) -> Type {
-        let Type::Reference(d_nr, _) = &t else {
+        let Some(d_nr) = crate::parser::vectors::boxed_cell_def(&t, &self.data) else {
             return t;
         };
-        if !self.data.def(*d_nr).name().starts_with("__cell_") {
-            return t;
-        }
-        let Some(value_attr) = self.data.def(*d_nr).attributes().first() else {
+        let Some(value_attr) = self.data.def(d_nr).attributes().first() else {
             return t;
         };
         if value_attr.name != "value" {

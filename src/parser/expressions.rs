@@ -646,14 +646,10 @@ impl Parser {
             // inside the closure and may be its sole write.  Text shadows keep the
             // plain copy.
             for (shadow, original) in self.vars.promoted_text_args() {
-                let seed = match self.vars.tp(shadow).clone() {
-                    Type::Reference(cell, _)
-                        if self.data.def(cell).name().starts_with("__cell_") =>
-                    {
-                        self.boxed_cell_alloc_and_set(shadow, cell, Value::Var(original))
-                    }
-                    _ => None,
-                };
+                let shadow_tp = self.vars.tp(shadow).clone();
+                let seed = crate::parser::vectors::boxed_cell_def(&shadow_tp, &self.data).and_then(
+                    |cell| self.boxed_cell_alloc_and_set(shadow, cell, Value::Var(original)),
+                );
                 ls.insert(
                     0,
                     seed.unwrap_or_else(|| v_set(shadow, Value::Var(original))),
@@ -1390,9 +1386,8 @@ impl Parser {
         // Activates in 02d-iii.e together with the flip.
         if !self.first_pass
             && self.vars.exists(v_nr)
-            && let Type::Reference(d, _) = self.vars.tp(v_nr)
-            && self.data.def(*d).name().starts_with("__cell_")
-            && let Some(value_attr) = self.data.def(*d).attributes().first()
+            && let Some(d) = crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
+            && let Some(value_attr) = self.data.def(d).attributes().first()
             && value_attr.name == "value"
             && (value_attr.typedef.is_equal(tp)
                 || (matches!(value_attr.typedef, Type::Integer(_))
@@ -3224,22 +3219,11 @@ use a separate collection or add after the loop"
         // already a Reference(__cell_text, _), not an argument
         // and not a plain text Var.
         let is_boxed_text_lhs = matches!(f_type, Type::Text(_))
-            && self
-                .extract_boxed_var_from_lhs(to)
-                .and_then(|v_nr| {
-                    if !self.vars.exists(v_nr) {
-                        return None;
-                    }
-                    match self.vars.tp(v_nr) {
-                        Type::Reference(d, _)
-                            if self.data.def(*d).name().starts_with("__cell_") =>
-                        {
-                            Some(v_nr)
-                        }
-                        _ => None,
-                    }
-                })
-                .is_some();
+            && self.extract_boxed_var_from_lhs(to).is_some_and(|v_nr| {
+                self.vars.exists(v_nr)
+                    && crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
+                        .is_some()
+            });
         if matches!(f_type.base(), Type::Text(_)) && !is_boxed_text_lhs {
             // A text assignment needs somewhere to assign TO. Every other type
             // falls through to the general operator dispatch, which refuses a
@@ -4586,8 +4570,23 @@ use a separate collection or add after the loop"
         // Only attempt outside format-string expressions (where `:` is used for
         // format specifiers like `{c:#}`).  Consume `: type` only when `=`
         // follows, confirming this is an annotated declaration.
-        if let Value::Var(v_nr) = code
-            && self.vars.exists(*v_nr)
+        // A capture a closure MUTATES is BOXED (plan-22 02d-iii): the local's type
+        // becomes `Reference(__cell_<T>)` and `auto_deref_boxed_scalar` rewrites every
+        // occurrence of the name into `OpGet<T>(Var, 0)` — the DECLARATION's own
+        // occurrence included.  That shape is the boxed local's place (`towards_set`
+        // maps it straight back to `OpSet<T>`), so the annotation is recognised through
+        // it as well.  Asking only for a bare `Value::Var` left the `:` unconsumed and
+        // reported the well-formed `t: integer = 0` as a missing `;`, on a line whose
+        // only fault was that a closure further down assigned `t` (loft#1231).
+        let annotated_var = match code {
+            Value::Var(v_nr) if self.vars.exists(*v_nr) => Some(*v_nr),
+            _ => self.extract_boxed_var_from_lhs(code).filter(|&v_nr| {
+                self.vars.exists(v_nr)
+                    && crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
+                        .is_some()
+            }),
+        };
+        if let Some(v_nr) = annotated_var
             && !self.in_format_expr
             && self.lexer.peek_token(":")
         {
@@ -4619,13 +4618,13 @@ use a separate collection or add after the loop"
                 } else {
                     tp
                 };
-                self.change_var_type(*v_nr, &tp);
+                self.change_var_type(v_nr, &tp);
                 // (I-Join) — an EXPLICIT `: Type` annotation pins the variable's type, so
                 // it stays constrained (a wider write is a narrowing error).  An inferred
                 // local (no annotation) widens to the join instead (see parse_assign_op).
-                self.vars.set_annotated(*v_nr);
+                self.vars.set_annotated(v_nr);
                 if is_value_const {
-                    self.vars.set_value_const(*v_nr);
+                    self.vars.set_value_const(v_nr);
                 }
                 f_type = tp;
                 got_annotation = true;
@@ -5538,12 +5537,9 @@ use a separate collection or add after the loop"
             return result;
         }
         let tp = self.vars.tp(v_nr).clone();
-        let Type::Reference(cell_d_nr, _) = &tp else {
+        let Some(cell_d_nr) = crate::parser::vectors::boxed_cell_def(&tp, &self.data) else {
             return result;
         };
-        if !self.data.def(*cell_d_nr).name().starts_with("__cell_") {
-            return result;
-        }
         if self.vars.is_defined(v_nr) {
             // Subsequent: cell already exists, no alloc needed.
             return result;
@@ -5553,7 +5549,7 @@ use a separate collection or add after the loop"
         if op_db == u32::MAX {
             return result;
         }
-        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type());
+        let cell_kt = i32::from(self.data.def(cell_d_nr).known_type());
         self.vars.defined(v_nr);
         Value::Insert(vec![
             v_set(v_nr, Value::Null),
@@ -5607,17 +5603,12 @@ use a separate collection or add after the loop"
             return None;
         }
         let tp = self.vars.tp(var_nr).clone();
-        let Type::Reference(cell_d_nr, _) = &tp else {
-            return None;
-        };
-        if !self.data.def(*cell_d_nr).name().starts_with("__cell_") {
-            return None;
-        }
-        let value_attr = self.data.def(*cell_d_nr).attributes().first()?;
+        let cell_d_nr = crate::parser::vectors::boxed_cell_def(&tp, &self.data)?;
+        let value_attr = self.data.def(cell_d_nr).attributes().first()?;
         if value_attr.name != "value" {
             return None;
         }
-        let op_set_d_nr = self.cell_value_set_op(*cell_d_nr)?;
+        let op_set_d_nr = self.cell_value_set_op(cell_d_nr)?;
         if self.vars.is_defined(var_nr) {
             // Subsequent: write value field of existing cell.
             Some(Value::Call(
@@ -5626,7 +5617,7 @@ use a separate collection or add after the loop"
             ))
         } else {
             // First-set: allocate cell + fill value field.
-            self.boxed_cell_alloc_and_set(var_nr, *cell_d_nr, rhs)
+            self.boxed_cell_alloc_and_set(var_nr, cell_d_nr, rhs)
         }
     }
 

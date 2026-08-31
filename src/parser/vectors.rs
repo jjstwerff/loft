@@ -1774,9 +1774,7 @@ impl Parser {
             }
             let original_tp = self.vars.tp(v_nr).clone();
             // Skip if already flipped.
-            if matches!(&original_tp, Type::Reference(d, _)
-                if self.data.def(*d).name().starts_with("__cell_"))
-            {
+            if boxed_cell_def(&original_tp, &self.data).is_some() {
                 continue;
             }
             // Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
@@ -1932,8 +1930,7 @@ impl Parser {
                     continue;
                 }
                 // Only undo the provisional boxing; anything else is already right.
-                let is_cell = matches!(self.data.attr_type(rec, a_nr),
-                    Type::Reference(d, _) if self.data.def(d).name().starts_with("__cell_"));
+                let is_cell = boxed_cell_def(&self.data.attr_type(rec, a_nr), &self.data).is_some();
                 if is_cell {
                     self.data.retype_capture_attr(rec, a_nr, inline_tp.clone());
                 }
@@ -4842,6 +4839,26 @@ pub(crate) fn cell_struct_name(tp: &Type, data: &crate::data::Data) -> Option<St
             Some(format!("__cell_enum_{enum_name}"))
         }
         _ => None,
+    }
+}
+
+/// The `__cell_<T>` definition a type points at, or `None` when the type is not a
+/// boxed scalar — the inverse of [`cell_struct_name`], and the ONE home for the
+/// question *"is this a boxed scalar?"*.
+///
+/// A capture a closure MUTATES is boxed: the local's type becomes
+/// `Reference(__cell_<T>)`, every read of it is rewritten into `OpGet<T>(Var, 0)`
+/// (`auto_deref_boxed_scalar`) and every write into the matching `OpSet<T>`.  A
+/// site that must tell such a local from an ordinary one asks here, so the sites
+/// cannot drift apart on what the box looks like.
+pub(crate) fn boxed_cell_def(tp: &Type, data: &crate::data::Data) -> Option<u32> {
+    let Type::Reference(d_nr, _) = tp else {
+        return None;
+    };
+    if data.def(*d_nr).name().starts_with("__cell_") {
+        Some(*d_nr)
+    } else {
+        None
     }
 }
 
