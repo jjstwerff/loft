@@ -6,12 +6,47 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-Null-Elem` was opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Narrow-Asgn` and `D-Null-Elem` were both opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Narrow-Asgn — OPENED AND CLOSED (2026-08-31, loft#1246): a narrowing store into a NULLABLE narrow LOCAL was neither refused nor checked
+
+`(I-Narrow)` says a narrowing store needs an explicit `as` or a literal that plainly fits, and
+the 2026-07-10 refinement below completes it for a NULLABLE narrow target: no `as`, but a
+CHECKED narrowing — the value when it fits, `null` when it does not.  An annotated local
+assignment got neither:
+
+```loft
+p = 250;
+d: u8? = p + 10;                 // kept 260 — outside the range its own type declares
+s.un = p + 10;   f(p + 10);      // null, correctly — field and argument
+S { un: p + 10 };                // null, correctly — struct literal
+```
+
+The refinement lives in `convert`, which the struct literal, the argument and the return all
+reach.  The ASSIGNMENT seam never reaches `convert` for this pair, because `integer` and
+`integer(0,255)?` are `is_equal` — so it runs its own narrowing test instead, and that test is a
+REFUSAL with no checked-cast arm which additionally did not peel the `Optional` wrapper.  It
+therefore refused nothing and checked nothing, and the value landed raw.
+
+`implicit_checked_narrow` (`parser/mod.rs`) is now the one home for the refinement, asked by
+`convert` and by the assignment seam.  The rule gained the clause it was missing —
+`(I-Narrow-Opt)` in types.md — because a two-clause `(I-Narrow)` cannot express a target whose
+type already says what an out-of-range value becomes, which is why this register could read
+`OPEN: 0` while the defect stood.
+
+⚠ **The refinement's own guard was green throughout.**
+`tests/scripts/25-nullable-narrow-implicit-checked.loft` has seven cells over four functions,
+two source types and in-range/out-of-range arms — and every cell is a RETURN, so all seven enter
+through `convert`.  TESTING.md § How a guard reads green carries the general shape ("every cell
+reaches the same SEAM").  The replacement guard,
+`tests/scripts/1246-a-nullable-narrow-slot-answers-null.loft`, is written as seams first and
+values second: local, field, struct literal, vector element, argument, return and compound, each
+in both spellings of the range.
 
 ### D-Null-Elem — OPENED AND CLOSED (2026-08-31, loft#1232): a nullable stored into a collection LITERAL's element, in silence
 

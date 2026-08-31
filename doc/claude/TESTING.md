@@ -2804,6 +2804,19 @@ build, exactly as for the guard itself; where the two readings coincide, say so 
 control where it can differ (that one moved to the `.loft` guard, which scores the ANSWER and
 falsifies with six assertion failures on the control build).
 
+**Every cell reaches the same SEAM.** A guard can sweep values, types and directions
+thoroughly and still ask one question, because all of its cells enter the machinery at the
+same place. `tests/scripts/25-nullable-narrow-implicit-checked.loft` pins the implicit
+checked narrowing into a nullable narrow target across four functions, an `if` in each,
+in-range and out-of-range arms and two source types — and every one of them is a RETURN.
+A return, an argument and a struct-literal field all reach that rule through `convert`; an
+annotated local assignment does not reach `convert` at all. So `d: u8? = p + 10` kept a
+value outside its own declared range for seven weeks under a green guard whose author had
+plainly enumerated (loft#1246). **Ask a guard which SEAM each cell enters, not only which
+value it carries** — the seams a store can enter are countable (local, field, element,
+struct literal, argument, return, compound), and a guard that names them is checkable
+against that list, while one that varies values inside a single seam is not.
+
 **The predicate has no reachable negative.** A predicate that cannot be false in your
 program cannot be wrong in a way anything notices. `document.fonts.check()` answers *true*
 for a family nothing declares (no unloaded face ⟹ vacuously satisfied), so the browser text

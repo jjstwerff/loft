@@ -3623,6 +3623,46 @@ impl Parser {
     /// smaller explicit width (e.g. `integer` → `i32`, or `i32` → `u8`), which
     /// loses data.  Widening (`i32` → `integer`) and same-width are not narrowing.
     /// A plain `integer`/`wide`/`u32` has no `forced_size` and is treated as 8 bytes.
+    /// @FR-I-Narrow, completed by @PLN25 DN4 `(N-Cast?)` — the implicit CHECKED narrowing
+    /// a NULLABLE narrow target takes in place of a refusal.  Answers whether it applied.
+    ///
+    /// `(I-Narrow)` says a narrowing store is not implicit: it needs an explicit `as` or a
+    /// literal that plainly fits.  DN4 completes that for the one target which has
+    /// somewhere to put a miss — an out-of-range value lands in a `u8?` as a VISIBLE
+    /// `null`, never as a truncation — so the store needs no `as`, and the diagnostic that
+    /// refuses the NON-nullable spelling already names `u8?` as the cure.  A non-nullable
+    /// narrow target has no such value and is still refused.
+    ///
+    /// This is the ONE home because the two seams that store into a slot ask the question
+    /// in different words.  [`Self::convert`] reaches the struct literal, the call argument
+    /// and the return; the ASSIGNMENT seam never reaches `convert` for this pair at all,
+    /// because `integer` and `integer(0,255)?` are `is_equal` — so it runs its own
+    /// narrowing test, and that test is a REFUSAL with no checked-cast arm.  Read off
+    /// separately the two disagreed: `d: u8? = p + 10` kept **260**, a value outside the
+    /// range its own type declares, while `f(p + 10)` on a `u8?` parameter and
+    /// `S { u: p + 10 }` on a `u8?` field both answered null (loft#1246).
+    ///
+    /// The `limit(lo, hi)` spelling of the same range deliberately does NOT come here: it
+    /// sets no `forced_size`, so `is_narrowing_int` declines it, and its bound is the
+    /// runtime `OpRangeDefault` every seam already applies (`guard_declared_range`).  Two
+    /// mechanisms, one answer — checked here cell for cell in
+    /// `tests/scripts/1246-a-nullable-narrow-slot-answers-null.loft`.
+    fn implicit_checked_narrow(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
+        if self.first_pass {
+            return false;
+        }
+        let Type::Optional(inner) = should else {
+            return false;
+        };
+        if !Self::is_narrowing_int(is_type.base(), inner.base()) {
+            return false;
+        }
+        let dst_base = inner.base().clone();
+        let src_base = is_type.base().clone();
+        self.dn4_checked_cast(code, &dst_base, &src_base);
+        true
+    }
+
     fn is_narrowing_int(src: &Type, dst: &Type) -> bool {
         let (Type::Integer(s), Type::Integer(d)) = (src, dst) else {
             return false;
@@ -4104,15 +4144,9 @@ impl Parser {
                 self.convert(code, is_type, inner);
                 return true;
             }
-            // Implicit CHECKED narrowing into a nullable narrow target: an integer or
-            // `integer?` coerced into `Optional(narrow int)` (e.g. `u8?`) yields the value
-            // when it fits, else null. Allowed WITHOUT an explicit `as` because the target is
-            // nullable — an out-of-range value becomes a VISIBLE null, never a silent
-            // truncation. A non-null narrow target (`u8`) is unchanged (still needs `as`).
-            if !self.first_pass && Self::is_narrowing_int(is_type.base(), inner.base()) {
-                let dst_base = inner.base().clone();
-                let src_base = is_type.base().clone();
-                self.dn4_checked_cast(code, &dst_base, &src_base);
+            // Implicit CHECKED narrowing into a nullable narrow target — see
+            // `implicit_checked_narrow`, which is the one home for it.
+            if self.implicit_checked_narrow(code, is_type, should) {
                 return true;
             }
             // `@FR-L-Null-Tag` — a tagged `__nullable<S>` flowing into a NULLABLE target has to

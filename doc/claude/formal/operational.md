@@ -403,19 +403,14 @@ drift apart; verified both backends —
 
 ## Deviations
 
-**OPEN: 5.**
+**OPEN: 3.**
 - **D-op-1** — there is no shared operational semantics — the interpreter is the spec
 - **D-op-2** — interpreter/native divergences are test-caught, not definition-caught
 - **D-op-5** — two spellings of a following null-check still report differently
-- **D-op-6** — (E-Uncomp-NN)'s default is emitted as the range's LOWER BOUND, not the type's
-  default.  `OpRangeDefault` carries a `dflt` operand and `declared_range` fills it with `lo`,
-  so `u8` gets `0` only because its floor happens to be zero: an `i16` overflow answers
-  `-32768` and an `i32` overflow `-2147483647`.  Both are in range and both are as unrelated
-  to the computation as a wrapped value would be.  loft#1246.
-- **D-op-7** — (E-Uncomp) does not reach a nullable narrow ALIAS.  The null default is keyed
-  on `Type::Optional(_)`, which `integer limit(0,255)?` matches and `u8?` does not, so a `u8?`
-  overflow answers `0` where the rule requires null — and `??`, the documented recovery, is
-  inert on it.  loft#1246.
+
+D-op-7 and D-op-8, both loft#1246 and both CLOSED 2026-08-31, are in the history: the
+(E-Uncomp-NN) default was the range's lower bound rather than the type's, and (E-Uncomp)
+did not reach a nullable narrow ALIAS at all.
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [operational-history.md](operational-history.md).

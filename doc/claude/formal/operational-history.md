@@ -8,7 +8,8 @@
 
 OPEN: **3** (D-op-1/2, and D-op-5 opened 2026-08-25 — two spellings of a following
 null-check still report, the sibling of a wrapper-list drift fixed the same day; the null-model keystone deviations D-op-null-1/2 both CLOSED 2026-07-10 by
-keystone steps 2–3, and D-op-6 opened AND closed 2026-08-29 by the first `@FR-E-NullArg` walk.
+keystone steps 2–3, D-op-6 opened AND closed 2026-08-29 by the first `@FR-E-NullArg` walk,
+and D-op-7/8 opened AND closed 2026-08-31 by loft#1246 — the sized-integer overflow pair.
 Opened 2026-07-10 by the @PLN102 pre-freeze audit —
 [the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md).)
 
@@ -17,6 +18,57 @@ it** — the rule it violates was itself incomplete. `(E-NullArg)` named compari
 exception to contagion and never mentioned truthiness, so a `&&` that answered `null` looked
 like the rule being OBEYED rather than a shipped decision (C73) being broken. An `OPEN: n` is
 only as strong as the rules above it, not only as strong as its oracle.
+
+### D-op-7 — CLOSED (2026-08-31, loft#1246): (E-Uncomp-NN)'s default was the range's FLOOR
+- Was: `OpRangeDefault(value, lo, hi, dflt)` is emitted for every declared range, and TWO
+  functions filled `dflt` with `lo` — `declared_range` for the `limit(…)` spelling and
+  `compound_range` for the `+=`-on-a-local path.  `u8` and `u16` have a floor of zero, so they
+  looked right and hid the rest: every signed width answered its minimum (`i8` `-128`, `i16`
+  `-32768`, `i32` `-2147483647`), which is in range, type-correct, and as unrelated to the
+  computation as a wrapped value would be.
+- The rule it violates did not exist when the code was written.  `(E-Uncomp)` says an
+  uncomputable result is `null` and carves out only float/single; it has nothing to say about a
+  slot that cannot HOLD null, which is what a non-nullable declared range is.  Closing this
+  needed the rule EXTENDED — `(E-Uncomp-NN)`, added the same day: the next best thing to null is
+  the value the slot would have had if nobody had assigned, never a value derived from the
+  machine.  ("Letting the way the hardware of a processor works dictate the outcome is the worst
+  choice.")
+- Fixed at one home: both range paths call `range_default(lo, hi)` — zero wherever the range
+  admits it, else the bound nearest zero.  Three shipped guards asserted the superseded answer
+  and were rewritten to the rule rather than worked around (`1009-width-type-bounds`,
+  `1030-compound-range-both-spellings`, `984-limit-field-out-of-range-defaults`).  Commit
+  361c6b77; verified both backends cell for cell.
+
+### D-op-8 — CLOSED (2026-08-31, loft#1246): (E-Uncomp) did not reach a nullable narrow ALIAS
+- Was: `u8?` answered `0` on overflow and `??` — the documented recovery — was inert on it,
+  while `integer limit(0,255)?`, the SAME range spelled differently, answered null.  Two
+  separate defects held it there, and a fix for either one leaves the other standing:
+  - the OVERFLOW path — the two range functions each decided the default for themselves, and
+    only the `limit(…)` one asked whether the slot was nullable.  `uncomputable_default(tp, lo,
+    hi)` is now the one home both ask: `null` where the slot admits it (E-Uncomp), the type's
+    default where it does not (E-Uncomp-NN).
+  - the STORE path — `d: u8? = p + 10` kept **260**, a value outside the range its own type
+    declares, while `f(p + 10)` on a `u8?` parameter and `S { u: p + 10 }` on a `u8?` field both
+    answered null.  `(I-Narrow)`'s nullable completion — DN4's implicit checked cast, which
+    types.md § Null-flow names as the reason a narrowing into a *declared-narrow slot* yields
+    `τ?` — lives in `convert`, and the ASSIGNMENT seam never reaches `convert` for this pair,
+    because `integer` and `integer(0,255)?` are `is_equal`.  So that seam ran its own narrowing
+    test, a REFUSAL with no checked-cast arm, and one that did not peel the `Optional` wrapper
+    either — so it refused nothing and guarded nothing.  `implicit_checked_narrow` is now the one
+    home, asked by both seams.
+- The two SPELLINGS still reach the answer by different machinery — the alias through DN4's
+  parse-time checked cast, `limit(lo, hi)` through the runtime `OpRangeDefault`.  They are
+  scored as PAIRS in the guard for exactly that reason; unifying them is not this fix.
+- Guard `tests/scripts/1246-a-nullable-narrow-slot-answers-null.loft`, falsified at 341a7bff
+  (interpret and native both exit 1 → 0); verified on both backends across local / field /
+  struct literal / vector element / argument / return, both directions, `+ - * /`, and inside a
+  loop and both arms of an `if`.
+
+> **A number collision worth knowing about.** These two were filed as `D-op-6` and `D-op-7` by
+> commit 361c6b77, which did not notice that `D-op-6` was already taken by the entry below —
+> closed two days earlier and cited from QUALITY.md.  They were renumbered to 7 and 8 when both
+> closed.  A deviation id is only useful while it names one thing, and the OPEN list is not
+> where a used id can be seen: every closed one has already moved here.
 
 ### D-op-6 — CLOSED (2026-08-29, the `@FR-E-NullArg` walk): `&&`/`||` kept a null right operand
 - Was: `&&` and `||` coerced a null LEFT operand to `false` and let a null RIGHT operand through

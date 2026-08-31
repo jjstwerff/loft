@@ -69,7 +69,7 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 /// The default is the LOWEST value in range, except where the slot admits null, which
 /// takes `null` instead: absence is a value that type can hold, and it is the honest
 /// answer for "this did not fit". A non-nullable slot has no such value, so it takes `lo`.
-/// (E-Uncomp-NN) — the value a non-nullable range takes when the result cannot be
+/// @FR-E-Uncomp-NN — the value a non-nullable range takes when the result cannot be
 /// computed: what the slot would hold if nobody had assigned.
 ///
 /// Zero wherever the range admits it, else the bound nearest zero.  Both range paths call
@@ -84,6 +84,31 @@ fn range_default(lo: i64, hi: i64) -> i64 {
         lo
     } else {
         hi
+    }
+}
+
+/// The value an uncomputable result takes in a slot of type `tp` whose range is
+/// `lo..=hi` — the ONE home for the choice `formal/operational.md` states in two rules.
+///
+/// @FR-E-Uncomp answers **null**, and that is the answer wherever the slot can hold one:
+/// `null` says "this did not happen", which is what an overflow or a divide by zero is.
+/// @FR-E-Uncomp-NN is the completion for a slot that CANNOT hold null — it takes the
+/// type's DEFAULT instead, the value it would have had if nobody had assigned.
+///
+/// Which of the two applies is decided by the WRAPPER, not by the width spelling, and
+/// that is the whole content of this function: `integer limit(0,255)?` and `u8?` are the
+/// same range and the same nullability, so they take the same answer.  Read off the two
+/// range paths separately they did not — the `limit(…)` spelling asked `Type::Optional`
+/// and the narrow ALIAS asked nothing at all, so a `u8?` overflow answered `0` where the
+/// rule requires null and `??`, the documented recovery, was inert on it (D-op-8,
+/// loft#1246).  A local's slot is a full i64, and `OpRangeDefault` passes `i64::MIN`
+/// through untouched, so the null reaches a narrow FIELD as the field store's own
+/// sentinel rather than as a number.
+fn uncomputable_default(tp: &Type, lo: i64, hi: i64) -> i64 {
+    if matches!(tp, Type::Optional(_)) {
+        i64::MIN
+    } else {
+        range_default(lo, hi)
     }
 }
 
@@ -106,18 +131,12 @@ fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
     }
     let lo = i64::from(spec.min);
     let hi = i64::from(spec.max);
-    // (E-Uncomp) / (E-Uncomp-NN), formal/operational.md.  A result that cannot be
-    // computed is null; where the slot cannot HOLD null it takes the type's DEFAULT
-    // instead — and the default is not the range's FLOOR (D-op-6).  `lo` is zero for `u8` and so
-    // looked right, while an `i16` answered `-32768` and an `i32` `-2147483647`: in
-    // range, type-correct, and as unrelated to the computation as a wrapped value would
-    // be.  `range_default` is the one answer, shared with the compound path.
-    let dflt = if matches!(tp, Type::Optional(_)) {
-        i64::MIN
-    } else {
-        range_default(lo, hi)
-    };
-    Some((lo, hi, dflt))
+    // @FR-E-Uncomp / @FR-E-Uncomp-NN — `uncomputable_default` is the one home for which
+    // of the two applies, shared with the compound path.  The default is NOT the range's
+    // floor: `lo` is zero for `u8` and so looked right, while an `i16` answered `-32768`
+    // and an `i32` `-2147483647` — in range, type-correct, and as unrelated to the
+    // computation as a wrapped value would be.
+    Some((lo, hi, uncomputable_default(tp, lo, hi)))
 }
 
 fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
@@ -4472,6 +4491,12 @@ use a separate collection or add after the loop"
                 f_type.name(&self.data),
             );
         }
+        // A NULLABLE narrow target takes the implicit CHECKED narrowing instead of the
+        // refusal below — `implicit_checked_narrow` is the one home, and this seam has to
+        // ask it by hand because `is_equal` above kept it out of `convert` (loft#1246).
+        if op == "=" && !matches!(s_type, Type::Null) {
+            self.implicit_checked_narrow(code, &s_type, f_type);
+        }
         // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
         // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
         // an explicit `as` unless the RHS is a constant that provably fits.
@@ -5768,10 +5793,10 @@ use a separate collection or add after the loop"
     /// no guard on the compound path at all and `l: integer limit(0,255) = 250; l += 10`
     /// kept 260 while the `u8` spelling of that identical range clamped (loft#1030).
     ///
-    /// The default is the range's LOW end, which is what a slot that cannot take the
-    /// write already answers — measured across `u8` / `i8` / `u16` / `i16` in both
-    /// directions and on both backends (commit 447564a1's table), so this reads the
-    /// existing behaviour off rather than choosing a new one.
+    /// The default a value outside the range takes is `uncomputable_default`'s, not this
+    /// function's: @FR-E-Uncomp for a slot that can hold null and @FR-E-Uncomp-NN for one
+    /// that cannot.  Both arms ask it, so the two spellings of one range cannot answer
+    /// differently.
     fn compound_range(tp: &Type) -> Option<(i64, i64, i64)> {
         // `declared_range` answers the `limit(lo, hi)` spelling and deliberately nothing
         // else — it returns `None` the moment `forced_size` is set.  So the two arms
@@ -5798,7 +5823,11 @@ use a separate collection or add after the loop"
             return None;
         }
         let lo = i64::from(spec.min);
-        Some((lo, i64::from(spec.max), range_default(lo, i64::from(spec.max))))
+        let hi = i64::from(spec.max);
+        // @FR-E-Uncomp / @FR-E-Uncomp-NN through the same home the `limit(…)` arm uses.
+        // Asking it HERE rather than answering `range_default` directly is what makes a
+        // nullable narrow alias answer null: this arm is the only one a `u8?` reaches.
+        Some((lo, hi, uncomputable_default(tp, lo, hi)))
     }
 
     pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {

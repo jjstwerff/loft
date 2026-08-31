@@ -2374,13 +2374,17 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 663 | 311 | 5 | **347** |
+| 665 | 313 | 5 | **347** |
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
 purpose — `Type::Optional` names the spelling it is looking for, and `.base()` peels it to ask
 what the storage is.  loft#1204, loft#1207 and loft#1212 then REPAIRED sites out of the opaque
-column, which is the movement this column exists to report.  loft#1227's `GroupAppends::report` is one the screen caught on BRAND-NEW code rather than on
+column, which is the movement this column exists to report.  loft#1246 moved both of the first two columns by +2 and left the opaque column where it was:
+`uncomputable_default` and `implicit_checked_narrow` are new sites that ask the wrapper
+question deliberately — each is the ONE home for a rule whose answer turns on nullability, so
+naming `Type::Optional` there is the point rather than a spelling to peel.  loft#1227's
+`GroupAppends::report` is one the screen caught on BRAND-NEW code rather than on
 the backlog: it matched its holder against `Type::Reference` bare, which reads a `Counter` local
 and misses a `Counter?` one holding the same fields and the same groups.  Named on the first run
 after the lint was written, so the blindness never shipped — `.base()`, and the opaque column

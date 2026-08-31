@@ -97,4 +97,18 @@ fn main() {
   // a silently-wrong number, and it never crashes; execution continues with the
   // null, exactly like divide-by-zero above. Check the result for null (or keep
   // intermediate values in range) when multiplying or summing very large numbers.
+  //
+  // A sized integer ('u8', 'i16', a field declared 'integer limit(0, 255)') has
+  // a smaller range, so it overflows sooner — and where it lands depends on one
+  // thing: whether the slot can hold null. A nullable one ('u8?') gets the null,
+  // the same as above. A non-nullable one has nowhere to put it, so it gets the
+  // type's default instead — 0 for every range that includes zero. What you
+  // never get is a wrapped number.
+  small: u8? = 250;
+  small += 10;
+  assert(small == null, "A nullable sized integer overflows to null");
+  assert((small ?? 0) == 0, "…and '??' recovers from it, like any other null");
+  fixed: u8 = 250;
+  fixed += 10;
+  assert(fixed == 0, "A non-nullable one takes its type's default instead");
 }
