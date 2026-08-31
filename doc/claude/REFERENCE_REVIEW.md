@@ -69,6 +69,7 @@ someone updated only the prose.
 | chapter source | reviewed through | commit |
 |---|---|---|
 | `tests/docs/01-keywords.loft` | 2026-08-31 | `1a1d1fd1` |
+| `tests/docs/02-text.loft` | 2026-08-31 | `8c0da87d` |
 
 ## See also
 
