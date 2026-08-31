@@ -127,9 +127,16 @@ heap-returning tail discarded 800 000 times holds a flat resident size).
                    parameter and the caller's argument share the same store: a MUTATION THROUGH
                    the parameter — `p.field = v`, `p[i] = v`, `p.field += …` — IS VISIBLE to the
                    caller.
+  (F-ParamGrow)    STRUCTURAL change is mutation, not replacement, so it is visible on the same
+                   terms: `p += [x]`, `p.remove(i)`, `p.clear()` and a re-key all change the
+                   shared store and the CALLER SEES THEM, at every container kind (vector,
+                   hash, sorted, index) and with no `&`.  `&` is not what makes a callee able
+                   to GROW its argument; nothing does, because the argument was never copied.
   (F-ParamRebind)  a WHOLE-VALUE reassignment of a heap parameter — `p = [..]`, `p = other` —
                    rebinds p LOCALLY (a fresh backing); it does NOT write back to the caller
-                   (@PLN87 P2.4).  The distinction is mutate-through (visible) vs replace (local).
+                   (@PLN87 P2.4).  The distinction is mutate-through (visible) vs replace (local),
+                   and it is the WHOLE distinction: replace is the one thing `&` adds
+                   (F-ParamRef), and it is the only local one.
   (F-ParamRef)     a `&`-typed parameter (binding.md) is the EXPLICIT write-back channel: a
                    whole-value `p = e` on a `&T` parameter DOES write through to the caller.
 ```
@@ -138,11 +145,33 @@ heap-returning tail discarded 800 000 times holds a flat resident size).
 copied — the callee can never change the caller's number. A **struct/vector** argument is
 **shared**: if the callee writes a field or element (`e.hp = 0`, `v[i] = x`), the caller sees it —
 this is deliberate (no deep copy on every call, and it is how a mod "manages the entities it is
-given"). But **replacing** the whole value (`v = [1,2]`) only rebinds the callee's local name; the
-caller keeps its value. To get write-back on a whole-value assignment, the parameter must be
-declared `&T` ([binding.md](binding.md)) — that is the one explicit channel. (Verified: `e.h=99`
-in a callee ⇒ caller sees `99`; `n=n+1` on a scalar ⇒ caller unchanged; `v=[9,9]` on a plain
-vector param ⇒ caller unchanged.)
+given"). Growing or shrinking it is the same kind of act on the same store, so `v += [x]`,
+`v.remove(0)` and `v.clear()` are visible too. But **replacing** the whole value (`v = [1,2]`)
+only rebinds the callee's local name; the caller keeps its value. To get write-back on a
+whole-value assignment, the parameter must be declared `&T` ([binding.md](binding.md)) — that is
+the one explicit channel. (Verified: `e.h=99` in a callee ⇒ caller sees `99`; `n=n+1` on a scalar
+⇒ caller unchanged; `v=[9,9]` on a plain vector param ⇒ caller unchanged.)
+
+**A PARAMETER is not a BIND, and reading one as the other is what put the opposite claim into two
+shipped documents.** `binding.md` `(B-Copy)` says a plain bind COPIES — `c = b; c += [4]` leaves
+`b` at its old length — and a SLICE is a fresh vector for the same reason, so `w = a[1..4];
+w += [9]` leaves `a` alone. Neither fact is about parameters. A parameter aliases
+(`F-ParamHeap`), which `binding.md` `(B-Ref-Reshape)` already says in as many words: *"A plain
+PARAMETER is NOT exempt: it aliases the caller's element exactly as a `&` one does (calls.md
+F-ParamHeap), so the rule keys on the aliasing relation, not on the token."* LOFT.md § Ref-param
+vector append and the reference's Vector chapter both promised that `v += [x]` on a non-`&`
+parameter was callee-local; it never was, on either backend, and the rules said so from the other
+end (loft#1251). Pinned by
+`tests/scripts/1251-a-heap-parameter-is-shared-not-copied.loft` — a table over
+{append, element write, remove, clear, replace} × {plain, `&`} × {vector, hash, sorted}, plus the
+bind and slice controls that make the three cases distinguishable.
+
+**What `&` buys on a collection, given that.** Exactly one thing a caller can observe: whole-value
+REPLACEMENT (`v = [7,7]` writes back through a `&vector<T>` and does not through a plain one).
+That is worth knowing, because "if a plain parameter grows the caller's vector anyway, `&` adds
+nothing observable" is the natural next thought and it is false. `&` is still worth writing where
+a signature should say *"this function replaces what you hand it"*; it is not the permission slip
+for appending.
 
 **`F-ParamHeap` has a static consequence at the CALL SITE.** Because a heap parameter aliases the
 caller's argument, handing a callee both a container and a reference INTO that container
