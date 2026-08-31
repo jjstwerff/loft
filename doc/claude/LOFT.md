@@ -2656,9 +2656,15 @@ fn ok_mutate(v: &vector<Item>, idx: integer, val: integer) {
 }
 ```
 
-Without `&`, element mutations on existing elements are also visible (the DbRef is shared),
-but appending via `v += [x]` is local to the callee — the caller's vector length does not
-change. Use `&vector<T>` whenever the function needs to grow the vector.
+Without `&`, element mutations on existing elements are also visible (the DbRef is shared).
+Use `&vector<T>` whenever the function needs to grow the vector: it is the spelling that says
+so in the signature, and a `&` never written through is refused.
+
+⚠ A plain (non-`&`) parameter is ALSO observed to grow the caller's vector today — measured on
+both backends, for integer and struct elements alike. This paragraph used to promise the
+opposite ("local to the callee"), and `formal/` settles neither side, so loft#1251 carries the
+measurement and the decision. Until it is settled, write `&` when you mean to grow and do not
+rely on a plain parameter's append staying local.
 
 ### Polymorphic text methods on struct-enum variants
 
