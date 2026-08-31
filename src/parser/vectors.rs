@@ -1037,25 +1037,19 @@ impl Parser {
         Some(self.get_field(rec, fnr, Value::Var(self.closure_param)))
     }
 
-    /// Write `value` into how THIS scope names a relayed capture — a field of its own closure
-    /// record — or `None` when it holds no such thing.  The mirror of
-    /// [`Self::relayed_capture_read`], for the write-back a void lambda call performs.
+    /// The record and attribute index THIS scope names a relayed capture by, or `None` when it
+    /// holds no such thing.  The write-side companion to [`Self::relayed_capture_read`].
     ///
     /// A by-VALUE capture is observed by copying the closure record's field back to the outer
     /// binding after the call.  For a lambda nested in a lambda the binding is not a variable
     /// of this scope at all, and the write-back was skipped — silently, so a nullable scalar
     /// (which is captured by value rather than boxed) accumulated nothing: `n? += x` four times
     /// read 0, on both backends.
-    pub(crate) fn relayed_capture_write(&mut self, name: &str, value: Value) -> Option<Value> {
-        let (rec, fnr) = self.relayed_capture_attr(name)?;
-        Some(self.set_field_no_check(rec, fnr, 0, Value::Var(self.closure_param), value))
-    }
-
-    /// The record and attribute index THIS scope names a relayed capture by, or `None`.
     ///
-    /// Asked before the value to write is BUILT, because building it is not free: a caller
-    /// that emits its side first and discards it on a `None` changes what other functions
-    /// compile to.
+    /// Answers the PLACE rather than emitting the write, because the value to write is not free
+    /// to build: a caller that emits its side first and discards it on a `None` changes what
+    /// other functions compile to — measured, as a native-only silent exit 1 in a script with no
+    /// lambda in it.
     pub(crate) fn relayed_capture_attr(&mut self, name: &str) -> Option<(u32, usize)> {
         if self.first_pass || self.closure_param == u16::MAX {
             return None;
