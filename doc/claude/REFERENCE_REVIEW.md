@@ -66,11 +66,18 @@ The one home for "reviewed through". `scripts/reference-review.py` parses this t
 there is deliberately no second machine-readable copy, because it would drift the moment
 someone updated only the prose.
 
+⚠ **A watermark names a COMMIT, and no rebase or cherry-pick preserves one.** Joining the
+two checkouts rewrote the three rows below onto their twins, and until that was done the
+worklist reported all three chapters as owing a re-read — each was being measured against a
+commit unreachable from this branch, so its OWN review commit read as a change since the
+review. Re-point the rows whenever commits are replayed; the tell is a chapter whose only
+"commit since" is the one whose subject names that chapter.
+
 | chapter source | reviewed through | commit |
 |---|---|---|
-| `tests/docs/01-keywords.loft` | 2026-08-31 | `1a1d1fd1` |
-| `tests/docs/02-text.loft` | 2026-08-31 | `8c0da87d` |
-| `tests/docs/03-integer.loft` | 2026-08-31 | `e261308c` |
+| `tests/docs/01-keywords.loft` | 2026-08-31 | `8f851965` |
+| `tests/docs/02-text.loft` | 2026-08-31 | `3e2555fc` |
+| `tests/docs/03-integer.loft` | 2026-08-31 | `c049205e` |
 
 ## See also
 
