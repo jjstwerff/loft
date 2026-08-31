@@ -347,10 +347,10 @@ impl Output<'_> {
                     _ => None,
                 };
                 call_val.is_some_and(|cv| {
-                    result[set_idx + 1..ret_pos].iter().any(|op| {
-                        Self::free_op_var(op, self.data)
-                            .is_some_and(|fv| cv.reads_var(fv))
-                    })
+                    let crosses_a_free = result[set_idx + 1..ret_pos]
+                        .iter()
+                        .any(|op| Self::free_op_var(op, self.data).is_some());
+                    crosses_a_free && Self::reads_a_local(cv, variables)
                 })
             };
             if set_call_borrows_freed_var {
@@ -450,6 +450,29 @@ impl Output<'_> {
             }
         }
         std::borrow::Cow::Owned(result)
+    }
+
+    /// Does `val` read any LOCAL of this function — as opposed to an argument, a literal, or a
+    /// call whose result borrows a program-lifetime store?
+    ///
+    /// This is the safety question for hoisting a value past a scope-exit free, and it is asked
+    /// this way round because the other way round cannot be answered here.  Naming the vars a
+    /// free INVALIDATES needs the whole ownership graph: `OpFreeRef(__vdb_1)` takes the store
+    /// that `tv: vector<text>` is a VIEW into (`tv`'s type carries `__vdb_1` as a dep, and the
+    /// expression never names `__vdb_1`), while `OpFreeRef(___clos_1)` CASCADES through the
+    /// closure record to the `__cell_text` a boxed capture lives in — a runtime ownership fact
+    /// with no dep to read. Asking only whether the expression reads the FREED VAR answered
+    /// "no" for both, and `return tv[0]` was hoisted past the free of its own container
+    /// (loft#1235).
+    ///
+    /// A local is therefore treated as reachable from any free, which over-approximates: the
+    /// cost of a false positive is that the `Set` + `Return` pair is KEPT, which returns an
+    /// owned copy made before the free — correct, and one `to_string` more than the collapse.
+    /// The collapse still fires for the shape it was written for, a call over ARGUMENTS whose
+    /// result borrows a program-lifetime store (`fn if_label<T: Labelable>(x: T) -> text {
+    /// x.to_label() }`), and for any window with no free in it at all.
+    fn reads_a_local(val: &Value, variables: &crate::variables::Function) -> bool {
+        (0..variables.count()).any(|v| !variables.is_argument(v) && val.reads_var(v))
     }
 
     /// @P364: if `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /

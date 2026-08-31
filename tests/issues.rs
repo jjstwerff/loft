@@ -2108,6 +2108,43 @@ fn test() {
     assert(out[7] == 9, \"last={out[7]}\");
 }"
     )
+    // loft#1232 — the five `c += [v[i]]` pushes now say that an index read is `integer?` and
+    // the destination's element is not.  The loft source is kept VERBATIM: this test guards a
+    // parse shape (issue 84's panic on the index-bound merge sort), so discharging the reads to
+    // silence the seam would change the shape the guard exists to hold.  Every index here is
+    // bounds-guarded by the `li >= ll` / `ri >= rl` tests above it, so the warning is a true
+    // statement about the TYPE and no read is ever actually null — which the assertions below
+    // still prove by sorting the data correctly.
+    .warning(concat!(
+        "a nullable `integer?` is stored into element 0 of this vector literal of the ",
+        "non-null type `integer` — it becomes null there; discharge with `?` (the type's ",
+        "default), `?? <default>`, or `match` if that is not intended at ",
+        "issue_84_merge_sort_too_few_parameters:8:38"
+    ))
+    .warning(concat!(
+        "a nullable `integer?` is stored into element 0 of this vector literal of the ",
+        "non-null type `integer` — it becomes null there; discharge with `?` (the type's ",
+        "default), `?? <default>`, or `match` if that is not intended at ",
+        "issue_84_merge_sort_too_few_parameters:9:43"
+    ))
+    .warning(concat!(
+        "a nullable `integer?` is stored into element 0 of this vector literal of the ",
+        "non-null type `integer` — it becomes null there; discharge with `?` (the type's ",
+        "default), `?? <default>`, or `match` if that is not intended at ",
+        "issue_84_merge_sort_too_few_parameters:10:51"
+    ))
+    .warning(concat!(
+        "a nullable `integer?` is stored into element 0 of this vector literal of the ",
+        "non-null type `integer` — it becomes null there; discharge with `?` (the type's ",
+        "default), `?? <default>`, or `match` if that is not intended at ",
+        "issue_84_merge_sort_too_few_parameters:11:31"
+    ))
+    .warning(concat!(
+        "a nullable `integer?` is stored into element 0 of this vector literal of the ",
+        "non-null type `integer` — it becomes null there; discharge with `?` (the type's ",
+        "default), `?? <default>`, or `match` if that is not intended at ",
+        "issue_84_merge_sort_too_few_parameters:19:39"
+    ))
     .result(Value::Null);
 }
 
@@ -13022,6 +13059,15 @@ fn run() -> integer {
     if g.cells[0] == null { 1 } else { 0 }
 }"
     )
+    // loft#1232 — the store into a dense `vector<text>` element now says so.  This test is
+    // about the null SURVIVING the field round-trip, and `(N-Store)` warns without changing
+    // that: the slot reserves its null distinctly, so the store proceeds and reads back null,
+    // which is exactly what the result below asserts.
+    .warning(concat!(
+        "`null` is stored into element 0 of this vector literal of the non-null scalar type ",
+        "`text` — the slot holds null; declare it `text?` to make that explicit at ",
+        "p220_null_text_preserved_through_struct_field:4:17"
+    ))
     .expr("run()")
     .result(Value::Int(1));
 }

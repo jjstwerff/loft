@@ -133,8 +133,21 @@ Contract: settled — `(E-Coalesce)` and `(N-Index)` already said what the right
 `Contract: settled` or `Contract: strained`, then a dash and one line of WHY — the reason
 is the part a month-later reader needs, and writing it is what stops the call becoming a
 reflex.  `.githooks/commit-msg` reports a `Fixes #N` with no `Contract:` trailer (it never
-blocks — same two-tier rule as the rest of that hook), and `scripts/contract_labels.py`
-reads the trailers off a branch and applies the labels.
+blocks — same two-tier rule as the rest of that hook).
+
+**The label is then applied for you, at the push.**  The same workflow run that labels the
+issue `fixed-pending-merge` reads the trailer off the same commits and sets `contract:` —
+[`apply-fixed-pending-merge.yml`](workflows/apply-fixed-pending-merge.yml), which runs
+`scripts/contract_labels.py --event`.  A `Fixes #N` that arrives with no trailer gets a
+warning naming the commit, and the issue stays UNJUDGED; nothing reads it as settled.
+Pushing the same fix twice is harmless, and a later commit that revises the call wins.
+
+That leaves the script as the BACKSTOP rather than the route: `scripts/contract_labels.py`
+reads the trailers off a whole branch (`--report` for only the misses, `--apply` to write),
+which is what recovers a push the workflow could not see — a longer-than-20-commit push, or
+a trailer added by an amend after the fact.  Its parse is held to a fixed corpus by
+`make contract-labels-test`, run by `make ci`: every way that regex can be wrong is silent,
+because no label and no judgement look identical.
 
 Setting the label by hand on the issue is equally fine; the trailer just puts it where the
 knowledge already is.

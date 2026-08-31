@@ -226,8 +226,6 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
   *driver-agreement* facet (D-op-2): `--dump` / `--interpret` / `--native` must agree that a
   non-exhaustive match is rejected.
 
----
-
 ## Conformance
 
 - **Arm selection + payload bind (`M-Variant`)** — `match Sh::Circle { r: 5 } { Dot => 0,

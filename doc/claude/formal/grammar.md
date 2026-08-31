@@ -172,39 +172,8 @@ non-context-free parse this doc already documents for `&` and struct-vs-block.
 
 ## Deviations
 
-OPEN: **0** — (was 4). D-gram-3 (`**` right-assoc) + D-gram-1 (precedence-doc) closed in code/
-doc; D-gram-2 + D-gram-4 resolved as **decided edges** (the spec-may-adjust outcome the roadmap
-predicted — they leave formal/ rather than being driven to zero).
-
-> **D-gram-1 (CLOSED) — the written grammar now states precedence + associativity.**
-> [LOFT.md § Operators](../LOFT.md#operators) carries the full twelve-level ladder (the stale
-> table is fixed: `**` added at level 10, `as` moved to 11) with an explicit associativity
-> statement (all left-assoc except `**` right-assoc) and the unary-binds-tightest note
-> (`-2 ** 2 == 4`). [LOFT.md § Summary of grammar](../LOFT.md) no longer collapses operators
-> into one undefined `op`: it enumerates `binary_op` and cross-references § Operators for the
-> grouping. The "read-the-parser tax" (FORMALIZATION.md rough spot #4) is paid down — the two
-> user-facing statements pin every expression's shape, matching `OPERATORS` / `parse_operators`.
-
-> **D-gram-2 (RESOLVED — decided edge) — the surface is deliberately not context-free.**
-> The speculative backtracking (type-vs-variable, `S { … }`-vs-block) + lexer interpolation
-> modes are accepted on purpose: they buy real ergonomics and no consumer needs a CFG (tooling
-> reuses the hand-written parser, which IS the spec). Decided, not chased → [DESIGN_DECISIONS.md
-> C82](../DESIGN_DECISIONS.md#c82--lofts-surface-is-deliberately-not-context-free).
-
-> **D-gram-4 (RESOLVED — decided edge) — `&` stays one token, disambiguated by position.**
-> Infix `&` is bitwise-and; a *leading* `&` is the reference annotation. Prefix `&` is a parse
-> error in every non-binding position, so the positional rule is **total** — like Rust, one `&`
-> token is kept. Decided → [DESIGN_DECISIONS.md
-> C81](../DESIGN_DECISIONS.md#c81---stays-one-token-disambiguated-by-position-bitwise-and-vs-reference).
->
-> "Total" was claimed here from 2026-07-24 on the strength of A1 (binding.md D-bind-7), which
-> closed the bare-statement position only. It became true on 2026-08-09 with binding.md's
-> **D-bind-10**: until then a `&` that was the LAST operand of an expression (`b = 1 + &a`,
-> `b += &a`, a block-final `1 + &a`, `S { x: &a }`) compiled, because the guard peeked only the
-> token AFTER the operand — which proves nothing precedes the `&`. The claim outran the
-> enforcement by one half of the question.
-
----
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+the companion [grammar-history.md](grammar-history.md).
 
 ## Conformance
 

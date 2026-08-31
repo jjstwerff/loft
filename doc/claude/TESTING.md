@@ -2749,6 +2749,28 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**A CONTROL cell scored in the same file as the thing it controls can blank every channel
+`falsify.sh` reads.** A control usually fails on the pre-fix build too — that is what makes it a
+control — and if it fails LOUDLY it fixes the file's exit code at the same value on both trees.
+`falsify` then reports INERT and the guard measures nothing, while looking like a guard with a
+control in it. Measured twice in one day: loft#1211's refusal file scored a dense `const` control
+beside the cell, so both trees read `1|0|none|none` and the movement disappeared; loft#1212's five
+cells mixed three SILENT wrong answers with two that already reported (an ICE and an arithmetic
+message), and the two loud ones pinned the exit at 1 and hid the other three entirely.
+
+Split by the CHANNEL that moves, not by the story: the cells whose answer is silent go in one
+file, where the exit moves 0 → 1 (or the panic clears); the cells that already reported go in
+another, whose `@falsified-at` records the diagnostic identity instead and says plainly that
+`falsify` reads INERT for it. Removing a control is not always a loss either — a build where the
+mechanism dies outright still fails an `@EXPECT_ERROR` file on its own unmatched annotation, so
+the control's job is often already done by the harness.
+
+⚠ **`make falsify` cannot render a verdict for an annotation-scored file at all.** A passing
+`@EXPECT_ERROR` guard exits 1, which its exit channel reads as *"THIS TREE IS NOT CLEAN"* — so
+the tool prints NOT FALSIFIED for a guard that is working. Read the control/here pair it prints
+(0 → 1 is the movement you want) and record the real gating channel, `check_diagnostics` in
+`tests/wrap.rs`, in the `@falsified-at` note.
+
 **The fallback has the same shape as the wrong answer.** `b.c ?? []` on a nullable
 collection field took the wrong branch and answered the empty field: length 0, which is
 exactly what the correct `[]` default answers too. Five guards covered that field shape
@@ -2809,6 +2831,109 @@ leak or lifetime matrix under it before believing a green.
 assert the read through the OLD name as well as the new one. loft#1160's first fix sent the
 record to the right field and every subject-side cell went green, while reading the binding
 back inside the block that wrote through it still answered 0.
+
+**A passing cell can pass for no reason, and then the axis it establishes is fiction.**
+loft#1201's matrix had `xs.map(pair)` clean beside a faulting `xs.map(|x| …)`, which reads as
+a lambda-vs-named-function boundary. The named cell was clean because its yield slot carried
+a dep whose index was a callee ATTRIBUTE number resolved against the CALLER's variable table —
+adding two unrelated locals to the caller moved that dep onto a `text` local. Non-empty was
+all that suppressed the free. The real axis was the RETURN FORMER (struct clean, vector
+broken), one the matrix never varied. **Test a control's cleanliness the way you test a
+failure**: perturb something the fact should not depend on — an unrelated local, a reordering,
+a rename — and see whether the cell still passes for the reason you think it does.
+
+**And the mirror: an assertion can read RED while nothing is wrong.** A checker that
+over-approximates is described as "stricter, never blinder", which is the right default and is
+not free — the cost is a false abort, and on a gate that stops at the first failure a false
+abort hides every real finding behind it. `check_text_return_path` counted a free on a loop's
+BREAK arm as reaching the code the break jumps over, so
+`for v in it { if done { free(v); break; } return v; }` — the shape of every early-returning
+loop over a text source — read as freeing the value it returns. It hard-failed the nightly
+debug-assertions gate on a program with nothing wrong with it, and the programs behind it went
+unchecked for as long as it stood. **Before believing an assertion, check that the path it
+names is a path that actually reaches the site**: here the fix was to separate the two ways an
+arm can decline to fall through — a `Return` hands its frees nowhere, a `Break` hands them to
+what follows the LOOP — because collapsing them either way is wrong in one direction or the
+other.
+
+**A green boundary matrix says nothing about a fix's BLAST RADIUS.** The matrix varies the
+axes of the DEFECT; a fix's risk is everything else that reaches the same site. loft#1201's
+first repair widened two ownership pairings at once: all 30 cells stayed green on both
+backends and sixteen test binaries leaked (`placement_parity`, `n2_cdylib`, `leak`,
+`leak_cases`, `nullable_ret_buffer`, `ownership_oracle`, `alias_link_baseline` and the script
+corpus). Only the suite could find that, so a lifetime change is not verified by its matrix —
+the matrix says the defect is closed, the suite says nothing else opened.
+
+**A reverted change is a MEASUREMENT — record what it measured, not just that it failed.** The
+instinct when a change does not work is to drop it and move on, and the cost of that is paid by
+whoever tries the same thing next. Twice in one day across two checkouts a written-up revert
+saved the other author a cycle: a leak note stopped a text route from shipping half-checked, and
+a note about which emit path a gate bypasses redirected a free-discipline reading. What is worth
+writing down is the CHANNEL that failed it and the cure that looked right and was not — a fix
+that is correct on every value cell and wrong on ownership tells the next person exactly where
+to aim, while "did not work" tells them nothing.
+
+**A leak fix that silences ONE backend is not a fix.** The interpreter and the native sweep
+disagree about an unowned store, so a mark that quiets one can leave the other leaking — and
+the value cells, both backends' answers and a thousand-test suite can all be green while it
+does. Check `LOFT_STRICT_STORES=1` on `--interpret` AND `LOFT_NATIVE_LEAK_CHECK=1` on
+`--native`; one of them alone reads clean for the wrong reason. Measured on loft#1225, where
+marking a place-seeded accumulator `skip_free` made native clean and left interpret leaking
+three stores, because the real question was who owns the store at all.
+
+**A fix that makes a dropped statement start EXECUTING is invisible on the diagnostic
+channel.** Sweeping the corpus for a change's new DIAGNOSTICS can only find programs the change
+newly refuses — never programs whose VALUES it changed, which is the whole population when the
+fix turns a silent no-op into a real effect. Measured on loft#1221: a ~2000-file sweep for two
+new diagnostics reported a clear blast radius, and `make ci` then found a corpus test whose
+assertion had been passing BECAUSE of the defect — a linked group filled through both members
+doubled its vector once the second append stopped being dropped. The right instrument is a
+differential: run the same program on both binaries and compare STDOUT. Reach for it whenever a
+fix makes something start happening rather than start reporting.
+
+Its visibility is the second half of the lesson: the keyed member of that group dedups by key
+and read the same either way, so only the VECTOR member's length moved. A consumer asserting on
+the keyed member sees nothing at all.
+
+The differential has two traps of its own, both paid for. Compare like-for-like PROFILES — a
+release-against-debug diff accused that change of a SIGSEGV which was the known release-only
+loft#1216. And it is blind to every `test_`-only file: those have no `main`, so `--interpret`
+runs nothing in them and they diff clean whatever changed. `tests/wrap.rs` is what covers those,
+and it is what caught the case the corrected differential still missed.
+
+**The defect's own EMISSION PATH decides which syntactic position exercises it.** A guard is
+written in whatever position reads naturally — usually a lookup straight inside an `assert` —
+and that position may never reach the code the defect lives in. loft#1217's broken branch is in
+the `Set` emission path, so a keyed lookup written as an argument compiled correctly on the
+pre-fix build and `make falsify` read INERT on both backends; the same lookup BOUND TO A LOCAL
+first reached the branch and failed. This is the general form of the argument-position trap: do
+not ask *"which position is safe?"* but *"which position does the emitter this defect lives in
+actually see?"*, and answer it by falsifying rather than by reading. It cost two guards in one
+day, both caught only by the tool.
+
+**`make falsify`'s verdict is an AND across backends, so a one-backend defect reads NOT
+FALSIFIED.** A native-only fault leaves the interpreter correctly inert, and an
+`@EXPECT_ERROR`-scored guard exits 1 when it PASSES — both make the summary line say the guard
+did not move while the per-backend rows show that it did. Read the rows, not the verdict, and
+record which channel is the real one in the guard's own `@falsified-at` header. Seen three
+times: loft#1211 (refusal-scored), loft#1216 (in-process vs binary) and loft#1217 (native-only).
+
+**Split a refusal guard by the PASS its check runs in, not by topic.** A pass-1 error stops the
+file before anything gated on `!first_pass` runs, so two refusal cells that look like siblings
+cannot share a file when their checks fire in different passes: the second cell's
+`@EXPECT_ERROR` goes unmatched for a reason that has nothing to do with the fix under test, and
+reads as a broken guard. Measured on loft#1215/#1221, where @PLAN52's ambiguity check is not
+pass-gated and fired in pass 1 while the `(N-Store)` cell beside it needed pass 2. Topic is the
+tempting axis and the pass is the load-bearing one.
+
+**A parser-global's lifetime can be shorter than the construct it describes.** The shape is
+`self.flag = false; parse(); read self.flag`, and it breaks when `parse()` re-enters the same
+function for a sub-expression — the nested entry runs the clear again and erases what the outer
+one recorded. It is invisible to a guard written with the simplest spelling, because the
+simplest spelling has nothing after the construct: `b.d? += […]` kept its discharge flag only
+because nothing is parsed after the `?`, while `h?[k] = v` lost it to the index parse
+(loft#1214). So a guard for anything flag-driven needs a cell with something PARSED AFTER the
+feature, not only the minimal one.
 
 ---
 

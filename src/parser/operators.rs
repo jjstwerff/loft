@@ -2405,7 +2405,32 @@ impl Parser {
         );
     }
 
+    /// Build the null-check both `a ?? d` and the postfix `a?` lower to, and record
+    /// WHICH of the two this was in [`Parser::last_place_discharge`].
+    ///
+    /// The two spellings are one mechanism and produce one shape, so nothing downstream
+    /// can tell them apart by reading the IR — and on an assignment place they do not
+    /// mean the same thing (loft#1205).  The postfix form is the one carrying a pending
+    /// default: the caller supplies it from the type rather than from the source text.
+    ///
+    /// The flag is set on the way OUT, so a `?` nested inside the default (`v[i?] ?? 0`)
+    /// leaves the OUTER spelling's answer standing rather than its own.
     fn build_null_coalesce_default(
+        &mut self,
+        var_tp: &Type,
+        code: &mut Value,
+        parent_tp: &mut Type,
+        precedence: usize,
+        ctp: &mut Type,
+        lhs_type: &Type,
+    ) {
+        let is_postfix = self.pending_default_src.is_some() || self.pending_default_rhs.is_some();
+        self.build_null_coalesce_default_inner(var_tp, code, parent_tp, precedence, ctp, lhs_type);
+        self.last_place_discharge = is_postfix;
+    }
+
+    #[allow(clippy::too_many_arguments)] // the wrapper's list, unchanged from before the split
+    fn build_null_coalesce_default_inner(
         &mut self,
         var_tp: &Type,
         code: &mut Value,

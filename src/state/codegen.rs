@@ -943,6 +943,16 @@ impl State {
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
                         stack.add_op("OpPutRef", self);
                     }
+                    // …and a KEYED collection is the same 12-byte handle its vector twin is, so
+                    // it writes the same way.  Named through `is_keyed` rather than by listing
+                    // five variants beside `Vector`, because a site that names some of the
+                    // kinds reads as a complete rule and is not one: `hash`, `sorted`, `index`,
+                    // `radix` and `trie` all reached the panic below, so assigning any of them
+                    // into a tuple element was an internal compiler error on ordinary source
+                    // (loft#1225).
+                    t if crate::parser::vectors::is_keyed(t) => {
+                        stack.add_op("OpPutRef", self);
+                    }
                     _ => panic!("TuplePut: unsupported element type {elem_tp:?}"),
                 }
                 self.code_add(var_pos);

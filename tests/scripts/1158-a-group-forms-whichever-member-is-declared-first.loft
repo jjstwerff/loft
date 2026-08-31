@@ -17,14 +17,12 @@
 //                        COUNT (2 and 3), and the declaring type (struct and enum VARIANT —
 //                        the pairing test runs over both, and one arm covering the other is a
 //                        claim worth a cell).
-// Axes it HOLDS FIXED:   the nullable-element axis is reached through `hash` only.  A
-//                        `vector<E?>` beside a keyed member links by having its element
-//                        rewritten to the sibling's `__nullable<E>`, and that rewrite covers
-//                        `hash` and no other kind — measured: `sorted<E[k]>` beside
-//                        `vector<E?>` is two independent collections in BOTH orders, on this
-//                        build and on the control alike.  That is a defect in the rewrite,
-//                        not in the pairing test this file is about, so it stays out of the
-//                        cells rather than being pinned as a boundary here.
+// Axes it HOLDS FIXED:   the nullable-element axis is reached through `hash` only, because the
+//                        pairing test is what this file is about and one kind exercises it.
+//                        The rewrite that links a `vector<E?>` to a keyed sibling covers all
+//                        five kinds in both orders — re-measured, ten cells, all complete —
+//                        and `a-nullable-keyed-member-joins-its-group.loft` owns that axis
+//                        along with which member carries the `?`.
 //
 // **Every row has its OWN element type.**  Group membership is per struct, but the
 // record-backed promotion is keyed on the ELEMENT TYPE across the whole program, so one

@@ -3028,6 +3028,185 @@ pub fn post_scope_lints(
     // @PLN102 arc C step 4 — the `#superseded` fold lint, including its hard ERROR for a
     // steer whose successor does not resolve.
     superseded_fold_diagnostics(data, diags, fallback_file);
+    warn_linked_group_append(data, diags, fallback_file);
+}
+
+/// Advise when two members of one linked collection GROUP are appended to in the same block
+/// (loft#1227).
+///
+/// The literal spelling is advised in the parser (`Parser::advise_linked_group_fill`); this is
+/// the SAME advice for the same modelling mistake reached by a different spelling, so it reuses
+/// that diagnostic code — one mistake, two spellings, and a code is a frozen public surface.
+///
+/// Two collections over one element type are two routes to a SINGLE record set. Before
+/// loft#1221 the bare-variable form at a keyed field was silently DROPPED, so the most natural
+/// spelling was inert; now it appends, and the idiom went from a silent no-op to a silent
+/// doubling.
+///
+/// **Scoped per BLOCK, and deliberately an UNDER-approximation.** One rule answers the three
+/// questions loft#1227 records as open design work — and they are the three
+/// `LOFT_NO_DOUBLE_MOVE` already answers, so this follows that precedent rather than deciding
+/// again: filling member A in one arm and B in the other is not a double fill (separate arms
+/// are separate blocks); a loop body counts once however often it runs (it is one block); and
+/// two fills separated by a branch are not paired. Under-approximating costs a missed report
+/// and nothing else — this is `advice`, which never gates a build — while over-approximating
+/// puts noise on correct code, the failure the ADVICE tier exists to avoid.
+pub fn warn_linked_group_append(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if !crate::keys::linked_group_lint_enabled() {
+        return;
+    }
+    let new_rec = data.def_nr("OpNewRecord");
+    if new_rec == u32::MAX {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        let def_file = if def.position.file.is_empty() {
+            fallback_file
+        } else {
+            def.position.file.as_str()
+        };
+        let mut cx = GroupAppends {
+            data,
+            func: &def.variables,
+            new_rec,
+            cur: None,
+            file: def_file,
+        };
+        cx.scan_block(&def.code, diags);
+    }
+}
+
+/// One block's group appends — see [`warn_linked_group_append`].
+struct GroupAppends<'a> {
+    data: &'a Data,
+    func: &'a Function,
+    new_rec: u32,
+    /// The nearest enclosing line marker, which is where a report lands.
+    cur: Option<Position>,
+    file: &'a str,
+}
+
+impl GroupAppends<'_> {
+    fn scan_block(&mut self, node: &Value, diags: &mut crate::diagnostics::Diagnostics) {
+        let mut here: Vec<(u16, usize, Position)> = Vec::new();
+        let saved = self.cur.clone();
+        self.collect(node, true, &mut here);
+        self.report(&here, diags);
+        self.cur = saved;
+        let mut nested: Vec<Value> = Vec::new();
+        Self::nested_blocks(node, true, &mut nested);
+        for b in &nested {
+            self.scan_block(b, diags);
+        }
+    }
+    fn collect(&mut self, node: &Value, top: bool, out: &mut Vec<(u16, usize, Position)>) {
+        if let Some(p) = node.span_pos() {
+            self.cur = Some(p.clone());
+        } else if let Value::Line(n) = node {
+            // BOTH carriers. `Span` alone silently degrades every report to the enclosing
+            // function's line, because a statement's position rides a `Line` marker —
+            // `DoubleMove::scan` reads both for the same reason.
+            self.cur = Some(Position {
+                file: String::new(),
+                line: *n,
+                pos: 0,
+            });
+        }
+        if !top && matches!(node.unspan(), Value::Block(_)) {
+            return;
+        }
+        if let Value::Call(d, args) = node.unspan()
+            && *d == self.new_rec
+            && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+            && let Some(Value::Int(fld)) = args.get(2).map(Value::unspan)
+            && *fld >= 0
+            && *fld != i32::from(u16::MAX)
+            && let Some(at) = self.cur.clone()
+        {
+            out.push((*v, *fld as usize, at));
+        }
+        node.unspan()
+            .for_each_child(&mut |c| self.collect(c, false, out));
+    }
+    fn nested_blocks(node: &Value, top: bool, out: &mut Vec<Value>) {
+        if !top && matches!(node.unspan(), Value::Block(_)) {
+            out.push(node.clone());
+            return;
+        }
+        node.unspan()
+            .for_each_child(&mut |c| Self::nested_blocks(c, false, out));
+    }
+    fn report(&self, here: &[(u16, usize, Position)], diags: &mut crate::diagnostics::Diagnostics) {
+        let mut vars: Vec<u16> = here.iter().map(|(v, _, _)| *v).collect();
+        vars.sort_unstable();
+        vars.dedup();
+        for v in vars {
+            if v as usize >= self.func.var_count() {
+                continue;
+            }
+            // `.base()` — a holder spelled `S?` has the same fields and the same groups, so
+            // the advice is the same. Matched bare, a nullable holder is the one spelling this
+            // cannot see; the `optional` screen named it on this code's first run.
+            let Type::Reference(td, _) = self.func.tp(v).base() else {
+                continue;
+            };
+            for (_, members) in &crate::parser::objects::collection_groups_of(self.data, *td) {
+                let filled: Vec<&String> = members
+                    .iter()
+                    .filter(|m| here.iter().any(|(hv, f, _)| *hv == v && *f == m.a_nr))
+                    .map(|m| &m.name)
+                    .collect();
+                if filled.len() < 2 {
+                    continue;
+                }
+                let Some(at) = here
+                    .iter()
+                    .filter(|(hv, f, _)| *hv == v && members.iter().any(|m| m.a_nr == *f))
+                    .map(|(_, _, p)| p)
+                    .max_by_key(|p| (p.line, p.pos))
+                else {
+                    continue;
+                };
+                let file = if at.file.is_empty() {
+                    self.file
+                } else {
+                    at.file.as_str()
+                };
+                let holder = filled[0];
+                let others = filled[1..]
+                    .iter()
+                    .map(|nm| format!("`{nm}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let route = if filled.len() == 2 {
+                    "is a second route"
+                } else {
+                    "are second routes"
+                };
+                let msg = format!(
+                    "{others} {route} to `{holder}`'s records, not collections of their own — \
+                     this block appends to both, so one record set ends up holding everything \
+                     they were given"
+                );
+                diags.add_at_coded(
+                    crate::diagnostics::Level::Advice,
+                    Some("linked-group-double-fill"),
+                    &msg,
+                    file,
+                    at.line,
+                    at.pos,
+                );
+            }
+        }
+    }
 }
 
 pub fn warn_dead_stores(

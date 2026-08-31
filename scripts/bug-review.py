@@ -185,8 +185,8 @@ def contract_pressure(issues, months):
     tot_u = sum(unjudged[m] for m in seen)
     if tot_j == 0:
         print("\n  Nothing judged yet in this window — the axis is new.  Every fix that")
-        print("  writes a `Contract:` trailer adds one; `scripts/contract_labels.py`")
-        print("  names the fixes on a branch that did not.")
+        print("  writes a `Contract:` trailer adds one — the push labels the issue off")
+        print("  it; `scripts/contract_labels.py` names the fixes that carried none.")
     elif tot_u > tot_j:
         print(f"\n  ⚠ {tot_u} unjudged against {tot_j} judged — the ratio above is drawn from")
         print("  a minority of the population and is not yet evidence either way.")

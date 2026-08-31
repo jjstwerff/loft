@@ -15,7 +15,17 @@ area and has exactly two parts:
    numbered (`D1`, `D2`, …), each with: the rule it violates, where it lives, the
    user-visible effect, and a status. **The deviation list is meant to shrink to
    zero over time** — closing a deviation means making the implementation obey the
-   rule (often a bug fix or a refactor), then deleting its entry here.
+   rule (often a bug fix or a refactor).
+
+> **Two files per area: the rules, and their timeline.**  `<area>.md` is the CONTRACT and
+> carries the current state — a `## Deviations` section giving the open count and one line per
+> open entry.  `<area>-history.md` beside it is the REGISTER: every entry, open and closed,
+> with its dates, measurements and closure record.  They are apart because a contract a reader
+> has to skim past its own history stops being one they can skim — `ownership.md` was 1905
+> lines of which 1748 were register.  Both files live in this directory, so `rule_tags.py`
+> (which globs `formal/*.md`) resolves a citation to either.  The general form of the rule, and
+> the report that ranks the docs still carrying their own history, is
+> [RELEASE.md § 5b](../RELEASE.md).
 
 > **The rules do not change to match the code. The code changes to match the rules.**
 > A new edge that the rules can't express is a signal the *rule* is wrong (fix the

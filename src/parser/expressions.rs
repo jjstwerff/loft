@@ -99,18 +99,56 @@ fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
 fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     match v.unspan() {
         Value::Var(nr) => *nr,
-        // loft#980 — see through the variant-field guard `if tag(c) ∈ declaring { c } else
-        // { null }`: the receiver is the THEN arm.  Recognised by its ELSE arm being the
-        // zero-argument null sentinel, so an ordinary `if` on the left of an assignment is
-        // still not a place and is still refused.
-        Value::If(_, then, els)
-            if matches!(els.unspan(), Value::Call(d, a)
-                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
-        {
-            lhs_base_var(then, data)
+        // Exactly two `if`s reach the left of an assignment, and both name their place through
+        // the THEN arm.  loft#980's variant-field guard — `if tag(c) ∈ declaring { c } else
+        // { null }` — carries the receiver there, and a bare-variable NULL DISCHARGE carries
+        // its SUBJECT there (`v?.x = …`, whose else arm is the type's default instead of the
+        // sentinel).  The subject is what a write through the discharge reaches on the path
+        // that reaches anything, so resolving to it is what keeps `const` binding through
+        // `h.i?.x = …`: while this answered "no variable at all", `validate_write` had no base
+        // to check and mutated a `const` parameter in silence (loft#1211).
+        Value::If(_, then, _) => lhs_base_var(then, data),
+        // …and a discharge whose subject is NOT a bare variable binds it to a temp inside an
+        // `ncc`/`ncr` block instead.  Only a discharge block is seen through: a
+        // `fn_ref_field_read` / `tuple_unbox` block is a different question, and answering it
+        // here would be guessing.
+        Value::Block(_) => {
+            null_discharge_subject(v, data).map_or(u16::MAX, |s| lhs_base_var(s, data))
         }
         Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0], data),
         _ => u16::MAX,
+    }
+}
+
+/// The SUBJECT a NULL DISCHARGE was applied to — `e` in `e?`, `e ?? d`, `e ?? return` — when
+/// `v` is one, and `None` when it is not.
+///
+/// ONE home for the two shapes the discharge lowering produces, because two questions read it
+/// and each used to carry its own matcher: which variable a place ROOTED in a discharge writes
+/// through ([`lhs_base_var`], so `const` still binds through `h.i?.x = …`), and which place a
+/// discharge that IS the target was reading ([`Parser::peel_place_discharge`], `@FR-E-Asgn-Discharge`).
+/// A non-trivial subject is bound to a `__ncc_N` / `ncr_N` temp by the block's own head
+/// statement; a bare VARIABLE subject can be read twice for free, so it lowers to a plain `if`
+/// with no temp and the subject stands in the then arm.
+fn null_discharge_subject<'a>(v: &'a Value, data: &crate::parser::Data) -> Option<&'a Value> {
+    match v.unspan() {
+        Value::Block(bl) if bl.name == "ncc" || bl.name == "ncr" => {
+            match bl.operators.first().map(Value::unspan) {
+                Some(Value::Set(_, subject)) => Some(subject),
+                _ => None,
+            }
+        }
+        // loft#980's variant-field guard is the other `if` that reaches a left-hand side; its
+        // zero-argument null-sentinel ELSE arm is what tells the two apart.  A discharge's else
+        // arm is the type's DEFAULT, so the guard is the only `if` this must not claim — its
+        // then arm is the receiver, and peeling to it would write through the wrong place.
+        Value::If(_, then, els)
+            if !matches!(els.unspan(), Value::Call(d, a)
+                if a.is_empty() && data.def(*d).name() == "OpNullRefSentinel") =>
+        {
+            Some(then)
+        }
+        _ => None,
     }
 }
 
@@ -608,14 +646,10 @@ impl Parser {
             // inside the closure and may be its sole write.  Text shadows keep the
             // plain copy.
             for (shadow, original) in self.vars.promoted_text_args() {
-                let seed = match self.vars.tp(shadow).clone() {
-                    Type::Reference(cell, _)
-                        if self.data.def(cell).name().starts_with("__cell_") =>
-                    {
-                        self.boxed_cell_alloc_and_set(shadow, cell, Value::Var(original))
-                    }
-                    _ => None,
-                };
+                let shadow_tp = self.vars.tp(shadow).clone();
+                let seed = crate::parser::vectors::boxed_cell_def(&shadow_tp, &self.data).and_then(
+                    |cell| self.boxed_cell_alloc_and_set(shadow, cell, Value::Var(original)),
+                );
                 ls.insert(
                     0,
                     seed.unwrap_or_else(|| v_set(shadow, Value::Var(original))),
@@ -1171,6 +1205,22 @@ impl Parser {
                         v = Value::FnRef(d_nr as i32, u16::MAX, Box::new((**elem_tp).clone()));
                     }
                 }
+                // A tuple YIELD materialises into the coroutine's buffer, and that buffer
+                // copies its members — so a member the tuple literal already wrapped in a
+                // frame-local copy (`tuple_member_copy`) is copied TWICE and the wrapper's
+                // store is claimed by nobody.  loft#1109 records the same fact for the RETURN
+                // path and unwraps it at `synthetic_tuple_return`; a yield does not go through
+                // that rewrite, so it unwraps here.  Without it a generator yielding a keyed
+                // collection leaks one store per kind.
+                if !self.first_pass
+                    && let Value::Tuple(members) = v.unspan_mut()
+                {
+                    for m in members.iter_mut() {
+                        if let Some(src) = self.tuple_member_copy_source(m) {
+                            *m = src;
+                        }
+                    }
+                }
                 *val = Value::Yield(Box::new(v));
                 Type::Void
             }
@@ -1336,9 +1386,8 @@ impl Parser {
         // Activates in 02d-iii.e together with the flip.
         if !self.first_pass
             && self.vars.exists(v_nr)
-            && let Type::Reference(d, _) = self.vars.tp(v_nr)
-            && self.data.def(*d).name().starts_with("__cell_")
-            && let Some(value_attr) = self.data.def(*d).attributes().first()
+            && let Some(d) = crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
+            && let Some(value_attr) = self.data.def(d).attributes().first()
             && value_attr.name == "value"
             && (value_attr.typedef.is_equal(tp)
                 || (matches!(value_attr.typedef, Type::Integer(_))
@@ -1963,6 +2012,112 @@ use a separate collection or add after the loop"
         out
     }
 
+    /// The place a postfix `x?` on an assignment left-hand side was reading, if `to` is
+    /// that discharge.
+    ///
+    /// [`Parser::build_null_coalesce_default`] emits two shapes for one meaning: a
+    /// temp-bound `ncc` block when the subject is non-trivial (`b.d?` — the temp keeps the
+    /// subject from being evaluated twice), and a bare null-check `if` when it is trivial
+    /// (`v?`).  Both name their subject in the position this reads, and that subject is the
+    /// place the assignment writes.
+    ///
+    /// Callers must check [`Parser::last_place_discharge`] first: an explicit `a ?? d`
+    /// builds the identical shape and names no place (loft#1205).
+    ///
+    /// Reads [`null_discharge_subject`], the one home for what a discharge looks like, which
+    /// [`lhs_base_var`] also consults — so "which place was this discharge reading?" and "which
+    /// binding does a write through a discharge reach?" cannot drift apart.  That home also
+    /// declines loft#980's variant-field guard, the OTHER `if` that reaches a left-hand side:
+    /// its then arm is the receiver rather than a place, so a guard reached with the flag set
+    /// by a `?` elsewhere in the same left-hand side is left alone instead of peeled into
+    /// (loft#1211).
+    fn peel_place_discharge(to: &Value, data: &crate::parser::Data) -> Option<Value> {
+        null_discharge_subject(to, data).cloned()
+    }
+
+    /// The subject of a discharge sitting at the RECEIVER of a KEYED element accessor —
+    /// `h?[k]`, `n.h?[k]` — when the place is one, and `None` when it is not.
+    ///
+    /// `@FR-E-Asgn-Discharge` says the write lands in `place`, and for a collection the `?`
+    /// asks for exactly what the place already does.  That holds one level in as well: the
+    /// discharge here is the RECEIVER of the target rather than the target, and the place the
+    /// write must reach is still the collection the `?` was reading.  Left unpeeled, the null
+    /// path writes into the fresh default the discharge builds for its `else` arm — a
+    /// collection nobody holds, dropped at the end of the statement.
+    ///
+    /// A KEYED accessor only.  A keyed element write is the one element write that CREATES its
+    /// slot, so it is the only one for which "build the empty collection first" changes the
+    /// answer; a vector element write addresses an EXISTING slot, and on the null path there is
+    /// no element either side of the peel.  A struct-field walk (`OpGetField`) is excluded on
+    /// the rule's own grounds — `h.i?.x = …` has no "build the empty one first" on its null
+    /// path, which is why loft#1211 resolves it through [`lhs_base_var`] instead.
+    ///
+    /// Reads [`null_discharge_subject`], the one home for what a discharge looks like, so this
+    /// and the whole-place spelling cannot drift apart about which shapes carry one.
+    fn keyed_receiver_discharge<'a>(
+        to: &'a Value,
+        data: &crate::parser::Data,
+    ) -> Option<&'a Value> {
+        let Value::Call(d_nr, args) = to.unspan() else {
+            return None;
+        };
+        if data.def(*d_nr).name() != "OpGetRecord" {
+            return None;
+        }
+        null_discharge_subject(args.first()?, data)
+    }
+
+    /// Does this assignment PLACE read through a null discharge, in either position?
+    ///
+    /// The one predicate both readers of a discharged left-hand side ask: the refusal of an
+    /// explicit `(a ?? d)`, which names two values and no place, and the peel that rewrites a
+    /// postfix `x?` to the place it was reading.  While the refusal saw only the whole-place
+    /// spelling, `(n.h ?? [])[k] = v` was neither refused nor peeled — it lowered to a write
+    /// into the coalesce's throwaway default and lost it in silence.
+    fn place_reads_through_discharge(to: &Value, data: &crate::parser::Data) -> bool {
+        null_discharge_subject(to, data).is_some()
+            || Self::keyed_receiver_discharge(to, data).is_some()
+    }
+
+    /// Seed `place` with type `base`'s default when — and only when — it is null, so a
+    /// compound assignment written `place? op= e` reads the default the `?` asked for.
+    ///
+    /// GUARDED, rather than the shorter `place = place?`: that spelling reads the place on
+    /// its own right-hand side, and a `text` local's store CLEARS the destination before it
+    /// copies, so the copy read a buffer the clear had just emptied — `t? += "cd"` on
+    /// `t = "ab"` answered `"cd"`.  The guard's store takes a CONSTANT, so no place is
+    /// ever its own source.  `None` when the type has no default (`(D-NoRef)`) or the place
+    /// is a shape [`Parser::place_store`] cannot write, which leaves the statement as the
+    /// peel alone made it.
+    fn discharge_seed(&mut self, place: &Value, base: &Type) -> Option<Value> {
+        let (default, _) = self.build_default(base)?;
+        let store = self.place_store(place, default)?;
+        let present = self.coalesce_not_null(place, base);
+        let absent = self.cl("OpNot", &[present]);
+        Some(v_if(absent, store, Value::Insert(Vec::new())))
+    }
+
+    /// Emit a store of `value` into `place`, where `place` is the left-hand side of an
+    /// assignment as the expression parser built it.
+    ///
+    /// The two shapes an assignment place takes: a bare local (`Value::Var`), and a heap
+    /// read (`OpGet<T>(base, offset)`) whose writing twin
+    /// [`Parser::call_to_set_op`] already names.  `None` for anything else, which leaves
+    /// the caller with no seed rather than a store to a place it could not identify.
+    fn place_store(&mut self, place: &Value, value: Value) -> Option<Value> {
+        match place.unspan().clone() {
+            Value::Var(v) if v != u16::MAX => Some(v_set(v, value)),
+            Value::Call(d, args) => {
+                let name = self.data.def(d).name().to_string();
+                if !name.starts_with("OpGet") {
+                    return None;
+                }
+                Some(self.call_to_set_op(&name, &args, value, "="))
+            }
+            _ => None,
+        }
+    }
+
     /// Apply the operator `op` to an already-parsed LHS and parse the RHS, then rewrite
     /// `code` into the assignment IR.  Returns `Type::Void`.
     // threads LHS context (to, f_type, parent_tp, var_nr) alongside op and &mut self
@@ -2041,8 +2196,33 @@ use a separate collection or add after the loop"
         // ~1159-1194 handles the same shape for fields after-the-fact;
         // we cannot do that here because the LHS-local path errors out
         // before reaching it.
+        //
+        // loft#1233 — a keyed collection CAPTURED into a closure is a destination this
+        // branch owns too.  It is reached through an `OpGetDbRef` of the closure record
+        // rather than by name, so `var_nr == u16::MAX` and the local gate alone skipped it.
+        // The RHS then parsed as a free-standing `[…]`, which against a keyed hint builds a
+        // WHOLE `hash<E[k]>`, and the assignment REBOUND the capture to that fresh
+        // one-element collection: every append destroyed the previous contents (and the
+        // records the caller put there before the lambda existed), leaving only the last —
+        // silent, both backends.  A one-append test reads correct, which is how it stayed
+        // unfound.
+        //
+        // The other three place kinds all parse this literal per-element already — a local
+        // here, a field through the after-the-fact twin — and the capture's own BARE
+        // spelling (`h += E { … }`) is routed by the `dbref_append_target` arm below.  So
+        // this is the one cell of place-kind × spelling that reached no per-element route,
+        // and the cure is to let the capture in rather than to add a fourth route.
+        //
+        // `is_captured_dbref` alone is too weak — a struct-field read is an `OpGetDbRef`
+        // too.  The gate is the one `dbref_append_target` uses below, so the interception
+        // and the routes it feeds cannot disagree about what a captured collection is.
+        let captured_keyed = var_nr == u16::MAX
+            && self.closure_param != u16::MAX
+            && Self::is_collection_type(f_type)
+            && f_type.depend().contains(&self.closure_param)
+            && self.is_captured_dbref(to);
         if op == "+="
-            && var_nr != u16::MAX
+            && (var_nr != u16::MAX || captured_keyed)
             && crate::parser::vectors::is_keyed(f_type)
             && self.lexer.peek_token("[")
         {
@@ -2060,14 +2240,22 @@ use a separate collection or add after the loop"
                 let mut item_parent = Type::Null;
                 let _ = self.parse_operators(&elm_tp, &mut item, &mut item_parent, 0);
                 if !self.first_pass {
-                    let steps = self.new_record(
-                        &mut Value::Var(var_nr),
-                        f_type,
-                        elm,
-                        var_nr,
-                        &[item],
-                        &elm_tp,
-                    );
+                    // A capture has no owning struct and no name: it is placed by the
+                    // `OpGetDbRef` itself, and `record_new`'s kind dispatch reads the
+                    // COLLECTION type when the field is `u16::MAX` — the same two
+                    // substitutions the `dbref_append_target` routes below make.
+                    let steps = if captured_keyed {
+                        self.new_record(&mut to.clone(), f_type, elm, u16::MAX, &[item], &elm_tp)
+                    } else {
+                        self.new_record(
+                            &mut Value::Var(var_nr),
+                            f_type,
+                            elm,
+                            var_nr,
+                            &[item],
+                            &elm_tp,
+                        )
+                    };
                     all_steps.extend(steps);
                 }
                 if !self.lexer.has_token(",") {
@@ -2677,11 +2865,34 @@ use a separate collection or add after the loop"
         // *"Variable 'v' cannot change type from vector<integer>? to integer"* for a
         // local, *"No matching operator 'Add'"* for a field, neither of which mentions
         // `+= [elem]`.
+        // loft#1221 — "is the source ONE element of this vector" is asked of the same home the
+        // append routes ask (`holds_element`), because the element type has more than one
+        // spelling and a bare `is_equal` knows only the first.  @FR-C-Var makes a VARIANT an
+        // element of a vector over its enum, so `b.items += Named { … }` is a bare element
+        // append and owes the reader this message.  Asked with `is_equal` it was none of the
+        // routes' business: `Reference(Named)` and `Enum(Tagged, …)` read as unrelated, the
+        // statement fell past every branch, and the generic path grew the vector by THREE.
+        // loft#1223 — the SOURCE is read through `.base()` for exactly the reason @PLN25 gave
+        // for the destination one paragraph up: the rule is a blanket requirement on the
+        // SPELLING, and `τ?` occupies τ's storage plus one reserved null, so nullability does
+        // not decide whether a bare element is ambiguous with a concat.  Asked unpeeled, the
+        // `?` spelling of one statement was MORE permissive than the plain one — `d.c += n`
+        // with `n: integer?` was accepted where the dense `d.c += i` is refused, which is
+        // backwards for a nullability marker.  It reached the vector single-element push, and
+        // was the ONLY shape in the corpus that did.
+        //
+        // The two questions stay separate and both still reach the reader: this one says WRITE
+        // THE BRACKETS, and `(N-Store)` below says the value may be null where a non-null is
+        // expected.  The cure named here (`+= [n]`) earns that warning on its own.
         if op == "+="
-            && let Type::Vector(elm_tp, _) = f_type.base()
+            && let Type::Vector(_, _) = f_type.base()
             && !s_type.is_unknown()
-            && (**elm_tp).is_equal(&s_type)
-            && !s_type.is_equal(f_type.base())
+            && {
+                let content = f_type.base().content();
+                let src = s_type.base().clone();
+                self.holds_element(&content, &src)
+            }
+            && !s_type.base().is_equal(f_type.base())
         {
             diagnostic!(
                 self.lexer,
@@ -2691,6 +2902,172 @@ use a separate collection or add after the loop"
             );
             *code = Value::Insert(Vec::new());
             return Type::Void;
+        }
+        // @PLN25 (N-Store), loft#1210 — an UN-DISCHARGED nullable source appended to a
+        // non-null collection.  `(N-Store)` rejects storing `e:τ?` into a `τ` slot, and the
+        // rule is already enforced one place-kind over: the same store into a dense LOCAL is
+        // refused with a message naming both cures.  A FIELD destination asked nobody, so the
+        // value was written raw — the interpreter panicked writing a read-only const store and
+        // `--native` emitted `set_int(…, v)` with a `DbRef` for `v`, neither of which describes
+        // the statement that caused it.  A keyed field took the null quietly instead.
+        //
+        // Placed here because it is the ONE point where both destinations are still in play:
+        // the vector-push, the vector-concat and the keyed-fill routes are all downstream, so a
+        // check at any of them is a third copy of the same question.  Discharging is what the
+        // reader is told to do (`c += s?` / `c += s ?? []`), and `n_store_violation` names it.
+        //
+        // The BASE has to be acceptable for this to be the null's fault rather than an
+        // ordinary type error: a `text?` appended to a `vector<integer>` is a mismatch that
+        // discharging does not fix, and it keeps the plain message it already had.
+        let nullable_append_source = op == "+="
+            && !self.first_pass
+            && !s_type.is_unknown()
+            && matches!(&s_type, Type::Optional(_))
+            && crate::parser::vectors::is_collection(f_type.base())
+            && {
+                let base = s_type.base().clone();
+                base.is_equal(f_type.base())
+                    || matches!(f_type.base(), Type::Vector(elm, _) if (**elm).is_equal(&base))
+                    || matches!(&base, Type::Vector(elm, _)
+                        if crate::parser::vectors::is_keyed(f_type.base())
+                            && (**elm).is_equal(&f_type.base().content()))
+            };
+        if nullable_append_source {
+            // The rule decides the severity, and it is not a refusal.  `(N-Store)`'s split is
+            // REPRESENTABILITY: a hard error only where the null sentinel collides with a real
+            // value of τ — the narrow widths, and nothing else — and a warning everywhere the
+            // null is representable-and-distinct, where the store COMPILES AND RUNS.  A
+            // collection is stored out-of-band (`nullref`), so it is on the warning side, and
+            // `d.c = s` one operator over already warns and proceeds.
+            if self.n_store_violation(&s_type, f_type.base(), "the appended value", None) {
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            // So make it proceed.  The append routes below read `s_type` to choose between
+            // concat, single-element push and the keyed fill, and an `Optional` matched none of
+            // them: the value fell to the push, which writes whatever it is given as ONE
+            // element of the element type.  A `vector<integer>?` was written where an `integer`
+            // belongs — the interpreter panicked into a read-only const store and `--native`
+            // emitted `set_int(…, v)` with a `DbRef` for `v`, neither naming the statement.  A
+            // keyed destination took it quietly.  Peeling here is what `convert` already does
+            // for `=`, so both operators reach the same reading of the same value.
+            let peeled = s_type.base().clone();
+            self.convert(code, &s_type, &peeled);
+            s_type = peeled;
+        }
+        // loft#1215 — the append routes below are a partial list, and nothing said so.  A
+        // source that matches none of them used to reach whichever route tests LEAST: the
+        // vector single-element push, which compares its source with the element type
+        // nowhere and writes whatever it is handed as one element.  A `float` came back as
+        // its IEEE-754 bits read as an `i64`, a `boolean` as 8705, a `text` panicked the
+        // allocator, a struct source and a `vector<text>` element both ended in a SIGSEGV,
+        // and `--native` refused to compile any of them — so the two backends disagreed
+        // about the same program.  A KEYED destination has no catch-all route, so the same
+        // source fell past everything to a statement that emitted no write at all and the
+        // append vanished with `len` reading 0.
+        //
+        // @FR-C-Only settles it without a design call: `⤳` is the only implicit coercion, and
+        // no `⤳` relates a `float` to an `integer` slot.  So this is an ordinary type
+        // error, and the reference route is one operator over — `d.c = f` has always been
+        // one.
+        //
+        // Placed at the ONE point where every destination kind and every route are still in
+        // play, beside `(N-Store)`'s check for the same reason: the vector push, the vector
+        // concat, the keyed fill and the record-literal routes are all downstream, so a
+        // check at any of them is one more copy of a question this file already asks in
+        // four places.  [`Parser::append_source`] is that question's home.
+        // ⚠ A bare `null` source is NOT the classifier's question and is excluded here.
+        // `null` is not a type the destination can or cannot HOLD — it is a value every
+        // element slot has a reading for, and the routes below have handled it since long
+        // before this check: `c += null` appends one absent element, at a nullable element
+        // type and at a dense one alike.  Whether it may occupy a DENSE slot is `(N-Store)`'s
+        // question and belongs to loft#1232, not to a routing refusal.
+        //
+        // Measured the hard way: without this clause the classifier called `null` `Unrelated`
+        // at every element type and refused four shapes the parent accepts — which broke the
+        // published `arguments 0.2.1` on `self.results += null` into a `vector<text?>`.  Five
+        // green `make ci` runs and a whole-corpus value differential said nothing, because no
+        // `.loft` file in this repository appends a bare `null` to a collection; only
+        // `scripts/revalidate_libs_local.sh` sees it.
+        if op == "+="
+            && !self.first_pass
+            && !matches!(s_type, Type::Null)
+            && crate::parser::vectors::is_collection(f_type.base())
+        {
+            let dest = f_type.base().clone();
+            let kind = self.append_source(&dest, &s_type);
+            // A keyed destination has no route for the WHOLE collection at any place kind, and
+            // the two place kinds fail differently — which is why neither one alone settles it.
+            // A keyed FIELD emitted no write: `d.h += other_h` left `len` reading 0 in silence.
+            // Between two keyed LOCALS the statement is claimed, and what it does is REBIND:
+            // the IR is a plain `b = a`, so `b` is repointed at `a`'s store and takes a dep on
+            // it.  From an EMPTY destination that reads exactly like a successful merge; from a
+            // POPULATED one the destination's own records are simply gone — measured,
+            // `d[1] = …; d += c` leaves `d[1]` ABSENT and `d[9]` (the source's) present — and
+            // mutating the source afterwards moves the destination, which is the cell that
+            // shows the alias rather than either appearance.  Its own `= []` store is orphaned
+            // (`1 stores not freed`).
+            //
+            // So there is no merge here to preserve.  @FR-Col-Insert is stated over records
+            // joining a collection and says nothing about merging two; no rule admits an
+            // aliasing rebind either, so refusing is the rule-consistent answer at every place
+            // kind, and implementing a real merge is a design call and a new op.
+            //
+            // ⚠ This deliberately does NOT carry a `var_nr == u16::MAX` clause, and a build that
+            // adds one has been told the LOCAL spelling works.  It does not: it looks correct
+            // only from an empty destination, and no `.loft` file in the tree merges two keyed
+            // locals, so a whole-corpus differential runs clean over the difference.
+            //
+            // The vector twin is the control — there `Whole` IS concatenation at every place
+            // kind, it copies rather than rebinds, and it must stay.
+            //
+            // ...and only when the source NAMES a collection.  `append_source` answers with
+            // TYPES, and a keyed literal is built THROUGH its destination (loft#703), so
+            // `t.0 += [E { … }]` at a TUPLE ELEMENT reports the destination's own type and
+            // reads as `Whole`.  That is a one-element append, not a merge — the three place
+            // kinds above never reach here because they parse the literal per element first,
+            // and the tuple element does because it builds through a `__kvb_N` accumulator.
+            // A merge can only be written with a source that names an existing collection.
+            let unroutable_whole = kind == crate::parser::vectors::AppendSource::Whole
+                && crate::parser::vectors::is_keyed(&dest)
+                && !s_type.is_unknown()
+                && self.source_names_a_collection(code);
+            if unroutable_whole {
+                let content = dest.content().name(&self.data);
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot append a whole `{}` to another — a keyed collection's `+=` takes \
+                     one `{}` element written `[…]`, or a `vector<{}>` of them",
+                    dest.source_name(&self.data),
+                    content,
+                    content
+                );
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
+            if kind == crate::parser::vectors::AppendSource::Unrelated {
+                // The two spellings named are the two that were MEASURED to work at every
+                // destination kind: `+= [elem]` and `+= <vector of elem>`.  For a vector the
+                // second IS the collection, so one sentence serves both kinds.  What is
+                // deliberately NOT offered is "the whole collection, to concatenate" at a
+                // KEYED destination: `d.h += other_h` between two `hash<E[k]>` is itself a
+                // silent drop, and a refusal whose cure is broken sends the reader to a dead
+                // end — that one is loft#1221, the routes that drop an ADMISSIBLE source.
+                let content = dest.content().name(&self.data);
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot append `{}` to `{}` — a `+=` source must be one `{}` element \
+                     written `[…]`, or a `vector<{}>` of them",
+                    s_type.name(&self.data),
+                    dest.source_name(&self.data),
+                    content,
+                    content
+                );
+                *code = Value::Insert(Vec::new());
+                return Type::Void;
+            }
         }
         // C54.A incremental 2a — if the variable carries an annotated
         // target type `: Long` with a narrower `Integer` RHS
@@ -2969,6 +3346,87 @@ use a separate collection or add after the loop"
         } else {
             to
         };
+        // loft#1237 — `keyed_local += <vector VALUE>`, the third place kind of loft#1159's
+        // question.  That issue gave a keyed FIELD the route that inserts every record a
+        // vector holds, each placed by its own key, and gated it on `var_nr == u16::MAX`.  A
+        // keyed LOCAL is the other spelling and reached no route at all: the statement fell
+        // through to `change_var` immediately below, which reads it as `h = <vector>` and
+        // refuses it as a TYPE CHANGE — *"Variable 'h' cannot change type from hash<E,[k]> to
+        // vector<E>"*.  Nothing in that message says `+=` was understood as an append, and
+        // both cures it names are wrong here: a new variable name does not help, and `as`
+        // cannot convert a `vector<E>` to a `hash<E[k]>`.
+        //
+        // `(Col-Insert)` is written over `c += [rec, …]` and says a keyed kind places each
+        // record by its key.  It does not distinguish how the destination is REACHED, so the
+        // local owes the same answer the field gives — the same argument loft#1159 made for
+        // the field and loft#1233 made for the capture.
+        //
+        // It has to sit ABOVE `change_var` rather than beside its field twin further down,
+        // because for a local the refusal fires first and the twin is never reached.  The
+        // source is validated before this point: loft#1215's classifier answers
+        // `ElementVector` for exactly the vector-of-the-element-type shape and refuses the
+        // rest, so reaching here already means the records fit.
+        //
+        // Claims the statement on BOTH passes — pass 1 must not fall into the refusal either
+        // — and emits only on pass 2, the way @P277's literal interception does.
+        //
+        // ⚠ The gate is the TYPE SHAPE, and the keyed type-table id is resolved only when
+        // emitting.  `keyed_field_kt` reads the element def's `known_type`, which is still
+        // `u16::MAX` during PASS 1 — so a gate that asked for the id refused to claim the
+        // statement on the very pass whose refusal is the bug, and pass 2 was never reached.
+        // `holds_element` is the same predicate the append classifier uses and answers on
+        // both passes.
+        let keyed_local_fill = op == "+="
+            && var_nr != u16::MAX
+            && crate::parser::vectors::is_keyed(f_type)
+            && !matches!(code, Value::Insert(_))
+            && match s_type.base() {
+                Type::Vector(elm, _) => {
+                    let content = f_type.base().content();
+                    let elm = (**elm).clone();
+                    self.holds_element(&content, &elm)
+                }
+                _ => false,
+            };
+        if keyed_local_fill {
+            match (self.first_pass, self.keyed_field_kt(f_type)) {
+                (false, Some(kt)) => {
+                    #[cfg(not(feature = "wasm"))]
+                    let tp_val = if self.is_struct_returning_call(code) {
+                        i32::from(kt) | 0x8000
+                    } else {
+                        i32::from(kt)
+                    };
+                    #[cfg(feature = "wasm")]
+                    let tp_val = i32::from(kt);
+                    let src = code.clone();
+                    let (parent, parent_tp_id, field_nr) =
+                        self.fill_keyed_site(to, &lhs_parent_tp, kt);
+                    *code = Value::Insert(vec![self.cl(
+                        "OpFillKeyed",
+                        &[
+                            parent,
+                            src,
+                            Value::Int(tp_val),
+                            Value::Int(i32::from(parent_tp_id)),
+                            Value::Int(i32::from(field_nr)),
+                        ],
+                    )]);
+                    return Type::Void;
+                }
+                // Pass 1 emits nothing and still CLAIMS the statement — pass 1's IR is
+                // regenerated in pass 2, and letting it fall through is exactly the refusal
+                // this route exists to remove.
+                (true, _) => {
+                    *code = Value::Insert(Vec::new());
+                    return Type::Void;
+                }
+                // Pass 2 with no resolvable keyed id: fall through rather than emit a write
+                // against an unknown type.  The statement then meets whatever the generic
+                // path says, which is the behaviour it had before this route existed.
+                (false, None) => {}
+            }
+        }
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
@@ -3012,22 +3470,11 @@ use a separate collection or add after the loop"
         // already a Reference(__cell_text, _), not an argument
         // and not a plain text Var.
         let is_boxed_text_lhs = matches!(f_type, Type::Text(_))
-            && self
-                .extract_boxed_var_from_lhs(to)
-                .and_then(|v_nr| {
-                    if !self.vars.exists(v_nr) {
-                        return None;
-                    }
-                    match self.vars.tp(v_nr) {
-                        Type::Reference(d, _)
-                            if self.data.def(*d).name().starts_with("__cell_") =>
-                        {
-                            Some(v_nr)
-                        }
-                        _ => None,
-                    }
-                })
-                .is_some();
+            && self.extract_boxed_var_from_lhs(to).is_some_and(|v_nr| {
+                self.vars.exists(v_nr)
+                    && crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
+                        .is_some()
+            });
         if matches!(f_type.base(), Type::Text(_)) && !is_boxed_text_lhs {
             // A text assignment needs somewhere to assign TO. Every other type
             // falls through to the general operator dispatch, which refuses a
@@ -3648,18 +4095,39 @@ use a separate collection or add after the loop"
         // (element-type, narrow-type, or otherwise) is rejected.  Single-
         // element-push case (RHS type == LHS element type) is already caught
         // by the diagnostic just before this branch.
+        //
+        // loft#1207 — the DESTINATION is read through `.base()`, the reading
+        // `vectors::is_keyed` already takes: a `vector<τ>?` field is stored as the vector it
+        // names plus one reserved null, so which vector to append to does not depend on the
+        // wrapper.
+        //
+        // This is the PASS-2 half of that issue and it does not stand alone.  The refusal a
+        // nullable vector append used to earn is decided a pass earlier, in
+        // `vectors::is_collection`: `towards_set`'s collection interception is asked in pass 1,
+        // and while that predicate matched its `Vector` arm bare it denied a `vector<τ>?`, so
+        // the statement fell through to the generic operator lookup as *"No matching operator
+        // 'Add' on 'vector<E>?'"* before any `!first_pass` branch could claim it.  With the
+        // pass-1 half alone the statement compiles and routes here; with this half alone the
+        // pass-1 refusal still fires.  Both are load-bearing, and each is measured so by
+        // reverting it against the guard.
+        //
+        // The SOURCE is deliberately left unpeeled.  A `τ?` value stored into a `τ` slot is
+        // `(N-Store)`'s question, not this branch's, and peeling here would ADMIT it: the
+        // dense-destination direction is loft#1210, where the interpreter panics writing a
+        // read-only store and `--native` emits Rust that will not compile.  Widening the
+        // destination must not quietly widen the source with it.
         if !self.first_pass
             && op == "+="
-            && let Type::Vector(elm_tp, _) = &f_type.clone()
+            && let Type::Vector(elm_tp, _) = &f_type.base().clone()
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
         {
-            if !s_type.is_equal(f_type) {
+            if !s_type.is_equal(f_type.base()) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
                     "vector `+= other_vec` requires equal types ({} != {})",
-                    f_type.name(&self.data),
+                    f_type.base().name(&self.data),
                     s_type.name(&self.data)
                 );
                 *code = Value::Insert(Vec::new());
@@ -3694,6 +4162,23 @@ use a separate collection or add after the loop"
         // and the RHS is a single expression (variable, function call) — NOT
         // a struct literal.  Struct-literal RHS is handled by the keyed-
         // collection branch below, which also covers vectors.
+        //
+        // ⚠ **Measured UNREACHABLE as of loft#1223, and deliberately kept.**  Zero callers
+        // across every `.loft` file in the repository (`tests/scripts`, `tests/docs`,
+        // `tests/lib`, `default`, `examples`, `doc`, `bench`, `tools`), and unreachable by
+        // argument too: for a `Type::Vector` destination every source shape is claimed
+        // earlier — an ELEMENT by @PLAN52's bracket refusal (which reads both sides through
+        // `.base()` since loft#1223, so the nullable spelling no longer slips past), a VECTOR
+        // by the concat branch, and anything else by loft#1215's classifier.  Its last caller
+        // was the un-bracketed nullable element, which is exactly what loft#1223 refused.
+        //
+        // Kept rather than deleted because the two failure modes are not symmetric.  A dead
+        // branch costs a reader's attention.  A WRONG deletion costs a silent wrong answer:
+        // the shape would fall through to the generic assignment path, which for a collection
+        // destination emits no write — the precise failure loft#1221 was.  The argument above
+        // rests on the ordering of four separate checks, any of which a later change may move,
+        // and this same branch was called dead once before on a reading that a measurement
+        // then contradicted.  Delete it behind a fresh probe, not behind this comment.
         if !self.first_pass
             && var_nr == u16::MAX
             && op == "+="
@@ -3776,7 +4261,15 @@ use a separate collection or add after the loop"
             && op == "+="
             && dbref_append_target
             && crate::parser::vectors::is_collection(f_type)
-            && matches!(code, Value::Insert(_))
+            // loft#1221 — a KEYED destination takes an element however it is SPELLED.  The
+            // `Insert` requirement is a vector's: for a vector a bare element is @PLAN52's
+            // ambiguity and the brackets are required, so only a struct LITERAL can reach a
+            // vector here.  A keyed kind has no such ambiguity — `h += rec` is the spelling
+            // its own LOCAL has always accepted — and requiring `Insert` of it left the
+            // FIELD form owned by nothing: `d.h += e` for a plain local `e` of the element
+            // type fell past every route to a statement that emitted no write, and the
+            // append vanished with `len` reading 0.
+            && (matches!(code, Value::Insert(_)) || crate::parser::vectors::is_keyed(f_type))
         {
             let elm_tp = f_type.content();
             // Only fire for single-element append (RHS type matches the
@@ -4292,7 +4785,29 @@ use a separate collection or add after the loop"
         binds
     }
 
+    /// Parse an assignment, keeping [`Parser::last_place_discharge`] the answer for the
+    /// left-hand side that is being parsed HERE.
+    ///
+    /// The flag records which of the two spellings built the last discharge — a postfix `x?`,
+    /// which names a place, or an explicit `(a ?? d)`, which names two values and none
+    /// (`@FR-E-Asgn-Discharge`).  `parse_assign_inner` clears it before parsing its own left
+    /// side so an earlier statement's answer cannot be read as this one's, and a left side
+    /// re-enters that function for every sub-expression it contains — an index (`h?[k]`), a
+    /// call argument.  A nested clear therefore erased the answer the OUTER left side had
+    /// already recorded: `b.d? += […]` survived because nothing is parsed after its `?`,
+    /// while `h?[k] = v` had its `?` forgotten by the time the place was judged, so the
+    /// place read as an explicit coalesce and was refused (loft#1214).
+    ///
+    /// Restoring on the way out confines each nesting level to its own answer: the inner
+    /// parse cannot leak one outward, and cannot destroy the one already standing.
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
+        let outer_discharge = self.last_place_discharge;
+        let tp = self.parse_assign_inner(code);
+        self.last_place_discharge = outer_discharge;
+        tp
+    }
+
+    fn parse_assign_inner(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
         // @PLN87 D-bind-7 — does THIS statement begin with a prefix `&`?  No valid
         // statement does: `&` is only ever a binding RHS (`x = &a`) or a type
@@ -4318,6 +4833,9 @@ use a separate collection or add after the loop"
         // `{ &a }` still reaches the D-bind-7 guard below with its own message,
         // instead of being reported here as a sub-expression use.
         self.amp_head = started_with_amp;
+        // loft#1205 — only a discharge built by THIS left-hand side may be peeled below,
+        // so the flag starts clear rather than carrying an earlier statement's answer.
+        self.last_place_discharge = false;
         let mut f_type = self.parse_operators(&Type::Unknown(0), code, &mut parent_tp, 0);
         self.amp_head = false;
         self.in_tuple_lhs = saved_tuple_lhs;
@@ -4328,8 +4846,23 @@ use a separate collection or add after the loop"
         // Only attempt outside format-string expressions (where `:` is used for
         // format specifiers like `{c:#}`).  Consume `: type` only when `=`
         // follows, confirming this is an annotated declaration.
-        if let Value::Var(v_nr) = code
-            && self.vars.exists(*v_nr)
+        // A capture a closure MUTATES is BOXED (plan-22 02d-iii): the local's type
+        // becomes `Reference(__cell_<T>)` and `auto_deref_boxed_scalar` rewrites every
+        // occurrence of the name into `OpGet<T>(Var, 0)` — the DECLARATION's own
+        // occurrence included.  That shape is the boxed local's place (`towards_set`
+        // maps it straight back to `OpSet<T>`), so the annotation is recognised through
+        // it as well.  Asking only for a bare `Value::Var` left the `:` unconsumed and
+        // reported the well-formed `t: integer = 0` as a missing `;`, on a line whose
+        // only fault was that a closure further down assigned `t` (loft#1231).
+        let annotated_var = match code {
+            Value::Var(v_nr) if self.vars.exists(*v_nr) => Some(*v_nr),
+            _ => self.extract_boxed_var_from_lhs(code).filter(|&v_nr| {
+                self.vars.exists(v_nr)
+                    && crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
+                        .is_some()
+            }),
+        };
+        if let Some(v_nr) = annotated_var
             && !self.in_format_expr
             && self.lexer.peek_token(":")
         {
@@ -4361,13 +4894,13 @@ use a separate collection or add after the loop"
                 } else {
                     tp
                 };
-                self.change_var_type(*v_nr, &tp);
+                self.change_var_type(v_nr, &tp);
                 // (I-Join) — an EXPLICIT `: Type` annotation pins the variable's type, so
                 // it stays constrained (a wider write is a narrowing error).  An inferred
                 // local (no annotation) widens to the join instead (see parse_assign_op).
-                self.vars.set_annotated(*v_nr);
+                self.vars.set_annotated(v_nr);
                 if is_value_const {
-                    self.vars.set_value_const(*v_nr);
+                    self.vars.set_value_const(v_nr);
                 }
                 f_type = tp;
                 got_annotation = true;
@@ -4621,6 +5154,46 @@ use a separate collection or add after the loop"
         let mut to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
             if self.lexer.has_token(op) {
+                // loft#1212 — an EXPLICIT `??` coalesce is not a place.  `(E-Asgn-Discharge)`
+                // (@FR-E-Asgn-Discharge) says so in as many words: *"an explicit `(a ?? d)`
+                // names two values and no place; it takes no assignment at all"*, and
+                // `(N-Default)` says why — on the absent path the coalesce answers a FRESHLY
+                // CONSTRUCTED default, so a write through it lands somewhere nothing can read
+                // back.  The rule was written and the site was missing, so the statement fell
+                // through to the machinery below and produced four different wrong answers,
+                // all on both backends: a present vector field was appended to ITSELF and its
+                // keyed sibling never re-indexed (`vec=4 hash=1` where the group holds two),
+                // a null one lost the write in silence, a `text` target reached codegen
+                // through a minted work variable and raised an ICE, and a scalar was turned
+                // away by arithmetic dispatch — *"Not implemented operation + for type
+                // integer"* — a message about the operator when the target is what is wrong.
+                //
+                // Refused HERE, at the one point every assignment form still shares a target,
+                // because each per-type path below answers its own way and `assign_var_nr`
+                // mints the text work variable that turns the `text` face into an ICE.  The
+                // postfix `x?` is the OTHER branch of this gate and is a place: it names one
+                // slot and says what to READ when that slot is null, so it peels below.
+                // Consume the right-hand side so the statement is finished before returning,
+                // matching the tuple-compound refusal above.
+                if !self.last_place_discharge
+                    && Self::place_reads_through_discharge(&to, &self.data)
+                {
+                    if !self.first_pass {
+                        diagnostic_at!(
+                            self.lexer,
+                            &stmt_start_pos,
+                            Level::Error,
+                            "the left side of this assignment is a `??` coalesce, which names \
+                             two values and no place — on the null path it answers a fresh \
+                             default, so there is nothing to write through. Name the place \
+                             itself (`x {op} …`), with `?` if the read needs discharging \
+                             (`x? {op} …`)"
+                        );
+                    }
+                    let mut discard = Value::Null;
+                    self.expression(&mut discard);
+                    return Type::Void;
+                }
                 // Mark the variable as defined only once we have confirmed the `=` token
                 // is actually present. Doing this before the token check caused any bare
                 // `Value::Var` (e.g. `{cd}` inside a format string) to be marked defined
@@ -4705,6 +5278,69 @@ use a separate collection or add after the loop"
                         self.sandbox_raw_writes.entry(self.context).or_insert(pos);
                     }
                 }
+                // loft#1205 — `P? op= e` / `P? = e`.  A `?` discharges a READ: on an
+                // assignment place it says what to read when `P` is null, it does not make
+                // the discharge itself the destination.  The LHS parse lowered it to the
+                // same null-check the expression form uses, and that null-check is
+                // RE-EVALUABLE, so every form below saw a value where a place should be.
+                // Measured, all silent and on both backends: the vector `+=` path adopted
+                // the check as the literal's own backing store and appended the destination
+                // to itself (`b.d? += [r]` on a one-element field answered len 4), a null
+                // place threw the write away entirely, a `text` place reached codegen with
+                // no variable to write and took the compiler down, and a scalar place was
+                // refused as *"Not implemented operation + for type integer"*.
+                //
+                // Peel to the place the discharge was reading, so the field / local being
+                // written is what the machinery below is handed.  `(E-Asgn-Compound)` is
+                // what that buys: the place's addressing then evaluates exactly once, and
+                // the @PLN102 F2 hoist under this can still do its half for a place whose
+                // addressing calls a function.
+                //
+                // Only the postfix `x?` peels.  An explicit `(a ?? b)` names two values and
+                // no place — there is nothing to peel to — and stays refused.
+                //
+                // The rule this site enforces is `@FR-E-Asgn-Discharge`.
+                //
+                // Peeling alone answers for a COLLECTION and for `=`.  A collection's own
+                // `op=` already reads through the discharge — `b.d += [r]` on a null field
+                // builds the empty collection and appends into it — and a plain `=` has no
+                // read to discharge, so in both the `?` asks for what the place already
+                // does.  A scalar or `text` place PROPAGATES instead (`(N-Prop)`: null + 3
+                // is null), so there the read is discharged explicitly by the seed built
+                // below the F2 hoist.  `i? += 3` on a null `i` is 3, which is what the `?`
+                // said; without the seed it would be null, and the `?` would be noise.
+                let mut seed_wanted = false;
+                if self.last_place_discharge
+                    && let Some(place) = Self::peel_place_discharge(&to, &self.data)
+                {
+                    seed_wanted = op != "="
+                        && !crate::parser::vectors::is_collection(f_type.base())
+                        && (crate::data::is_scalar(f_type.base())
+                            || matches!(f_type.base(), Type::Text(_)));
+                    to = place.clone();
+                    *code = place;
+                } else if self.last_place_discharge
+                    && let Some(subject) = Self::keyed_receiver_discharge(&to, &self.data).cloned()
+                {
+                    // The same rule one level in: the discharge is the RECEIVER of the
+                    // target, and the write still lands in the collection the `?` was
+                    // reading.  Unpeeled, the null path wrote into the fresh collection the
+                    // discharge builds for its `else` arm — one nobody holds, dropped at the
+                    // end of the statement, so `n.h?[k] = v` on an absent field answered
+                    // length 0 with nothing reported (loft#1214).
+                    //
+                    // No seed, unlike the whole-place branch above: a keyed insert already IS
+                    // "build the empty collection first", because loft#1213 materialises an
+                    // absent keyed destination on the write itself.  That is also what makes
+                    // the bare `n.h[k] = v` correct, and this peel is what makes the two
+                    // spellings agree.
+                    if let Value::Call(_, args) = to.unspan_mut()
+                        && let Some(recv) = args.first_mut()
+                    {
+                        *recv = subject;
+                    }
+                    *code = to.clone();
+                }
                 // @PLN102 F2 (C92) — a compound assign evaluates its place ONCE.
                 // When the place reads a heap scalar slot through a NON-idempotent
                 // accessor (`w[idx()]`, `m[i()][j()]`, `getvec()[0]` — the index or
@@ -4762,6 +5398,19 @@ use a separate collection or add after the loop"
                     to = rebuilt.clone();
                     *code = rebuilt;
                 }
+                // loft#1205 — the seed is built HERE, from the place the F2 hoist may just
+                // have rewritten, because it reads the place a second time: once to ask
+                // whether it is null, once to write the default in.  Read off the original
+                // `w[idx()]`, that second read would call `idx()` again — measured, with the
+                // seed built above instead: two calls, the value read from element 0 and
+                // written to element 1, silently.  Through `_place` it is one call, which is
+                // the whole point of the hoist and `(E-Asgn-Compound)`.
+                let discharge_seed = if seed_wanted && !self.first_pass {
+                    let base = f_type.base().clone();
+                    self.discharge_seed(&to, &base)
+                } else {
+                    None
+                };
                 let var_nr = self.assign_var_nr(code, op, &f_type, &mut parent_tp);
                 // Handle `f += X` for File variables before type-changing logic.
                 if op == "+="
@@ -4776,6 +5425,16 @@ use a separate collection or add after the loop"
                 // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
                 let result =
                     self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr, f2_hoisted);
+                // loft#1205 — the discharged read runs before the compound, which was built
+                // for a place the seed has just made non-null.  Prepended FIRST so the F2
+                // binding below ends up in front of it: the seed reads and writes THROUGH
+                // that binding, so a `_place` bound after it is a `_place` it cannot see —
+                // native reported `cannot find value var___place_1`, and the interpreter
+                // quietly seeded the wrong slot.
+                if let Some(seed) = discharge_seed {
+                    let assign = std::mem::replace(code, Value::Null);
+                    *code = Value::Insert(vec![seed, assign]);
+                }
                 // @PLN102 F2 — run the once-evaluated place binding before the compound.
                 if let Some(setup) = f2_setup {
                     let assign = std::mem::replace(code, Value::Null);
@@ -5154,12 +5813,9 @@ use a separate collection or add after the loop"
             return result;
         }
         let tp = self.vars.tp(v_nr).clone();
-        let Type::Reference(cell_d_nr, _) = &tp else {
+        let Some(cell_d_nr) = crate::parser::vectors::boxed_cell_def(&tp, &self.data) else {
             return result;
         };
-        if !self.data.def(*cell_d_nr).name().starts_with("__cell_") {
-            return result;
-        }
         if self.vars.is_defined(v_nr) {
             // Subsequent: cell already exists, no alloc needed.
             return result;
@@ -5169,7 +5825,7 @@ use a separate collection or add after the loop"
         if op_db == u32::MAX {
             return result;
         }
-        let cell_kt = i32::from(self.data.def(*cell_d_nr).known_type());
+        let cell_kt = i32::from(self.data.def(cell_d_nr).known_type());
         self.vars.defined(v_nr);
         Value::Insert(vec![
             v_set(v_nr, Value::Null),
@@ -5223,17 +5879,12 @@ use a separate collection or add after the loop"
             return None;
         }
         let tp = self.vars.tp(var_nr).clone();
-        let Type::Reference(cell_d_nr, _) = &tp else {
-            return None;
-        };
-        if !self.data.def(*cell_d_nr).name().starts_with("__cell_") {
-            return None;
-        }
-        let value_attr = self.data.def(*cell_d_nr).attributes().first()?;
+        let cell_d_nr = crate::parser::vectors::boxed_cell_def(&tp, &self.data)?;
+        let value_attr = self.data.def(cell_d_nr).attributes().first()?;
         if value_attr.name != "value" {
             return None;
         }
-        let op_set_d_nr = self.cell_value_set_op(*cell_d_nr)?;
+        let op_set_d_nr = self.cell_value_set_op(cell_d_nr)?;
         if self.vars.is_defined(var_nr) {
             // Subsequent: write value field of existing cell.
             Some(Value::Call(
@@ -5242,7 +5893,7 @@ use a separate collection or add after the loop"
             ))
         } else {
             // First-set: allocate cell + fill value field.
-            self.boxed_cell_alloc_and_set(var_nr, *cell_d_nr, rhs)
+            self.boxed_cell_alloc_and_set(var_nr, cell_d_nr, rhs)
         }
     }
 
@@ -5300,6 +5951,15 @@ use a separate collection or add after the loop"
 
     /// Determine the variable number for an assignment target.
     /// For text `+=`, creates a unique temporary variable.
+    ///
+    /// `.base()` on the text test, because a `text?` accumulator appends exactly like a
+    /// dense one — the same reading `parse_assign_op_inner`'s routing already takes
+    /// (@PLN25 slice (c)).  Spelled `Type::Text` here and `f_type.base()` there, the two
+    /// disagreed about one notion: the router sent a nullable field's `+=` down the
+    /// text-append path while this left it with no variable to append THROUGH, so
+    /// `n.t += "cd"` on a `t: text?` field emitted `Set(65535, …)` and the scope pass
+    /// asserted on it — an internal compiler error on both backends for an ordinary
+    /// append to an ordinary field (loft#1206).
     pub(crate) fn assign_var_nr(
         &mut self,
         code: &mut Value,
@@ -5309,10 +5969,21 @@ use a separate collection or add after the loop"
     ) -> u16 {
         if let Value::Var(v_nr) = *code {
             v_nr
-        } else if op == "+=" && matches!(f_type, Type::Text(_)) {
-            let v = self
-                .vars
-                .unique("field", &Type::Text(Deps::none()), &mut self.lexer);
+        } else if op == "+=" && matches!(f_type.base(), Type::Text(_)) {
+            // The temp holds what the field holds, NULL INCLUDED, so it is typed the way
+            // the field is.  `--native` decides whether an append propagates a null from
+            // the DESTINATION VARIABLE's static type (`generation/text.rs::append_text`),
+            // while the interpreter tests the value it finds at run time; typed dense, the
+            // temp told native there was nothing to propagate and `n.t += "cd"` on a null
+            // `text?` field appended onto the null sentinel — `"\0cd"`, reported non-null,
+            // where the interpreter left the field null.  One notion, two spellings, and a
+            // shape that only became reachable when the `+=` above stopped being an ICE.
+            let tmp_tp = if matches!(f_type, Type::Optional(_)) {
+                Type::Optional(Box::new(Type::Text(Deps::none())))
+            } else {
+                Type::Text(Deps::none())
+            };
+            let v = self.vars.unique("field", &tmp_tp, &mut self.lexer);
             *code = Value::Var(v);
             *parent_tp = Type::Null;
             v

@@ -74,6 +74,44 @@ owns their *operations + order*).
 ```
 *Anchor:* tests/scripts/48-spatial-construct-free.loft (construct/append/len).
 
+**What `Col-Insert`'s source may BE, and what it may not.** The rule is written over one
+spelling, `c += [ rec, … ]`, and three source shapes satisfy it: the collection ITSELF (for a
+vector, concatenation), ONE element, and a `vector` OF elements (which a keyed kind places one
+by one — loft#1159).  Anything else is not an insert at all and is refused, by
+[types.md](types.md) `C-Only`: `⤳` is the only implicit coercion, so a value the collection
+cannot hold has no reading here.  A source that IS holdable but is spelled another way is
+still an insert — [types.md](types.md) `C-Var` makes a VARIANT one element of a vector over
+its enum, and a nullable record reaches a keyed kind as `Reference(d)` and a vector as the
+synthetic `Enum(d, true, …)`, which are two spellings of the same element and not two
+questions (loft#1215, loft#1221).
+
+Two source shapes the rule deliberately does NOT license, each with its own answer:
+
+  * **a whole KEYED collection into another of the same type.**  `Col-Insert` is about records
+    joining a collection and says nothing about merging two, so this is refused rather than
+    implemented.  Not a permanent decision — the rule could grow a merge — but silence was
+    never one of the options, and it is what shipped until loft#1221.
+
+    What it did instead of merging is the reason refusing is rule-CONSISTENT rather than merely
+    safe: at a keyed FIELD it emitted no write at all, and between two keyed LOCALS it REBOUND —
+    the IR is a plain `b = a`, so the destination is repointed at the source's store and takes a
+    dep on it.  From an empty destination that is indistinguishable from a successful merge;
+    from a populated one the destination's own records are gone, and mutating the source
+    afterwards moves the destination.  No rule in this document admits an aliasing rebind, and
+    `(T-Cons)`'s independence requirement for a keyed tuple element says the opposite — so the
+    behaviour was not an unwritten merge waiting to be documented.  A real merge would have to
+    walk the source and insert each record with the dedup `Col-Insert` already performs; there
+    is no such copy anywhere in the language today, which is what `tuples-history.md`'s
+    `D-tup-4` keyed half has been waiting on (loft#1230).
+  * **a bare element into a VECTOR.**  Legal by this rule and refused by @PLAN52's ambiguity
+    rule instead: `vector<vector<T>> += vector<T>` is both "push one element" and "concatenate",
+    so the brackets are required for every element type, not only the ambiguous ones — and for
+    every SPELLING of an element type.  A `τ?` source is one, because [types.md](types.md)
+    `N-Opt` gives it τ's storage plus one reserved null: nullability does not decide whether a
+    bare element is ambiguous with a concat.  Asked unpeeled, `d.c += n` on an `integer?` was
+    accepted where the dense `d.c += 9` is refused, which made the `?` spelling of a statement
+    more permissive than the plain one (loft#1223).
+
 ### 1.2b Removal — `Col-Remove` (a vector RENUMBERS; a keyed kind does not)
 
 ```
@@ -194,20 +232,23 @@ tests/scripts/48b-spatial-slice.loft (the asserted box/open/cap slices). CAVEATS
                 to a single record set, provided at least one of them is keyed.  A record
                 entering through any member is in every member, by any write route.  Membership
                 is a fact about the PAIR — not about declaration order, not about which member
-                is written first, and not about whether the element is dense (vector<E>) or
-                nullable (vector<E?>).
+                is written first, not about whether the element is dense (vector<E>) or
+                nullable (vector<E?>), and not about whether a MEMBER itself is nullable
+                (hash<E[k]>? is a collection over E in that struct, so it is a member).
                 Two members neither of which is keyed (two plain vectors) are INDEPENDENT.
 ```
 
-Five fixes are all instances of this one rule, which is why it is written here rather than left
+Six fixes are all instances of this one rule, which is why it is written here rather than left
 to the issues: `trie`/`spatial` were absent from the pairing test (loft#927); the `others` link
 ran one way, so which member maintained the rest depended on declaration order (loft#843); the
 test asked only whether the field being ADDED was keyed, so a plain `vector<E>` declared second
 formed no group (loft#1158); only `hash` had its element rewritten to a nullable sibling's
-`__nullable<E>`, so the other four kinds no longer matched by content; and a whole vector VALUE
+`__nullable<E>`, so the other four kinds no longer matched by content; a whole vector VALUE
 (`data = rows()`) reached only the member it was assigned to, because the bulk write never
 passed the per-record chokepoint that maintains the group (loft#1152, and loft#1159 for the
-same route into a KEYED member).
+same route into a KEYED member); and the same nullable-element rewrite asked both of its halves
+with a bare variant test, so a member spelled `hash<S[k]>?` — or a vector spelled
+`vector<S?>?` — fell out of the set entirely (loft#1204).
 
 Every one of them **failed silently** — the pairing was never refused, a second independent
 collection was built instead, and `len` of the empty view is a legal value.  That is the shape
@@ -238,6 +279,7 @@ tests/scripts/a-collection-group-does-not-depend-on-declaration-order.loft;
 tests/scripts/1158-a-group-forms-whichever-member-is-declared-first.loft;
 tests/scripts/1152-a-vector-value-into-a-group-reaches-every-member.loft;
 tests/scripts/1159-a-keyed-collection-filled-from-a-vector-value.loft;
+tests/scripts/a-nullable-keyed-member-joins-its-group.loft;
 tests/scripts/1160-a-variant-binding-write-means-the-field-write.loft;
 tests/scripts/927-trie-spatial-linked-group.loft;
 tests/scripts/901-linked-group-fill.loft.
@@ -259,46 +301,10 @@ tests/scripts/901-linked-group-fill.loft.
 - **INV-SliceFresh** — a `vector`/`text` value slice is a FRESH, independent value (H-Alloc); mutating
   it never touches the source.
 
-## 3. Deviations / decided edges to record (expected: mostly decided edges, 0 or few OPEN)
+## 3. Deviations / decided edges
 
-- **`C-Order`** (hash bucket-walk) — already a decided edge in concurrency.md; `Col-Order` references it.
-- **`D-key-1`** (keyed slice = iterator) — a shipped decided edge (the value-position crash was fixed to a
-  clean diagnostic, RELEASE.md 2026-07-04); formalized as `INV-KeyedSlice`, not an open deviation.
-- **INV-Superset** — a deliberate design decision (raw Morton interval), not a deviation; record as an edge
-  with a DESIGN_DECISIONS cross-link.
-- **Candidate OPEN (verify):** the per-query scratch-vector allocation for spatial slices (CAVEATS.md notes
-  it as the next efficiency lever) — a performance note, likely NOT a formal deviation.
-
-OPEN: **0** — `D-col-null` was opened and CLOSED the same day (2026-08-28, below).
-
-### `D-col-null` — OPENED AND CLOSED (2026-08-28, loft#1120): two answers to *"is this collection null?"*
-
-`(Col-Lookup)` and `(N-Index)` make an absent element that type's null, and `(E-Coalesce)` makes
-`e ?? d` yield `d` for exactly that null.  One value, one null, one answer — and the tree carried
-two, each right about the half the other got wrong.
-
-`??` asked `OpConvBoolFromRef` (`rec != 0`).  That reads the encoding a MISSED LOOKUP uses and
-nothing else, so a nullable collection FIELD — whose read is a sub-reference carrying the HOLDER's
-record — was "present" whatever the slot contained: the default was unreachable, and a `hash` /
-`index` field then dereferenced the record the absent slot names and stopped the run.  `==  null`
-asked `OpVectorIsNull`, which reads the handle sentinel and the slot word but called a record-less
-DbRef present, so `vv[9] == null` answered `false` for an index plainly out of range.  `spatial`
-and `trie` were in neither list: the coalesce's hand-written variants named `Vector`/`Sorted`/
-`Hash`/`Index` only, so they fell to the generic convert, which hands back the bare handle —
-`--interpret` read twelve pointer bytes as a boolean and `--native` would not compile the `if`.
-
-Closed by giving the question ONE implementation: `vector::is_absent_collection` answers ABSENT for
-a DbRef that reaches no slot (the missed-lookup encoding it used to call present), and the coalesce
-asks `Parser::collection_is_null` — the lowering `== null` already used — through
-`is_collection_type`, which names every kind including `Radix` and `Trie`.  The condition position
-(`if c`) shares that lowering and was wrong in the same three ways.
-
-⚠ **The oracle under the neighbouring `OPEN: 0`s could not see this.**  Five guards already covered
-nullable collection fields (`909`, `917`, `920`, `922`, `936`) and every one of them writes `?? []`
-— and empty is what the wrong answer looks like, so each cell agreed with itself.  A default whose
-length differs from both the empty and the present arm is what separates them; that is what
-`tests/scripts/1120-one-null-question-for-a-collection.loft` writes, over six collection kinds ×
-{null, empty, filled} × {field, element field, parameter, handle, lookup} × {`??`, `== null`, `if`}.
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
+the companion [collections-history.md](collections-history.md).
 
 ## 4. Conformance / oracle plan (how each rule gets pinned — [VERIFICATION.md](VERIFICATION.md))
 

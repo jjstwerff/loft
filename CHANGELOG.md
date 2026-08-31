@@ -33,6 +33,239 @@ way `u8` and `i16` already did; and **generics work inside tuples** — a `T?` e
 defaulted `T? = null` reaching a tuple, and a plain `-> (text?, integer)` return all
 compiled to the wrong thing or refused to compile at all, on one backend or both.
 
+### Appending to a keyed field you never constructed works
+
+```loft
+struct N { h: hash<E[k]>? }
+
+n = N { };          // the field is absent, not empty
+n.h += rows;        // crashed the program
+```
+
+An absent collection field and an empty one are the same thing to an append — there are no
+records either way, and the append builds the collection. The vector side had always read it
+that way; the keyed side followed the "no collection here" marker as if it were a record, and
+the first lookup took the program down. `hash`, `sorted` and `index` all did it, on both
+backends. Constructing the field empty (`N { h: [] }`) was the workaround and is no longer
+needed.
+
+### `x ?? d += e` now says what is wrong with it
+
+`?` and `??` build the same thing internally and mean different things on the left of an
+assignment. `x?` names one place and says what to read when it is null; `x ?? d` names two
+values and no place at all, so there is nothing to write through — on the null path it hands
+back a fresh default that the write lands in and nothing can read back.
+
+Only the first was handled. The second reached the machinery below it and each type answered
+its own way, none of them right:
+
+```loft
+g.data ?? [] += [Ec { k: 7 }];   // the field appended to ITSELF — one record became four,
+                                 // and the keyed sibling of its group never saw the record
+b.d ?? [] += [Ec { k: 9 }];      // null field: the write simply disappeared
+b.n ?? 0 += 1;                   // "Not implemented operation + for type integer"
+b.t ?? "" += "cd";               // internal compiler error
+```
+
+All four are now one message that names the two spellings that do work — `x += …`, or
+`x? += …` when the read needs discharging.
+
+### `const` holds through a `?` inside the place
+
+A `const` parameter could be modified after all, if the write went through a nullable field on
+the way:
+
+```loft
+fn touch(h: const Holder) {
+  h.inner?.x = 99;           // compiled, ran, and the CALLER saw 99
+  h.inner.x  = 99;           // refused correctly — the same write, dense
+}
+```
+
+The promise `const` makes is about the write's root, and a `?` does not change which binding a
+write reaches — it changes what a read answers. The same gap made an ordinary write
+unreachable from the other side: `a.i?.nm = "cd"` on a `text` member reported that *a
+file-scope `NAME: text = …` is a CONSTANT*, about code nobody had written, while the `integer`
+member beside it wrote through fine. Both are one missing case, on both backends.
+### A `?` on a value no longer buys it past a rule the plain value obeys
+
+Appending one element to a vector needs brackets — `v += [x]`, not `v += x` — because
+`vector<vector<T>> += vector<T>` would otherwise be both "push one element" and "concatenate".
+That rule applies to every element type. It was not applied to a nullable one:
+
+```loft
+struct D { c: vector<integer> }
+
+i: integer = 9
+d.c += i          // error: vector `+= elem` is ambiguous; use `+= [elem]`
+n: integer? = 9
+d.c += n          // …accepted
+```
+
+So the `?` spelling of a statement was *more* permissive than the plain one, which is backwards
+for a marker whose whole job is to make you handle a value more carefully. Both now ask for the
+brackets, and `d.c += [n]` does what you meant.
+
+Nullability and bracketing stay two separate questions about the same line, and both still reach
+you: the brackets are this message, and *"a nullable `integer?` is stored into … the non-null
+type"* is the other.
+
+### Every `+=` on a collection now either appends or says why not
+
+`c += v` had a list of routes and no `else`, so a source matching none of them went one of two
+ways, both quiet.
+
+A **vector** had a catch-all — a route that writes the value as one element without ever
+comparing its type — so an unrelated source was written raw:
+
+```loft
+struct D { c: vector<integer> }
+
+d = D { c: [] }
+f: float = 2.5
+d.c += f          // len 1, and the element reads 4612811918334230528
+```
+
+That is the IEEE-754 bit pattern of `2.5` read back as an integer. A `boolean` stored `8705`, a
+`text` took the process down inside the allocator, and appending a struct — or an integer to a
+`vector<text>` — ended in a segfault. `--native` refused to compile any of them, so the two
+backends disagreed about the same program.
+
+A **keyed** collection had no catch-all, so the same source reached nothing at all and the
+append simply vanished with `len` reading 0.
+
+Both now report:
+
+```
+error: cannot append `float` to `vector<integer>` — a `+=` source must be one `integer`
+       element written `[…]`, or a `vector<integer>` of them
+```
+
+### Appending a record to a keyed field no longer needs a literal
+
+The same list of routes was incomplete in the other direction: a source the collection *can*
+hold sometimes reached no route either, and was dropped in silence.
+
+```loft
+struct E { k: integer, n: integer }
+struct D { h: hash<E[k]> }
+
+d = D { h: [] }
+e = E { k: 2, n: 8 }
+d.h += e          // used to add nothing; len read 0
+```
+
+A keyed field took `d.h += E { k: 2, n: 8 }` and `d.h += [e]`, and a keyed *local* took the bare
+`h += e` — three spellings of one question, and only one of them was wrong. All five keyed kinds
+were affected.
+
+**If you wrote that statement, check what it was doing for you.** Two collections over the same
+element type are a linked *group* — two routes to a single record set — so appending to one
+already puts the record in the other:
+
+```loft
+struct Counter { ordered: vector<Word>, by_text: hash<Word[text]> }
+
+c.ordered += [w]      // this alone puts the record in BOTH; `c.by_text["apple"]` finds it
+c.by_text += w        // a no-op before this release; now a SECOND append
+```
+
+Code that filled both members was relying on the second statement doing nothing, and it now adds
+every record twice. The vector member is the only one that shows it — a hash keeps one entry per
+key either way — so a test that checks the lookup will not notice while the vector's length has
+doubled. The fix is to delete the redundant append; `examples/collections.loft` was written this
+way and is corrected in this release. Two more of the same shape are fixed with it: appending a variant to a vector over
+its enum (`b.items += Named { … }`) grew the vector by three instead of one and now asks for the
+usual brackets, and appending a whole keyed collection to another of the same type wrote nothing
+and now says so.
+
+### `x? += …` accumulates from the type's zero
+
+`?` on the left of an assignment says *which value to read when this place is null*; the write
+still lands in the place. That is the accumulate-from-nothing idiom:
+
+```loft
+hits: integer? = null;
+hits? += 1;                  // 1     — the `?` read the zero
+misses: integer? = null;
+misses += 1;                 // null  — no `?`, so the null propagates through `+`
+```
+
+It did not work. On a vector field the appended record was built into the destination and the
+destination was then appended to itself, so a one-element field grew to four; on a null place
+the write disappeared and the field stayed null; a keyed sibling of the vector was never
+re-indexed; a `text` place crashed the compiler; and a scalar place was refused with a message
+about the operator. All of it silent, and identical on both backends.
+
+For a **collection** the `?` was always redundant — `b.d += [r]` on a null field already builds
+the empty collection first — and that spelling was correct throughout. `(a ?? d) += e` stays
+refused: it names two values and no place.
+
+### A nullable inside a collection literal says so too
+
+```loft
+n: integer? = null;
+v: vector<integer> = [n];    // was: silent — and `v[0]` read back null
+```
+
+Now it warns, the way `x: integer = n` and `d.c += n` already did. The gap mattered because it
+was the cure the language names: `d.c += n` is refused with *"use `+= [n]`"*, and `+= [n]` was
+the spelling nothing checked — so following our own advice took you from warned to silent. The
+same check now covers a field assignment (`d.c = [n]`), a constructor field (`D { c: [n] }`) and
+nested literals.
+
+It is a warning and never an error, including for narrow element types like `u8` where a null
+does not really fit: the store already compiled and ran, and refusing it now would break code
+that works today. Write `[n?]` or `[n ?? 0]` to say what you mean.
+
+### `c += null` now compiles with `--native`
+
+Appending a bare `null` to a collection worked in the interpreter and had never compiled
+natively — `rustc` rejected the generated code for `integer`, `float`, `single`, `character`,
+narrow-int and struct element types. A published package (`arguments`) relied on it, so it built
+on one backend only. Both backends now agree at every element type.
+
+### Appending a nullable value to a collection says so, instead of crashing
+
+```loft
+struct D { c: vector<integer> }
+s: vector<integer>? = [1, 2];
+d.c += s;                    // was: interpreter panic; `--native` would not compile
+```
+
+Now it warns — *"a nullable `vector<integer>?` is stored into … the non-null type
+`vector<integer>`"* — and appends, which is what the same value does when you write
+`d.c = s`. A keyed field took the value silently before and now warns too. The warning names
+the two cures it always had: `d.c += s?` or `d.c += s ?? []`. Appending a value that really is
+null appends nothing.
+
+### Appending to a nullable collection works
+
+```loft
+struct Bag { rows: vector<Row>?, by_id: hash<Row[id]>? }
+b.rows += more;              // was: "No matching operator 'Add' on 'vector<Row>?'"
+b.by_id += more;             // was: added nothing at all, and said nothing
+```
+
+A `vector<τ>?` or `hash<τ[k]>?` field takes the same append its dense twin does. The two
+halves failed differently and both are fixed: the vector was refused outright, and the keyed
+one was **silent** — the records vanished and `len` read 0 with no diagnostic anywhere. Only
+a *non-literal* source was affected, so `b.rows += [r]` was correct all along, which is what
+made the silent half easy to miss. Appending to a field that is actually absent builds the
+empty collection first, as it always did for a dense one.
+
+### Appending to a nullable text field works
+
+```loft
+struct Row { note: text? }
+r.note += "cd";              // was: internal compiler error
+```
+
+One append to a `text?` struct field took the compiler down, on both backends. The dense
+`text` field beside it and the `text?` local were always fine. Appending to a field that is
+*actually* null still leaves it null — `+=` propagates — and `--native` now agrees with the
+interpreter about that, which it did not while the crash was hiding the shape.
+
 ### A vector rebuilt from itself keeps its contents
 
 The ordinary "drop the last element" idiom quietly produced an **empty** vector:

@@ -711,6 +711,16 @@ pub struct Parser {
     /// When a variable is not found in the lambda's scope but exists here, it is a capture.
     /// Empty when not inside a lambda.
     pub(crate) capture_context: Vec<(String, Type)>,
+    /// Which DEFINITION owns each name in [`Parser::capture_context`] — the function whose
+    /// variable table it lives in.
+    ///
+    /// For a lambda directly inside a function every visible name is owned by that function,
+    /// and this says nothing the enclosing context does not.  For a lambda nested inside a
+    /// LAMBDA it is the difference between the enclosing lambda and the scope the name really
+    /// comes from, which is what decides where a mutated capture is boxed: the cell has to be
+    /// minted in the frame that holds the variable, not in the closure that passes it along
+    /// (loft#1236).
+    pub(crate) capture_owner: std::collections::HashMap<String, u32>,
     /// Accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
@@ -805,6 +815,14 @@ pub struct Parser {
     /// the notice fires before the default exists and the caller's cursor has moved past
     /// the statement terminator by the time it returns.
     pub(crate) ncc_default_end: Option<(u32, u32)>,
+    /// The last null-check built by [`Parser::build_null_coalesce_default`] came from the
+    /// postfix `x?` discharge (@PLN116), not from an explicit `a ?? d`.
+    ///
+    /// The two spellings build the SAME IR and mean different things on an assignment
+    /// place: `x?` names one place and says what to read when it is null, while `a ?? d`
+    /// names two values and no place at all.  Read at the assignment dispatcher, which
+    /// peels the first and leaves the second refused (loft#1205).
+    pub(crate) last_place_discharge: bool,
     /// loft#1023 — definitions whose BODY has been parsed in the current second pass.
     ///
     /// A generic instantiated before its own template appears in this set was built from
@@ -1194,6 +1212,7 @@ impl Parser {
             expected: Type::Unknown(0),
             fields_of: u32::MAX,
             capture_context: Vec::new(),
+            capture_owner: std::collections::HashMap::new(),
             captured_names: Vec::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
@@ -1214,6 +1233,7 @@ impl Parser {
             pending_default_rhs: None,
             pending_default_src: None,
             ncc_default_end: None,
+            last_place_discharge: false,
             pass2_bodies: std::collections::HashSet::new(),
             stale_monomorphs: Vec::new(),
             conv_owned_result: None,
@@ -3759,12 +3779,36 @@ impl Parser {
         }
     }
 
+    /// Does storing `value_tp` into `target_tp` violate `(N-Store)`?  Reports it if so, and
+    /// answers whether the store was REFUSED (an error) rather than merely reported.
+    ///
+    /// `never_error` holds the report to `Level::Warning` whatever the width.  Exactly one
+    /// seam asks for it — a collection LITERAL's elements (loft#1232) — and the reason is
+    /// compatibility, not doctrine: the narrow-width escalation below is right about the
+    /// SLOT (a `u8` spends all 256 values on real data, so a null there has no room), but
+    /// this seam was silent until now, so escalating it retro-breaks published code that
+    /// compiles today.  Measured: `assets 0.2.0` writes `bp += [0 as u8?]`, whose value is
+    /// never actually null, and the whole registry gate went from 42 pass to a COMPILE-BREAK.
+    /// Reporting where there was silence is a strict gain; refusing what a shipped package
+    /// already relies on is a break the freeze forbids, and raising the tier later is
+    /// COMPATIBILITY.md's process rather than this function's call.
     fn n_store_violation(
         &mut self,
         value_tp: &Type,
         target_tp: &Type,
         what: &str,
         at: Option<&Position>,
+    ) -> bool {
+        self.n_store_violation_inner(value_tp, target_tp, what, at, false)
+    }
+
+    fn n_store_violation_inner(
+        &mut self,
+        value_tp: &Type,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
     ) -> bool {
         if self.first_pass {
             return false;
@@ -3798,7 +3842,13 @@ impl Parser {
         {
             let mut hit = false;
             for (i, (ve, te)) in v_elems.iter().zip(t_elems.iter()).enumerate() {
-                hit |= self.n_store_violation(ve, te, &format!("element {i} of {what}"), at);
+                hit |= self.n_store_violation_inner(
+                    ve,
+                    te,
+                    &format!("element {i} of {what}"),
+                    at,
+                    never_error,
+                );
             }
             return hit;
         }
@@ -3824,7 +3874,8 @@ impl Parser {
             // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
             // spends the whole width on real values, so a null there would silently corrupt.
             // Gate OFF → the current uniform hard error (this branch stays byte-identical).
-            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            let narrow =
+                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
             if crate::keys::nullflow_enabled() && !narrow {
                 let msg = diagnostic_format(
                     Level::Warning,
@@ -3860,7 +3911,8 @@ impl Parser {
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
             // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
-            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            let narrow =
+                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
             if crate::keys::nullflow_enabled() && !narrow {
                 let msg = diagnostic_format(
                     Level::Warning,
@@ -4715,6 +4767,18 @@ impl Parser {
             }
             if let (Type::Reference(r_nr, _), Type::Enum(e_nr, true, _)) = (test_type, should)
                 && e_nr == r_nr
+            {
+                return true;
+            }
+            // @FR-C-Var — a VARIANT satisfies the enum it belongs to: `Reference(S) ⤳
+            // Enum(E)` when `S ∈ variants(E)`.  The argument, return and struct-field
+            // positions all accept `Named { … }` where a `Tagged` is declared, so a
+            // predicate that answers *"may this value satisfy that slot"* has to say the
+            // same — asked from a fourth position it said no, and the caller then read a
+            // legal value as unrelated to the slot it was going into (loft#1215).
+            if let (Type::Reference(v_nr, _), Type::Enum(e_nr, _, _)) = (test_type, should)
+                && self.data.def_type(*v_nr) == crate::data::DefType::EnumValue
+                && self.data.def(*v_nr).parent == *e_nr
             {
                 return true;
             }
@@ -9573,6 +9637,13 @@ impl Parser {
     /// absent. `build_nullable_set_null` is what the absent arm uses, so a slot being
     /// REASSIGNED releases the payload it held instead of leaking it.
     ///
+    /// The PRESENT arm releases it too, for the same reason and with the same op: both arms
+    /// clobber the slot in place, so a `Some` payload holding a keyed collection or a nested
+    /// store is orphaned unless the write says otherwise. Exactly one clear on either path —
+    /// `build_nullable_set_null` carries the absent arm's — because `OpClearKeyed` reads the
+    /// discriminant, and a second one over a slot whose discriminant still says `Some` would
+    /// release the same claims twice.
+    ///
     /// `slot_ref` addresses the slot itself — an `OpGetField` at the enum's own type.
     /// Answers the statements to emit; the caller decides where they go.
     pub(crate) fn emit_nullable_slot_write(
@@ -9593,7 +9664,15 @@ impl Parser {
             return Vec::new();
         }
         let mut list = vec![v_set(src_var, value)];
-        let present = self.build_some_present(some_d, slot_ref.clone(), Value::Var(src_var));
+        let kt = self.data.def(syn).known_type();
+        let mut present = Vec::with_capacity(3);
+        if kt != u16::MAX {
+            present.push(self.cl(
+                "OpClearKeyed",
+                &[slot_ref.clone(), Value::Int(i32::from(kt))],
+            ));
+        }
+        present.extend(self.build_some_present(some_d, slot_ref.clone(), Value::Var(src_var)));
         let absent = self.build_nullable_set_null(syn, slot_ref.clone());
         let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
         let not_null = self.cl("OpNot", &[is_null]);

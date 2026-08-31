@@ -1015,6 +1015,125 @@ impl Parser {
         }
     }
 
+    /// How THIS scope names a capture it holds only because a nested lambda asked for it — a
+    /// read of its own closure record — or `None` when it holds no such thing.
+    ///
+    /// The scope that BUILDS a closure record fills it from what it can name, and a relayed
+    /// capture is not a local here: it arrived through this lambda's own `__closure`
+    /// (loft#1236).  Pass 1 answers `None` (no record is synthesised yet) and emits nothing,
+    /// which costs nothing — pass 1's IR is rebuilt in pass 2.
+    pub(crate) fn relayed_capture_read(&mut self, name: &str) -> Option<Value> {
+        if self.first_pass || self.closure_param == u16::MAX {
+            return None;
+        }
+        let rec = self.data.def(self.context).closure_record();
+        if rec == u32::MAX {
+            return None;
+        }
+        let fnr = self.data.attr(rec, name);
+        if fnr == usize::MAX {
+            return None;
+        }
+        Some(self.get_field(rec, fnr, Value::Var(self.closure_param)))
+    }
+
+    /// The record and attribute index THIS scope names a relayed capture by, or `None` when it
+    /// holds no such thing.  The write-side companion to [`Self::relayed_capture_read`].
+    ///
+    /// A by-VALUE capture is observed by copying the closure record's field back to the outer
+    /// binding after the call.  For a lambda nested in a lambda the binding is not a variable
+    /// of this scope at all, and the write-back was skipped — silently, so a nullable scalar
+    /// (which is captured by value rather than boxed) accumulated nothing: `n? += x` four times
+    /// read 0, on both backends.
+    ///
+    /// Answers the PLACE rather than emitting the write, because the value to write is not free
+    /// to build: a caller that emits its side first and discards it on a `None` changes what
+    /// other functions compile to — measured, as a native-only silent exit 1 in a script with no
+    /// lambda in it.
+    pub(crate) fn relayed_capture_attr(&mut self, name: &str) -> Option<(u32, usize)> {
+        if self.first_pass || self.closure_param == u16::MAX {
+            return None;
+        }
+        let rec = self.data.def(self.context).closure_record();
+        if rec == u32::MAX {
+            return None;
+        }
+        let fnr = self.data.attr(rec, name);
+        if fnr == usize::MAX {
+            return None;
+        }
+        Some((rec, fnr))
+    }
+
+    /// Install the capture scope a lambda body is parsed in, and return the enclosing one.
+    ///
+    /// The scope is the enclosing function's variables PLUS, when that function is itself a
+    /// lambda, everything IT can see — a lambda nested in a lambda names the grandparent's
+    /// locals just as the outer one does.  Without the second half the inner body could not
+    /// RESOLVE such a name: where it happened to be a scalar or a collection the resolver made
+    /// a fresh binding instead of refusing, so every write landed in a local that dies with the
+    /// call and `total` read 0 where it owed 62 — silent, and `--native` would not compile it
+    /// (loft#1236).
+    ///
+    /// The enclosing entries go in AFTER the enclosing function's own variables, so a name
+    /// bound in the nearer scope shadows the further one.
+    fn enter_capture_scope(
+        &mut self,
+        outer_vars: &Function,
+        outer_context: u32,
+    ) -> (Vec<(String, Type)>, std::collections::HashMap<String, u32>) {
+        let mut ctx = outer_vars.all_names_and_types();
+        let mut owner: std::collections::HashMap<String, u32> = ctx
+            .iter()
+            .map(|(n, _)| (n.clone(), outer_context))
+            .collect();
+        for (name, tp) in &self.capture_context {
+            if !ctx.iter().any(|(n, _)| n == name) {
+                ctx.push((name.clone(), tp.clone()));
+            }
+            // Ownership stays where the BINDING is, even when the enclosing scope has a
+            // variable of that name: a lambda that names a capture gets a placeholder in its
+            // own table, and a placeholder is a way of reaching the binding rather than being
+            // it.  Reading the table alone made the enclosing lambda the owner and boxed the
+            // cell in the closure instead of in the frame that holds the variable.
+            if let Some(d) = self.capture_owner.get(name) {
+                owner.insert(name.clone(), *d);
+            }
+        }
+        (
+            std::mem::replace(&mut self.capture_context, ctx),
+            std::mem::replace(&mut self.capture_owner, owner),
+        )
+    }
+
+    /// Take, in THIS scope, every capture the lambda just parsed reaches past it for.
+    ///
+    /// A closure record is filled by the scope that BUILDS it, from what that scope can name.
+    /// An inner lambda capturing a grandparent's local therefore needs its enclosing lambda to
+    /// have captured it as well — otherwise there is nothing here to fill the inner record
+    /// from, and `emit_lambda_code` silently skips the field (loft#1236).
+    ///
+    /// Only names this scope does not already bind, and only ones its own capture scope offers:
+    /// a name the inner lambda declared, or one that is a local here, relays nothing.
+    fn relay_nested_captures(&mut self, inner: &[(String, Type)]) {
+        for (name, _) in inner {
+            if self.vars.var(name) != u16::MAX {
+                continue;
+            }
+            let Some((_, ctype)) = self
+                .capture_context
+                .iter()
+                .find(|(n, _)| n == name)
+                .cloned()
+            else {
+                continue;
+            };
+            if !self.captured_names.iter().any(|(n, _)| n == name) {
+                self.captured_names.push((name.clone(), ctype));
+            }
+        }
+    }
+
     pub(crate) fn parse_lambda(&mut self, code: &mut Value) -> Type {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
@@ -1028,8 +1147,7 @@ impl Parser {
         let outer_loop = self.in_loop;
         self.in_loop = false;
         // save outer scope variable names/types for capture detection.
-        let outer_capture =
-            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        let (outer_capture, outer_owner) = self.enter_capture_scope(&outer_vars, outer_context);
         // clear captured_names so we collect only this lambda's captures.
         let outer_captured = std::mem::take(&mut self.captured_names);
 
@@ -1047,6 +1165,12 @@ impl Parser {
             self.context = outer_context;
             self.vars = outer_vars;
             self.in_loop = outer_loop;
+            // …and the capture state, which the short form already restored here.  Left
+            // standing, this lambda's `capture_context` is what the NEXT thing parsed sees as
+            // its enclosing scope.
+            self.capture_context = outer_capture;
+            self.capture_owner = outer_owner;
+            self.captured_names = outer_captured;
             return Type::Unknown(0);
         }
         let d_nr = self.context;
@@ -1131,7 +1255,13 @@ impl Parser {
             // `scalars_to_box` field.  Phase 02d-iii will use this
             // to rewrite outer bindings to hidden cells.  Detection-
             // only at this phase — no behavior change.
-            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            accumulate_scalars_to_box(
+                &mut self.data,
+                outer_context,
+                d_nr,
+                &self.captured_names,
+                &self.capture_owner,
+            );
             // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
             // exists for every scalar-typed mutated capture, so
             // 02d-iii's outer-binding rewrite has a target type to
@@ -1151,6 +1281,7 @@ impl Parser {
                 &mut self.captured_names,
                 &self.data,
                 outer_context,
+                &self.capture_owner,
             );
             self.synthesize_closure_record(d_nr, &lambda_name);
             // #314: remember this lambda so the enclosing body's end
@@ -1161,12 +1292,13 @@ impl Parser {
             }
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
-        drop(captured);
 
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
+        self.capture_owner = outer_owner;
+        self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);
 
@@ -1295,8 +1427,7 @@ impl Parser {
         let outer_loop = self.in_loop;
         self.in_loop = false;
         // save outer scope variable names/types for capture detection.
-        let outer_capture =
-            std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
+        let (outer_capture, outer_owner) = self.enter_capture_scope(&outer_vars, outer_context);
         let outer_captured = std::mem::take(&mut self.captured_names);
 
         self.context = if self.first_pass {
@@ -1309,6 +1440,7 @@ impl Parser {
             self.vars = outer_vars;
             self.in_loop = outer_loop;
             self.capture_context = outer_capture;
+            self.capture_owner = outer_owner;
             self.captured_names = outer_captured;
             return Type::Unknown(0);
         }
@@ -1430,7 +1562,13 @@ impl Parser {
             // `scalars_to_box` field.  Phase 02d-iii will use this
             // to rewrite outer bindings to hidden cells.  Detection-
             // only at this phase — no behavior change.
-            accumulate_scalars_to_box(&mut self.data, outer_context, d_nr, &self.captured_names);
+            accumulate_scalars_to_box(
+                &mut self.data,
+                outer_context,
+                d_nr,
+                &self.captured_names,
+                &self.capture_owner,
+            );
             // Plan-22 phase 02d-ii — ensure a `__cell_<T>` struct
             // exists for every scalar-typed mutated capture, so
             // 02d-iii's outer-binding rewrite has a target type to
@@ -1450,6 +1588,7 @@ impl Parser {
                 &mut self.captured_names,
                 &self.data,
                 outer_context,
+                &self.capture_owner,
             );
             self.synthesize_closure_record(d_nr, &lambda_name);
             // #314: remember this lambda so the enclosing body's end
@@ -1460,12 +1599,13 @@ impl Parser {
             }
         }
         let captured = std::mem::replace(&mut self.captured_names, outer_captured);
-        drop(captured);
 
         self.context = outer_context;
         self.vars = outer_vars;
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
+        self.capture_owner = outer_owner;
+        self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);
 
@@ -1553,12 +1693,31 @@ impl Parser {
                     // a false "never read" warning.  Do NOT call var_usages —
                     // that would interfere with the dead-assignment check.
                     self.vars.set_captured(v_nr);
+                }
+                // loft#1236 — fill from however THIS scope NAMES the capture, and its own
+                // closure field comes first: a lambda that names an outer binding gets a
+                // placeholder variable in its own table, which pass 2 never assigns because
+                // the read goes through the record.  Filling from that placeholder handed the
+                // inner record an unallocated slot (an internal compiler error) and, where it
+                // survived, an inline scalar where the outer half had a boxed cell.  A name
+                // this scope really OWNS is not in its record, so it falls through to the
+                // local — which is every one-level capture.
+                let fill = self
+                    .relayed_capture_read(&cap_name)
+                    .or_else(|| (v_nr != u16::MAX).then_some(Value::Var(v_nr)));
+                if let Some(fill) = fill {
+                    if v_nr != u16::MAX {
+                        // loft#1218 — give a NULL collection capture its slot BEFORE the fill
+                        // below copies the handle, or there is nothing for the lambda to share.
+                        let backing = self.null_capture_backing(v_nr);
+                        alloc_steps.extend(backing);
+                    }
                     alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
                         0,
                         Value::Var(w),
-                        Value::Var(v_nr),
+                        fill,
                     ));
                     // P259 / Plan-57 Phase B (Mechanism B): the closure record now
                     // holds a DbRef into the captured heap cell (`Reference(__cell_*,
@@ -1602,6 +1761,83 @@ impl Parser {
         } else {
             *code = Value::Int(d_nr as i32);
         }
+    }
+
+    /// The backing a NULL collection capture needs before the closure record can share it —
+    /// empty for every other capture.
+    ///
+    /// A captured collection is shared as a DbRef, and `vector::is_absent_collection`'s header
+    /// states what that DbRef is: *"a collection field or local is addressed by a DbRef aimed
+    /// AT its 4-byte slot, not at the collection"*, with absence read out of the SLOT because
+    /// the value-level null "can never appear there".  A `τ?` local still holding the
+    /// value-level null has no slot to aim at, so the closure record was handed `DbRef::NULL`
+    /// and the append inside the lambda had no destination: silently lost for a vector, a NULL
+    /// DbRef fault for a keyed kind (loft#1218).
+    ///
+    /// So the local is given its slot here, marked ABSENT.  That changes the REPRESENTATION
+    /// and not the value — `v == null` still answers true, because absence is what the slot
+    /// now says — and an append on EITHER side then materialises in place, which is what an
+    /// absent FIELD has always done (loft#1213).  Materialising the COLLECTION instead is the
+    /// cheaper-looking alternative and is wrong: it would make `v == null` answer false
+    /// because a lambda mentioned `v`.
+    ///
+    /// Not gated on the lambda MUTATING the capture.  `(L-CapHeap)` shares a captured heap
+    /// value whatever the body does with it, and the mutation walker cannot see a collection
+    /// append in any case: `v += [x]` lowers to `OpNewRecord` / `OpFinishRecord` on the
+    /// capture and neither is in its mutating-op set, so it reported the element TEMP as the
+    /// mutated name and the capture as untouched.  A read-only capture pays one store for a
+    /// representation it shares with every other collection capture.
+    fn null_capture_backing(&mut self, v_nr: u16) -> Vec<Value> {
+        if self.first_pass || v_nr == u16::MAX || self.vars.is_argument(v_nr) {
+            return Vec::new();
+        }
+        let tp = self.vars.tp(v_nr).clone();
+        let (base, nullable) = tp.peel_optional();
+        if !nullable || !Self::is_collection_type(base) {
+            return Vec::new();
+        }
+        // A dep means the local already owns a backing — a `= []` capture, or one an earlier
+        // statement built.  Its slot is already there to share.
+        if !tp.depend().is_empty() {
+            return Vec::new();
+        }
+        #[allow(clippy::cast_possible_wrap)]
+        let absent = crate::keys::DbRef::ABSENT_REC as i32;
+        if let Type::Vector(elm, _) = base {
+            let elm = (**elm).clone();
+            return self.vector_db_init(&elm, v_nr, absent, true);
+        }
+        // A KEYED local has no wrapper record: its store IS the collection, so the slot it must
+        // gain is the one `OpDatabase` hands it.  Built with the guarded emission a keyed WRITE
+        // already uses, and then marked ABSENT — the store exists to be shared, the collection
+        // does not exist yet, and `h == null` is still true.
+        //
+        // The mark is what makes this the same change of REPRESENTATION the vector branch
+        // above makes.  Without it the mint alone is a change of VALUE: `h == null` answers
+        // false straight after the capture, which is the reading this whole function exists to
+        // avoid.
+        //
+        // Guarded on the HANDLE, and NOT through `keyed_local_materialise`, whose guard is
+        // `OpVectorIsNull` — the right test for a WRITE, which wants the empty collection built
+        // whenever there is no collection.  Here the mint leaves the collection ABSENT on
+        // purpose, so that test still answers true afterwards: a closure built inside a loop
+        // would re-mint and re-MARK on every pass, and the second pass's mark would wipe what
+        // the first one's appends had put in.  `OpRefIsNull` asks the question this site means
+        // — does the local have a store at all — and is false from the first pass on.
+        let Some(kt) = self.keyed_known_type(&tp) else {
+            return Vec::new();
+        };
+        let mint = self.cl("OpDatabase", &[Value::Var(v_nr), Value::Int(i32::from(kt))]);
+        let mark = self.cl(
+            "OpSetInt4",
+            &[Value::Var(v_nr), Value::Int(0), Value::Int(absent)],
+        );
+        let test = self.cl("OpRefIsNull", &[Value::Var(v_nr)]);
+        vec![crate::data::v_if(
+            test,
+            Value::Insert(vec![mint, mark]),
+            Value::Null,
+        )]
     }
 
     /// Synthesize an anonymous struct definition for the captured variables
@@ -1774,9 +2010,7 @@ impl Parser {
             }
             let original_tp = self.vars.tp(v_nr).clone();
             // Skip if already flipped.
-            if matches!(&original_tp, Type::Reference(d, _)
-                if self.data.def(*d).name().starts_with("__cell_"))
-            {
+            if boxed_cell_def(&original_tp, &self.data).is_some() {
                 continue;
             }
             // Plan-22 phase 02d-iii.e / 02d-v / 02d-vi — all
@@ -1932,11 +2166,90 @@ impl Parser {
                     continue;
                 }
                 // Only undo the provisional boxing; anything else is already right.
-                let is_cell = matches!(self.data.attr_type(rec, a_nr),
-                    Type::Reference(d, _) if self.data.def(d).name().starts_with("__cell_"));
+                let is_cell = boxed_cell_def(&self.data.attr_type(rec, a_nr), &self.data).is_some();
                 if is_cell {
                     self.data.retype_capture_attr(rec, a_nr, inline_tp.clone());
                 }
+            }
+        }
+    }
+
+    /// Box the capture attribute of every lambda NESTED inside this function's lambdas, for
+    /// each name this function boxes.
+    ///
+    /// Pass 1 freezes a closure record's storage at the lambda's own end, and a nested lambda
+    /// ends BEFORE the enclosing one — so when the enclosing lambda is what mutates the name,
+    /// the inner record was laid out before anyone knew the binding would be boxed.  The inner
+    /// half then read an inline scalar out of a field the outer half filled with a cell DbRef:
+    /// `OpSetInt(clos, 0, OpGetDbRef(…))` on one side and `OpGetInt(closure, 0)` on the other,
+    /// which wrote a handle through an integer setter and landed on the const store
+    /// (loft#1236).
+    ///
+    /// The repair runs at the OWNER's body end, which is the first moment `scalars_to_box` is
+    /// complete, and walks `fn_lambdas` transitively because a nested lambda is registered
+    /// against its enclosing LAMBDA rather than against this function.  It is the mirror of
+    /// [`Self::finalize_capture_storage`], which un-boxes at the same moment for the binding
+    /// that turned out to carry its own indirection.
+    pub(crate) fn box_nested_capture_attrs(&mut self, parent_d: u32) {
+        if !self.first_pass
+            || parent_d == u32::MAX
+            || (parent_d as usize) >= self.data.definitions.len()
+        {
+            return;
+        }
+        let scalars = self.data.def(parent_d).scalars_to_box().to_vec();
+        if scalars.is_empty() {
+            return;
+        }
+        // Only lambdas NESTED inside this function's lambdas.  A direct child is
+        // `finalize_capture_storage`'s to decide, and it has just run: re-boxing what it
+        // deliberately un-boxed is two indirections for one binding, which is the crash #687
+        // exists to prevent.
+        let direct: Vec<u32> = self.fn_lambdas.get(&parent_d).cloned().unwrap_or_default();
+        let mut todo: Vec<u32> = direct
+            .iter()
+            .filter_map(|d| self.fn_lambdas.get(d).cloned())
+            .flatten()
+            .collect();
+        let mut seen: Vec<u32> = Vec::new();
+        while let Some(lam) = todo.pop() {
+            if seen.contains(&lam) || direct.contains(&lam) {
+                continue;
+            }
+            seen.push(lam);
+            if let Some(inner) = self.fn_lambdas.get(&lam) {
+                todo.extend(inner.iter().copied());
+            }
+        }
+        for name in &scalars {
+            // The same exemption `finalize_capture_storage` applies: a binding that already
+            // carries its own indirection (a hidden `&text` out-parameter) must stay inline.
+            let v_nr = self.vars.var(name);
+            if v_nr != u16::MAX && matches!(self.vars.tp(v_nr), Type::RefVar(_)) {
+                continue;
+            }
+            for lam in &seen {
+                let rec = self.data.def(*lam).closure_record();
+                if rec == u32::MAX {
+                    continue;
+                }
+                let a_nr = self.data.attr(rec, name);
+                if a_nr == usize::MAX {
+                    continue;
+                }
+                let tp = self.data.attr_type(rec, a_nr);
+                if boxed_cell_def(&tp, &self.data).is_some() {
+                    continue;
+                }
+                let Some(cell_name) = cell_struct_name(&tp, &self.data) else {
+                    continue;
+                };
+                let cell_d_nr = self.data.def_nr(&cell_name);
+                if cell_d_nr == u32::MAX {
+                    continue;
+                }
+                self.data
+                    .retype_capture_attr(rec, a_nr, Type::Reference(cell_d_nr, Deps::none()));
             }
         }
     }
@@ -2013,7 +2326,15 @@ impl Parser {
         if let Some(d) = self.data.nullable_struct_payload(tp) {
             return Type::Reference(d, Deps::share_sentinel());
         }
-        match tp {
+        // …and the same for a nullable COLLECTION, which is the other half of that rule and
+        // was the half left behind: `.base()`, so `vector<τ>?` / `hash<τ[k]>?` share exactly
+        // as their dense twins do.  Unpeeled it fell to `_ => tp.clone()`, the attribute kept
+        // the collection type and was stored INLINE, and the body's read came back an
+        // `OpGetField` where the dense capture reads an `OpGetDbRef` — so an append inside
+        // the lambda was taken for a STRUCT FIELD append, resolved its parent against
+        // `Type::Null`, and asked `Data::def` for `u32::MAX`: an internal compiler error on
+        // three lines of ordinary source (loft#1209).
+        match tp.base() {
             Type::Reference(d, _) => Type::Reference(*d, Deps::share_sentinel()),
             Type::Hash(c, _, _)
             | Type::Sorted(c, _, _)
@@ -2881,7 +3202,16 @@ impl Parser {
             self.data.vector_def(&mut self.lexer, &in_t);
         }
         let tp = if keyed_dest {
-            self.vars.tp(vec).clone()
+            // `.base()` — a CONSTRUCTED literal is never absent, so it does not wear the
+            // destination's nullability.  A keyed literal is built THROUGH its destination
+            // (loft#703), so it reports the destination variable's type; taken whole, a
+            // `hash<E[k]>?` destination made the literal's own type `Optional(Hash(…))`, and
+            // loft#1210's `(N-Store)` append gate then read the construction as an
+            // un-discharged nullable SOURCE and warned about code that is correct — a
+            // `warning`, which is the tier that GATES a library's CI (loft#1229).  The vector
+            // branch below has always constructed its type fresh, which is why only the keyed
+            // spelling carried this.
+            self.vars.tp(vec).base().clone()
         } else {
             Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()))
         };
@@ -2995,7 +3325,19 @@ impl Parser {
         // sees the accumulator OWN, so an argument literal (`f([K { … }])`) leaked it.
         // A keyed LOCAL is excluded: its store comes from its own declaration, and a
         // second allocation here would orphan the first.
-        if !self.first_pass && !is_var && self.keyed_local(vec) {
+        let tuple_place = match val.unspan() {
+            Value::TupleGet(t, i) => Some((*t, *i)),
+            _ => None,
+        };
+        if tuple_place.is_some() && !self.first_pass {
+            // The accumulator is SEEDED from the place, so its own null-init must not allocate
+            // a store: `OpInitRef` claims one eagerly, the seed overwrites the handle one
+            // statement later, and the claimed store is orphaned.  `--interpret` never noticed
+            // (its init is lazy); `--native` leaked one per append.  Same precedent as
+            // `vector_db`'s rebind backing, whose `OpDatabase` is likewise conditional.
+            self.vars.mark_inline_ref(vec);
+        }
+        if !self.first_pass && !is_var && tuple_place.is_none() && self.keyed_local(vec) {
             let keyed_tp = self.vars.tp(vec).clone();
             if let Some(kt) = self.keyed_known_type(&keyed_tp) {
                 ls.push(v_set(vec, Value::Null));
@@ -3034,6 +3376,17 @@ impl Parser {
             }
         }
         ls.extend(self.new_record(val, parent_tp, elm, vec, res, in_t));
+        if let Some((tuple_var, idx)) = tuple_place {
+            // Write back ONLY when the place is still null.  The accumulator was SEEDED from
+            // the place, so for a non-null element the two already name one store and the
+            // append has landed in it — writing it back would put a second owner on a store
+            // that has one.  A null element is the only case where the accumulator holds a
+            // store the place has never seen.
+            let slot = Value::TupleGet(tuple_var, idx);
+            let test = self.cl("OpVectorIsNull", std::slice::from_ref(&slot));
+            let put = Value::TuplePut(tuple_var, idx, Box::new(Value::Var(vec)));
+            ls.push(crate::data::v_if(test, put, Value::Null));
+        }
         if !substituted
             && !self.first_pass
             && vec != u16::MAX
@@ -3175,6 +3528,78 @@ impl Parser {
     /// typed keyed reads its elements back through the wrong container.
     pub(crate) fn keyed_local(&self, vec: u16) -> bool {
         vec != u16::MAX && is_keyed(self.vars.tp(vec))
+    }
+
+    /// The empty keyed collection a NULLABLE keyed LOCAL must be given before a write can
+    /// land in it — `if h == null { OpDatabase(h, …) }` — or `None` when `vec` is not one.
+    ///
+    /// `(N-Default)` states it on the COLLECTION and not on the kind: appending to a null
+    /// collection builds the empty one first.  Two of the three shapes already keep it and
+    /// the third could not.  A vector LOCAL is given a `__vdb_N` backing at the write
+    /// ([`Parser::vector_db`]); a keyed FIELD holds the absent marker in a slot the runtime
+    /// materialises in place (`collection_rec`, loft#1213).  A keyed LOCAL has neither: its
+    /// store comes from its DECLARATION, and one declared `= null` is given no store at all,
+    /// so the slot holds the null sentinel and every keyed accessor follows it as a record
+    /// number — `h += [e]` and `h[k] = e` both reached "a NULL DbRef reached a store
+    /// accessor" while the dense local one declaration over was correct.
+    ///
+    /// GUARDED, not unconditional, and that is the half a write site cannot supply for
+    /// itself: the site can run many times, so an unguarded mint would build a fresh
+    /// collection on every pass and throw away what the previous ones put in it.  Guarded,
+    /// the mint is idempotent and a keyed local filled inside a loop keeps its records.
+    ///
+    /// An ARGUMENT is excluded: its store is the caller's, and a null one is the caller's
+    /// answer to give.
+    pub(crate) fn keyed_local_materialise(&mut self, vec: u16) -> Option<Value> {
+        if self.first_pass
+            || !self.keyed_local(vec)
+            || !self.vars.tp(vec).peel_optional().1
+            || self.vars.is_argument(vec)
+        {
+            return None;
+        }
+        let keyed_tp = self.vars.tp(vec).clone();
+        let kt = self.keyed_known_type(&keyed_tp)?;
+        self.keyed_place_materialise(&Value::Var(vec), kt, &keyed_tp)
+    }
+
+    /// The same guarded build for a keyed PLACE rather than a keyed local — the emission
+    /// itself, so the two place-kinds cannot drift about what "build the empty one first"
+    /// produces.
+    ///
+    /// A VARIABLE is repointed by `OpDatabase` directly, which takes the variable it fills.
+    /// A TUPLE ELEMENT cannot be: it is a slot inside the tuple, and `OpDatabase` names a
+    /// variable, so the store is built in a `__kvb_N` accumulator and put into the slot with
+    /// the same `TuplePut` an ordinary `t.0 = h` uses. That assignment is what loft#1225's
+    /// first half taught to accept a keyed collection at all — before it, this materialisation
+    /// could not have been written, because the statement it ends with was an ICE.
+    ///
+    /// `None` for any other place. A struct FIELD is deliberately not here: its slot is
+    /// addressable, so the runtime materialises it in place through `collection_rec`
+    /// (loft#1213), and a second build from the parser would orphan the first.
+    pub(crate) fn keyed_place_materialise(
+        &mut self,
+        place: &Value,
+        kt: u16,
+        keyed_tp: &Type,
+    ) -> Option<Value> {
+        let test = self.cl("OpVectorIsNull", std::slice::from_ref(place));
+        let mint = match place.unspan() {
+            Value::Var(v) => self.cl("OpDatabase", &[Value::Var(*v), Value::Int(i32::from(kt))]),
+            Value::TupleGet(tuple_var, idx) => {
+                let (tuple_var, idx) = (*tuple_var, *idx);
+                let base = keyed_tp.base().clone();
+                let kvb = self.vars.work_keyed(&base, &mut self.lexer);
+                let db = self.cl("OpDatabase", &[Value::Var(kvb), Value::Int(i32::from(kt))]);
+                Value::Insert(vec![
+                    v_set(kvb, Value::Null),
+                    db,
+                    Value::TuplePut(tuple_var, idx, Box::new(Value::Var(kvb))),
+                ])
+            }
+            _ => return None,
+        };
+        Some(crate::data::v_if(test, mint, Value::Null))
     }
 
     /// The registered database type for a KEYED collection type — the id that makes
@@ -3530,6 +3955,37 @@ impl Parser {
         {
             t = in_t.clone();
         }
+        // loft#1232 — `(N-Store)` is owed of a LITERAL's elements too.  `(N-Dense)` says a
+        // `vector<t>`'s elements are non-null unless the type is written `vector<t?>`, and the
+        // rule was enforced at the scalar seam (`x: integer = n`) and at the append seam
+        // (`c += n`) but nowhere inside a collection literal: `v: vector<integer> = [n]` with
+        // `n: integer?` stored the null and `v[0]` read back null, silently, on both backends.
+        //
+        // This is the CURE the language itself names.  loft#1223 refuses the bare `c += n` and
+        // sends the reader to `c += [n]` — the right spelling under @PLAN52's bracket rule, and
+        // until now the un-diagnosed one — so closing that issue moved the reader from warned to
+        // silent.  A diagnostic must not go quiet along the path it recommends.
+        //
+        // Asked HERE because this is the one point every literal shape passes through with both
+        // types settled: a typed local (`v: vector<integer> = [n]`), a field assignment
+        // (`d.c = [n]`), a constructor field (`D { c: [n] }`) and a NESTED literal all reach
+        // `parse_item`, so the three shapes the issue lists and their nested forms need no
+        // separate checks.  Placed BEFORE the conversion chain below, which is what was silent:
+        // `convert` peels the `Optional` and stores the sentinel without a word.
+        //
+        // `n_store_violation` is the shared home, so this seam cannot drift from the other two —
+        // it carries the warn/error split (a full-width slot reserves its null distinctly and
+        // WARNS with the store proceeding; a narrow one has no room and errors) and it already
+        // declines on a nullable target, which is what keeps `vector<t?>` and the synthetic
+        // `vector<__nullable<S>>` quiet.
+        let elem_index = res.len();
+        self.n_store_violation_inner(
+            &t,
+            in_t,
+            &format!("element {elem_index} of this vector literal"),
+            None,
+            true,
+        );
         if let (Type::Reference(t_nr, _), Type::Reference(in_nr, _)) = (&t, &in_t.clone())
             && let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (
                 self.data.def(*t_nr).returned(),
@@ -3560,27 +4016,18 @@ impl Parser {
             p = Value::Insert(Vec::new());
             t = in_t.clone();
         } else if !self.first_pass
-            && let Type::Enum(syn, true, _) = &*in_t
-            && let Type::Reference(s_d, _) = &t
-            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*s_d).name())
+            && let Type::Enum(syn, true, _) = in_t.base()
+            && self.needs_nullable_wrap(*syn, &t)
             && !matches!(p, Value::Insert(_))
         {
-            // @PLN25 single-payload — store a DENSE struct value `S` into a
+            // @PLN25 single-payload — store a value spelled `S` or `S?` into a
             // `vector<__nullable<S>>` element (`v += [p]`, `v += [make()]`): set the
-            // discriminant present and copy the whole dense `S` into the inline `payload`
-            // field (one record copy).  A non-Var source is stashed once so it is not
-            // re-evaluated.  Gate-inert: `__nullable<>` exists only when E2 is active.
+            // discriminant present and copy the dense `S` into the inline `payload` field.
+            // `emit_nullable_slot_write` is the shared home — it stashes the source once and
+            // supplies the runtime null test this arm used to be written without, which is
+            // what an `S?` source needs: the value is only dense when it is present.
             let syn = *syn;
-            let some_d = self.data.variant_of(syn, "Some");
-            let mut steps = Vec::new();
-            let src = if matches!(p, Value::Var(_)) {
-                p.clone()
-            } else {
-                let tmp = self.create_unique("nbl_src", &t);
-                steps.push(v_set(tmp, p.clone()));
-                Value::Var(tmp)
-            };
-            steps.extend(self.build_some_present(some_d, Value::Var(elm), src));
+            let steps = self.emit_nullable_slot_write(syn, &Value::Var(elm), p.clone());
             p = Value::Insert(steps);
             t = in_t.clone();
         } else if matches!(t, Type::Null) && matches!(in_t.base(), Type::Enum(_, false, _)) {
@@ -3853,6 +4300,13 @@ impl Parser {
         in_t: &Type,
     ) -> Vec<Value> {
         let mut ls = Vec::new();
+        // A keyed LOCAL declared `= null` owns no store, so the record would be added
+        // through the null sentinel.  Build the empty collection first — `(N-Default)` —
+        // here rather than at each append spelling, because every one of them reaches this
+        // function to add its record and no two reach it by the same route.
+        if let Some(guard) = self.keyed_local_materialise(vec) {
+            ls.push(guard);
+        }
         let is_field = self.is_field(val);
         let ed_nr = self.data.type_def_nr(in_t);
         if ed_nr == u32::MAX && self.first_pass && crate::data::Data::type_has_unresolved(in_t) {
@@ -4260,8 +4714,39 @@ impl Parser {
             Value::Var(v) => *v,
             _ => return None,
         };
-        if v >= self.vars.count() || self.vars.is_argument(v) || self.keyed_local(v) {
+        if v >= self.vars.count() || self.vars.is_argument(v) {
             return None;
+        }
+        // The KEYED half of `D-tup-4`, closed with the copy the keyed family already has.
+        // `OpReplaceKeyed` is what a STRUCT literal emits for a keyed member (`S { h: a }`),
+        // and a tuple RETURN copies through the synthetic `__tuple<…>` record — so both
+        // siblings `(T-Cons)` names were already independent and only the tuple LITERAL
+        // aliased.  The register left this open because the shape was a codegen ICE; that is
+        // fixed (loft#1225's `TuplePut` arm), and what remained was reaching for the copy.
+        //
+        // The copy keeps the SOURCE's nullability.  `keyed_known_type` is nullability-agnostic
+        // so the store type is the same either way, but a tuple's element slot is `τ?` when
+        // the source is, and a dense-typed copy loses its ownership dep entering that slot —
+        // which leaks the copy's store.
+        if self.keyed_local(v) {
+            let keyed_tp = self.vars.tp(v).clone();
+            let kt = self.keyed_known_type(&keyed_tp)?;
+            let o = self.create_unique("tupcopy", &keyed_tp);
+            if o == u16::MAX {
+                return None;
+            }
+            self.vars.defined(o);
+            let db = self.cl("OpDatabase", &[Value::Var(o), Value::Int(i32::from(kt))]);
+            let copy = self.cl(
+                "OpReplaceKeyed",
+                &[Value::Var(v), Value::Var(o), Value::Int(i32::from(kt))],
+            );
+            let ops = vec![v_set(o, Value::Null), db, copy, Value::Var(o)];
+            // DEPENDING on `o`, exactly as the vector branch's result does: that dep is what
+            // tells the scope pass the copy's store has an owner in this frame.
+            let owned_tp = keyed_tp.depending(o);
+            *val.unspan_mut() = crate::data::v_block(ops, owned_tp.clone(), "tuple_member_copy");
+            return Some(owned_tp);
         }
         let Type::Vector(b, _) = tp else {
             return None;
@@ -4312,17 +4797,48 @@ impl Parser {
         if b.name != "tuple_member_copy" {
             return None;
         }
-        // The block ends `OpAppendVector(backing, source, elem_tp); backing`, and the SOURCE is
-        // the only part of it the record's own copy still needs.
+        // The block ends `OpAppendVector(backing, source, elem_tp); backing` for a VECTOR
+        // member and `OpReplaceKeyed(source, backing, tp); backing` for a KEYED one, and the
+        // SOURCE is the only part of either that the record's own copy still needs.  The source
+        // sits at a DIFFERENT argument position in the two, which is why this cannot be a
+        // name-agnostic `args.get(1)`.
         b.operators.iter().rev().find_map(|op| match op.unspan() {
-            Value::Call(d, args) if self.data.def(*d).name() == "OpAppendVector" => {
-                args.get(1).cloned()
-            }
+            Value::Call(d, args) => match self.data.def(*d).name() {
+                "OpAppendVector" => args.get(1).cloned(),
+                "OpReplaceKeyed" => args.first().cloned(),
+                _ => None,
+            },
             _ => None,
         })
     }
 
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {
+        self.vector_db_init(assign_tp, vec, 0, false)
+    }
+
+    /// [`Self::vector_db`] with the collection slot's initial value spelled out.
+    ///
+    /// `0` is the EMPTY collection and is what a backing minted for a write wants.
+    /// `DbRef::ABSENT_REC` is the reserved id that means ABSENT (loft#917), and it is what a
+    /// backing minted to give a NULL local something shareable wants: the local gains its
+    /// slot without gaining a collection, so `v == null` still answers true —
+    /// `vector::is_absent_collection` reads the slot, not the handle.
+    ///
+    /// `guarded` mints only into a local whose HANDLE is still null, and is for a site that
+    /// can run more than once — a closure built inside a loop mints at every pass, and an
+    /// unguarded mint then re-points the local at a fresh store and orphans what the previous
+    /// pass put in it (the shape loft#1219 measured at the append site).  The test is
+    /// `OpRefIsNull` and not `OpVectorIsNull`: the slot this writes says ABSENT, so the
+    /// collection test answers true afterwards as well and would re-mint every time.  The
+    /// backing is `mark_inline_ref` for the same reason the rebind branch above is — a
+    /// CONDITIONAL `OpDatabase` leaves the untaken path holding an eagerly allocated store.
+    pub(crate) fn vector_db_init(
+        &mut self,
+        assign_tp: &Type,
+        vec: u16,
+        slot_init: i32,
+        guarded: bool,
+    ) -> Vec<Value> {
         // @PLN87 P2.4 — a REBIND vector param (`v = [..]` whole-binding replace on
         // a visible vector param, marked via `ensure_rebind_witness`) DOES get a
         // fresh backing: it rebinds locally rather than appending to the caller's
@@ -4381,8 +4897,13 @@ impl Parser {
             ls.push(self.cl("OpDatabase", &[Value::Var(db), Value::Int(i32::from(tp))]));
             // Reference to the vector field.
             ls.push(v_set(vec, self.get_field(vec_def, 0, Value::Var(db))));
-            // Write 0 into this reference.
-            ls.push(self.set_field(vec_def, 0, 0, Value::Var(db), Value::Int(0)));
+            // Write the initial slot value into this reference.
+            ls.push(self.set_field(vec_def, 0, 0, Value::Var(db), Value::Int(slot_init)));
+            if guarded {
+                self.vars.mark_inline_ref(db);
+                let test = self.cl("OpRefIsNull", &[Value::Var(vec)]);
+                return vec![crate::data::v_if(test, Value::Insert(ls), Value::Null)];
+            }
             ls
         }
     }
@@ -4575,6 +5096,80 @@ impl Parser {
         }
     }
 
+    /// Classify a `c += e` source against the collection `dest` it is appended to — the one
+    /// home for [`AppendSource`], so the routes below cannot disagree about which of them
+    /// owns a statement, and a source none of them owns is NAMED rather than guessed at.
+    ///
+    /// The element test is asked of [`Parser::can_convert`], the predicate that already
+    /// answers *"may this value satisfy that slot"* for arguments, returns and struct
+    /// literals.  It has to be that one, because "the element type" has more than one
+    /// spelling and a fresh `is_equal` knows only the first: a nullable record is
+    /// `Reference(d)` where `content()` reads it off a keyed kind and `Enum(d, true, …)`
+    /// where a vector carries it (@FR-L-Null), and `(C-Var)` makes a VARIANT satisfy its
+    /// enum, so `vector<Tagged>` holds a `Named`.  Both spellings are live in the corpus.
+    ///
+    /// `Unknown` on either side answers [`AppendSource::Whole`] — a generic body carries
+    /// placeholder types until monomorphisation, and refusing there would refuse the
+    /// template rather than any of its instances.
+    /// Does this source VALUE name a collection that ALREADY EXISTS — a binding, a field, a
+    /// capture, a tuple member — rather than one constructed on the spot?
+    ///
+    /// [`Self::append_source`] answers with TYPES, and a keyed literal is built THROUGH its
+    /// destination (loft#703), so `t.0 += [E { … }]` reports the destination's own
+    /// `hash<E[k]>` and reads as `Whole`.  The refusal that fires on `Whole` is about MERGING
+    /// two collections, which is a thing only a source that names one can be: three place
+    /// kinds never reach it because they parse the literal per element first, and the fourth —
+    /// a TUPLE ELEMENT, which builds the append through a `__kvb_N` accumulator — does, so a
+    /// bracketed one-element append there was refused as a merge.
+    pub(crate) fn source_names_a_collection(&self, val: &Value) -> bool {
+        match val.unspan() {
+            Value::Var(v) => *v != u16::MAX,
+            Value::TupleGet(_, _) => true,
+            Value::Call(d, _) => self.data.def(*d).name().starts_with("OpGet"),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn append_source(&mut self, dest: &Type, s_type: &Type) -> AppendSource {
+        let dest = dest.base();
+        let content = dest.content();
+        if s_type.is_unknown() || content.is_unknown() {
+            return AppendSource::Whole;
+        }
+        if s_type.is_equal(dest) {
+            return AppendSource::Whole;
+        }
+        if self.holds_element(&content, s_type) {
+            return AppendSource::Element;
+        }
+        if is_keyed(dest)
+            && let Type::Vector(elm, _) = s_type.base()
+            && self.holds_element(&content, elm)
+        {
+            return AppendSource::ElementVector;
+        }
+        AppendSource::Unrelated
+    }
+
+    /// May a value of type `src` be ONE element of a collection whose element type is
+    /// `content`?  Delegates to [`Parser::can_convert`] in both directions, because the two
+    /// spellings of a record element are not ordered: a keyed kind reads its element off
+    /// `content()` as `Reference(d)` while a vector carries the synthetic `Enum(d, true, …)`,
+    /// and which side holds which depends on the destination's kind rather than on the value.
+    pub(crate) fn holds_element(&mut self, content: &Type, src: &Type) -> bool {
+        // `Unknown` is not a match, and saying so here is what keeps the predicate usable by a
+        // REFUSAL.  [`Parser::can_convert`] answers TRUE for an unknown `test_type` — the right
+        // answer for a validator, which must not report a generic body's placeholder as a
+        // mismatch — but read as "this IS an element" it turns every unresolved element type
+        // into a hit: a struct-enum's collection field resolves lazily, so `j.xs += [Item { … }]`
+        // asked while `xs` was still `Unknown` looked like a bare element append and earned
+        // @PLAN52's ambiguity refusal with the brackets already written.
+        if content.is_unknown() || src.is_unknown() {
+            return false;
+        }
+        content.is_equal(src) || self.can_convert(src, content) || self.can_convert(content, src)
+    }
+
     // <children> ::=
 }
 
@@ -4595,18 +5190,15 @@ impl Parser {
 /// ⚠ No rule names the KEYED FAMILY as a category, though that is the question 16 sites
 /// actually ask — see doc/claude/formal/IMPLEMENTATIONS.md.
 ///
-/// ⚠ NOT nullability-agnostic, and that is a KNOWN GAP rather than a decision.  A
-/// `hash<S[k]>?` is a keyed collection that may be absent, and `Optional(τ)` occupies τ's
-/// storage exactly (@FR-L-Null) — yet all 24 call sites ask this bare, so every one of them
-/// answers "not keyed" for a `τ?`.  The visible cost is that `h: hash<S[k]>? = [S { … }]`
-/// builds a `vector<S>` and is then refused against its own declared type.
+/// Nullability-agnostic: the operand is read through `.base()`.  A `hash<S[k]>?` is a keyed
+/// collection that may be absent, and `Optional(τ)` occupies τ's storage exactly
+/// (@FR-L-Null), so which keyed kind a type names does not depend on the wrapper.  Asking
+/// bare instead answers "not keyed" for every `τ?`, and the call sites that gate a WRITE on
+/// it then emit no write at all.
 ///
-/// Peeling HERE is the one-home fix and it is measured INSUFFICIENT: with the peel (plus
-/// `content`, `keyed_known_type` and `gen_keyed_null` peeled to match) the literal compiles
-/// and answers correctly on `--interpret`, and `--native` panics in `keys.rs` on a
-/// `u16::MAX` store number.  A refusal is better than a backend divergence, so the peel is
-/// not here.  [`Parser::get_type`] above carries it, for the narrower question it asks
-/// (loft#909).
+/// [`is_collection`] must peel on BOTH of its arms for the same reason.  The two differ by
+/// the `Vector` variant and by nothing else — a difference on the nullability axis makes a
+/// `vector<τ>?` the one collection `is_collection` denies, which is loft#1207.
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp.base(),
@@ -4624,8 +5216,44 @@ pub(crate) fn is_keyed(tp: &Type) -> bool {
 /// `Parts::{Vector, Hash, Sorted, Radix, Trie}`.  Checklist #4 in
 /// doc/claude/formal/IMPLEMENTATIONS.md: this is the `is_keyed` set plus `Vector`, and the
 /// two differ by that one variant BY DESIGN — not a drifted copy of each other.
+///
+/// That "one variant" is the whole difference, which is why the `Vector` arm reads
+/// `tp.base()` exactly as [`is_keyed`] does.  While it matched bare, the two predicates
+/// disagreed on a second axis nothing documented: a `vector<τ>?` was the one collection this
+/// answered "no" for, so `towards_set`'s collection interception — asked in PASS 1, before
+/// any `!first_pass` route can claim the statement — let a nullable vector append fall
+/// through to the generic operator lookup and be refused as *"No matching operator 'Add'"*
+/// (loft#1207).
 pub(crate) fn is_collection(tp: &Type) -> bool {
-    is_keyed(tp) || matches!(tp, Type::Vector(_, _))
+    is_keyed(tp) || matches!(tp.base(), Type::Vector(_, _))
+}
+
+/// What a `c += e` source IS, relative to the collection it is being appended to.
+///
+/// @FR-Col-Insert is stated over `c += [ rec, … ]` — a record joins the collection — and the
+/// routes that implement it each serve ONE spelling of that source: the whole collection
+/// (concatenation), a single element, or a vector of elements aimed at a keyed kind.  Naming
+/// the three in one place is what makes the FOURTH answer expressible: a source the
+/// destination cannot hold at all.
+///
+/// Without that answer the routes are a partial list with no `else`, and each of the two
+/// failure directions has shipped.  A source matching no route reached whichever route tests
+/// LEAST — the vector single-element push, which compares nothing — and was written raw into
+/// an element slot: a `float` read back as its IEEE-754 bits, a `text` panicking the
+/// allocator, `--native` refusing to compile the Rust it emitted (loft#1215).  A keyed
+/// destination has no such catch-all, so the same source fell past every route to a statement
+/// that emitted no write, and the append vanished with `len` reading 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppendSource {
+    /// The source IS the collection — `v += other_v`, concatenation.
+    Whole,
+    /// The source is ONE element.  A keyed kind places it by key; a vector requires the
+    /// `+= [elem]` brackets (@PLAN52), so for a vector this is a diagnosis, not a route.
+    Element,
+    /// A vector OF elements aimed at a KEYED destination — loft#1159's bulk fill.
+    ElementVector,
+    /// Nothing the destination can hold.
+    Unrelated,
 }
 
 /// P216: walk a captured variable's `Type` and call `tuple_def` for
@@ -4702,6 +5330,26 @@ pub(crate) fn cell_struct_name(tp: &Type, data: &crate::data::Data) -> Option<St
     }
 }
 
+/// The `__cell_<T>` definition a type points at, or `None` when the type is not a
+/// boxed scalar — the inverse of [`cell_struct_name`], and the ONE home for the
+/// question *"is this a boxed scalar?"*.
+///
+/// A capture a closure MUTATES is boxed: the local's type becomes
+/// `Reference(__cell_<T>)`, every read of it is rewritten into `OpGet<T>(Var, 0)`
+/// (`auto_deref_boxed_scalar`) and every write into the matching `OpSet<T>`.  A
+/// site that must tell such a local from an ordinary one asks here, so the sites
+/// cannot drift apart on what the box looks like.
+pub(crate) fn boxed_cell_def(tp: &Type, data: &crate::data::Data) -> Option<u32> {
+    let Type::Reference(d_nr, _) = tp else {
+        return None;
+    };
+    if data.def(*d_nr).name().starts_with("__cell_") {
+        Some(*d_nr)
+    } else {
+        None
+    }
+}
+
 /// Plan-22 phase 02d-ii — canonical type for the cell's `value`
 /// field.
 ///
@@ -4775,11 +5423,21 @@ fn box_captured_names_for_outer_scalars(
     captured_names: &mut [(String, Type)],
     data: &crate::data::Data,
     outer_context: u32,
+    owner: &std::collections::HashMap<String, u32>,
 ) {
     if outer_context == u32::MAX || (outer_context as usize) >= data.definitions.len() {
         return;
     }
-    let scalars = data.def(outer_context).scalars_to_box().to_vec();
+    // Per NAME, because a lambda nested in a lambda captures from further out than its
+    // enclosing scope: the cell is minted in the frame that HOLDS the variable, so that is
+    // also the definition whose `scalars_to_box` answers for it (loft#1236).
+    let scalars_of = |name: &str| -> Vec<String> {
+        let d = owner.get(name).copied().unwrap_or(outer_context);
+        if d == u32::MAX || (d as usize) >= data.definitions.len() {
+            return Vec::new();
+        }
+        data.def(d).scalars_to_box().to_vec()
+    };
     // #687 — this is PROVISIONAL.  Whether the binding really takes a cell depends on
     // whether it ends up with its own indirection (a hidden `&T` out-parameter), and at
     // the lambda's epilogue that is not settled yet: a text local the function RETURNS is
@@ -4790,7 +5448,7 @@ fn box_captured_names_for_outer_scalars(
     // something now: pass 1 freezes the record's storage, so leaving the un-flipped
     // scalar here would lay the field out as 8B inline instead of a 12B shared DbRef.
     for (name, tp) in captured_names {
-        if !scalars.iter().any(|s| s == name) {
+        if !scalars_of(name).iter().any(|s| s == name) {
             continue;
         }
         if let Some(cell_name) = cell_struct_name(tp, data) {
@@ -4807,12 +5465,21 @@ fn accumulate_scalars_to_box(
     parent_d_nr: u32,
     lambda_d_nr: u32,
     captured_names: &[(String, Type)],
+    owner: &std::collections::HashMap<String, u32>,
 ) {
     if parent_d_nr == u32::MAX || (parent_d_nr as usize) >= data.definitions.len() {
         return;
     }
     let mutated = data.def(lambda_d_nr).mutated_captures().to_vec();
     for name in &mutated {
+        // The cell belongs to the frame that HOLDS the variable.  For a lambda nested in a
+        // lambda that is further out than the enclosing scope, and boxing it in the enclosing
+        // closure instead leaves the owner's local an unboxed scalar while every capture of it
+        // is a cell handle — the two halves of one binding disagreeing (loft#1236).
+        let parent_d_nr = owner.get(name).copied().unwrap_or(parent_d_nr);
+        if parent_d_nr == u32::MAX || (parent_d_nr as usize) >= data.definitions.len() {
+            continue;
+        }
         let Some((_, tp)) = captured_names.iter().find(|(n, _)| n == name) else {
             continue;
         };

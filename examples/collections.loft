@@ -21,12 +21,15 @@ struct Counter {
 
 fn main() {
   c = Counter { ordered: [], by_text: [] };
-  // Add three words with distinct keys; both views hold the records.
+  // Add three words with distinct keys.  ONE append is enough: the two fields are a
+  // linked group — two collections over the same element type are two routes to a single
+  // record set — so appending to `ordered` puts the record in `by_text` too.  Appending to
+  // both would add each word TWICE, and the vector is the only member that shows it (the
+  // hash keeps one entry per key whichever way round).
   for w in [Word { text: "apple", count: 3 },
             Word { text: "banana", count: 5 },
             Word { text: "cherry", count: 2 }] {
     c.ordered += [w];
-    c.by_text += w;
   }
   // Vector iteration walks in insertion order.
   print("In insertion order:\n");

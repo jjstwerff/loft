@@ -900,6 +900,25 @@ static well-definedness check, fully consistent with "no *runtime* errors ever" 
 `x?` on an already-non-null operand is an identity plus a redundant-`?` warning (mirrors the
 redundant-`??` lint).
 
+**On the left of an assignment, the `?` is on the READ.** `place? op= e` writes `place`; the
+`?` says which value to read when `place` is null. So `x? += 3` on a null `x` is `3` — the
+accumulate-from-the-zero idiom — while the bare `x += 3` leaves it null, because a compound
+assignment on a scalar or `text` PROPAGATES. For a **collection** the two spellings agree:
+appending to a null collection builds the empty one first, so `b.d? += [r]` and `b.d += [r]`
+mean the same thing. A plain `place? = e` has no read to discharge and means `place = e`.
+
+```loft
+hits: integer? = null;
+hits? += 1                  // 1     — the `?` read the zero, the write landed in `hits`
+misses: integer? = null;
+misses += 1                 // null  — no `?`, so the null propagates through `+`
+```
+
+`(a ?? d) += e` is refused rather than guessed: it names two values and no place, so it takes
+no assignment at all. A place whose **address calls a function** is fine — `w[idx()]? += 1`
+calls `idx()` once, as [C92](DESIGN_DECISIONS.md) requires of every compound assignment.
+Rule: `@FR-E-Asgn-Discharge`, [formal/operational.md](formal/operational.md).
+
 ### The `as` operator
 
 Used for explicit type casts and conversions:

@@ -626,38 +626,47 @@ impl Output<'_> {
         for (a_nr, a) in def_fn.attributes().iter().enumerate() {
             let name = "@".to_string() + &a.name;
             if a_nr < vals.len() {
-                // For enum-typed parameters, Value::Null means the null enum byte (255).
-                if matches!(a.typedef, Type::Enum(_, _, _)) && matches!(vals[a_nr], Value::Null) {
-                    res = replace_placeholder(&res, &name, "(255u8)");
-                    continue;
-                }
-                // For reference-typed parameters, Value::Null means the null DbRef sentinel.
-                if matches!(
-                    a.typedef,
-                    Type::Reference(_, _)
-                        | Type::Vector(_, _)
-                        | Type::Sorted(_, _, _)
-                        | Type::Hash(_, _, _)
-                        | Type::Index(_, _, _)
-                        | Type::Enum(_, true, _)
-                ) && matches!(vals[a_nr], Value::Null)
+                // loft#1234 — what a `null` looks like AT A PARAMETER'S TYPE has one home,
+                // [`Self::write_typed_null_in`], and this is the second of the two places
+                // that ask it.  The direct-call path below already routes here (#307); this
+                // template path used to re-spell a SUBSET of the same list by hand — enums,
+                // heap refs and booleans — and every type the hand-written list omitted fell
+                // through to `generate_expr_buf`, which renders a bare `Value::Null` as `()`.
+                //
+                // So `c += null` emitted `let v = (()); … set_int(…, v)` and `--native`
+                // refused to compile the program at `integer`, `float`, `single`,
+                // `character` and narrow-int element types, while the interpreter appended
+                // an absent element at every one of them.  A published package depends on
+                // that append (`arguments 0.2.1`), so the two backends disagreed about a
+                // program the registry ships.
+                //
+                // The lists had also already drifted: the enum arm matched `Enum(_, _, _)`,
+                // so it claimed the struct-enum spelling `Enum(_, true, _)` and answered
+                // `255u8` for a DbRef-backed parameter — which made the reference arm's own
+                // `Enum(_, true, _)` case dead, and disagreed with what the direct-call path
+                // emits for the very same type.  Asking the one home removes the subset and
+                // the disagreement together.
+                //
+                // Fn-ref parameters keep the generic path: their two-part
+                // `(d_nr, closure)` form is not a single sentinel, and the direct-call path
+                // excludes them for the same reason.
+                if matches!(vals[a_nr], Value::Null)
+                    && !matches!(a.typedef, Type::Function(_, _, _))
                 {
-                    res = replace_placeholder(&res, &name, "(DbRef::NULL)");
+                    let mut buf: Vec<u8> = Vec::new();
+                    Self::write_typed_null_in(&mut buf, &a.typedef, true)?;
+                    let null_lit = String::from_utf8(buf).unwrap_or_else(|_| "()".to_string());
+                    res = replace_placeholder(&res, &name, &format!("({null_lit})"));
                     continue;
                 }
                 // @PLN17 — boolean operands: the op `#rust` templates do u8
-                // arithmetic (`@v != 1`, `@v1 == @v2`, `@v == 255`).  A null
-                // boolean is the byte 255; everything else is rendered to its u8
-                // storage form — a no-op cast for a `u8` variable, a `0/1`
-                // narrowing for a transient `bool` sub-expression.
+                // arithmetic (`@v != 1`, `@v1 == @v2`, `@v == 255`).  Rendered to the u8
+                // storage form — a no-op cast for a `u8` variable, a `0/1` narrowing for a
+                // transient `bool` sub-expression.  (The null case is the shared arm above.)
                 if matches!(a.typedef.base(), Type::Boolean) {
-                    if matches!(vals[a_nr], Value::Null) {
-                        res = replace_placeholder(&res, &name, "(255u8)");
-                    } else {
-                        let inner = self.generate_expr_buf(&vals[a_nr])?;
-                        let inner = hoisted(a_nr, inner, &mut prelude);
-                        res = replace_placeholder(&res, &name, &format!("(({inner}) as u8)"));
-                    }
+                    let inner = self.generate_expr_buf(&vals[a_nr])?;
+                    let inner = hoisted(a_nr, inner, &mut prelude);
+                    res = replace_placeholder(&res, &name, &format!("(({inner}) as u8)"));
                     continue;
                 }
                 // For character-typed parameters, Value::Int means a character code point.

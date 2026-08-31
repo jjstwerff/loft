@@ -437,7 +437,10 @@ impl Parser {
                 .iter()
                 .find(|(n, _)| n == name)
                 .map(|(_, ct)| ct.clone())
-                .filter(Self::is_collection_type);
+                // `.base()` — the same reading its twin below takes: a `vector<τ>?` capture is
+                // a collection capture, so the body sees the collection type the source wrote
+                // rather than the shared attribute's `Reference(elem)` (loft#1209).
+                .filter(|ct| Self::is_collection_type(ct.base()));
             t = captured_collection_tp.unwrap_or_else(|| self.data.attr_type(closure_d_nr, fnr));
             // closure record is a struct — add __closure as dep so the
             // store allocation stays alive while derived text/references are in use.
@@ -576,7 +579,13 @@ impl Parser {
             // not the type.  Collections have always been in this set; a nullable heap
             // value joins it, because `S?` is a `DbRef` whose `rec == 0` means absent and
             // it shares exactly as its dense twin does (loft#1114).
-            let is_collection_capture = Self::is_collection_type(&ctype)
+            // `.base()`, because this is the READING half of the same fact `closure_attr_type`
+            // decides the STORAGE half of, and the two must agree about what a nullable
+            // collection is.  Asked unpeeled, a `vector<τ>?` / `hash<τ[k]>?` capture answered
+            // "not a collection", so the body took the attribute's own `Reference(elem)` type
+            // and `v += [x]` inside the lambda reported *"No matching operator 'Add' on
+            // 'integer'"* — the ELEMENT's type, for an append to the collection (loft#1209).
+            let is_collection_capture = Self::is_collection_type(ctype.base())
                 || self.data.nullable_struct_payload(&ctype).is_some();
             // record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {
@@ -1064,13 +1073,10 @@ impl Parser {
     ///   bare DbRef — phase 02d-ii's silent gap for exotic
     ///   shapes carries through here.
     pub(crate) fn auto_deref_boxed_scalar(&mut self, code: &mut Value, t: Type) -> Type {
-        let Type::Reference(d_nr, _) = &t else {
+        let Some(d_nr) = crate::parser::vectors::boxed_cell_def(&t, &self.data) else {
             return t;
         };
-        if !self.data.def(*d_nr).name().starts_with("__cell_") {
-            return t;
-        }
-        let Some(value_attr) = self.data.def(*d_nr).attributes().first() else {
+        let Some(value_attr) = self.data.def(d_nr).attributes().first() else {
             return t;
         };
         if value_attr.name != "value" {
@@ -3878,7 +3884,13 @@ impl Parser {
     /// already, while a `vector` carries a whole `Type` and only a record element (a struct,
     /// or the `__nullable<S>` enum a nullable vector holds) can be shared with a sibling.
     fn collection_element(tp: &Type) -> Option<u32> {
-        match tp {
+        // Peeled, because a member's own `?` is not part of what the group is: `Optional(τ)`
+        // is τ's slot plus a compile-time bit (@FR-L-Null) and the group forms at runtime for
+        // a nullable member exactly as for a dense one.  Its sibling test
+        // `is_keyed_collection` peels through `is_keyed`, so a bare match here made the two
+        // halves of one home disagree — a `hash<S[k]>?` was dropped before `keyed` was even
+        // consulted, and both advices went silent on a group that really exists.
+        match tp.base() {
             Type::Sorted(e, _, _)
             | Type::Index(e, _, _)
             | Type::Hash(e, _, _)
@@ -3907,6 +3919,13 @@ impl Parser {
     /// literal that fills two members, and the declaration that spreads one out — cannot
     /// disagree about what a group is.  Pairs that are not a group (two plain vectors, two
     /// collections over different element types) never appear.
+    pub(crate) fn collection_element_of(tp: &Type) -> Option<u32> {
+        Self::collection_element(tp)
+    }
+    pub(crate) fn is_keyed_collection_of(tp: &Type) -> bool {
+        Self::is_keyed_collection(tp)
+    }
+
     pub(crate) fn collection_groups(&self, td_nr: u32) -> Vec<(u32, Vec<GroupMember>)> {
         let mut groups: Vec<(u32, Vec<GroupMember>)> = Vec::new();
         for a_nr in 0..self.data.attributes(td_nr) {
@@ -4361,8 +4380,16 @@ impl Parser {
     /// HASH-only while @P309 — a deep-copy data-loss/hang when `index<T>`
     /// grew the shared element struct — was open; now fixed in
     /// `copy_claims_array_body`.)
+    ///
+    /// Asks through `.base()`, the reading [`crate::parser::vectors::is_keyed`] already
+    /// takes: a `hash<E[k]>?` field is stored as the hash it names plus one reserved null,
+    /// so which keyed store it is does not depend on the wrapper.  Matched unpeeled, every
+    /// nullable keyed field fell to the `None` arm, and the two callers that gate a WRITE on
+    /// it emitted no write at all — `h.c += rows` on a `hash<E[k]>?` field silently added
+    /// nothing where the dense twin added two, for all five keyed kinds and every non-literal
+    /// source (loft#1207).
     pub(crate) fn keyed_field_kt(&mut self, td: &Type) -> Option<u16> {
-        match td {
+        match td.base() {
             Type::Hash(d, key, _) => {
                 let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.hash(c, key))
@@ -4466,31 +4493,28 @@ impl Parser {
             ));
             return;
         }
+        // The source's own spelling decides nothing here: `S?`, a bare `S` and a bare `null`
+        // all name the same dense payload, and `needs_nullable_wrap` is the one place that
+        // knows it.  Asking for `Reference(S)` by hand instead missed the `Optional(Reference)`
+        // spelling entirely — every value a function RETURNS as `S?`, and every local declared
+        // `S?` — so the dense record went in untagged: the first field became the
+        // discriminant, `s.a` answered `s.b`, and a runtime null overwrote nothing at all.
         if !self.first_pass
-            && let Type::Enum(syn, true, _) = &td
-            && self.data.def(*syn).name.starts_with("__nullable<")
-            && let Type::Reference(src_d, _) = exp_tp
-            && self.data.def(*syn).name == format!("__nullable<{}>", self.data.def(*src_d).name())
+            && let Type::Enum(syn, true, _) = td.base()
+            && self.needs_nullable_wrap(*syn, exp_tp)
         {
             let syn = *syn;
-            let some_d = self.data.variant_of(syn, "Some");
             let enum_kt = i32::from(self.data.def(syn).known_type());
             let item_pos = i32::from(
                 self.database
                     .position(self.data.def(td_nr).known_type(), field),
             );
-            let src_var = self.vars.work_refs(exp_tp, &mut self.lexer);
-            list.push(v_set(src_var, value.clone()));
             let field_ref = self.cl(
                 "OpGetField",
                 &[code.clone(), Value::Int(item_pos), Value::Int(enum_kt)],
             );
-            // Single-payload: set the discriminant present (Null=1, Some=2; 0 = absent)
-            // and copy the whole dense `S` source into the inline `payload` field.
-            let present = self.build_some_present(some_d, field_ref, Value::Var(src_var));
-            let is_null = self.cl("OpRefIsNull", &[Value::Var(src_var)]);
-            let not_null = self.cl("OpNot", &[is_null]);
-            list.push(v_if(not_null, Value::Insert(present), Value::Null));
+            let write = self.emit_nullable_slot_write(syn, &field_ref, value.clone());
+            list.extend(write);
             return;
         }
         if crate::parser::vectors::is_collection(&td_base) {
@@ -4696,4 +4720,28 @@ impl Parser {
             }
         }
     }
+}
+
+pub(crate) fn collection_groups_of(
+    data: &crate::data::Data,
+    td_nr: u32,
+) -> Vec<(u32, Vec<GroupMember>)> {
+    let mut groups: Vec<(u32, Vec<GroupMember>)> = Vec::new();
+    for a_nr in 0..data.attributes(td_nr) {
+        let tp = data.attr_type(td_nr, a_nr);
+        let Some(elem) = Parser::collection_element_of(&tp) else {
+            continue;
+        };
+        let entry = GroupMember {
+            a_nr,
+            name: data.attr_name(td_nr, a_nr),
+            keyed: Parser::is_keyed_collection_of(&tp),
+        };
+        match groups.iter_mut().find(|(e, _)| *e == elem) {
+            Some((_, members)) => members.push(entry),
+            None => groups.push((elem, vec![entry])),
+        }
+    }
+    groups.retain(|(_, m)| m.len() >= 2 && m.iter().any(|x| x.keyed));
+    groups
 }

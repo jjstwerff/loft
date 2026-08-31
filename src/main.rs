@@ -9759,16 +9759,26 @@ fn main() {
                     );
                     std::process::exit(1);
                 }
-                let cargo_ok = std::process::Command::new("cargo")
+                // loft#1238 — nothing here asks whether the deps are already built: the
+                // staleness question is delegated wholesale to cargo, which is correct (it is
+                // the tool that knows) but means the cost is invisible from loft's side.  Name
+                // it in the report so a slow `--html` says which bridge is paying.
+                let mut dep_build = std::process::Command::new("cargo");
+                dep_build
                     .arg("build")
                     .arg("--release")
                     .arg("--target")
                     .arg("wasm32-unknown-unknown")
                     .arg("--manifest-path")
-                    .arg(synth_dir.join("Cargo.toml"))
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
+                    .arg(synth_dir.join("Cargo.toml"));
+                let cargo_ok = loft::platform::timing_exec(
+                    "cargo",
+                    &format!("bridge deps ({crate_ident})"),
+                    "no staleness check here — cargo decides what to rebuild",
+                    || dep_build.status(),
+                )
+                .map(|s| s.success())
+                .unwrap_or(false);
                 if !cargo_ok {
                     eprintln!(
                         "loft: --html: failed to cargo-build wasm-bridge dependencies for {bridge_crate}"
@@ -9930,7 +9940,7 @@ fn main() {
         } else {
             ("--strip-debug", &[])
         };
-        let final_wasm = if wasm_opt
+        wasm_opt
             .args([
                 // -O / -Oz plus --asyncify strips the host imports
                 // (loft_gl.*, loft_io.*) entirely — wasm goes from 25
@@ -9971,9 +9981,18 @@ fn main() {
             .args(debuginfo_flags)
             .arg("-o")
             .arg(&opt_path)
-            .arg(&wasm_path)
-            .status()
-            .is_ok_and(|s| s.success())
+            .arg(&wasm_path);
+        // loft#1238 — wasm-opt runs unconditionally: `--asyncify` is not an optimisation but
+        // the pass that makes frame-yield work at all, so there is no staleness question and
+        // nothing to skip.  Named in the report anyway, because a reader looking at a slow
+        // `--html` needs to see the whole pipeline and not only the parts that can be cached.
+        let final_wasm = if loft::platform::timing_exec(
+            "wasm-opt",
+            "prog_opt.wasm",
+            "always runs — --asyncify is required for frame yield, not an optimisation",
+            || wasm_opt.status(),
+        )
+        .is_ok_and(|s| s.success())
         {
             let _ = std::fs::remove_file(&wasm_path);
             opt_path
@@ -10489,6 +10508,10 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             " · full engine shell"
         };
         println!("wrote {html_path} ({html_kb} KB, WASM {wasm_kb} KB{shell})");
+        // loft#1238 — the per-invocation breakdown, slowest first.  Silent unless LOFT_TIMING
+        // is set AND something actually ran, so a build that reused every artifact says
+        // nothing.
+        loft::platform::timing_report("--html");
         return;
     }
 

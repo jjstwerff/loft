@@ -394,7 +394,7 @@ assumes step 3 covered it.
 
 ## Where the shipped rule lives
 
-1. `formal/binding.md` § B-Ref-Reshape — the rule; § Deviations carries D-bind-8's closure record.
+1. `formal/binding.md` § B-Ref-Reshape — the rule; `formal/binding-history.md` carries D-bind-8's closure record.
 2. `probes/40-reshape-refusal/README.md` — the 25-cell boundary, with the *before* column measured
    on the pre-fix binary and the three cells (X9, S4, X3) that decided the shape of the fix.
 3. `tests/parse_errors.rs::b_ref_reshape_*` — six refused shapes and three positive ones;

@@ -252,8 +252,6 @@ contract (this file). What remains is the SAME meta-deviation, not a heap-specif
   ⚠ A claim about another doc's register goes stale silently; re-read the register rather
   than this sentence.
 
----
-
 ## Conformance
 
 The rules are checkable directly, and every check is a program both backends must agree on:

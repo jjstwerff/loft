@@ -128,6 +128,11 @@ struct Scopes {
     /// `None` unless the body actually reaches a displacing site (`displaces_return_buffer`),
     /// so a function that cannot leak pays no slot.
     rbuf_witness: Option<(u16, u16)>,
+    /// loft#1200 — the per-LOCAL ownership witness: a nullable heap-record local that is
+    /// reassigned from a minting call, mapped to the boolean that records whether the store
+    /// it currently holds is this frame's SOLE property.  The static answer is not available
+    /// (see `nullable_locals_that_displace`), so the displaced-store free reads this instead.
+    local_owns: HashMap<u16, u16>,
     /// @PLN85 `local_source` over-free fix (gated by `LOFT_JOIN_OWN`): heap slots
     /// that hold an OWNED store displaced by a later `Borrowed`/`Join` reassignment
     /// (`use_analysis::displaced_owned_slots`). For these, `scan_set` strips the
@@ -1423,6 +1428,7 @@ fn run_scan_phase(
         witness_buffer: HashMap::new(),
         owned_refs: HashMap::new(),
         rbuf_witness: None,
+        local_owns: HashMap::new(),
         displaced_owned,
         views_to_materialise: collect_views_to_materialise(orig_code, orig_vars, data),
         fnref_target: collect_fnref_targets(orig_code, orig_vars),
@@ -1447,6 +1453,17 @@ fn run_scan_phase(
         scopes.var_order.push(flag);
         scopes.rbuf_witness = Some((buf, flag));
     }
+    // loft#1200 — the same construction one scope in: a boolean per nullable heap-record LOCAL
+    // that a minting call reassigns, recording whether the store it holds is this frame's sole
+    // property.  Minted BEFORE the scan for the reason the buffer's is: the first assignment
+    // that has to maintain it already needs a flag to write.
+    for v in nullable_locals_that_displace(orig_code, &function, data) {
+        let name = format!("__lbo_{}", function.name(v));
+        let flag = function.add_temp_var(&name, &Type::Boolean);
+        scopes.var_scope.insert(flag, 0);
+        scopes.var_order.push(flag);
+        scopes.local_owns.insert(v, flag);
+    }
     let mut code = scopes.scan(orig_code, &mut function, data);
     // The witness starts FALSE: on entry the buffer holds the CALLER's store, which this
     // function must never release.  A transition site is reachable with no prior assignment at
@@ -1456,6 +1473,18 @@ fn run_scan_phase(
         && let Value::Block(bl) = &mut code
     {
         bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+    }
+    // Every per-local witness starts FALSE for the same reason: before the local's first
+    // assignment there is no store of its own to release, and an uninitialised boolean slot
+    // would read as garbage and free one.
+    if !scopes.local_owns.is_empty()
+        && let Value::Block(bl) = &mut code
+    {
+        let mut flags: Vec<u16> = scopes.local_owns.values().copied().collect();
+        flags.sort_unstable();
+        for flag in flags.into_iter().rev() {
+            bl.operators.insert(0, v_set(flag, Value::Boolean(false)));
+        }
     }
     // lift vars from `scan_args` are assigned inside conditional branches but
     // their `OpFreeRef` lives at function exit; prepend the null-inits so codegen
@@ -3782,8 +3811,16 @@ fn record_adopts_capture(data: &Data, function: &Function, record: u32, a: usize
     // A `__cell_<T>` is minted FOR this closure (plan-22 boxes a mutated scalar /
     // text capture into one), so the record is its only possible owner however the
     // original binding was reached — including from a parameter.
+    //
+    // ...as long as it was minted for a binding THIS frame has.  A lambda nested in a lambda
+    // RELAYS the capture outward: the enclosing lambda holds no binding of the name at all and
+    // reads the handle out of its own closure record, so the record it builds is a second
+    // pointer at a cell that belongs further out.  Adopting it freed the cell when the
+    // enclosing lambda returned — on its FIRST call, so the second one read a released store
+    // (loft#1236).
     if let Type::Reference(cell, _) = data.attr_type(record, a)
         && data.def(cell).name.starts_with("__cell_")
+        && function.var(&data.attr_name(record, a)) != u16::MAX
     {
         return true;
     }
@@ -4440,8 +4477,31 @@ impl Scopes {
                 Value::Null,
             ));
         }
+        // loft#1200 — the displaced-store free for a nullable heap-record local, GUARDED by
+        // the per-local witness.  See `nullable_locals_that_displace` for why the guard is a
+        // runtime flag and not a predicate: the local's first store is shared with a work-ref
+        // that frees it too, and no static site separates that iteration from the rest.
+        if transition_free.is_none()
+            && was_in_scope
+            && let Some(&flag) = self.local_owns.get(&v)
+            && mints_a_store_the_target_does_not_hold(value, v, ov, data)
+        {
+            transition_free = Some(v_if(
+                Value::Var(flag),
+                call("OpFreeRef", v, data),
+                Value::Null,
+            ));
+        }
+        // A record ENUM is the second spelling of a struct-like heap store, and this
+        // transition — and the `owned_refs` tracking below that licenses it — reads the
+        // same @FR-O-Latest fact for both.  The two blocks above already pair the
+        // spellings; these two did not, so a record-enum local that OWNED a store and is
+        // then assigned a VIEW never freed what it displaced (loft#1202).
         if was_in_scope
-            && matches!(function.tp(v), Type::Reference(_, d) if !d.is_empty())
+            && matches!(
+                function.tp(v),
+                Type::Reference(_, d) | Type::Enum(_, true, d) if !d.is_empty()
+            )
             && self.owned_refs.get(&v) == Some(&self.loops.len())
             && matches!(
                 self.ref_rhs_ownership(value, data),
@@ -4458,7 +4518,10 @@ impl Scopes {
             transition_free = Some(call("OpFreeRef", v, data));
         }
         // Track the LATEST assignment's ownership for this var.
-        if matches!(function.tp(v), Type::Reference(_, _)) {
+        if matches!(
+            function.tp(v),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) {
             match self.ref_rhs_ownership(value, data) {
                 RefRhs::Owned => {
                     self.owned_refs.insert(v, self.loops.len());
@@ -4562,10 +4625,24 @@ impl Scopes {
         while let Type::RefVar(inner) = record_target {
             record_target = inner.base();
         }
-        if matches!(
+        // The WITNESS PAIRING below asks *did the callee adopt the buffer I handed it, or
+        // mint its own?*, and that question is the same for a vector: a `vector<T>` is
+        // delivered through a `__ref_N` exactly as a record is, and its per-iteration free
+        // has the same two cases to tell apart.  Without it a vector local bound from such
+        // a call got a PLAIN `OpFreeRef`, which in the adoption case releases the caller's
+        // own buffer — reused every iteration, so the next one wrote into a freed store
+        // (loft#1201; the record spelling beside it was already correct).
+        //
+        // The two dep-STRIPS in this block do NOT generalise and keep the record-shaped
+        // test they had: both exist for `gen_set_first_ref_call_copy`, the Reference-only
+        // deep-copy path, and a vector never reaches it.
+        let record_shaped = matches!(
             record_target,
             Type::Reference(_, _) | Type::Enum(_, true, _)
-        ) && let Value::Call(fn_nr, _) = unspanned_value
+        );
+        let vector_shaped = matches!(record_target, Type::Vector(_, _));
+        if (record_shaped || vector_shaped)
+            && let Value::Call(fn_nr, _) = unspanned_value
             // A loft-defined callee — an `n_` global OR a `t_` method / generic
             // monomorph (@PLN85 generic-tuple-return-fix.md — a generic tuple return
             // is a `t_<Type>_<fn>` monomorph; without `t_` the adopts-fresh /
@@ -4582,7 +4659,8 @@ impl Scopes {
             // owned path then deep-copies the borrow into `v`'s store and frees it at
             // scope exit; without this the displaced owned store is orphaned (it was
             // bound to `v`, not to the source retbuf the cleanup guards) and leaks.
-            if !publishes_through_ref
+            if record_shaped
+                && !publishes_through_ref
                 && self.displaced_owned.contains(&ov)
                 && !function.tp(v).depend().is_empty()
             {
@@ -4591,7 +4669,7 @@ impl Scopes {
                     function.make_independent(v, d);
                 }
             }
-            if !adopts_fresh_store && !publishes_through_ref {
+            if record_shaped && !adopts_fresh_store && !publishes_through_ref {
                 // codegen will take gen_set_first_ref_call_copy —
                 // OpConvRefFromNull +
                 // OpDatabase + lock-args + OpCopyRecord deep-copy into a
@@ -4640,7 +4718,18 @@ impl Scopes {
             // so the buffer and the caller's slot alias whenever the callee
             // returned the buffer it was handed — the majority shape, and the
             // one `file()` has (`result = File{..}; result`).
-            if (adopts_fresh_store || publishes_through_ref)
+            // ⚠ A VECTOR pairs whatever `adopts_fresh_store` says, and the asymmetry is
+            // the whole point.  The flag means *the callee mints its own store rather than
+            // filling the one I passed*, so for a RECORD its false case is safe on its own:
+            // `gen_set_first_ref_call_copy` interposes a deep copy, and `v` and the buffer
+            // cannot alias.  A vector has no such copy path — it is PutRef-ALIASED to the
+            // work-ref argument — so there the false case is the one where they DEFINITELY
+            // alias, and a plain `OpFreeRef(v)` releases the caller's own buffer.  Hoisted
+            // out of a loop and reused every iteration, that buffer is then written after
+            // the free (loft#1201).  `OpFreeRefIfDistinct` answers both cases at run time
+            // and is conservative in the direction that matters: it frees exactly as the
+            // plain free did when the stores DIFFER, and only skips when they alias.
+            if (adopts_fresh_store || publishes_through_ref || vector_shaped)
                 && let Value::Call(_, args) = unspanned_value
             {
                 for arg in args {
@@ -4683,8 +4772,18 @@ impl Scopes {
                             if av == v {
                                 continue;
                             }
-                            if (publishes_through_ref && function.is_argument(v))
-                                || (v_scope <= av_scope && v_scope != u16::MAX)
+                            // A vector admitted here ONLY by the alias case below
+                            // (`!adopts_fresh_store`, no `&`) takes the inner-slot branch
+                            // and nothing else.  Making the BUFFER's own free conditional
+                            // on the slot is the opposite trade and is wrong for it: the
+                            // slot may have no free of its own, and then neither store is
+                            // released.  Measured — widening both branches leaked across
+                            // sixteen suites (loft#1201).
+                            let vector_alias_only =
+                                vector_shaped && !adopts_fresh_store && !publishes_through_ref;
+                            if !vector_alias_only
+                                && ((publishes_through_ref && function.is_argument(v))
+                                    || (v_scope <= av_scope && v_scope != u16::MAX))
                             {
                                 self.paired_witness.entry(av).or_insert(v);
                             } else if v_scope != u16::MAX
@@ -4900,13 +4999,24 @@ impl Scopes {
         // NOT adopt a fresh store) leaves `v` holding whatever it held, so the flag is left
         // alone; every other assignment sets it to the same @FR-O-Latest verdict `owned_refs`
         // records statically.
-        let witness_update = match self.rbuf_witness {
+        let mut witness_update = match self.rbuf_witness {
             Some((buf, flag)) if buf == v && !delivers_into_buffer(value, v, ov, data) => {
                 let owned = matches!(self.ref_rhs_ownership(value, data), RefRhs::Owned);
                 Some(v_set(flag, Value::Boolean(owned)))
             }
             _ => None,
         };
+        // loft#1200 — the per-local witness records SOLE ownership, which is a narrower
+        // question than `owned_refs`'s.  An inline mint into a work-ref is `Owned` and still
+        // not solely owned: the work-ref frees it too.  Only a MINTING CALL hands the local a
+        // store nothing else names, so that is the one shape that sets the flag true.
+        if let Some(&flag) = self.local_owns.get(&v) {
+            let sole = mints_a_store_the_target_does_not_hold(value, v, ov, data);
+            witness_update = Some(match witness_update {
+                Some(prev) => Value::Insert(vec![prev, v_set(flag, Value::Boolean(sole))]),
+                None => v_set(flag, Value::Boolean(sole)),
+            });
+        }
         if prefix.is_empty() && ls.is_empty() && witness_update.is_none() {
             Value::Set(v, Box::new(set_value))
         } else {
@@ -7797,35 +7907,36 @@ impl Scopes {
                     }
                     crate::use_analysis::Own::Borrowed { .. } => false,
                 };
-                if let Type::Reference(d_nr, _) = returned
+                // An inline-unbound call whose result is a struct-like heap store —
+                // a `Reference` or a record ENUM, the two spellings `heap_def_nr`
+                // answers for — binds its result to nothing, so nothing frees it.
+                // Lifting it into a `__lift_N` gives `get_free_vars` a name to emit
+                // the `OpFreeRef` against.  The lifted temp keeps the spelling it
+                // arrived with.
+                //
+                // Three ways to be the caller's to free, and the second is the one a
+                // dep list reads backwards:
+                //   - EMPTY dep (`fn mk() -> H { Bytes{…} }`) — fresh, owned.
+                //   - a dep naming the HIDDEN `__ref_N`/`__retbuf` the callee
+                //     delivered through.  That reads as a borrow and is not one: the
+                //     buffer is the CALLER's own allocation, so the lift's copy-path
+                //     free (`0x8000` source-free) claims it exactly as the bound
+                //     `h = f()` case does.  Declining here orphans one store per
+                //     evaluation (#490 kt=65 on native, loft#1202 on both backends).
+                //   - the ORACLE says owned where the deps proxy cannot (@FR-O-Oracle).
+                // A dep naming a VISIBLE parameter (`fn field_of_arg(d) -> H { d.value }`)
+                // IS a borrow: lifting it would dangle the caller's own argument.
+                //
+                // ⚠ Asked ONCE for both spellings on purpose.  These were two arms, and
+                // the record-enum one carried only `!returns_borrowed_view()` — so a
+                // struct-enum callee delivering through a `__retbuf` fell through the
+                // second bullet above and leaked, while its `Reference` twin did not.
+                if returned.heap_def_nr().is_some()
                     && (!def.returns_borrowed_view()
                         || def.attr_names.contains_key("__retbuf")
                         || lift_by_oracle)
                 {
-                    return Some(Self::reopt(opt, Type::Reference(*d_nr, Deps::none())));
-                }
-                // @P303 / #490 — a user fn returning a heap struct-enum that the
-                // caller OWNS leaks its result temp when used directly as a call
-                // argument (or discarded); lift it like the Reference case above
-                // so `get_free_vars` emits its `OpFreeRef`.  The owned-vs-borrowed
-                // split is the canonical `returns_borrowed_view()` fact:
-                //   - EMPTY dep (`fn mk() -> H { Bytes{…} }`) — fresh, owned.
-                //   - HIDDEN work-ref dep (`fn f() -> H { mk().x }`, dep → the
-                //     `__ref_N`/`__retbuf` the callee reallocated) — a fresh store
-                //     delivered through the caller's hidden buffer; the caller owns
-                //     it and the lift's copy-path free (`0x8000` source-free) claims
-                //     it exactly like the `h = f()` bound case does.
-                // Both are `returns_borrowed_view() == false` → lift.  A dep naming
-                // a VISIBLE param (`fn field_of_arg(d) -> H { d.value }`) IS a
-                // borrow → true → must NOT lift (freeing it dangles the caller's
-                // arg).  Was `dep.is_empty()`, which missed the hidden-work-ref
-                // case: on native the caller freed the by-value-stale `__ref_N`
-                // (never delivered back) instead of the reallocated store, leaking
-                // one enum store per inline use (#490 kt=65).
-                if let Type::Enum(d_nr, true, _) = returned
-                    && !def.returns_borrowed_view()
-                {
-                    return Some(Self::reopt(opt, Type::Enum(*d_nr, true, Deps::none())));
+                    return Some(Self::reopt(opt, returned.with_deps(&Deps::none())));
                 }
                 // Plan-57: a user fn returning a CAPTURING closure (`fn(...) -> T`
                 // whose fn-ref carries a fresh closure record) leaks its result temp
@@ -8049,6 +8160,79 @@ fn hidden_return_buffer_var(d_nr: u32, function: &Function, data: &Data) -> Opti
     let name = def.attributes().get(idx)?.name.clone();
     let v = function.var(&name);
     (v != u16::MAX).then_some(v)
+}
+
+/// Which nullable heap-record LOCALS are reassigned from a call that mints?
+///
+/// The pre-scan answer to *"is a runtime ownership witness worth a slot here?"*, asked once
+/// per function in the shape [`displaces_return_buffer`] already uses.  A body that reaches no
+/// such site pays nothing.
+///
+/// **Why a witness and not a predicate.** A nullable RECORD return gets no delivery buffer —
+/// `-> S?` is a synthetic `__nullable<S>` carrying its own delivery, and giving it a buffer as
+/// well leaks one record per call — so every call MINTS and the caller owes the release of
+/// what it displaces.  A static free at the reassignment cannot be placed, because the local's
+/// FIRST store is normally an inline mint into a work-ref (`c: S? = S { x: 5 }` lowers to
+/// `c = { Object -> __ref_p2_1 }`): the local and that work-ref name ONE store, and freeing
+/// through the local double-frees it against the work-ref's own scope-exit free.  One static
+/// site cannot separate the first iteration from the rest, which is what `formal/ownership.md`
+/// D-own-16 records; the flag answers it per RUN.
+fn nullable_locals_that_displace(code: &Value, function: &Function, data: &Data) -> Vec<u16> {
+    fn walk(node: &Value, seen: &mut HashSet<u16>, out: &mut Vec<u16>, data: &Data) {
+        if let Value::Set(t, val) = node.unspan() {
+            // A SECOND assignment is what displaces; the first allocates.
+            if !seen.insert(*t)
+                && mints_a_store_the_target_does_not_hold(val, *t, *t, data)
+                && !out.contains(t)
+            {
+                out.push(*t);
+            }
+        }
+        node.unspan()
+            .for_each_child(&mut |c| walk(c, seen, out, data));
+    }
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    walk(code, &mut seen, &mut out, data);
+    out.retain(|&v| {
+        v < function.count()
+            && matches!(function.tp(v), Type::Optional(_))
+            && matches!(
+                function.tp(v).base(),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            && function.tp(v).depend().is_empty()
+            && !function.is_skip_free(v)
+            && !function.is_argument(v)
+    });
+    out
+}
+
+/// Does this call hand back a store the target does NOT already hold?
+///
+/// The complement of [`displaces_owned_through_fresh_callee`]'s NRVO shape.  There the target
+/// sits at the callee's return-buffer attribute, so the callee fills the store the target
+/// already owns and nothing is displaced.  Here the callee MINTS: it has no return buffer at
+/// all — which is every nullable RECORD return — or it was handed someone else's.
+///
+/// The target must not be READ anywhere in the call: the free is emitted before the
+/// assignment, so a call that still reads the old value would be handed a freed store.
+fn mints_a_store_the_target_does_not_hold(value: &Value, v: u16, ov: u16, data: &Data) -> bool {
+    let Value::Call(fn_nr, args) = value.unspan() else {
+        return false;
+    };
+    let def = data.def(*fn_nr);
+    if !def.is_loft_defined() || !def.return_adopts_fresh_store() {
+        return false;
+    }
+    let names_v = |x: &Value| matches!(x.unspan(), Value::Var(w) if *w == v || *w == ov);
+    if def
+        .hidden_return_buffer_attr()
+        .is_some_and(|i| args.get(i).is_some_and(names_v))
+    {
+        return false;
+    }
+    args.iter().all(|a| !a.reads_var(v) && !a.reads_var(ov))
 }
 
 /// Does this body ever displace a store held by the return-buffer parameter `v`?
@@ -9019,9 +9203,13 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
         return;
     }
     let mut freed: HashSet<u16> = HashSet::new();
+    // A `break` at function level has no loop to leave, so this set stays empty; it exists
+    // so the walker can hand a break arm's frees to the loop that encloses it.
+    let mut breaks: HashSet<u16> = HashSet::new();
     check_text_return_path(
         ir,
         &mut freed,
+        &mut breaks,
         free_text_nr,
         data.def_nr("OpNullRefSentinel"),
         function,
@@ -9029,23 +9217,50 @@ fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &
     );
 }
 
-/// True when control cannot fall out of `node` — every path through it returns.
-/// A free inside such a node is released on that path only, so it can never
-/// reach a `Return` that follows the node.
+/// True when control cannot fall through `node` to the statement AFTER it.
 ///
-/// Answers `false` for anything it cannot prove, including `Loop` (which
-/// normally leaves via `Break`).  That is the safe direction: an unproven
-/// terminator keeps its frees in the continuation set, which can only make the
-/// check stricter, never blinder.
+/// Two ways out qualify, and they differ in where the frees go rather than in
+/// whether they fall through:
+///
+/// - a `Return` leaves the function, so a free on that path reaches nothing;
+/// - a `Break` leaves the LOOP, so a free on that path reaches what follows the
+///   loop and NOT the rest of the loop body.  The `Loop` arm of the walker is
+///   what carries those frees past the loop, so counting `Break` here loses no
+///   strictness — it only stops a break arm's frees being charged to the body
+///   statements the break jumps over.
+///
+/// Missing the `Break` case is a FALSE POSITIVE, not a blind spot, and it fired:
+/// `for v in it { if done { free(v); break; } return v; }` — the shape every
+/// early-returning loop over a text generator has — read as freeing `v` on the
+/// path reaching its own `Return`, and hard-failed the debug-assertions gate on
+/// a program with nothing wrong with it.
+///
+/// Answers `false` for anything it cannot prove, including `Loop` itself.  That
+/// stays the safe direction: an unproven terminator keeps its frees in the
+/// continuation set, which makes the check stricter rather than blinder.
 #[cfg(debug_assertions)]
 fn always_returns(node: &Value) -> bool {
     match node.unspan() {
         Value::Return(_) => true,
-        // Anything after a `Return` in the same block is dead, so one
-        // top-level `Return` terminates the whole block.
         Value::Block(bl) => bl.operators.iter().any(always_returns),
         Value::Insert(ops) => ops.iter().any(always_returns),
         Value::If(_, t, f) => always_returns(t) && always_returns(f),
+        _ => false,
+    }
+}
+
+/// True when control cannot fall through `node` to the statement after it — by
+/// RETURNING or by BREAKING.  Paired with [`always_returns`], which separates the
+/// two: a return's frees reach nothing, a break's reach what follows the loop.
+#[cfg(debug_assertions)]
+fn never_falls_through(node: &Value) -> bool {
+    match node.unspan() {
+        Value::Return(_) | Value::Break(_) => true,
+        // Anything after a `Return` or `Break` in the same block is dead, so one
+        // top-level terminator terminates the whole block.
+        Value::Block(bl) => bl.operators.iter().any(never_falls_through),
+        Value::Insert(ops) => ops.iter().any(never_falls_through),
+        Value::If(_, t, f) => never_falls_through(t) && never_falls_through(f),
         _ => false,
     }
 }
@@ -9057,13 +9272,14 @@ fn always_returns(node: &Value) -> bool {
 fn check_text_return_path(
     node: &Value,
     freed: &mut HashSet<u16>,
+    breaks: &mut HashSet<u16>,
     free_text_nr: u32,
     null_nr: u32,
     function: &Function,
     fn_name: &str,
 ) {
-    let walk = |n: &Value, set: &mut HashSet<u16>| {
-        check_text_return_path(n, set, free_text_nr, null_nr, function, fn_name);
+    let walk = |n: &Value, set: &mut HashSet<u16>, brk: &mut HashSet<u16>| {
+        check_text_return_path(n, set, brk, free_text_nr, null_nr, function, fn_name);
     };
     match node.unspan() {
         Value::Call(d_nr, args) if *d_nr == free_text_nr => {
@@ -9074,7 +9290,7 @@ fn check_text_return_path(
         Value::Return(inner) => {
             // The return expression runs BEFORE the return itself, so a free
             // inside it counts against this very return.
-            walk(inner, freed);
+            walk(inner, freed, breaks);
             let ret_var = returned_var_null_unified(inner, null_nr);
             if ret_var != u16::MAX && matches!(function.tp(ret_var), Type::Text(_)) {
                 assert!(
@@ -9090,43 +9306,66 @@ fn check_text_return_path(
         }
         Value::If(cond, t, f) => {
             // The condition runs on both paths; each arm gets its own.
-            walk(cond, freed);
+            walk(cond, freed, breaks);
             let mut then_freed = freed.clone();
-            walk(t, &mut then_freed);
+            walk(t, &mut then_freed, breaks);
             let mut else_freed = freed.clone();
-            walk(f, &mut else_freed);
-            // Only an arm that can fall through hands its frees to what follows.
-            if !always_returns(t) {
-                freed.extend(then_freed);
-            }
-            if !always_returns(f) {
-                freed.extend(else_freed);
+            walk(f, &mut else_freed, breaks);
+            // Where an arm's frees go is decided by HOW it leaves.  Falling through hands
+            // them to the next statement; RETURNING hands them nowhere, since the function
+            // is over; BREAKING hands them to what follows the LOOP, which is what `breaks`
+            // carries out to the enclosing `Loop` arm.  Collapsing the last two — treating a
+            // break like a return — would lose a real free, and treating it like a
+            // fall-through charges it to body statements the break jumps over, which is the
+            // false positive this split exists to remove.
+            let mut arm = |a: &Value, arm_freed: HashSet<u16>, freed: &mut HashSet<u16>| {
+                if always_returns(a) {
+                } else if never_falls_through(a) {
+                    breaks.extend(arm_freed);
+                } else {
+                    freed.extend(arm_freed);
+                }
+            };
+            arm(t, then_freed, freed);
+            arm(f, else_freed, freed);
+        }
+        Value::Block(bl) => {
+            for op in &bl.operators {
+                walk(op, freed, breaks);
             }
         }
-        Value::Block(bl) | Value::Loop(bl) => {
+        Value::Loop(bl) => {
+            // A loop is left either by falling out of its body or by a BREAK, and both
+            // continuations resume AFTER the loop — so both sets are unioned here.  The
+            // break set is fresh per loop, which is what keeps an inner loop's breaks from
+            // reaching the outer loop's continuation.
+            let mut body_freed = freed.clone();
+            let mut body_breaks = HashSet::new();
             for op in &bl.operators {
-                walk(op, freed);
+                walk(op, &mut body_freed, &mut body_breaks);
             }
+            freed.extend(body_breaks);
+            freed.extend(body_freed);
         }
         Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
             for op in ops {
-                walk(op, freed);
+                walk(op, freed, breaks);
             }
         }
         Value::Call(_, args) | Value::CallRef(_, args) => {
             for a in args {
-                walk(a, freed);
+                walk(a, freed, breaks);
             }
         }
         Value::Iter(_, create, next, extra_init) => {
-            walk(create, freed);
-            walk(next, freed);
-            walk(extra_init, freed);
+            walk(create, freed, breaks);
+            walk(next, freed, breaks);
+            walk(extra_init, freed, breaks);
         }
         Value::Set(_, inner)
         | Value::TuplePut(_, _, inner)
         | Value::Drop(inner)
-        | Value::Yield(inner) => walk(inner, freed),
+        | Value::Yield(inner) => walk(inner, freed, breaks),
         _ => {}
     }
 }
@@ -9143,7 +9382,7 @@ fn check_text_return_path(
 #[cfg(all(test, debug_assertions))]
 mod text_return_path_tests {
     use super::check_text_return_path;
-    use crate::data::{Deps, Type, Value, v_block, v_if};
+    use crate::data::{Deps, Type, Value, v_block, v_if, v_loop};
     use crate::variables::Function;
     use std::collections::HashSet;
 
@@ -9170,7 +9409,16 @@ mod text_return_path_tests {
     fn check(body: Vec<Value>) {
         let ir = v_block(body, Type::Text(Deps::none()), "body");
         let mut freed = HashSet::new();
-        check_text_return_path(&ir, &mut freed, FREE_TEXT, NULL_SENTINEL, &vars(), "probe");
+        let mut breaks = HashSet::new();
+        check_text_return_path(
+            &ir,
+            &mut freed,
+            &mut breaks,
+            FREE_TEXT,
+            NULL_SENTINEL,
+            &vars(),
+            "probe",
+        );
     }
 
     /// Straight-line use-after-free: the plainest shape the check exists for.
@@ -9235,6 +9483,68 @@ mod text_return_path_tests {
             v_block(vec![free(TB), ret(TA)], Type::Never, "else"),
         )]);
     }
+
+    /// A BREAK arm's free does not reach the loop body that follows it — the shape every
+    /// early-returning loop over a text source has, and the one that read as a
+    /// use-after-free before `never_falls_through` learned about `Break`:
+    ///
+    /// ```text
+    /// loop { ta = next(); if done { free(ta); break; } return ta; }
+    /// ```
+    ///
+    /// The arm that frees is the arm that LEAVES, so it can never reach the `return`.
+    /// Correct code — the check must stay silent.
+    #[test]
+    fn free_in_a_break_arm_does_not_reach_the_bodys_return() {
+        check(vec![v_loop(
+            vec![
+                v_if(
+                    Value::Var(TB),
+                    v_block(vec![free(TA), Value::Break(0)], Type::Never, "then"),
+                    Value::Null,
+                ),
+                ret(TA),
+            ],
+            "loop",
+        )]);
+    }
+
+    /// The control for the cell above, and the reason it cannot be written as "skip a loop".
+    /// Here the free FALLS THROUGH inside the same loop body and the `return` follows it, so
+    /// the free really is on the path that returns `ta`.  The two differ only by the `break`.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn free_without_a_break_still_reaches_the_bodys_return() {
+        check(vec![v_loop(
+            vec![
+                v_if(
+                    Value::Var(TB),
+                    v_block(vec![free(TA)], Type::Void, "then"),
+                    Value::Null,
+                ),
+                ret(TA),
+            ],
+            "loop",
+        )]);
+    }
+
+    /// A break arm's free is still charged to what follows the LOOP, which is where that
+    /// path actually resumes.  Counting `Break` as a terminator must not lose this.
+    #[test]
+    #[should_panic(expected = "frees local text 'ta'")]
+    fn a_break_arms_free_still_reaches_after_the_loop() {
+        check(vec![
+            v_loop(
+                vec![v_if(
+                    Value::Var(TB),
+                    v_block(vec![free(TA), Value::Break(0)], Type::Never, "then"),
+                    Value::Null,
+                )],
+                "loop",
+            ),
+            ret(TA),
+        ]);
+    }
 }
 
 /// After scope analysis, assert that every Reference variable that should be
@@ -9263,10 +9573,19 @@ fn check_ref_leaks(
     // ref-returning call's work ref is released when it doesn't alias
     // the assigned var; the armed-corpus sweep's ~130 "no OpFreeRef"
     // false positives were all this shape).
+    // ⚠ `OpFreeRefOrHandUp` belongs here for the same reason the other three do, and its
+    // absence is what made this assert fire on `n___lambda_3`'s `__ref_p2_1` — a store that
+    // IS released, by an op this list had never heard of.  loft#1186 added it (D-clo-13) as
+    // `OpFreeRefIfDistinct` with an owner on the not-distinct leg, on the EMIT side only:
+    // three files emit it and nineteen name its sibling, so every matcher keyed on the op
+    // NAME went blind to the new spelling at once.  A free-op list is a claim about a
+    // NOTION — "this op releases its first argument" — and each new spelling of that notion
+    // has to arrive here too, or the assert reports a leak the compiler does not have.
     let free_ops = [
         data.def_nr("OpFreeRef"),
         data.def_nr("OpFreeRefTag"),
         data.def_nr("OpFreeRefIfDistinct"),
+        data.def_nr("OpFreeRefOrHandUp"),
     ];
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, &free_ops, &mut freed);

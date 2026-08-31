@@ -216,44 +216,11 @@ that gate, now applied across a network boundary.
 
 ## Deviations
 
-- **D-layout-1 — no version guard on persisted bytes** (the motivating gap). Before @PLN97 the
-  layout was **nowhere written** and **nothing recorded which layout a store was written under**,
-  so a layout-changing fix (#477: nested-vector stride 4→8) **silently misread** existing data —
-  caught only by breakage, never by a check. `L-Sound` is the rule it violated.
+**OPEN: 1.**
+- **D-layout-1** — residual: the load-time schema gate is built and opt-in, and closes fully when a persistence consumer wires `check_beside` into its open path
 
-  **Status — mechanism shipped, auto-enforcement pending a consumer.** The rule is now
-  *enforceable*: the golden test (`tests/layout_golden.rs`) catches a layout change at commit time,
-  and the `.dschema` sidecar (`src/schema_sidecar.rs`, `CorruptReason::SchemaMismatch`) detects a
-  stale store at load and routes it through the durable store's `on_corruption` rebuild. **Residual:**
-  the durable store (`plans/43`) is not yet driven by a loft builtin, so nothing *calls* the
-  load-time gate automatically yet — the deviation closes fully when a persistence consumer wires
-  `check_beside` into its open path. Until then the guard exists but is opt-in.
-
-- **D-layout-2 — the `?` changed the layout** (2026-08-28, loft#1125). `L-Null` says
-  `layout(τ) = layout(τ?)`, and three sites decided layout by naming `Type` variants BARE, so a
-  wrapped shape reached none of them.
-
-  The visible one: the walk that gives an `index` its bookkeeping triple a position runs at the
-  end of `fill_all` precisely so `#left_N / #right_N / #color_N` are appended to the ELEMENT
-  struct before it is sized. `Optional(Index(…))` matched nothing there, the triple was appended
-  afterwards, and `finish_type` returns early for a type that already has a size — so all three
-  kept `position: 0`, on top of each other and of the first real field. The nullable form then
-  refused to lay out at all while its dense twin was fine.
-
-  Its two siblings, same rule: the `null` → sentinel conversion asked for `Type::Vector` alone
-  and was short by the five KEYED kinds and by the wrapper, so a `spatial<P[x,y]>? = null` local
-  kept a bare `Value::Null` — which writes nothing — and the scope-exit `OpFreeRef` read the
-  untouched bytes as store #0 (BUG #306); and an OMITTED nullable collection FIELD took the zero
-  its type gives, where zero is the EMPTY collection and absence has its own reserved id
-  (`DbRef::ABSENT_REC`, loft#917), so `c: vector<τ>? = null` read back present-and-empty.
-
-  **Status — CLOSED.** All three read through `base()`. Guard:
-  `tests/scripts/a-nullable-collection-lays-out-like-its-dense-twin.loft`, which gives every
-  keyed kind its OWN element struct: the layout half is invisible whenever the same index type
-  also has a dense local somewhere in the program, because that one registers the bookkeeping in
-  time and the nullable form inherits a correct layout.
-
----
+The full register — these entries in full, plus every closed one with its dates and
+issue numbers — is the companion [layout-history.md](layout-history.md).
 
 ## Conformance
 
