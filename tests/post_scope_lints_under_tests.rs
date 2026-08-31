@@ -165,3 +165,95 @@ fn test_unused() {
         "the parse-time lint reached --tests before this change and must still\n{out}"
     );
 }
+
+/// loft#1227 — the APPEND spelling of `linked-group-double-fill` fires, and its four controls
+/// stay silent.
+///
+/// Two collections over one element type are two routes to a SINGLE record set. The advice
+/// covered the struct-LITERAL spelling only; since loft#1221 the APPEND spelling is the more
+/// dangerous one, because the bare-variable form at a keyed field used to be silently dropped
+/// and now really appends — the idiom went from a silent no-op to a silent doubling.
+///
+/// Scored HERE rather than in `tests/scripts/` because a post-scope lint's output never reaches
+/// the corpus harness's diagnostic list: `check_diagnostics` sees what the PARSE produced, and
+/// `post_scope_lints` runs after it, so an `@EXPECT_WARNING` for one of these can only ever
+/// report "not emitted". That is the same reason every other lint in this file lives here.
+///
+/// The four controls are the scoping rule, and it is one rule rather than three special cases:
+/// **the unit is the BLOCK**. Separate `if` arms are separate blocks, a loop body is one block
+/// however often it runs, and a group needs a keyed member at all. It is a deliberate
+/// UNDER-approximation, licensed by the tier — `advice` never gates a build, so a missed report
+/// costs nothing while noise on correct code is what the ADVICE tier exists to avoid. The
+/// shipped `double-move` lint under-approximates for the same reason at the stricter `warning`
+/// tier, and this follows it rather than deciding the question again.
+#[test]
+fn linked_group_double_fill_fires_on_the_append_spelling() {
+    const SRC: &str = r#"
+struct W1227 { text: text, n: integer }
+struct G1227 { ordered: vector<W1227>, by_text: hash<W1227[text]> }
+struct T1227 { a: vector<W1227>, b: vector<W1227> }
+
+fn test_both_members_appended() {
+  g = G1227 { ordered: [], by_text: [] };
+  g.ordered += [W1227 { text: "a", n: 1 }];
+  g.by_text += [W1227 { text: "a", n: 1 }];
+  assert(len(g.ordered) == 2, "the double fill really doubles");
+}
+"#;
+    let (out, _) = run_tests("lg_append", SRC, &[]);
+    assert!(
+        out.contains("linked-group-double-fill"),
+        "the append spelling must advise; got:\n{out}"
+    );
+    assert!(
+        out.contains("is a second route"),
+        "and it must name the second route; got:\n{out}"
+    );
+}
+
+/// The four controls, each of which must stay SILENT — the scoping rule, measured.
+#[test]
+fn linked_group_double_fill_is_silent_on_its_four_controls() {
+    const SRC: &str = r#"
+struct W1227 { text: text, n: integer }
+struct G1227 { ordered: vector<W1227>, by_text: hash<W1227[text]> }
+struct T1227 { a: vector<W1227>, b: vector<W1227> }
+
+fn test_one_member_only() {
+  c = G1227 { ordered: [], by_text: [] };
+  c.ordered += [W1227 { text: "b", n: 2 }];
+  assert(len(c.ordered) == 1, "one member filled");
+  assert(len(c.by_text) == 1, "and the keyed member sees it without a second fill");
+}
+
+fn test_opposite_arms() {
+  c = G1227 { ordered: [], by_text: [] };
+  if 1 > 0 {
+    c.ordered += [W1227 { text: "c", n: 3 }];
+  } else {
+    c.by_text += [W1227 { text: "c", n: 3 }];
+  }
+  assert(len(c.ordered) == 1, "at most one arm ran");
+}
+
+fn test_loop_body_counts_once() {
+  c = G1227 { ordered: [], by_text: [] };
+  for i in 0..3 {
+    c.ordered += [W1227 { text: "n", n: i }];
+  }
+  assert(len(c.ordered) == 3, "three iterations, one member");
+}
+
+fn test_two_plain_vectors_are_not_a_group() {
+  t = T1227 { a: [], b: [] };
+  t.a += [W1227 { text: "d", n: 4 }];
+  t.b += [W1227 { text: "d", n: 4 }];
+  assert(len(t.a) == 1, "a group needs a KEYED member");
+}
+"#;
+    let (out, _) = run_tests("lg_controls", SRC, &[]);
+    assert!(
+        !out.contains("linked-group-double-fill"),
+        "none of the four controls is a double fill; got:\n{out}"
+    );
+}

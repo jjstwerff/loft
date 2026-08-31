@@ -3913,6 +3913,13 @@ impl Parser {
     /// literal that fills two members, and the declaration that spreads one out — cannot
     /// disagree about what a group is.  Pairs that are not a group (two plain vectors, two
     /// collections over different element types) never appear.
+    pub(crate) fn collection_element_of(tp: &Type) -> Option<u32> {
+        Self::collection_element(tp)
+    }
+    pub(crate) fn is_keyed_collection_of(tp: &Type) -> bool {
+        Self::is_keyed_collection(tp)
+    }
+
     pub(crate) fn collection_groups(&self, td_nr: u32) -> Vec<(u32, Vec<GroupMember>)> {
         let mut groups: Vec<(u32, Vec<GroupMember>)> = Vec::new();
         for a_nr in 0..self.data.attributes(td_nr) {
@@ -4707,4 +4714,28 @@ impl Parser {
             }
         }
     }
+}
+
+pub(crate) fn collection_groups_of(
+    data: &crate::data::Data,
+    td_nr: u32,
+) -> Vec<(u32, Vec<GroupMember>)> {
+    let mut groups: Vec<(u32, Vec<GroupMember>)> = Vec::new();
+    for a_nr in 0..data.attributes(td_nr) {
+        let tp = data.attr_type(td_nr, a_nr);
+        let Some(elem) = Parser::collection_element_of(&tp) else {
+            continue;
+        };
+        let entry = GroupMember {
+            a_nr,
+            name: data.attr_name(td_nr, a_nr),
+            keyed: Parser::is_keyed_collection_of(&tp),
+        };
+        match groups.iter_mut().find(|(e, _)| *e == elem) {
+            Some((_, members)) => members.push(entry),
+            None => groups.push((elem, vec![entry])),
+        }
+    }
+    groups.retain(|(_, m)| m.len() >= 2 && m.iter().any(|x| x.keyed));
+    groups
 }

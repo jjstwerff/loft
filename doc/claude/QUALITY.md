@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 342 | 325 | **17** |
+| 343 | 326 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -524,6 +524,10 @@ loft#1205 moved it to 340 · 323 · 17 with the two predicates the `?`-on-a-plac
 `if`, and `parser::place_store`, which tells a local from a heap read.  Both unspan before they
 match, for the reason the column exists: each is deciding what an assignment WRITES, and a
 `Span` that hid the shape would leave the statement writing nothing.
+
+loft#1227 moves it to 343 · 326 · **17** with `use_analysis::GroupAppends::collect`, which tells
+a `Span`, a `Line` marker, a nested `Block` and an `OpNewRecord` call apart while walking one
+block's statements.  It peels, and the third column is unchanged.
 
 loft#1225 moved it to 342 · 325 · **17** with `parser::keyed_place_materialise`, which tells a
 VARIABLE destination from a TUPLE ELEMENT one — the two need different builds, because a
@@ -2367,13 +2371,19 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 660 | 307 | 5 | **348** |
+| 661 | 308 | 5 | **348** |
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
 purpose — `Type::Optional` names the spelling it is looking for, and `.base()` peels it to ask
 what the storage is.  loft#1204, loft#1207 and loft#1212 then REPAIRED sites out of the opaque
-column, which is the movement this column exists to report.  loft#1229 is another: `parse_vector`
+column, which is the movement this column exists to report.  loft#1227's `GroupAppends::report` is one the screen caught on BRAND-NEW code rather than on
+the backlog: it matched its holder against `Type::Reference` bare, which reads a `Counter` local
+and misses a `Counter?` one holding the same fields and the same groups.  Named on the first run
+after the lint was written, so the blindness never shipped — `.base()`, and the opaque column
+stays at 348 rather than growing.
+
+  loft#1229 is another: `parse_vector`
 crosses from opaque to seeing-through, because a keyed literal reported its DESTINATION
 variable's type whole — so a `hash<E[k]>?` destination gave the constructed literal the type
 `Optional(Hash(…))`, and loft#1210's append gate read that construction as an un-discharged
