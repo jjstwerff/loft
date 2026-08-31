@@ -6,12 +6,51 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Null-Elem` was opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Null-Elem — OPENED AND CLOSED (2026-08-31, loft#1232): a nullable stored into a collection LITERAL's element, in silence
+
+`(N-Dense)` says a `vector<τ>`'s elements are non-null unless the type is written `vector<τ?>`,
+and `(N-Store)` says storing `e:τ?` into a `τ` slot is at least a warning where the null is
+representable.  Both were enforced at the scalar seam and at the append seam, and neither was
+asked of the elements INSIDE a literal — so the same value, one spelling over, went unremarked:
+
+```loft
+n: integer? = null;
+x: integer = n;                  // ERROR, correctly
+d.c += n;                        // ERROR, correctly (loft#1223's bracket rule)
+v: vector<integer> = [n];        // compiled, silent — and v[0] reads null
+d.c = [n];   e = D { c: [n] };   // the same, silent
+```
+
+This is the entry the register's own bound predicted.  `types.md`'s `OPEN: 0` was earned by a
+verification the ROADMAP row states the limit of in the same breath — *"verified both backends —
+for the DIRECT store, which is the bound on that verification"* — and a literal's element is not
+a direct store.  `D-Null-Join` came from outside that same bound at a branch join; this one comes
+from inside a collection literal.  An `OPEN: 0` is only as strong as the shape its oracle reached.
+
+It also mattered more than an ordinary gap, because it was the cure the language NAMES: loft#1223
+refuses `d.c += n` and tells the reader to write `d.c += [n]`, which was the un-diagnosed
+spelling — so closing that issue moved the reader from warned to silent along the path the
+diagnostic recommends.
+
+Closed by asking `n_store_violation` — the shared home the other two seams already use — of each
+element as it is parsed against the declared element type, which reaches all three spellings above
+and their nested forms at one point.
+
+⚠ **The tier is held to WARNING here, including at the narrow widths the shared split escalates.**
+That escalation is right about the SLOT — a `u8` spends all 256 values on real values, so a null
+there has no room — and wrong about the moment: this seam was silent until now, so refusing at it
+retro-breaks code that compiles today.  Measured on the whole registry: `assets 0.2.0` writes
+`bp += [0 as u8?]`, whose value is never actually null, and the gate went from 42 pass to a
+COMPILE-BREAK.  Reporting where there was silence is a strict gain; refusing what a shipped
+package relies on is a break the freeze forbids, and raising the tier later is COMPATIBILITY.md's
+process rather than this seam's call.
 
 ### D-Chk-Yield — OPENED AND CLOSED (2026-08-28, loft#1130): `yield` carried no expected type
 

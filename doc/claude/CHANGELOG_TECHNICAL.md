@@ -137,6 +137,42 @@ place and stays refused. The seed reads the place twice, so it is built on the p
 `w[idx()]? += 1` calls `idx()` once, where off the original spelling it called twice and read
 one element while writing the next. `operational.md` states it as `@FR-E-Asgn-Discharge`.
 
+### `(N-Store)` reaches a collection literal's elements (2026-08-31)
+
+`v: vector<integer> = [n]` with `n: integer?` stored the null and `v[0]` read it back, silently,
+on both backends — as did `d.c = [n]` and `D { c: [n] }`. `(N-Dense)` says a `vector<t>`'s
+elements are non-null unless written `vector<t?>`, and the rule was enforced at the scalar seam
+and the append seam and nowhere inside a literal (loft#1232).
+
+The check goes at `parse_item`, where each element's type meets the declared element type, and it
+asks `n_store_violation` — the same home the other two seams use, so the three cannot drift. One
+point covers the typed local, the field assignment, the constructor field and nested literals.
+
+**Held to WARNING even at the narrow widths the shared split escalates.** That escalation is
+right about the slot and wrong about the moment: this seam was silent, so refusing at it
+retro-breaks working code. Measured on the whole registry — `assets 0.2.0` writes
+`bp += [0 as u8?]`, whose value is never null, and the gate went 42 pass → COMPILE-BREAK.
+`n_store_violation_inner` carries a `never_error` flag for exactly this one caller.
+`formal/types-history.md` records it as `D-Null-Elem`, opened and closed — and it came from
+outside the bound that doc's own `OPEN: 0` states (*"for the DIRECT store"*).
+
+### One home for what a `null` looks like at a parameter's type (2026-08-31)
+
+`c += null` ran on the interpreter and had never compiled on `--native`: the generated Rust was
+`let v = (()); … set_int(…, v)`, and rustc refused the program at `integer`, `float`, `single`,
+`character`, narrow-int and struct element types. `arguments 0.2.1` depends on the construct, so
+a signed registry package built on one backend only (loft#1234).
+
+`write_typed_null_in` is the one home for that question, and the two argument-emission paths each
+re-spelled a SUBSET of it by hand; every type the subset omitted fell through to the generic
+expression emitter, which renders `Value::Null` as `()`. The subsets had already drifted from each
+other — the template path's enum arm claimed the struct-enum spelling `Enum(_, true, _)` and
+answered `255u8` for a DbRef-backed parameter, which also made the reference arm's own
+`Enum(_, true, _)` case dead. Both paths now ask the home. A third site, `OpCopyRecordEmitter`,
+emits reference operands through the new `EmitCtx::emit_ref`, which asks it too; the runtime
+`OpCopyRecord` already gave a null source its meaning (nothing to read, destination left absent),
+so only the operand's rendering was missing.
+
 ### An un-discharged nullable appended to a collection warns and stores (2026-08-30)
 
 `d.c += s` with `s: vector<integer>?` into a dense `vector<integer>` FIELD panicked the

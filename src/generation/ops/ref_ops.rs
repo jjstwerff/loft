@@ -352,10 +352,16 @@ impl OpEmitter for OpCopyRecordEmitter {
                     return Ok(());
                 }
             }
+            // loft#1234 — `src` and `dst` are both declared `reference`, so a `null` operand
+            // is `DbRef::NULL` and not `()`.  `c += null` into a `vector<S?>` lowers to a copy
+            // from a null source, and the runtime already gives that its meaning: a NULL
+            // source has no store to read, so it returns and leaves the destination the
+            // absent record `OpNewRecord` zero-inited — which is what the interpreter does.
+            // Only the rendering of the operand was missing.
             write!(ctx.w, "OpCopyRecord(cell,")?;
-            ctx.emit(src)?;
+            ctx.emit_ref(src)?;
             write!(ctx.w, ", ")?;
-            ctx.emit(dst)?;
+            ctx.emit_ref(dst)?;
             write!(ctx.w, ", ")?;
             ctx.emit_i32_slot(tp_val)?;
             write!(ctx.w, ")")?;

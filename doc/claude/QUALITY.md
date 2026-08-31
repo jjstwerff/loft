@@ -2441,7 +2441,16 @@ side and leaves the opaque column where it was, and loft#1183 to 658 · 298 by g
 function prologue the heap-return test that arms `FnRefBufGuard` — asked through `.base()`, so a
 `τ?` heap return is read as the heap return it is.  loft#1185 then moved it to 659 · 300: the
 fn-ref-parameter test asks through `.base()` too, and the native call site's heap-return test
-does the same, so both land on the seeing-through side.  B6w's four were: `needs_nullable_wrap`
+does the same, so both land on the seeing-through side.  loft#1234 then moved it to 661 · 350 by
+TRADING one entry for another: `substitute_template_body` left the list because the three
+hand-spelled `Type` arms it used to carry — an enum one, a heap-ref one and a boolean one, each
+answering what a `null` looks like at a parameter — were replaced by a single call to
+`write_typed_null_in`, the one home for that question; and `ops::EmitCtx::emit_ref` joined it,
+counted opaque because it does not peel a wrapper at all — it CONSTRUCTS a `Type::Reference` to
+ask that same home what the heap null is.  The movement is therefore the audit reporting a
+de-duplication rather than a new opaque site: the subset that drifted (its enum arm claimed the
+struct-enum spelling and answered `255u8` for a DbRef-backed parameter, disagreeing with the
+direct-call path) is gone, and what replaced it asks the keystone.  B6w's four were: `needs_nullable_wrap`
 asks through `.base()` and sees through,
 while `nullable_payload_struct`, `tuple_elem_tag_read` and `tuple_elem_tag_write` are opaque ON
 PURPOSE — each discriminates on a type read out of the LAYOUT (`attr_type` of a stored tuple

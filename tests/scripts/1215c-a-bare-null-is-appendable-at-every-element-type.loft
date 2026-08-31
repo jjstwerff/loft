@@ -22,18 +22,18 @@
 // The corpus is not the population. These four cells put the registry's shape INTO the corpus so
 // the cheap gate can see it next time.
 //
-// ⚠ INTERPRETER-ONLY, and that is a second pre-existing defect rather than a property of this
-// file: `c += null` has never compiled on `--native` — three E0308s from the emitted Rust, on the
-// shipped 2026.8.0 exactly as here. So the published library depends on a construct one backend
-// has never supported, which is loft#1234. The file is listed in `native.rs::SCRIPTS_NATIVE_SKIP`
-// with that reason; the RIGHT cure is to make `--native` compile it, not to withdraw it from the
+// This file ran on the INTERPRETER ONLY when it was written: `c += null` had never compiled on
+// `--native` — three E0308s from the emitted Rust, on the shipped 2026.8.0 exactly as here — so a
+// published library depended on a construct one backend had never supported. That was loft#1234,
+// and it is fixed: the cure was to make `--native` compile it rather than to withdraw it from the
 // interpreter, because `(Col-Insert)` has no objection to an absent element joining a
-// `vector<τ?>`.
+// `vector<τ?>`. The file is no longer in `native.rs::SCRIPTS_NATIVE_SKIP` and is now the
+// two-backend guard it should always have been.
 //
 // @falsified-at: b82d37d3 — interpret exit 1 -> 0
-//   Interpreter channel only, and deliberately so — `--native` answers exit 1 on BOTH builds
-//   (loft#1234), so a two-backend verdict reads NOT FALSIFIED for a guard that is doing exactly
-//   its job. On b82d37d3 all four cells are refused at parse time, so the file does not run and
+//   Interpreter channel only, and deliberately so — when this guard was written `--native`
+//   answered exit 1 on BOTH builds (loft#1234, since fixed), so a two-backend verdict read NOT
+//   FALSIFIED for a guard that was doing exactly its job. On b82d37d3 all four cells are refused at parse time, so the file does not run and
 //   no assertion is met; on loft#1215's parent and on 2026.8.0 all four pass, which is what makes
 //   this a regression guard rather than a new promise.
 //   The channel is the assert count, not the exit: on b82d37d3 all four cells are REFUSED at

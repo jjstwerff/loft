@@ -3779,12 +3779,36 @@ impl Parser {
         }
     }
 
+    /// Does storing `value_tp` into `target_tp` violate `(N-Store)`?  Reports it if so, and
+    /// answers whether the store was REFUSED (an error) rather than merely reported.
+    ///
+    /// `never_error` holds the report to `Level::Warning` whatever the width.  Exactly one
+    /// seam asks for it — a collection LITERAL's elements (loft#1232) — and the reason is
+    /// compatibility, not doctrine: the narrow-width escalation below is right about the
+    /// SLOT (a `u8` spends all 256 values on real data, so a null there has no room), but
+    /// this seam was silent until now, so escalating it retro-breaks published code that
+    /// compiles today.  Measured: `assets 0.2.0` writes `bp += [0 as u8?]`, whose value is
+    /// never actually null, and the whole registry gate went from 42 pass to a COMPILE-BREAK.
+    /// Reporting where there was silence is a strict gain; refusing what a shipped package
+    /// already relies on is a break the freeze forbids, and raising the tier later is
+    /// COMPATIBILITY.md's process rather than this function's call.
     fn n_store_violation(
         &mut self,
         value_tp: &Type,
         target_tp: &Type,
         what: &str,
         at: Option<&Position>,
+    ) -> bool {
+        self.n_store_violation_inner(value_tp, target_tp, what, at, false)
+    }
+
+    fn n_store_violation_inner(
+        &mut self,
+        value_tp: &Type,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+        never_error: bool,
     ) -> bool {
         if self.first_pass {
             return false;
@@ -3818,7 +3842,13 @@ impl Parser {
         {
             let mut hit = false;
             for (i, (ve, te)) in v_elems.iter().zip(t_elems.iter()).enumerate() {
-                hit |= self.n_store_violation(ve, te, &format!("element {i} of {what}"), at);
+                hit |= self.n_store_violation_inner(
+                    ve,
+                    te,
+                    &format!("element {i} of {what}"),
+                    at,
+                    never_error,
+                );
             }
             return hit;
         }
@@ -3844,7 +3874,8 @@ impl Parser {
             // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
             // spends the whole width on real values, so a null there would silently corrupt.
             // Gate OFF → the current uniform hard error (this branch stays byte-identical).
-            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            let narrow =
+                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
             if crate::keys::nullflow_enabled() && !narrow {
                 let msg = diagnostic_format(
                     Level::Warning,
@@ -3880,7 +3911,8 @@ impl Parser {
             // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
             // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
-            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            let narrow =
+                !never_error && matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
             if crate::keys::nullflow_enabled() && !narrow {
                 let msg = diagnostic_format(
                     Level::Warning,

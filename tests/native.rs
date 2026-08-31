@@ -55,13 +55,6 @@ const NATIVE_SKIP: &[&str] = &[];
 
 /// Script files to skip in native mode.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
-    // `c += null` — appending a bare null to a collection — is INTERPRETER-ONLY, and has
-    // been since before loft#1215: `--native` emits Rust that will not compile (three E0308s),
-    // on the shipped 2026.8.0 exactly as here.  The interpreter appends one absent element at
-    // every element type, nullable and dense alike, and the published `arguments 0.2.1` relies
-    // on it (`self.results += null` into a `vector<text?>`).  Filed as loft#1234; this file is
-    // the interpreter half's regression guard and runs under `wrap`.
-    "1215c-a-bare-null-is-appendable-at-every-element-type.loft",
     // Struct yields from a generator's LOOP body are interpreter-only for
     // now: the native eager-collect factory cannot preserve per-yield
     // snapshots (values silently alias), so --native rejects the shape with

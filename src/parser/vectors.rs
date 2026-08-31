@@ -3961,6 +3961,37 @@ impl Parser {
         {
             t = in_t.clone();
         }
+        // loft#1232 — `(N-Store)` is owed of a LITERAL's elements too.  `(N-Dense)` says a
+        // `vector<t>`'s elements are non-null unless the type is written `vector<t?>`, and the
+        // rule was enforced at the scalar seam (`x: integer = n`) and at the append seam
+        // (`c += n`) but nowhere inside a collection literal: `v: vector<integer> = [n]` with
+        // `n: integer?` stored the null and `v[0]` read back null, silently, on both backends.
+        //
+        // This is the CURE the language itself names.  loft#1223 refuses the bare `c += n` and
+        // sends the reader to `c += [n]` — the right spelling under @PLAN52's bracket rule, and
+        // until now the un-diagnosed one — so closing that issue moved the reader from warned to
+        // silent.  A diagnostic must not go quiet along the path it recommends.
+        //
+        // Asked HERE because this is the one point every literal shape passes through with both
+        // types settled: a typed local (`v: vector<integer> = [n]`), a field assignment
+        // (`d.c = [n]`), a constructor field (`D { c: [n] }`) and a NESTED literal all reach
+        // `parse_item`, so the three shapes the issue lists and their nested forms need no
+        // separate checks.  Placed BEFORE the conversion chain below, which is what was silent:
+        // `convert` peels the `Optional` and stores the sentinel without a word.
+        //
+        // `n_store_violation` is the shared home, so this seam cannot drift from the other two —
+        // it carries the warn/error split (a full-width slot reserves its null distinctly and
+        // WARNS with the store proceeding; a narrow one has no room and errors) and it already
+        // declines on a nullable target, which is what keeps `vector<t?>` and the synthetic
+        // `vector<__nullable<S>>` quiet.
+        let elem_index = res.len();
+        self.n_store_violation_inner(
+            &t,
+            in_t,
+            &format!("element {elem_index} of this vector literal"),
+            None,
+            true,
+        );
         if let (Type::Reference(t_nr, _), Type::Reference(in_nr, _)) = (&t, &in_t.clone())
             && let (Type::Enum(t_e, true, _), Type::Enum(in_e, true, _)) = (
                 self.data.def(*t_nr).returned(),

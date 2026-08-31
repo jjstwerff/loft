@@ -201,6 +201,30 @@ For a **collection** the `?` was always redundant — `b.d += [r]` on a null fie
 the empty collection first — and that spelling was correct throughout. `(a ?? d) += e` stays
 refused: it names two values and no place.
 
+### A nullable inside a collection literal says so too
+
+```loft
+n: integer? = null;
+v: vector<integer> = [n];    // was: silent — and `v[0]` read back null
+```
+
+Now it warns, the way `x: integer = n` and `d.c += n` already did. The gap mattered because it
+was the cure the language names: `d.c += n` is refused with *"use `+= [n]`"*, and `+= [n]` was
+the spelling nothing checked — so following our own advice took you from warned to silent. The
+same check now covers a field assignment (`d.c = [n]`), a constructor field (`D { c: [n] }`) and
+nested literals.
+
+It is a warning and never an error, including for narrow element types like `u8` where a null
+does not really fit: the store already compiled and ran, and refusing it now would break code
+that works today. Write `[n?]` or `[n ?? 0]` to say what you mean.
+
+### `c += null` now compiles with `--native`
+
+Appending a bare `null` to a collection worked in the interpreter and had never compiled
+natively — `rustc` rejected the generated code for `integer`, `float`, `single`, `character`,
+narrow-int and struct element types. A published package (`arguments`) relied on it, so it built
+on one backend only. Both backends now agree at every element type.
+
 ### Appending a nullable value to a collection says so, instead of crashing
 
 ```loft

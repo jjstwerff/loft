@@ -39,7 +39,7 @@ pub mod text_ops;
 pub mod vector_ops;
 
 use super::Output;
-use crate::data::{Definition, Value};
+use crate::data::{Definition, Type, Value};
 use std::io::{self, Write};
 
 /// Context passed to every emitter.  Carries the writer, the Op
@@ -74,6 +74,28 @@ impl EmitCtx<'_, '_> {
     /// `self.output.emit_i32_slot(&mut *self.w, v)`.
     pub fn emit_i32_slot(&mut self, v: &Value) -> io::Result<()> {
         self.output.emit_i32_slot(&mut *self.w, v)
+    }
+
+    /// Emit a `Value` that the runtime helper takes as a `DbRef`.
+    ///
+    /// [`Self::emit`] renders a bare `Value::Null` as `()`, because it knows the value and
+    /// not the slot it is going into.  At a reference-typed operand that is Rust which does
+    /// not compile, so ask the one home for what a null of this kind looks like
+    /// (`Output::write_typed_null_in`) instead of spelling `DbRef::NULL` at each emitter —
+    /// the same repair the two call paths in `calls.rs` make for a typed parameter
+    /// (loft#1234).
+    ///
+    /// Reach for this in a hand-written emitter wherever the generated call takes a
+    /// `DbRef`; `emit` stays right for operands whose Rust type follows the value.
+    pub fn emit_ref(&mut self, v: &Value) -> io::Result<()> {
+        if matches!(v.unspan(), Value::Null) {
+            return crate::generation::Output::write_typed_null_in(
+                &mut *self.w,
+                &Type::Reference(u32::MAX, crate::data::Deps::none()),
+                true,
+            );
+        }
+        self.emit(v)
     }
 }
 
