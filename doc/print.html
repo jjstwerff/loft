@@ -436,12 +436,16 @@
   <span class="st">"positive"</span>
 }</code></pre>
 <h2 id="const-and-reference-parameters">Const and Reference Parameters</h2>
-<p><code>const</code> on a parameter tells the compiler "this function must never change this value." The compiler enforces it — any assignment to a const parameter is a compile error. <code>&amp;</code> is the opposite promise: "this function will modify this value." Declaring <code>&amp;</code> without actually writing to the parameter is also a compile error. These rules make it easy to read a function signature and know what it does to its inputs.</p>
+<p>Write <code>const</code> with the TYPE, not before the name — <code>fn f(s: const text)</code>, not <code>fn f(const s: text)</code>, which does not parse. It tells the compiler "this function must never change this value", and the compiler enforces it: assigning to a const parameter is a compile error ("Cannot modify const parameter"). <code>&amp;</code> is the opposite promise: "this function will modify this value." Declaring <code>&amp;</code> without actually writing to the parameter is also a compile error ("Parameter <code>a</code> has &amp; but is never modified; remove the &amp;"). These rules make it easy to read a function signature and know what it does to its inputs.</p>
+<p><code>const</code> earns its keep on a parameter the function COULD write through — a text, a vector, a struct. On a primitive you never modify it is reported as needless (<code>needless-const-parameter</code>), because a plain <code>integer</code> parameter is already a copy and const adds nothing to it.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">shout</span>(s: const <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  s + <span class="st">"!"</span>
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">scale</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   a * factor
 }</code></pre>
 <h2 id="type-based-dispatch">Type-Based Dispatch</h2>
-<p>You can define two functions with the same name as integer as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
+<p>You can define two functions with the same name as long as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">describe_int</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
   <span class="st">"integer:{v}"</span>
 }</code></pre>
@@ -449,7 +453,7 @@
   <span class="st">"text:{v}"</span>
 }</code></pre>
 <h2 id="function-references">Function References</h2>
-<p><code>fn &lt;name&gt;</code> creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type <code>fn(param_types) -&gt; return_type</code> and can be: - stored in a variable, - called directly with <code>f(args)</code>, and - passed as a parameter to another function.</p>
+<p>Writing a function's NAME on its own creates a reference to it that you can store or pass around — <code>f = double_it</code>, with no <code>fn</code> in front. (<code>fn double_it</code> is refused: "Use the function name directly, without <code>fn</code> prefix".) The compiler checks that the name exists — a typo is a compile error. The result has type <code>fn(param_types) -&gt; return_type</code> and can be: - stored in a variable, - called directly with <code>f(args)</code>, and - passed as a parameter to another function.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">2</span>
 }</code></pre>
@@ -479,6 +483,8 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">3</span>) == <span class="st">"positive"</span>, <span class="st">"Classify positive"</span>);</code></pre>
 <p><code>scale</code> uses plain parameters (no <code>const</code>, no <code>&amp;</code>): it only reads them to compute the product, so the caller's values are never touched.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">scale</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">21</span>, <span class="st">"scale(3,7)"</span>);</code></pre>
+<p><code>shout</code> promises not to change its text, and the compiler holds it to that.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">shout</span>(<span class="st">"hi"</span>) == <span class="st">"hi!"</span>, <span class="st">"const parameter: {shout(\"</span>hi\<span class="st">")}"</span>);</code></pre>
 <p>Loft selects the right function based on the type of the argument.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_int</span>(<span class="nm">42</span>) == <span class="st">"integer:42"</span>, <span class="st">"Integer describe"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_text</span>(<span class="st">"hi"</span>) == <span class="st">"text:hi"</span>, <span class="st">"Text describe"</span>);</code></pre>
@@ -520,7 +526,7 @@
 <h1>Vector</h1>
 <p>A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: <code>[1, 2, 3]</code>. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.</p>
 <h2 id="transforming-vectors-map-filter-reduce">Transforming vectors: map, filter, reduce</h2>
-<p><code>map</code>, <code>filter</code>, and <code>reduce</code> each take a function and apply it to the vector. Pass the function using <code>fn &lt;name&gt;</code> to refer to a named function by name. map(v, f)          — apply f to every element; returns a new vector filter(v, pred)    — keep only elements for which pred returns true reduce(v, init, f) — combine all elements into a single value, starting from init</p>
+<p><code>map</code>, <code>filter</code>, and <code>reduce</code> each take a function and apply it to the vector. Pass the function by writing its NAME on its own — <code>map(v, triple)</code>, with no <code>fn</code> in front of it. map(v, f)          — apply f to every element; returns a new vector filter(v, pred)    — keep only elements for which pred returns true reduce(v, init, f) — combine all elements into a single value, starting from init</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">triple</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">3</span>
 }</code></pre>
@@ -532,6 +538,12 @@
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">mul_acc</span>(acc: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   acc * x
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">set_first_v</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  v[<span class="nm">0</span>] = x;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">append_one_v</span>(v: &amp;<span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  v += [x];
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Create a vector with a literal and loop over it with <code>for</code>. Two special loop annotations help when you need to know where you are: <code>v#first</code>  is true only on the very first iteration — useful for skipping separators. <code>v#index</code>  holds the zero-based position of the current element.</p>
@@ -585,15 +597,22 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c == <span class="nm">8421</span>, <span class="st">"Reverse sub-vector iteration"</span>);</code></pre>
 <p>You can fill a vector with many copies of the same value using <code>; count</code> syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples.</p>
 <h2 id="passing-vectors-to-functions">Passing vectors to functions</h2>
-<p>When you pass a vector to a function, the function receives a <strong>slice</strong> — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with <code>+=</code> inside the function creates a local copy that the caller never sees.</p>
-<p>To let a function append to the caller's vector, mark the parameter with <code>&amp;</code>. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
-<pre><code>fn append_one(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
+<p>A vector parameter shares the caller's storage — no data is copied. So the function reads and writes the SAME elements, and a write to an element the vector already has is visible to the caller when the function returns.</p>
+<p>To let a function GROW the caller's vector, mark the parameter with <code>&amp;</code>. That is the spelling that says so in the signature, and the compiler holds you to it: a <code>&amp;</code> you never write through is a compile error. Use it whenever the function appends, so a reader of the signature can see that it does.</p>
+<pre><code>fn append_one_v(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
 </code></pre>
-<p>Without <code>&amp;</code>, only element-level mutations are visible to the caller:</p>
-<pre><code>fn set_first(v: vector&lt;integer&gt;, x: integer) { v[0] = x; }  // caller sees the change
-fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does NOT see the append
-</code></pre>
-<p>The same rule applies to slices: <code>v[2..5]</code> passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.</p>
+<p>A SLICE is a different thing from a shared parameter. <code>v[2..5]</code> builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a <code>vector&lt;T&gt;</code> parameter is expected — bind it to a variable first, and remember you are then working on a copy.</p>
+<pre><code>  passed: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">set_first_v</span>(passed, <span class="nm">99</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(passed[<span class="nm">0</span>] == <span class="nm">99</span>, <span class="st">"a write to an existing element reaches the caller"</span>);
+  grown: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">append_one_v</span>(grown, <span class="nm">4</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(grown) == <span class="nm">4</span>, <span class="st">"a '&amp;' parameter grows the caller's vector"</span>);
+  source: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
+  window = source[<span class="nm">2..5</span>];
+  <span class="fn-call">set_first_v</span>(window, <span class="nm">77</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(window[<span class="nm">0</span>] == <span class="nm">77</span>, <span class="st">"the slice itself is written"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(source[<span class="nm">2</span>] == <span class="nm">3</span>, <span class="st">"…and the original is untouched, because a slice is a copy"</span>);</code></pre>
 <h2 id="higher-order-functions">Higher-order functions</h2>
 <p><code>map</code> applies a function to every element and returns a new vector.</p>
 <pre><code>  nums =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];

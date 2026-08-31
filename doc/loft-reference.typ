@@ -1700,7 +1700,15 @@ fn classify(n: integer) -> text {
 
 === Const and Reference Parameters
 
-'const' on a parameter tells the compiler "this function must never change this value." The compiler enforces it — any assignment to a const parameter is a compile error. '&' is the opposite promise: "this function will modify this value." Declaring '&' without actually writing to the parameter is also a compile error. These rules make it easy to read a function signature and know what it does to its inputs.
+Write 'const' with the TYPE, not before the name — 'fn f(s: const text)', not 'fn f(const s: text)', which does not parse. It tells the compiler "this function must never change this value", and the compiler enforces it: assigning to a const parameter is a compile error ("Cannot modify const parameter"). '&' is the opposite promise: "this function will modify this value." Declaring '&' without actually writing to the parameter is also a compile error ("Parameter 'a' has & but is never modified; remove the &"). These rules make it easy to read a function signature and know what it does to its inputs.
+
+'const' earns its keep on a parameter the function COULD write through — a text, a vector, a struct. On a primitive you never modify it is reported as needless ('needless-const-parameter'), because a plain 'integer' parameter is already a copy and const adds nothing to it.
+
+```rust
+fn shout(s: const text) -> text {
+  s + "!"
+}
+```
 
 ```rust
 fn scale(a: integer, factor: integer) -> integer {
@@ -1710,7 +1718,7 @@ fn scale(a: integer, factor: integer) -> integer {
 
 === Type-Based Dispatch
 
-You can define two functions with the same name as integer as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.
+You can define two functions with the same name as long as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.
 
 ```rust
 fn describe_int(v: integer) -> text {
@@ -1726,7 +1734,7 @@ fn describe_text(v: text) -> text {
 
 === Function References
 
-'fn \<name\>' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param\_types) -\> return\_type' and can be:
+Writing a function's NAME on its own creates a reference to it that you can store or pass around — 'f = double\_it', with no 'fn' in front. ('fn double\_it' is refused: "Use the function name directly, without 'fn' prefix".) The compiler checks that the name exists — a typo is a compile error. The result has type 'fn(param\_types) -\> return\_type' and can be:
 
 ```
 - stored in a variable,
@@ -1817,6 +1825,12 @@ v = 3 + 4 + 1 = 8
   assert(scale(3, 7) == 21, "scale(3,7)");
 ```
 
+'shout' promises not to change its text, and the compiler holds it to that.
+
+```rust
+  assert(shout("hi") == "hi!", "const parameter: {shout(\"hi\")}");
+```
+
 Loft selects the right function based on the type of the argument.
 
 ```rust
@@ -1896,7 +1910,7 @@ A vector is an ordered list of values that can grow and shrink while your progra
 
 === Transforming vectors: map, filter, reduce
 
-'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn \<name\>' to refer to a named function by name.
+'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function by writing its NAME on its own — 'map(v, triple)', with no 'fn' in front of it.
 
 ```
 map(v, f)          — apply f to every element; returns a new vector
@@ -1925,6 +1939,18 @@ fn sum_acc(acc: integer, x: integer) -> integer {
 ```rust
 fn mul_acc(acc: integer, x: integer) -> integer {
   acc * x
+}
+```
+
+```rust
+fn set_first_v(v: vector<integer>, x: integer) {
+  v[0] = x;
+}
+```
+
+```rust
+fn append_one_v(v: &vector<integer>, x: integer) {
+  v += [x];
 }
 ```
 
@@ -2039,22 +2065,29 @@ This creates 16 identical copies in one expression. See 08-struct.loft for examp
 
 === Passing vectors to functions
 
-When you pass a vector to a function, the function receives a \*\*slice\*\* — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with '+=' inside the function creates a local copy that the caller never sees.
+A vector parameter shares the caller's storage — no data is copied. So the function reads and writes the SAME elements, and a write to an element the vector already has is visible to the caller when the function returns.
 
-To let a function append to the caller's vector, mark the parameter with '&'. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.
-
-```
-fn append_one(v: &vector<integer>, x: integer) { v += [x]; }
-```
-
-Without '&', only element-level mutations are visible to the caller:
+To let a function GROW the caller's vector, mark the parameter with '&'. That is the spelling that says so in the signature, and the compiler holds you to it: a '&' you never write through is a compile error. Use it whenever the function appends, so a reader of the signature can see that it does.
 
 ```
-fn set_first(v: vector<integer>, x: integer) { v[0] = x; }  // caller sees the change
-fn try_push(v: vector<integer>, x: integer) { v += [x]; }   // caller does NOT see the append
+fn append_one_v(v: &vector<integer>, x: integer) { v += [x]; }
 ```
 
-The same rule applies to slices: 'v\[2..5\]' passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.
+A SLICE is a different thing from a shared parameter. 'v\[2..5\]' builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a 'vector\<T\>' parameter is expected — bind it to a variable first, and remember you are then working on a copy.
+
+```rust
+  passed: vector<integer> = [1, 2, 3];
+  set_first_v(passed, 99);
+  assert(passed[0] == 99, "a write to an existing element reaches the caller");
+  grown: vector<integer> = [1, 2, 3];
+  append_one_v(grown, 4);
+  assert(len(grown) == 4, "a '&' parameter grows the caller's vector");
+  source: vector<integer> = [1, 2, 3, 4, 5];
+  window = source[2..5];
+  set_first_v(window, 77);
+  assert(window[0] == 77, "the slice itself is written");
+  assert(source[2] == 3, "…and the original is untouched, because a slice is a copy");
+```
 
 === Higher-order functions
 
