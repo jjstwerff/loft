@@ -131,9 +131,15 @@ struct Dict {
 
 fn main_ranges() {
   // ## Iterating a Key Range
-  // Use an `if` guard inside a `for` loop to visit only records whose key falls
-  // within a range. Because the collection is sorted the guard still sees all
-  // elements, but the body only runs for the matching ones.
+  // Give the collection a RANGE in square brackets and the loop starts and stops at
+  // the right places, without looking at the records outside it. This is the operation
+  // a sorted collection exists for.
+  //   c[lo..hi]   from lo up to but NOT including hi
+  //   c[lo..=hi]  from lo up to AND including hi
+  //   c[lo..]     from lo to the end
+  //   c[..hi]     from the start up to but not including hi
+  // Mind the two spellings: '..' leaves the last key out, '..=' keeps it. That is the
+  // same rule as a vector slice.
   d = Dict { words: [
     Word { name: "apple",      score: 5 },
     Word { name: "banana",     score: 3 },
@@ -141,12 +147,31 @@ fn main_ranges() {
     Word { name: "date",       score: 2 },
     Word { name: "elderberry", score: 1 }
   ] };
-  // Closed range: keys >= "banana" and <= "date".
-  range_total = 0;
-  for w in d.words if w.name >= "banana" && w.name <= "date" {
-    range_total += w.score
+  slice_total = 0;
+  for w in d.words["banana"..="date"] {
+    slice_total += w.score
   }
-  assert(range_total == 13, "banana(3)+cherry(8)+date(2) = {range_total}");
+  assert(slice_total == 13, "banana(3)+cherry(8)+date(2) = {slice_total}");
+  half_open = 0;
+  for w in d.words["banana".."date"] {
+    half_open += w.score
+  }
+  assert(half_open == 11, "'..' leaves date out: {half_open}");
+  head_total = 0;
+  for w in d.words[.."cherry"] {
+    head_total += w.score
+  }
+  assert(head_total == 8, "apple(5)+banana(3) = {head_total}");
+  // ## Filtering on something that is NOT the key
+  // An `if` guard inside the loop still works, and it is what you want when the
+  // condition is not about the key: the guard sees every element and the body runs
+  // only for the matching ones. Use a range when you are selecting BY key, and a
+  // guard when you are selecting by anything else.
+  cheap = 0;
+  for w in d.words if w.score < 4 {
+    cheap += w.score
+  }
+  assert(cheap == 6, "banana(3)+date(2)+elderberry(1) = {cheap}");
   // ## Open-ended Range (tail)
   // All records from "cherry" onward to the end of the sorted order.
   tail_count = 0;
