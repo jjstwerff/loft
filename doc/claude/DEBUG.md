@@ -1362,6 +1362,29 @@ the discarded call, the argument case, the vector case and the loop, and **the f
 still leaked**, because the `??` half was a second, independent defect. Re-run the ORIGINAL
 repro after the matrix goes green.
 
+**An assertion that fires can be reporting a WRONG ANSWER, not the invariant it names.** A
+debug-assertion is written to catch one property, so the report describes that property and
+nothing else — and the shape that trips it is then read as a question about the assertion.
+loft#1241 was filed that way: a store-span check firing on a local the lowering had elided, with
+the answer measured as *"right — `len=3` on both backends"* and the remaining question presented
+as a choice between two ways to reshape the check. Both proposed cures would have silenced it.
+One `for` around the same append and the answer was 3 where the program says 7 — at every
+iteration count, because the rewrite had folded the append out of the loop (loft#1243). The
+assertion was the only thing in the tree that had noticed. **Before treating an assertion as a
+question about itself, sweep its shape over CONTROL FLOW** — a loop around it, a branch not
+taken, the same statement at two nesting depths. An issue's own "the answer is right" is a
+measurement of the cells its author ran.
+
+**A rewrite's guard list can be complete on DATA and empty on CONTROL FLOW.** The move-elision's
+`ready` filter asked seven questions — does the source escape, is the destination disturbed or
+cleared, is the container allocated first, is the destination unique — and every one of them is
+about values. None asked whether the statement it was DELETING runs as often as the code it was
+keeping, and its prescan walked the whole body, so an append inside a loop was folded exactly
+like one written beside the declaration. When reading any pass that MOVES or DROPS a statement,
+count the two kinds of guard separately: the question "is this value still valid there?" and the
+question "is that place reached the same number of times?" are answered by different machinery,
+and a list can be exhaustive in one and empty in the other.
+
 **A precedent transfers along the MECHANISM, not the problem statement.** Before reusing a
 neighbouring solution, ask what its unit of work is — per member, per record, per call, per
 path, per pass — and whether yours has the same one. `keyed_group_clear` solves the same

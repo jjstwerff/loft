@@ -2793,6 +2793,17 @@ without the guard. The cell asserted the right conclusion from a condition that 
 load-bearing. **Assert the precondition first** — that the mark IS under the point — so the
 only thing left saying no is the guard under test.
 
+**A control reads the same on both trees for OPPOSITE reasons.** The "does not fire" trap has a
+harder sibling: a control cell whose reading is identical before and after, arrived at by two
+different mechanisms, so it can never say which tree it is on. A cell written for loft#1241 —
+*"with the append inside a loop the fold is declined, so the local must keep its slot"* — reads
+"slotted" on the fixed build because the fold is declined, and reads "slotted" on the broken one
+because the fold happened and left a stale dep behind. Passing on both, it is a control in name
+only. Before writing a control, name what it reads on the CONTROL tree and check that against the
+build, exactly as for the guard itself; where the two readings coincide, say so and put the
+control where it can differ (that one moved to the `.loft` guard, which scores the ANSWER and
+falsifies with six assertion failures on the control build).
+
 **The predicate has no reachable negative.** A predicate that cannot be false in your
 program cannot be wrong in a way anything notices. `document.fonts.check()` answers *true*
 for a family nothing declares (no unloaded face ⟹ vacuously satisfied), so the browser text
