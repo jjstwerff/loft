@@ -282,6 +282,24 @@ impl State {
         self.arguments = stack.position;
         stack.position += stack.step(4); // keep space for the code return address
         if is_empty_stub {
+            // loft#1254 — a stub with an empty body still has to RETURN something, and
+            // `add_return` only copies `size(return_type)` bytes off the frame: with
+            // nothing pushed it copied whatever the stack happened to hold.  That is the
+            // one answer `formal/operational.md` forbids outright — "never … whatever the
+            // hardware happened to leave in the register" — and it was not even stable
+            // (three runs of one program gave three integers, and a struct return indexed
+            // a record by garbage and panicked).
+            //
+            // The value a type takes when nothing chooses one is `Data::to_default`, the
+            // one home for `construct_default` (@FR-D-Scalar / D-Text / D-Coll / D-Enum /
+            // D-Rec / D-Opt) — the same answer an omitted struct field and a
+            // default-initialised local already take.  A type that HAS no default
+            // (@FR-D-NoRef) keeps the old path rather than inventing one.
+            let stub_ret = stack.data.def(def_nr).returned().clone();
+            if stub_ret != Type::Void && stack.data.has_default(&stub_ret).is_ok() {
+                let dflt = crate::data::to_default(&stub_ret, stack.data);
+                self.generate(&dflt, &mut stack, false);
+            }
             self.add_return(&mut stack, start);
             data.definitions[def_nr as usize].code_position = start;
             data.definitions[def_nr as usize].code_length = self.code_pos - start;

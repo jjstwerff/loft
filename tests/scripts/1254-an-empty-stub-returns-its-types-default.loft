@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// An empty-body stub returns its type's DEFAULT, not whatever the stack held (loft#1254).
+//
+// A stub with an empty body is a supported affordance — `definitions.rs` recognises
+// `body_empty && first_is_self` as an intentional skip, and the Enums chapter tells a reader
+// to write one to silence "no implementation of 'area' for variant 'Rect'".  But the emitted
+// function pushed nothing before its `OpReturn`, and `add_return` copies `size(return_type)`
+// bytes off the frame regardless — so the caller received whatever was there.
+//
+// That is the one answer `formal/operational.md` rules out in as many words: "What it is
+// never allowed to be is whatever the hardware happened to leave in the register … a wrapped
+// number says nothing at all, and says it convincingly."  It was not stable either — three
+// runs of one program answered three different integers.
+//
+// The value a type takes when nothing chooses one already has a home: `Data::to_default`,
+// which is `construct_default` from `formal/types.md` (@FR-D-Scalar / D-Text / D-Coll /
+// D-Enum / D-Rec / D-Opt) and is what an omitted struct field and a default-initialised local
+// already take.  The stub path asks it rather than spelling a fourth answer.
+//
+// ⚠ Scored on the VALUE, and it has to be: the old behaviour was type-correct, in range and
+// plausible.  No leak moved, nothing crashed for the scalar shapes, and both backends
+// "worked" — a reader could only tell by knowing what the number should have been.
+//
+// NOT closed by this, and deliberately left for loft#1254 rather than folded in: a `-> text`
+// stub does not compile on `--native` (rustc E0308), a `-> boolean` stub answers `false` here
+// and null there, a struct-returning stub still panics the interpreter, and a stub returning
+// `integer limit(10, 20)` answers 0 where an omitted FIELD of that type answers 10.  Each is
+// its own question; this file guards only the shapes that now agree on both backends.
+//
+// @falsified-at: 6b12385dd — interpret exit 1 -> 0, interpret 1 assertion failures -> 0;
+//   native INERT (expected for a backend-divergence guard — only one side can move).
+//
+//   The control is one-sided BY CONSTRUCTION and that is the point: `--native` already
+//   answered 0 for these shapes, so the file scores the interpreter against it.  On the
+//   control build the integer stub answers `[103113574851151]` and the float a denormal —
+//   and the integer differs between RUNS there, which is why each assertion names the value
+//   it expects instead of comparing the two backends to each other.
+
+struct P1254 {
+  n: integer,
+}
+
+enum Sh1254 {
+  Ci1254 { r: float },
+  Re1254 { w: float },
+}
+
+fn ar1254(self: Ci1254) -> float { self.r * 2.0 }
+
+// The stub the Enums chapter tells a reader to write.
+fn ar1254(self: Re1254) -> float { }
+
+fn empty_float() -> float { }
+
+fn empty_int() -> integer { }
+
+fn main() {
+  // The two scalar shapes, which answered uninitialised memory.
+  assert(empty_float() == 0.0, "an empty `-> float` stub answers its default: {empty_float()}");
+  assert(empty_int() == 0, "an empty `-> integer` stub answers its default: {empty_int()}");
+
+  // The variant stub, which is the shape the reference documents.
+  s1254 = Re1254 { w: 2.0 };
+  assert(s1254.ar1254() == 0.0, "a variant stub answers its default: {s1254.ar1254()}");
+
+  // The control that says the OTHER variant is unaffected — a real body still runs, and it is
+  // what the stub's leftover value used to resemble.
+  c1254 = Ci1254 { r: 3.0 };
+  assert(c1254.ar1254() == 6.0, "the implemented variant still computes: {c1254.ar1254()}");
+}
