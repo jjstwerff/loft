@@ -180,7 +180,7 @@ fn inline_ref_set_in(val: &Value, r: u16) -> bool {
 ///   - root = t_var_nr
 ///   - chain = []
 ///   - leaf_idx = 0
-struct NestedTupleLhs {
+pub(super) struct NestedTupleLhs {
     root: u16,
     /// Pairs of `(work_var, index_into_parent)`, ordered root → leaf.
     chain: Vec<(u16, u16)>,
@@ -190,7 +190,7 @@ struct NestedTupleLhs {
 /// Walk a Value that might be a chained tuple read (single `TupleGet`
 /// or nested `Block[Set(w, source), TupleGet(w, idx)]`) and return a
 /// flattened `NestedTupleLhs`.  Returns `None` for any other shape.
-fn extract_nested_tuple_lhs(code: &Value) -> Option<NestedTupleLhs> {
+pub(super) fn extract_nested_tuple_lhs(code: &Value) -> Option<NestedTupleLhs> {
     match code.unspan() {
         Value::TupleGet(var_nr, idx) => Some(NestedTupleLhs {
             root: *var_nr,
@@ -225,7 +225,11 @@ fn extract_nested_tuple_lhs(code: &Value) -> Option<NestedTupleLhs> {
 /// `TuplePut(deepest_w, leaf_idx, rhs)`, then write each intermediate
 /// back to its parent in reverse so the modification propagates up
 /// to `root`.
-fn build_nested_tuple_assign(orig_code: &Value, lhs: &NestedTupleLhs, rhs: Value) -> Value {
+pub(super) fn build_nested_tuple_assign(
+    orig_code: &Value,
+    lhs: &NestedTupleLhs,
+    rhs: Value,
+) -> Value {
     if lhs.chain.is_empty() {
         return Value::TuplePut(lhs.root, lhs.leaf_idx, Box::new(rhs));
     }
@@ -3475,6 +3479,34 @@ use a separate collection or add after the loop"
                     && crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
                         .is_some()
             });
+        // loft#1228 — a TUPLE ELEMENT of text type takes its own lowering, because text concat
+        // is inherently variable-based: every route below builds through a destination VARIABLE
+        // (`OpAppendText(var, …)`) and a tuple slot is not one.  Minting a work variable and
+        // appending into it — which is what this branch used to do here — produced an append
+        // that was never written back: codegen then saw a variable naming no slot, SIGSEGV on
+        // the interpreter and `E0425` from rustc.
+        //
+        // So build the sequence the `=` branch already builds for a self-reference — clear a
+        // work text, append the CURRENT value, append the operand — and finish it with the
+        // `TuplePut` a tuple slot is written through.  Reading the place for the append and
+        // writing it back addresses it twice, which `(E-Asgn-Compound)` permits here: a tuple
+        // root is a plain variable and the index is a constant, so there is no addressing to
+        // duplicate.
+        if op == "+="
+            && matches!(f_type.base(), Type::Text(_))
+            && !self.first_pass
+            && let Some(tuple_lhs) = extract_nested_tuple_lhs(to)
+        {
+            let work = self.vars.work_text(&mut self.lexer);
+            let mut ls = vec![
+                self.cl("OpClearText", &[Value::Var(work)]),
+                self.cl("OpAppendText", &[Value::Var(work), to.clone()]),
+                self.cl("OpAppendText", &[Value::Var(work), code.clone()]),
+            ];
+            ls.push(build_nested_tuple_assign(to, &tuple_lhs, Value::Var(work)));
+            *code = Value::Insert(ls);
+            return Type::Void;
+        }
         if matches!(f_type.base(), Type::Text(_)) && !is_boxed_text_lhs {
             // A text assignment needs somewhere to assign TO. Every other type
             // falls through to the general operator dispatch, which refuses a
@@ -6007,6 +6039,13 @@ use a separate collection or add after the loop"
     ) -> u16 {
         if let Value::Var(v_nr) = *code {
             v_nr
+        } else if extract_nested_tuple_lhs(code).is_some() {
+            // loft#1228 — a TUPLE ELEMENT keeps `u16::MAX` and takes the general path, whose
+            // `towards_set` now has a `TuplePut` route for it.  Minting the text work variable
+            // below put the append in a local that is never written back, so the statement
+            // reached codegen with a variable naming no slot — SIGSEGV on the interpreter and
+            // `E0425` from rustc on `--native`.
+            u16::MAX
         } else if op == "+=" && matches!(f_type.base(), Type::Text(_)) {
             // The temp holds what the field holds, NULL INCLUDED, so it is typed the way
             // the field is.  `--native` decides whether an append propagates a null from

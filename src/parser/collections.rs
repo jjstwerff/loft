@@ -1494,6 +1494,21 @@ impl Parser {
             let name = self.data.def(*d_nr).name().to_string();
             let args = args.clone();
             self.call_to_set_op(&name, &args, code, op)
+        } else if let Some(tuple_lhs) = crate::parser::expressions::extract_nested_tuple_lhs(to) {
+            // loft#1228 — a TUPLE ELEMENT is a place, and this is the seam where a place
+            // becomes a write.  A `Call` gets its `OpGetX` -> `OpSetX` twin above and a `Var`
+            // gets a `Set`; a tuple slot had neither, so every compound assignment to one fell
+            // to the diagnostic below — *"Not implemented operation + for type integer"*, a
+            // message about the OPERATOR when `+` on an integer is plainly implemented and the
+            // target is what had no route.
+            //
+            // `code` is already the COMPOSED value here (the comment on the range guard above
+            // says so), so the write is the only missing half.  Both IR spellings of a tuple
+            // place are handled, through the one home that knows them — a bare `TupleGet` at
+            // depth 1 and a `Block[Set(w, …), TupleGet(w, idx)]` chain deeper — because
+            // matching only the first is the half-fix QUALITY.md's `spellings` screen exists
+            // to catch.
+            crate::parser::expressions::build_nested_tuple_assign(to, &tuple_lhs, code)
         } else if let Value::Var(nr) = to.unspan() {
             if self.const_write_blocked(*nr, op) {
                 diagnostic!(
