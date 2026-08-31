@@ -28,15 +28,26 @@ fn main() {
   // Loft follows standard mathematical precedence: '*' and '/' before '+' and '-'.
   // Bitwise operators (<<, &, ^) have their own precedence — when mixing them with
   // arithmetic, parentheses make your intent clear and avoid surprises.
-  // Note: '^' is XOR, not exponentiation. For powers use 'pow(base, exp)' — but it
-  // is a FLOAT function ('pow(2, 3)' does not resolve), so raise in floats and come
-  // back: 'pow(2.0, 10.0) as integer' is 1024.
+  // Note: '^' is XOR, not exponentiation. For powers use 'pow(base, exp)' — a FLOAT
+  // function, so 'pow(2, 3)' does not resolve: raise in floats and come back. It
+  // answers a NULLABLE float ('float?'), because a power can be uncomputable, so the
+  // trip back is a checked cast or a discharge:
+  //   pow(base, exp) as integer?           // the number, or null
+  //   (pow(base, exp) ?? 0.0) as integer   // your own default instead
+  // A bare 'as integer' is refused ("cannot cast a possibly-null `float?` to the
+  // non-null `integer`"). It does compile when BOTH arguments are literals, and that
+  // is the one shape which does not generalise — write the '?' and it works wherever
+  // the base is a variable, which is everywhere real.
   assert(1 + 2 * 4 == 9, "Multiplication before addition");
   assert(1 + 2 << 2 == 12, "Shift: (1+2) << 2 = 12");
   assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
   assert(42 ^ 0b111111 == 21, "Bitwise XOR");
   assert(105 % 100 == 5, "Modulus (remainder)");
-  assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
+  // Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the
+  // one that stops compiling the moment a reader puts their own number in it.
+  pw_base = 2.0;
+  assert(pow(pw_base, 3.0) as integer? == 8, "pow() for exponentiation");
+  assert((pow(pw_base, 10.0) ?? 0.0) as integer == 1024, "…or discharge, then cast");
   // 'abs()' returns the absolute value — the distance from zero, always positive.
   assert(1 + abs(-2) == 3, "abs(-2) == 2");
   // ## Division by zero — produces null and keeps running
