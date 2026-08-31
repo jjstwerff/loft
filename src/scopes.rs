@@ -1930,7 +1930,7 @@ fn move_elide(data: &mut Data) {
             // element work-refs whose builds were just re-pointed — and a dep is the statement
             // "my store belongs to that variable", which after the retarget belongs to the
             // CONTAINER instead.  Left stale it is wrong twice over: the ownership derivation
-            // reads a var that owns nothing (`formal/ownership.md` O-Deps — every store-lifetime
+            // reads a var that owns nothing (@FR-O-Deps — every store-lifetime
             // decision reads this one fact), and the scope pass declares the dep var so a borrower
             // can name it, which hands the erased local a stack slot no instruction ever writes.
             // That slot is what @PLN120 A's store-span check reports (loft#1241): the local is
@@ -2451,9 +2451,9 @@ fn construct_move_rewrite(
                 // (`for i in 0..3 { d.c += s }` grew `d.c` by one copy, not three), and an append
                 // inside a branch NOT TAKEN did not run at all and now always does (`if false {
                 // d.c += s }` appended anyway).  Both answer wrong with nothing said, on both
-                // backends, because this is one shared IR pass (ownership.md O-NoDiverge).
+                // backends, because this is one shared IR pass (@FR-O-NoDiverge).
                 // Equality of the whole path, not of its depth: two arms of one `if` are equally
-                // deep and never run together.  ownership.md O-Latest — a binding's ownership
+                // deep and never run together.  @FR-O-Latest — a binding's ownership
                 // lives at the LOOP DEPTH its assignment was taken at, which no type-level fact
                 // can carry, so the depth has to be measured here.  loft#1243.
                 && db_path.get(&vdb[s]) == dest_path.get(s)
