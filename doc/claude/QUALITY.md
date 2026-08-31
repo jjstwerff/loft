@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 343 | 326 | **17** |
+| 344 | 327 | **17** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -525,7 +525,10 @@ loft#1205 moved it to 340 · 323 · 17 with the two predicates the `?`-on-a-plac
 match, for the reason the column exists: each is deciding what an assignment WRITES, and a
 `Span` that hid the shape would leave the statement writing nothing.
 
-loft#1227 moves it to 343 · 326 · **17** with `use_analysis::GroupAppends::collect`, which tells
+loft#1236 adds one more peeling site — `source_names_a_collection`, which asks what an append's
+source IS and therefore has to look through a `Span` to see it — for 344 · 327 · **17**.
+
+loft#1227 moved it to 343 · 326 · **17** with `use_analysis::GroupAppends::collect`, which tells
 a `Span`, a `Line` marker, a nested `Block` and an `OpNewRecord` call apart while walking one
 block's statements.  It peels, and the third column is unchanged.
 
