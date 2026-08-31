@@ -404,6 +404,10 @@ fn print_help() {
     );
     println!("                                prune            — drop what this loft cannot reuse");
     println!("                                prune --all      — drop the live generation too");
+    println!("                                warm [--from <dir>] [pkg…]");
+    println!(
+        "                                                 — build what a run will need, first"
+    );
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
@@ -4234,9 +4238,165 @@ fn handle_cache(argv: &[String], i: &mut usize) {
             }
             cache_report(&cache_areas(), true, all);
         }
+        "warm" => cache_warm(argv, *i),
         _ => {
-            eprintln!("usage: loft cache <status|prune> [--all] [--force]");
+            eprintln!("usage: loft cache <status|prune|warm> [--all] [--force]");
             std::process::exit(1);
+        }
+    }
+}
+
+/// loft#1238 — build the native artifacts a run is about to need, once, up front.
+///
+/// `native_artifact_cache_key()` folds in a content hash of the loft build, so rebuilding loft
+/// invalidates every cached artifact keyed on it. That is deliberate — it is what makes a codegen
+/// fix reach an already-built dependency (#433) — but it means the FIRST user of each artifact
+/// pays a full rebuild, and under a parallel test runner every user arrives at once and
+/// serialises on the global build lock. Measured on this box: loft's wasm runtime rlib is 25.6 s
+/// and the `random` cdylib 1.8 s idle, against a 60 s per-test budget that a loaded CI box blew
+/// twice.
+///
+/// Warming is not a cache-correctness change: each artifact is built by the SAME call a test
+/// would make (`ensure_loft_runtime_rlib` / `resolve_native_lib`), so it is stamped with the same
+/// key and a test running afterwards takes the ordinary hit path. It only moves the cost out of
+/// the parallel section, where it is charged to whichever test happened to arrive first.
+///
+/// ⚠ SCOPE IS THE WHOLE DESIGN. The first version warmed every stale tree under
+/// `~/.loft/build-cache/`, which on this box is 61 of 71 — generations belonging to OTHER loft
+/// builds, none of which this run would touch. It was still going minutes later. The set that
+/// costs a test its budget is the intersection of two much smaller ones: packages the corpus
+/// actually `use`s, and trees already on disk under a previous key. Neither alone is right —
+/// used-but-absent is a first build that no warming can avoid, and stale-but-unused is somebody
+/// else's cache.
+///
+/// Never fails the caller. A package that cannot be warmed is simply built by the test that
+/// needs it, exactly as before, so this is an optimisation with no new failure mode.
+fn cache_warm(argv: &[String], from: usize) {
+    let mut wanted: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut idx = from;
+    while idx < argv.len() {
+        let a = argv[idx].as_str();
+        if a == "--from" {
+            if let Some(dir) = argv.get(idx + 1) {
+                collect_used_packages(std::path::Path::new(dir), &mut wanted);
+                idx += 1;
+            }
+        } else if !a.starts_with('-') {
+            wanted.insert(a.to_string());
+        }
+        idx += 1;
+    }
+
+    let mut built = 0usize;
+    let mut skipped = 0usize;
+
+    // 1. loft's own wasm runtime rlibs — one per shape, and only where the target is installed.
+    //    A missing target is a skip, not a failure: a box without that target has no wasm test
+    //    to warm for. `HtmlThreads` is deliberately absent — it needs a nightly `-Z build-std`,
+    //    which is far too big a thing to start implicitly before a test run.
+    let installed = std::process::Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    for shape in [
+        native_utils::WasmRuntimeShape::Wasi,
+        native_utils::WasmRuntimeShape::Html,
+    ] {
+        if !installed.lines().any(|l| l.trim() == shape.triple()) {
+            println!(
+                "  skip  {} — {} not installed",
+                shape.name(),
+                shape.triple()
+            );
+            skipped += 1;
+            continue;
+        }
+        if native_utils::ensure_loft_runtime_rlib(shape).is_some() {
+            built += 1;
+        } else {
+            println!(
+                "  warn  {} — could not build its runtime rlib",
+                shape.name()
+            );
+            skipped += 1;
+        }
+    }
+
+    // 2. Package cdylibs: USED by the corpus, and already on disk under a stale key.
+    let home = loft_home();
+    let build_cache = home.join("build-cache");
+    let registry = home.join("registry");
+    let key = loft::cache::native_artifact_cache_key();
+    let mut entries: Vec<String> = std::fs::read_dir(&build_cache)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    for name in entries {
+        // `<pkg>-<ver>` — the package name is everything before the LAST hyphen.
+        let Some((pkg, _ver)) = name.rsplit_once('-') else {
+            continue;
+        };
+        if !wanted.contains(pkg) {
+            continue;
+        }
+        let profile = build_cache.join(&name).join("release");
+        if loft::cache::native_artifact_fingerprint_matches(&profile, key) {
+            continue; // already this generation — a test would hit the cache
+        }
+        let pkg_dir = registry.join(&name);
+        if !pkg_dir.is_dir() {
+            continue; // a build tree whose package is gone; `loft cache prune` owns that
+        }
+        let stem = format!("loft_{pkg}");
+        if loft::extensions::resolve_native_lib(&pkg_dir.to_string_lossy(), &stem).is_some() {
+            built += 1;
+        } else {
+            println!("  warn  {name} — could not rebuild {stem}");
+            skipped += 1;
+        }
+    }
+    println!("loft cache warm: {built} artifact(s) current, {skipped} skipped");
+}
+
+/// Every `use <name>;` under `dir` — the packages a run there can ask for.
+///
+/// A plain scan rather than a manifest read on purpose: the corpus is thousands of standalone
+/// `.loft` files with no `loft.toml` between them, so `use` is the only statement of what they
+/// need. Over-collecting is harmless here (an unused name simply matches no stale build tree);
+/// under-collecting would leave the cost where it was.
+fn collect_used_packages(dir: &std::path::Path, out: &mut std::collections::BTreeSet<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_used_packages(&p, out);
+        } else if p
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("loft"))
+            && let Ok(src) = std::fs::read_to_string(&p)
+        {
+            for line in src.lines() {
+                let t = line.trim();
+                if let Some(rest) = t.strip_prefix("use ")
+                    && let Some(name) = rest.strip_suffix(';')
+                {
+                    let name = name.trim();
+                    if !name.is_empty()
+                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        out.insert(name.to_string());
+                    }
+                }
+            }
         }
     }
 }

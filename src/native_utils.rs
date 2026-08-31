@@ -248,7 +248,7 @@ pub(crate) const WASM_THREAD_FLAGS: &[&str] = &[
 
 impl WasmRuntimeShape {
     /// The rustc/rustup target triple this shape compiles for.
-    fn triple(self) -> &'static str {
+    pub(crate) fn triple(self) -> &'static str {
         match self {
             WasmRuntimeShape::Html | WasmRuntimeShape::HtmlThreads => "wasm32-unknown-unknown",
             WasmRuntimeShape::Wasi => "wasm32-wasip2",
@@ -256,7 +256,7 @@ impl WasmRuntimeShape {
     }
 
     /// Short name for diagnostics / the isolated directory.
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             WasmRuntimeShape::Html => "html",
             WasmRuntimeShape::HtmlThreads => "html-mt",

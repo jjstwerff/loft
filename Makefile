@@ -1889,6 +1889,21 @@ ci: ci-guard
 	#                       2026-05-18 — promoted from non-blocking after
 	#                       repeated PR-212 cycles where ignored drift
 	#                       surfaced as downstream test failures)
+	#   3b. cache warm     → loft#1238: build the native artifacts this run is
+	#                       about to need, ONCE, before the parallel section.
+	#                       `native_artifact_cache_key` folds in a content hash
+	#                       of the loft build, so the rebuild above invalidates
+	#                       every cached cdylib and loft's own wasm runtime
+	#                       rlib — and the FIRST test to want each pays the
+	#                       full rebuild while the rest queue on the global
+	#                       build lock.  Measured: 25.6s for the wasm rlib,
+	#                       63s for the `random` cdylib on a loaded box,
+	#                       against a 60s per-test budget that blew twice.
+	#                       Run with the RELEASE binary on purpose: the cdylib
+	#                       key is profile-independent, but the wasm-rlib
+	#                       fingerprint is a content hash of the binary, and
+	#                       `html_asyncify` drives `target/release/loft`.
+	#                       0.3-0.5s once warm; never fails the gate.
 	#   4. Test       job → cargo build --all-targets,
 	#                       cargo build --release --target wasm32-wasip2/
 	#                         wasm32-unknown-unknown --lib (added
@@ -1931,6 +1946,7 @@ ci: ci-guard
 	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random >> result.txt 2>&1 && \
 	python3 scripts/gen_target_surface.py --check >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
+	./target/release/loft cache warm --from tests >> result.txt 2>&1 && \
 	gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); [ $$jobs -lt 2 ] && jobs=2; export NEXTEST_TEST_THREADS=$$jobs; \
 	echo "make ci: tests on $$jobs thread(s), $$gates gate(s) live" >> result.txt && \
 	cargo nextest run --profile ci >> result.txt 2>&1 && \
