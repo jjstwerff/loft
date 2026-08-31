@@ -24,6 +24,10 @@
 //     FIRST.  A lambda that names an outer binding gets a placeholder variable in its own
 //     table which pass 2 never assigns, because the read goes through the record; filling from
 //     that placeholder handed the inner record an unallocated slot.
+//   * THE WRITE-BACK — a by-VALUE capture (a nullable scalar; `cell_struct_name` answers
+//     `None` for one, so it is never boxed) is observed by copying the closure record's field
+//     back after the call.  That copy looked for a VARIABLE of the enclosing scope and skipped
+//     what it could not find, so the chain was silent for exactly the captures that need it.
 //   * OWNERSHIP — the `__cell_<T>` a mutated capture is boxed into belongs to the frame that
 //     HOLDS the variable, not to the closure that passes it along.  Boxed in the enclosing
 //     closure, the owner's local stayed an unboxed scalar while every capture of it was a cell
@@ -145,6 +149,56 @@ fn main() {
   };
   assert(oy1236(1) == 51, "write and nest in one lambda {oy1236(1)}");
   assert(y1236 == 50, "and the write reached the binding {y1236}");
+
+  // A NULLABLE scalar two levels down.  A nullable scalar is captured BY VALUE — it is not
+  // boxed, and `cell_struct_name` answers `None` for it — so the mutation is observed by
+  // copying the closure record's field back to the outer binding after each call.  That
+  // write-back looked for a VARIABLE of the enclosing scope and skipped what it could not
+  // find, so the whole chain was silent: four appends read 0.  It now writes back into the
+  // enclosing lambda's own closure record, and the next level out observes it the same way.
+  //
+  // Its one-level twin below is the separating control: it was correct throughout, because
+  // there the enclosing scope really does hold the binding.
+  n1236: integer? = 0;
+  on1236 = fn(p: integer) {
+    in1236 = fn(q: integer) { n1236? += q; };
+    in1236(p);
+    in1236(p + 1);
+  };
+  on1236(10);
+  on1236(20);
+  assert((n1236 ?? -1) == 62, "nested nullable scalar {n1236 ?? -1}");
+
+  m1236: integer? = 0;
+  am1236 = fn(q: integer) { m1236? += q; };
+  am1236(10);
+  am1236(11);
+  am1236(20);
+  am1236(21);
+  assert((m1236 ?? -1) == 62, "one-level nullable scalar control {m1236 ?? -1}");
+
+  // ...and nullable TEXT, whose append is its own path again.
+  p1236: text? = "";
+  op1236 = fn(s: text) {
+    ip1236 = fn(t: text) { p1236? += t; };
+    ip1236(s);
+  };
+  op1236("a");
+  op1236("b");
+  assert((p1236 ?? "NULL") == "ab", "nested nullable text {p1236 ?? "NULL"}");
+
+  // A nullable COLLECTION two levels down, which shares by DbRef rather than by value.
+  q1236: vector<integer>? = null;
+  oq1236 = fn(b: integer) {
+    iq1236 = fn(x: integer) { q1236 += [x]; };
+    iq1236(b);
+    iq1236(b + 1);
+  };
+  oq1236(10);
+  oq1236(20);
+  wq1236 = q1236 ?? [];
+  assert(len(wq1236) == 4, "nested nullable collection {len(wq1236)}");
+  assert(wq1236[0] == 10, "nested nullable collection [0] {wq1236[0]}");
 
   // The one-level twin of that write, correct before and after.
   z1236 = 3;

@@ -1022,7 +1022,7 @@ impl Parser {
     /// capture is not a local here: it arrived through this lambda's own `__closure`
     /// (loft#1236).  Pass 1 answers `None` (no record is synthesised yet) and emits nothing,
     /// which costs nothing — pass 1's IR is rebuilt in pass 2.
-    fn relayed_capture_read(&mut self, name: &str) -> Option<Value> {
+    pub(crate) fn relayed_capture_read(&mut self, name: &str) -> Option<Value> {
         if self.first_pass || self.closure_param == u16::MAX {
             return None;
         }
@@ -1035,6 +1035,40 @@ impl Parser {
             return None;
         }
         Some(self.get_field(rec, fnr, Value::Var(self.closure_param)))
+    }
+
+    /// Write `value` into how THIS scope names a relayed capture — a field of its own closure
+    /// record — or `None` when it holds no such thing.  The mirror of
+    /// [`Self::relayed_capture_read`], for the write-back a void lambda call performs.
+    ///
+    /// A by-VALUE capture is observed by copying the closure record's field back to the outer
+    /// binding after the call.  For a lambda nested in a lambda the binding is not a variable
+    /// of this scope at all, and the write-back was skipped — silently, so a nullable scalar
+    /// (which is captured by value rather than boxed) accumulated nothing: `n? += x` four times
+    /// read 0, on both backends.
+    pub(crate) fn relayed_capture_write(&mut self, name: &str, value: Value) -> Option<Value> {
+        let (rec, fnr) = self.relayed_capture_attr(name)?;
+        Some(self.set_field_no_check(rec, fnr, 0, Value::Var(self.closure_param), value))
+    }
+
+    /// The record and attribute index THIS scope names a relayed capture by, or `None`.
+    ///
+    /// Asked before the value to write is BUILT, because building it is not free: a caller
+    /// that emits its side first and discards it on a `None` changes what other functions
+    /// compile to.
+    pub(crate) fn relayed_capture_attr(&mut self, name: &str) -> Option<(u32, usize)> {
+        if self.first_pass || self.closure_param == u16::MAX {
+            return None;
+        }
+        let rec = self.data.def(self.context).closure_record();
+        if rec == u32::MAX {
+            return None;
+        }
+        let fnr = self.data.attr(rec, name);
+        if fnr == usize::MAX {
+            return None;
+        }
+        Some((rec, fnr))
     }
 
     /// Install the capture scope a lambda body is parsed in, and return the enclosing one.

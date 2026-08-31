@@ -14367,9 +14367,6 @@ impl Parser {
                 for aid in 0..n_attrs {
                     let cap_name = self.data.attr_name(closure_rec_d, aid).clone();
                     let outer_v = self.vars.var(&cap_name);
-                    if outer_v == u16::MAX {
-                        continue;
-                    }
                     // Plan-22 phase 02d-iii.e + @P319 — skip the
                     // write-back for ALL shared-reference captures,
                     // i.e. those stored in the closure record via the
@@ -14403,8 +14400,33 @@ impl Parser {
                     ) {
                         continue;
                     }
+                    // The binding may be no variable of THIS scope at all: the lambda being
+                    // called reaches past it, and this scope is itself a lambda that captured
+                    // the name on its behalf.  Then the write-back goes into this lambda's own
+                    // closure record, so the next level out observes it the same way.  Asked
+                    // BEFORE the value is built, because emitting the read and discarding it
+                    // changes what every other function compiles to.
+                    let relayed = if outer_v == u16::MAX {
+                        self.relayed_capture_attr(&cap_name)
+                    } else {
+                        None
+                    };
+                    if outer_v == u16::MAX && relayed.is_none() {
+                        continue;
+                    }
                     let field_val = self.get_field(closure_rec_d, aid, Value::Var(closure_w));
-                    block.push(v_set(outer_v, field_val));
+                    if outer_v != u16::MAX {
+                        block.push(v_set(outer_v, field_val));
+                    } else if let Some((rec, fnr)) = relayed {
+                        let back = self.set_field_no_check(
+                            rec,
+                            fnr,
+                            0,
+                            Value::Var(self.closure_param),
+                            field_val,
+                        );
+                        block.push(back);
+                    }
                 }
                 if block.len() > 1 {
                     // Use Insert rather than Block: we must NOT create a new scope
