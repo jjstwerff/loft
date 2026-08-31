@@ -297,7 +297,35 @@ impl State {
             // (@FR-D-NoRef) keeps the old path rather than inventing one.
             let stub_ret = stack.data.def(def_nr).returned().clone();
             if stub_ret != Type::Void && stack.data.has_default(&stub_ret).is_ok() {
-                let dflt = crate::data::to_default(&stub_ret, stack.data);
+                // A HANDLE-carried return needs a well-formed `DbRef`, and `to_default`
+                // answers `Value::Null` for one — which pushes none of the twelve bytes
+                // `add_return` then copies, so the caller read a garbage handle and
+                // indexed a record by it ("index out of bounds: the len is 2 but the
+                // index is 8658").  `OpNullRefSentinel` is the no-allocation spelling of
+                // that null (`DbRef::NULL`), which is what `--native` already returns
+                // here, so the two backends agree.
+                //
+                // Whether a NON-nullable heap return should answer null or a
+                // default-constructed record is loft#1254 cell 2's question, not this
+                // one: that cell decides the policy for every non-nullable return, and
+                // this site follows it.  What is settled either way is that reading an
+                // unwritten frame is not an answer.
+                let heap_ret = matches!(
+                    stub_ret.base(),
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                        | Type::Enum(_, true, _)
+                );
+                let dflt = if heap_ret {
+                    Value::Call(stack.data.def_nr("OpNullRefSentinel"), Vec::new())
+                } else {
+                    crate::data::to_default(&stub_ret, stack.data)
+                };
                 self.generate(&dflt, &mut stack, false);
             }
             self.add_return(&mut stack, start);

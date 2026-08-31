@@ -23,11 +23,21 @@
 // plausible.  No leak moved, nothing crashed for the scalar shapes, and both backends
 // "worked" — a reader could only tell by knowing what the number should have been.
 //
-// NOT closed by this, and deliberately left for loft#1254 rather than folded in: a `-> text`
+// A HANDLE-carried return needs a well-formed `DbRef` rather than a default: `to_default`
+// answers `Value::Null` for one, which pushes none of the twelve bytes `add_return` copies, so
+// the caller read a garbage handle and indexed a record by it — "index out of bounds: the len
+// is 2 but the index is 8658".  `OpNullRefSentinel` is the no-allocation spelling of that null
+// (`DbRef::NULL`), which is what `--native` already returned, so the two agree.
+//
+// ⚠ Whether a NON-nullable heap return should answer null or a default-constructed record is
+// loft#1254 cell 2's question — it decides the policy for every non-nullable return and this
+// site follows it.  What is settled either way, and is what this file guards, is that reading
+// an unwritten frame is not an answer.
+//
+// NOT closed by this, and deliberately left on loft#1254 rather than folded in: a `-> text`
 // stub does not compile on `--native` (rustc E0308), a `-> boolean` stub answers `false` here
-// and null there, a struct-returning stub still panics the interpreter, and a stub returning
-// `integer limit(10, 20)` answers 0 where an omitted FIELD of that type answers 10.  Each is
-// its own question; this file guards only the shapes that now agree on both backends.
+// and null there, and a stub returning `integer limit(10, 20)` answers 0 where an omitted
+// FIELD of that type answers 10.  Each is its own question.
 //
 // @falsified-at: 6b12385dd — interpret exit 1 -> 0, interpret 1 assertion failures -> 0;
 //   native INERT (expected for a backend-divergence guard — only one side can move).
@@ -37,10 +47,21 @@
 //   control build the integer stub answers `[103113574851151]` and the float a denormal —
 //   and the integer differs between RUNS there, which is why each assertion names the value
 //   it expects instead of comparing the two backends to each other.
+//
+//   ⚠ The PANIC column reads `none` on both trees and that is not evidence the struct cell
+//   is harmless there.  The control stops at the first failing assertion — the float one,
+//   three cells earlier — so the struct cell is never reached and cannot panic.  Measured
+//   on its own against that build, it aborts with "index out of bounds: the len is 2 but
+//   the index is 8658".  A channel that never runs reads exactly like a channel that did
+//   not move.
 
 struct P1254 {
   n: integer,
 }
+
+// A struct-returning stub: the shape that used to PANIC the interpreter rather than answer
+// wrongly, because twelve bytes of stack were read as a record handle.
+fn empty_struct() -> P1254 { }
 
 enum Sh1254 {
   Ci1254 { r: float },
@@ -64,6 +85,12 @@ fn main() {
   // The variant stub, which is the shape the reference documents.
   s1254 = Re1254 { w: 2.0 };
   assert(s1254.ar1254() == 0.0, "a variant stub answers its default: {s1254.ar1254()}");
+
+  // The heap shape: a well-formed null rather than a handle made of stack bytes.  Scored
+  // through `??`, because the point is that the value is TESTABLE at all.
+  h1254 = empty_struct();
+  assert(!h1254, "a struct-returning stub answers a null handle, not stack bytes");
+  assert((h1254 ?? P1254 { n: -1 }).n == -1, "…and `??` recovers it like any other null");
 
   // The control that says the OTHER variant is unaffected — a real body still runs, and it is
   // what the stub's leftover value used to resemble.
