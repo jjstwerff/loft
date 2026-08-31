@@ -30,7 +30,8 @@
   stock: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
 <h2 id="field-constraints">Field Constraints</h2>
-<p>You can restrict what values a field may hold. <code>limit(min, max)</code> rejects any value outside that range at runtime. <code>not null</code> tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need <code>not null</code>. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
+<p>You can restrict what values a field may hold. <code>limit(min, max)</code> gives the field a smaller range. It is not a rejection and it never stops your program: a value outside the range cannot be represented, so the field takes the same answer any uncomputable number takes (see the Integers page). That is null when the field is nullable, and the type's default when it is not — 0 for a range that includes zero. Zero is an ordinary value here. A Colour of 0, 0, 0 is pure black and reads back as three zeros, with nothing extra to write. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
+<p>You may meet <code>not null</code> on a field in older code. It has no effect — a type is non-null by default now — and the compiler advises removing it.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Colour</span> {
   r: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>),
   g: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>),
@@ -70,10 +71,17 @@
 <li>Binding a whole value COPIES it, always. After <code>b = a</code> the two names are independent, and writing <code>b</code> never changes <code>a</code>. The copy goes all the way down, including nested structs and vectors.</li>
 <li>Reading a struct-typed field or element gives you a VIEW: <code>w = o.inner</code> and <code>c = v[i]</code> name the record in place, so <code>w.n = 42</code> changes <code>o.inner</code> too. A view is not a copy — it points at the interior of what you read it from. (A vector-typed field is a whole value, so <code>av = bx.v</code> copies.)</li>
 <li>Write <code>&amp;</code> when you want a live link where a bind would copy: <code>b = &amp;a</code> and <code>av = &amp;bx.v</code> both write through to the source.</li>
+<li>⚠ The same expression can COPY in one position and ALIAS in another. <code>av = bx.v</code> copies, because binding a whole value always copies — but <code>f(bx.v)</code> hands the field itself to the function, and a heap parameter shares what it is given (see the Vector page), so the function writes through to <code>bx.v</code>. Binding is the copy; passing is not. Read the position, not just the expression.</li>
 </ul>
 <pre><code>value <span class="kw">struct</span> <span class="en">Point</span> {
   x: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   y: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Holder8</span> {
+  v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">touch8</span>(w8: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) {
+  w8[<span class="nm">0</span>] = <span class="nm">99</span>;
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Constructing a struct: name the fields you want to set. Fields you leave out default to zero (or null for nullable fields).</p>
@@ -83,9 +91,16 @@
 <p>You can read and write individual fields after construction.</p>
 <pre><code>  apple.stock -= <span class="nm">1</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(apple.stock == <span class="nm">49</span>, <span class="st">"stock after one sale: {apple.stock}"</span>);</code></pre>
-<p>A field omitted from the constructor gets zero as its default.</p>
+<p>A field omitted from the constructor gets zero as its default. loft points this out (<code>omitted-field-zero</code>): the zero is the type's, and nothing in the declaration chose it. That is fine when zero is what you meant, and a trap when zero is a meaningful value in your data — an index where 0 is the first entry, say. Give the field a declared default when you want a different one, the way <code>Item.name_length</code> does above.</p>
 <pre><code>  col = <span class="en">Colour</span> {r: <span class="nm">128</span>, b: <span class="nm">128</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(col.g == <span class="nm">0</span>, <span class="st">"omitted green channel defaults to zero"</span>);</code></pre>
+<p>Zero is a real value in a limited field — pure black needs nothing extra.</p>
+<pre><code>  black = <span class="en">Colour</span> {r: <span class="nm">0</span>, g: <span class="nm">0</span>, b: <span class="nm">0</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(black.r == <span class="nm">0</span> <span class="kw">and</span> black.g == <span class="nm">0</span> <span class="kw">and</span> black.b == <span class="nm">0</span>, <span class="st">"pure black reads back as zeros"</span>);</code></pre>
+<p>A value outside the range takes the type's default rather than being rejected.</p>
+<pre><code>  over = <span class="nm">300</span>;
+  black.r = over;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(black.r == <span class="nm">0</span>, <span class="st">"out of range takes the default: {black.r}"</span>);</code></pre>
 <p>Formatting a struct shows all fields compactly.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col}"</span> == <span class="st">"{{r:128,g:0,b:128}}"</span>, <span class="st">"Struct compact formatting"</span>);</code></pre>
 <p><code>:j</code> produces JSON output — a text format used by many web APIs and config tools.</p>
@@ -131,6 +146,14 @@
   spare.stock = <span class="nm">3</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">7</span>, <span class="st">"a whole-value bind copies"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(spare.stock == <span class="nm">3</span>, <span class="st">"and the copy moves on its own"</span>);</code></pre>
+<p>The same field expression, in the two positions: bound it copies, passed it does not. This pair is easy to generalise the wrong way in either direction.</p>
+<pre><code>  bx8 = <span class="en">Holder8</span> { v: [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>] };
+  av8 = bx8.v;
+  av8[<span class="nm">0</span>] = <span class="nm">42</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bx8.v[<span class="nm">0</span>] == <span class="nm">1</span>, <span class="st">"binding a vector field copies it"</span>);
+  cx8 = <span class="en">Holder8</span> { v: [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>] };
+  <span class="fn-call">touch8</span>(cx8.v);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cx8.v[<span class="nm">0</span>] == <span class="nm">99</span>, <span class="st">"passing the same field shares it"</span>);</code></pre>
 <p>Write <code>&amp;</code> to get a live link where a bind would otherwise copy.</p>
 <pre><code>  linked = &amp;item;
   linked.stock = <span class="nm">1</span>;
@@ -171,11 +194,17 @@ struct Product {
 }
 // ## Field Constraints
 // You can restrict what values a field may hold.
-// 'limit(min, max)' rejects any value outside that range at runtime.
-// 'not null' tells the field that zero is a real data value — without it, zero
-// is treated as "no value" (null). Colour channels can all be zero (pure black
-// is a valid colour), so all three need 'not null'.
+// 'limit(min, max)' gives the field a smaller range. It is not a rejection and it
+// never stops your program: a value outside the range cannot be represented, so the
+// field takes the same answer any uncomputable number takes (see the Integers page).
+// That is null when the field is nullable, and the type's default when it is not —
+// 0 for a range that includes zero.
+// Zero is an ordinary value here. A Colour of 0, 0, 0 is pure black and reads back
+// as three zeros, with nothing extra to write.
 // Fields you omit in a constructor receive zero (or null for nullable fields) by default.
+//
+// You may meet 'not null' on a field in older code. It has no effect — a type is
+// non-null by default now — and the compiler advises removing it.
 
 struct Colour {
   r: integer limit(0, 255),
@@ -244,10 +273,23 @@ struct Area {
 //   from. (A vector-typed field is a whole value, so 'av = bx.v' copies.)
 // * Write '&amp;' when you want a live link where a bind would copy: 'b = &amp;a' and
 //   'av = &amp;bx.v' both write through to the source.
+// * ⚠ The same expression can COPY in one position and ALIAS in another. 'av = bx.v'
+//   copies, because binding a whole value always copies — but 'f(bx.v)' hands the
+//   field itself to the function, and a heap parameter shares what it is given (see
+//   the Vector page), so the function writes through to 'bx.v'. Binding is the copy;
+//   passing is not. Read the position, not just the expression.
 
 value struct Point {
   x: integer,
   y: integer
+}
+
+struct Holder8 {
+  v: vector&lt;integer&gt;
+}
+
+fn touch8(w8: vector&lt;integer&gt;) {
+  w8[0] = 99;
 }
 
 fn main() {
@@ -259,9 +301,21 @@ fn main() {
   // You can read and write individual fields after construction.
   apple.stock -= 1;
   assert(apple.stock == 49, "stock after one sale: {apple.stock}");
-  // A field omitted from the constructor gets zero as its default.
+  // A field omitted from the constructor gets zero as its default. loft points this
+  // out ('omitted-field-zero'): the zero is the type's, and nothing in the
+  // declaration chose it. That is fine when zero is what you meant, and a trap when
+  // zero is a meaningful value in your data — an index where 0 is the first entry,
+  // say. Give the field a declared default when you want a different one, the way
+  // 'Item.name_length' does above.
   col = Colour {r: 128, b: 128 };
   assert(col.g == 0, "omitted green channel defaults to zero");
+  // Zero is a real value in a limited field — pure black needs nothing extra.
+  black = Colour {r: 0, g: 0, b: 0 };
+  assert(black.r == 0 and black.g == 0 and black.b == 0, "pure black reads back as zeros");
+  // A value outside the range takes the type's default rather than being rejected.
+  over = 300;
+  black.r = over;
+  assert(black.r == 0, "out of range takes the default: {black.r}");
   // Formatting a struct shows all fields compactly.
   assert("{col}" == "{{r:128,g:0,b:128}}", "Struct compact formatting");
   // ':j' produces JSON output — a text format used by many web APIs and config tools.
@@ -311,6 +365,15 @@ fn main() {
   spare.stock = 3;
   assert(item.stock == 7, "a whole-value bind copies");
   assert(spare.stock == 3, "and the copy moves on its own");
+  // The same field expression, in the two positions: bound it copies, passed it does
+  // not. This pair is easy to generalise the wrong way in either direction.
+  bx8 = Holder8 { v: [1, 2, 3] };
+  av8 = bx8.v;
+  av8[0] = 42;
+  assert(bx8.v[0] == 1, "binding a vector field copies it");
+  cx8 = Holder8 { v: [1, 2, 3] };
+  touch8(cx8.v);
+  assert(cx8.v[0] == 99, "passing the same field shares it");
   // Write '&amp;' to get a live link where a bind would otherwise copy.
   linked = &amp;item;
   linked.stock = 1;

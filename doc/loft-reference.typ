@@ -2158,7 +2158,9 @@ struct Product {
 
 === Field Constraints
 
-You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need 'not null'. Fields you omit in a constructor receive zero (or null for nullable fields) by default.
+You can restrict what values a field may hold. 'limit(min, max)' gives the field a smaller range. It is not a rejection and it never stops your program: a value outside the range cannot be represented, so the field takes the same answer any uncomputable number takes (see the Integers page). That is null when the field is nullable, and the type's default when it is not — 0 for a range that includes zero. Zero is an ordinary value here. A Colour of 0, 0, 0 is pure black and reads back as three zeros, with nothing extra to write. Fields you omit in a constructor receive zero (or null for nullable fields) by default.
+
+You may meet 'not null' on a field in older code. It has no effect — a type is non-null by default now — and the compiler advises removing it.
 
 ```rust
 struct Colour {
@@ -2244,10 +2246,31 @@ from. (A vector-typed field is a whole value, so 'av = bx.v' copies.)
 'av = &bx.v' both write through to the source.
 ```
 
+- ⚠ The same expression can COPY in one position and ALIAS in another. 'av = bx.v'
+
+```
+copies, because binding a whole value always copies — but 'f(bx.v)' hands the
+field itself to the function, and a heap parameter shares what it is given (see
+the Vector page), so the function writes through to 'bx.v'. Binding is the copy;
+passing is not. Read the position, not just the expression.
+```
+
 ```rust
 value struct Point {
   x: integer,
   y: integer
+}
+```
+
+```rust
+struct Holder8 {
+  v: vector<integer>
+}
+```
+
+```rust
+fn touch8(w8: vector<integer>) {
+  w8[0] = 99;
 }
 ```
 
@@ -2270,11 +2293,26 @@ You can read and write individual fields after construction.
   assert(apple.stock == 49, "stock after one sale: {apple.stock}");
 ```
 
-A field omitted from the constructor gets zero as its default.
+A field omitted from the constructor gets zero as its default. loft points this out ('omitted-field-zero'): the zero is the type's, and nothing in the declaration chose it. That is fine when zero is what you meant, and a trap when zero is a meaningful value in your data — an index where 0 is the first entry, say. Give the field a declared default when you want a different one, the way 'Item.name\_length' does above.
 
 ```rust
   col = Colour {r: 128, b: 128 };
   assert(col.g == 0, "omitted green channel defaults to zero");
+```
+
+Zero is a real value in a limited field — pure black needs nothing extra.
+
+```rust
+  black = Colour {r: 0, g: 0, b: 0 };
+  assert(black.r == 0 and black.g == 0 and black.b == 0, "pure black reads back as zeros");
+```
+
+A value outside the range takes the type's default rather than being rejected.
+
+```rust
+  over = 300;
+  black.r = over;
+  assert(black.r == 0, "out of range takes the default: {black.r}");
 ```
 
 Formatting a struct shows all fields compactly.
@@ -2368,6 +2406,18 @@ Binding the whole value copies it, so the original keeps its own stock.
   spare.stock = 3;
   assert(item.stock == 7, "a whole-value bind copies");
   assert(spare.stock == 3, "and the copy moves on its own");
+```
+
+The same field expression, in the two positions: bound it copies, passed it does not. This pair is easy to generalise the wrong way in either direction.
+
+```rust
+  bx8 = Holder8 { v: [1, 2, 3] };
+  av8 = bx8.v;
+  av8[0] = 42;
+  assert(bx8.v[0] == 1, "binding a vector field copies it");
+  cx8 = Holder8 { v: [1, 2, 3] };
+  touch8(cx8.v);
+  assert(cx8.v[0] == 99, "passing the same field shares it");
 ```
 
 Write '&' to get a live link where a bind would otherwise copy.
