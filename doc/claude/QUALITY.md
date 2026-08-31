@@ -507,6 +507,16 @@ pre-scan that decides whether a nullable heap-record local is worth an ownership
 unspans before matching `Set`, so it lands on the peeling side and leaves the opaque column
 alone.
 
+loft#1245 moved it to 346 · 329 · 17, and the pair it added is the audit's own subject: both
+`use_analysis::callee_of` and `use_analysis::call_return_frees_source` went from naming ONE
+`Value` variant to naming two (`Call` and `CallRef`), which is what put them in scope at all.
+Both unspan first, so the opaque column is unchanged. The defect that fix closed is the same
+shape one variant further out — not a missing `unspan` but a missing VARIANT, a call spelled
+`CallRef` that five readers of "is this a call?" could not see. This audit cannot ask that
+question (its predicate is `Span`-peeling, not variant coverage); `ir_walker_audit.py
+spellings` is the one that can, and the general lesson is in
+[IMPLEMENTATIONS.md § One notion, how many SPELLINGS?](formal/IMPLEMENTATIONS.md).
+
 loft#1194/#1195 moved the table twice: 337 · 319 · 18 → 337 · 320 · **17**, then
 338 · 321 · 17 as `parser::field_place` entered it — a new site that discriminates `Var` from
 `Call` and peels at every level, so it lands on the peeling side and leaves the opaque column
@@ -535,7 +545,7 @@ match, for the reason the column exists: each is deciding what an assignment WRI
 `Span` that hid the shape would leave the statement writing nothing.
 
 loft#1236 adds one more peeling site — `source_names_a_collection`, which asks what an append's
-source IS and therefore has to look through a `Span` to see it — for 344 · 327 · **17**.
+source IS and therefore has to look through a `Span` to see it — for 346 · 329 · **17**.
 
 loft#1227 moved it to 343 · 326 · **17** with `use_analysis::GroupAppends::collect`, which tells
 a `Span`, a `Line` marker, a nested `Block` and an `OpNewRecord` call apart while walking one
@@ -2410,6 +2420,11 @@ and who does not.
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
 | 668 | 316 | 5 | **347** |
+
+loft#1245 added `use_analysis::callref_captures` on the seeing-through side (the opaque
+column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function` through
+`.base()`, because the same fn-ref reaches it as `fn(τ) -> ρ` and as `fn(τ) -> ρ?` and a
+capture is a capture either way.
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on

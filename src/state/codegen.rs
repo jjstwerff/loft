@@ -2371,8 +2371,11 @@ impl State {
                     // bracket refuses the free on a protected argument's store and
                     // allows it on a callee-minted one, so the split is decided per
                     // execution instead of by a static bit that cannot express it.
-                    let tp_val = if crate::use_analysis::call_return_frees_source(stack.data, value)
-                    {
+                    let tp_val = if crate::use_analysis::call_return_frees_source(
+                        stack.data,
+                        stack.def_nr,
+                        value,
+                    ) {
                         i32::from(tp_nr) | 0x8000
                     } else {
                         i32::from(tp_nr)
@@ -2399,7 +2402,8 @@ impl State {
                     // above (which asks whether these cover every ref argument) and with
                     // the native backend.  Two lists of the same arguments drift.
                     let ref_args: Vec<u16> =
-                        crate::use_analysis::protectable_ref_args(stack.data, value).0;
+                        crate::use_analysis::protectable_ref_args(stack.data, stack.def_nr, value)
+                            .0;
                     // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf
                     // work-ref args.  After the OpCopyRecord wrap frees
                     // the source store (via 0x8000), the caller's slot
@@ -2806,13 +2810,21 @@ impl State {
             self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
         } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
             stack.function.tp(v).clone()
-            && let Value::Call(fn_nr, _) = value.unspan()
+            // loft#1245 — BOTH spellings of a call, because a `CallRef` reaching a
+            // definition is the same question as a `Call` reaching one and only the
+            // second was asked.  Reading `Value::Call` alone sent every fn-ref bind to
+            // the plain-adopt fallthrough at the bottom of this dispatch: a borrowed
+            // return was then ALIASED (a write through the bind reached the caller's own
+            // variable, which B-Copy forbids) and a minted one was left with no owner.
+            // An unresolved fn-ref answers `None` and keeps that fallthrough, which is
+            // the behaviour every fn-ref had before.
+            && let Some(fn_nr) = crate::use_analysis::callee_of(stack.data, stack.def_nr, value)
             // The shared gate on the carried ownership facts (`Def::is_loft_defined`) —
             // methods and generic monomorphs (`t_`) reach this arm too.  While it read
             // `n_` alone, a method returning through the caller's `__ref_N` fell to the
             // plain-adopt fallthrough at the bottom of this dispatch and was then freed
             // as an owner, taking the caller's buffer with it (loft#810).
-            && stack.data.def(*fn_nr).is_loft_defined()
+            && stack.data.def(fn_nr).is_loft_defined()
         {
             // Cluster A.3 (OWNERSHIP_MODEL row 102): read the carried
             // adopt-vs-copy fact.  When the callee returns a genuinely FRESH
@@ -2847,7 +2859,7 @@ impl State {
                 && base != u16::MAX
             {
                 self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
-            } else if stack.data.def(*fn_nr).return_adopts_fresh_store() {
+            } else if stack.data.def(fn_nr).return_adopts_fresh_store() {
                 // runtime tolerates double-free as a no-op so leaving
                 // __ref_N to be freed by scopes.rs's is_work_ref gate at
                 // scope exit is safe in both adoption and orphan cases.
@@ -3327,7 +3339,8 @@ impl State {
         // so OpCopyRecord's `0x8000` source-free skips them.  loft#981/#982 — ONE
         // derivation, shared with the source-free gate below (which asks whether these
         // cover every ref argument) and with the native backend.
-        let ref_args: Vec<u16> = crate::use_analysis::protectable_ref_args(stack.data, value).0;
+        let ref_args: Vec<u16> =
+            crate::use_analysis::protectable_ref_args(stack.data, stack.def_nr, value).0;
         // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf work-ref
         // args for the post-wrap sentinel reset (see the reassignment
         // path's matching comment for rationale).
@@ -3365,11 +3378,12 @@ impl State {
         // above decides per execution.  Same fact, same three emitters (the sibling
         // reassignment path here, and native `generation/dispatch.rs`).
         #[cfg(not(feature = "wasm"))]
-        let tp_with_free = if crate::use_analysis::call_return_frees_source(stack.data, value) {
-            i32::from(tp_nr) | 0x8000
-        } else {
-            i32::from(tp_nr)
-        };
+        let tp_with_free =
+            if crate::use_analysis::call_return_frees_source(stack.data, stack.def_nr, value) {
+                i32::from(tp_nr) | 0x8000
+            } else {
+                i32::from(tp_nr)
+            };
         #[cfg(feature = "wasm")]
         let tp_with_free = i32::from(tp_nr);
         // Push the call result, then OpCopyRefOrNull binds it into v's slot: a

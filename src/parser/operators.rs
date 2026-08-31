@@ -432,10 +432,12 @@ impl Parser {
         let mut any_freeing_call = false;
         for a in &arms {
             if self.is_struct_returning_call(a)
-                && crate::use_analysis::call_return_frees_source(&self.data, a)
+                && crate::use_analysis::call_return_frees_source(&self.data, self.context, a)
             {
                 any_freeing_call = true;
-                witnesses.extend(crate::use_analysis::protectable_ref_args(&self.data, a).0);
+                witnesses.extend(
+                    crate::use_analysis::protectable_ref_args(&self.data, self.context, a).0,
+                );
                 continue;
             }
             witnesses.extend(crate::use_analysis::view_root_slots(&self.data, a)?);

@@ -559,9 +559,18 @@ impl Output<'_> {
             )
             .map(|(rec, _)| rec)
         });
-        if let (Some(d_nr), Value::Call(fn_nr, args)) = (record_def, to_unspanned)
-            && self.data.def(*fn_nr).is_loft_defined()
-            && !self.data.def(*fn_nr).return_adopts_fresh_store()
+        // loft#1245 — BOTH spellings of a call reach this dispatch.  `CallRef` is `Call`
+        // with the callee in a variable, and matching only `Call` sent every fn-ref bind
+        // past the copy-or-adopt split to a plain adopt: a borrowed return was ALIASED
+        // (a write through the bind reached the caller's own variable, against B-Copy)
+        // and a minted one was left with no owner.  An unresolved fn-ref answers `None`
+        // and keeps that pre-existing emit.
+        if let (Some(d_nr), Some(fn_nr)) = (
+            record_def,
+            crate::use_analysis::callee_of(self.data, self.def_nr, to),
+        ) && matches!(to_unspanned, Value::Call(_, _) | Value::CallRef(_, _))
+            && self.data.def(fn_nr).is_loft_defined()
+            && !self.data.def(fn_nr).return_adopts_fresh_store()
         {
             let tp_nr = self.data.def(d_nr).known_type();
             if !self.declared.contains(&var) {
@@ -593,7 +602,7 @@ impl Output<'_> {
             // Cluster-A A.4: ONE return-ownership query, shared with the
             // interpreter (`state/codegen.rs`).  Both backends read the same
             // fact, so they cannot diverge on the hidden-only / out-of-range edge.
-            let is_borrowed_view = self.data.def(*fn_nr).returns_borrowed_view();
+            let is_borrowed_view = self.data.def(fn_nr).returns_borrowed_view();
             // loft#981/#982 — a borrowed-view return is not always a borrow: the callee
             // may hand back the parameter's store OR one it minted (a `??` whose arms
             // split, a `return o` the return hoist materialises into a fresh `__ret_N`),
@@ -602,16 +611,16 @@ impl Output<'_> {
             // on a protected argument's store and allows it on a callee-minted one — so
             // the bit is set exactly when this site brackets every ref argument.
             // The interpreter reads the same fact and runs the same bracket.
-            let tp_with_free: i32 = if crate::use_analysis::call_return_frees_source(self.data, to)
-            {
-                i32::from(tp_nr) | 0x8000
-            } else {
-                i32::from(tp_nr)
-            };
+            let tp_with_free: i32 =
+                if crate::use_analysis::call_return_frees_source(self.data, self.def_nr, to) {
+                    i32::from(tp_nr) | 0x8000
+                } else {
+                    i32::from(tp_nr)
+                };
             // Only a borrowed-view return needs the bracket; every other call keeps its
             // previous emit byte-for-byte.
             let bracket: Vec<String> = if is_borrowed_view {
-                crate::use_analysis::protectable_ref_args(self.data, to)
+                crate::use_analysis::protectable_ref_args(self.data, self.def_nr, to)
                     .0
                     .iter()
                     .map(|&av| format!("var_{}", sanitize(variables.name(av))))
@@ -638,7 +647,7 @@ impl Output<'_> {
             // PutRef path in `gen_set_first_ref_call_copy`).
             // P198 — the inner user-fn call uses the new `cell` ABI; the
             // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
-            let callee = self.data.def(*fn_nr);
+            let callee = self.data.def(fn_nr);
             // @PLN85 unification — collapse the native first-bind onto the ownership
             // oracle. A `??`-JOIN return needs the runtime ARG-ALIASING guard
             // witnessed by the oracle's interprocedurally-resolved base (the borrowed
@@ -662,19 +671,26 @@ impl Output<'_> {
             // bare name, so a call reached a `fn` that had been emitted under another —
             // rustc E0425 "cannot find function `n_defaulted` in this scope", from a package
             // whose test file happened to name a helper the way the library did (loft#878).
-            write!(
-                w,
-                "{{ let _dst = var_{name}; {protect}let _src = {}(cell",
-                self.fn_ident(callee)
-            )?;
-            // Emit each arg through the shared `emit_call_arg` helper so the
-            // ABI-B call applies the same per-parameter coercions (boolean→u8,
-            // narrow-int, text deref, typed-null, fn-ref) as the normal call
-            // path.  Re-deriving arg emission here is what dropped the
-            // boolean→u8 wrap and tripped rustc E0308 (issue #366).
-            for (idx, arg) in args.iter().enumerate() {
-                write!(w, ", ")?;
-                self.emit_call_arg(w, callee, idx, arg)?;
+            write!(w, "{{ let _dst = var_{name}; {protect}let _src = ")?;
+            if let Value::Call(_, args) = to_unspanned {
+                write!(w, "{}(cell", self.fn_ident(callee))?;
+                // Emit each arg through the shared `emit_call_arg` helper so the
+                // ABI-B call applies the same per-parameter coercions (boolean→u8,
+                // narrow-int, text deref, typed-null, fn-ref) as the normal call
+                // path.  Re-deriving arg emission here is what dropped the
+                // boolean→u8 wrap and tripped rustc E0308 (issue #366).
+                for (idx, arg) in args.iter().enumerate() {
+                    write!(w, ", ")?;
+                    self.emit_call_arg(w, callee, idx, arg)?;
+                }
+                write!(w, ")")?;
+            } else {
+                // A `CallRef` is not one identifier and an argument list: it lowers to a
+                // MATCH over the candidate definitions of that signature
+                // (`output_call_ref`).  Emitting it through the general value path is what
+                // keeps the candidate set, the closure argument and the hidden buffers in
+                // one place instead of re-deriving a second fn-ref ABI here.
+                self.output_code_inner(w, to)?;
             }
             // The ADOPT condition. Default (`_src == _dst`): adopt a null return or
             // a same-store NRVO alias, else deep-copy. JOIN (witnessed): adopt a
@@ -715,7 +731,7 @@ impl Output<'_> {
             // null-sentinel `_dst` are excluded by the guard.
             write!(
                 w,
-                "); if {adopt} {{ if _dst.store_nr != u16::MAX \
+                "; if {adopt} {{ if _dst.store_nr != u16::MAX \
                  && _dst.store_nr != _src.store_nr \
                  {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} \
                  var_{name} = _src; }} \

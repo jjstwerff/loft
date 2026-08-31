@@ -6,8 +6,9 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — a fn-ref call's bind skips the heap first-bind dispatch (loft#1245)
-(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed).
+OPEN: **1** — D-clo-7, narrowed by loft#1245 (2026-08-31): the fn-ref bind now COPIES like
+its named twin, so the (B-Copy) half is closed; the INLINE spelling still holds its store to
+frame exit, and the lift that would close it is measured unsound three ways.
 
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
@@ -567,59 +568,69 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > for EVERY declared-collection lambda was already correct on `--native`, and the only thing
 > wrong with it here was the unowned buffer.
 >
-> **OPEN: a fn-ref call's bind skips the heap first-bind dispatch — loft#1245.** Re-measured
-> 2026-08-31, and the scope recorded here was wrong in BOTH directions, so the entry is
-> restated rather than edited.
+> **PARTLY CLOSED (2026-08-31, loft#1245) — a fn-ref call is a call in BOTH spellings.** The
+> value half is closed; the leak half this entry was filed for is still open, and the scope
+> recorded here was wrong in both directions, so the entry is restated rather than edited.
 >
 > What was written: *"a lambda's `??`-default store discarded INLINE leaks one store per call
 > on BOTH backends; the BOUND spelling is clean, and so is the named twin."* Measured against
-> `LOFT_ALLOC_REPORT=1` at N calls:
+> `LOFT_ALLOC_REPORT=1` at N calls, "bound" named the wrong bind — binding inside the lambda
+> BODY (`d = q ?? P{}; d`) leaks exactly as the inline tail does, and what is clean is binding
+> the RESULT at the call site.
 >
-> | cell | peak | |
-> |---|---|---|
-> | named fn, `??` discharge | 4 (flat) | the working reference |
-> | lambda, fresh construct `P{…}` | 4 (flat) | no join, no defect |
-> | lambda, `??`, SUBJECT arm only | 4 (flat) | never mints |
-> | lambda, `??`, MINT arm, INLINE | N+3 | as recorded |
-> | lambda, `??`, MINT arm, BOUND IN THE BODY | N+3 | **recorded as clean; it is not** |
-> | the same call BOUND AT THE CALL SITE | 4 (flat) | the spelling that IS clean |
+> **It is not a leak, it is a crash.** The entry was scored on the exit-leak channel, which
+> reads ZERO for it: `cr_fnref_minted` / `State::release_fnref_bufs` do release the buffers,
+> but the unit is the FRAME, so a loop holds one store per call until the frame exits. Nothing
+> leaks at exit, the peak grows linearly, and both backends abort at `store table exhausted:
+> 65535 stores live at once`. An exit-leak gate cannot see a frame-lifetime accumulation.
 >
-> So "the BOUND spelling is clean" named the wrong bind: binding inside the lambda body
-> (`d = q ?? P{}; d`) leaks exactly as the inline tail does, and what is clean is binding the
-> RESULT at the call site (`r = g(null)`). That one is flat at 400 000 calls on both backends
-> and on both arms.
+> **And the leak was the smaller half.** The same missing dispatch dropped the (B-Copy) copy:
+> `r = g(a)` on a fn-ref ALIASED the argument, so `r.n = 99` wrote through to the caller's `a`
+> where the named twin copies. It needed no nullable, no `??` and no capture — a lambda
+> returning its parameter was enough — and both backends agreed on the wrong answer, so no
+> differential oracle could see it. The compiler even emitted `lost-write` on that line,
+> telling the reader the mutation *"lands in the copy, not the source"* while it corrupted the
+> source. **That half is closed.**
 >
-> **It is not a leak, it is a crash.** The register scored this on the exit-leak channel,
-> which reads ZERO for it — `cr_fnref_minted` / `State::release_fnref_bufs` do release the
-> buffers, but the unit is the FRAME, so a loop holds one store per call until the frame
-> exits. Nothing is leaked at exit and the peak grows linearly, so both backends abort at
-> `store table exhausted: 65535 stores live at once`. An exit-leak gate cannot see a
-> frame-lifetime accumulation; the channel that moved is the PEAK.
+> **The cure is one question asked once.** `use_analysis::callee_of` answers *which definition
+> does this call reach?* for `Call` and `CallRef` alike, and the sites that decide what a
+> returned store means now read it instead of matching one spelling: both backends' heap
+> first-bind dispatch, `scopes`' deps strip (which its own comment already required to name the
+> SAME callees as the dispatch, loft#810), and the @P290 bracket's two halves
+> (`protectable_ref_args` / `call_return_frees_source`). The `CallRef` route did not need a new
+> answer — it needed to be asked.
 >
-> **And the leak is the smaller half.** The same missing dispatch drops the (B-Copy) copy:
-> `r = g(a)` on a fn-ref ALIASES the argument, so `r.n = 99` writes through to the caller's
-> `a`, where the named twin copies. It needs no nullable, no `??` and no capture — a lambda
-> returning its parameter is enough — and both backends agree on the wrong answer, so no
-> differential oracle sees it. The compiler even emits `lost-write` on that line, telling the
-> reader the mutation *"lands in the copy, not the source"* while it is corrupting the source.
+> **What is still open, and why it is not a matter of finishing the job.** The INLINE spelling
+> holds its store to frame exit. Closing it means the bind must COPY, which is
+> `gen_set_first_ref_call_copy` — reached when the callee does not adopt-fresh, or through a
+> witnessed JOIN — and the lift that would arrange it is measured unsound three separate ways,
+> each invisible without `LOFT_POISON=1`:
 >
-> **Cause, unchanged from the original reading and now with its second half.** The lambda's
-> return dep names its parameter on the subject arm, so `returns_borrowed_view` calls the
-> whole thing a borrow and `callref_owned_return` declines — the mint arm pays for the borrow
-> arm's caution. The reason the `CallRef` route cannot ask what the direct call asks is that
-> the @P290 bracket is blind to the spelling: `use_analysis::protectable_ref_args` and
-> `use_analysis::call_return_frees_source` both open with `let Value::Call(..) = … else
-> { return … }`, so a `CallRef` gets an empty, incomplete witness set by construction. One
-> notion, two IR spellings.
+> 1. **The SUBJECT arm.** `h(have).n` in a loop hands back the caller's own argument; the
+>    lifted temp adopts it and its scope-exit free releases it. The loop then answers `null`.
+> 2. **A CAPTURE.** Neither reading can see it: `returns_borrowed_view` treats the hidden
+>    `__closure` dep as *"the callee minted this"*, and `protectable_ref_args` reports its
+>    witness set COMPLETE for a call whose arguments are all scalars — vacuously, having
+>    witnessed nothing. Together they say *"owned and fully bracketed"* about a store the
+>    enclosing scope owns. `use_analysis::callref_captures` is the one home for that exception.
+> 3. **`τ?`.** `Optional(Reference)` reaches the copy-or-adopt split only through
+>    `nullable_join_first_bind`, which is itself `Call`-only and wants a JOIN with a nameable
+>    witness. Admitting the nullable spelling without that twin turned
+>    `1114-a-nullable-heap-capture-…`'s `fn(q: P2s?) -> P2s? { q }` into a use-after-free.
 >
-> ⚠ **The obvious repair is measured and is a use-after-free.** Relaxing
-> `callref_owned_return`'s `returns_borrowed_view()` decline takes the mint arm from N+3 to
-> flat and the borrow arm keeps PASSING ordinary runs — under `LOFT_POISON=1` it faults.
-> The gate's own doc predicts it (*"lifting on the type alone frees a borrowed element: a
-> use-after-free that only `LOFT_POISON=1` makes visible"*). The bracket is not optional, and
-> an ordinary run is not a control for it.
+> ⚠ **A fourth thing, and it is the one worth carrying forward.** Classifying a `CallRef` in
+> `Ownership::classify` — so the join arm could see it — looked necessary and is not: with it
+> removed every value cell is still correct and every peak still flat, while WITH it a direct
+> `p2_named(p2_st)` read another cell's recycled store on `--native`. A change that is not
+> load-bearing can still be load-bearing for a regression.
 >
-> Guard: `tests/scripts/1245-a-fn-ref-bind-copies-like-its-named-twin.loft`.
+> ⚠ **The capture hazard was found by `scripts/matrix_axes.py`, not by the suite.** Every cell
+> written by hand held closure capture at `none` (A10 1/5), and the fix was green on all of
+> them, on both backends, under poison, while silently breaking every capturing lambda.
+>
+> Guard: `tests/scripts/1245-a-fn-ref-bind-copies-like-its-named-twin.loft`, falsified at
+> `ee199301` on both backends, carrying the named twin as its control plus the capture and
+> argument-spelling axes.  The leak half has no cell there because one would have to abort.
 >
 > Guarded by `tests/scripts/1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft`.
 

@@ -93,7 +93,7 @@ with the closure's environment in scope.
 ## Deviations
 
 **OPEN: 1.**
-- **D-clo-7** — a fn-ref call's bind skips the heap first-bind dispatch, so it ALIASES instead of copying (B-Copy) and its minted store is never adopted (both backends abort at the 65535-store ceiling) — loft#1245; that entry's value half and its BOUND-return leak half are both closed
+- **D-clo-7** — a fn-ref call's INLINE result holds its store to FRAME exit, so a loop aborts at the 65535-store ceiling; narrowed by loft#1245, which closed the (B-Copy) half (the bind now copies like its named twin) and records why the lift that would close this one is unsound
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [closures-history.md](closures-history.md).

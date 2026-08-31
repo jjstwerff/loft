@@ -4101,7 +4101,7 @@ use a separate collection or add after the loop"
             let join_witnesses = self.join_source_frees(code);
             #[cfg(not(feature = "wasm"))]
             let tp_val = if (self.is_struct_returning_call(code)
-                && crate::use_analysis::call_return_frees_source(&self.data, code))
+                && crate::use_analysis::call_return_frees_source(&self.data, self.context, code))
                 || join_witnesses.is_some()
             {
                 i32::from(kt) | 0x8000
@@ -4178,7 +4178,7 @@ use a separate collection or add after the loop"
             } else if let Some(w) = join_witnesses {
                 w
             } else {
-                crate::use_analysis::protectable_ref_args(&self.data, code).0
+                crate::use_analysis::protectable_ref_args(&self.data, self.context, code).0
             };
             for av in &guarded {
                 seq.push(self.cl("n_protect_store_frees", &[Value::Var(*av)]));
