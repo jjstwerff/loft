@@ -22,11 +22,18 @@
 //   build, so no `make falsify` reference exists to move.  What it catches is a future
 //   rewording, and that is a build which does not exist yet.
 //
-//   So both halves were measured by hand instead, because a guard made of expected FAILURES is
-//   the shape that most easily passes while proving nothing.  Changing one expected substring
-//   to a word the compiler never prints fails the suite, so the matching is real; and breaking
-//   the assertion in the one RUNNING cell also fails the suite, so the file is not passing on
+//   So it was measured by hand instead, because a guard made of expected FAILURES is the shape
+//   that most easily passes while proving nothing.  Each of the five substrings was replaced in
+//   turn by a word the compiler never prints: all five fail the suite, so all five are live.
+//   Breaking the assertion in the one RUNNING cell fails it too, so the file is not passing on
 //   its refusals alone.  Restoring each returns the suite to green.
+//
+// ⚠ `make falsify` reports `expect 1/5` on this file, and that is the TOOL's view rather than
+//   a hole in the guard.  It runs `loft` directly, and a direct run stops at the first error;
+//   the suite peels the refusing cell and re-parses to collect the union of every round
+//   (loft#1242).  So the column counts one round, not the file.  Read `1/5` here as "falsify
+//   saw the first of five", never as "four are unmatched" — the five-way control above is what
+//   answers that question.
 
 struct RQ { n: integer }
 
