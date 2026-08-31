@@ -854,7 +854,7 @@ examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review
+.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
@@ -890,6 +890,23 @@ libraries-review:  ## Library review aid: which libraries owe a review + which o
 #   make bug-review ARGS="--bands 6"      # finer slicing on a busy cycle
 bug-review:  ## Monthly bug-review aid: which mechanism classes are still producing bugs
 	@python3 scripts/bug-review.py $(ARGS)
+
+# The per-release checklist: what a HUMAN still has to do, with everything the machine
+# can decide already decided.  RELEASE.md holds the prose and three partial lists; this
+# is the single worked-through list, generated so it cannot drift from the repo.
+# Automatic items are MEASURED on every run and cannot be ticked (a gate you can tick is
+# a gate that gets ticked); manual items carry the exact command and what counts as a
+# pass, and are the only ones `--done` accepts.  Items for work this release did not
+# touch (the VS Code pass, the native-debug gate) stay hidden.
+# A REPORT plus local state — never a gate, and it never tags or publishes anything.
+#   make release-checklist                            # the list for Cargo.toml's version
+#   make release-checklist ARGS="--fetch"             # refresh origin/main + tags first
+#   make release-checklist ARGS="--done M-install-sh --note 'ran on the NUC'"
+# `|| true`: the script exits 1 while an automatic check is FAILING, which is the
+# answer a caller wants ("is this release ready?") and the wrong thing for make to
+# render as a broken target.  A report says what it found; it does not stop the build.
+release-checklist:  ## Per-release checklist: what CI proved, and what is left for a human
+	@python3 scripts/release-checklist.py $(ARGS) || true
 
 # `doc/claude/plans/**/probes/` holds ~860 executable `.loft` files that no suite
 # reaches — the residue of finished investigations, still compiling and running

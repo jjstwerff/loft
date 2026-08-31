@@ -3,11 +3,13 @@
 // Demonstrates: file I/O via the `file()` constructor + method-style
 // `f.write(...)` and `f.content()`.  See STDLIB.md for the full API.
 //
-// The example is hermetic — it writes to a per-run path under
-// /tmp/ and prints the contents back.
+// The example is hermetic — it writes into the system temporary
+// directory and prints the contents back.
 
 fn main() {
-  path = "/tmp/loft_example_files.txt";
+  // `temp_dir()` rather than a literal "/tmp": the temporary directory
+  // differs by platform, and this bundle ships to Windows too.
+  path = "{temp_dir() ?? "."}/loft_example_files.txt";
   // `file(path)` returns a File handle even if the path doesn't
   // exist yet; the first `write` creates it.
   out = file(path);

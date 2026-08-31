@@ -877,6 +877,12 @@ feedback signal that makes them meaningful.  Until then:
   - Cross-platform smoke test (Linux + macOS + Windows
     walkthrough run, VS Code extension install,
     example-open) — defer.
+    ⚠ **This deferral predates external users** (2026-05-15, before the
+    registry, `loft install` and `self-update` shipped), and
+    `make release-checklist` lists the three hands-on runs
+    (`M-hands-linux` / `-macos` / `-windows`) as outstanding.  Whether
+    the deferral still holds is the owner's call; until it is made, the
+    checklist asks for them and this line says they may be waived.
 
 Steps 1-4 + 8 + 9 (internal-doc hygiene, broken-link
 audit, clippy-suppression review, gendoc + PDF) are NOT
@@ -1127,42 +1133,68 @@ adds an item that needs a new tool, add the tool here.
 | `python3` | JSON validation (`python3 -m json.tool`); generic scripting | OS package manager |
 | `chromium` / `google-chrome` | WASM HTML build verification (already used by `make wasm-html-test`) | OS package manager |
 
-### Cross-platform smoke test (per release)
+### The per-release checklist — `make release-checklist`
 
-Performed manually before each release tag, on each supported
-platform:
+**Work the generated list, not this document.**  Everything a release needs a
+human to do is one command:
 
-- **Linux:** install loft from a fresh git clone, run any
-  newly-shipped walkthrough top-to-bottom, install the VS Code
-  extension, open an example.
-- **macOS:** same.
-- **Windows:** same — pay attention to symlink behaviour (the
-  VS Code extension grammar symlink is the most likely point
-  of failure on Windows).
+```
+make release-checklist                     # the list for Cargo.toml's version
+make release-checklist ARGS="--fetch"      # refresh origin/main + tags first
+make release-checklist ARGS="--done M-install-sh --note 'ran on the NUC'"
+```
 
-### Per-release ship checklist (in addition to the safety gate above)
+It exists because the alternative was three overlapping partial lists in this
+file, and the steps that lived in **none** of them — the Windows `self-update`,
+the registry splice, `scripts/install.sh` — are precisely the ones that got
+skipped.  Not because anyone decided to skip them: because no list said them.
 
-For each release, the relevant per-item plans hold their own
-landing procedures (e.g. for 0.8.5: SH.1, SH.2, DX.1, DX.3 in
-[`plans/36-developer-experience/`](plans/36-developer-experience);
-NDB.0 in [`plans/34-native-debug/`](plans/34-native-debug)).
-The cross-cutting work for ANY release is:
+Three things make it worth working through rather than reading:
 
-- [ ] All per-item landing procedures in the release's plans
-      passed.
-- [ ] `cargo fmt --all -- --check` clean.
-- [ ] `cargo clippy --tests --release -- -D warnings` clean.
-- [ ] Full local test suite green (`cargo nextest run --profile ci`).
-- [ ] CI matrix on push (Windows / macOS / Linux) all green.
-- [ ] Safety gate above (no new crashes, no leaks, no new H
-      P-issues opened during the release window).
-- [ ] Cross-platform smoke test done.
-- [ ] Release artefacts produced (see § Release Artifacts
-      Checklist below).
-- [ ] `Cargo.toml` version bumped.
-- [ ] `CHANGELOG.md` (user-facing) + `CHANGELOG_TECHNICAL.md`
-      (contributor) entries written.
-- [ ] Tag pushed; `release.yml` workflow runs.
+- **Automatic items are measured on every run and cannot be ticked.**  "Is
+  `make ci` green" is not a promise a human gets to make — it is `result.txt`'s
+  verdict line, and a verdict older than the newest source file reports STALE
+  rather than pass.  A gate you can tick is a gate that gets ticked.
+- **Manual items carry the exact command and what counts as a pass**, and are
+  the only ones `--done` accepts.  Progress lives in `.release-checklist/`
+  (local, gitignored) with a timestamp and your note as the evidence.
+- **Items for work this release did not touch stay hidden.**  The VS Code
+  extension pass and the native-debug gate are rituals for code most releases
+  never change; the script asks git whether they moved since the last tag.  A
+  list that includes work nobody needs to do is one people learn to skim.
+
+Two corrections it carries that this document used to get wrong:
+
+- The hands-on smoke is run **from the release ZIP, not a fresh git clone**.
+  The clone is a different path from the one users take, and it was the only
+  one anybody ever exercised — so the thing we smoke-tested was not the thing
+  we shipped.  (The tag pipeline now runs each bundle too; see below.)
+- `scripts/install.sh` — the documented `curl | sh` path — is executed by no
+  workflow.  `tests/doc_hygiene.rs` only checks statically that its
+  `uname`→triple mapping matches `PUBLISHED_TRIPLES`.
+
+The per-item landing procedures in the release's plans are separate and still
+apply (e.g. NDB.0 in [`plans/34-native-debug/`](plans/34-native-debug)).
+
+### What the tag pipeline proves about the artifacts
+
+`release.yml` used to build four bundles and upload them without executing one,
+so every artifact-level property — does the binary run, is it the version the
+tag claims, does the manifest still describe the files, do the shipped examples
+work — was checked by nobody.  Those properties do not exist before the zip
+does, which makes the tag run the only place they can be checked at all.
+
+Each build leg now unpacks **its own zip** (not the staging directory: the
+round-trip is part of what is under test) and asserts `--version` against the
+tag, `loft verify-self`, and every `examples/*.loft` under `--interpret`.  The
+example check asserts **empty stderr**, not just exit 0 — a loft program that
+cannot write its output file prints `… — write skipped` and exits 0, so an
+exit-code-only smoke passes on a bundle whose examples do nothing.
+
+One leg cannot always run its own artifact: `x86_64-apple-darwin` is
+cross-built on an arm64 runner and needs Rosetta 2.  It reports a loud skip
+rather than failing the release, and `make release-checklist` reads the run's
+annotations so a skipped bundle becomes a manual item instead of a silence.
 
 ---
 
