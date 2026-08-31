@@ -412,11 +412,19 @@ index.json                        ← the ONE signature (Ed25519, 4 trust roots)
 generated from the artifacts of the run that built them.  Splice it in and open a PR:
 
 ```bash
-gh release download v<version> -R loft-lang/loft -p 'loft-<version>-registry-entry.json'
-# or regenerate from the release assets:
+# Download EVERY asset, then let the tool merge -- `--splice-into` regenerates the
+# entry from the artifacts it hashes, so the directory must hold all of them:
+gh release download v<version> -R loft-lang/loft -D <assets>
 scripts/gen-toolchain-entry.py --version <version> --dir <assets> \
     --splice-into <registry-checkout>/index.json
 ```
+
+Downloading only `loft-<version>-registry-entry.json` and pasting it in is the
+route that looks cheaper and is the one this section warns against below: there is
+no flag that splices an existing entry FILE, so taking that shortcut leaves you
+hand-merging the `versions` map.  The two agree — the regenerated entry was
+verified byte-identical to the attached one for 2026.8.0 — so use the tool and keep
+the attached JSON as the thing to diff against if a hash is ever disputed.
 
 Never paste the entry over the existing one: the `versions` map **adds**.  Replacing
 it drops every earlier release, and it does so silently — resolution still succeeds,
@@ -437,7 +445,14 @@ verifies every `binaries` hash by download, so the exemption does not leave the
 binaries — the things users actually run — unchecked.
 
 > **Both landed in [loft-lang/registry#22](https://github.com/loft-lang/registry/pull/22),
-> and until it merges neither exists.**  This paragraph described them as current
+> which is still OPEN — so as of 2026-08-31 neither exists and `loft` is in no index.**
+> Verified end-to-end that day in a throwaway clone, because a doc that says a gate
+> works is the thing that stops anyone checking: with #22's validator, splicing
+> 2026.8.0's entry passes all four gates and gate 2b downloads each platform zip and
+> re-checks its sha256; with `main`'s validator, the same index reproduces
+> `` `loft package` failed: exit status 1 `` exactly.  The PR is MERGEABLE and carries
+> no CI of its own — the registry runs validation on submission PRs, not on changes to
+> the validator, so nothing will ever go green here to signal that it is ready.  This paragraph described them as current
 > from the day it was written; the live validator had no toolchain case at all —
 > gate 3 skipped only a package with no `homepage`, and the toolchain has one — so
 > the first real submission (2026.8.0) failed on `` `loft package` failed: exit

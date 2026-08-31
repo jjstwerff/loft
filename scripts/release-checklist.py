@@ -271,6 +271,57 @@ def check_ci_verdict():
     return OK, f"ALL GATES PASSED at {when}, newer than every source file"
 
 
+def check_reference_pdf():
+    """The reference PDF is not stale against its source.
+
+    `make-release.sh` copies `doc/loft-reference.pdf` into every bundle when the file
+    exists, and never builds it -- so a PDF older than `doc/loft-reference.typ` ships a
+    reference that does not describe the release, in all four zips, silently.  Unlike
+    the HTML docs, which the tag's `docs` job regenerates from source, nothing rebuilds
+    this one: `make pdf` is a hand-run step (RELEASE.md § 9).
+    """
+    pdf = os.path.join(ROOT, "doc", "loft-reference.pdf")
+    typ = os.path.join(ROOT, "doc", "loft-reference.typ")
+    if not os.path.isfile(typ):
+        return UNKNOWN, "doc/loft-reference.typ is missing"
+    if not os.path.isfile(pdf):
+        return FAIL, "no doc/loft-reference.pdf — every bundle ships without a reference"
+    pdf_at, typ_at = os.path.getmtime(pdf), os.path.getmtime(typ)
+    when = datetime.datetime.fromtimestamp(pdf_at).strftime("%Y-%m-%d %H:%M")
+    if typ_at > pdf_at:
+        src = datetime.datetime.fromtimestamp(typ_at).strftime("%Y-%m-%d %H:%M")
+        return FAIL, (
+            f"PDF built {when}, source edited {src} — run `make pdf`, or all four "
+            f"bundles ship a stale reference"
+        )
+    return OK, f"built {when}, newer than doc/loft-reference.typ"
+
+
+def check_ignored_tests():
+    """Every shipped `#[ignore]` still carries a rationale.
+
+    RELEASE.md's zero-ignore gate: an ignored test is a known failure pulled out of CI,
+    so "all green" means less than it looks.  The machine can check that the set is
+    small and every entry gives a reason; whether each reason is still ACCEPTABLE is the
+    owner's sign-off (M-ignores), and no script can do that half.
+    """
+    p = os.path.join(ROOT, "tests", "ignored_tests.baseline")
+    if not os.path.isfile(p):
+        return UNKNOWN, "tests/ignored_tests.baseline is missing"
+    entries = []
+    with open(p, encoding="utf-8") as f:
+        for line in f:
+            if line.strip() and not line.startswith("#"):
+                entries.append(line.rstrip("\n"))
+    bare = [e.split("\t")[0] for e in entries if "\t" not in e or not e.split("\t", 1)[1].strip()]
+    if bare:
+        return FAIL, "ignored with no rationale: " + ", ".join(bare)
+    names = [e.split("\t")[0] for e in entries]
+    if not names:
+        return OK, "no tests ship ignored"
+    return OK, f"{len(names)} ignored, each with a rationale: " + ", ".join(names)
+
+
 def check_prev_release_in_registry(version: str, network: bool):
     """Did the release before this one reach the signed index?
 
@@ -497,6 +548,75 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
             "The PREVIOUS release reached the signed registry index",
             "scripts/check-release-published.py",
             check=lambda: check_prev_release_in_registry(version, network),
+        ),
+        Item(
+            "A-pdf",
+            "The reference PDF is current (it ships in every bundle)",
+            "make pdf",
+            check=check_reference_pdf,
+        ),
+        Item(
+            "A-ignores",
+            "Every shipped `#[ignore]` carries a rationale",
+            "tests/ignored_tests.baseline",
+            check=check_ignored_tests,
+        ),
+        Item(
+            "M-valgrind",
+            "Valgrind-clean on the TAG CANDIDATE",
+            "valgrind target/release/loft <script> over tests/scripts/ + tests/docs/",
+            "`ERROR SUMMARY: 0 errors from 0 contexts` AND `definitely lost: 0 bytes` "
+            "— RELEASE.md § Memory safety says run it on the candidate, not last week",
+        ),
+        Item(
+            "M-leaks",
+            "Zero-leak gate re-verified on the TAG CANDIDATE",
+            "run tests/scripts/*.loft under LOFT_STORES=warn; LOFT_LOG=stores on "
+            "22-threading.loft and 80-parallel-block.loft",
+            "no `Warning: N stores not freed at program exit`.  A release that leaks "
+            "one store per loop iteration is unusable for a server or a game loop",
+        ),
+        Item(
+            "M-ignores",
+            "Owner sign-off on every ignore AND every skip-list entry",
+            "read tests/ignored_tests.baseline, then grep SKIP / NATIVE_SKIP / "
+            "SCRIPTS_NATIVE_SKIP / ignored_scripts() in tests/",
+            "each traces to a named open blocker.  `A-ignores` checks the rationales "
+            "exist; whether they are still acceptable is a judgement",
+        ),
+        Item(
+            "M-wasm",
+            "The WASM endpoint works — build, runtime, and gallery",
+            "make wasm-html-test && make gallery, then open doc/gallery.html",
+            "RELEASE.md § WASM endpoint: the browser bundle is how most users meet "
+            "loft.  All examples load with NO console errors",
+        ),
+        Item(
+            "M-docs-review",
+            "Pre-release documentation review (RELEASE.md steps 1-4 + 8)",
+            "load the doc-quality skill first, then walk the steps",
+            "stale problem docs removed, code links resolve, every doc reachable, "
+            "clippy suppressions re-justified.  Steps 5-7 are deferred (2026-05-15)",
+        ),
+        Item(
+            "M-monthly-docs",
+            "Monthly by-hand documentation review",
+            "make libraries-review && make features-review",
+            "which libraries owe a review or moved since their watermark — the "
+            "monthly cadence makes this a per-release step",
+        ),
+        Item(
+            "M-monthly-bugs",
+            "Monthly bug review — one rising class, one generalization",
+            "make bug-review",
+            "which mechanism classes still produce bugs, and whether last cycle's "
+            "keystone moved its class",
+        ),
+        Item(
+            "M-close-plans",
+            "Close the plans this release shipped",
+            "scripts/close-shipped-plans.sh --range <prev-tag>..HEAD",
+            "a plan that shipped and stayed open is one nobody can trust the status of",
         ),
         Item(
             "M-changelog-read",
