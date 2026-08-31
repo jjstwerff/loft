@@ -1914,6 +1914,7 @@ fn move_elide(data: &mut Data) {
                 .filter(|&s| source_escapes(&code, s, &co))
                 .collect();
             // B1.3b — reorder-free field-appends (`x.field += src`, container already exists).
+            let mut moved_into: HashMap<u16, u16> = HashMap::new();
             construct_move_rewrite(
                 &mut code,
                 &con_sources,
@@ -1922,7 +1923,28 @@ fn move_elide(data: &mut Data) {
                 &bad_containers,
                 &escaping,
                 &mut skip,
+                &mut moved_into,
             );
+            // A retargeted source is ERASED: its wrapper alloc, its view-def and the append are
+            // all gone, so nothing writes it any more.  What still names it is the `deps` of the
+            // element work-refs whose builds were just re-pointed — and a dep is the statement
+            // "my store belongs to that variable", which after the retarget belongs to the
+            // CONTAINER instead.  Left stale it is wrong twice over: the ownership derivation
+            // reads a var that owns nothing (`formal/ownership.md` O-Deps — every store-lifetime
+            // decision reads this one fact), and the scope pass declares the dep var so a borrower
+            // can name it, which hands the erased local a stack slot no instruction ever writes.
+            // That slot is what @PLN120 A's store-span check reports (loft#1241): the local is
+            // not merely unrecorded, it is not there.  Re-pointing states the fact the rewrite
+            // created rather than exempting the symptom by name.
+            for (&src, &cvar) in &moved_into {
+                let vars = &mut data.definitions[d_nr as usize].variables;
+                for v in 0..vars.next_var() {
+                    if v != src && vars.tp(v).depend().contains(&src) {
+                        vars.make_independent(v, src);
+                        vars.depend(v, cvar);
+                    }
+                }
+            }
             // B1.3c — fresh construction (`a = Bag { items: base }`, container built after the
             // source): hoist `a`'s alloc, then retarget. Runs on the copies B1.3b left standing.
             // B1.4 — the interprocedural mutation set (`find_written_vars` knows which callees
@@ -2377,6 +2399,7 @@ fn construct_move_rewrite(
     bad_containers: &HashSet<u16>,
     escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
+    moved_into: &mut HashMap<u16, u16>,
 ) {
     // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
     // destination's container var, the `OpDatabase` encounter order (for the reorder guard) and
@@ -2457,6 +2480,13 @@ fn construct_move_rewrite(
 
     // Pass 2 — retarget the element builds + drop the wrapper / view / prealloc / copy.
     construct_rewrite_ops(code, &ready, &vdbs, &dest, co);
+    // Report where each source's records now live, so its borrowers can be re-pointed there
+    // (loft#1241).  `ready` already proved the container is a `OpGetField(Var(c), …)` base.
+    for s in &ready {
+        if let Some(Some(cvar)) = container.get(s) {
+            moved_into.insert(*s, *cvar);
+        }
+    }
     // The moved-out owned store is the backing wrapper (`src` is a borrow of it) — suppress ITS
     // free. Only ready sources' backings are added, so a skipped source keeps its free.
     skip.extend(vdbs);
