@@ -263,6 +263,30 @@ impl IntegerSpec {
         }
     }
 
+    /// @FR-E-Uncomp-NN — the value a slot of this type holds when nobody assigned one, and
+    /// the value an uncomputable result takes where the slot cannot hold null.
+    ///
+    /// Zero wherever the range admits it, else the bound nearest zero.  A declared range that
+    /// excludes zero is the whole content: `integer limit(10, 20)` defaults to `10`, and `0`
+    /// is not a value that type has — a slot holding it is holding something its own
+    /// declaration forbids.
+    ///
+    /// The ONE home, because there were three and they agreed only where the range contains
+    /// zero, which is nearly every width anyone tests: the parser's `range_default` (this
+    /// answer), `data::to_default` and the native `default_native_value` (both `0` flat).
+    /// loft#1246 already recorded two of them drifting apart; loft#1254 found the third.
+    #[must_use]
+    pub fn default_value(&self) -> i64 {
+        let (lo, hi) = (i64::from(self.min), i64::from(self.max));
+        if lo <= 0 && 0 <= hi {
+            0
+        } else if lo > 0 {
+            lo
+        } else {
+            hi
+        }
+    }
+
     /// Usable UPPER bound — the [`Self::usable_min`] companion.  A nullable narrow
     /// UNSIGNED spec whose range fills its width drops the TOP code (`max-1`, so a
     /// nullable `u8` is `0..=254`); signed keeps `max`.
@@ -1104,8 +1128,18 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
     match tp {
         Type::Boolean => Value::Boolean(false),
         Type::Enum(tp, _, _) => Value::Enum(0, data.def(*tp).known_type),
-        Type::Integer(_)
-        | Type::Vector(_, _)
+        // @FR-E-Uncomp-NN — an integer's default is its RANGE's, not a flat zero.  A
+        // declared range that excludes zero made this answer a value the type does not have:
+        // an omitted `integer limit(10, 20)` field held `0`, outside its own declaration.
+        // `IntegerSpec::default_value` is the one home, shared with the parser's range guard
+        // and the native generator (loft#1254).
+        // `default_value` answers `0`, or `min` when the range lies wholly above zero — both
+        // i32-representable, since `min` IS an i32 (the `max` arm cannot fire: a `u32` max is
+        // never negative).  The fallback is unreachable and takes the neutral value.
+        Type::Integer(spec) => Value::Int(i32::try_from(spec.default_value()).unwrap_or(0)),
+        // A collection's zero is an EMPTY one, which is what a zero record number means here
+        // — not an integer default, and it does not go through the range home.
+        Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)

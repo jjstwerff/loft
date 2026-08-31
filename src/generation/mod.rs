@@ -1204,6 +1204,32 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
 ///   `integer`/`float` fn reads back as the sentinel on interp AND native), and
 ///   `floatvar = null` is type-rejected.  Do NOT route a live scalar null
 ///   through this — it would diverge from `emit_typed_null`.
+/// @FR-E-Uncomp-NN — the value a slot of `tp` holds when nobody assigned one.
+///
+/// NOT [`default_native_value`], which despite its name answers the type's NULL: a
+/// `boolean`'s `255u8` sentinel, a text's `STRING_NULL`, a flat `0` for every integer
+/// whatever its declared range.  That is the right answer where a null is what is wanted —
+/// an explicit `return null`, a `Value::Null` store — and the wrong one for a NON-NULLABLE
+/// destination, which is what an empty-bodied function's return is: `fn f() -> boolean { }`
+/// answered `null` natively where the interpreter said `false`, and
+/// `fn f() -> integer limit(10, 20) { }` answered `0`, a value that type does not have
+/// (loft#1254).
+///
+/// Only the two arms that differ are stated here; everything else delegates, because for
+/// every other type the null IS the zero-shaped default (an empty collection's `DbRef::NULL`,
+/// `0.0` for a float).  `character` is the documented exception and stays: its null is
+/// codepoint 0 and so is its default, so the collision `formal/types.md` records for `Char`
+/// leaves nothing better to return.
+pub(super) fn uninitialised_native_value(tp: &Type, context: &Context) -> String {
+    match tp {
+        // The storage form of `false`; the null is `255u8`.
+        Type::Boolean => "0u8".into(),
+        Type::Integer(spec) => spec.default_value().to_string(),
+        Type::Optional(inner) => default_native_value_in(inner, context),
+        _ => default_native_value_in(tp, context),
+    }
+}
+
 pub(super) fn default_native_value(tp: &Type) -> String {
     default_native_value_in(tp, &Context::Result)
 }
@@ -4889,7 +4915,13 @@ extern crate loft;"
                     w,
                     "  let _stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
                 )?;
-                writeln!(w, "  {}", default_native_value(def.returned()))?;
+                // An empty body assigns nothing, so the return takes the type's DEFAULT —
+                // not its null (@FR-E-Uncomp-NN, loft#1254).
+                writeln!(
+                    w,
+                    "  {}",
+                    uninitialised_native_value(def.returned(), &Context::Result)
+                )?;
                 writeln!(w, "}}")?;
             } else if instrument {
                 // Emit shadow call stack instrumentation before the block body.

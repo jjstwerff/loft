@@ -4498,3 +4498,77 @@ fn a_nested_narrow_vector_field_keeps_the_type_ids_aligned() {
         );
     }
 }
+
+/// loft#1254 cell 2 + cell 4 — an empty-bodied function's return takes the type's DEFAULT,
+/// not its NULL, and for an integer the default is its RANGE's.
+///
+/// `default_native_value` answers each type's null sentinel — a `boolean`'s `255u8`, a flat
+/// `0` for every integer whatever its declared range — which is right for an explicit
+/// `return null` and wrong for a non-nullable destination.  An empty body assigns nothing, so
+/// its return is `(E-Uncomp-NN)`'s case: `fn f() -> boolean { }` answered `null` here where
+/// the interpreter said `false`, and `fn f() -> integer limit(10, 20) { }` answered `0`, a
+/// value that type does not have.
+///
+/// NATIVE-ONLY on purpose, and measured rather than assumed.  The interpreter half of
+/// loft#1254 — an empty body leaving whatever the evaluation stack held — is a separate fix,
+/// and it reaches the BOOLEAN cell too: on `--interpret` the stub's value PRINTS as `false`
+/// and `!b` reads true, while `b == false` is **false**.  It is a garbage byte that the
+/// formatter renders as `false` because a boolean is a `u8` and anything but `1` formats that
+/// way, so the one test a reader would write to check it is the one that exposes it and the
+/// two obvious ones hide it.  A cross-backend `.loft` guard therefore cannot assert any cell
+/// here yet; it becomes writable when cell 1 lands.
+///
+/// A range whose values do not FIT their native storage — `limit(300, 400)` is emitted as
+/// `-> u8` and returns `94` for a body of `350`, on this build and on the last release — is
+/// deliberately not a cell here.  That is loft#1255, a representation defect underneath this
+/// one: while it stands there is no correct literal for such a range's default either, so a
+/// cell for it would be pinning the wrong answer.  `limit(10, 20)` is the range cell, and it
+/// is the one that separates `IntegerSpec::default_value` from a flat `0`.
+#[test]
+fn native_empty_body_returns_the_types_default() -> std::io::Result<()> {
+    let _guard = native_suite_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let rlib_info = find_loft_rlib();
+    let path = std::env::temp_dir().join("loft_1254_stub_default.loft");
+    std::fs::write(
+        &path,
+        "fn s_bool() -> boolean { }\n\
+         fn s_lim() -> integer limit(10, 20) { }\n\
+         fn s_int() -> integer { }\n\
+         fn s_float() -> float { }\n\
+         fn main() {\n\
+         \x20 println(\"bool {s_bool()}\");\n\
+         \x20 println(\"lim {s_lim()}\");\n\
+         \x20 println(\"int {s_int()}\");\n\
+         \x20 println(\"float {s_float()}\");\n\
+         }\n",
+    )?;
+    let job = prepare_native_test(&path)?;
+    // Ok(false) = skipped (rustc absent / low space) — not a failure.
+    if !compile_native_job(&job, &rlib_info)? {
+        return Ok(());
+    }
+    let out = std::process::Command::new(&job.binary).output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains("bool false"),
+        "a `boolean` stub takes the type's default `false`, not its `255u8` NULL — a reader \
+         who tests the result for null gets the wrong answer either way round: {stdout}"
+    );
+    assert!(
+        stdout.contains("lim 10"),
+        "an `integer limit(10, 20)` stub takes the bound nearest zero, because `0` is not a \
+         value that type has: {stdout}"
+    );
+    // The controls: a range that CONTAINS zero, and a plain integer, both still answer 0.
+    // Without them "return the low bound" satisfies every cell above.
+    assert!(
+        stdout.contains("int 0"),
+        "a plain integer stub is 0: {stdout}"
+    );
+    assert!(stdout.contains("float 0"), "a float stub is 0.0: {stdout}");
+    Ok(())
+}

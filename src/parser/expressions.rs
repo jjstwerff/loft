@@ -53,42 +53,8 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
     }
 }
 
-/// The base variable at the root of an lvalue access chain, or `u16::MAX` if the
-/// chain does not bottom out in a plain variable.  A field/element access lowers to
-/// `Call(op, [inner, …])` whose FIRST argument is the object being accessed
-/// (`s.a.b[i]` → `Call(idx, [Call(f_b, [Call(f_a, [Var(s), …]), …]), i])`), so the
-/// base is found by walking `args[0]` to the leaf `Var`.  @PLN40 step 3 uses this to
-/// find which binding a component write (`p.x = …`, `p[i] = …`) mutates THROUGH, so a
-/// write through a value-const binding can be rejected at its root.
-/// loft#984 — the DECLARED range of a store target, and the default a value outside it
-/// takes: `(lo, hi, default)`.
-///
-/// `None` when the question does not arise — the target declares no range of its own (the
-/// plain `integer` / i32 templates), or it is not an integer at all.
-///
-/// The default is the LOWEST value in range, except where the slot admits null, which
-/// takes `null` instead: absence is a value that type can hold, and it is the honest
-/// answer for "this did not fit". A non-nullable slot has no such value, so it takes `lo`.
-/// @FR-E-Uncomp-NN — the value a non-nullable range takes when the result cannot be
-/// computed: what the slot would hold if nobody had assigned.
-///
-/// Zero wherever the range admits it, else the bound nearest zero.  Both range paths call
-/// this rather than each deciding: they already drifted once, `declared_range` and
-/// `compound_range` both answering `lo` for reasons neither states, which is how an `i16`
-/// overflow came to answer `-32768` — a number as unrelated to the computation as a
-/// wrapped one, and just as impossible to tell from a real answer downstream.
-fn range_default(lo: i64, hi: i64) -> i64 {
-    if lo <= 0 && 0 <= hi {
-        0
-    } else if lo > 0 {
-        lo
-    } else {
-        hi
-    }
-}
-
-/// The value an uncomputable result takes in a slot of type `tp` whose range is
-/// `lo..=hi` — the ONE home for the choice `formal/operational.md` states in two rules.
+/// The value an uncomputable result takes in a slot of type `tp` whose range is `spec` —
+/// the one place that chooses between the two rules `formal/operational.md` states.
 ///
 /// @FR-E-Uncomp answers **null**, and that is the answer wherever the slot can hold one:
 /// `null` says "this did not happen", which is what an overflow or a divide by zero is.
@@ -104,14 +70,24 @@ fn range_default(lo: i64, hi: i64) -> i64 {
 /// loft#1246).  A local's slot is a full i64, and `OpRangeDefault` passes `i64::MIN`
 /// through untouched, so the null reaches a narrow FIELD as the field store's own
 /// sentinel rather than as a number.
-fn uncomputable_default(tp: &Type, lo: i64, hi: i64) -> i64 {
+///
+/// The non-nullable ANSWER is not decided here: `IntegerSpec::default_value` is its one
+/// home, shared with `data::to_default` and the native generator, which answered it
+/// separately until loft#1254.
+fn uncomputable_default(tp: &Type, spec: &crate::data::IntegerSpec) -> i64 {
     if matches!(tp, Type::Optional(_)) {
         i64::MIN
     } else {
-        range_default(lo, hi)
+        spec.default_value()
     }
 }
 
+/// loft#984 — the DECLARED range of a store target, and the default a value outside it
+/// takes: `(lo, hi, default)`.  The default is `uncomputable_default`'s; this function
+/// answers only which range applies.
+///
+/// `None` when the question does not arise — the target declares no range of its own (the
+/// plain `integer` / i32 templates), or it is not an integer at all.
 fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
     let Type::Integer(spec) = tp.base() else {
         return None;
@@ -136,9 +112,16 @@ fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
     // floor: `lo` is zero for `u8` and so looked right, while an `i16` answered `-32768`
     // and an `i32` `-2147483647` — in range, type-correct, and as unrelated to the
     // computation as a wrapped value would be.
-    Some((lo, hi, uncomputable_default(tp, lo, hi)))
+    Some((lo, hi, uncomputable_default(tp, spec)))
 }
 
+/// The base variable at the root of an lvalue access chain, or `u16::MAX` if the
+/// chain does not bottom out in a plain variable.  A field/element access lowers to
+/// `Call(op, [inner, …])` whose FIRST argument is the object being accessed
+/// (`s.a.b[i]` → `Call(idx, [Call(f_b, [Call(f_a, [Var(s), …]), …]), i])`), so the
+/// base is found by walking `args[0]` to the leaf `Var`.  @PLN40 step 3 uses this to
+/// find which binding a component write (`p.x = …`, `p[i] = …`) mutates THROUGH, so a
+/// write through a value-const binding can be rejected at its root.
 fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     match v.unspan() {
         Value::Var(nr) => *nr,
@@ -5834,7 +5817,7 @@ use a separate collection or add after the loop"
         // @FR-E-Uncomp / @FR-E-Uncomp-NN through the same home the `limit(…)` arm uses.
         // Asking it HERE rather than answering `range_default` directly is what makes a
         // nullable narrow alias answer null: this arm is the only one a `u8?` reaches.
-        Some((lo, hi, uncomputable_default(tp, lo, hi)))
+        Some((lo, hi, uncomputable_default(tp, spec)))
     }
 
     pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {
