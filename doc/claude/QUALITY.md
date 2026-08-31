@@ -2371,7 +2371,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 661 | 308 | 5 | **348** |
+| 660 | 310 | 5 | **345** |
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
@@ -2381,7 +2381,7 @@ column, which is the movement this column exists to report.  loft#1227's `GroupA
 the backlog: it matched its holder against `Type::Reference` bare, which reads a `Counter` local
 and misses a `Counter?` one holding the same fields and the same groups.  Named on the first run
 after the lint was written, so the blindness never shipped — `.base()`, and the opaque column
-stays at 348 rather than growing.
+did not grow.
 
   loft#1229 is another: `parse_vector`
 crosses from opaque to seeing-through, because a keyed literal reported its DESTINATION
@@ -2391,6 +2391,12 @@ nullable SOURCE and warned about correct code.  A constructed collection is neve
 literal takes `.base()`.  This is the family shape the paragraph below describes, one more time:
 the VECTOR branch three lines down had always built its type fresh, and only the keyed sibling
 carried the destination's wrapper.
+
+loft#1209 is the largest single move the column has recorded, and it is a
+CAPTURE rather than a lowering: `closure_attr_type` and both of `parse_var`'s capture sites asked
+`is_collection_type` bare, so the storage half and the reading half of one capture disagreed
+about whether a `vector<τ>?` is a collection — an internal compiler error on three lines of
+ordinary source.  One notion, two spellings, decided in two files.
 
 ⚠ **The queue this column names is not "349 bodies to read".**  Every repair in it so far was
 one member of a PREDICATE FAMILY peeled while its siblings were not — `is_keyed` (d1220a1b),

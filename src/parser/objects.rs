@@ -437,7 +437,10 @@ impl Parser {
                 .iter()
                 .find(|(n, _)| n == name)
                 .map(|(_, ct)| ct.clone())
-                .filter(Self::is_collection_type);
+                // `.base()` — the same reading its twin below takes: a `vector<τ>?` capture is
+                // a collection capture, so the body sees the collection type the source wrote
+                // rather than the shared attribute's `Reference(elem)` (loft#1209).
+                .filter(|ct| Self::is_collection_type(ct.base()));
             t = captured_collection_tp.unwrap_or_else(|| self.data.attr_type(closure_d_nr, fnr));
             // closure record is a struct — add __closure as dep so the
             // store allocation stays alive while derived text/references are in use.
@@ -576,7 +579,13 @@ impl Parser {
             // not the type.  Collections have always been in this set; a nullable heap
             // value joins it, because `S?` is a `DbRef` whose `rec == 0` means absent and
             // it shares exactly as its dense twin does (loft#1114).
-            let is_collection_capture = Self::is_collection_type(&ctype)
+            // `.base()`, because this is the READING half of the same fact `closure_attr_type`
+            // decides the STORAGE half of, and the two must agree about what a nullable
+            // collection is.  Asked unpeeled, a `vector<τ>?` / `hash<τ[k]>?` capture answered
+            // "not a collection", so the body took the attribute's own `Reference(elem)` type
+            // and `v += [x]` inside the lambda reported *"No matching operator 'Add' on
+            // 'integer'"* — the ELEMENT's type, for an append to the collection (loft#1209).
+            let is_collection_capture = Self::is_collection_type(ctype.base())
                 || self.data.nullable_struct_payload(&ctype).is_some();
             // record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {

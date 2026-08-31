@@ -1553,6 +1553,10 @@ impl Parser {
                     // a false "never read" warning.  Do NOT call var_usages —
                     // that would interfere with the dead-assignment check.
                     self.vars.set_captured(v_nr);
+                    // loft#1218 — give a NULL collection capture its slot BEFORE the fill
+                    // below copies the handle, or there is nothing for the lambda to share.
+                    let backing = self.null_capture_backing(v_nr);
+                    alloc_steps.extend(backing);
                     alloc_steps.push(self.set_field_no_check(
                         closure_rec_d,
                         aid,
@@ -1602,6 +1606,61 @@ impl Parser {
         } else {
             *code = Value::Int(d_nr as i32);
         }
+    }
+
+    /// The backing a NULL collection capture needs before the closure record can share it —
+    /// empty for every other capture.
+    ///
+    /// A captured collection is shared as a DbRef, and `vector::is_absent_collection`'s header
+    /// states what that DbRef is: *"a collection field or local is addressed by a DbRef aimed
+    /// AT its 4-byte slot, not at the collection"*, with absence read out of the SLOT because
+    /// the value-level null "can never appear there".  A `τ?` local still holding the
+    /// value-level null has no slot to aim at, so the closure record was handed `DbRef::NULL`
+    /// and the append inside the lambda had no destination: silently lost for a vector, a NULL
+    /// DbRef fault for a keyed kind (loft#1218).
+    ///
+    /// So the local is given its slot here, marked ABSENT.  That changes the REPRESENTATION
+    /// and not the value — `v == null` still answers true, because absence is what the slot
+    /// now says — and an append on EITHER side then materialises in place, which is what an
+    /// absent FIELD has always done (loft#1213).  Materialising the COLLECTION instead is the
+    /// cheaper-looking alternative and is wrong: it would make `v == null` answer false
+    /// because a lambda mentioned `v`.
+    ///
+    /// Not gated on the lambda MUTATING the capture.  `(L-CapHeap)` shares a captured heap
+    /// value whatever the body does with it, and the mutation walker cannot see a collection
+    /// append in any case: `v += [x]` lowers to `OpNewRecord` / `OpFinishRecord` on the
+    /// capture and neither is in its mutating-op set, so it reported the element TEMP as the
+    /// mutated name and the capture as untouched.  A read-only capture pays one store for a
+    /// representation it shares with every other collection capture.
+    fn null_capture_backing(&mut self, v_nr: u16) -> Vec<Value> {
+        if self.first_pass || v_nr == u16::MAX || self.vars.is_argument(v_nr) {
+            return Vec::new();
+        }
+        let tp = self.vars.tp(v_nr).clone();
+        let (base, nullable) = tp.peel_optional();
+        if !nullable || !Self::is_collection_type(base) {
+            return Vec::new();
+        }
+        // A dep means the local already owns a backing — a `= []` capture, or one an earlier
+        // statement built.  Its slot is already there to share.
+        if !tp.depend().is_empty() {
+            return Vec::new();
+        }
+        #[allow(clippy::cast_possible_wrap)]
+        let absent = crate::keys::DbRef::ABSENT_REC as i32;
+        if let Type::Vector(elm, _) = base {
+            let elm = (**elm).clone();
+            return self.vector_db_init(&elm, v_nr, absent, true);
+        }
+        // A KEYED capture is NOT given one here, and the measurement is why.  A keyed local
+        // has no wrapper — its store IS the collection — so the slot it would gain is the one
+        // `OpDatabase` hands it, and that word is the keyed store's own header rather than a
+        // "which record holds the collection" slot.  Minting it makes `h == null` answer false
+        // (the value changes, which is exactly what this is written to avoid) and the appends
+        // inside the lambda still do not accumulate: two adds read length 1, and one whose
+        // element carries a formatted `text` reads 0.  So the keyed spelling keeps today's
+        // loud failure rather than gaining a quiet wrong one — loft#1233.
+        Vec::new()
     }
 
     /// Synthesize an anonymous struct definition for the captured variables
@@ -2010,7 +2069,15 @@ impl Parser {
         if let Some(d) = self.data.nullable_struct_payload(tp) {
             return Type::Reference(d, Deps::share_sentinel());
         }
-        match tp {
+        // …and the same for a nullable COLLECTION, which is the other half of that rule and
+        // was the half left behind: `.base()`, so `vector<τ>?` / `hash<τ[k]>?` share exactly
+        // as their dense twins do.  Unpeeled it fell to `_ => tp.clone()`, the attribute kept
+        // the collection type and was stored INLINE, and the body's read came back an
+        // `OpGetField` where the dense capture reads an `OpGetDbRef` — so an append inside
+        // the lambda was taken for a STRUCT FIELD append, resolved its parent against
+        // `Type::Null`, and asked `Data::def` for `u32::MAX`: an internal compiler error on
+        // three lines of ordinary source (loft#1209).
+        match tp.base() {
             Type::Reference(d, _) => Type::Reference(*d, Deps::share_sentinel()),
             Type::Hash(c, _, _)
             | Type::Sorted(c, _, _)
@@ -4458,6 +4525,32 @@ impl Parser {
     }
 
     pub(crate) fn vector_db(&mut self, assign_tp: &Type, vec: u16) -> Vec<Value> {
+        self.vector_db_init(assign_tp, vec, 0, false)
+    }
+
+    /// [`Self::vector_db`] with the collection slot's initial value spelled out.
+    ///
+    /// `0` is the EMPTY collection and is what a backing minted for a write wants.
+    /// `DbRef::ABSENT_REC` is the reserved id that means ABSENT (loft#917), and it is what a
+    /// backing minted to give a NULL local something shareable wants: the local gains its
+    /// slot without gaining a collection, so `v == null` still answers true —
+    /// `vector::is_absent_collection` reads the slot, not the handle.
+    ///
+    /// `guarded` mints only into a local whose HANDLE is still null, and is for a site that
+    /// can run more than once — a closure built inside a loop mints at every pass, and an
+    /// unguarded mint then re-points the local at a fresh store and orphans what the previous
+    /// pass put in it (the shape loft#1219 measured at the append site).  The test is
+    /// `OpRefIsNull` and not `OpVectorIsNull`: the slot this writes says ABSENT, so the
+    /// collection test answers true afterwards as well and would re-mint every time.  The
+    /// backing is `mark_inline_ref` for the same reason the rebind branch above is — a
+    /// CONDITIONAL `OpDatabase` leaves the untaken path holding an eagerly allocated store.
+    pub(crate) fn vector_db_init(
+        &mut self,
+        assign_tp: &Type,
+        vec: u16,
+        slot_init: i32,
+        guarded: bool,
+    ) -> Vec<Value> {
         // @PLN87 P2.4 — a REBIND vector param (`v = [..]` whole-binding replace on
         // a visible vector param, marked via `ensure_rebind_witness`) DOES get a
         // fresh backing: it rebinds locally rather than appending to the caller's
@@ -4516,8 +4609,13 @@ impl Parser {
             ls.push(self.cl("OpDatabase", &[Value::Var(db), Value::Int(i32::from(tp))]));
             // Reference to the vector field.
             ls.push(v_set(vec, self.get_field(vec_def, 0, Value::Var(db))));
-            // Write 0 into this reference.
-            ls.push(self.set_field(vec_def, 0, 0, Value::Var(db), Value::Int(0)));
+            // Write the initial slot value into this reference.
+            ls.push(self.set_field(vec_def, 0, 0, Value::Var(db), Value::Int(slot_init)));
+            if guarded {
+                self.vars.mark_inline_ref(db);
+                let test = self.cl("OpRefIsNull", &[Value::Var(vec)]);
+                return vec![crate::data::v_if(test, Value::Insert(ls), Value::Null)];
+            }
             ls
         }
     }
