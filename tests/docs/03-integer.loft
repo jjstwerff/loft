@@ -15,8 +15,11 @@
 fn main() {
   // ## Converting between numbers and text
   // Wrapping a value in '{...}' inside a string formats it as text.
-  // Going the other way, 'as integer' parses a text value into a number.
-  // If the text cannot be parsed, the result is null — not a crash.
+  // Going the other way, 'as integer?' parses a text value into a number. Write
+  // the '?': a text parse can fail, so a bare 'as integer' is refused at compile
+  // time ("a text parse `as integer` may fail, and a bare cast asserts it cannot").
+  // The '?' is you accepting the failure case, and the result is null — not a
+  // crash — when the text does not parse.
   v = 4;
   assert("{v}" == "4", "Format integer as text");
   assert("123" as integer? == 123, "Parse text to integer");
@@ -25,7 +28,9 @@ fn main() {
   // Loft follows standard mathematical precedence: '*' and '/' before '+' and '-'.
   // Bitwise operators (<<, &, ^) have their own precedence — when mixing them with
   // arithmetic, parentheses make your intent clear and avoid surprises.
-  // Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.
+  // Note: '^' is XOR, not exponentiation. For powers use 'pow(base, exp)' — but it
+  // is a FLOAT function ('pow(2, 3)' does not resolve), so raise in floats and come
+  // back: 'pow(2.0, 10.0) as integer' is 1024.
   assert(1 + 2 * 4 == 9, "Multiplication before addition");
   assert(1 + 2 << 2 == 12, "Shift: (1+2) << 2 = 12");
   assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
@@ -40,11 +45,12 @@ fn main() {
   // CONTINUES — the spreadsheet model, where one bad cell shows an error but
   // the rest still recalculate.  This holds the same everywhere (development,
   // test, and production) — one bad calculation never halts the run.
-  // - **Undefended** (bare `1 / 0`): you get null, and at this unguarded site
-  //   loft also reports a warning so the divide-by-zero is not invisible.
-  // - **Defended** (`1 / 0 ?? fallback`, or a following `if x != null`):
-  //   `??` supplies a non-null fallback and the warning is suppressed —
-  //   you have explicitly handled the case.
+  // Where the divisor is a literal zero in your source, loft can see it before the
+  // program runs and warns (next section). Where it is only zero at RUN time there is
+  // no warning — you get null, and when loft knows the reason it prints it, so a bare
+  // '{12 / a}' shows 'null(/0)' rather than a bare 'null'. Recover with '??', or test
+  // the result for null: nothing else tells you, so a divide whose divisor could be
+  // zero is one you handle rather than one you are reminded about.
   a = 2 * 2;
   a -= 4;
   // a is now 0

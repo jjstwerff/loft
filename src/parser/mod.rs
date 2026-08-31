@@ -3684,7 +3684,12 @@ impl Parser {
     fn int_type_name(&self, t: &Type) -> String {
         if let Type::Integer(s) = t {
             match s.forced_size.map(std::num::NonZeroU8::get) {
-                Some(4) => return "i32".to_string(),
+                // Every width picks its spelling from the sign of the range, and the
+                // four-byte case was the one that did not — so a `u32` reported itself
+                // as `i32`, and the message's own advice (`cast explicitly with
+                // `as i32``) named a type with a different range than the one the
+                // author declared (loft#1247).
+                Some(4) => return if s.min < 0 { "i32" } else { "u32" }.to_string(),
                 Some(2) => return if s.min < 0 { "i16" } else { "u16" }.to_string(),
                 Some(1) => return if s.min < 0 { "i8" } else { "u8" }.to_string(),
                 _ => {}
