@@ -110,6 +110,22 @@ comparison, `??`) evaluates both operands under E-Left.
                                                 `x % 0.0` — since the float null IS the NaN
                                                 (E-Null).  Overflow follows the same line:
                                                 `1.0e308 * 10.0` keeps `inf`.
+  (E-Uncomp-NN) ⟨v₁ op v₂, σ⟩ → ⟨default(τ), σ⟩ where the result is not computable AND the
+                                                target type τ cannot HOLD null (a non-nullable
+                                                declared range).  (E-Uncomp) answers null, and
+                                                a slot that cannot hold null cannot take that
+                                                answer, so the next best thing is τ's DEFAULT —
+                                                the value the program would have had if nobody
+                                                had assigned: `0` for every integer width whose
+                                                range admits it, else the bound nearest zero.
+                                                NEVER a value derived from the machine
+                                                representation.  A wrapped, truncated or
+                                                reinterpreted result is the WORST answer
+                                                available: it is in range, type-correct, and
+                                                unrelated to the computation, so nothing
+                                                downstream can tell it from a real one.  The
+                                                processor's behaviour is an implementation
+                                                detail and never the semantics.
   (E-NullArg)   any op with a `null` operand produces `null` (null is CONTAGIOUS),
                 EXCEPT the two families below.
                 COMPARISONS are DEFINITE against the reserved pattern and UNIFORM across
@@ -133,7 +149,13 @@ comparison, `??`) evaluates both operands under E-Left.
 
 **In words.** Arithmetic gives the obvious result when it fits. When it *can't* — overflow,
 divide/modulo by zero — it yields **null** and the program **keeps running**; it does not
-halt. Comparisons are the first exception to contagion: they let you *test* for null
+halt.  Where the value has to land somewhere that cannot hold null — a non-nullable declared
+range — it takes that type's **default** instead (E-Uncomp-NN), which is `0` wherever the
+range admits it.  What it is never allowed to be is whatever the hardware happened to leave
+in the register: a wrapped or truncated result is in range, type-correct and unrelated to the
+computation, which makes it indistinguishable from an answer.  Null says "this did not
+happen"; the default says "this did not happen and I could not tell you"; a wrapped number
+says nothing at all, and says it convincingly. Comparisons are the first exception to contagion: they let you *test* for null
 (`x == null`) and give a **total order** with null sorting first, and this is **uniform across
 scalar types** — `null == null` is always true, never type-dependent. (`float`/`single` null was
 a NaN, so `null == null` used to be false and ordering unordered — deviation D-op-null-1, CLOSED
@@ -381,10 +403,19 @@ drift apart; verified both backends —
 
 ## Deviations
 
-**OPEN: 3.**
+**OPEN: 5.**
 - **D-op-1** — there is no shared operational semantics — the interpreter is the spec
 - **D-op-2** — interpreter/native divergences are test-caught, not definition-caught
 - **D-op-5** — two spellings of a following null-check still report differently
+- **D-op-6** — (E-Uncomp-NN)'s default is emitted as the range's LOWER BOUND, not the type's
+  default.  `OpRangeDefault` carries a `dflt` operand and `declared_range` fills it with `lo`,
+  so `u8` gets `0` only because its floor happens to be zero: an `i16` overflow answers
+  `-32768` and an `i32` overflow `-2147483647`.  Both are in range and both are as unrelated
+  to the computation as a wrapped value would be.  loft#1246.
+- **D-op-7** — (E-Uncomp) does not reach a nullable narrow ALIAS.  The null default is keyed
+  on `Type::Optional(_)`, which `integer limit(0,255)?` matches and `u8?` does not, so a `u8?`
+  overflow answers `0` where the rule requires null — and `??`, the documented recovery, is
+  inert on it.  loft#1246.
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [operational-history.md](operational-history.md).

@@ -69,6 +69,24 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 /// The default is the LOWEST value in range, except where the slot admits null, which
 /// takes `null` instead: absence is a value that type can hold, and it is the honest
 /// answer for "this did not fit". A non-nullable slot has no such value, so it takes `lo`.
+/// (E-Uncomp-NN) — the value a non-nullable range takes when the result cannot be
+/// computed: what the slot would hold if nobody had assigned.
+///
+/// Zero wherever the range admits it, else the bound nearest zero.  Both range paths call
+/// this rather than each deciding: they already drifted once, `declared_range` and
+/// `compound_range` both answering `lo` for reasons neither states, which is how an `i16`
+/// overflow came to answer `-32768` — a number as unrelated to the computation as a
+/// wrapped one, and just as impossible to tell from a real answer downstream.
+fn range_default(lo: i64, hi: i64) -> i64 {
+    if lo <= 0 && 0 <= hi {
+        0
+    } else if lo > 0 {
+        lo
+    } else {
+        hi
+    }
+}
+
 fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
     let Type::Integer(spec) = tp.base() else {
         return None;
@@ -88,10 +106,16 @@ fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
     }
     let lo = i64::from(spec.min);
     let hi = i64::from(spec.max);
+    // (E-Uncomp) / (E-Uncomp-NN), formal/operational.md.  A result that cannot be
+    // computed is null; where the slot cannot HOLD null it takes the type's DEFAULT
+    // instead — and the default is not the range's FLOOR (D-op-6).  `lo` is zero for `u8` and so
+    // looked right, while an `i16` answered `-32768` and an `i32` `-2147483647`: in
+    // range, type-correct, and as unrelated to the computation as a wrapped value would
+    // be.  `range_default` is the one answer, shared with the compound path.
     let dflt = if matches!(tp, Type::Optional(_)) {
         i64::MIN
     } else {
-        lo
+        range_default(lo, hi)
     };
     Some((lo, hi, dflt))
 }
@@ -5774,7 +5798,7 @@ use a separate collection or add after the loop"
             return None;
         }
         let lo = i64::from(spec.min);
-        Some((lo, i64::from(spec.max), lo))
+        Some((lo, i64::from(spec.max), range_default(lo, i64::from(spec.max))))
     }
 
     pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {

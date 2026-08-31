@@ -87,7 +87,7 @@ fn main() {
   sp.hi = 300;
   assert(sp.hi == 300, "and its bottom: {sp.hi}");
   sp.hi = 299;
-  assert(sp.hi == 300, "below the range takes the default, which is `lo` = 300: {sp.hi}");
+  assert(sp.hi == 300, "below the range takes the default — 0 is outside limit(300,400), so the bound nearest it: {sp.hi}");
 
   sp.lo = 0;
   assert(sp.lo == 0, "a limit(-200, 0) field holds its top value: {sp.lo}");
@@ -96,7 +96,9 @@ fn main() {
   sp.lo = -200;
   assert(sp.lo == -200, "and its negative bottom: {sp.lo}");
   sp.lo = -300;
-  assert(sp.lo == -200, "below it takes the default, which is `lo` = -200: {sp.lo}");
+  // (E-Uncomp-NN): the DEFAULT, which for a range spanning zero is zero — not the floor.
+  // This cell read -200 until 2026-08-31, when the floor stopped standing in for it.
+  assert(sp.lo == 0, "below it takes the type's default, 0: {sp.lo}");
 
   // ── A NULLABLE narrow field defaults to null, not to the bottom of the range ──────
   // 65535 is the value the `+1` encoding cannot store (it is the reserved sentinel), so
@@ -114,7 +116,7 @@ fn main() {
   assert(sp.hi == 300, "above the declared hi takes the default: {sp.hi}");
   sp.lo = -100;
   sp.lo = 5;
-  assert(sp.lo == -200, "above a negative range's hi takes its lo: {sp.lo}");
+  assert(sp.lo == 0, "and above its top, the same default — not the floor: {sp.lo}");
 
   // A value the compiler cannot see through — not a literal — takes the same route.
   runtime984 = 777;
@@ -125,7 +127,7 @@ fn main() {
   // The CONSTRUCTOR path, which the assignment seam does not reach.
   ctor = Span984 { hi: 500, lo: 5 };
   assert(ctor.hi == 300, "a struct literal's out-of-range field defaults: {ctor.hi}");
-  assert(ctor.lo == -200, "both of them: {ctor.lo}");
+  assert(ctor.lo == 0, "both of them — and this range spans zero, so 0: {ctor.lo}");
 
   // ── VARIABLES, which had no enforcement of any kind ───────────────────────────────
   v984: integer limit(0, 255) = 7;
@@ -141,7 +143,7 @@ fn main() {
   // The default is the LOWEST VALUE IN RANGE, which is not the same as zero.
   w984: integer limit(10, 20) = 12;
   w984 = 99;
-  assert(w984 == 10, "the default is the range's low end, not 0: {w984}");
+  assert(w984 == 10, "0 is outside this range, so the default is the bound nearest zero: {w984}");
   w984 = 15;
   assert(w984 == 15, "in range, untouched: {w984}");
 

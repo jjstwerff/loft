@@ -7,8 +7,15 @@
 // The entry says each "holds whole numbers within fixed bounds".  There are three places that
 // could enforce it and they are not the same place: the DECLARATION refuses a value that does
 // not fit (`l: u8 = 300`), the written-out assignment refuses one it cannot prove fits
-// (`l = l + 10`), and STORAGE clamps — an out-of-range write to a narrow field leaves the
-// type's minimum.  A compound assignment into a LOCAL used to reach none of them: `a: u8 =
+// (`l = l + 10`), and STORAGE bounds the write.
+//
+// WHAT it leaves changed on 2026-08-31: the type's DEFAULT, not its minimum
+// (`formal/operational.md` (E-Uncomp-NN)).  The two coincide for `u8` and `u16`, whose floor
+// IS zero, which is why the original cells still read the same; they part for every signed
+// width, where the minimum is a large negative number that has nothing to do with the
+// calculation.  A result that cannot be computed is null, and where the slot cannot hold null
+// it takes the value it would have had if nobody had assigned — never one the machine's
+// representation chose.  A compound assignment into a LOCAL used to reach none of them: `a: u8 =
 // 250; a += 10;` answered 260 and `b: u8 = 5; b -= 10;` answered -5, a value the type cannot
 // represent at all, so one program held 260 in a `u8` local and 0 in the `u8` field beside it.
 //
@@ -70,7 +77,7 @@ fn main() {
   // check of any kind.
   a1009: u8 = 250;
   a1009 += 10;
-  assert(a1009 == 0, "a u8 local past its ceiling takes the type's minimum, got {a1009}");
+  assert(a1009 == 0, "a u8 local past its ceiling takes the type's default, got {a1009}");
 
   b1009: u8 = 5;
   b1009 -= 10;
@@ -78,7 +85,7 @@ fn main() {
 
   c1009: i8 = 100;
   c1009 += 100;
-  assert(c1009 == -128, "an i8's minimum is -128, not 0, got {c1009}");
+  assert(c1009 == 0, "an i8 past its ceiling takes its DEFAULT, 0 — not its minimum -128, got {c1009}");
 
   d1009: u16 = 65000;
   d1009 += 1000;
@@ -86,7 +93,7 @@ fn main() {
 
   e1009: i16 = 32000;
   e1009 += 1000;
-  assert(e1009 == -32768, "an i16 past 32767, got {e1009}");
+  assert(e1009 == 0, "an i16 past 32767 takes its DEFAULT, 0 — not -32768, got {e1009}");
 
   // IN-RANGE compound assignment is untouched, which is what says the guard fires on the
   // value rather than on the type.  Both directions, and exactly on the boundary.
@@ -118,11 +125,11 @@ fn main() {
   // holding a value its own type cannot represent.
   k1009: i32 = 2147483647;
   k1009 += 1;
-  assert(k1009 == -2147483647, "an i32 past 2147483647, got {k1009}");
+  assert(k1009 == 0, "an i32 past 2147483647 takes its DEFAULT, 0, got {k1009}");
 
   l1009: i32 = -2147483647;
   l1009 -= 1;
-  assert(l1009 == -2147483647, "an i32 below -2147483647, got {l1009}");
+  assert(l1009 == 0, "and one below its floor takes the same default, got {l1009}");
 
   // In-range `i32` arithmetic is untouched, both directions — the guard fires on the
   // VALUE, exactly as it does for the narrower four above.
