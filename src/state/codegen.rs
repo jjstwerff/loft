@@ -2757,6 +2757,24 @@ impl State {
             // now aliases on BOTH backends, exactly as the undestructured read `ca = t.0`
             // already did on both.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
+        } else if let Some((join_d_nr, base)) = crate::use_analysis::callref_join_first_bind(
+            stack.data,
+            stack.def_nr,
+            stack.function.tp(v),
+            value,
+        ) {
+            // loft#1248 — a first bind from a CLOSURE call whose return may borrow.  The arm
+            // below that asks this for a direct call is keyed on `Value::Call`, so a
+            // `CallRef` — which names a runtime value rather than a definition — reached
+            // neither it nor the plain-adopt paths' deps strip.  The bind stayed an alias
+            // carrying the argument's dep, and the arm where the closure MINTED its store
+            // left it with no owner: one per call, released only when the CALLER's frame
+            // exits, so a loop reaches the store-table ceiling.
+            //
+            // Same guard as its direct-call twin, for the same reason: `OpBindOrCopy` copies
+            // when the returned store is the witness's and adopts when it is not, so the
+            // scope-exit free the deps strip enables is right on both arms.
+            self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
         } else if let Some((join_d_nr, base)) = crate::use_analysis::nullable_join_first_bind(
             stack.data,
             stack.def_nr,

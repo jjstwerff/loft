@@ -1774,6 +1774,14 @@ pub(crate) struct Defs {
     /// one of each, and read as a plain Borrowed-of-`e`: the empty arm lowers to
     /// `OpClearVector(retbuf); OpAppendVector(retbuf, …)`, which defines nothing.
     filled: HashSet<u16>,
+    /// The DEFINITION each fn-ref variable in this body was assigned — what lets
+    /// [`Ownership::classify`] resolve a `CallRef` through its callee's return summary,
+    /// exactly as it resolves a `Call` through the definition the node names.
+    ///
+    /// A `CallRef` names a runtime VALUE, not a definition, so the target has to be
+    /// recovered from the assignment that put the closure in the variable.  Shared with
+    /// the scope pass rather than re-derived (`scopes::collect_fnref_targets`).
+    fnref_targets: HashMap<u16, u32>,
 }
 
 /// The ops that establish a var's CONTENTS without re-binding it — see [`Defs::filled`].
@@ -2024,8 +2032,30 @@ impl<'a> Ownership<'a> {
                 .last()
                 .map_or(Own::Owned, |t| self.classify(t, func, defs)),
             Value::Return(v) => self.classify(v, func, defs),
-            // Everything else (literals, scalar/void ops, control with no value
-            // payload) is a fresh value or irrelevant to the heap over-free class.
+            // @FR-O-Oracle — a call resolves through the callee's return summary, and a
+            // call has TWO spellings.  `Value::Call` names its definition; a `CallRef`
+            // names a runtime value, so the target is recovered from the assignment that
+            // put the closure in the variable and the SAME `call_ownership` answers.
+            //
+            // Without this arm a `CallRef` fell to the fallback below and was called
+            // `Owned` — the one answer that licenses a free — so the oracle was silently
+            // wrong about every closure call and was saved only by its readers gating on
+            // the `Call` spelling first.  What that cost is the mint arm of a closure whose
+            // return may also be a borrow: the deps PROXY calls the whole thing a borrow,
+            // the oracle was never asked, and the minted store got no owner (loft#1248).
+            //
+            // An unresolvable or ambiguous target answers `Borrowed { base: MAX }`: a
+            // borrow of nothing nameable, which every reader treats as "do not lift, do not
+            // free".  That keeps the leak an unknown target already had, and a leak is
+            // recoverable where a premature free is not.
+            Value::CallRef(fn_var, args) => match defs.fnref_targets.get(fn_var).copied() {
+                Some(d) if d != u32::MAX => self.call_ownership(d, args),
+                _ => Own::Borrowed { base: u16::MAX },
+            },
+            // Everything else is a literal, a scalar/void op, or control carrying no value
+            // payload — nothing that can name a store some other binding owns, so calling it
+            // `Owned` cannot license a free of someone else's record.  The two shapes that
+            // CAN are both named above: a projection, and a call in either spelling.
             _ => Own::Owned,
         }
     }
@@ -2622,6 +2652,53 @@ pub fn nullable_join_first_bind(
     Some((*rec, base))
 }
 
+/// loft#1248 — the `CallRef` sibling of [`nullable_join_first_bind`]: does a FIRST bind
+/// from a CLOSURE call have to go through the runtime join guard?
+///
+/// `Some((record_def, base))` names the record type to allocate and the value the callee's
+/// return may borrow.  `None` leaves the bind exactly as it was.
+///
+/// Apart from its sibling rather than folded into it, because the two answer for spellings
+/// whose OTHER paths differ: a `Value::Call` that is not nullable is already served by the
+/// heap first-bind dispatch's own call arm, so that sibling only has to cover the nullable
+/// hole.  A `CallRef` reaches NEITHER — the dispatch arm and the `scan_set` deps strip are
+/// both keyed on `Value::Call` — so this one covers both nullabilities.  Folding them would
+/// mean one predicate whose answer means "the hole" for one spelling and "everything" for
+/// the other.
+///
+/// Same three readers and the same obligation: `scopes::scan_set` strips the local's deps so
+/// a free is emitted at all, and the two backends emit the guard that makes that free
+/// correct.  A site deciding this differently would either free a store the caller still
+/// names, or strip the deps off a bind that stays a plain alias.
+///
+/// Narrow for the same reason: only a JOIN with a nameable witness.  A closure that borrows
+/// nothing is already owned and adopts; one whose witness the @P290 bracket cannot name keeps
+/// today's conservative no-free, which costs the leak it already had.
+#[must_use]
+pub fn callref_join_first_bind(
+    data: &Data,
+    d_nr: u32,
+    tp: &Type,
+    value: &Value,
+) -> Option<(u32, u16)> {
+    if !crate::keys::join_own_enabled() {
+        return None;
+    }
+    let (Type::Reference(rec, _) | Type::Enum(rec, true, _)) = tp.base() else {
+        return None;
+    };
+    if !matches!(value.unspan(), Value::CallRef(_, _)) {
+        return None;
+    }
+    let Own::Join { base } = ownership_of(data, d_nr, value) else {
+        return None;
+    };
+    if base == u16::MAX {
+        return None;
+    }
+    Some((*rec, base))
+}
+
 /// See [`HeapDelivery`].
 #[must_use]
 pub fn heap_return_delivery(data: &Data, d_nr: u32) -> HeapDelivery {
@@ -2751,7 +2828,9 @@ pub fn ownership_of(data: &Data, d_nr: u32, value: &Value) -> Own {
 #[must_use]
 pub(crate) fn function_defs(data: &Data, d_nr: u32) -> Defs {
     let mut defs = Defs::default();
-    collect_defs(&data.def(d_nr).code, &FillOps::of(data), &mut defs);
+    let def = data.def(d_nr);
+    collect_defs(&def.code, &FillOps::of(data), &mut defs);
+    defs.fnref_targets = crate::scopes::collect_fnref_targets(&def.code, &def.variables);
     defs
 }
 

@@ -734,6 +734,61 @@ impl Output<'_> {
             );
             return Ok(());
         }
+        // loft#1248 — a first bind from a CLOSURE call whose return may borrow.  The
+        // call-return block above is keyed on `Value::Call`, which names its definition; a
+        // `CallRef` names a runtime VALUE and reaches none of it.  `scopes` strips such a
+        // bind's deps so the interpreter's `OpBindOrCopy` can own the minted arm, and those
+        // empty deps reach THIS generator too — so without this arm native adopted the
+        // borrow arm as an owner and freed the caller's own record at scope exit
+        // (`USE AFTER FREE (read) … killed by the free of var_r`, native-only, measured).
+        //
+        // The guard is the one its direct-call twin above emits, with the same witness from
+        // the same oracle: adopt when the returned store is not the witness's (the closure
+        // minted it), materialise when it is (the closure handed back what the caller still
+        // holds).  The copy takes NO source-free bit for that reason — the source on that
+        // arm is the witness's store.
+        //
+        // The source is emitted through `output_code_inner`, which is spelling-agnostic, so
+        // this arm needs none of the call block's `emit_call_arg` / `fn_ident` / @P290
+        // machinery: a fn-ref call site lowers to its own `match` dispatch and the value it
+        // yields is all this guard reads.
+        if let Some((rec, base)) = crate::use_analysis::callref_join_first_bind(
+            self.data,
+            self.def_nr,
+            variables.tp(var),
+            to_unspanned,
+        ) {
+            let tp_nr = self.data.def(rec).known_type();
+            let witness = sanitize(variables.name(base));
+            if !self.declared.contains(&var) {
+                self.declared.insert(var);
+                let tp_str = rust_type(variables.tp(var), &Context::Variable);
+                writeln!(
+                    w,
+                    "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
+                )?;
+                self.indent(w)?;
+            }
+            write!(w, "{{ let _dst = var_{name}; let _src = ")?;
+            self.output_code_inner(w, to)?;
+            write!(
+                w,
+                "; if _src.store_nr == u16::MAX || _src.store_nr != var_{witness}.store_nr \
+                 {{ if _dst.store_nr != u16::MAX && _dst.store_nr != _src.store_nr \
+                 {{ OpFreeRef(cell, _dst, \"{name}(displaced)\"); }} var_{name} = _src; }} \
+                 else {{ var_{name} = OpDatabase(cell, _dst, {tp_nr}_i32); \
+                 OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }} }}"
+            )?;
+            // A MAY-copy site: the branch is decided at run time, and the manifest asks
+            // whether the diagnostic accounts for the site, not which arm ran.
+            crate::copy_manifest::record(
+                self.def_nr,
+                var,
+                tp_nr,
+                crate::copy_manifest::Origin::NativeCallReturn,
+            );
+            return Ok(());
+        }
         // @PLN130 F1/F2 — MATERIALISE an element/field read into a store `var` owns.
         //
         // Sibling of the interpreter's `gen_set_first_ref_elem_copy`.  `c = v[i]` normally

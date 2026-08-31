@@ -507,6 +507,25 @@ mint is `Owned`, a projection is `Borrowed(base)`, a call resolves through the c
 return summary — and it **never consults `deps`**. The two are independent derivations of
 the same question, which is why they can disagree, and loft#723 is what that looks like.
 
+**And "a call" is TWO spellings.** `Value::Call` names its definition; `Value::CallRef` names
+a runtime value, so it has none. `classify` had no arm for the second and fell to
+`_ => Own::Owned` — the answer that licenses a free — which stayed invisible because every
+reader gates on the `Call` spelling before asking. The cost was not a wrong free but the whole
+closure family never getting an oracle answer at all, left to `O-Proxy` alone: a `??` return's
+mint arm owned by nobody, released only at the caller's frame exit, so a loop hit the
+65535-store ceiling (loft#1248). The target is resolved through the same
+`scopes::collect_fnref_targets` the scope pass reads, and the three sites that act on the
+answer share one predicate, `use_analysis::callref_join_first_bind` — the deps strip and both
+backends' guard, which must agree or the strip frees what no guard protects.
+
+**The general form, which is worth more than the instance: a predicate whose job is to
+WITHHOLD a licence must not fail open.** `_ => Own::Owned` is the permissive answer in a
+three-valued verdict where two of the three values mean "do not free" — so the shape the
+matcher had never heard of got the licence by default, silently. An `Own::Unknown` that forced
+every caller to decide would have made the missing spelling loud the day it was added. The
+same test applies to any `_ => true` / `_ => None` in a gate: ask which answer is the
+permissive one, and put the unnamed shapes on the other side of it.
+
 `O-Proxy` carries the first checkable obligation in this space: *a site that FREES on the
 empty-deps proxy must also consult `O-Override`.*
 

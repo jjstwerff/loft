@@ -1,0 +1,130 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A closure whose return may BORROW or may MINT owns the minted arm (loft#1248).
+//
+// `g = fn(q: P?) -> P { q ?? P { n: 7 } }` returns its argument on one arm and a store it
+// minted on the other.  The dep list can only say one thing about a return, and it says
+// BORROW — the dep names the parameter the subject arm hands back.  So the minted arm's
+// store was owned by nobody: `release_fnref_bufs` handed it up to the caller's frame, which
+// released it only when THAT frame exited.  A loop therefore accumulated one store per call
+// and aborted at `store table exhausted: 65535 stores live at once`.
+//
+// The rule settles which answer is right.  `formal/ownership.md` `(O-Oracle)` says the
+// own-vs-borrow answer for a value is computed by ONE oracle, `use_analysis::ownership_of`,
+// and that a call resolves through the callee's return summary; `(O-Proxy)` says an empty
+// dep list is a cheap PROXY for the same question and is UNSOUND ALONE.  A `??` return is a
+// `Own::Join` — owned on one arm, a borrow of the witness on the other — and the direct-call
+// route has read the oracle and bound through `OpBindOrCopy` since @PLN85.
+//
+// A CALL HAS TWO SPELLINGS, and the oracle knew one.  `Value::Call` names its definition;
+// `Value::CallRef` names a runtime value, so `Ownership::classify` had no arm for it and it
+// fell to `_ => Own::Owned` — the one answer that licenses a free.  Every reader was saved
+// only by gating on the `Call` spelling first, which is why nothing crashed and the whole
+// closure family simply never got the oracle's answer.  Three readers had to learn the
+// second spelling together, and they are the three `callref_join_first_bind` names: the
+// `scan_set` deps strip, so a free is emitted at all, and both backends' guard, so that free
+// is right on the borrow arm too.
+//
+// ⚠ THE LEAK AND THE OVER-FREE ARE ONE AXIS, and the last three cells are the half that says
+// so.  Stripping the deps without the guard turns this leak into a use-after-free: measured
+// mid-fix, `--native` freed `var_r` while the caller still held it and answered `s=null
+// src=-2401053088876216593`, with the LEAK channel reading clean throughout because a freed
+// store still held plausible bytes.  Only `LOFT_STRICT_STORES=1` and a read of the SOURCE
+// after the loop separate them, so both are asserted here.
+//
+// NOT covered, and measured to still leak — a capture is not an argument, so the @P290
+// bracket cannot NAME the witness and the conservative no-lift stands:
+//   * the witness reached through a CAPTURE (`c: P? = null; fn(k) -> P { c ?? P{} }`);
+//   * a literal `null` argument, which is a value and not a var, so there is no witness slot
+//     to compare against even though that arm can never borrow.
+// Both keep the leak they already had, which is the direction this gate has always taken
+// when it cannot name what it would be freeing.
+//
+// @falsified-at: 212bf82c — both backends abort with `store table exhausted: 65535 stores
+//   live at once` in the first cell.  The PANIC channel is what scores the leak half; the
+//   borrow-arm cells below are scored by VALUE, and they cannot be reached on that build
+//   because the abort comes first.  Taken one cell at a time there, they pass — the
+//   over-free is what this fix could have introduced, not what it found.
+
+struct P1248 { n: integer }
+
+fn named1248(q: P1248?) -> P1248 {
+  q ?? P1248 { n: 7 }
+}
+
+fn test_the_minted_arm_of_an_inline_closure_join_is_freed_per_call() {
+  // 70 000 > the 65535-store ceiling, so a build that holds one store per call cannot
+  // reach the assert: it aborts inside the loop.
+  none: P1248? = null;
+  g = fn(q: P1248?) -> P1248 { q ?? P1248 { n: 7 } };
+  s = 0;
+  for _ in 0..70000 { s += g(none).n; }
+  assert(s == 490000, "inline sum: got {s}");
+}
+
+fn test_the_minted_arm_of_a_bound_closure_join_is_freed_per_call() {
+  // The BOUND spelling reaches a different site — `scan_set`'s deps strip and the first-bind
+  // dispatch, where the inline one reaches the lift — so a fix at either alone moves only
+  // one of these two cells.
+  none: P1248? = null;
+  g = fn(q: P1248?) -> P1248 { q ?? P1248 { n: 7 } };
+  s = 0;
+  for _ in 0..70000 { r = g(none); s += r.n; }
+  assert(s == 490000, "bound sum: got {s}");
+}
+
+fn test_the_borrow_arm_leaves_the_caller_its_own_record_bound() {
+  // The over-free direction, BOUND.  Every iteration hands back the store `some` holds; a
+  // free of the binding would release it under the variable that still names it.
+  some: P1248? = P1248 { n: 41 };
+  s = 0;
+  for _ in 0..5 { r = g_borrow_bound(some); s += r.n; }
+  assert(s == 205, "borrow-arm sum: got {s}");
+  assert((some ?? P1248 { n: -1 }).n == 41, "the source after five borrows: got {(some ?? P1248 { n: -1 }).n}");
+}
+
+fn g_borrow_bound(q: P1248?) -> P1248 {
+  q ?? P1248 { n: 7 }
+}
+
+fn test_the_borrow_arm_leaves_the_caller_its_own_record_inline() {
+  // The same axis INLINE, where the lifted `__lift_N` carries no deps of its own and so
+  // reads as an owner.  This is the cell that failed on `--native` alone mid-fix.
+  some: P1248? = P1248 { n: 41 };
+  g = fn(q: P1248?) -> P1248 { q ?? P1248 { n: 7 } };
+  s = 0;
+  for _ in 0..5 { s += g(some).n; }
+  assert(s == 205, "inline borrow-arm sum: got {s}");
+  assert((some ?? P1248 { n: -1 }).n == 41, "the source after five inline borrows: got {(some ?? P1248 { n: -1 }).n}");
+}
+
+fn test_the_shapes_one_axis_away_are_unmoved() {
+  // Controls, each one axis from the fixed cell, so a widening past the JOIN shape moves
+  // them.  A closure with a nullable parameter and NO discharge mints unconditionally and
+  // was always owned; a discharge whose subject is the closure's OWN LOCAL never borrows
+  // from the caller; and the named twin is the direct call this fix makes the closure match.
+  g = fn(q: P1248?) -> P1248 { P1248 { n: 7 } };
+  s = 0;
+  for _ in 0..400 { s += g(null).n; }
+  assert(s == 2800, "a nullable parameter with no discharge: got {s}");
+
+  h = fn(k: integer) -> P1248 { q: P1248? = null; q ?? P1248 { n: 7 } };
+  t = 0;
+  for _ in 0..400 { t += h(0).n; }
+  assert(t == 2800, "a discharge over the closure's own local: got {t}");
+
+  none: P1248? = null;
+  u = 0;
+  for _ in 0..400 { u += named1248(none).n; }
+  assert(u == 2800, "the named twin: got {u}");
+}
+
+fn main() {
+  test_the_minted_arm_of_an_inline_closure_join_is_freed_per_call();
+  test_the_minted_arm_of_a_bound_closure_join_is_freed_per_call();
+  test_the_borrow_arm_leaves_the_caller_its_own_record_bound();
+  test_the_borrow_arm_leaves_the_caller_its_own_record_inline();
+  test_the_shapes_one_axis_away_are_unmoved();
+  print("1248-a-closure-join-return-owns-its-minted-arm ok\n");
+}

@@ -93,7 +93,7 @@ with the closure's environment in scope.
 ## Deviations
 
 **OPEN: 1.**
-- **D-clo-7** — a lambda's `??`-default store discarded INLINE leaks one store per call; that entry's value half and its BOUND-return leak half are both closed
+- **D-clo-7** — a lambda's `??`-default store leaks one store per call where the borrow arm's witness is a CAPTURE or a literal `null`; that entry's value half, its BOUND-return leak half and its ARGUMENT-witness half are all closed (loft#1248)
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [closures-history.md](closures-history.md).

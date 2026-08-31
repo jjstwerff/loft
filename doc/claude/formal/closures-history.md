@@ -6,8 +6,9 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — a lambda's `??`-default store discarded INLINE leaks one store per call
-(D-clo-7, below; that entry's value half and its BOUND-return leak half are both closed).
+OPEN: **1** — a lambda's `??`-default store leaks one store per call where the borrow arm's
+witness is a CAPTURE or a literal `null` (D-clo-7, below; that entry's value half, its
+BOUND-return leak half and its ARGUMENT-witness half are all closed).
 
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
@@ -567,16 +568,53 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > for EVERY declared-collection lambda was already correct on `--native`, and the only thing
 > wrong with it here was the unowned buffer.
 >
-> **OPEN: a lambda's `??`-default store discarded INLINE.** `g = fn(q: P?) -> P { q ?? P{} }`
-> called as `g(null).n` leaks the default arm's store, one per call, on BOTH backends; the
-> BOUND spelling is clean, and so is the named twin. The lambda's return dep names its
-> parameter on the subject arm, so `returns_borrowed_view` calls the whole thing a borrow and
-> `callref_owned_return` declines — the mint arm pays for the borrow arm's caution. It is a
-> JOIN, and the direct-call branch beside it already knows what to do with one
-> (`use_analysis::ownership_of`, lifting a `Join` only where the following bind is the runtime
-> guard); the `CallRef` route does not ask.
+> **The `??`-default store — the ARGUMENT witness CLOSED (2026-09-01, loft#1248), the
+> CAPTURE witness OPEN.** `g = fn(q: P?) -> P { q ?? P{} }` leaked the default arm's store,
+> one per call, on both backends, released only when the CALLER's frame exited — so a loop
+> reached `store table exhausted: 65535 stores live at once`.
 >
-> Guarded by `tests/scripts/1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft`.
+> ⚠ **Two claims in the previous wording were wrong, and both were measured that way.** *"the
+> BOUND spelling is clean"* holds only for a LITERAL `null` argument: from a variable,
+> `r = g(none)` leaked at exactly the same rate as the inline spelling, because the dep then
+> has a caller variable to name. And *"discarded INLINE"* named a symptom rather than the
+> axis — the two spellings reach two different sites (the lift, and `scan_set`'s deps strip
+> with the first-bind dispatch), so a fix at either alone moves one of them.
+>
+> **The cure was the one this entry already named, and the reason it had not been taken is
+> that the oracle could not answer.** `(O-Oracle)` says the own-vs-borrow verdict is computed
+> by ONE oracle and that a call resolves through the callee's return summary — but a CALL HAS
+> TWO SPELLINGS. `Value::Call` names its definition; `Value::CallRef` names a runtime value,
+> so `Ownership::classify` had no arm for it and it fell to `_ => Own::Owned`, the one answer
+> that licenses a free. Nothing crashed on that, because every reader gates on the `Call`
+> spelling first — so the effect was not a wrong free but a whole family that never got the
+> oracle's answer at all, and was left to `(O-Proxy)`, which `ownership.md` says in as many
+> words is UNSOUND ALONE.
+>
+> `classify` learns the second spelling (resolving the target through
+> `scopes::collect_fnref_targets`, shared rather than re-derived), and three readers learn it
+> together through one predicate, `use_analysis::callref_join_first_bind`: `scan_set`'s deps
+> strip, so a free is emitted at all, and both backends' `OpBindOrCopy`, so that free is right
+> on the borrow arm too. `callref_owned_return` reads the oracle beside the proxy, exactly as
+> the direct-call branch does.
+>
+> ⚠ **The leak and the over-free are ONE axis, and stripping the deps without the guard turns
+> this defect into the other one.** Measured mid-fix: with the strip in and native's guard
+> still keyed on the `Call` spelling, `--native` freed the caller's own record and answered
+> `s=null src=-2401053088876216593` — while the LEAK channel read clean throughout, because a
+> freed store still holds plausible bytes. `LOFT_STRICT_STORES=1` plus a read of the SOURCE
+> after the loop is what separates them, and both are cells now.
+>
+> **STILL OPEN: the witness reached through a CAPTURE** (`c: P? = null; fn(k) -> P { c ?? P{} }`),
+> and a LITERAL `null` argument. Neither is an argument the @P290 bracket can NAME — a capture
+> arrives through the hidden `__closure` attribute, and a literal is a value with no slot — so
+> `caller_arg_base` answers `u16::MAX` and the conservative no-lift stands. That costs the
+> leak they already had, which is this gate's standing direction when it cannot name what it
+> would be freeing. Closing it needs the captured caller variable mapped to the closure
+> attribute the return dep names.
+>
+> Guarded by `tests/scripts/1248-a-closure-join-return-owns-its-minted-arm.loft` (falsified at
+> `212bf82c`: both backends abort in the first cell) and
+> `tests/scripts/1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft`.
 
 > **D-clo-6 — CLOSED (2026-08-27).** `(L-FnRef)` says a bare function name is a first-class
 > value. It was not, for a function that carries TWO hidden `RefVar(Text)` work buffers:

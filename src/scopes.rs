@@ -1301,7 +1301,14 @@ pub(crate) fn drop_bearing_source(src: &Value) -> Option<u16> {
     }
 }
 
-fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
+/// Which DEFINITION each fn-ref variable in `code` was assigned, `u32::MAX` where the
+/// assignments disagree or the target cannot be named.
+///
+/// `pub(crate)` because two readers need the same answer and a second spelling of it could
+/// only agree by accident: the scope pass decides here whether a `CallRef` result may be
+/// lifted, and the ownership oracle needs the same target to resolve that call through the
+/// callee's return summary (`@FR-O-Oracle`).
+pub(crate) fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
     let mut out: HashMap<u16, u32> = HashMap::new();
     code.walk(&mut |v| {
         let Value::Set(var, rhs) = v else { return };
@@ -5044,6 +5051,14 @@ impl Scopes {
         // the scanned form — emits the guard anyway.  Then the local owns a store with no
         // free: one leaked record per call on the minting arm, from the two readers of ONE
         // predicate disagreeing about which value they were reading.
+        //
+        // loft#1248 — and the same sentence for a bind from a CLOSURE call, which reaches
+        // neither this strip's sibling above nor the `Value::Call` strip earlier in this
+        // function: both are keyed on the call spelling that names its definition, and a
+        // `CallRef` names a runtime value.  So a closure whose return may be its argument or
+        // may be a store it minted kept the argument's dep, read as a permanent borrow, and
+        // the minted arm's store was owned by nobody — one per call, to FRAME exit, which a
+        // loop turns into the 65535-store ceiling.
         if crate::use_analysis::nullable_join_first_bind(
             data,
             self.d_nr,
@@ -5051,6 +5066,13 @@ impl Scopes {
             &set_value,
         )
         .is_some()
+            || crate::use_analysis::callref_join_first_bind(
+                data,
+                self.d_nr,
+                function.tp(v),
+                &set_value,
+            )
+            .is_some()
         {
             let deps: Vec<u16> = function.tp(v).depend().clone();
             for d in deps {
@@ -7616,7 +7638,13 @@ impl Scopes {
     /// An unknown or ambiguous target answers `None`: the result is not lifted,
     /// which is the pre-existing behaviour (it leaks, and a leak is recoverable
     /// where a premature free is not).
-    fn callref_owned_return(&self, val: &Value, data: &Data, function: &Function) -> Option<Type> {
+    fn callref_owned_return(
+        &self,
+        val: &Value,
+        data: &Data,
+        function: &Function,
+        outer_call: u32,
+    ) -> Option<Type> {
         let Value::CallRef(v_nr, _) = val.unspan() else {
             return None;
         };
@@ -7625,7 +7653,39 @@ impl Scopes {
             _ => return None,
         };
         let def = data.def(d_nr);
-        if def.code == Value::Null || def.returns_borrowed_view() {
+        if def.code == Value::Null {
+            return None;
+        }
+        // `returns_borrowed_view()` is the deps PROXY (@FR-O-Proxy), and for a closure whose
+        // return is a `??` it is right about one arm and wrong about the other: the dep names
+        // the parameter or the capture the SUBJECT arm hands back, so the whole return reads
+        // as a borrow and the DEFAULT arm's minted store is left owned by nobody — one store
+        // per call, to frame exit, which a loop turns into the 65535-store ceiling
+        // (loft#1248).
+        //
+        // @FR-O-Oracle is the authority, and this is the chokepoint that should read it —
+        // the same sentence the direct-call branch below already acts on.  A `Join` lifts
+        // only where the bind that follows is the runtime guard `OpBindOrCopy`: the witness
+        // has to be NAMEABLE, and the statement has to be one that BINDS.  `outer_call ==
+        // u32::MAX` is the bare-statement lowering, which gets no such bind, so there the
+        // conservative no-lift stands and costs the mint arm's leak instead.
+        //
+        // ⚠ The relaxation reaches exactly as far as the GUARD does, and no further.  The
+        // arms below also answer for the collection returns, and a lifted collection gets a
+        // scope-exit free with nothing deciding per execution whether the store is the
+        // caller's — `callref_join_first_bind`, which is what emits `OpBindOrCopy` on both
+        // backends, answers only for a `Reference` / record `Enum`.  Widening past that
+        // would trade this leak for the over-free in the other direction, which is the
+        // trade the whole gate exists to refuse.
+        let join_lifts = matches!(
+            def.returned().peel_optional().0,
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && matches!(
+            crate::use_analysis::ownership_of(data, self.d_nr, val),
+            crate::use_analysis::Own::Join { base }
+                if base != u16::MAX && outer_call != u32::MAX
+        );
+        if def.returns_borrowed_view() && !join_lifts {
             return None;
         }
         // The fn-ref variable's own type is the declared shape; the definition is
@@ -7820,7 +7880,7 @@ impl Scopes {
     ) -> Option<Type> {
         // loft#721 — a closure call is lifted only when its target definition is
         // known AND that definition does not return a borrowed view.
-        if let Some(tp) = self.callref_owned_return(val, data, function) {
+        if let Some(tp) = self.callref_owned_return(val, data, function, outer_call) {
             return Some(tp);
         }
         // loft#879 — a null-coalesce (`??`) lowers to an `ncc` value-block that
