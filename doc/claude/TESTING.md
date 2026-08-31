@@ -2784,6 +2784,16 @@ channel moves as well: a file whose declared errors all occur exits 0, one with 
 declaration exits 1. The column now reads `FAIL/6 -> 6/6` — the suite's verdict and a declared
 count, never a guessed fraction, because a guessed fraction is what did the damage.
 
+**Two `@EXPECT_ERROR` cells declaring the IDENTICAL substring make each other vacuous.** The
+suite matches declarations against the UNION of every parse round (loft#1242), not cell by
+cell, so either annotation consumes either diagnostic: corrupt one and the other still
+satisfies the file. Measured — a guard's two `const` locals were both named `u`, so
+`Cannot modify const variable 'u'` was declared twice, and the cell added for loft#1252 passed
+while proving nothing. **Give each cell a distinguishable subject** (rename the variable, the
+function, the field) so its declared substring can only be satisfied by its own diagnostic.
+The hand check below is what finds this; reading the file does not, because two cells that
+differ in the shape being tested can still be identical in the sentence the compiler prints.
+
 **A guard of expected failures still needs its non-vacuity proved by hand**, and falsify cannot
 give you that in either direction: replace each expected substring in turn with a word the
 compiler never prints, check the suite fails, restore it. Five for five is the proof; the

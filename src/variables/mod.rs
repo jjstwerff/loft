@@ -2591,8 +2591,33 @@ impl Function {
 
     /// Returns the appropriate error noun for a const-modification diagnostic.
     /// Parameters say "const parameter"; local variables say "const variable".
-    pub fn const_kind(&self, var_nr: u16) -> &'static str {
-        if (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument {
+    ///
+    /// `argument` alone is not the question.  It marks a variable that OCCUPIES an argument
+    /// slot, and a heap-typed LOCAL that supplies the function's return value occupies one
+    /// too: `ref_return` promotes it to the hidden destination parameter, so
+    /// `fn f() -> text { const u: text = "abc"; u = "z"; u }` reported a "const PARAMETER"
+    /// about a function that has none (loft#1252).
+    ///
+    /// `promoted` is the caller's half and has to be passed rather than derived here, because
+    /// the fact lives on the DEFINITION: `text_return` / `ref_return` mark the hidden
+    /// destination as `attributes[…].hidden` at the same moment they call `become_argument`,
+    /// and a variable table cannot see its own definition's attributes.
+    /// [`Parser::const_noun`] is the one place that joins the two.
+    ///
+    /// Do not try to read it off the TYPE.  The promoted local is a `RefVar` and that looked
+    /// like a free discriminator — until the shipped suite produced `fn f(a: &const integer)`,
+    /// a DECLARED parameter that is also a `RefVar`, and the noun flipped the other way for
+    /// it.  (`const &integer` is what does not parse; the `&` goes first.)
+    ///
+    /// Deliberately NOT a split of the `argument` flag, which is what the issue proposed:
+    /// `is_argument` has 141 readers across the parser, codegen, the LSP and introspection,
+    /// and `ir_schema` / `ir_store` persist the field — so splitting it is a serialised-format
+    /// change, and this question needs no new state to answer.
+    pub fn const_kind(&self, var_nr: u16, promoted: bool) -> &'static str {
+        if (var_nr as usize) < self.variables.len()
+            && self.variables[var_nr as usize].argument
+            && !promoted
+        {
             "const parameter"
         } else {
             "const variable"

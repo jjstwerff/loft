@@ -4548,7 +4548,7 @@ use a separate collection or add after the loop"
                 self.lexer,
                 Level::Error,
                 "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(report),
+                self.const_noun(report),
                 self.vars.name(report)
             );
         }
@@ -5642,7 +5642,7 @@ use a separate collection or add after the loop"
                 self.lexer,
                 Level::Error,
                 "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(report),
+                self.const_noun(report),
                 self.vars.name(report)
             );
         }
@@ -6424,7 +6424,7 @@ use a separate collection or add after the loop"
                     self.lexer,
                     Level::Error,
                     "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                    self.vars.const_kind(report),
+                    self.const_noun(report),
                     self.vars.name(report)
                 );
             } else if let Some(frozen) = self.lhs_frozen_through(to) {

@@ -2004,7 +2004,7 @@ impl Parser {
                         Level::Error,
                         "Cannot modify {} '{}' from a closure; remove 'const' or \
                          capture a local copy",
-                        self.vars.const_kind(report),
+                        self.const_noun(report),
                         self.vars.name(report)
                     );
                     continue;

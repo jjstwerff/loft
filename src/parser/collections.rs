@@ -1374,7 +1374,7 @@ impl Parser {
                         self.lexer,
                         Level::Error,
                         "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                        self.vars.const_kind(*nr),
+                        self.const_noun(*nr),
                         self.vars.name(*nr)
                     );
                 }
@@ -1515,7 +1515,7 @@ impl Parser {
                     self.lexer,
                     Level::Error,
                     "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                    self.vars.const_kind(*nr),
+                    self.const_noun(*nr),
                     self.vars.name(*nr)
                 );
             }

@@ -22,17 +22,24 @@
 // marked an argument, so a report against it would also say "const variable" where the
 // author wrote a parameter — the cells below assert the whole sentence, not the name alone.
 //
-// @falsified-at: 4c4a7a56 — interpret exit 1 -> 0, interpret expectations FAIL/6 -> 6/6,
-//   native exit 1 -> 0, native expectations FAIL/6 -> 6/6.  On that build the two `const text`
-//   PARAMETER cells report `'__tp_s'`, so the suite does not accept the file; the other four
-//   match on both builds and are what makes this a control rather than a file that simply
-//   stopped compiling.  `FAIL/6` is the SUITE's verdict and deliberately not a count of
-//   matching cells — see loft#1253, which is why this file is scored through `--tests` at all.
+// @falsified-at: 4c4a7a56 — interpret exit 1 -> 0, interpret expectations FAIL/7 -> 7/7,
+//   native exit 1 -> 0, native expectations FAIL/7 -> 7/7.  On that build the two `const text`
+//   PARAMETER cells report `'__tp_s'`, so the suite does not accept the file.
+// @falsified-at: 5dda4f6d — the same movement for the OTHER defect this file now covers: on
+//   that build (loft#1250 fixed, loft#1252 not) it is `const_text_local_that_is_returned`
+//   that fails, reporting a "const parameter" in a function with none.  Two refs because two
+//   defects: a single one would leave half the file unfalsified, and the cells that match on
+//   BOTH builds are what make each ref a control rather than a file that stopped compiling.
+//   `FAIL/7` is the SUITE's verdict and deliberately not a count of matching cells — see
+//   loft#1253, which is why this file is scored through `--tests` at all.
 //
 // Non-vacuity, measured rather than assumed, because a guard made of expected failures is
 // the shape that most easily passes while proving nothing: each of the five distinct
 // substrings was replaced in turn with a word the compiler never prints, the suite failed
-// five times out of five, and restoring each returned it to green.
+// six times out of six, and restoring each returned it to green.  It earned itself: the
+// loft#1252 cell was VACUOUS on the first pass — it declared the same substring as the cell
+// above it, and the suite matches the UNION of every round, so either annotation consumed
+// either diagnostic.  Renaming its local to `r` is what made the two cells distinguishable.
 
 struct B1250 { n: integer }
 
@@ -66,16 +73,41 @@ fn const_struct_parameter(b: const B1250) {
   b.n = 9;
 }
 
-// A const LOCAL says "const variable", which is the other half of the noun and the cell that
-// fails if `const_report_var` is applied where it does not belong.  The local must not BE the
-// function's returned text: a text local bound to the caller-supplied return buffer occupies
-// an argument slot, and `const_kind` reads that slot rather than the declaration, so it calls
-// such a local a "const parameter" — loft#1252, pre-existing, filed rather than folded in
-// because separating "declared parameter" from "occupies an argument slot" is a flag split
-// and not a message fix.
+// A const LOCAL says "const variable" — the other half of the noun, and the cell that fails
+// if `const_report_var` is applied where it does not belong.
 // @EXPECT_ERROR: Cannot modify const variable 'u'
 fn const_text_local() -> integer {
   const u: text = "abc";
   u = "z";
   5
 }
+
+// …and it still says "const variable" when the local IS the function's returned text, which
+// is the shape that did not (loft#1252).  A heap-typed local supplying the return value is
+// promoted by `ref_return` to the hidden destination parameter, so it occupies an argument
+// slot, and `const_kind` read that slot rather than the declaration: this function has no
+// parameters and was told it had a const one.  The PROMOTION is visible in the type — the
+// promoted local is a `RefVar` and a declared parameter is its bare type — which separates
+// them without splitting the `argument` flag that 141 sites read and the IR schema persists.
+//
+// The pair is what makes it a guard rather than one cell: the two differ only in whether the
+// local is returned, so a fix that reached the noun by any coarser route moves both.
+// The local is named `r` and not `u` ON PURPOSE.  Written with the same name as the cell
+// above, the two declare the IDENTICAL substring, and the suite matches against the union of
+// every round — so either annotation consumes either diagnostic and corrupting one of them
+// leaves the file green.  Measured: this cell was VACUOUS until it was renamed, and the
+// non-vacuity check is what said so rather than a reading of it.
+// @EXPECT_ERROR: Cannot modify const variable 'r'
+fn const_text_local_that_is_returned() -> text {
+  const r: text = "abc";
+  r = "z";
+  r
+}
+
+// The `&` half of the discriminator is NOT a cell here, deliberately.  `const &τ` does not
+// parse — `&` opts a binding INTO write-through and `const` opts it out, so the two never
+// appear together in a signature, and that is what makes a `RefVar` at a const diagnostic
+// always a promotion.  Written as an `@EXPECT_ERROR` cell it desyncs the parser into three
+// cascading errors and takes the whole FILE with it, which would cost the six cells above to
+// pin one fact about a spelling nobody writes.  It lives in `const_kind`'s doc-comment
+// instead, where the code that depends on it is.

@@ -3623,6 +3623,30 @@ impl Parser {
     /// smaller explicit width (e.g. `integer` → `i32`, or `i32` → `u8`), which
     /// loses data.  Widening (`i32` → `integer`) and same-width are not narrowing.
     /// A plain `integer`/`wide`/`u32` has no `forced_size` and is treated as 8 bytes.
+    /// The noun a const-modification diagnostic should use — "const parameter" for one the
+    /// author declared, "const variable" for a local.  The one place that joins the two facts
+    /// the answer needs, because they live apart: the variable table knows the variable
+    /// OCCUPIES an argument slot, and only the DEFINITION knows whether that slot is a hidden
+    /// one the return mechanism promoted it into.
+    ///
+    /// `text_return` / `ref_return` set `attributes[…].hidden` and call `become_argument` at
+    /// the same moment, so a heap-typed local supplying the function's return value is an
+    /// argument by the time any diagnostic sees it — and a const one was reported as a "const
+    /// PARAMETER" in a function that has none (loft#1252).  Matching by NAME is what
+    /// `scopes.rs`'s worker-output check already does with the same pair of facts.
+    fn const_noun(&self, var_nr: u16) -> &'static str {
+        let promoted =
+            self.context != u32::MAX && (self.context as usize) < self.data.definitions.len() && {
+                let name = self.vars.name(var_nr);
+                self.data
+                    .def(self.context)
+                    .attributes()
+                    .iter()
+                    .any(|a| a.hidden && a.name == name)
+            };
+        self.vars.const_kind(var_nr, promoted)
+    }
+
     /// @FR-I-Narrow, completed by @PLN25 DN4 `(N-Cast?)` — the implicit CHECKED narrowing
     /// a NULLABLE narrow target takes in place of a refusal.  Answers whether it applied.
     ///
