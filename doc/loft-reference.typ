@@ -2567,13 +2567,13 @@ describe() uses format strings with field access inside each variant's method.
 
 === Stubs for missing implementations
 
-If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it:
+If a variant intentionally has no implementation of a method, the compiler emits a warning ("no implementation of 'area' for variant 'Rect'"). Provide an empty-body stub to silence it:
 
 ```
 fn area(self: SomeVariant) -> float { }
 ```
 
-A stub returns null at runtime and suppresses the warning.
+Give the stub a real body — '{ 0.0 }' — when anything reads its result. An empty body silences the warning, but what it hands back is not a value you can test: it is not null, and it is not the same on both backends.
 
 === Match expressions on enums
 
@@ -2632,7 +2632,7 @@ Or-patterns work on scalars too.
   assert(kind == "low", "scalar or-pattern");
 ```
 
-A `null` pattern matches when the value is absent (e.g. a defended division by zero — `?? null` marks the division as handled, so no undefended-site warning is logged; the result is null either way).
+A `null` pattern matches when the value is absent — here a division by zero, which yields null (see the Integers page). The `?? null` turns the reasoned null into a plain one; it is the value that is being matched either way.
 
 ```rust
   zero = 0;
