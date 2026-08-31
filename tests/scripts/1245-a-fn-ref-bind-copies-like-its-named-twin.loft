@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A fn-ref call's bind copies like its named twin (loft#1245, OPEN).
+//
+// `formal/binding.md` (B-Copy): a PLAIN bind COPIES the source, so the bound variable is
+// INDEPENDENT and mutating it does not reach the source.  No `&` is written here.  The
+// NAMED call obeys it; the fn-ref spelling of the same call ALIASES the argument, so the
+// write lands in the caller's own variable.  Both backends agree on the wrong answer,
+// which is why no differential oracle sees it.
+//
+// The IR says it outright.  A direct call mints a caller-local return buffer and types the
+// bind with no deps:
+//
+//     __ref_1(1):ref(P) = null;
+//     r(1):ref(P) = n_nm(have(1), __ref_1(1));
+//
+// The fn-ref call is handed no buffer, so what comes back is the ARGUMENT's own `DbRef`
+// and the bind records the borrow:
+//
+//     r(1):ref(P)["have"] = fn_ref[1](have(1));
+//
+// Cause and cure are one family with D-clo-12 / D-clo-13: the fn-ref call site owns
+// nothing.  The decided cure is the caller-local heap return buffer — the symmetric twin
+// of `Parser::push_fnref_text_buffers` — not another ownership classification, which is
+// measured ground (`formal/closures.md` D-clo-13).
+//
+// NOT scored here, and it is the same root: the minted store of a `??` whose subject arm
+// borrows the parameter is never adopted either, so a loop holds one store per call and
+// both backends abort at `store table exhausted: 65535 stores live at once`.  That half
+// moves the PEAK, not a value — `LOFT_ALLOC_REPORT=1` reads `peak = N + 3` against the
+// named twin's flat 4 — and a loft assert cannot read it.  loft#1245 carries the matrix.
+//
+// ⚠ The obvious repair is measured and is a use-after-free: relaxing
+// `Scopes::callref_owned_return`'s `returns_borrowed_view()` decline takes the leak half
+// from N+3 to flat AND the borrow arm keeps passing ordinary runs — it faults only under
+// `LOFT_POISON=1`.  An ordinary run is not a control for this fix.
+//
+// @falsified-at: none — an `@EXPECT_FAIL` on an OPEN defect has no fixed build to falsify
+//   against: the cell fails on HEAD by construction, on both backends, and that IS the
+//   record.  What stands in for a control is the NAMED twin asserted first, so a
+//   regression there fails the file for a different reason and says so in the message.
+//   When loft#1245 lands, the harness prints `FIXED <path>`, this annotation comes off,
+//   and that commit is the ref to run `make falsify` against.
+// @EXPECT_FAIL: fnref-bind-aliases
+struct P {
+  n: integer,
+}
+
+fn nm(q: P) -> P { q }
+
+fn main() {
+  // Control FIRST: the named twin copies.  If this one ever fails, the file is failing
+  // for a different reason than the tag names.
+  b: P = P { n: 7 };
+  r2 = nm(b);
+  r2.n = 99;
+  assert(b.n == 7, "control: a named call's bind must copy, source read {b.n}");
+
+  // The cell.  A lambda that merely returns its parameter — no nullable, no `??`, no
+  // capture — is enough.
+  a: P = P { n: 7 };
+  g = fn(q: P) -> P { q };
+  r = g(a);
+  r.n = 99;
+  assert(a.n == 7, "fnref-bind-aliases: a fn-ref call's bind must copy, source read {a.n}");
+}
