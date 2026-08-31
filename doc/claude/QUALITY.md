@@ -2429,7 +2429,9 @@ capture is a capture either way.
 loft#1254 added the empty-stub return classifier on the same side, and the opaque column again
 did not move: it asks whether a stub's return is HANDLE-carried, peeling first for the same
 reason — a stub declared `-> P?` needs the twelve-byte null exactly as `-> P` does, so the
-question is about the storage and not about the wrapper.
+question is about the storage and not about the wrapper.  Joining the two checkouts put the
+row at 668 · 316 · 5 · 347: both sides had moved it, and neither side's number is right after
+a join, so it is re-measured rather than added up.
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on

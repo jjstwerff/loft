@@ -77,6 +77,17 @@ fn empty_float() -> float { }
 
 fn empty_int() -> integer { }
 
+// Declared AND called on purpose: an uncalled function is pruned before it reaches rustc, so
+// a stub that is never called cannot prove that it compiles.
+fn empty_text() -> text { }
+
+fn empty_bool() -> boolean { }
+
+// A range that does NOT contain zero: its default is the bound nearest zero, and the plain
+// `integer` and `float` cells above are the controls that stop "return the low bound" from
+// satisfying every cell.
+fn empty_limited() -> integer limit(10, 20) { }
+
 fn main() {
   // The two scalar shapes, which answered uninitialised memory.
   assert(empty_float() == 0.0, "an empty `-> float` stub answers its default: {empty_float()}");
@@ -85,6 +96,23 @@ fn main() {
   // The variant stub, which is the shape the reference documents.
   s1254 = Re1254 { w: 2.0 };
   assert(s1254.ar1254() == 0.0, "a variant stub answers its default: {s1254.ar1254()}");
+
+  // The text shape.  Reaching this at all means `--native` COMPILED the stub, which was cell
+  // 1; that it is the empty string rather than the null sentinel was cell 2.
+  t1254 = empty_text();
+  assert(t1254 == "", "a `-> text` stub is the empty string: [{t1254}]");
+  assert(len(t1254) == 0, "…and it is empty by length too, not just by rendering");
+
+  // The boolean shape, asserted on the COMPARISON and not on how it prints.  A boolean is a
+  // `u8` and anything that is not `1` FORMATS as `false`, so a leftover byte renders exactly
+  // like the right answer and `!b` reads `true` for it as well — the two spellings a reader
+  // reaches for first both hide the defect.  `== false` is the one that does not.
+  b1254 = empty_bool();
+  assert(b1254 == false, "a `-> boolean` stub EQUALS false, not merely prints it");
+  assert(!b1254, "…and reads falsy, which a garbage byte also does");
+
+  // A declared RANGE takes the bound nearest zero, because 0 is not a value that type has.
+  assert(empty_limited() == 10, "a limit(10, 20) stub takes its own default: {empty_limited()}");
 
   // The heap shape: a well-formed null rather than a handle made of stack bytes.  Scored
   // through `??`, because the point is that the value is TESTABLE at all.

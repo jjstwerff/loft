@@ -1237,6 +1237,13 @@ pub(super) fn uninitialised_native_value(tp: &Type, context: &Context) -> String
         // The storage form of `false`; the null is `255u8`.
         Type::Boolean => "0u8".into(),
         Type::Integer(spec) => spec.default_value().to_string(),
+        // `to_default` says a text's default is the EMPTY string (@FR-D-Text); the null is
+        // the `STRING_NULL` sentinel `default_native_value_in` answers, which is a different
+        // value and the one an uninitialised slot must not take.  Spelled per context for
+        // the reason that function's own doc gives: `String` where the destination is
+        // declared as one, `Str` in a return.
+        Type::Text(_) if context == &Context::Variable => "String::new()".into(),
+        Type::Text(_) => "Str::new(\"\")".into(),
         Type::Optional(inner) => default_native_value_in(inner, context),
         _ => default_native_value_in(tp, context),
     }
