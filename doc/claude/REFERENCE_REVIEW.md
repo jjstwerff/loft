@@ -42,7 +42,32 @@ read as coverage we do not have.
 
 The examples are **already gated** — every code example in the reference is a
 `tests/docs/*.loft` file that runs in the suite, which is what lets page 1 claim it. Do
-not re-verify them by hand; that budget belongs to the things no test covers:
+not re-verify them by hand; that budget belongs to the things no test covers.
+
+⚠ **Read "example" narrowly: it means the code the file EXECUTES.** A chapter is mostly
+comments, and three kinds of claim inside them run under nothing at all — which is where
+every defect the first passes found was living:
+
+| claim in a comment | what checks it |
+|---|---|
+| a code snippet shown but not executed (`fn f(v: &vector<T>) …`) | nothing |
+| a table of results (`1.0 / 0.0 is inf`) | nothing |
+| a quoted diagnostic ("a text parse `as integer` may fail…") | nothing — and an `assert` never can, because the program does not compile |
+
+So the first move on a chapter is to separate the sentences the suite is holding up from
+the sentences it is not, and spend the read on the second set.
+
+**Where the proof goes once you have it.** Not into the chapter. A chapter is read by
+someone meeting the subject for the first time, so proving a boundary exhaustively on the
+page costs them more than it gives: keep the one or two cells that carry the LESSON and
+move completeness to a guard in `tests/scripts/`. The two written for the Float and
+Functions passes are the model —
+`the-reference-float-boundary-is-where-it-says.loft` and
+`the-reference-quotes-its-refusals-word-for-word.loft` — the second using `@EXPECT_ERROR`
+cells, which one file can hold beside a running cell since loft#1242. Such a guard is a
+LOCK rather than a regression test: it has no build on which it fails, so it records
+`@falsified-at: none` and must be checked by hand in both directions, because a guard made
+of expected failures passes most easily when it is proving nothing.
 
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
