@@ -1,0 +1,85 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// loft#1235 — a `text` RETURNED from a function is read before the callee's stores are
+// released, not after.
+//
+// Three shapes returned a text whose bytes live in a container the function owns, and on
+// `--native` each was read AFTER the epilogue dropped that container.  The value was right
+// today and only today: nothing had reused the bytes yet.  With the arena armed the first two
+// panic on `0xDEADBEEF` and the third answers `null` — a wrong value, no diagnostic, exit 0.
+//
+// This file is scored by `tests/returned_text_lifetime.rs`, which runs it under
+// `LOFT_POISON=1` as well as plain.  It is deliberately NOT a value-only guard: freed bytes
+// are usually intact, so every cell below passes on the broken build unless the arena is
+// armed — the same reason loft#882 needed its own binary.
+//
+// The cause is one hoist.  The B5-L3 collapse rewrites `Set(__ret_N, call); …; Return(Var)`
+// into `Return(call)`, which moves the read from BEFORE the scope's frees to AFTER them.  Its
+// @P364 guard asked whether the call reads the FREED VAR, and none of these three does:
+//   * shape 1 and 2 read a collection LOCAL, which is a VIEW into a `__vdb_N` wrapper — the
+//     free names the wrapper, the expression names the view;
+//   * shape 3 reads a boxed `__cell_text` that the CLOSURE RECORD owns, so the free of the
+//     record cascades to it at runtime with no dep anywhere to read.
+// So the question is asked the other way round now: does the call read a LOCAL at all.
+//
+// @falsified-at: none — this file cannot move a `falsify.sh` channel, and that is the point.
+//   Every cell below answers CORRECTLY on the pre-fix build: the read lands on a freed store
+//   whose bytes are still intact, so exit, assertions, panic and refusals are identical on both
+//   trees, and the leak channel reads `none` either way.  The scoring is in
+//   `tests/returned_text_lifetime.rs`, which was falsified instead — 4 of its 6 tests pass on
+//   the control at `65d995d1`, and the two that move are the two oracles a value cannot supply:
+//   `returned_text_poison_clean_native` (the arena armed, so a freed store stops being right by
+//   luck) and `the_returned_text_is_read_before_the_free` (the emitted order, which is
+//   deterministic and does not depend on reuse at all).
+//
+// The INTEGER twin of shape 2 is the separating control — it was clean throughout, because
+// an integer element is copied by value and never points into the container.
+
+fn elem1235() -> text {
+  tv: vector<text> = ["a", "b"];
+  return tv[0];
+}
+
+fn slice1235() -> text {
+  t: vector<vector<text>> = [["a"], ["b"], ["c"]];
+  ts = t[0..2];
+  ts[0][0]
+}
+
+fn boxed1235(n: text) -> text {
+  app = fn(k: text) { n = n + k; };
+  app("x");
+  app("y");
+  n
+}
+
+// Controls.  The integer element never points into its container, and the `??` spelling gets a
+// caller buffer to deliver through — both were correct before the fix and must stay so.
+fn intslice1235() -> integer {
+  a: vector<vector<integer>> = [[1, 2], [3, 4], [5, 6]];
+  s = a[0..2];
+  s[0][0]
+}
+
+fn coalesce1235(idx: integer, fb: text) -> text {
+  tv: vector<text> = ["a", "b"];
+  return tv[idx] ?? fb;
+}
+
+// The shape the collapse itself exists for: a call over an ARGUMENT whose result borrows a
+// program-lifetime store.  It must keep collapsing, and it must keep answering.
+fn overarg1235(s: text) -> text {
+  return s.trim();
+}
+
+fn main() {
+  assert(elem1235() == "a", "element return: {elem1235()}");
+  assert(slice1235() == "a", "nested-slice element return: {slice1235()}");
+  assert(boxed1235("a") == "axy", "boxed text param capture returned: {boxed1235(\"a\")}");
+  assert(intslice1235() == 1, "integer control: {intslice1235()}");
+  assert(coalesce1235(0, "fb") == "a", "coalesce present arm: {coalesce1235(0, \"fb\")}");
+  assert(coalesce1235(9, "fb") == "fb", "coalesce fallback arm: {coalesce1235(9, \"fb\")}");
+  assert(overarg1235("  z  ") == "z", "call over an argument: {overarg1235(\"  z  \")}");
+  println("1235 returned-text lifetime OK");
+}
