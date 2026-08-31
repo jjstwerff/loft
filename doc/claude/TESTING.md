@@ -2864,6 +2864,23 @@ backends and sixteen test binaries leaked (`placement_parity`, `n2_cdylib`, `lea
 corpus). Only the suite could find that, so a lifetime change is not verified by its matrix —
 the matrix says the defect is closed, the suite says nothing else opened.
 
+**A reverted change is a MEASUREMENT — record what it measured, not just that it failed.** The
+instinct when a change does not work is to drop it and move on, and the cost of that is paid by
+whoever tries the same thing next. Twice in one day across two checkouts a written-up revert
+saved the other author a cycle: a leak note stopped a text route from shipping half-checked, and
+a note about which emit path a gate bypasses redirected a free-discipline reading. What is worth
+writing down is the CHANNEL that failed it and the cure that looked right and was not — a fix
+that is correct on every value cell and wrong on ownership tells the next person exactly where
+to aim, while "did not work" tells them nothing.
+
+**A leak fix that silences ONE backend is not a fix.** The interpreter and the native sweep
+disagree about an unowned store, so a mark that quiets one can leave the other leaking — and
+the value cells, both backends' answers and a thousand-test suite can all be green while it
+does. Check `LOFT_STRICT_STORES=1` on `--interpret` AND `LOFT_NATIVE_LEAK_CHECK=1` on
+`--native`; one of them alone reads clean for the wrong reason. Measured on loft#1225, where
+marking a place-seeded accumulator `skip_free` made native clean and left interpret leaking
+three stores, because the real question was who owns the store at all.
+
 **A fix that makes a dropped statement start EXECUTING is invisible on the diagnostic
 channel.** Sweeping the corpus for a change's new DIAGNOSTICS can only find programs the change
 newly refuses — never programs whose VALUES it changed, which is the whole population when the
