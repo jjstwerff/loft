@@ -1949,8 +1949,20 @@ fn set_first_v(v: vector<integer>, x: integer) {
 ```
 
 ```rust
-fn append_one_v(v: &vector<integer>, x: integer) {
+fn append_one_v(v: vector<integer>, x: integer) {
   v += [x];
+}
+```
+
+```rust
+fn replace_all_plain(v: vector<integer>) {
+  v = [7, 7];
+}
+```
+
+```rust
+fn replace_all(v: &vector<integer>) {
+  v = [7, 7];
 }
 ```
 
@@ -2065,15 +2077,17 @@ This creates 16 identical copies in one expression. See 08-struct.loft for examp
 
 === Passing vectors to functions
 
-A vector parameter shares the caller's storage — no data is copied. So the function reads and writes the SAME elements, and a write to an element the vector already has is visible to the caller when the function returns.
+A vector parameter is a shared view of the caller's vector — no data is copied. So everything the function does to the CONTENTS is visible to the caller once it returns: writing an element, appending, removing, clearing. You do not need to mark the parameter for any of that.
 
-To let a function GROW the caller's vector, mark the parameter with '&'. That is the spelling that says so in the signature, and the compiler holds you to it: a '&' you never write through is a compile error. Use it whenever the function appends, so a reader of the signature can see that it does.
+Exactly one thing stays local: replacing the WHOLE value. Writing 'v = \[7, 7\]' inside the function gives that function a different vector and leaves the caller's alone. Mark the parameter '&' when you want that replacement to reach the caller as well.
 
 ```
-fn append_one_v(v: &vector<integer>, x: integer) { v += [x]; }
+fn replace_all(v: &vector<integer>) { v = [7, 7]; }   // caller sees the new vector
 ```
 
-A SLICE is a different thing from a shared parameter. 'v\[2..5\]' builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a 'vector\<T\>' parameter is expected — bind it to a variable first, and remember you are then working on a copy.
+So '&' means "I may replace this", not "I may add to it".
+
+A SLICE is a different thing again. 'v\[2..5\]' builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a 'vector\<T\>' parameter is expected — bind it to a variable first, and remember you are then working on a copy.
 
 ```rust
   passed: vector<integer> = [1, 2, 3];
@@ -2081,7 +2095,13 @@ A SLICE is a different thing from a shared parameter. 'v\[2..5\]' builds a FRESH
   assert(passed[0] == 99, "a write to an existing element reaches the caller");
   grown: vector<integer> = [1, 2, 3];
   append_one_v(grown, 4);
-  assert(len(grown) == 4, "a '&' parameter grows the caller's vector");
+  assert(len(grown) == 4, "…and so does an append, with no '&' needed");
+  kept: vector<integer> = [1, 2, 3];
+  replace_all_plain(kept);
+  assert(len(kept) == 3, "replacing the whole value stays inside the function");
+  swapped: vector<integer> = [1, 2, 3];
+  replace_all(swapped);
+  assert(swapped[0] == 7, "…unless the parameter is marked '&'");
   source: vector<integer> = [1, 2, 3, 4, 5];
   window = source[2..5];
   set_first_v(window, 77);

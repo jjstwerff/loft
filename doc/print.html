@@ -542,8 +542,14 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">set_first_v</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
   v[<span class="nm">0</span>] = x;
 }</code></pre>
-<pre><code><span class="kw">fn</span> <span class="fn-call">append_one_v</span>(v: &amp;<span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+<pre><code><span class="kw">fn</span> <span class="fn-call">append_one_v</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
   v += [x];
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">replace_all_plain</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) {
+  v = [<span class="nm">7</span>, <span class="nm">7</span>];
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">replace_all</span>(v: &amp;<span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) {
+  v = [<span class="nm">7</span>, <span class="nm">7</span>];
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Create a vector with a literal and loop over it with <code>for</code>. Two special loop annotations help when you need to know where you are: <code>v#first</code>  is true only on the very first iteration — useful for skipping separators. <code>v#index</code>  holds the zero-based position of the current element.</p>
@@ -597,17 +603,24 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c == <span class="nm">8421</span>, <span class="st">"Reverse sub-vector iteration"</span>);</code></pre>
 <p>You can fill a vector with many copies of the same value using <code>; count</code> syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples.</p>
 <h2 id="passing-vectors-to-functions">Passing vectors to functions</h2>
-<p>A vector parameter shares the caller's storage — no data is copied. So the function reads and writes the SAME elements, and a write to an element the vector already has is visible to the caller when the function returns.</p>
-<p>To let a function GROW the caller's vector, mark the parameter with <code>&amp;</code>. That is the spelling that says so in the signature, and the compiler holds you to it: a <code>&amp;</code> you never write through is a compile error. Use it whenever the function appends, so a reader of the signature can see that it does.</p>
-<pre><code>fn append_one_v(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
+<p>A vector parameter is a shared view of the caller's vector — no data is copied. So everything the function does to the CONTENTS is visible to the caller once it returns: writing an element, appending, removing, clearing. You do not need to mark the parameter for any of that.</p>
+<p>Exactly one thing stays local: replacing the WHOLE value. Writing <code>v = [7, 7]</code> inside the function gives that function a different vector and leaves the caller's alone. Mark the parameter <code>&amp;</code> when you want that replacement to reach the caller as well.</p>
+<pre><code>fn replace_all(v: &amp;vector&lt;integer&gt;) { v = [7, 7]; }   // caller sees the new vector
 </code></pre>
-<p>A SLICE is a different thing from a shared parameter. <code>v[2..5]</code> builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a <code>vector&lt;T&gt;</code> parameter is expected — bind it to a variable first, and remember you are then working on a copy.</p>
+<p>So <code>&amp;</code> means "I may replace this", not "I may add to it".</p>
+<p>A SLICE is a different thing again. <code>v[2..5]</code> builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a <code>vector&lt;T&gt;</code> parameter is expected — bind it to a variable first, and remember you are then working on a copy.</p>
 <pre><code>  passed: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
   <span class="fn-call">set_first_v</span>(passed, <span class="nm">99</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(passed[<span class="nm">0</span>] == <span class="nm">99</span>, <span class="st">"a write to an existing element reaches the caller"</span>);
   grown: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
   <span class="fn-call">append_one_v</span>(grown, <span class="nm">4</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(grown) == <span class="nm">4</span>, <span class="st">"a '&amp;' parameter grows the caller's vector"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(grown) == <span class="nm">4</span>, <span class="st">"…and so does an append, with no '&amp;' needed"</span>);
+  kept: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">replace_all_plain</span>(kept);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(kept) == <span class="nm">3</span>, <span class="st">"replacing the whole value stays inside the function"</span>);
+  swapped: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">replace_all</span>(swapped);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(swapped[<span class="nm">0</span>] == <span class="nm">7</span>, <span class="st">"…unless the parameter is marked '&amp;'"</span>);
   source: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
   window = source[<span class="nm">2..5</span>];
   <span class="fn-call">set_first_v</span>(window, <span class="nm">77</span>);
