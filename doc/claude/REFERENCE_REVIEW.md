@@ -80,6 +80,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/03-integer.loft` | 2026-08-31 | `0c842212` |
 | `tests/docs/04-boolean.loft` | 2026-08-31 | `16c7eb77` |
 | `tests/docs/05-float.loft` | 2026-08-31 | `6e08b7d0` |
+| `tests/docs/06-function.loft` | 2026-08-31 | `1b8c8fa7` |
 
 ## See also
 
