@@ -738,11 +738,42 @@ fn sanitize(name: &str) -> String {
 #[must_use]
 fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     match tp {
-        Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => Some("u8"),
-        Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => Some("u16"),
-        Type::Integer(s) if s.range() - 1 <= 255 => Some("i8"),
-        Type::Integer(s) if s.range() - 1 <= 65536 => Some("i16"),
+        Type::Integer(s) => native_narrow_int(s),
         _ => boolean_u8_cast(tp),
+    }
+}
+
+/// The narrow Rust type a value of this integer range fits UNENCODED, or `None` when it needs
+/// the full width.
+///
+/// The ONE home for that question, asked by `rust_type`'s Result arms (which pick the
+/// signature) and by [`narrow_int_cast`] (which casts the value at the return site).  They
+/// have to agree or the generated code does not compile — and they were two copies of the
+/// same four-line predicate, which is how they came to share a defect.
+///
+/// The test is which VALUES the range holds, not how MANY.  Read off the SPAN
+/// (`range() - 1 <= 255`) both answered `u8` for `integer limit(300, 400)` — 101 values,
+/// which fit a byte only OFFSET-encoded, which is what the store layer does and a register
+/// does not.  A body of `350` came back as `94` on `--native` and `350` on `--interpret`,
+/// silently, on every build back to the last release; `limit(70000, 70100)` is the cell that
+/// shows it is not a u8-vs-u16 boundary question at all, since a 101-wide range picked `u8`
+/// for a five-digit number (loft#1255).
+///
+/// `formal/layout.md` is why the answer is the values: the packed encoding is a STORAGE fact,
+/// so the span belongs to `bytes_for_range` and never to a register.  A value in flight is
+/// its plain number, which is what the interpreter's i64 slot already does.
+fn native_narrow_int(s: &crate::data::IntegerSpec) -> Option<&'static str> {
+    let (min, max) = (i64::from(s.min), i64::from(s.max));
+    if min >= 0 && max <= 255 {
+        Some("u8")
+    } else if min >= 0 && max <= 65535 {
+        Some("u16")
+    } else if min >= -128 && max <= 127 {
+        Some("i8")
+    } else if min >= -32768 && max <= 32767 {
+        Some("i16")
+    } else {
+        None
     }
 }
 
@@ -999,16 +1030,14 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         // cascading type-mismatch errors when the variable is passed to a template
         // operation (e.g. `set_short`) that expects `i32`.  The `return` site adds an
         // explicit `as u16` / `as u8` cast (see `narrow_int_cast`).
-        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 && s.min >= 0 => {
-            "u8"
-        }
+        //
+        // WHICH narrow type is `native_narrow_int`'s answer, shared with `narrow_int_cast` so
+        // the signature and the cast at the return site cannot disagree (loft#1255).
         Type::Integer(s)
-            if context == &Context::Result && s.range() - 1 <= 65536 && s.min >= 0 =>
+            if context == &Context::Result && native_narrow_int(s).is_some() =>
         {
-            "u16"
+            native_narrow_int(s).unwrap_or("i64")
         }
-        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 => "i8",
-        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 65536 => "i16",
         Type::Enum(_, false, _) => "u8",
         Type::Character | Type::Null => "i32",
         Type::Integer(_) => "i64",
