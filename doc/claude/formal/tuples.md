@@ -126,8 +126,16 @@ or take the tuple by value and return a new one. The refusal message says both.
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-tup-4** — the KEYED half — a tuple in a keyed collection
+**OPEN: 0.**
+
+`D-tup-4`'s KEYED half closed 2026-08-31 (loft#1230): a keyed collection given to a tuple is now
+COPIED like its vector twin, so `(T-Cons)`'s independence holds for every element type.
+
+⚠ **The zero above is only as strong as the Conformance list below it, and that list checked
+`(T-Cons)`'s copy with a VECTOR** — the one element type that already obeyed it. The keyed half
+stood for five days after the vector half closed because the rule's own example exercised the
+passing shape. A conformance entry that names one member of a family is a claim about that
+member, not the family.
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [tuples-history.md](tuples-history.md).
@@ -147,6 +155,11 @@ issue numbers — is the companion [tuples-history.md](tuples-history.md).
   are STATIC errors naming the element type, never an ICE
   (`tests/scripts/102-expected-errors.loft`).
 - **Static index (`T-Proj`)** — `t.5` on a 2-tuple is a compile error, not a runtime null.
+- **Heap element is COPIED (`T-Cons`)** — `t = (h, 9); h[2] = …` leaves `t.0` at its old length
+  for EVERY heap element type, not just the vector the paragraph above names: `hash`, `hash<τ>?`,
+  `sorted`, `index`, `trie`, `spatial`, and a DEEP case with a nested `vector<text>` inside the
+  element. Both backends
+  (`tests/scripts/1230-a-keyed-tuple-element-owns-a-copy.loft`).
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on a
 tuple's element order, values, or a projection is the definitional error this doc names.

@@ -6,7 +6,7 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** (D-tup-4's KEYED half, 2026-08-26 — below); D-tup-5 and D-tup-6 opened and closed
+OPEN: **0** (D-tup-4's KEYED half CLOSED 2026-08-31, loft#1230 — below); D-tup-5 and D-tup-6 opened and closed
 2026-08-28; D-tup-3 opened and closed 2026-08-26; D-tup-2 closed the day the
 rule it needed was written down.  Bounded by the oracle note below — **and D-tup-3 is what that
 note was warning about**: it was found by giving an element a HEAP type, which this doc's
@@ -125,7 +125,19 @@ than a third spelling both would have to learn.  Guard:
 > the copy`, while the write reached `vl` through two levels of binding. A diagnostic that
 > describes the contract wrongly is worse than a missing one, because it is believed.
 >
-> **What is NOT closed, and why.** A KEYED collection given to a tuple aliases in the same way
+> **CLOSED 2026-08-31 (loft#1230).** The keyed half is fixed: a keyed member is copied with
+> `OpReplaceKeyed` — the op a STRUCT literal already emitted for its keyed field, and the reason
+> both siblings this entry appeals to were independent while the tuple literal was not. The
+> paragraph below records why it stayed open, and the blocker it names was removed by loft#1225's
+> `TuplePut` arm; what remained was reaching for the copy rather than building one. **A plan was
+> filed on the premise that no keyed copy existed anywhere in the language; the premise was
+> wrong, and what disproved it was testing the struct-field route.** Three things were needed
+> beyond the vector branch: the copy keeps the SOURCE's nullability (built dense it loses its
+> ownership dep entering a `τ?` slot and leaks), its result type depends on the copy's own
+> variable, and a tuple YIELD unwraps the copy exactly as `synthetic_tuple_return` already did
+> for a RETURN — without that a generator leaked one store per keyed kind.
+>
+> **What WAS not closed, and why — the reason it stayed open until now.** A KEYED collection given to a tuple aliases in the same way
 > (`hash<S[k]>`), and the fix here excludes a keyed local deliberately: that shape is a
 > pre-existing codegen ICE (three of the four tuple emitters hand-spelled the `DbRef` type set
 > and were short by the five keyed collections), reproduced identically on a control binary, and
