@@ -2872,15 +2872,27 @@ use a separate collection or add after the loop"
         // append and owes the reader this message.  Asked with `is_equal` it was none of the
         // routes' business: `Reference(Named)` and `Enum(Tagged, …)` read as unrelated, the
         // statement fell past every branch, and the generic path grew the vector by THREE.
+        // loft#1223 — the SOURCE is read through `.base()` for exactly the reason @PLN25 gave
+        // for the destination one paragraph up: the rule is a blanket requirement on the
+        // SPELLING, and `τ?` occupies τ's storage plus one reserved null, so nullability does
+        // not decide whether a bare element is ambiguous with a concat.  Asked unpeeled, the
+        // `?` spelling of one statement was MORE permissive than the plain one — `d.c += n`
+        // with `n: integer?` was accepted where the dense `d.c += i` is refused, which is
+        // backwards for a nullability marker.  It reached the vector single-element push, and
+        // was the ONLY shape in the corpus that did.
+        //
+        // The two questions stay separate and both still reach the reader: this one says WRITE
+        // THE BRACKETS, and `(N-Store)` below says the value may be null where a non-null is
+        // expected.  The cure named here (`+= [n]`) earns that warning on its own.
         if op == "+="
             && let Type::Vector(_, _) = f_type.base()
             && !s_type.is_unknown()
             && {
                 let content = f_type.base().content();
-                let src = s_type.clone();
+                let src = s_type.base().clone();
                 self.holds_element(&content, &src)
             }
-            && !s_type.is_equal(f_type.base())
+            && !s_type.base().is_equal(f_type.base())
         {
             diagnostic!(
                 self.lexer,
@@ -4043,6 +4055,23 @@ use a separate collection or add after the loop"
         // and the RHS is a single expression (variable, function call) — NOT
         // a struct literal.  Struct-literal RHS is handled by the keyed-
         // collection branch below, which also covers vectors.
+        //
+        // ⚠ **Measured UNREACHABLE as of loft#1223, and deliberately kept.**  Zero callers
+        // across every `.loft` file in the repository (`tests/scripts`, `tests/docs`,
+        // `tests/lib`, `default`, `examples`, `doc`, `bench`, `tools`), and unreachable by
+        // argument too: for a `Type::Vector` destination every source shape is claimed
+        // earlier — an ELEMENT by @PLAN52's bracket refusal (which reads both sides through
+        // `.base()` since loft#1223, so the nullable spelling no longer slips past), a VECTOR
+        // by the concat branch, and anything else by loft#1215's classifier.  Its last caller
+        // was the un-bracketed nullable element, which is exactly what loft#1223 refused.
+        //
+        // Kept rather than deleted because the two failure modes are not symmetric.  A dead
+        // branch costs a reader's attention.  A WRONG deletion costs a silent wrong answer:
+        // the shape would fall through to the generic assignment path, which for a collection
+        // destination emits no write — the precise failure loft#1221 was.  The argument above
+        // rests on the ordering of four separate checks, any of which a later change may move,
+        // and this same branch was called dead once before on a reading that a measurement
+        // then contradicted.  Delete it behind a fresh probe, not behind this comment.
         if !self.first_pass
             && var_nr == u16::MAX
             && op == "+="

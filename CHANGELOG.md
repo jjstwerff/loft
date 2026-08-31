@@ -87,6 +87,29 @@ write reaches — it changes what a read answers. The same gap made an ordinary 
 unreachable from the other side: `a.i?.nm = "cd"` on a `text` member reported that *a
 file-scope `NAME: text = …` is a CONSTANT*, about code nobody had written, while the `integer`
 member beside it wrote through fine. Both are one missing case, on both backends.
+### A `?` on a value no longer buys it past a rule the plain value obeys
+
+Appending one element to a vector needs brackets — `v += [x]`, not `v += x` — because
+`vector<vector<T>> += vector<T>` would otherwise be both "push one element" and "concatenate".
+That rule applies to every element type. It was not applied to a nullable one:
+
+```loft
+struct D { c: vector<integer> }
+
+i: integer = 9
+d.c += i          // error: vector `+= elem` is ambiguous; use `+= [elem]`
+n: integer? = 9
+d.c += n          // …accepted
+```
+
+So the `?` spelling of a statement was *more* permissive than the plain one, which is backwards
+for a marker whose whole job is to make you handle a value more carefully. Both now ask for the
+brackets, and `d.c += [n]` does what you meant.
+
+Nullability and bracketing stay two separate questions about the same line, and both still reach
+you: the brackets are this message, and *"a nullable `integer?` is stored into … the non-null
+type"* is the other.
+
 ### Every `+=` on a collection now either appends or says why not
 
 `c += v` had a list of routes and no `else`, so a source matching none of them went one of two

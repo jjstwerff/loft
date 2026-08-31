@@ -105,7 +105,12 @@ Two source shapes the rule deliberately does NOT license, each with its own answ
     `D-tup-4` keyed half has been waiting on (loft#1230).
   * **a bare element into a VECTOR.**  Legal by this rule and refused by @PLAN52's ambiguity
     rule instead: `vector<vector<T>> += vector<T>` is both "push one element" and "concatenate",
-    so the brackets are required for every element type, not only the ambiguous ones.
+    so the brackets are required for every element type, not only the ambiguous ones — and for
+    every SPELLING of an element type.  A `τ?` source is one, because [types.md](types.md)
+    `N-Opt` gives it τ's storage plus one reserved null: nullability does not decide whether a
+    bare element is ambiguous with a concat.  Asked unpeeled, `d.c += n` on an `integer?` was
+    accepted where the dense `d.c += 9` is refused, which made the `?` spelling of a statement
+    more permissive than the plain one (loft#1223).
 
 ### 1.2b Removal — `Col-Remove` (a vector RENUMBERS; a keyed kind does not)
 

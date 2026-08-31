@@ -9,6 +9,46 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A nullable element meets @PLAN52's bracket rule, and the push branch it kept alive is dead (2026-08-31)
+
+@PLAN52's rule is a blanket requirement on the SPELLING — `vector += elem` is refused whatever
+the element's type — and the ambiguity check asked it of an unpeeled source. So a `τ?` was not
+recognised as an element and slipped past: `d.c += n` with `n: integer?` was accepted where the
+dense `d.c += 9` is refused, making the `?` spelling of one statement MORE permissive than the
+plain one (loft#1223).
+
+**Not a design call, and the precedent is in the same function.** @PLN25 met this axis once
+already on the DESTINATION — *"matched on the target's STORAGE, so a `vector<T>?` is refused the
+same way and gets the same cure"* — so the answer for the SOURCE is the same reading one position
+over: `τ?` occupies τ's storage plus one reserved null, and nullability does not decide whether a
+bare element is ambiguous with a concat. The fix is `s_type.base()` in the two places the check
+compares, mirroring the `f_type.base()` @PLN25 added.
+
+**The vector single-element push is now measured UNREACHABLE, and deliberately kept.** Its one
+corpus caller was exactly the un-bracketed nullable element this refuses; a re-run of the same
+env-gated probe over `tests/scripts`, `tests/docs`, `tests/lib`, `default`, `examples`, `doc`,
+`bench` and `tools` reports zero. It is unreachable by argument too — for a `Type::Vector`
+destination an ELEMENT is claimed by this refusal, a VECTOR by the concat branch, and anything
+else by loft#1215's classifier. It stays because the failure modes are not symmetric: a dead
+branch costs a reader's attention, while a wrong deletion drops the shape through to the generic
+path, which for a collection destination emits no write — the precise failure loft#1221 was. The
+argument rests on the ordering of four checks, and this same branch was called dead once before
+on a reading a measurement then contradicted. The reasoning is at its head; delete it behind a
+fresh probe.
+
+**The cure is under-diagnosed and that is filed rather than folded in.** `d.c += [n]` stores the
+null into a dense `vector<integer>` with no diagnostic — the whole vector-literal family is
+silent, including `v: vector<integer> = [n]` and a struct constructor, on both backends and on
+2026.8.0. So closing this moves that reader from warned to silent until loft#1232 lands. The
+trade is right — a rule violation should not ship to preserve a warning the correct spelling
+ought to carry too — but the gap is named at the guard and in the issue so it is not rediscovered
+from our own diagnostic.
+
+Two guard cells moved to the bracketed spelling with their assertions unchanged, which is what
+says the SPELLING changed and not the store: loft#1210's nullable-element axis cell and
+loft#1215b's. Each `@EXPECT_WARNING` that went with them was removed for loft#1232's reason, not
+because the store changed, and both files say so.
+
 ### The `+=` routing table is total: every collection append routes or reports (2026-08-30)
 
 `towards_set`'s `+=` handling is a chain of route branches, each testing a hand-spelled

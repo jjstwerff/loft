@@ -4620,6 +4620,50 @@ and there is none in the language — the vector cure (`o = []; o += vl; o`) has
 because the keyed `+=` was an alias all along. That is plan-sized new parse-time machinery over
 five kinds, on loft#1230.
 
+#### B7m — loft#1223 closed, and the reachability count that changed under it (2026-08-31)
+
+The last of the append walk's own filings, and it closes on a precedent rather than a decision.
+B7k had measured that the vector single-element push has exactly ONE caller in the corpus — an
+un-bracketed nullable element — and drew the conclusion that the branch is therefore not dead.
+That reading was right and it is now stale: this entry refuses that caller, so the branch has
+zero.
+
+**The issue was filed as a design call and it was not one.** @PLAN52's bracket rule is a blanket
+requirement on the SPELLING, and @PLN25 had already met the nullability axis on the DESTINATION
+half of the same check — *"matched on the target's STORAGE, so a `vector<T>?` is refused the same
+way"*. The SOURCE is that reading one position over. So the two-cures framing in the issue was
+mine and wrong, and the correction is a `.base()` mirroring the one already there.
+[[consult-formal-spec-first]] with the spec being a comment above the check: the precedent that
+settles a question is not always in `formal/`.
+
+⚠ **A refusal's cure can be under-diagnosed without being a dead end, and the two are worth
+separating.** `d.c += [n]` — the spelling this sends the reader to — stores a null into a dense
+`vector<integer>` in silence, on both backends and on the shipped release. B7k's rule was *a
+refusal whose cure is broken sends the reader to a dead end*, and it made me hesitate here. The
+cure is not broken: it compiles and appends exactly what it says. It is UNDER-DIAGNOSED, which is
+a different defect with a different owner (loft#1232, filed, covering the whole vector-literal
+family — the local binding and the struct constructor are silent too). Shipping the refusal moves
+one reader from warned to silent for as long as that is open, and that is still the right trade:
+a rule violation must not stay shipped to preserve a warning that the CORRECT spelling ought to
+carry as well.
+
+⚠ **The push branch is dead by measurement AND by argument, and is kept anyway.** Zero callers
+over eight directories; and for a `Type::Vector` destination every source shape is claimed
+earlier — an element by this refusal, a vector by concat, anything else by B7k's classifier. It
+stays because the costs are asymmetric: a dead branch costs attention, a wrong deletion drops the
+shape to the generic path which emits no write — the exact failure B7k's other half was. The
+argument rests on the ordering of four checks that a later change may move, and **this branch was
+called dead once already on a reading a measurement contradicted**. The reasoning is at its head
+so the next reader deletes it behind a fresh probe rather than behind a comment.
+
+⚠ **A guard carried a claim that a later commit in the same walk falsified.** `1215b`'s header
+said the nullable-element cell was *"the only shape in the whole corpus that reaches the push …
+so the push is not dead code to delete"*. True and measured when written; false three commits
+later. It is CORRECTED IN PLACE rather than deleted, with the reason, because the useful thing is
+not the current number — it is that **a reachability count is a measurement with a date on it**,
+and the thing that moved this one was our own subsequent fix. [[keystone-claim-is-a-measurement]]
+extends to the counts a walk leaves behind, not only the ones it starts from.
+
 #### B2 — open, and the owner's call
 
 | decision | evidence | why it is not mine to take |

@@ -10,6 +10,12 @@
 // courtesy sweep — three of them refuse a build where the classifier is one clause short, and
 // each names which clause.
 //
+// ⚠ The nullable-ELEMENT cell is BRACKETED and carries no warning, and both facts are
+// loft#1223's and loft#1232's rather than this file's: the bare spelling is now refused by
+// @PLAN52's rule, and the bracketed one it names is not diagnosed at all — a nullable value
+// inside a vector literal reaches a dense `vector<integer>` in silence. Its `@EXPECT_WARNING`
+// line was removed for that reason, not because the store changed.
+//
 //   * the NULLABLE-ELEMENT keyed view is the one that fails when the element test is a fresh
 //     `is_equal`, and it is the second spelling of the same notion, in the other
 //     direction: a keyed kind reads its element off `content()` as `Reference(d)` while the
@@ -27,11 +33,17 @@
 //     read as the types they store; placed one statement earlier it would refuse both, and
 //     loft#1210 — which is what put that peel there — would be undone by its own successor.
 //
-// The nullable ELEMENT cell is load-bearing for a second reason worth writing down: it is the
-// only shape in the whole corpus that reaches the vector single-element push, the route
-// loft#1215's raw write came from. Measured across every `.loft` file in the repository, it is
-// the one hit. So the push is not dead code to delete — it has exactly one caller, and this is
-// it.
+// ⚠ The nullable ELEMENT cell used to carry a second claim that loft#1223 has since falsified,
+// and it is left here as a correction rather than deleted. It read: *"it is the only shape in
+// the whole corpus that reaches the vector single-element push … so the push is not dead code to
+// delete — it has exactly one caller, and this is it."* That was true and measured when written.
+// loft#1223 then refused the un-bracketed spelling, which WAS that one caller, and a re-run of
+// the same probe over the same corpus plus `tools/` now reports ZERO. The branch is kept anyway,
+// and the reason is at its head in `parser/expressions.rs`: a wrong deletion falls through to
+// the generic path and emits no write, which is the failure loft#1221 was.
+//
+// The correction is the point. A reachability count is a measurement with a DATE on it, and the
+// thing that changed it was a fix three commits later in the same walk.
 //
 // @falsified-at: e695a6f5 — INERT on all four channels, both backends, and that is the correct
 //   answer here: `scripts/falsify.sh` prints `INERT — the control and this tree answer the same`,
@@ -45,7 +57,6 @@
 //   move under that build, which is why the note above says what it says.
 //
 // @EXPECT_WARNING: a nullable `vector<integer>?` is stored into the appended value of the non-null type `vector<integer>`
-// @EXPECT_WARNING: a nullable `integer?` is stored into the appended value of the non-null type `vector<integer>`
 
 enum Tag1215 { Anon1215, Named1215 { nm: text } }
 
@@ -77,8 +88,11 @@ fn main() {
   s1215b: vector<integer>? = [7, 8];
   d1215b.c += s1215b;
   assert(len(d1215b.c) == 8 && d1215b.c[7] == 8, "a nullable vector source still concatenates");
+  // Bracketed, because loft#1223 made the nullable spelling meet @PLAN52's rule that the plain
+  // one has always met: `d.c += n` was accepted here while the dense `d.c += 9` is refused. The
+  // assertions are unchanged, which is the point — what moved is the SPELLING, not the store.
   e1215b: integer? = 9;
-  d1215b.c += e1215b;
+  d1215b.c += [e1215b];
   assert(len(d1215b.c) == 9 && d1215b.c[8] == 9, "a nullable element still appends as one");
 
   // ---- a keyed destination, in all three source spellings it accepts ----
