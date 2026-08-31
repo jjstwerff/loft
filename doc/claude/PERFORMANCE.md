@@ -3964,6 +3964,34 @@ measured.**
 parse of `default/`.  It is the cheapest hit/miss check there is, and it works on
 any build.
 
+**`LOFT_TIMING=1` also reports the EXTERNAL build tools, with a reason each** (loft#1238).
+A `--html` or `--native-wasm` build shells out to `cargo`, `rustc` and `wasm-opt`, and until
+now the only channel was a per-event stderr line — right for a spawned process, useless for a
+reader watching a 25-second `--html` and wanting to know what it is doing.  The report is
+per-invocation, slowest first, and it names WHY each ran:
+
+```
+[loft-build] --html: 3 external invocation(s), 25.79s total
+[loft-build]     25.61s  cargo     libloft.rlib (wasm32-unknown-unknown)  loft's own build fingerprint moved (loft was rebuilt) — rlib is stale
+[loft-build]      0.18s  wasm-opt  prog_opt.wasm                          always runs — --asyncify is required for frame yield, not an optimisation
+[loft-build]      0.00s  lock      html                                   waiting for the global build lock
+```
+
+**What it made visible.**  `loft_build_fingerprint()` is a CONTENT HASH of `libloft.rlib` /
+the loft executable, so it moves on every loft rebuild — and it gates loft's own wasm runtime
+rlib.  The first `--html` / `--native-wasm` run after ANY loft source change therefore pays a
+full `cargo build` of that rlib (25.6 s here); the second is 0.55 s.  That is the price of the
+guarantee that a codegen change reaches an already-built artifact, not a defect, but it was
+invisible and it is why a wasm-shaped test can look like a hang.
+
+**The lock is timed apart from the build on purpose.**  Under a parallel runner every
+wasm-shaped process reaches `/tmp/loft-native-build.lock` at once after a loft rebuild, so a
+single run's wall-clock can be almost entirely SOMEONE ELSE'S build.  Folding the two together
+would name `cargo` for time cargo did not spend in this process.
+
+Silent unless armed, and silent when nothing ran — a build that reused every artifact prints
+no report at all.
+
 **`LOFT_STDLIB_CACHE` is the narrower fallback, not an addition.**  It caches
 `default/` only, and `main.rs` engages it **just when the program cache is off** —
 so on an installed binary setting it changes nothing, while on a from-source build

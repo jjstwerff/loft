@@ -355,8 +355,21 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
             && loft::cache::native_artifact_fingerprint_matches(dir, fp)
     };
     if fresh(&profile_dir) {
+        crate::platform::timing_record("wasmrlib", shape.name(), true, None);
         return Some(profile_dir);
     }
+    // loft#1238 — say WHY this build is about to run.  The two reasons are not the same
+    // problem: a MISSING rlib is a first build on this checkout and costs what it costs, while
+    // a STALE one is the fingerprint moving because loft itself was rebuilt — which happens on
+    // every commit, so the first wasm/html run after any source change pays a full cargo build.
+    // `loft_build_fingerprint` is a content hash of libloft.rlib / the loft executable, so this
+    // is not tunable by the caller; it is the price of the correctness guarantee that a codegen
+    // change reaches an already-built artifact.
+    let why = if rlib.exists() {
+        "loft's own build fingerprint moved (loft was rebuilt) — rlib is stale"
+    } else {
+        "no rlib for this shape yet — first build on this checkout"
+    };
     if env::var_os("LOFT_NO_AUTO_REBUILD").is_some() {
         // Opt-out (CI / interpreter-preferring users): link whatever rlib is
         // present rather than trigger an implicit cargo build.
@@ -373,10 +386,22 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
         .open(std::env::temp_dir().join("loft-native-build.lock"))
         .ok();
     if let Some(f) = &_build_lock {
-        let _ = f.lock();
+        // loft#1238 — the wait is timed separately from the build.  Under a parallel test
+        // runner every wasm-shaped process reaches this lock at once after a loft rebuild, so
+        // the wall-clock a single run reports can be almost entirely SOMEONE ELSE'S build; a
+        // report that folded the two together would name cargo for time cargo did not spend.
+        crate::platform::timing_exec(
+            "lock",
+            shape.name(),
+            "waiting for the global build lock",
+            || {
+                let _ = f.lock();
+            },
+        );
     }
     if fresh(&profile_dir) {
         // A process we waited on just produced it.
+        crate::platform::timing_record("wasmrlib", shape.name(), true, None);
         return Some(profile_dir);
     }
     eprintln!(
@@ -424,7 +449,9 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
     if let Some(sub) = shape.isolated_target_subdir() {
         cmd.arg("--target-dir").arg(tree.join(sub));
     }
-    match cmd.status() {
+    let subject = format!("libloft.rlib ({triple})");
+    let status = crate::platform::timing_exec("cargo", &subject, why, || cmd.status());
+    match status {
         Ok(s) if s.success() && rlib.exists() => {
             loft::cache::write_native_artifact_fingerprint(&profile_dir, fp);
             Some(profile_dir)

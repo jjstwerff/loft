@@ -19,6 +19,27 @@ pub struct Timing {
     /// `(kind, name, cache_hit, compile_seconds)`.  Accumulated for an
     /// in-process summary; the per-event stderr line is the cross-process channel.
     events: std::sync::Mutex<Vec<(&'static str, String, bool, Option<f64>)>>,
+    /// External build-tool invocations — see [`Timing::record_exec`].
+    steps: std::sync::Mutex<Vec<BuildStep>>,
+}
+
+/// One external build-tool invocation: WHAT ran, on what, WHY, and for how long.
+///
+/// The cache events above answer *did we reuse an artifact*; this answers the question a
+/// reader actually asks when a build is slow — *which tool is spending the time, and what
+/// decided it had to run at all*.  A `reason` is required rather than optional because a step
+/// with no stated reason is the thing that makes a slow build unreadable: `rustc` appearing
+/// three times says nothing, `rustc bridge rlib (web) — bridge source newer than rlib` says
+/// everything.
+pub struct BuildStep {
+    /// The program spawned: `"cargo"`, `"rustc"`, `"wasm-opt"`, …
+    pub tool: &'static str,
+    /// What it was run ON — an artifact or crate name, not a full path.
+    pub subject: String,
+    /// Why it ran: the staleness verdict, or the fact that nothing checks.
+    pub reason: String,
+    /// Wall-clock seconds the invocation took.
+    pub secs: f64,
 }
 
 static TIMING: OnceLock<Option<Timing>> = OnceLock::new();
@@ -33,6 +54,7 @@ impl Timing {
                     || std::env::var("LOFT_TIMING_LEDGER").is_ok();
                 on.then(|| Timing {
                     events: std::sync::Mutex::new(Vec::new()),
+                    steps: std::sync::Mutex::new(Vec::new()),
                 })
             })
             .as_ref()
@@ -76,6 +98,66 @@ impl Timing {
             e.push((kind, name.to_string(), hit, secs));
         }
     }
+
+    /// Record one external build-tool invocation.  Same two channels as
+    /// [`Timing::record`] — a `[loft-build]` stderr line so a spawned loft's work reaches the
+    /// parent log, and the ledger file when `LOFT_TIMING_LEDGER` is set — plus in-process
+    /// accumulation for [`Timing::report`].
+    pub fn record_exec(&self, tool: &'static str, subject: &str, reason: &str, secs: f64) {
+        eprintln!("[loft-build] {tool} {subject} secs={secs:.2} reason={reason}");
+        if let Ok(dir) = std::env::var("LOFT_TIMING_LEDGER")
+            && std::fs::create_dir_all(&dir).is_ok()
+        {
+            use std::io::Write;
+            let path =
+                std::path::Path::new(&dir).join(format!("timing-{}.tsv", std::process::id()));
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(f, "exec\t{tool}\t{subject}\t{reason}\t{secs:.2}");
+            }
+        }
+        if let Ok(mut st) = self.steps.lock() {
+            st.push(BuildStep {
+                tool,
+                subject: subject.to_string(),
+                reason: reason.to_string(),
+                secs,
+            });
+        }
+    }
+
+    /// Print the per-invocation breakdown, slowest first.
+    ///
+    /// The `events` list has been accumulated since this struct existed and never read — the
+    /// per-event stderr line was the only channel, which is right for a spawned process and
+    /// wrong for a direct `loft --html` run, where the reader wants the shape of the build and
+    /// not a transcript of it.  Prints nothing when no step was recorded, so a run that
+    /// rebuilt nothing stays silent.
+    pub fn report(&self, phase: &str) {
+        let Ok(steps) = self.steps.lock() else {
+            return;
+        };
+        if steps.is_empty() {
+            return;
+        }
+        let total: f64 = steps.iter().map(|s| s.secs).sum();
+        let mut rows: Vec<&BuildStep> = steps.iter().collect();
+        rows.sort_by(|a, b| b.secs.total_cmp(&a.secs));
+        let width = rows.iter().map(|r| r.subject.len()).max().unwrap_or(0);
+        eprintln!(
+            "[loft-build] {phase}: {} external invocation(s), {total:.2}s total",
+            rows.len()
+        );
+        for r in rows {
+            eprintln!(
+                "[loft-build]   {:>7.2}s  {:<9} {:<width$}  {}",
+                r.secs, r.tool, r.subject, r.reason
+            );
+        }
+    }
 }
 
 /// Record a native-compile event into the process [`Timing`] singleton — a
@@ -84,6 +166,34 @@ impl Timing {
 pub fn timing_record(kind: &'static str, name: &str, hit: bool, secs: Option<f64>) {
     if let Some(t) = Timing::global() {
         t.record(kind, name, hit, secs);
+    }
+}
+
+/// Time `run` and record it as an external build-tool invocation — a no-op wrapper when
+/// `LOFT_TIMING` is unset, so an uninstrumented build pays one cached env read.
+///
+/// Takes the reason as a closure-free `&str` because every call site knows it statically or
+/// has already computed the staleness verdict it is about to act on.
+pub fn timing_exec<T>(
+    tool: &'static str,
+    subject: &str,
+    reason: &str,
+    run: impl FnOnce() -> T,
+) -> T {
+    let Some(t) = Timing::global() else {
+        return run();
+    };
+    let started = std::time::Instant::now();
+    let out = run();
+    t.record_exec(tool, subject, reason, started.elapsed().as_secs_f64());
+    out
+}
+
+/// Print the external-invocation breakdown for `phase` — a no-op when `LOFT_TIMING` is unset
+/// or nothing ran.
+pub fn timing_report(phase: &str) {
+    if let Some(t) = Timing::global() {
+        t.report(phase);
     }
 }
 
