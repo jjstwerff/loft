@@ -2391,6 +2391,11 @@ struct ConstructOps {
 /// (`a = Bag { items: base }` — `a` built AFTER `base`) needs a build-order reorder and is NOT
 /// handled here; it is left as a copy. `skip` receives ONLY the backings of sources actually
 /// rewritten, so a skipped source keeps its free (no live-store suppression).
+// The eight parameters are one act's worth of state: the code being rewritten, the four
+// read-only sets that decide whether a source may move, and the two out-parameters the
+// caller reads back.  Bundling them into a struct would put a name between each set and
+// the predicate that reads it without removing anything.
+#[allow(clippy::too_many_arguments)]
 fn construct_move_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,

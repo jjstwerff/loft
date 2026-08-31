@@ -1233,6 +1233,7 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
 ///   `integer`/`float` fn reads back as the sentinel on interp AND native), and
 ///   `floatvar = null` is type-rejected.  Do NOT route a live scalar null
 ///   through this — it would diverge from `emit_typed_null`.
+///
 /// @FR-E-Uncomp-NN — the value a slot of `tp` holds when nobody assigned one.
 ///
 /// NOT [`default_native_value`], which despite its name answers the type's NULL: a
