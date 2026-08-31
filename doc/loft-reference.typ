@@ -3063,7 +3063,7 @@ no-op; does not panic
 
 = Hash
 
-A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
+A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash does not keep its records in order — that is exactly what makes the lookup fast. You can still iterate one and get a predictable order (ascending key), but the hash has to sort a snapshot to do it; see 'Iterating a Hash' at the bottom of this page. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
 
 ```rust
 struct Keyword {
@@ -3153,9 +3153,8 @@ Assigning null to a hash subscript removes that element. Removing a key that is 
   assert(!d.h["three"], "three was removed");
   assert(d.h["one"], "one still present");
   d.h["missing"] = null;
+  assert(d.h["one"], "removing a key that is not there leaves the others alone");
 ```
-
-no-op; does not panic
 
 === Iterating a Hash
 
@@ -3163,12 +3162,14 @@ no-op; does not panic
 
 Under the hood the compiler builds a one-shot sorted snapshot of the hash's record-numbers and walks it, so iteration cost is O(n) + O(n log n) per `for`, not amortised across calls.  For a hot loop, pair the hash with a `vector\<T\>` or `sorted\<T\[k\]\>` on the same record type and iterate the companion collection.
 
-`e\#remove` is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use `h\[key\] = null` to remove an entry.
+`e\#remove` is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use `h\[key\] = null` to remove an entry. Adding the values up cannot show you the order — a sum is the same whichever way you walk. Collect the keys instead: they come out alphabetically, not in the order they went in.
 
 ```rust
   sum = 0;
-  for e in c.lookup { sum += e.v; }
+  order = "";
+  for e in c.lookup { sum += e.v; order += "{e.t} "; }
   assert(sum == 10, "Sum via hash iteration: {sum}");
+  assert(order == "Four One Three Two ", "hash walks in key order: {order}");
 }
 ```
 

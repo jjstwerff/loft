@@ -4,8 +4,8 @@
 // The refusal messages the reference QUOTES still say what it quotes.
 //
 // Several chapters help a reader past a compile error by printing the message they will see:
-// the Integers and Float chapters quote the text-parse refusal, and the Functions chapter
-// quotes three more.  That is the right thing for a beginner — recognising the sentence is
+// the Integers and Float chapters quote the text-parse refusal, the Functions chapter
+// quotes three more, and the Hash chapter promises a refusal without quoting it.  That is the right thing for a beginner — recognising the sentence is
 // most of getting unstuck — and it is a promise about a string, which nothing in a chapter can
 // keep, because an `assert` cannot reach a program that does not compile.
 //
@@ -23,19 +23,22 @@
 //   rewording, and that is a build which does not exist yet.
 //
 //   So it was measured by hand instead, because a guard made of expected FAILURES is the shape
-//   that most easily passes while proving nothing.  Each of the five substrings was replaced in
-//   turn by a word the compiler never prints: all five fail the suite, so all five are live.
+//   that most easily passes while proving nothing.  Each of the six substrings was replaced in
+//   turn by a word the compiler never prints: all six fail the suite, so all six are live.
 //   Breaking the assertion in the one RUNNING cell fails it too, so the file is not passing on
 //   its refusals alone.  Restoring each returns the suite to green.
 //
-// ⚠ `make falsify` reports `expect 1/5` on this file, and that is the TOOL's view rather than
+// ⚠ `make falsify` reports `expect 1/6` on this file, and that is the TOOL's view rather than
 //   a hole in the guard.  It runs `loft` directly, and a direct run stops at the first error;
 //   the suite peels the refusing cell and re-parses to collect the union of every round
-//   (loft#1242).  So the column counts one round, not the file.  Read `1/5` here as "falsify
-//   saw the first of five", never as "four are unmatched" — the five-way control above is what
+//   (loft#1242).  So the column counts one round, not the file.  Read `1/6` here as "falsify
+//   saw the first of six", never as "four are unmatched" — the six-way control above is what
 //   answers that question.
 
 struct RQ { n: integer }
+
+struct RQCount { t: text, v: integer }
+struct RQCounting { entries: vector<RQCount>, lookup: hash<RQCount[t]> }
 
 // The Integers chapter: "a text parse `as integer` may fail, and a bare cast asserts it cannot".
 // @EXPECT_ERROR: a text parse `as integer` may fail
@@ -74,6 +77,15 @@ fn a_fn_prefixed_reference_is_refused() {
 
 fn rq_double(rq_x: integer) -> integer {
   rq_x * 2
+}
+
+// The Hash chapter promises `e#remove` is "rejected at compile time" -- a claim about the
+// REJECTION rather than a quoted string, so what is pinned here is that it still refuses.
+// @EXPECT_ERROR: not supported on hash iteration
+fn rq_hash_remove_is_refused() {
+  rq_c = RQCounting { };
+  rq_c.entries = [ {t: "One", v: 1} ];
+  for rq_e in rq_c.lookup { rq_e#remove; }
 }
 
 // A running cell, so the file cannot pass on its refusals alone: the bare name IS the spelling
