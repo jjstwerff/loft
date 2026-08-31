@@ -3020,9 +3020,18 @@ use a separate collection or add after the loop"
             //
             // The vector twin is the control — there `Whole` IS concatenation at every place
             // kind, it copies rather than rebinds, and it must stay.
+            //
+            // ...and only when the source NAMES a collection.  `append_source` answers with
+            // TYPES, and a keyed literal is built THROUGH its destination (loft#703), so
+            // `t.0 += [E { … }]` at a TUPLE ELEMENT reports the destination's own type and
+            // reads as `Whole`.  That is a one-element append, not a merge — the three place
+            // kinds above never reach here because they parse the literal per element first,
+            // and the tuple element does because it builds through a `__kvb_N` accumulator.
+            // A merge can only be written with a source that names an existing collection.
             let unroutable_whole = kind == crate::parser::vectors::AppendSource::Whole
                 && crate::parser::vectors::is_keyed(&dest)
-                && !s_type.is_unknown();
+                && !s_type.is_unknown()
+                && self.source_names_a_collection(code);
             if unroutable_whole {
                 let content = dest.content().name(&self.data);
                 diagnostic!(

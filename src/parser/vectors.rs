@@ -5111,6 +5111,25 @@ impl Parser {
     /// `Unknown` on either side answers [`AppendSource::Whole`] — a generic body carries
     /// placeholder types until monomorphisation, and refusing there would refuse the
     /// template rather than any of its instances.
+    /// Does this source VALUE name a collection that ALREADY EXISTS — a binding, a field, a
+    /// capture, a tuple member — rather than one constructed on the spot?
+    ///
+    /// [`Self::append_source`] answers with TYPES, and a keyed literal is built THROUGH its
+    /// destination (loft#703), so `t.0 += [E { … }]` reports the destination's own
+    /// `hash<E[k]>` and reads as `Whole`.  The refusal that fires on `Whole` is about MERGING
+    /// two collections, which is a thing only a source that names one can be: three place
+    /// kinds never reach it because they parse the literal per element first, and the fourth —
+    /// a TUPLE ELEMENT, which builds the append through a `__kvb_N` accumulator — does, so a
+    /// bracketed one-element append there was refused as a merge.
+    pub(crate) fn source_names_a_collection(&self, val: &Value) -> bool {
+        match val.unspan() {
+            Value::Var(v) => *v != u16::MAX,
+            Value::TupleGet(_, _) => true,
+            Value::Call(d, _) => self.data.def(*d).name().starts_with("OpGet"),
+            _ => false,
+        }
+    }
+
     pub(crate) fn append_source(&mut self, dest: &Type, s_type: &Type) -> AppendSource {
         let dest = dest.base();
         let content = dest.content();
