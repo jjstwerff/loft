@@ -106,7 +106,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/04-boolean.loft` | 2026-08-31 | `16c7eb77` |
 | `tests/docs/05-float.loft` | 2026-08-31 | `6e08b7d0` |
 | `tests/docs/06-function.loft` | 2026-08-31 | `1b8c8fa7` |
-| `tests/docs/07-vector.loft` | 2026-08-31 | `d62a17d4` |
+| `tests/docs/07-vector.loft` | 2026-08-31 | `9fc947a5` |
 
 ## See also
 
