@@ -4136,7 +4136,11 @@ impl Parser {
         // own answer for a value that does not fit (`400 as u8` is null), and folding the
         // default in would silently change it.
         if !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
-            self.guard_declared_range(code, should, is_type);
+            // A struct LITERAL's field, an ARGUMENT and a RETURN all name a DECLARED type,
+            // so the wrapper is the answer here — the element-write ambiguity
+            // `target_holds_null` exists for cannot arise at this seam.
+            let holds_null = matches!(should, Type::Optional(_));
+            self.guard_declared_range(code, should, is_type, holds_null);
         }
         if is_type.is_equal(should) {
             return true;

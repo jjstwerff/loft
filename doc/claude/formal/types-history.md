@@ -6,14 +6,14 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — `D-Narrow-Res` opened 2026-08-31 and is live (below); `D-Narrow-Asgn` and `D-Null-Elem` were opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
-### D-Narrow-Res — OPEN (2026-08-31, loft#1249): `(N-Reserve)` holds for a packed slot, not a register one
+### D-Narrow-Res — OPENED AND CLOSED (2026-08-31, loft#1249): `(N-Reserve)` held for a packed slot and not a register one
 
 `(N-Reserve)` says a reserved null is a value OF THE TYPE and is excluded from `τ?`'s range
 everywhere the value can be.  loft#334 implemented that for a nullable byte-width FIELD (its
@@ -55,10 +55,30 @@ and rejected on 2026-08-31:
    flattened to `0`: `hex_field`'s `edge_set_mat` stored `255` as `0` (measured
    `OpRangeDefault(…, 0, 254, i64::MIN)` emitted for a `vector<u8>` element).
 
-**So closing this needs the index-write conflation resolved first** — a write target's type has
-to say "this slot holds null", not "this read may miss".  That is a separate, larger change with
-its own blast radius, and it is the reason this entry is open rather than closed.  The
-workaround is unchanged and clean: declare the field `not null`, or one width wider.
+**Closed by resolving the index-write conflation first**, which turned out to be one predicate
+rather than the larger change it was feared to be.  `expressions::target_holds_null` is the one
+home for *"does the slot this store TARGETS hold null?"*: `parent_tp` is what the place is read
+out of, so a collection there carries the DECLARED element type and `Type::content` unwraps it —
+`vector<u8>` says no, `vector<u8?>` says yes, and anything that is not a collection falls back to
+the target's own wrapper.  The three range-guard seams take the answer as a REQUIRED PARAMETER
+rather than re-deriving it, which is what made the compiler enumerate them (there are exactly
+three, and a grep for the diagnostic text would have found fewer).
+
+With that in place cure 2 became correct, and it is the fix: `declared_range` answers for a
+nullable narrow alias — the compile-time narrowing refusal does not cover one, because
+`(I-Narrow-Opt)` makes that narrowing implicit and checked — and bounds it by `usable_*`.
+
+Both rejected cures are now CELLS in the guard rather than only prose here, because each looked
+obviously right: `test_a_cast_is_not_a_slot` fails on the build where cure 1 was live, and
+`test_a_non_null_element_is_not_a_nullable_slot` on the build where cure 2 was.  Guard
+`tests/scripts/1249-a-nullable-narrow-sentinel-is-not-a-value.loft`, falsified at 95a7f949 on
+both backends.
+
+⚠ **`(N-Store)` is deliberately NOT changed.** That seam's `f_type` feeds `n_store_violation`
+too, and passing it the peeled answer would make storing a nullable into a `vector<u8>` element
+a violation where today it silently is not — which is `(N-Dense)` working rather than a
+regression, but it is a second behaviour change and it wants its own measurement and its own
+guard.  The range guards take the new fact; the null-store check still reads the target type.
 
 ### D-Narrow-Asgn — OPENED AND CLOSED (2026-08-31, loft#1246): a narrowing store into a NULLABLE narrow LOCAL was neither refused nor checked
 

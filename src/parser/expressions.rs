@@ -74,8 +74,41 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 /// The non-nullable ANSWER is not decided here: `IntegerSpec::default_value` is its one
 /// home, shared with `data::to_default` and the native generator, which answered it
 /// separately until loft#1254.
-fn uncomputable_default(tp: &Type, spec: &crate::data::IntegerSpec) -> i64 {
-    if matches!(tp, Type::Optional(_)) {
+/// Does the slot this store TARGETS hold null?
+///
+/// The one home for a question `Type::Optional` on a write target cannot answer, because it
+/// means two different things there.  For a variable or a field it is the DECLARED
+/// nullability and the answer.  For an ELEMENT it is not: `(N-Domain)` makes an index
+/// expression nullable for the MISS, so `v[i]` on a NON-nullable `vector<u8>` presents its
+/// target as `u8?` — *"this read may miss"* wearing the spelling of *"this slot holds null"*.
+///
+/// `parent` is what the place is read out of, so a collection there carries the DECLARED
+/// element type and `Type::content` is the existing home that unwraps it: `vector<u8>` says
+/// no, `vector<u8?>` says yes, and everything that is not a collection falls back to the
+/// target's own wrapper.
+///
+/// This blocked loft#1249 for a session.  Bounding the store seam by the target's `Optional`
+/// looked right and wrote the null sentinel into a non-null `vector<u8>` element, which the
+/// store flattened to `0` — measured in published `hex_field`, where `255` became `0`.
+pub(crate) fn target_holds_null(target: &Type, parent: &Type) -> bool {
+    // `&τ` first: `AssignPlace::parent_tp` is documented as `&S` for a write inside a
+    // `&`-parameter, and the referent is what carries the element type.  Missing this peel
+    // read a `&vector<u8>` as "not a collection" and fell through to the target's own
+    // wrapper — which for an element write is the out-of-bounds one — so published `assets`
+    // wrote a fully-opaque alpha of `255` into a non-null `vector<u8>` and got `null`.
+    let parent = match parent {
+        Type::RefVar(inner) => inner.as_ref(),
+        other => other,
+    };
+    if crate::parser::vectors::is_collection(parent) {
+        matches!(parent.content(), Type::Optional(_))
+    } else {
+        matches!(target, Type::Optional(_))
+    }
+}
+
+fn uncomputable_default(nullable: bool, spec: &crate::data::IntegerSpec) -> i64 {
+    if nullable {
         i64::MIN
     } else {
         spec.default_value()
@@ -88,31 +121,43 @@ fn uncomputable_default(tp: &Type, spec: &crate::data::IntegerSpec) -> i64 {
 ///
 /// `None` when the question does not arise — the target declares no range of its own (the
 /// plain `integer` / i32 templates), or it is not an integer at all.
-fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
+fn declared_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
     let Type::Integer(spec) = tp.base() else {
         return None;
     };
     if spec.is_wide_template() || spec.is_signed32_template() {
         return None;
     }
-    // Only the `limit(lo, hi)` spelling. A narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`,
-    // which is what `forced_size` marks) is already guarded at COMPILE time — storing a
-    // plain integer into one is an error demanding `as u8` — so a runtime default there
-    // would be redundant where the check holds and WRONG where it does not: it fired 24
-    // times inside the stdlib's own `i8` stores and handed them `-128`. The gap this
-    // closes is that `limit(...)` sets no `forced_size`, so none of that machinery sees
-    // it (`is_narrowing_int_store`), which is why a declared range went unenforced.
-    if spec.forced_size.is_some() {
+    // The `limit(lo, hi)` spelling, and a NULLABLE narrow alias.
+    //
+    // A NON-NULLABLE narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`, which is what `forced_size`
+    // marks) is already guarded at COMPILE time — storing a plain integer into one is an
+    // error demanding `as u8` — so a runtime default there would be redundant where the
+    // check holds and WRONG where it does not: it fired 24 times inside the stdlib's own
+    // `i8` stores and handed them `-128`.  Neither half of that reasoning survives the `?`.
+    // The compile-time check does not fire (@FR-I-Narrow-Opt makes the narrowing implicit
+    // and CHECKED for a nullable target), and the slot has a reserved edge a value can land
+    // on — so this is the seam that has to bound it (@FR-N-Reserve, loft#1249).
+    //
+    // `nullable` is the CALLER's answer and not `matches!(tp, Optional(_))`, which is what
+    // makes this safe: an element write on a non-null `vector<u8>` presents its target as
+    // `u8?` for the out-of-bounds MISS, and bounding that by the usable range wrote the
+    // sentinel into a slot that cannot hold one.  `target_holds_null` is the one home.
+    if spec.forced_size.is_some() && !nullable {
         return None;
     }
-    let lo = i64::from(spec.min);
-    let hi = i64::from(spec.max);
+    // @FR-N-Reserve — a nullable narrow slot's bound is its USABLE range: the sentinel is a
+    // value of the type, so a `u8?` is `0..=254` (loft#1249).  `usable_*` answers the
+    // declared bound unchanged for every non-nullable spec and for every width with a spare
+    // code, so passing `nullable` here only adds the case that reserves an edge.
+    let lo = i64::from(spec.usable_min(nullable));
+    let hi = spec.usable_max(nullable);
     // @FR-E-Uncomp / @FR-E-Uncomp-NN — `uncomputable_default` is the one home for which
     // of the two applies, shared with the compound path.  The default is NOT the range's
     // floor: `lo` is zero for `u8` and so looked right, while an `i16` answered `-32768`
     // and an `i32` `-2147483647` — in range, type-correct, and as unrelated to the
     // computation as a wrapped value would be.
-    Some((lo, hi, uncomputable_default(tp, spec)))
+    Some((lo, hi, uncomputable_default(nullable, spec)))
 }
 
 /// The base variable at the root of an lvalue access chain, or `u16::MAX` if the
@@ -4511,7 +4556,8 @@ use a separate collection or add after the loop"
         // `is_narrowing_int_store` above cannot see it — which is why a declared range on
         // a LOCAL went unenforced entirely, not merely mis-stored.
         if op == "=" && !self.first_pass {
-            self.guard_declared_range(code, f_type, &s_type);
+            let holds_null = target_holds_null(f_type, &lhs_parent_tp);
+            self.guard_declared_range(code, f_type, &s_type, holds_null);
         }
         if self.validate_lock_assign(code, to) {
             return Type::Void;
@@ -5747,8 +5793,8 @@ use a separate collection or add after the loop"
     /// (`is_narrowing_int_store`), and `declared_range`'s own comment records what happens
     /// when a runtime default is added on top of a check that already holds — it handed 24
     /// of the stdlib's own `i8` stores a `-128`.
-    pub(crate) fn guard_compound_range(&mut self, code: &mut Value, target: &Type) {
-        let Some((lo, hi, dflt)) = Self::compound_range(target) else {
+    pub(crate) fn guard_compound_range(&mut self, code: &mut Value, target: &Type, nullable: bool) {
+        let Some((lo, hi, dflt)) = Self::compound_range(target, nullable) else {
             return;
         };
         // Two seams can reach one store, so never wrap a guard in a guard: harmless
@@ -5787,11 +5833,11 @@ use a separate collection or add after the loop"
     /// function's: @FR-E-Uncomp for a slot that can hold null and @FR-E-Uncomp-NN for one
     /// that cannot.  Both arms ask it, so the two spellings of one range cannot answer
     /// differently.
-    fn compound_range(tp: &Type) -> Option<(i64, i64, i64)> {
+    fn compound_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
         // `declared_range` answers the `limit(lo, hi)` spelling and deliberately nothing
         // else — it returns `None` the moment `forced_size` is set.  So the two arms
         // below partition the bounded types rather than overlapping.
-        if let Some(r) = declared_range(tp) {
+        if let Some(r) = declared_range(tp, nullable) {
             return Some(r);
         }
         let Type::Integer(spec) = tp.base() else {
@@ -5812,16 +5858,24 @@ use a separate collection or add after the loop"
         if spec.forced_size.is_none() || spec.is_wide_template() {
             return None;
         }
-        let lo = i64::from(spec.min);
-        let hi = i64::from(spec.max);
+        // @FR-N-Reserve, as in `declared_range` — a nullable narrow alias is bounded by its
+        // usable range, and this arm is the one every `u8?` / `i16?` reaches (loft#1249).
+        let lo = i64::from(spec.usable_min(nullable));
+        let hi = spec.usable_max(nullable);
         // @FR-E-Uncomp / @FR-E-Uncomp-NN through the same home the `limit(…)` arm uses.
         // Asking it HERE rather than answering `range_default` directly is what makes a
         // nullable narrow alias answer null: this arm is the only one a `u8?` reaches.
-        Some((lo, hi, uncomputable_default(tp, spec)))
+        Some((lo, hi, uncomputable_default(nullable, spec)))
     }
 
-    pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {
-        let Some((lo, hi, dflt)) = declared_range(target) else {
+    pub(crate) fn guard_declared_range(
+        &mut self,
+        code: &mut Value,
+        target: &Type,
+        source: &Type,
+        nullable: bool,
+    ) {
+        let Some((lo, hi, dflt)) = declared_range(target, nullable) else {
             return;
         };
         // Two seams reach the same store — the assignment path and `convert` — so guard

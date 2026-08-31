@@ -242,7 +242,6 @@
 25-index-elision-borrower.loft
 25-index-nullable.loft
 25-narrow-field-format.loft
-25-narrow-nullable-field-sentinel-collision.loft
 25-narrow-nullable-packed-field-clobber.loft
 25-narrow-nullable-vector-null.loft
 25-not-null-deprecated.loft

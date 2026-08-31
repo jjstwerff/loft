@@ -1488,7 +1488,8 @@ impl Parser {
         // it is already in range — clamping is idempotent, and `set_byte`'s out-of-range
         // return is discarded, so nothing is judged or reported twice.
         if op != "=" && !self.first_pass {
-            self.guard_compound_range(&mut code, f_type);
+            let holds_null = crate::parser::expressions::target_holds_null(f_type, parent_tp);
+            self.guard_compound_range(&mut code, f_type, holds_null);
         }
         if let Value::Call(d_nr, args) = to.unspan() {
             let name = self.data.def(*d_nr).name().to_string();

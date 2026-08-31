@@ -1409,6 +1409,19 @@ libraries, which `make ci` says nothing about — caught the second on a real co
 full green gate. **Run both before believing a semantic change**: a green `make ci` is not
 evidence about the language's users.
 
+**When you write a predicate over a type, read that type's own doc-comment for the shapes it
+says it takes.** `target_holds_null` asks whether a store's target is a nullable slot, keyed on
+what the place is read OUT of, and it handled a variable, a field and an element correctly on
+the first try. It missed `&vector<u8>` — a write through a `&`-parameter — and fell through to
+the answer meant for the other shapes, so a fully-opaque `255` written into a non-null
+`vector<u8>` came back `null` and every proxy test in published `assets` failed (loft#1249).
+The field it reads, `AssignPlace::parent_tp`, is documented as *"`Reference(S)` for `s.f`, **`&S`
+for the same write inside a `&`-parameter**, `vector<τ>` for `v[i]`"* — the missing case is the
+second of the three it names. **The enumeration you need is usually already written where the
+data is declared**; a predicate built from the cases you happened to probe will match them and
+nothing else, and the shapes it misses are the ones the type system spells differently for the
+same thing.
+
 **A precedent transfers along the MECHANISM, not the problem statement.** Before reusing a
 neighbouring solution, ask what its unit of work is — per member, per record, per call, per
 path, per pass — and whether yours has the same one. `keyed_group_clear` solves the same

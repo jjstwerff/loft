@@ -2412,7 +2412,9 @@ question deliberately — each is the ONE home for a rule whose answer turns on 
 naming `Type::Optional` there is the point rather than a spelling to peel.  loft#1254's
 `uninitialised_native_value` is another: it states the two arms where a type's DEFAULT differs
 from its NULL and delegates the rest, and its `Optional` arm is that decision, not a peel it
-forgot.  loft#1227's `GroupAppends::report` is one the screen caught on BRAND-NEW code rather
+forgot.  loft#1249's `target_holds_null` is the sharpest of the three — it exists BECAUSE
+`Type::Optional` on a write target means two things, so naming the variant there is the whole
+function rather than a spelling it failed to peel.  loft#1227's `GroupAppends::report` is one the screen caught on BRAND-NEW code rather
 than on the backlog: it matched its holder against `Type::Reference` bare, which reads a `Counter` local
 and misses a `Counter?` one holding the same fields and the same groups.  Named on the first run
 after the lint was written, so the blindness never shipped — `.base()`, and the opaque column

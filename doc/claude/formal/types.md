@@ -528,12 +528,8 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-Narrow-Res** — `(N-Reserve)` holds for a packed slot and not for a register one.  A
-  `u8?` FIELD or vector ELEMENT answers `null` for 255, and a `u8?` LOCAL, parameter, return
-  and cast result keep it as a number — so an ordinary in-range `250 + 5` is destroyed on the
-  way into a field, in silence.  loft#1249, with the two cure directions that were measured
-  and rejected.
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in the companion
+[types-history.md](types-history.md).
 
 ⚠ **This line read `OPEN: 0` while D-Narrow-Asgn and D-Narrow-Res were both live, and the
 oracle under it could not have moved either** — `(I-Narrow)` had only two clauses, so a
