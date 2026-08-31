@@ -159,13 +159,24 @@ class Item:
 
 
 def check_version_untagged(version: str):
+    """Cargo.toml names this release, and nothing has tagged it yet.
+
+    Both halves, because the checklist is usually generated for a version the tree has
+    not reached: reporting "no v2026.9.0 tag yet" as a pass, with a message that names
+    Cargo.toml without reading it, states the bump has happened at the exact moment it
+    has not.  Cargo.toml is what `make-release.sh` names the bundles from, so a tag
+    pushed ahead of the bump builds a release for the previous version.
+    """
     code, out = sh("git", "tag", "--list", f"v{version}")
     if code != 0:
         return UNKNOWN, out
     if out.strip():
-        return (
-            FAIL,
-            f"v{version} is already tagged — bump Cargo.toml before starting a release",
+        return FAIL, f"v{version} is already tagged — this release already happened"
+    have = cargo_version()
+    if have != version:
+        return FAIL, (
+            f"Cargo.toml still says {have} — bump it to {version} before tagging, or "
+            f"the bundles are built and named for {have}"
         )
     return OK, f"Cargo.toml is {version}; no v{version} tag yet"
 
@@ -260,15 +271,29 @@ def check_ci_verdict():
     return OK, f"ALL GATES PASSED at {when}, newer than every source file"
 
 
-def check_prev_release_in_registry(network: bool):
+def check_prev_release_in_registry(version: str, network: bool):
+    """Did the release before this one reach the signed index?
+
+    Asked with THIS release's version rather than Cargo.toml's, because the checklist is
+    read before the bump: left to default, the gate sees a tree still carrying the
+    released version, answers "nothing to gate", and renders as a tick over a question
+    nobody asked.  That is the whole window in which the answer matters.
+    """
     if not network:
         return UNKNOWN, "skipped (--no-network)"
     code, out = sh(
-        sys.executable, os.path.join(ROOT, "scripts", "check-release-published.py")
+        sys.executable,
+        os.path.join(ROOT, "scripts", "check-release-published.py"),
+        "--version",
+        version,
     )
+    lines = [l for l in out.splitlines() if l.strip()]
     if code == 0:
-        return OK, out.splitlines()[-1] if out else "previous release is in the index"
-    return FAIL, (out.splitlines()[-1] if out else "check-release-published.py failed")
+        return OK, lines[-1] if lines else "previous release is in the index"
+    # `fail()` writes one `::error title=T::body` line, then the body's later lines.
+    first = lines[0] if lines else "check-release-published.py failed"
+    m = re.match(r"::error title=([^:]+)::(.*)", first)
+    return FAIL, f"{m.group(1)} — {m.group(2)}" if m else first
 
 
 def check_draft_assets(version: str, network: bool):
@@ -471,7 +496,7 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
             "A-registry-prev",
             "The PREVIOUS release reached the signed registry index",
             "scripts/check-release-published.py",
-            check=lambda: check_prev_release_in_registry(network),
+            check=lambda: check_prev_release_in_registry(version, network),
         ),
         Item(
             "M-changelog-read",

@@ -25,6 +25,7 @@ Exits 0 when there is nothing to gate or the previous release is complete; 1 wit
 GitHub-annotated error otherwise.
 """
 
+import argparse
 import json
 import os
 import re
@@ -77,7 +78,18 @@ def gh_json(path: str):
 
 
 def main() -> None:
-    version = cargo_version()
+    # The version the tree is MOVING TO.  Normally that is Cargo.toml's, because the
+    # gate runs on the PR that bumps it.  `--version` lets the release checklist ask the
+    # same question BEFORE the bump -- otherwise "has the previous release reached the
+    # index?" reads as answered-and-fine during the whole window in which it is neither,
+    # since the tree still carries the released version and the gate says "nothing to
+    # gate".  One question, one implementation; only the moment it is asked differs.
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--version",
+        help="the version being prepared (default: Cargo.toml's)",
+    )
+    version = ap.parse_args().version or cargo_version()
 
     releases = [r for r in gh_json(f"repos/{REPO}/releases?per_page=20") if not r["draft"]]
     if not releases:
