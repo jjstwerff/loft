@@ -70,6 +70,7 @@ someone updated only the prose.
 |---|---|---|
 | `tests/docs/01-keywords.loft` | 2026-08-31 | `1a1d1fd1` |
 | `tests/docs/02-text.loft` | 2026-08-31 | `8c0da87d` |
+| `tests/docs/03-integer.loft` | 2026-08-31 | `e261308c` |
 
 ## See also
 
