@@ -2860,7 +2860,7 @@ pub fn callref_join_first_bind(
     Some((*rec, base))
 }
 
-/// Does this call go through a fn-ref that CAPTURES?
+/// Does this call go through a fn-ref that captures something a RETURN COULD BORROW FROM?
 ///
 /// The question matters wherever a site is about to decide that a returned store is the
 /// caller's to free.  A capture is reached through `__closure`, a HIDDEN attribute, and two
@@ -2870,18 +2870,41 @@ pub fn callref_join_first_bind(
 /// there was nothing to witness.  Together those say *"owned, and fully bracketed"* about a
 /// value that is neither: the store belongs to the enclosing scope, and no argument names it.
 ///
-/// So a capturing fn-ref keeps the conservative answer at every such site.  It costs the leak
-/// that was already there; the alternative is releasing a live variable, which is what
-/// loft#1114 was.
+/// So such a fn-ref keeps the conservative answer at every such site.  It costs the leak that
+/// was already there; the alternative is releasing a live variable, which is what loft#1114
+/// was.
+///
+/// **What makes a capture dangerous is that it HOLDS A STORE**, and that is narrower than
+/// having a capture at all.  The hazard above is a returned value that borrows from the
+/// enclosing scope; a captured SCALAR holds no store, so nothing can be borrowed from it, and
+/// declining on its account buys nothing.  Read as mere presence this leaked one store per
+/// call for `m = 7; g = fn(k) -> P { P { n: m } }` — a closure over an integer returning a
+/// freshly minted struct, with no discharge and nothing borrowable anywhere in it
+/// (loft#1248).
+///
+/// The fn-ref type's deps name the CLOSURE RECORD rather than the captured variables, so the
+/// question is asked one level in: the record's FIELDS are the captures, and `is_dbref` is
+/// the one home for whether a field holds a store.  A dep that is not a resolvable record
+/// keeps the conservative answer, because a capture that cannot be read is exactly the one
+/// that must not be assumed harmless.
 #[must_use]
 pub fn callref_captures(data: &Data, d_nr: u32, call: &Value) -> bool {
     let Value::CallRef(v_nr, _) = call.unspan() else {
         return false;
     };
-    matches!(
-        data.def(d_nr).variables().tp(*v_nr).base(),
-        Type::Function(_, _, deps) if !deps.is_empty()
-    )
+    let vars = data.def(d_nr).variables();
+    let Type::Function(_, _, deps) = vars.tp(*v_nr).base() else {
+        return false;
+    };
+    deps.iter().any(|&v| {
+        let Type::Reference(clos, _) = vars.tp(v).base() else {
+            return true;
+        };
+        data.def(*clos)
+            .attributes()
+            .iter()
+            .any(|a| crate::data::is_dbref(a.typedef.base()))
+    })
 }
 
 /// Which definition does this call reach, in EITHER spelling?
