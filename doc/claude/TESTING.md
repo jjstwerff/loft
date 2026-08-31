@@ -2784,6 +2784,24 @@ channel moves as well: a file whose declared errors all occur exits 0, one with 
 declaration exits 1. The column now reads `FAIL/6 -> 6/6` — the suite's verdict and a declared
 count, never a guessed fraction, because a guessed fraction is what did the damage.
 
+**The GATE has the same failure mode as a guard, and its verdict line is the channel.**
+`make ci` printed `CI-RESULT: ALL GATES PASSED` beside `error: could not compile` — its clippy
+phase had failed, the run continued into the tests, and the success line was emitted anyway.
+Reading that line, or the `4537/4537` count beside it, measures the test phase alone. Check
+`grep -c "^error" result.txt` as well; CI_BUDGET.md § `CI-RESULT` carries the detail and the
+`-D warnings` half (a bare `cargo clippy` does not show you what the gate denies). The general
+form is the one this section is about, one level up: **a channel that reports success while
+measuring nothing is not less likely because the channel is the gate.**
+
+**A doc-comment lands on the NEXT item, so an insert between a doc and its function silently
+re-parents it.** Three times in one day: `lhs_base_var`'s and `declared_range`'s docs had both
+drifted onto `range_default`, and fixing that I twice created the same thing — a new helper
+inserted above `default_native_value` and above `construct_move_rewrite` took their docs with
+it. The reader then lands on a function described by someone else's paragraph, and nothing
+fails. `clippy::doc_lazy_continuation` catches only the sub-case where the stolen doc ends in a
+list item. **When inserting a function, put it after the previous item's `}` and before the next
+item's doc — not before the doc you happen to be reading.**
+
 **A boolean prints `false` for every byte that is not `1`.** So a garbage `u8` in a boolean
 slot renders exactly like the right answer, `!b` reads `true` for it, and only `b == false`
 separates them — the two spellings a reader reaches for first are the two that hide it.

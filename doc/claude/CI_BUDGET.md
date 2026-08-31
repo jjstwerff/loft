@@ -33,6 +33,43 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > "parallelise or move to a slower cadence until we are consistently back under"
 > half of the rule is still owed work.
 
+## ⚠ `CI-RESULT: ALL GATES PASSED` can be printed while an EARLIER PHASE FAILED (2026-09-01)
+
+**Measured, on two checkouts, after a full day of reading it as the verdict.** `result.txt`
+held all of these at once:
+
+```
+error: this function has too many arguments (8/7)      src/scopes.rs
+error: doc list item without indentation               src/generation/mod.rs
+error: could not compile `loft` (lib) due to 2 previous errors
+     Summary [ 362s ] 4537 tests run: 4537 passed, 35 skipped
+CI-RESULT: ALL GATES PASSED
+```
+
+The clippy phase failed, the run continued into the tests, and the success line was emitted
+anyway. Every "4537/4537, ALL GATES PASSED" reported that day was measuring the TEST phase
+alone, on both checkouts independently.
+
+**So the success line is not sufficient, and neither is the test count.** The check that
+actually holds is:
+
+```bash
+grep -c "^error" result.txt        # must be 0
+grep -c "CI-RESULT: ALL GATES PASSED" result.txt   # must be 1
+```
+
+**And a bare `cargo clippy` will not show you what `make ci` denies.** `make ci` passes
+`-D warnings`, so lints that print as *warnings* in an ad-hoc `cargo clippy --release
+--all-targets` are *errors* there. An eight-argument function sat as a visible warning through
+several ad-hoc lint checks and a dozen full-gate runs before anything reported it as a failure.
+Run `cargo clippy --release --all-targets -- -D warnings` when you want the answer `make ci`
+will give.
+
+This is the gate-level twin of TESTING.md § How a guard reads green: a channel that reports
+success while measuring nothing. It cost nothing here because the two lints were cosmetic — but
+nothing about the mechanism is limited to cosmetic lints, and a red `fmt` or a red `clippy`
+hiding behind a green verdict line is the same shape as a red test would be.
+
 ## A LOCAL `make ci` is ~10 min, and it is two tests (2026-08-21)
 
 This document is about the CI runner. A developer's complaint is different — *a local
@@ -67,8 +104,10 @@ Two specific traps behind that list, both worth knowing before they cost a cycle
   surfaces as a mold link error — `undefined symbol: anon.<hash>.llvm.<hash>` against a stale
   `libloft.rlib` — which reads exactly like a real link failure and is not. A clean tree with
   nothing else building is the only valid run, and
-  `grep -c "CI-RESULT: ALL GATES PASSED" result.txt` is the only verdict: the wrapper's own exit
-  code has been observed as 0 on a run whose `result.txt` said FAILED.
+  the wrapper's own exit code is not the verdict — it has been observed as 0 on a run whose
+  `result.txt` said FAILED. Neither is the success LINE on its own: read it together with
+  `grep -c "^error" result.txt` — see § `CI-RESULT: ALL GATES PASSED` can be printed while an
+  EARLIER PHASE FAILED.
 
 ⚠⚠ **The "slowest tests" list is a trap, and reading it is how this went wrong the first
 time.** JUnit `time` is WALL clock, so on a saturated machine it counts *waiting*:
