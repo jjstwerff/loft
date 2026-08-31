@@ -2282,24 +2282,33 @@ impl State {
                 // `has_ref_params` proxy this fact replaced — it MISSED a
                 // callee borrowing from a visible VECTOR param, taking the
                 // plain-adopt path for a borrowed return.
+                // loft#1245 — BOTH spellings, and this is the site the LOOP case needs.
+                // A lifted inline call is declared at function scope and assigned inside
+                // the loop body, so its `Set` is a REASSIGNMENT, not a first bind, and
+                // reads `Value::Call` alone sent every fn-ref one to the plain-adopt
+                // fallthrough: `CallRef` then `PutRef`, with no `OpDatabase`, no
+                // `OpCopyRecord` and no @P290 bracket.  `--native` had it right through
+                // `output_set_witnessed`, so the two backends disagreed about the same IR.
                 if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
                     stack.function.tp(v).clone()
                     && !stack.function.is_argument(v)
-                    && let Value::Call(fn_nr, _) = value.unspan()
+                    && matches!(value.unspan(), Value::Call(_, _) | Value::CallRef(_, _))
+                    && let Some(fn_nr) =
+                        crate::use_analysis::callee_of(stack.data, stack.def_nr, value)
                     // The shared gate on the carried ownership facts — a METHOD
                     // (`t_`) takes a caller-allocated buffer exactly like a global
                     // (`n_`) does, and reading the fact for only one of them is what
                     // made a method's return adopt the buffer and then free it
                     // (loft#810).  See `Def::is_loft_defined`.
-                    && stack.data.def(*fn_nr).is_loft_defined()
+                    && stack.data.def(fn_nr).is_loft_defined()
                     && (if crate::keys::reassign_copy_enabled() {
                         // The carried A.3 fact (see the comment above).
-                        !stack.data.def(*fn_nr).return_adopts_fresh_store()
+                        !stack.data.def(fn_nr).return_adopts_fresh_store()
                     } else {
                         // Preserved raw path (LOFT_NO_REASSIGN_COPY) — the old
                         // visible-Reference/Enum proxy, kept ONLY so the fuzz
                         // gate's crash control can still reproduce the class.
-                        stack.data.def(*fn_nr).attributes().iter().any(|a| {
+                        stack.data.def(fn_nr).attributes().iter().any(|a| {
                             !a.hidden
                                 && matches!(
                                     a.typedef,
@@ -2321,7 +2330,7 @@ impl State {
                     // returned dep names a VISIBLE param), not the inline visible-dep
                     // scan; identical verdict, one fewer per-site re-derivation
                     // (siblings at 1845/2582 already read it).
-                    && !(stash_old_for_post_free && stack.data.def(*fn_nr).returns_borrowed_view())
+                    && !(stash_old_for_post_free && stack.data.def(fn_nr).returns_borrowed_view())
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly

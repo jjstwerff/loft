@@ -6,9 +6,10 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — D-clo-7, narrowed by loft#1245 (2026-08-31): the fn-ref bind now COPIES like
-its named twin, so the (B-Copy) half is closed; the INLINE spelling still holds its store to
-frame exit, and the lift that would close it is measured unsound three ways.
+OPEN: **1** — D-clo-7, narrowed by loft#1245 (2026-08-31) to the CAPTURE case alone: a fn-ref
+that captures nothing now copies like its named twin and its inline result is freed per
+statement, while a CAPTURING one keeps its leak because the @P290 bracket witnesses arguments
+and a capture is not one.
 
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
@@ -568,69 +569,71 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > for EVERY declared-collection lambda was already correct on `--native`, and the only thing
 > wrong with it here was the unowned buffer.
 >
-> **PARTLY CLOSED (2026-08-31, loft#1245) — a fn-ref call is a call in BOTH spellings.** The
-> value half is closed; the leak half this entry was filed for is still open, and the scope
-> recorded here was wrong in both directions, so the entry is restated rather than edited.
+> **NARROWED TO THE CAPTURE CASE (2026-08-31, loft#1245).** Both halves this entry describes
+> are closed for a fn-ref that captures nothing; a CAPTURING one keeps the leak, and the
+> reason is a witness that does not exist rather than a site not yet visited.
 >
-> What was written: *"a lambda's `??`-default store discarded INLINE leaks one store per call
-> on BOTH backends; the BOUND spelling is clean, and so is the named twin."* Measured against
+> The scope recorded here was wrong in both directions, so the entry is restated. What was
+> written: *"a lambda's `??`-default store discarded INLINE leaks one store per call on BOTH
+> backends; the BOUND spelling is clean, and so is the named twin."* Measured with
 > `LOFT_ALLOC_REPORT=1` at N calls, "bound" named the wrong bind — binding inside the lambda
-> BODY (`d = q ?? P{}; d`) leaks exactly as the inline tail does, and what is clean is binding
-> the RESULT at the call site.
+> BODY leaks exactly as the inline tail does, and what is clean is binding the RESULT at the
+> call site:
 >
-> **It is not a leak, it is a crash.** The entry was scored on the exit-leak channel, which
-> reads ZERO for it: `cr_fnref_minted` / `State::release_fnref_bufs` do release the buffers,
-> but the unit is the FRAME, so a loop holds one store per call until the frame exits. Nothing
-> leaks at exit, the peak grows linearly, and both backends abort at `store table exhausted:
-> 65535 stores live at once`. An exit-leak gate cannot see a frame-lifetime accumulation.
+> | cell | before | after |
+> |---|---|---|
+> | named fn, `??` discharge | 4 (flat) | 4 — the working reference |
+> | lambda, `??`, MINT arm, INLINE | N+3 | **5** |
+> | lambda, `??`, MINT arm, BOUND IN BODY | N+3 | **5** |
+> | lambda, `??`, SUBJECT arm only | 4 | 5 |
+> | bound at the CALL SITE | 4 | 5 |
+> | **capturing** lambda, `??`, INLINE | N+3 | N+3 — the remaining case |
+>
+> **It was never a leak, it was a crash.** The entry was scored on the exit-leak channel,
+> which reads ZERO for it: `cr_fnref_minted` / `State::release_fnref_bufs` do release the
+> buffers, but the unit is the FRAME, so a loop held one store per call until the frame
+> exited. An exit-leak gate cannot see a frame-lifetime accumulation; the channel that moves
+> is the PEAK, and at 70 000 calls both backends aborted at `store table exhausted: 65535`.
 >
 > **And the leak was the smaller half.** The same missing dispatch dropped the (B-Copy) copy:
-> `r = g(a)` on a fn-ref ALIASED the argument, so `r.n = 99` wrote through to the caller's `a`
-> where the named twin copies. It needed no nullable, no `??` and no capture — a lambda
-> returning its parameter was enough — and both backends agreed on the wrong answer, so no
-> differential oracle could see it. The compiler even emitted `lost-write` on that line,
-> telling the reader the mutation *"lands in the copy, not the source"* while it corrupted the
-> source. **That half is closed.**
+> `r = g(a)` ALIASED the argument, so `r.n = 99` wrote through to the caller's `a` where the
+> named twin copies. No nullable, no `??`, no capture needed, and both backends agreed on the
+> wrong answer. The compiler even emitted `lost-write` on that line, telling the reader the
+> mutation *"lands in the copy, not the source"* while it corrupted the source.
 >
 > **The cure is one question asked once.** `use_analysis::callee_of` answers *which definition
-> does this call reach?* for `Call` and `CallRef` alike, and the sites that decide what a
-> returned store means now read it instead of matching one spelling: both backends' heap
-> first-bind dispatch, `scopes`' deps strip (which its own comment already required to name the
-> SAME callees as the dispatch, loft#810), and the @P290 bracket's two halves
-> (`protectable_ref_args` / `call_return_frees_source`). The `CallRef` route did not need a new
-> answer — it needed to be asked.
+> does this call reach?* for `Call` and `CallRef` alike, and **six** sites now read it instead
+> of matching one spelling: both backends' heap first-bind dispatch, the interpreter's
+> REASSIGNMENT path, `scopes`' deps strip, and the @P290 bracket's two halves. The `CallRef`
+> route never needed a new answer — it needed to be asked.
 >
-> **What is still open, and why it is not a matter of finishing the job.** The INLINE spelling
-> holds its store to frame exit. Closing it means the bind must COPY, which is
-> `gen_set_first_ref_call_copy` — reached when the callee does not adopt-fresh, or through a
-> witnessed JOIN — and the lift that would arrange it is measured unsound three separate ways,
-> each invisible without `LOFT_POISON=1`:
+> ⚠ **The sixth site is the one the loop shape needs, and only a BACKEND DISAGREEMENT found
+> it.** A lifted inline call is declared at function scope and assigned inside the loop body,
+> so its `Set` is a REASSIGNMENT, not a first bind. That gate read `Value::Call` alone, so a
+> fn-ref got `CallRef` then `PutRef` — no `OpDatabase`, no `OpCopyRecord`, no bracket — while
+> `--native` emitted the bracketed copy correctly all along. Every value cell passed; the
+> interpreter's over-free showed up only under `LOFT_POISON=1`. Reading the two backends'
+> emitted code side by side is what named it, after three rounds of reasoning had not.
 >
-> 1. **The SUBJECT arm.** `h(have).n` in a loop hands back the caller's own argument; the
->    lifted temp adopts it and its scope-exit free releases it. The loop then answers `null`.
-> 2. **A CAPTURE.** Neither reading can see it: `returns_borrowed_view` treats the hidden
->    `__closure` dep as *"the callee minted this"*, and `protectable_ref_args` reports its
->    witness set COMPLETE for a call whose arguments are all scalars — vacuously, having
->    witnessed nothing. Together they say *"owned and fully bracketed"* about a store the
->    enclosing scope owns. `use_analysis::callref_captures` is the one home for that exception.
-> 3. **`τ?`.** `Optional(Reference)` reaches the copy-or-adopt split only through
->    `nullable_join_first_bind`, which is itself `Call`-only and wants a JOIN with a nameable
->    witness. Admitting the nullable spelling without that twin turned
->    `1114-a-nullable-heap-capture-…`'s `fn(q: P2s?) -> P2s? { q }` into a use-after-free.
+> ⚠ **What is still open, and why it is not a matter of finishing.** A CAPTURE is reached
+> through `__closure`, and two readings that are reliable elsewhere are both VACUOUS through
+> it: `returns_borrowed_view` treats a hidden-only return dep as *"the callee minted this"*,
+> and `protectable_ref_args` reports its witness set COMPLETE for a call whose arguments are
+> all scalars, having witnessed nothing. Together they say *"owned and fully bracketed"* about
+> a store the enclosing scope owns, and acting on that frees a live variable — loft#1114's
+> exact fault, which this fix reintroduced once before `use_analysis::callref_captures` was
+> extracted as the one home for the exception. Measured: removing it takes the capturing cells
+> from correct to poison on both the value and the `strict-store` channel.
 >
-> ⚠ **A fourth thing, and it is the one worth carrying forward.** Classifying a `CallRef` in
-> `Ownership::classify` — so the join arm could see it — looked necessary and is not: with it
-> removed every value cell is still correct and every peak still flat, while WITH it a direct
-> `p2_named(p2_st)` read another cell's recycled store on `--native`. A change that is not
-> load-bearing can still be load-bearing for a regression.
->
-> ⚠ **The capture hazard was found by `scripts/matrix_axes.py`, not by the suite.** Every cell
-> written by hand held closure capture at `none` (A10 1/5), and the fix was green on all of
-> them, on both backends, under poison, while silently breaking every capturing lambda.
+> The bracket cannot rescue it, because it witnesses ARGUMENTS and a capture is not one. The
+> fn-ref type's deps name the CLOSURE RECORD, not the captured variable, and `protect_store_frees`
+> marks a STORE — so protecting the closure does not protect the store the capture points into.
+> Closing this needs a witness for the captured variable itself, which is a design, not a site
+> — filed as loft#1248, which carries the repro and the two vacuous readings in full.
 >
 > Guard: `tests/scripts/1245-a-fn-ref-bind-copies-like-its-named-twin.loft`, falsified at
-> `ee199301` on both backends, carrying the named twin as its control plus the capture and
-> argument-spelling axes.  The leak half has no cell there because one would have to abort.
+> `ee199301` on both backends. Cell B is the 70 000-call ceiling; C7 is the opposite kind —
+> green before and after, red only if a future capture fix frees what it must not.
 >
 > Guarded by `tests/scripts/1114-a-nullable-heap-capture-is-shared-like-its-dense-twin.loft`.
 

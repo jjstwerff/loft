@@ -7527,27 +7527,20 @@ impl Scopes {
             _ => return None,
         };
         let def = data.def(d_nr);
-        // loft#1245 — a borrowed-view return still declines, and the reason is now
-        // MEASURED rather than assumed.  Lifting rewrites an inline use into a temp, and
-        // that temp ADOPTS the returned DbRef: sound only where the store is the callee's
-        // to give.  Through a fn-ref it repeatedly is not, and each way is invisible in an
-        // ordinary run — it takes `LOFT_POISON=1` to see any of them:
+        // loft#1245 — the INVARIANT: a call's returned store is ADOPTED by the caller only
+        // where the callee minted it, and COPIED otherwise.  Which of the two happened is a
+        // runtime fact for a `??` return, so the @P290 bracket decides it per execution —
+        // and for that it needs a witness for every place the return could borrow FROM.
         //
-        //   * the SUBJECT arm of `q ?? d` hands back the caller's own argument, so the
-        //     temp's scope-exit free releases it (`h(have).n` in a loop, answering null);
-        //   * a CAPTURE is handed back the same way, and neither
-        //     `returns_borrowed_view` (the dep is the hidden `__closure`) nor
-        //     `protectable_ref_args` (its witness set reads COMPLETE for a call whose
-        //     arguments are all scalars, having witnessed nothing) can see it;
-        //   * `τ?` reaches the copy-or-adopt split only through
-        //     `nullable_join_first_bind`, which is `Call`-only.
-        //
-        // What would make the lift safe is the bind COPYING, and that is
-        // `gen_set_first_ref_call_copy` — reached when the callee does not adopt-fresh, or
-        // through a witnessed JOIN.  Neither is decidable here from the fn-ref alone.  So
-        // the inline spelling keeps its store to frame exit, which is the remaining half of
-        // loft#1245; the BOUND spelling is flat and is the workaround the issue names.
-        if def.code == Value::Null || def.returns_borrowed_view() {
+        // A fn-ref can borrow from two places, and only one of them is witnessable: its
+        // ARGUMENTS (which `protectable_ref_args` names) and its CAPTURES (which nothing at
+        // the call site can name).  So the lift is admissible exactly when the witness set
+        // is COMPLETE and the fn-ref captures nothing.
+        if def.code == Value::Null
+            || crate::use_analysis::callref_captures(data, self.d_nr, val)
+            || (def.returns_borrowed_view()
+                && !crate::use_analysis::protectable_ref_args(data, self.d_nr, val).1)
+        {
             return None;
         }
         // The fn-ref variable's own type is the declared shape; the definition is

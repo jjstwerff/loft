@@ -22,11 +22,12 @@
 //     exhausted: 65535 stores live at once`.  An exit-leak gate cannot see a
 //     frame-lifetime accumulation — the channel that moves is the PEAK.
 //
-//     ⚠ That half is STILL OPEN for the INLINE spelling and is not guarded here, because
-//     a cell for it would have to abort.  Binding the result (`r = g(x); … r …`) is flat
-//     and is the workaround loft#1245 names.  What closing it needs is the bind to COPY,
-//     and the lift that would arrange that is measured unsound three separate ways — see
-//     `Scopes::callref_owned_return`, which now records each one.
+//     Cell B guards it.  Closing it took the SIXTH site of the same blindness and the one
+//     the loop shape needs: a lifted inline call is declared at function scope and assigned
+//     inside the loop body, so its `Set` is a REASSIGNMENT, not a first bind.  That gate
+//     read `Value::Call` alone, so a fn-ref got `CallRef` then `PutRef` — no `OpDatabase`,
+//     no `OpCopyRecord`, no bracket — while `--native` had it right all along.  Two
+//     backends disagreeing about the same IR is the tell that found it.
 //
 // The cure is one question asked once: `use_analysis::callee_of` answers *which
 // definition does this call reach?* for both spellings, and the five sites read it —
@@ -40,14 +41,16 @@
 // below carry their SUBJECT arm (`p2_have`), which returns the borrow, beside their mint
 // arm: a fix that frees what it must not shows up there, not in the peak.
 //
-// ⚠ A CAPTURING fn-ref is deliberately left on the conservative answer, so C7's peak still
+// ⚠ A CAPTURING fn-ref is deliberately left on the conservative answer, so its peak still
 // grows and that is not a bug to "finish".  Two readings that are reliable elsewhere are
 // both VACUOUS through a capture: `returns_borrowed_view` cannot see a hidden `__closure`
 // dep as a borrow, and `protectable_ref_args` reports its witness set COMPLETE for a call
 // whose arguments are all scalars, having witnessed nothing.  Together they say "owned and
 // fully bracketed" about a store the enclosing scope owns.  `use_analysis::callref_captures`
 // is the one home for that exception; removing it frees a live variable, which is what
-// loft#1114 was — C7 is the cell that catches it.
+// loft#1114 was — C7 is the cell that catches it.  The capture case is loft#1248, which
+// carries why the bracket cannot witness it: the fn-ref type's deps name the CLOSURE
+// RECORD, not the captured variable, and `protect_store_frees` marks a STORE.
 //
 // @falsified-at: ee199301 — interpret exit 1 -> 0, interpret 1 assertion failures -> 0,
 //   native exit 1 -> 0, native 1 assertion failures -> 0.  The channel that moves is the
@@ -70,6 +73,8 @@ struct P2bBox {
 }
 
 fn p2b_named(p2_q: P2b) -> P2b { p2_q }
+
+fn p2b_named_null(p2_q: P2b?) -> P2b { p2_q ?? P2b { n: 5 } }
 
 fn p2b_fwd(p2_f: fn(P2b) -> P2b, p2_q: P2b) -> P2b { p2_f(p2_q) }
 
@@ -152,6 +157,20 @@ fn main() {
   if 1 > 0 { p2_amb = fn(p2_q: P2b) -> P2b { P2b { n: p2_q.n } }; }
   p2_ai: P2b = P2b { n: 16 };
   assert(p2_amb(p2_ai).n == 16, "C5 an ambiguous fn-ref still answers: {p2_amb(p2_ai).n}");
+
+  // B — the mint arm, INLINE, past the `u16` store ceiling.  Before the fix this held one
+  // store per call to FRAME exit and aborted at 65535, while the named twin was always
+  // flat; the channel is the PEAK, and an exit-leak gate reads ZERO for it either way.
+  // Scored by SURVIVING, because the wrong answer here is a hard abort, not a value.
+  p2_s = 0;
+  for _ in 0..70000 { p2_s += p2_h(null).n; }
+  assert(p2_s == 350000, "B 70000 inline mint-arm calls: {p2_s}");
+
+  // The named twin of B, which was always flat — it is what says the defect was the
+  // SPELLING and not the shape.
+  p2_t = 0;
+  for _ in 0..70000 { p2_t += p2b_named_null(null).n; }
+  assert(p2_t == 350000, "B control, the named twin: {p2_t}");
 
   // C6 — a fn-ref FORWARDED through a parameter and called there.
   p2_fi: P2b = P2b { n: 17 };
