@@ -3004,7 +3004,19 @@ impl Parser {
         // sees the accumulator OWN, so an argument literal (`f([K { … }])`) leaked it.
         // A keyed LOCAL is excluded: its store comes from its own declaration, and a
         // second allocation here would orphan the first.
-        if !self.first_pass && !is_var && self.keyed_local(vec) {
+        let tuple_place = match val.unspan() {
+            Value::TupleGet(t, i) => Some((*t, *i)),
+            _ => None,
+        };
+        if tuple_place.is_some() && !self.first_pass {
+            // The accumulator is SEEDED from the place, so its own null-init must not allocate
+            // a store: `OpInitRef` claims one eagerly, the seed overwrites the handle one
+            // statement later, and the claimed store is orphaned.  `--interpret` never noticed
+            // (its init is lazy); `--native` leaked one per append.  Same precedent as
+            // `vector_db`'s rebind backing, whose `OpDatabase` is likewise conditional.
+            self.vars.mark_inline_ref(vec);
+        }
+        if !self.first_pass && !is_var && tuple_place.is_none() && self.keyed_local(vec) {
             let keyed_tp = self.vars.tp(vec).clone();
             if let Some(kt) = self.keyed_known_type(&keyed_tp) {
                 ls.push(v_set(vec, Value::Null));
@@ -3043,6 +3055,17 @@ impl Parser {
             }
         }
         ls.extend(self.new_record(val, parent_tp, elm, vec, res, in_t));
+        if let Some((tuple_var, idx)) = tuple_place {
+            // Write back ONLY when the place is still null.  The accumulator was SEEDED from
+            // the place, so for a non-null element the two already name one store and the
+            // append has landed in it — writing it back would put a second owner on a store
+            // that has one.  A null element is the only case where the accumulator holds a
+            // store the place has never seen.
+            let slot = Value::TupleGet(tuple_var, idx);
+            let test = self.cl("OpVectorIsNull", std::slice::from_ref(&slot));
+            let put = Value::TuplePut(tuple_var, idx, Box::new(Value::Var(vec)));
+            ls.push(crate::data::v_if(test, put, Value::Null));
+        }
         if !substituted
             && !self.first_pass
             && vec != u16::MAX

@@ -33,11 +33,30 @@
 // identity-is-meant trap.  Three keys and a lookup by value is what makes the length mean
 // something.
 //
-// NOT fixed here, and the rest of loft#1225: the keyed APPEND spelling (`t.0 += [e]`) at a
-// tuple element is still silently lost — it reaches `new_record`, which is given a variable
-// number and has no place for a tuple destination.  The VECTOR spelling is lost there too and
-// is blocked behind loft#1228: `t.0 += [x]` on a tuple element appends every element TWICE
-// (dense and shipped), so materialising it would answer 2 where 1 is meant.
+// The APPEND spelling is the third fix here, and it was a REPLACE rather than a dropped write.
+// `parse_vector`'s destination test asks `Value::Var`, and a tuple element is not one, so the
+// statement was built as a VALUE-POSITION literal: a fresh accumulator nobody reads.  The place
+// was seeded into it and then RESET one statement later, so the append replaced the collection.
+// Measured on a populated element: length 1 before and 1 after, `[9]` GONE and `[1]` present —
+// which is why the cells below read a KEY back instead of counting.
+//
+// Three parts, and the third is an ownership fact no value cell can see:
+//   * the accumulator is kept out of the value-position reset, so it starts as the place's own
+//     collection;
+//   * its result is written back with `TuplePut`, GUARDED on the place still being null — for a
+//     non-null element the accumulator and the place already name one store and the append has
+//     landed, so writing it back would give that store a second owner;
+//   * it is `mark_inline_ref`, so its null-init does not eagerly claim a store the seed then
+//     orphans.  `--interpret` never noticed (its init is lazy) and `--native` leaked one store
+//     per append while every value cell was green on BOTH backends — the same one-backend
+//     blindness a `set_skip_free` attempt produced in the opposite direction.
+//
+// NOT fixed here, and the rest of loft#1225: the VECTOR spelling at a tuple element, unblocked
+// by the sibling checkout's loft#1228 fix but not attempted.
+//
+// @falsified-at: ccbeab35 — interpret exit 1 -> 0, interpret 1 assertion failures -> 0, native
+//   exit 1 -> 0, native 1 assertion failures -> 0.  That control carries both earlier halves and
+//   not the APPEND, so the cells that move against it are the three append cells.
 //
 // @falsified-at: 6e91d9e6 — interpret exit 101 -> 0, interpret panicked -> clean, native exit
 //   1 -> 0, native panicked -> clean.  That control carries the ASSIGNMENT half and not the
@@ -48,7 +67,7 @@
 //   101 -> 0, native panicked -> clean.  The control before EITHER half, where the file dies
 //   in `src/state/codegen.rs` on the `TuplePut` ICE instead.
 //
-//   Two controls because the file scores two fixes that had to land in order: the assignment
+//   Three controls because the file scores three fixes that had to land in order: the assignment
 //   had to accept a keyed collection before the materialisation could be written, since
 //   building the empty collection ENDS in exactly that statement.  One control cannot say
 //   both halves were broken, and against the later one the earlier half is already fixed.
@@ -60,6 +79,8 @@
 //   assertions below score the values once it does.
 
 struct E1225 { k: integer, nm: text }
+
+fn take1225(h1225p: hash<E1225[k]>) -> integer { return len(h1225p); }
 struct P1225 { x: integer, y: integer }
 
 fn main() {
@@ -126,7 +147,40 @@ fn main() {
   assert(len(tw1225.0?) == 1, "a filled collection writes back into the element it came from");
   assert(tw1225.0?[7].nm == "seven", "and the record survives the round trip");
 
+  // ---- the APPEND spelling, which was a REPLACE ----
+  // Read a KEY back, never just a length: the element holds one record before and one after a
+  // broken append, so a count cannot tell "added" from "replaced".
+  ha1225: hash<E1225[k]>? = null;
+  ha1225[9] = E1225 { k: 9, nm: "nine" };
+  ta1225: (hash<E1225[k]>?, integer) = (ha1225, 5);
+  ta1225.0 += [E1225 { k: 1, nm: "one" }];
+  assert(len(ta1225.0?) == 2, "an append to a populated tuple element ADDS");
+  assert(ta1225.0?[9].nm == "nine", "and the record that was there survives");
+  assert(ta1225.0?[1].nm == "one", "beside the one appended");
+
+  // A NULL element: the materialisation and the guarded write-back together.
+  tn1225: (hash<E1225[k]>?, integer) = (null, 5);
+  tn1225.0 += [E1225 { k: 4, nm: "four" }];
+  assert(len(tn1225.0?) == 1, "an append to a null tuple element builds and lands");
+  assert(tn1225.0?[4].nm == "four", "and the record is reachable by key");
+
+  // DENSE, to say nullability is not the axis of the replace.
+  hd1225: hash<E1225[k]> = [];
+  hd1225[9] = E1225 { k: 9, nm: "nine" };
+  tdn1225: (hash<E1225[k]>, integer) = (hd1225, 5);
+  tdn1225.0 += [E1225 { k: 1, nm: "one" }];
+  assert(len(tdn1225.0) == 2 && tdn1225.0[9].nm == "nine", "a dense tuple element adds too");
+
   // ---- controls ----
+
+  // The VALUE-POSITION keyed literal shares the branch the append fix narrows and must keep
+  // building-and-yielding: an ARGUMENT literal, and two bound to fresh locals.
+  assert(take1225([E1225 { k: 1, nm: "a" }, E1225 { k: 2, nm: "b" }]) == 2,
+         "a keyed literal in argument position still builds and yields");
+  vp1225: hash<E1225[k]> = [E1225 { k: 1, nm: "a" }];
+  assert(len(vp1225) == 1, "and one bound to a fresh local");
+  vpn1225: hash<E1225[k]>? = [E1225 { k: 1, nm: "a" }];
+  assert(len(vpn1225?) == 1, "and the nullable spelling of that");
 
   // The VECTOR element: the arm the keyed kinds should have shared, correct throughout.
   v1225: vector<integer>? = [1, 2];
