@@ -3337,6 +3337,87 @@ use a separate collection or add after the loop"
         } else {
             to
         };
+        // loft#1237 — `keyed_local += <vector VALUE>`, the third place kind of loft#1159's
+        // question.  That issue gave a keyed FIELD the route that inserts every record a
+        // vector holds, each placed by its own key, and gated it on `var_nr == u16::MAX`.  A
+        // keyed LOCAL is the other spelling and reached no route at all: the statement fell
+        // through to `change_var` immediately below, which reads it as `h = <vector>` and
+        // refuses it as a TYPE CHANGE — *"Variable 'h' cannot change type from hash<E,[k]> to
+        // vector<E>"*.  Nothing in that message says `+=` was understood as an append, and
+        // both cures it names are wrong here: a new variable name does not help, and `as`
+        // cannot convert a `vector<E>` to a `hash<E[k]>`.
+        //
+        // `(Col-Insert)` is written over `c += [rec, …]` and says a keyed kind places each
+        // record by its key.  It does not distinguish how the destination is REACHED, so the
+        // local owes the same answer the field gives — the same argument loft#1159 made for
+        // the field and loft#1233 made for the capture.
+        //
+        // It has to sit ABOVE `change_var` rather than beside its field twin further down,
+        // because for a local the refusal fires first and the twin is never reached.  The
+        // source is validated before this point: loft#1215's classifier answers
+        // `ElementVector` for exactly the vector-of-the-element-type shape and refuses the
+        // rest, so reaching here already means the records fit.
+        //
+        // Claims the statement on BOTH passes — pass 1 must not fall into the refusal either
+        // — and emits only on pass 2, the way @P277's literal interception does.
+        //
+        // ⚠ The gate is the TYPE SHAPE, and the keyed type-table id is resolved only when
+        // emitting.  `keyed_field_kt` reads the element def's `known_type`, which is still
+        // `u16::MAX` during PASS 1 — so a gate that asked for the id refused to claim the
+        // statement on the very pass whose refusal is the bug, and pass 2 was never reached.
+        // `holds_element` is the same predicate the append classifier uses and answers on
+        // both passes.
+        let keyed_local_fill = op == "+="
+            && var_nr != u16::MAX
+            && crate::parser::vectors::is_keyed(f_type)
+            && !matches!(code, Value::Insert(_))
+            && match s_type.base() {
+                Type::Vector(elm, _) => {
+                    let content = f_type.base().content();
+                    let elm = (**elm).clone();
+                    self.holds_element(&content, &elm)
+                }
+                _ => false,
+            };
+        if keyed_local_fill {
+            match (self.first_pass, self.keyed_field_kt(f_type)) {
+                (false, Some(kt)) => {
+                    #[cfg(not(feature = "wasm"))]
+                    let tp_val = if self.is_struct_returning_call(code) {
+                        i32::from(kt) | 0x8000
+                    } else {
+                        i32::from(kt)
+                    };
+                    #[cfg(feature = "wasm")]
+                    let tp_val = i32::from(kt);
+                    let src = code.clone();
+                    let (parent, parent_tp_id, field_nr) =
+                        self.fill_keyed_site(to, &lhs_parent_tp, kt);
+                    *code = Value::Insert(vec![self.cl(
+                        "OpFillKeyed",
+                        &[
+                            parent,
+                            src,
+                            Value::Int(tp_val),
+                            Value::Int(i32::from(parent_tp_id)),
+                            Value::Int(i32::from(field_nr)),
+                        ],
+                    )]);
+                    return Type::Void;
+                }
+                // Pass 1 emits nothing and still CLAIMS the statement — pass 1's IR is
+                // regenerated in pass 2, and letting it fall through is exactly the refusal
+                // this route exists to remove.
+                (true, _) => {
+                    *code = Value::Insert(Vec::new());
+                    return Type::Void;
+                }
+                // Pass 2 with no resolvable keyed id: fall through rather than emit a write
+                // against an unknown type.  The statement then meets whatever the generic
+                // path says, which is the behaviour it had before this route existed.
+                (false, None) => {}
+            }
+        }
         self.change_var(to, &s_type);
         // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
         // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
