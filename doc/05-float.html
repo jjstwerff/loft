@@ -29,14 +29,24 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1.5</span> + <span class="nm">0.5</span> == <span class="nm">2.0</span>, <span class="st">"Float addition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3.0</span> / <span class="nm">2.0</span> == <span class="nm">1.5</span>, <span class="st">"Float division"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2.0</span> * <span class="nm">1.5</span> == <span class="nm">3.0</span>, <span class="st">"Float multiplication"</span>);</code></pre>
-<h2 id="undefined-results-are-null-float">Undefined results are null (<code>float?</code>)</h2>
-<p>Some float operations have no real answer for some inputs: dividing or taking <code>%</code> by zero, <code>sqrt</code> of a negative, <code>ln</code>/<code>log</code> of zero or a negative, <code>asin</code>/<code>acos</code> outside -1..1, or an out-of-domain <code>pow</code>. Rather than crash, Loft yields null for these — so <code>/</code>, <code>%</code>, <code>sqrt</code>, <code>ln</code>, <code>log</code>, <code>pow</code>, <code>asin</code> and <code>acos</code> each produce a NULLABLE float (<code>float?</code>). The null then propagates: any further arithmetic on a null stays null. Discharge it with <code>?? fallback</code> when you need a plain float (just as <code>"1.5" as float?</code> below is a float? you can default).</p>
+<h2 id="undefined-results-are-null-float-but-infinities-are-not-undefined">Undefined results are null (<code>float?</code>) — but infinities are NOT undefined</h2>
+<p>Some float operations have no real answer for some inputs: <code>sqrt</code> of a negative, <code>ln</code>/<code>log</code> of a NEGATIVE, <code>asin</code>/<code>acos</code> outside -1..1, an out-of-domain <code>pow</code>, <code>%</code> by zero, and 0.0/0.0. Rather than crash, Loft yields null for these — so <code>/</code>, <code>%</code>, <code>sqrt</code>, <code>ln</code>, <code>log</code>, <code>pow</code>, <code>asin</code> and <code>acos</code> each produce a NULLABLE float (<code>float?</code>). The null then propagates: any further arithmetic on a null stays null, and <code>?? fallback</code> discharges it when you need a plain float.</p>
+<p>Read the boundary carefully, because it is not "anything unusual is null". Floats keep IEEE INFINITY, and infinity is a value, not a missing one:</p>
+<pre><code>1.0 / 0.0   is  inf        0.0 / 0.0   is  null
+</code></pre>
+<p> -1.0 / 0.0   is -inf        1.0 % 0.0   is  null ln(0.0)     is -inf        ln(-1.0)    is  null</p>
+<p>So a <code>?? fallback</code> does NOT rescue a division by zero the way it rescues a sqrt of a negative — the infinity is not null, sails through the guard, and propagates through every later sum. When a zero divisor is possible, test the DIVISOR rather than defending the result.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"sqrt of a negative is null"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) + <span class="nm">5.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"null propagates through arithmetic"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) + <span class="nm">5.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"null propagates through arithmetic"</span>);
+  fz = <span class="nm">0.0</span>;
+  fp = <span class="nm">1.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{fp / fz}"</span> == <span class="st">"inf"</span>, <span class="st">"a non-zero over zero is an infinity, not a null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((fp / fz) ?? -<span class="nm">1.0</span>) &gt; <span class="nm">1000000.0</span>, <span class="st">"…so `??` does not rescue it"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((fz / fz) ?? -<span class="nm">1.0</span>) == -<span class="nm">1.0</span>, <span class="st">"…while 0.0/0.0 really is null, and `??` does"</span>);</code></pre>
 <p>The <code>f</code> suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.</p>
 <pre><code>  x = <span class="nm">0.1f</span> + <span class="nm">2</span> * <span class="nm">1.0f</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x == <span class="nm">2.1f</span>, <span class="st">"Single precision float"</span>);</code></pre>
-<p><code>as float</code> converts an integer to a float so you can mix them in calculations. Putting a float inside <code>{...}</code> converts it to text for display. You can also go the other way: <code>"1.5" as float</code> parses the text back to a number.</p>
+<p><code>as float</code> converts an integer to a float so you can mix them in calculations. Putting a float inside <code>{...}</code> converts it to text for display. You can also go the other way: <code>"1.5" as float?</code> parses the text back to a number. The <code>?</code> is required — a bare <code>as float</code> on text is refused for the same reason a bare <code>as integer</code> is ("a text parse <code>as float</code> may fail, and a bare cast asserts it cannot"), because the text might not be a number.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span> == <span class="nm">3.0</span>, <span class="st">"Integer to float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1.5"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>? == <span class="nm">1.5</span>, <span class="st">"Text to float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1.5}"</span> == <span class="st">"1.5"</span>, <span class="st">"Float formatted as text"</span>);</code></pre>
@@ -87,17 +97,32 @@ fn main() {
   assert(1.5 + 0.5 == 2.0, "Float addition");
   assert(3.0 / 2.0 == 1.5, "Float division");
   assert(2.0 * 1.5 == 3.0, "Float multiplication");
-  // ## Undefined results are null ('float?')
-  // Some float operations have no real answer for some inputs: dividing or
-  // taking '%' by zero, 'sqrt' of a negative, 'ln'/'log' of zero or a negative,
-  // 'asin'/'acos' outside -1..1, or an out-of-domain 'pow'. Rather than crash,
-  // Loft yields null for these — so '/', '%', 'sqrt', 'ln', 'log', 'pow',
-  // 'asin' and 'acos' each produce a NULLABLE float ('float?'). The null then
-  // propagates: any further arithmetic on a null stays null. Discharge it with
-  // '?? fallback' when you need a plain float (just as '"1.5" as float?' below
-  // is a float? you can default).
+  // ## Undefined results are null ('float?') — but infinities are NOT undefined
+  // Some float operations have no real answer for some inputs: 'sqrt' of a negative,
+  // 'ln'/'log' of a NEGATIVE, 'asin'/'acos' outside -1..1, an out-of-domain 'pow',
+  // '%' by zero, and 0.0/0.0. Rather than crash, Loft yields null for these — so
+  // '/', '%', 'sqrt', 'ln', 'log', 'pow', 'asin' and 'acos' each produce a NULLABLE
+  // float ('float?'). The null then propagates: any further arithmetic on a null
+  // stays null, and '?? fallback' discharges it when you need a plain float.
+  //
+  // Read the boundary carefully, because it is not "anything unusual is null".
+  // Floats keep IEEE INFINITY, and infinity is a value, not a missing one:
+  //
+  //   1.0 / 0.0   is  inf        0.0 / 0.0   is  null
+  //  -1.0 / 0.0   is -inf        1.0 % 0.0   is  null
+  //   ln(0.0)     is -inf        ln(-1.0)    is  null
+  //
+  // So a '?? fallback' does NOT rescue a division by zero the way it rescues a
+  // sqrt of a negative — the infinity is not null, sails through the guard, and
+  // propagates through every later sum. When a zero divisor is possible, test the
+  // DIVISOR rather than defending the result.
   assert((sqrt(-1.0) ?? 0.0) == 0.0, "sqrt of a negative is null");
   assert(((sqrt(-1.0) + 5.0) ?? 0.0) == 0.0, "null propagates through arithmetic");
+  fz = 0.0;
+  fp = 1.0;
+  assert("{fp / fz}" == "inf", "a non-zero over zero is an infinity, not a null");
+  assert(((fp / fz) ?? -1.0) &gt; 1000000.0, "…so `??` does not rescue it");
+  assert(((fz / fz) ?? -1.0) == -1.0, "…while 0.0/0.0 really is null, and `??` does");
   // The 'f' suffix selects single-precision floats, which take half the memory
   // of a regular float but have fewer decimal digits of accuracy. This trade-off
   // is common in graphics and audio code where exact decimal values matter less
@@ -106,7 +131,10 @@ fn main() {
   assert(x == 2.1f, "Single precision float");
   // 'as float' converts an integer to a float so you can mix them in calculations.
   // Putting a float inside '{...}' converts it to text for display.
-  // You can also go the other way: '"1.5" as float' parses the text back to a number.
+  // You can also go the other way: '"1.5" as float?' parses the text back to a number.
+  // The '?' is required — a bare 'as float' on text is refused for the same reason a
+  // bare 'as integer' is ("a text parse `as float` may fail, and a bare cast asserts
+  // it cannot"), because the text might not be a number.
   assert(3 as float == 3.0, "Integer to float");
   assert("1.5" as float? == 1.5, "Text to float");
   assert("{1.5}" == "1.5", "Float formatted as text");

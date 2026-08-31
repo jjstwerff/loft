@@ -991,7 +991,7 @@ Downside Python's \*\* additionally handles complex numbers, and its three-argum
 
 = Keywords
 
-This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified with an assert so you can see the exact expected result.
+This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified: most with an assert naming the exact expected result, and the first with a panic that would fire if the rule it shows did not hold.
 
 ```rust
 fn main() {
@@ -1026,7 +1026,7 @@ Text enclosed in double quotes can contain expressions inside curly braces — t
 
 === if as an expression
 
-Every block in Loft produces a value — the last expression inside it. That means you can use 'if/else' on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed.
+An 'if', a 'match', and a bare '{ }' block all produce a value — the last expression inside them. That means you can use 'if/else' on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed. Loops are the exception: 'for' and 'while' are statements, so 'x = for i in 1..3 { i }' does not compile.
 
 ```rust
   b = if a == 13 {
@@ -1059,9 +1059,23 @@ Every block in Loft produces a value — the last expression inside it. That mea
   assert(t == 54321, "Result was {t} instead of 54321");
 ```
 
+=== The other loop: while
+
+Loft has two loop statements: 'for', which walks a range or a collection, and 'while', which repeats as long as its condition holds. A 'for' over a range carries its own upper bound, so it is the one to reach for; a 'while' does not, and 'while true { }' runs until something stops it. Because nothing bounds a 'while', its body must move the condition towards false — here 'n += 1' is what ends the loop. This is the same sum as the 'for' above, written the other way.
+
+```rust
+  n = 1;
+  t = 0;
+  while n <= 5 {
+    t += n;
+    n += 1;
+  }
+  assert(t == 15, "while summed to {t} instead of 15");
+```
+
 === Nested loops and break
 
-Loft has two loop statements: 'for', which walks a range or a collection, and 'while', which repeats as long as its condition holds. A 'for' over a range carries its own upper bound, so it is the one to reach for; a 'while' does not, and 'while true { }' runs until something stops it. 'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar\#break'. Here x\#break leaves both loops when the product x\*y reaches 16.
+'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar\#break'. Here x\#break leaves both loops when the product x\*y reaches 16.
 
 ```rust
   b = "";
@@ -1076,7 +1090,7 @@ this breaks the inner y loop
 ```rust
       }
       if x * y >= 16 {
-        x# break;
+        x#break;
       }
       if len(b) > 0 {
         b += "; ";
@@ -1131,7 +1145,7 @@ A for loop can appear inside a format string. The results are collected into a b
 
 Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.
 
-The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.
+The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. So there are two different counts, and which one you get depends on the operation: anything that takes a POSITION — indexing, slicing, 'find' — counts bytes, while 'len()' and iterating a text count characters. Positions in bytes are fast and simple; the thing to watch is mixing the two counts, which has its own section below.
 
 ```rust
 fn main() {
@@ -1153,6 +1167,16 @@ Use '+' to join two pieces of text into one. The result is a new value — neith
   assert(len("😃") == 1, "Emoji is one character");
   assert(len("♥") == 1, "Heart is one character");
   assert(len("abc") == 3, "ASCII character count");
+```
+
+=== Do not mix the two counts
+
+'len()' is a character count and 's\[i\]' is a byte index, so walking one with the other goes wrong on any text that is not pure ASCII: the loop runs too few times AND re-reads the bytes inside a multi-byte character. Over "Hi 😊!", 'for i in 0..len(s) { s\[i\] }' yields "Hi 😊😊" — the '!' is silently gone and the emoji appears twice. Nothing fails; the answer is just wrong. Iterate the characters with 'for c in text', or, when you really do mean bytes, walk '0..size(text)'. The compiler reports the mix for you as warning\[text-index-char-bound\].
+
+```rust
+  mixed = "Hi 😊!";
+  assert(len(mixed) == 5, "five characters, not eight");
+  assert(size(mixed) == 8, "eight bytes, not five");
 ```
 
 === Reading individual characters
@@ -1181,6 +1205,13 @@ A negative end index counts backwards from the end of the text. '-1' means "stop
 ```rust
   txt = "12😊🙃45";
   assert(txt[2.. - 1] == "😊🙃4", "UTF-8 sub-string by byte range");
+```
+
+That counts BYTES, and the offset still snaps to a character boundary — so it trims a one-byte suffix like '5' above, and leaves a multi-byte one whole. Here both -1 and -2 land inside the trailing emoji and snap back around it, returning the text unchanged. Trim by bytes only when you know the suffix is ASCII.
+
+```rust
+  assert("ab😊"[.. - 1] == "ab😊", "a multi-byte suffix is not trimmed by -1");
+  assert("ab😊"[.. - 2] == "ab😊", "nor by -2");
 ```
 
 === Iterating over characters
@@ -1229,7 +1260,7 @@ Inside a format string '{' and '}' are special: they introduce an interpolated e
 
 === Aligning text in a fixed-width field
 
-The ':' specifier controls alignment and width. '\<' left-aligns the value, '\>' right-aligns it (the default). The width can be a constant or a small arithmetic expression — here '2+3' evaluates to 5, giving a field of width 5.
+The ':' specifier controls alignment and width. '\<' left-aligns the value and '\>' right-aligns it. The default depends on the TYPE: text is left-aligned (as '{a:4}' and '{vr:6}' here both show), while numbers are right-aligned, which is what lines a column of figures up. The width can be a constant or a small arithmetic expression — here '2+3' evaluates to 5, giving a field of width 5.
 
 ```rust
   vr = "abc";
@@ -1250,7 +1281,7 @@ fn main() {
 
 === Converting between numbers and text
 
-Wrapping a value in '{...}' inside a string formats it as text. Going the other way, 'as integer' parses a text value into a number. If the text cannot be parsed, the result is null — not a crash.
+Wrapping a value in '{...}' inside a string formats it as text. Going the other way, 'as integer?' parses a text value into a number. Write the '?': a text parse can fail, so a bare 'as integer' is refused at compile time ("a text parse `as integer` may fail, and a bare cast asserts it cannot"). The '?' is you accepting the failure case, and the result is null — not a crash — when the text does not parse.
 
 ```rust
   v = 4;
@@ -1261,7 +1292,14 @@ Wrapping a value in '{...}' inside a string formats it as text. Going the other 
 
 === Arithmetic and operator precedence
 
-Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. Bitwise operators (\<\<, &, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.
+Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. Bitwise operators (\<\<, &, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: '^' is XOR, not exponentiation. For powers use 'pow(base, exp)' — a FLOAT function, so 'pow(2, 3)' does not resolve: raise in floats and come back. It answers a NULLABLE float ('float?'), because a power can be uncomputable, so the trip back is a checked cast or a discharge:
+
+```
+pow(base, exp) as integer?           // the number, or null
+(pow(base, exp) ?? 0.0) as integer   // your own default instead
+```
+
+A bare 'as integer' is refused ("cannot cast a possibly-null `float?` to the non-null `integer`"). It does compile when BOTH arguments are literals, and that is the one shape which does not generalise — write the '?' and it works wherever the base is a variable, which is everywhere real.
 
 ```rust
   assert(1 + 2 * 4 == 9, "Multiplication before addition");
@@ -1269,7 +1307,14 @@ Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. 
   assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
   assert(42 ^ 0b111111 == 21, "Bitwise XOR");
   assert(105 % 100 == 5, "Modulus (remainder)");
-  assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
+```
+
+Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the one that stops compiling the moment a reader puts their own number in it.
+
+```rust
+  pw_base = 2.0;
+  assert(pow(pw_base, 3.0) as integer? == 8, "pow() for exponentiation");
+  assert((pow(pw_base, 10.0) ?? 0.0) as integer == 1024, "…or discharge, then cast");
 ```
 
 'abs()' returns the absolute value — the distance from zero, always positive.
@@ -1280,20 +1325,7 @@ Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. 
 
 === Division by zero — produces null and keeps running
 
-Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run.
-
-- \*\*Undefended\*\* (bare `1 / 0`): you get null, and at this unguarded site
-
-```
-loft also reports a warning so the divide-by-zero is not invisible.
-```
-
-- \*\*Defended\*\* (`1 / 0 ?? fallback`, or a following `if x != null`):
-
-```
-`??` supplies a non-null fallback and the warning is suppressed —
-you have explicitly handled the case.
-```
+Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run. Where the divisor is a literal zero in your source, loft can see it before the program runs and warns (next section). Where it is only zero at RUN time there is no warning — you get null, and when loft knows the reason it prints it, so a bare '{12 / a}' shows 'null(/0)' rather than a bare 'null'. Recover with '??', or test the result for null: nothing else tells you, so a divide whose divisor could be zero is one you handle rather than one you are reminded about.
 
 ```rust
   a = 2 * 2;
@@ -1372,7 +1404,16 @@ Because 'integer' is 64-bit, values far past the old 2-billion limit work direct
 
 A calculation whose result is too large to represent overflows — and in loft an overflow is uncomputable, so the result is null. It never wraps to a silently-wrong number, and it never crashes; execution continues with the null, exactly like divide-by-zero above. Check the result for null (or keep intermediate values in range) when multiplying or summing very large numbers.
 
+A sized integer ('u8', 'i16', a field declared 'integer limit(0, 255)') has a smaller range, so it overflows sooner — and where it lands depends on one thing: whether the slot can hold null. A nullable one ('u8?') gets the null, the same as above. A non-nullable one has nowhere to put it, so it gets the type's default instead — 0 for every range that includes zero. What you never get is a wrapped number.
+
 ```rust
+  small: u8? = 250;
+  small += 10;
+  assert(small == null, "A nullable sized integer overflows to null");
+  assert((small ?? 0) == 0, "…and '??' recovers from it, like any other null");
+  fixed: u8 = 250;
+  fixed += 10;
+  assert(fixed == 0, "A non-nullable one takes its type's default instead");
 }
 ```
 
@@ -1413,11 +1454,15 @@ Division by zero (and other failed operations) produce null when defended with `
 if !result { ... handle missing value ... }
 ```
 
-Even without `?? null`, a bare `1 / 0` never halts: it yields null and logs a warning, behaving the same everywhere — development, test, and production. The `?? null` above just marks the case as handled, which suppresses that warning.
+Even without `?? null`, a bare divide never halts: it yields null and execution continues, the same everywhere — development, test, and production.
+
+The `?? null` is not what makes that safe, and it silences nothing. loft warns about a divisor that is a literal 0 in your source, while READING your code, and it warns whether or not you wrote `?? null`; a divisor that is only zero at RUN time is not warned about at all. What `?? null` changes is the VALUE: loft prints the reason it knows, so an undefended result formats as 'null(/0)', and coalescing it to a plain null throws that reason away. Reach for `?? null` when you want the bare null, and for `?? \<value\>` when you want a number — not to quiet a warning.
 
 ```rust
   zero = 0;
   assert(!(12 / zero ?? null), "null from division-by-zero is false-like when defended");
+  assert("{12 / zero}" == "null(/0)", "an undefended result carries its reason");
+  assert("{12 / zero ?? null}" == "null", "…and `?? null` trades the reason for a plain null");
   assert(12 > 0, "positive integer is true");
 ```
 
@@ -1497,13 +1542,32 @@ Write a decimal point in a literal and Loft treats the whole expression as a flo
   assert(2.0 * 1.5 == 3.0, "Float multiplication");
 ```
 
-=== Undefined results are null ('float?')
+=== Undefined results are null ('float?') — but infinities are NOT undefined
 
-Some float operations have no real answer for some inputs: dividing or taking '%' by zero, 'sqrt' of a negative, 'ln'/'log' of zero or a negative, 'asin'/'acos' outside -1..1, or an out-of-domain 'pow'. Rather than crash, Loft yields null for these — so '/', '%', 'sqrt', 'ln', 'log', 'pow', 'asin' and 'acos' each produce a NULLABLE float ('float?'). The null then propagates: any further arithmetic on a null stays null. Discharge it with '?? fallback' when you need a plain float (just as '"1.5" as float?' below is a float? you can default).
+Some float operations have no real answer for some inputs: 'sqrt' of a negative, 'ln'/'log' of a NEGATIVE, 'asin'/'acos' outside -1..1, an out-of-domain 'pow', '%' by zero, and 0.0/0.0. Rather than crash, Loft yields null for these — so '/', '%', 'sqrt', 'ln', 'log', 'pow', 'asin' and 'acos' each produce a NULLABLE float ('float?'). The null then propagates: any further arithmetic on a null stays null, and '?? fallback' discharges it when you need a plain float.
+
+Read the boundary carefully, because it is not "anything unusual is null". Floats keep IEEE INFINITY, and infinity is a value, not a missing one:
+
+```
+1.0 / 0.0   is  inf        0.0 / 0.0   is  null
+```
+
+ -1.0 / 0.0   is -inf        1.0 % 0.0   is  null
+
+```
+ln(0.0)     is -inf        ln(-1.0)    is  null
+```
+
+So a '?? fallback' does NOT rescue a division by zero the way it rescues a sqrt of a negative — the infinity is not null, sails through the guard, and propagates through every later sum. When a zero divisor is possible, test the DIVISOR rather than defending the result.
 
 ```rust
   assert((sqrt(-1.0) ?? 0.0) == 0.0, "sqrt of a negative is null");
   assert(((sqrt(-1.0) + 5.0) ?? 0.0) == 0.0, "null propagates through arithmetic");
+  fz = 0.0;
+  fp = 1.0;
+  assert("{fp / fz}" == "inf", "a non-zero over zero is an infinity, not a null");
+  assert(((fp / fz) ?? -1.0) > 1000000.0, "…so `??` does not rescue it");
+  assert(((fz / fz) ?? -1.0) == -1.0, "…while 0.0/0.0 really is null, and `??` does");
 ```
 
 The 'f' suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.
@@ -1513,7 +1577,7 @@ The 'f' suffix selects single-precision floats, which take half the memory of a 
   assert(x == 2.1f, "Single precision float");
 ```
 
-'as float' converts an integer to a float so you can mix them in calculations. Putting a float inside '{...}' converts it to text for display. You can also go the other way: '"1.5" as float' parses the text back to a number.
+'as float' converts an integer to a float so you can mix them in calculations. Putting a float inside '{...}' converts it to text for display. You can also go the other way: '"1.5" as float?' parses the text back to a number. The '?' is required — a bare 'as float' on text is refused for the same reason a bare 'as integer' is ("a text parse `as float` may fail, and a bare cast asserts it cannot"), because the text might not be a number.
 
 ```rust
   assert(3 as float == 3.0, "Integer to float");
@@ -6264,6 +6328,7 @@ pub interface Ordered
 ```
 
 Types that support the `\<` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.
+`boolean` is NOT among them, deliberately: it satisfies Equatable below and has no ordering, so `false \< true` is a refusal rather than a convention the language picks for you.  A program that wants it says so — `(a as integer) \< (b as integer)`.  Note this is what bounds the null-ordering half of \@FR-E-NullArg, which applies to the ORDERED types only; boolean null still compares with `==` like every other scalar.
 ONE method is all a type has to define: inside a generic bounded by this, `\>`, `\<=` and `\>=` all derive from `\<` — `a \> b` is `b \< a`, `a \<= b` is `!(b \< a)`, `a \>= b` is `!(a \< b)`.  Each evaluates its operands exactly once.
 
 ```rust

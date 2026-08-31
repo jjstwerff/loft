@@ -27,27 +27,26 @@
 <p>The default number type is <code>integer</code>: a 64-bit signed whole number, the same as i64 in Rust. It can hold values from about −9 quintillion to +9 quintillion (roughly ±9.2 × 10^18), so everyday counts and very large numbers both fit in the one type — there is no separate <code>long</code>. For decimal (fractional) numbers, see the Float page.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="converting-between-numbers-and-text">Converting between numbers and text</h2>
-<p>Wrapping a value in <code>{...}</code> inside a string formats it as text. Going the other way, <code>as integer</code> parses a text value into a number. If the text cannot be parsed, the result is null — not a crash.</p>
+<p>Wrapping a value in <code>{...}</code> inside a string formats it as text. Going the other way, <code>as integer?</code> parses a text value into a number. Write the <code>?</code>: a text parse can fail, so a bare <code>as integer</code> is refused at compile time ("a text parse <code>as integer</code> may fail, and a bare cast asserts it cannot"). The <code>?</code> is you accepting the failure case, and the result is null — not a crash — when the text does not parse.</p>
 <pre><code>  v = <span class="nm">4</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"4"</span>, <span class="st">"Format integer as text"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"123"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>? == <span class="nm">123</span>, <span class="st">"Parse text to integer"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="st">"abc"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>?), <span class="st">"Unparseable text gives null"</span>);</code></pre>
 <h2 id="arithmetic-and-operator-precedence">Arithmetic and operator precedence</h2>
-<p>Loft follows standard mathematical precedence: <code>*</code> and <code>/</code> before <code>+</code> and <code>-</code>. Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: <code>^</code> is XOR, not exponentiation. Use pow(base, exp) for powers.</p>
+<p>Loft follows standard mathematical precedence: <code>*</code> and <code>/</code> before <code>+</code> and <code>-</code>. Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: <code>^</code> is XOR, not exponentiation. For powers use <code>pow(base, exp)</code> — a FLOAT function, so <code>pow(2, 3)</code> does not resolve: raise in floats and come back. It answers a NULLABLE float (<code>float?</code>), because a power can be uncomputable, so the trip back is a checked cast or a discharge: pow(base, exp) as integer?           // the number, or null (pow(base, exp) ?? 0.0) as integer   // your own default instead A bare <code>as integer</code> is refused ("cannot cast a possibly-null <code>float?</code> to the non-null <code>integer</code>"). It does compile when BOTH arguments are literals, and that is the one shape which does not generalise — write the <code>?</code> and it works wherever the base is a variable, which is everywhere real.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> * <span class="nm">4</span> == <span class="nm">9</span>, <span class="st">"Multiplication before addition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> &lt;&lt; <span class="nm">2</span> == <span class="nm">12</span>, <span class="st">"Shift: (1+2) &lt;&lt; 2 = 12"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x0a8</span> &amp; <span class="nm">15</span> == <span class="nm">8</span>, <span class="st">"Bitwise AND masks low 4 bits"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">42</span> ^ <span class="nm">0b111111</span> == <span class="nm">21</span>, <span class="st">"Bitwise XOR"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() for exponentiation"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);</code></pre>
+<p>Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the one that stops compiling the moment a reader puts their own number in it.</p>
+<pre><code>  pw_base = <span class="nm">2.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(pw_base, <span class="nm">3.0</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>? == <span class="nm">8</span>, <span class="st">"pow() for exponentiation"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(pw_base, <span class="nm">10.0</span>) ?? <span class="nm">0.0</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">1024</span>, <span class="st">"…or discharge, then cast"</span>);</code></pre>
 <p><code>abs()</code> returns the absolute value — the distance from zero, always positive.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2</span>) == <span class="nm">3</span>, <span class="st">"abs(-2) == 2"</span>);</code></pre>
 <h2 id="division-by-zero-produces-null-and-keeps-running">Division by zero — produces null and keeps running</h2>
-<p>Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run.</p>
-<ul>
-<li><strong>Undefended</strong> (bare <code>1 / 0</code>): you get null, and at this unguarded site loft also reports a warning so the divide-by-zero is not invisible.</li>
-<li><strong>Defended</strong> (<code>1 / 0 ?? fallback</code>, or a following <code>if x != null</code>): <code>??</code> supplies a non-null fallback and the warning is suppressed — you have explicitly handled the case.</li>
-</ul>
+<p>Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run. Where the divisor is a literal zero in your source, loft can see it before the program runs and warns (next section). Where it is only zero at RUN time there is no warning — you get null, and when loft knows the reason it prints it, so a bare <code>{12 / a}</code> shows <code>null(/0)</code> rather than a bare <code>null</code>. Recover with <code>??</code>, or test the result for null: nothing else tells you, so a divide whose divisor could be zero is one you handle rather than one you are reminded about.</p>
 <pre><code>  a = <span class="nm">2</span> * <span class="nm">2</span>;
   a -= <span class="nm">4</span>;</code></pre>
 <p>a is now 0</p>
@@ -76,7 +75,15 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{big}"</span> == <span class="st">"5000000000"</span>, <span class="st">"Large integer formatted as text"</span>);</code></pre>
 <h2 id="common-pitfall-integer-overflow">Common pitfall: integer overflow</h2>
 <p>A calculation whose result is too large to represent overflows — and in loft an overflow is uncomputable, so the result is null. It never wraps to a silently-wrong number, and it never crashes; execution continues with the null, exactly like divide-by-zero above. Check the result for null (or keep intermediate values in range) when multiplying or summing very large numbers.</p>
-<pre><code>}</code></pre>
+<p>A sized integer (<code>u8</code>, <code>i16</code>, a field declared <code>integer limit(0, 255)</code>) has a smaller range, so it overflows sooner — and where it lands depends on one thing: whether the slot can hold null. A nullable one (<code>u8?</code>) gets the null, the same as above. A non-nullable one has nowhere to put it, so it gets the type's default instead — 0 for every range that includes zero. What you never get is a wrapped number.</p>
+<pre><code>  small: <span class="ty"><a href="stdlib-types.html">u8</a></span>? = <span class="nm">250</span>;
+  small += <span class="nm">10</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(small == <span class="kw">null</span>, <span class="st">"A nullable sized integer overflows to null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((small ?? <span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"…and '??' recovers from it, like any other null"</span>);
+  fixed: <span class="ty"><a href="stdlib-types.html">u8</a></span> = <span class="nm">250</span>;
+  fixed += <span class="nm">10</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fixed == <span class="nm">0</span>, <span class="st">"A non-nullable one takes its type's default instead"</span>);
+}</code></pre>
 <section id="loft-panel" class="loft-panel" hidden>
 <h2>Run it yourself</h2>
 <p class="lp-note">This page is a loft program. It runs here, in your browser — press Run, then ask it something.</p>
@@ -105,8 +112,11 @@
 fn main() {
   // ## Converting between numbers and text
   // Wrapping a value in '{...}' inside a string formats it as text.
-  // Going the other way, 'as integer' parses a text value into a number.
-  // If the text cannot be parsed, the result is null — not a crash.
+  // Going the other way, 'as integer?' parses a text value into a number. Write
+  // the '?': a text parse can fail, so a bare 'as integer' is refused at compile
+  // time ("a text parse `as integer` may fail, and a bare cast asserts it cannot").
+  // The '?' is you accepting the failure case, and the result is null — not a
+  // crash — when the text does not parse.
   v = 4;
   assert("{v}" == "4", "Format integer as text");
   assert("123" as integer? == 123, "Parse text to integer");
@@ -115,13 +125,26 @@ fn main() {
   // Loft follows standard mathematical precedence: '*' and '/' before '+' and '-'.
   // Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with
   // arithmetic, parentheses make your intent clear and avoid surprises.
-  // Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.
+  // Note: '^' is XOR, not exponentiation. For powers use 'pow(base, exp)' — a FLOAT
+  // function, so 'pow(2, 3)' does not resolve: raise in floats and come back. It
+  // answers a NULLABLE float ('float?'), because a power can be uncomputable, so the
+  // trip back is a checked cast or a discharge:
+  //   pow(base, exp) as integer?           // the number, or null
+  //   (pow(base, exp) ?? 0.0) as integer   // your own default instead
+  // A bare 'as integer' is refused ("cannot cast a possibly-null `float?` to the
+  // non-null `integer`"). It does compile when BOTH arguments are literals, and that
+  // is the one shape which does not generalise — write the '?' and it works wherever
+  // the base is a variable, which is everywhere real.
   assert(1 + 2 * 4 == 9, "Multiplication before addition");
   assert(1 + 2 &lt;&lt; 2 == 12, "Shift: (1+2) &lt;&lt; 2 = 12");
   assert(0x0a8 &amp; 15 == 8, "Bitwise AND masks low 4 bits");
   assert(42 ^ 0b111111 == 21, "Bitwise XOR");
   assert(105 % 100 == 5, "Modulus (remainder)");
-  assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
+  // Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the
+  // one that stops compiling the moment a reader puts their own number in it.
+  pw_base = 2.0;
+  assert(pow(pw_base, 3.0) as integer? == 8, "pow() for exponentiation");
+  assert((pow(pw_base, 10.0) ?? 0.0) as integer == 1024, "…or discharge, then cast");
   // 'abs()' returns the absolute value — the distance from zero, always positive.
   assert(1 + abs(-2) == 3, "abs(-2) == 2");
   // ## Division by zero — produces null and keeps running
@@ -130,11 +153,12 @@ fn main() {
   // CONTINUES — the spreadsheet model, where one bad cell shows an error but
   // the rest still recalculate.  This holds the same everywhere (development,
   // test, and production) — one bad calculation never halts the run.
-  // - **Undefended** (bare `1 / 0`): you get null, and at this unguarded site
-  //   loft also reports a warning so the divide-by-zero is not invisible.
-  // - **Defended** (`1 / 0 ?? fallback`, or a following `if x != null`):
-  //   `??` supplies a non-null fallback and the warning is suppressed —
-  //   you have explicitly handled the case.
+  // Where the divisor is a literal zero in your source, loft can see it before the
+  // program runs and warns (next section). Where it is only zero at RUN time there is
+  // no warning — you get null, and when loft knows the reason it prints it, so a bare
+  // '{12 / a}' shows 'null(/0)' rather than a bare 'null'. Recover with '??', or test
+  // the result for null: nothing else tells you, so a divide whose divisor could be
+  // zero is one you handle rather than one you are reminded about.
   a = 2 * 2;
   a -= 4;
   // a is now 0
@@ -181,6 +205,20 @@ fn main() {
   // a silently-wrong number, and it never crashes; execution continues with the
   // null, exactly like divide-by-zero above. Check the result for null (or keep
   // intermediate values in range) when multiplying or summing very large numbers.
+  //
+  // A sized integer ('u8', 'i16', a field declared 'integer limit(0, 255)') has
+  // a smaller range, so it overflows sooner — and where it lands depends on one
+  // thing: whether the slot can hold null. A nullable one ('u8?') gets the null,
+  // the same as above. A non-nullable one has nowhere to put it, so it gets the
+  // type's default instead — 0 for every range that includes zero. What you
+  // never get is a wrapped number.
+  small: u8? = 250;
+  small += 10;
+  assert(small == null, "A nullable sized integer overflows to null");
+  assert((small ?? 0) == 0, "…and '??' recovers from it, like any other null");
+  fixed: u8 = 250;
+  fixed += 10;
+  assert(fixed == 0, "A non-nullable one takes its type's default instead");
 }
 </pre>
 <style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>

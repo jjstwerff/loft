@@ -77,7 +77,7 @@
 </nav>
 <section class="print-section" id="01-keywords">
 <h1>Keywords</h1>
-<p>This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified with an assert so you can see the exact expected result.</p>
+<p>This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified: most with an assert naming the exact expected result, and the first with a panic that would fire if the rule it shows did not hold.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="conditionals">Conditionals</h2>
 <p><code>if</code> runs a block only when its condition is true. If the condition is false the block is skipped entirely — nothing else happens. <code>panic</code> stops the program immediately with a message. During development it is a clear way to mark situations that should never occur.</p>
@@ -94,7 +94,7 @@
 <p>Text enclosed in double quotes can contain expressions inside curly braces — the expression is evaluated and its result is inserted into the text. <code>assert</code> checks that its first argument is true; if it is false the second argument is printed as an error message.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">13</span>, <span class="st">"Incorrect value {a} != 13"</span>);</code></pre>
 <h2 id="if-as-an-expression">if as an expression</h2>
-<p>Every block in Loft produces a value — the last expression inside it. That means you can use <code>if/else</code> on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed.</p>
+<p>An <code>if</code>, a <code>match</code>, and a bare <code>{ }</code> block all produce a value — the last expression inside them. That means you can use <code>if/else</code> on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed. Loops are the exception: <code>for</code> and <code>while</code> are statements, so <code>x = for i in 1..3 { i }</code> does not compile.</p>
 <pre><code>  b = <span class="kw">if</span> a == <span class="nm">13</span> {
     <span class="st">"Correct"</span>
   } <span class="kw">else</span> {
@@ -114,8 +114,17 @@
     t = t * <span class="nm">10</span> + i;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">54321</span>, <span class="st">"Result was {t} instead of 54321"</span>);</code></pre>
+<h2 id="the-other-loop-while">The other loop: while</h2>
+<p>Loft has two loop statements: <code>for</code>, which walks a range or a collection, and <code>while</code>, which repeats as long as its condition holds. A <code>for</code> over a range carries its own upper bound, so it is the one to reach for; a <code>while</code> does not, and <code>while true { }</code> runs until something stops it. Because nothing bounds a <code>while</code>, its body must move the condition towards false — here <code>n += 1</code> is what ends the loop. This is the same sum as the <code>for</code> above, written the other way.</p>
+<pre><code>  n = <span class="nm">1</span>;
+  t = <span class="nm">0</span>;
+  while n &lt;= <span class="nm">5</span> {
+    t += n;
+    n += <span class="nm">1</span>;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">15</span>, <span class="st">"while summed to {t} instead of 15"</span>);</code></pre>
 <h2 id="nested-loops-and-break">Nested loops and break</h2>
-<p>Loft has two loop statements: <code>for</code>, which walks a range or a collection, and <code>while</code>, which repeats as long as its condition holds. A <code>for</code> over a range carries its own upper bound, so it is the one to reach for; a <code>while</code> does not, and <code>while true { }</code> runs until something stops it. <code>break</code> exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write <code>outerVar#break</code>. Here x#break leaves both loops when the product x*y reaches 16.</p>
+<p><code>break</code> exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write <code>outerVar#break</code>. Here x#break leaves both loops when the product x*y reaches 16.</p>
 <pre><code>  b = <span class="st">""</span>;
   <span class="kw">for</span> x <span class="kw">in</span> <span class="nm">1..5</span> {
     <span class="kw">for</span> y <span class="kw">in</span> <span class="nm">1..5</span> {
@@ -124,7 +133,7 @@
 <p>this breaks the inner y loop</p>
 <pre><code>      }
       <span class="kw">if</span> x * y &gt;= <span class="nm">16</span> {
-        x# <span class="kw">break</span>;
+        x#<span class="kw">break</span>;
       }
       <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(b) &gt; <span class="nm">0</span> {
         b += <span class="st">"; "</span>;
@@ -161,7 +170,7 @@
 <section class="print-section" id="02-text">
 <h1>Texts</h1>
 <p>Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.</p>
-<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.</p>
+<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. So there are two different counts, and which one you get depends on the operation: anything that takes a POSITION — indexing, slicing, <code>find</code> — counts bytes, while <code>len()</code> and iterating a text count characters. Positions in bytes are fast and simple; the thing to watch is mixing the two counts, which has its own section below.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="joining-and-measuring-text">Joining and measuring text</h2>
 <p>Use <code>+</code> to join two pieces of text into one. The result is a new value — neither of the originals is modified. Placing a value name inside curly braces inside a format string inserts the value as text. You can also control the width: <code>{a:4}</code> pads the value on the right to at least 4 characters.</p>
@@ -172,6 +181,11 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"😃"</span>) == <span class="nm">1</span>, <span class="st">"Emoji is one character"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"♥"</span>) == <span class="nm">1</span>, <span class="st">"Heart is one character"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"abc"</span>) == <span class="nm">3</span>, <span class="st">"ASCII character count"</span>);</code></pre>
+<h2 id="do-not-mix-the-two-counts">Do not mix the two counts</h2>
+<p><code>len()</code> is a character count and <code>s[i]</code> is a byte index, so walking one with the other goes wrong on any text that is not pure ASCII: the loop runs too few times AND re-reads the bytes inside a multi-byte character. Over "Hi 😊!", <code>for i in 0..len(s) { s[i] }</code> yields "Hi 😊😊" — the <code>!</code> is silently gone and the emoji appears twice. Nothing fails; the answer is just wrong. Iterate the characters with <code>for c in text</code>, or, when you really do mean bytes, walk <code>0..size(text)</code>. The compiler reports the mix for you as warning[text-index-char-bound].</p>
+<pre><code>  mixed = <span class="st">"Hi 😊!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(mixed) == <span class="nm">5</span>, <span class="st">"five characters, not eight"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(mixed) == <span class="nm">8</span>, <span class="st">"eight bytes, not five"</span>);</code></pre>
 <h2 id="reading-individual-characters">Reading individual characters</h2>
 <p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.</p>
 <pre><code>  s = <span class="st">"ABCDE"</span>;
@@ -186,6 +200,9 @@
 <p>A negative end index counts backwards from the end of the text. <code>-1</code> means "stop one byte before the very last byte". Combined with a start offset this lets you trim a known suffix without knowing the exact length.</p>
 <pre><code>  txt = <span class="st">"12😊🙃45"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(txt[<span class="nm">2..</span> - <span class="nm">1</span>] == <span class="st">"😊🙃4"</span>, <span class="st">"UTF-8 sub-string by byte range"</span>);</code></pre>
+<p>That counts BYTES, and the offset still snaps to a character boundary — so it trims a one-byte suffix like <code>5</code> above, and leaves a multi-byte one whole. Here both -1 and -2 land inside the trailing emoji and snap back around it, returning the text unchanged. Trim by bytes only when you know the suffix is ASCII.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab😊"</span>[.. - <span class="nm">1</span>] == <span class="st">"ab😊"</span>, <span class="st">"a multi-byte suffix is not trimmed by -1"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab😊"</span>[.. - <span class="nm">2</span>] == <span class="st">"ab😊"</span>, <span class="st">"nor by -2"</span>);</code></pre>
 <h2 id="iterating-over-characters">Iterating over characters</h2>
 <p>A <code>for</code> loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: <code>c#index</code> is the byte offset where the current character starts. <code>c#next</code> is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
 <pre><code>  result = <span class="st">""</span>;
@@ -212,7 +229,7 @@
 <pre><code>  brace_inner = <span class="st">"cd"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab{{cd}}e"</span> == <span class="st">"ab{{{brace_inner}}}e"</span>, <span class="st">"Escaping braces"</span>);</code></pre>
 <h2 id="aligning-text-in-a-fixed-width-field">Aligning text in a fixed-width field</h2>
-<p>The <code>:</code> specifier controls alignment and width. <code>&lt;</code> left-aligns the value, <code>&gt;</code> right-aligns it (the default). The width can be a constant or a small arithmetic expression — here <code>2+3</code> evaluates to 5, giving a field of width 5.</p>
+<p>The <code>:</code> specifier controls alignment and width. <code>&lt;</code> left-aligns the value and <code>&gt;</code> right-aligns it. The default depends on the TYPE: text is left-aligned (as <code>{a:4}</code> and <code>{vr:6}</code> here both show), while numbers are right-aligned, which is what lines a column of figures up. The width can be a constant or a small arithmetic expression — here <code>2+3</code> evaluates to 5, giving a field of width 5.</p>
 <pre><code>  vr = <span class="st">"abc"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1{vr:&lt;2+3}2{vr}3{vr:6}4{vr:&gt;7}"</span> == <span class="st">"1abc  2abc3abc   4    abc"</span>, <span class="st">"Text alignment"</span>);
 }</code></pre>
@@ -223,27 +240,26 @@
 <p>The default number type is <code>integer</code>: a 64-bit signed whole number, the same as i64 in Rust. It can hold values from about −9 quintillion to +9 quintillion (roughly ±9.2 × 10^18), so everyday counts and very large numbers both fit in the one type — there is no separate <code>long</code>. For decimal (fractional) numbers, see the Float page.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="converting-between-numbers-and-text">Converting between numbers and text</h2>
-<p>Wrapping a value in <code>{...}</code> inside a string formats it as text. Going the other way, <code>as integer</code> parses a text value into a number. If the text cannot be parsed, the result is null — not a crash.</p>
+<p>Wrapping a value in <code>{...}</code> inside a string formats it as text. Going the other way, <code>as integer?</code> parses a text value into a number. Write the <code>?</code>: a text parse can fail, so a bare <code>as integer</code> is refused at compile time ("a text parse <code>as integer</code> may fail, and a bare cast asserts it cannot"). The <code>?</code> is you accepting the failure case, and the result is null — not a crash — when the text does not parse.</p>
 <pre><code>  v = <span class="nm">4</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"4"</span>, <span class="st">"Format integer as text"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"123"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>? == <span class="nm">123</span>, <span class="st">"Parse text to integer"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="st">"abc"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>?), <span class="st">"Unparseable text gives null"</span>);</code></pre>
 <h2 id="arithmetic-and-operator-precedence">Arithmetic and operator precedence</h2>
-<p>Loft follows standard mathematical precedence: <code>*</code> and <code>/</code> before <code>+</code> and <code>-</code>. Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: <code>^</code> is XOR, not exponentiation. Use pow(base, exp) for powers.</p>
+<p>Loft follows standard mathematical precedence: <code>*</code> and <code>/</code> before <code>+</code> and <code>-</code>. Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: <code>^</code> is XOR, not exponentiation. For powers use <code>pow(base, exp)</code> — a FLOAT function, so <code>pow(2, 3)</code> does not resolve: raise in floats and come back. It answers a NULLABLE float (<code>float?</code>), because a power can be uncomputable, so the trip back is a checked cast or a discharge: pow(base, exp) as integer?           // the number, or null (pow(base, exp) ?? 0.0) as integer   // your own default instead A bare <code>as integer</code> is refused ("cannot cast a possibly-null <code>float?</code> to the non-null <code>integer</code>"). It does compile when BOTH arguments are literals, and that is the one shape which does not generalise — write the <code>?</code> and it works wherever the base is a variable, which is everywhere real.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> * <span class="nm">4</span> == <span class="nm">9</span>, <span class="st">"Multiplication before addition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> &lt;&lt; <span class="nm">2</span> == <span class="nm">12</span>, <span class="st">"Shift: (1+2) &lt;&lt; 2 = 12"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x0a8</span> &amp; <span class="nm">15</span> == <span class="nm">8</span>, <span class="st">"Bitwise AND masks low 4 bits"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">42</span> ^ <span class="nm">0b111111</span> == <span class="nm">21</span>, <span class="st">"Bitwise XOR"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() for exponentiation"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);</code></pre>
+<p>Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the one that stops compiling the moment a reader puts their own number in it.</p>
+<pre><code>  pw_base = <span class="nm">2.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(pw_base, <span class="nm">3.0</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>? == <span class="nm">8</span>, <span class="st">"pow() for exponentiation"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(pw_base, <span class="nm">10.0</span>) ?? <span class="nm">0.0</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">1024</span>, <span class="st">"…or discharge, then cast"</span>);</code></pre>
 <p><code>abs()</code> returns the absolute value — the distance from zero, always positive.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2</span>) == <span class="nm">3</span>, <span class="st">"abs(-2) == 2"</span>);</code></pre>
 <h2 id="division-by-zero-produces-null-and-keeps-running">Division by zero — produces null and keeps running</h2>
-<p>Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run.</p>
-<ul>
-<li><strong>Undefended</strong> (bare <code>1 / 0</code>): you get null, and at this unguarded site loft also reports a warning so the divide-by-zero is not invisible.</li>
-<li><strong>Defended</strong> (<code>1 / 0 ?? fallback</code>, or a following <code>if x != null</code>): <code>??</code> supplies a non-null fallback and the warning is suppressed — you have explicitly handled the case.</li>
-</ul>
+<p>Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run. Where the divisor is a literal zero in your source, loft can see it before the program runs and warns (next section). Where it is only zero at RUN time there is no warning — you get null, and when loft knows the reason it prints it, so a bare <code>{12 / a}</code> shows <code>null(/0)</code> rather than a bare <code>null</code>. Recover with <code>??</code>, or test the result for null: nothing else tells you, so a divide whose divisor could be zero is one you handle rather than one you are reminded about.</p>
 <pre><code>  a = <span class="nm">2</span> * <span class="nm">2</span>;
   a -= <span class="nm">4</span>;</code></pre>
 <p>a is now 0</p>
@@ -272,7 +288,15 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{big}"</span> == <span class="st">"5000000000"</span>, <span class="st">"Large integer formatted as text"</span>);</code></pre>
 <h2 id="common-pitfall-integer-overflow">Common pitfall: integer overflow</h2>
 <p>A calculation whose result is too large to represent overflows — and in loft an overflow is uncomputable, so the result is null. It never wraps to a silently-wrong number, and it never crashes; execution continues with the null, exactly like divide-by-zero above. Check the result for null (or keep intermediate values in range) when multiplying or summing very large numbers.</p>
-<pre><code>}</code></pre>
+<p>A sized integer (<code>u8</code>, <code>i16</code>, a field declared <code>integer limit(0, 255)</code>) has a smaller range, so it overflows sooner — and where it lands depends on one thing: whether the slot can hold null. A nullable one (<code>u8?</code>) gets the null, the same as above. A non-nullable one has nowhere to put it, so it gets the type's default instead — 0 for every range that includes zero. What you never get is a wrapped number.</p>
+<pre><code>  small: <span class="ty"><a href="stdlib-types.html">u8</a></span>? = <span class="nm">250</span>;
+  small += <span class="nm">10</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(small == <span class="kw">null</span>, <span class="st">"A nullable sized integer overflows to null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((small ?? <span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"…and '??' recovers from it, like any other null"</span>);
+  fixed: <span class="ty"><a href="stdlib-types.html">u8</a></span> = <span class="nm">250</span>;
+  fixed += <span class="nm">10</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fixed == <span class="nm">0</span>, <span class="st">"A non-nullable one takes its type's default instead"</span>);
+}</code></pre>
 </section>
 <section class="print-section" id="04-boolean">
 <h1>Boolean</h1>
@@ -289,9 +313,12 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> &amp;&amp; <span class="nm">3</span> &gt; <span class="nm">2</span>), <span class="st">"First false → whole 'and' is false"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> || <span class="nm">3</span> &gt; <span class="nm">4</span>), <span class="st">"Both false → 'or' is false"</span>);</code></pre>
 <h2 id="null-in-boolean-context">Null in boolean context</h2>
-<p>Division by zero (and other failed operations) produce null when defended with <code>?? null</code> (or <code>if result != null { ... }</code> after the assignment).  Null in a boolean context is treated as false, so <code>!</code> is true.  This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... } Even without <code>?? null</code>, a bare <code>1 / 0</code> never halts: it yields null and logs a warning, behaving the same everywhere — development, test, and production. The <code>?? null</code> above just marks the case as handled, which suppresses that warning.</p>
+<p>Division by zero (and other failed operations) produce null when defended with <code>?? null</code> (or <code>if result != null { ... }</code> after the assignment).  Null in a boolean context is treated as false, so <code>!</code> is true.  This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... } Even without <code>?? null</code>, a bare divide never halts: it yields null and execution continues, the same everywhere — development, test, and production.</p>
+<p>The <code>?? null</code> is not what makes that safe, and it silences nothing. loft warns about a divisor that is a literal 0 in your source, while READING your code, and it warns whether or not you wrote <code>?? null</code>; a divisor that is only zero at RUN time is not warned about at all. What <code>?? null</code> changes is the VALUE: loft prints the reason it knows, so an undefended result formats as <code>null(/0)</code>, and coalescing it to a plain null throws that reason away. Reach for <code>?? null</code> when you want the bare null, and for <code>?? &lt;value&gt;</code> when you want a number — not to quiet a warning.</p>
 <pre><code>  zero = <span class="nm">0</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / zero ?? <span class="kw">null</span>), <span class="st">"null from division-by-zero is false-like when defended"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12 / zero}"</span> == <span class="st">"null(/0)"</span>, <span class="st">"an undefended result carries its reason"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12 / zero ?? null}"</span> == <span class="st">"null"</span>, <span class="st">"…and `?? null` trades the reason for a plain null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12</span> &gt; <span class="nm">0</span>, <span class="st">"positive integer is true"</span>);</code></pre>
 <h2 id="bitwise-operators">Bitwise operators</h2>
 <p>While <code>and</code>/<code>or</code> work on true/false values, bitwise operators work on the individual bits of an integer. They are useful for flags, masks, and low-level data manipulation.</p>
@@ -330,14 +357,24 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1.5</span> + <span class="nm">0.5</span> == <span class="nm">2.0</span>, <span class="st">"Float addition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3.0</span> / <span class="nm">2.0</span> == <span class="nm">1.5</span>, <span class="st">"Float division"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2.0</span> * <span class="nm">1.5</span> == <span class="nm">3.0</span>, <span class="st">"Float multiplication"</span>);</code></pre>
-<h2 id="undefined-results-are-null-float">Undefined results are null (<code>float?</code>)</h2>
-<p>Some float operations have no real answer for some inputs: dividing or taking <code>%</code> by zero, <code>sqrt</code> of a negative, <code>ln</code>/<code>log</code> of zero or a negative, <code>asin</code>/<code>acos</code> outside -1..1, or an out-of-domain <code>pow</code>. Rather than crash, Loft yields null for these — so <code>/</code>, <code>%</code>, <code>sqrt</code>, <code>ln</code>, <code>log</code>, <code>pow</code>, <code>asin</code> and <code>acos</code> each produce a NULLABLE float (<code>float?</code>). The null then propagates: any further arithmetic on a null stays null. Discharge it with <code>?? fallback</code> when you need a plain float (just as <code>"1.5" as float?</code> below is a float? you can default).</p>
+<h2 id="undefined-results-are-null-float-but-infinities-are-not-undefined">Undefined results are null (<code>float?</code>) — but infinities are NOT undefined</h2>
+<p>Some float operations have no real answer for some inputs: <code>sqrt</code> of a negative, <code>ln</code>/<code>log</code> of a NEGATIVE, <code>asin</code>/<code>acos</code> outside -1..1, an out-of-domain <code>pow</code>, <code>%</code> by zero, and 0.0/0.0. Rather than crash, Loft yields null for these — so <code>/</code>, <code>%</code>, <code>sqrt</code>, <code>ln</code>, <code>log</code>, <code>pow</code>, <code>asin</code> and <code>acos</code> each produce a NULLABLE float (<code>float?</code>). The null then propagates: any further arithmetic on a null stays null, and <code>?? fallback</code> discharges it when you need a plain float.</p>
+<p>Read the boundary carefully, because it is not "anything unusual is null". Floats keep IEEE INFINITY, and infinity is a value, not a missing one:</p>
+<pre><code>1.0 / 0.0   is  inf        0.0 / 0.0   is  null
+</code></pre>
+<p> -1.0 / 0.0   is -inf        1.0 % 0.0   is  null ln(0.0)     is -inf        ln(-1.0)    is  null</p>
+<p>So a <code>?? fallback</code> does NOT rescue a division by zero the way it rescues a sqrt of a negative — the infinity is not null, sails through the guard, and propagates through every later sum. When a zero divisor is possible, test the DIVISOR rather than defending the result.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"sqrt of a negative is null"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) + <span class="nm">5.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"null propagates through arithmetic"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) + <span class="nm">5.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"null propagates through arithmetic"</span>);
+  fz = <span class="nm">0.0</span>;
+  fp = <span class="nm">1.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{fp / fz}"</span> == <span class="st">"inf"</span>, <span class="st">"a non-zero over zero is an infinity, not a null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((fp / fz) ?? -<span class="nm">1.0</span>) &gt; <span class="nm">1000000.0</span>, <span class="st">"…so `??` does not rescue it"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((fz / fz) ?? -<span class="nm">1.0</span>) == -<span class="nm">1.0</span>, <span class="st">"…while 0.0/0.0 really is null, and `??` does"</span>);</code></pre>
 <p>The <code>f</code> suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.</p>
 <pre><code>  x = <span class="nm">0.1f</span> + <span class="nm">2</span> * <span class="nm">1.0f</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x == <span class="nm">2.1f</span>, <span class="st">"Single precision float"</span>);</code></pre>
-<p><code>as float</code> converts an integer to a float so you can mix them in calculations. Putting a float inside <code>{...}</code> converts it to text for display. You can also go the other way: <code>"1.5" as float</code> parses the text back to a number.</p>
+<p><code>as float</code> converts an integer to a float so you can mix them in calculations. Putting a float inside <code>{...}</code> converts it to text for display. You can also go the other way: <code>"1.5" as float?</code> parses the text back to a number. The <code>?</code> is required — a bare <code>as float</code> on text is refused for the same reason a bare <code>as integer</code> is ("a text parse <code>as float</code> may fail, and a bare cast asserts it cannot"), because the text might not be a number.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span> == <span class="nm">3.0</span>, <span class="st">"Integer to float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1.5"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>? == <span class="nm">1.5</span>, <span class="st">"Text to float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1.5}"</span> == <span class="st">"1.5"</span>, <span class="st">"Float formatted as text"</span>);</code></pre>
@@ -3161,6 +3198,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub interface Ordered</code></pre>
 <p>Types that support the `&lt;` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.</p>
+<p>`boolean` is NOT among them, deliberately: it satisfies Equatable below and has no ordering, so `false &lt; true` is a refusal rather than a convention the language picks for you.  A program that wants it says so — `(a as integer) &lt; (b as integer)`.  Note this is what bounds the null-ordering half of @FR-E-NullArg, which applies to the ORDERED types only; boolean null still compares with `==` like every other scalar.</p>
 <p>ONE method is all a type has to define: inside a generic bounded by this, `&gt;`, `&lt;=` and `&gt;=` all derive from `&lt;` — `a &gt; b` is `b &lt; a`, `a &lt;= b` is `!(b &lt; a)`, `a &gt;= b` is `!(a &lt; b)`.  Each evaluates its operands exactly once.</p>
 </div>
 <div class="item">
