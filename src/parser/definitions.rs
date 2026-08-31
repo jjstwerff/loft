@@ -3204,6 +3204,32 @@ impl Parser {
                 }
             }
             self.lexer.token(",");
+            // An upper bound below zero is not representable: `IntegerSpec::max` is a
+            // `u32`, so a range lying entirely below zero has no encoding.  Say that,
+            // because the `-` otherwise reaches no branch below and the parser desyncs
+            // into *"Expect token )"* — an error about punctuation for a bound the type
+            // system simply cannot carry, which is the same shape the lower bound's
+            // too-wide case was fixed for above.
+            if self.lexer.has_token("-") {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`limit(...)`'s upper bound cannot be negative, so a range lying \
+                         entirely below zero cannot be declared; widen it to zero \
+                         (`limit({min}, 0)`) and check the upper edge in code, or declare \
+                         it plain `integer`"
+                    );
+                }
+                // Consume the digits so the `)` below still lines up and the file's other
+                // errors are reported rather than buried under a cascade.
+                let _ = self
+                    .lexer
+                    .has_integer()
+                    .or_else(|| self.lexer.has_long().and_then(|n| u32::try_from(n).ok()));
+                self.lexer.token(")");
+                return true;
+            }
             // C54.A incremental 2a — accept both Integer and Long literals.
             // Values > i32::MAX tokenise as Long, so u32-range bounds like
             // `limit(0, 4_294_967_294)` work.
