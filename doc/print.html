@@ -1069,7 +1069,8 @@
 </section>
 <section class="print-section" id="11-index">
 <h1>Index</h1>
-<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending. Note: each record can only belong to one index at a time.</p>
+<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending.</p>
+<p>Two keyed collections over the SAME element type are two ROUTES to one set of records, not two collections. Give records to either one and both see them; write through one and the other reads the change; remove through one and it is gone from both. That is the point of declaring a second one — a second way in, by a different key — and loft says so if a literal fills both (<code>linked-group-double-fill</code>), because then one record set ends up holding everything they were given.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
   nr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
@@ -1094,6 +1095,12 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"Key lookup"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">12</span>, <span class="st">""</span>], <span class="st">"Missing key returns null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">83</span>, <span class="st">"One"</span>], <span class="st">"Wrong secondary key returns null"</span>);</code></pre>
+<p>Fewer fields than the key has: every record sharing that prefix.</p>
+<pre><code>  prefix_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> r <span class="kw">in</span> db.map[<span class="nm">83</span>] {
+    prefix_sum += r.value
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(prefix_sum == <span class="nm">12</span>, <span class="st">"the three nr=83 records: {prefix_sum}"</span>);</code></pre>
 <h2 id="iterating-in-order">Iterating in Order</h2>
 <p>A <code>for</code> loop visits all elements in key order.</p>
 <pre><code>  total = <span class="nm">0</span>;
