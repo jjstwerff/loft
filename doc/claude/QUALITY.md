@@ -479,10 +479,19 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 344 | 327 | **17** |
+| 356 | 332 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
+
+⚠ **The row moved from 344 · 327 · 17 to 356 · 332 · 24 with nothing about the code changing,
+and the reason is worth keeping: the census USED TO DEPEND ON FORMATTING.** `DISCRIM` ends in
+`(?:=>|\||\)\s*=)`, and its `|` alternative was matching the first bar of a boolean `||` — so
+`if def.code == Value::Null || f()` counted as discrimination and the same test on its own line
+did not. Rewrapping one condition in `scopes.rs` moved the published total by one. An equality
+test against a variant discriminates on it exactly as a pattern does, and a `Span` defeats it
+the same way, so `EQ_TEST` now recognises it by design rather than by accident. The +12 and the
++7 are sites that were always in scope and never counted; nothing regressed to produce them.
 The figures below the fold were measured against the NARROWER matcher this audit shipped with
 (221 · 211 · 10); B4g says what widening it added, why the backlog grew without anything
 regressing, and which site the measurement then took back off it.

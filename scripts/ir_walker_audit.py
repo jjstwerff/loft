@@ -183,6 +183,18 @@ GUARDED_ARM = re.compile(
     r"(?<![A-Za-z0-9_])Value::([A-Za-z]+)\s*(?:\([^)]*\)|\{[^}]*\})?\s*if\b[^\n]*=>"
 )
 
+# An EQUALITY test — `if def.code == Value::Null`, `if v != Value::Null`.  Comparing against a
+# variant discriminates on it exactly as a pattern does, and a `Span` wrapper defeats it the
+# same way, so it belongs in the same census.
+#
+# It is here because leaving it out did not merely UNDERCOUNT — it made the count depend on
+# formatting.  `DISCRIM` ends in `(?:=>|\||\)\s*=)`, and the `|` alternative matched the
+# FIRST BAR of a boolean `||`: so `if def.code == Value::Null || f()` counted, and the same
+# test written on its own line did not.  Rewrapping one condition in `scopes.rs` moved the
+# published total by one with nothing about the code's shape having changed.  A census whose
+# answer moves when a line is rewrapped cannot be read as open work.
+EQ_TEST = re.compile(r"(?:==|!=)\s*Value::([A-Za-z]+)")
+
 # A binding form — `if let Value::Call(..) = v`, `let Value::Block(bl) = v else`, `while let`.
 # `Value::unspan`'s rule is about *pattern-matching a specific variant*, and these do exactly
 # that: `pre_eval::create_stack_var` decides on `if let Value::Call(d, args) = v` and falls to
@@ -335,6 +347,7 @@ def audit_unspan():
             named = set(DISCRIM.findall(code))
             named |= set(GUARDED_ARM.findall(code))
             named |= set(BINDING_PAT.findall(code))
+            named |= set(EQ_TEST.findall(code))
             named -= {"Span"}
             if named & HOST_ONLY:
                 continue  # a `host::Value` site — that enum has no `Span`
