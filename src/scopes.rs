@@ -2379,24 +2379,20 @@ fn construct_move_rewrite(
     skip: &mut HashSet<u16>,
 ) {
     // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
-    // destination's container var, and the `OpDatabase` encounter order (for the reorder guard).
-    let mut idx = 0usize;
-    let mut db_order: HashMap<u16, usize> = HashMap::new();
-    let mut dest: HashMap<u16, Value> = HashMap::new();
-    let mut ambiguous: HashSet<u16> = HashSet::new();
-    let mut vdb: HashMap<u16, u16> = HashMap::new();
-    let mut container: HashMap<u16, Option<u16>> = HashMap::new();
-    construct_prescan(
-        code,
-        co,
-        con_sources,
-        &mut idx,
-        &mut db_order,
-        &mut dest,
-        &mut ambiguous,
-        &mut vdb,
-        &mut container,
-    );
+    // destination's container var, the `OpDatabase` encounter order (for the reorder guard) and
+    // the control-flow position of the build and of the append (for the run-count guard).
+    let mut sc = ConstructScan::default();
+    construct_prescan(code, co, con_sources, &mut sc);
+    let ConstructScan {
+        db_order,
+        db_path,
+        dest,
+        dest_path,
+        ambiguous,
+        vdb,
+        container,
+        ..
+    } = sc;
 
     // A destination TOUCHED between the source's build and the append cannot take the retarget:
     // the append would move ahead of that access.  `escaping` above guards the SOURCE being read
@@ -2424,6 +2420,20 @@ fn construct_move_rewrite(
                 // the result), and the source may even READ the field (`s.v = s.v[1..]`). Leave the
                 // replace to B1.3d (which moves the clear) or to a copy.
                 && !field_is_cleared(code, &dest[s], co)
+                // The rewrite leaves the element builds where the source is BUILT and DROPS the
+                // append, so the program it produces runs the build as often as the append it
+                // replaced only when the two sit in the same control-flow region.  Where they do
+                // not, the count is simply wrong in whichever direction the region runs: an
+                // append inside a loop ran once per turn and now runs once for the whole loop
+                // (`for i in 0..3 { d.c += s }` grew `d.c` by one copy, not three), and an append
+                // inside a branch NOT TAKEN did not run at all and now always does (`if false {
+                // d.c += s }` appended anyway).  Both answer wrong with nothing said, on both
+                // backends, because this is one shared IR pass (ownership.md O-NoDiverge).
+                // Equality of the whole path, not of its depth: two arms of one `if` are equally
+                // deep and never run together.  ownership.md O-Latest — a binding's ownership
+                // lives at the LOOP DEPTH its assignment was taken at, which no type-level fact
+                // can carry, so the depth has to be measured here.  loft#1243.
+                && db_path.get(&vdb[s]) == dest_path.get(s)
                 && container.get(s).and_then(|c| *c).is_some_and(|cvar| {
                     // The container must PRE-EXIST when the source is built. A FRESH `OpNewRecord`
                     // element (`[Chunk { … }]` → `_elm_N.field += src`) has no `OpDatabase` but is
@@ -2463,33 +2473,55 @@ fn get_field_base(expr: &Value, co: &ConstructOps) -> Option<u16> {
     None
 }
 
+/// Where a statement sits in the control flow: the chain of enclosing regions that run
+/// zero, one, or MANY times — a loop body, an `if` arm, a parallel arm, an iterator's
+/// step.  Every region gets its own id, so two statements carry the same path exactly
+/// when each execution of one is an execution of the other.  That is the question
+/// [`construct_move_rewrite`] has to answer before it may move a build and drop a copy.
+type CfPath = Vec<u32>;
+
+/// What [`construct_prescan`] gathers in one walk of a function body, for
+/// [`construct_move_rewrite`] to filter.
+#[derive(Default)]
+struct ConstructScan {
+    /// `OpDatabase` encounter index per var (first allocation wins) — the build-order guard.
+    db_order: HashMap<u16, usize>,
+    /// Where each var's `OpDatabase` sits: the site the retargeted element builds stay at.
+    db_path: HashMap<u16, CfPath>,
+    /// The one append destination expression per source.
+    dest: HashMap<u16, Value>,
+    /// Where that append sits: the site whose copy the rewrite DROPS.
+    dest_path: HashMap<u16, CfPath>,
+    /// Sources appended into two places — not the clean shape, so not rewritten.
+    ambiguous: HashSet<u16>,
+    /// Source → the backing wrapper it is a view of.
+    vdb: HashMap<u16, u16>,
+    /// Source → the destination's container var, when the destination is a field read.
+    container: HashMap<u16, Option<u16>>,
+    /// Walk state: the `OpDatabase` counter, the region-id counter, and the current path.
+    idx: usize,
+    next_region: u32,
+    path: CfPath,
+}
+
 /// Pass 1 of [`construct_move_rewrite`]: gather the append destination / backing / container /
-/// `OpDatabase` order for every construct source.
-#[allow(clippy::too_many_arguments)]
-fn construct_prescan(
-    node: &Value,
-    co: &ConstructOps,
-    con: &HashSet<u16>,
-    idx: &mut usize,
-    db_order: &mut HashMap<u16, usize>,
-    dest: &mut HashMap<u16, Value>,
-    ambiguous: &mut HashSet<u16>,
-    vdb: &mut HashMap<u16, u16>,
-    container: &mut HashMap<u16, Option<u16>>,
-) {
+/// `OpDatabase` order — and the control-flow position of the build and the append — for every
+/// construct source.
+fn construct_prescan(node: &Value, co: &ConstructOps, con: &HashSet<u16>, sc: &mut ConstructScan) {
     match node.unspan() {
         Value::Call(d, args) => {
             if *d == co.op_database {
                 if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
-                    db_order.entry(*v).or_insert(*idx);
+                    sc.db_order.entry(*v).or_insert(sc.idx);
+                    sc.db_path.entry(*v).or_insert_with(|| sc.path.clone());
                 }
-                *idx += 1;
+                sc.idx += 1;
             } else if *d == co.op_append
                 && let Some(dst) = args.first()
                 && let Some(Value::Var(s)) = args.get(1).map(Value::unspan)
                 && con.contains(s)
             {
-                if dest.contains_key(s) {
+                if sc.dest.contains_key(s) {
                     // ⚠ NOT idempotent, and this function double-visits a spanned node: the
                     // scrutinee above is peeled while `for_each_child` below walks the ORIGINAL,
                     // and that walk sees through a `Span` itself.  A second visit of the SAME
@@ -2498,10 +2530,11 @@ fn construct_prescan(
                     // first-appends in 45 files and exactly ONE mark, which is genuine — it
                     // survives binding the peel.  So the hazard does not fire today; it is one
                     // edit away from firing.  See `sandbox::intrinsic_space` for the shape biting.
-                    ambiguous.insert(*s); // appended into two places — not the clean shape.
+                    sc.ambiguous.insert(*s); // appended into two places — not the clean shape.
                 } else {
-                    container.insert(*s, get_field_base(dst, co));
-                    dest.insert(*s, dst.clone());
+                    sc.container.insert(*s, get_field_base(dst, co));
+                    sc.dest.insert(*s, dst.clone());
+                    sc.dest_path.insert(*s, sc.path.clone());
                 }
             }
         }
@@ -2511,14 +2544,28 @@ fn construct_prescan(
                 && *gd == co.op_get_field
                 && let Some(Value::Var(vd)) = gargs.first().map(Value::unspan)
             {
-                vdb.insert(*s, *vd);
+                sc.vdb.insert(*s, *vd);
             }
         }
         _ => {}
     }
-    node.for_each_child(&mut |c| {
-        construct_prescan(c, co, con, idx, db_order, dest, ambiguous, vdb, container);
-    });
+    // A node whose children do NOT run exactly once with it opens a region, so everything
+    // below carries a path the statements outside cannot match.  Scoped to the whole node
+    // rather than to the arms alone: an `if` CONDITION does run once, but charging it the
+    // region too only ever withholds a rewrite, and this walk visits a span-wrapped node
+    // twice (the ⚠ above), which arm-precise pushes could not survive.
+    let region = matches!(
+        node.unspan(),
+        Value::Loop(_) | Value::If(_, _, _) | Value::Parallel(_) | Value::Iter(_, _, _, _)
+    );
+    if region {
+        sc.path.push(sc.next_region);
+        sc.next_region += 1;
+    }
+    node.for_each_child(&mut |c| construct_prescan(c, co, con, sc));
+    if region {
+        sc.path.pop();
+    }
 }
 
 /// Pass 2 of [`construct_move_rewrite`]: DROP the wrapper/view/prealloc/copy statements and
