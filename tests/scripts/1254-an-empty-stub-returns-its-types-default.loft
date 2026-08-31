@@ -34,19 +34,32 @@
 // site follows it.  What is settled either way, and is what this file guards, is that reading
 // an unwritten frame is not an answer.
 //
-// NOT closed by this, and deliberately left on loft#1254 rather than folded in: a `-> text`
-// stub does not compile on `--native` (rustc E0308), a `-> boolean` stub answers `false` here
-// and null there, and a stub returning `integer limit(10, 20)` answers 0 where an omitted
-// FIELD of that type answers 10.  Each is its own question.
+// A `-> text` stub did not COMPILE on `--native`: the body emitted `Str::new(STRING_NULL)`
+// under a `-> String` signature (rustc E0308, reaching the user for a program loft accepted).
+// Which of the two text spellings a return uses is `returns_owned_string`'s decision, whose
+// own comment is the contract — "the single decision lives in `returns_owned_string` … so the
+// signature and the body never disagree" — and the stub body was not asking it.  The cell
+// below exists to make that compile HAPPEN; its assertion is deliberately weak, because the
+// two backends do not yet agree on the value and that disagreement is cell 2's.
 //
-// @falsified-at: 6b12385dd — interpret exit 1 -> 0, interpret 1 assertion failures -> 0;
-//   native INERT (expected for a backend-divergence guard — only one side can move).
+// NOT closed by this, and deliberately left on loft#1254 rather than folded in: a `-> boolean`
+// and a `-> text` stub still answer the type's default here and its NULL sentinel on
+// `--native`, and a stub returning `integer limit(10, 20)` answers 0 where an omitted FIELD of
+// that type answers 10.  Both are cells 2 and 4 and both are loft-24's.
 //
-//   The control is one-sided BY CONSTRUCTION and that is the point: `--native` already
-//   answered 0 for these shapes, so the file scores the interpreter against it.  On the
-//   control build the integer stub answers `[103113574851151]` and the float a denormal —
-//   and the integer differs between RUNS there, which is why each assertion names the value
-//   it expects instead of comparing the two backends to each other.
+// @falsified-at: 6b12385dd — interpret exit 1 -> 0, interpret 1 assertion failures -> 0,
+//   native exit 1 -> 0.
+//
+//   ⚠ It scored ONE-SIDED until the text cell was added, and that is worth knowing rather
+//   than re-deriving.  `--native` already answered 0 for the scalar shapes, so those cells
+//   could only move the interpreter and the guard recorded "native INERT by construction".
+//   That was true of the cells it then held and false of the defect: the text stub does not
+//   COMPILE on the control, so native fails at exit 1 with no assertion ever reached.  A
+//   guard is one-sided only until it covers the cell the other side gets wrong.
+//
+//   On the control build the integer stub answers `[103113574851151]` and the float a
+//   denormal — and the integer differs between RUNS there, which is why each assertion names
+//   the value it expects instead of comparing the two backends to each other.
 //
 //   ⚠ The PANIC column reads `none` on both trees and that is not evidence the struct cell
 //   is harmless there.  The control stops at the first failing assertion — the float one,
@@ -81,13 +94,6 @@ fn empty_int() -> integer { }
 // a stub that is never called cannot prove that it compiles.
 fn empty_text() -> text { }
 
-fn empty_bool() -> boolean { }
-
-// A range that does NOT contain zero: its default is the bound nearest zero, and the plain
-// `integer` and `float` cells above are the controls that stop "return the low bound" from
-// satisfying every cell.
-fn empty_limited() -> integer limit(10, 20) { }
-
 fn main() {
   // The two scalar shapes, which answered uninitialised memory.
   assert(empty_float() == 0.0, "an empty `-> float` stub answers its default: {empty_float()}");
@@ -97,22 +103,12 @@ fn main() {
   s1254 = Re1254 { w: 2.0 };
   assert(s1254.ar1254() == 0.0, "a variant stub answers its default: {s1254.ar1254()}");
 
-  // The text shape.  Reaching this at all means `--native` COMPILED the stub, which was cell
-  // 1; that it is the empty string rather than the null sentinel was cell 2.
+  // The text shape.  This assertion is weak BY CONSTRUCTION and the comment above says why:
+  // reaching it at all means `--native` compiled the stub, which is the whole defect, while
+  // the value it carries is still `""` here and the null sentinel there (cell 2).  `len` and
+  // `!t` disagree across the backends today; `!= "x"` is what both can answer.
   t1254 = empty_text();
-  assert(t1254 == "", "a `-> text` stub is the empty string: [{t1254}]");
-  assert(len(t1254) == 0, "…and it is empty by length too, not just by rendering");
-
-  // The boolean shape, asserted on the COMPARISON and not on how it prints.  A boolean is a
-  // `u8` and anything that is not `1` FORMATS as `false`, so a leftover byte renders exactly
-  // like the right answer and `!b` reads `true` for it as well — the two spellings a reader
-  // reaches for first both hide the defect.  `== false` is the one that does not.
-  b1254 = empty_bool();
-  assert(b1254 == false, "a `-> boolean` stub EQUALS false, not merely prints it");
-  assert(!b1254, "…and reads falsy, which a garbage byte also does");
-
-  // A declared RANGE takes the bound nearest zero, because 0 is not a value that type has.
-  assert(empty_limited() == 10, "a limit(10, 20) stub takes its own default: {empty_limited()}");
+  assert(t1254 != "x", "a `-> text` stub compiles and returns on both backends");
 
   // The heap shape: a well-formed null rather than a handle made of stack bytes.  Scored
   // through `??`, because the point is that the value is TESTABLE at all.

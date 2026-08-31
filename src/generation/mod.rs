@@ -4959,11 +4959,20 @@ extern crate loft;"
                 )?;
                 // An empty body assigns nothing, so the return takes the type's DEFAULT —
                 // not its null (@FR-E-Uncomp-NN, loft#1254).
-                writeln!(
-                    w,
-                    "  {}",
-                    uninitialised_native_value(def.returned(), &Context::Result)
-                )?;
+                //
+                // Which SPELLING that default takes is `returns_owned_string`'s decision,
+                // and the signature above already asked it; its own doc is the contract —
+                // "the single decision lives in `returns_owned_string` … so the signature
+                // and the body never disagree".  Asking it here too is what stops a `-> text`
+                // stub emitting a `Str` under a `-> String` signature, which rustc rejects
+                // (E0308): a raw compiler error reaching the user for a program loft
+                // accepted (loft#1254).
+                let ctx = if returns_owned_string(def) {
+                    Context::Variable
+                } else {
+                    Context::Result
+                };
+                writeln!(w, "  {}", uninitialised_native_value(def.returned(), &ctx))?;
                 writeln!(w, "}}")?;
             } else if instrument {
                 // Emit shadow call stack instrumentation before the block body.
