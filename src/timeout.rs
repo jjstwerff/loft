@@ -213,6 +213,84 @@ pub fn blocked_on(what: &str) {
     }
 }
 
+/// Time left before the armed deadline, or `None` when no timeout is armed.
+#[must_use]
+pub fn remaining() -> Option<std::time::Duration> {
+    DEADLINE
+        .get()
+        .map(|d| d.saturating_duration_since(Instant::now()))
+}
+
+/// Has this process already reported giving up on `key`?  One report per subject per process.
+///
+/// The resolution is attempted more than once in a run (pass 1 and pass 2 both resolve `use`),
+/// and each attempt legitimately gives up — the second having waited only what was left of the
+/// budget. Printing the full explanation each time turns one fact into a wall, and the second
+/// figure (`after 0.8s`) reads like a different, faster failure.
+pub fn first_giveup_report(key: &str) -> bool {
+    static SEEN: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+    let Ok(mut g) = SEEN.lock() else {
+        return true;
+    };
+    let seen = g.get_or_insert_with(Vec::new);
+    if seen.iter().any(|k| k == key) {
+        return false;
+    }
+    seen.push(key.to_string());
+    true
+}
+
+/// Acquire an advisory file lock, giving up rather than letting the wait consume the run's
+/// budget.  `Err(waited)` means it gave up; the caller reports and fails.
+///
+/// **Why a bounded wait (loft#1238).**  The global native-build lock serialises cold cdylib
+/// builds across processes, which is right.  Under a parallel test runner every process reaches
+/// a stale artifact at once, and the ones at the back of the queue were killed by their own
+/// timeout while still waiting — SIGABRT, `phase=parse`, nothing built, nothing stamped, so the
+/// next attempt repeated it.  An unbounded wait inside a time-budgeted run cannot succeed; it can
+/// only convert a queue into a hard kill.
+///
+/// So when a deadline is armed the wait is bounded by what is left of it, minus a margin big
+/// enough for the caller to report and exit cleanly.  The run still fails — the artifact really
+/// is missing — but it fails SAYING SO, with the lock named and the wait measured, instead of
+/// being aborted mid-queue.
+///
+/// With no deadline armed this blocks exactly as before: an interactive build should wait for
+/// the lock however long the other build takes, because it has no budget to lose.
+///
+/// # Errors
+///
+/// `Err(waited)` when a deadline is armed and the lock was still held with too little budget
+/// left to use it — `waited` is how long this process queued before giving up.
+pub fn lock_within_budget(f: &std::fs::File, what: &str) -> Result<(), std::time::Duration> {
+    let started = Instant::now();
+    let Some(budget) = remaining() else {
+        // Unarmed: the historical behaviour, and the right one — nothing is counting.
+        blocked_on(what);
+        let _ = f.lock();
+        unblocked();
+        return Ok(());
+    };
+    // Leave room to report and unwind. Never more than half the remaining budget, so a short
+    // deadline still gets a real (if brief) attempt rather than an instant refusal.
+    let margin = std::time::Duration::from_millis(1500).min(budget / 2);
+    let deadline = started + budget.saturating_sub(margin);
+    blocked_on(what);
+    loop {
+        if f.try_lock().is_ok() {
+            unblocked();
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            unblocked();
+            return Err(started.elapsed());
+        }
+        // Coarse on purpose: this is a queue measured in seconds, and a tight spin would burn
+        // the CPU the holder needs to finish.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Clear the blocked note set by [`blocked_on`].
 pub fn unblocked() {
     if !ARMED.load(Ordering::Relaxed) {

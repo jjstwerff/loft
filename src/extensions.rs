@@ -2341,9 +2341,25 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         // message said `phase=parse`, which is true and useless.  Now the process that dies here
         // says so in the line that reports its death.
         let waiting = format!("the global native-build lock (for {stem})");
-        crate::timeout::blocked_on(&waiting);
-        let _ = f.lock();
-        crate::timeout::unblocked();
+        // loft#1238 — bounded by the run's remaining budget.  Waiting past the deadline cannot
+        // succeed: the process is killed mid-queue, builds nothing, stamps nothing, and the next
+        // attempt repeats it.  Failing here instead is the same outcome said out loud.
+        if let Err(waited) = crate::timeout::lock_within_budget(f, &waiting) {
+            crate::platform::timing_record("lockgaveup", stem, false, Some(waited.as_secs_f64()));
+            if crate::timeout::first_giveup_report(stem) {
+                eprintln!(
+                    "loft: TRANSIENT — gave up waiting for {waiting} after {:.1}s.\n  \
+                     Another process is building a native library and this run's timeout \
+                     would expire before the queue cleared, so it stopped rather than be \
+                     killed mid-wait.\n  Nothing here is broken or stale in the way the \
+                     next message will suggest: `{stem}`'s cdylib simply had not been \
+                     rebuilt yet. Build it once up front (`loft cache warm`), raise the \
+                     timeout, or re-run once the other build has finished.",
+                    waited.as_secs_f64()
+                );
+            }
+            return None;
+        }
         crate::platform::timing_record(
             "lockheld",
             stem,

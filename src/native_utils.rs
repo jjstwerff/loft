@@ -397,16 +397,28 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
             "the global native-build lock (for the {} wasm runtime rlib)",
             shape.name()
         );
-        loft::timeout::blocked_on(&waiting);
+        // loft#1238 — bounded by the run's remaining budget; see `timeout::lock_within_budget`.
+        let mut gave_up = None;
         crate::platform::timing_exec(
             "lock",
             shape.name(),
             "waiting for the global build lock",
             || {
-                let _ = f.lock();
+                if let Err(waited) = loft::timeout::lock_within_budget(f, &waiting) {
+                    gave_up = Some(waited);
+                }
             },
         );
-        loft::timeout::unblocked();
+        if let Some(waited) = gave_up {
+            eprintln!(
+                "loft: gave up waiting for {waiting} after {:.1}s — another process is \
+                 building it and this run's timeout would expire first.\n  Build it once up \
+                 front (`loft cache warm`), raise the timeout, or re-run when that build has \
+                 finished.",
+                waited.as_secs_f64()
+            );
+            return rlib.exists().then_some(profile_dir);
+        }
     }
     if fresh(&profile_dir) {
         // A process we waited on just produced it.
