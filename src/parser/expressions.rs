@@ -4540,12 +4540,16 @@ use a separate collection or add after the loop"
             && var_nr != u16::MAX
             && self.vars.is_const_binding(var_nr)
         {
+            // `const_report_var` — a mutated text argument is promoted to a `__tp_` local
+            // that inherits the const axis, so the guard fires on a name the author never
+            // wrote (loft#1250).  Ask the one home rather than the raw var here too.
+            let report = self.vars.const_report_var(var_nr);
             diagnostic!(
                 self.lexer,
                 Level::Error,
                 "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(var_nr),
-                self.vars.name(var_nr)
+                self.vars.const_kind(report),
+                self.vars.name(report)
             );
         }
         if !matches!(code, Value::Insert(_)) {
@@ -5631,12 +5635,15 @@ use a separate collection or add after the loop"
         // value-const append via the shared guard.  The `Insert` re-init form is a
         // rebind handled by the `towards_set` check, so skip it here.
         if !matches!(code, Value::Insert(_)) && self.const_write_blocked(var_nr, op) {
+            // `const_report_var` — see loft#1250.  This is the site a `const text`
+            // parameter's `s += "!"` reaches, so it is the one that was naming `__tp_s`.
+            let report = self.vars.const_report_var(var_nr);
             diagnostic!(
                 self.lexer,
                 Level::Error,
                 "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(var_nr),
-                self.vars.name(var_nr)
+                self.vars.const_kind(report),
+                self.vars.name(report)
             );
         }
         if let Value::Insert(ls) = code {
@@ -6411,12 +6418,14 @@ use a separate collection or add after the loop"
         if !self.first_pass {
             let base = lhs_base_var(to, &self.data);
             if base != u16::MAX && self.vars.is_value_const(base) {
+                // `const_report_var` — see loft#1250.
+                let report = self.vars.const_report_var(base);
                 diagnostic!(
                     self.lexer,
                     Level::Error,
                     "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                    self.vars.const_kind(base),
-                    self.vars.name(base)
+                    self.vars.const_kind(report),
+                    self.vars.name(report)
                 );
             } else if let Some(frozen) = self.lhs_frozen_through(to) {
                 // @PLN40 Phase 2 — the write DEREFERENCES THROUGH a value-const field

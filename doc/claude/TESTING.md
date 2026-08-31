@@ -2765,11 +2765,14 @@ another, whose `@falsified-at` records the diagnostic identity instead and says 
 mechanism dies outright still fails an `@EXPECT_ERROR` file on its own unmatched annotation, so
 the control's job is often already done by the harness.
 
-⚠ **`make falsify` cannot render a verdict for an annotation-scored file at all.** A passing
-`@EXPECT_ERROR` guard exits 1, which its exit channel reads as *"THIS TREE IS NOT CLEAN"* — so
-the tool prints NOT FALSIFIED for a guard that is working. Read the control/here pair it prints
-(0 → 1 is the movement you want) and record the real gating channel, `check_diagnostics` in
-`tests/wrap.rs`, in the `@falsified-at` note.
+**`make falsify` scores an annotation-gated file through its EXPECTATIONS, not its exit.** A
+passing `@EXPECT_ERROR` guard exits 1, so the exit channel reads *"THIS TREE IS NOT CLEAN"* on
+both trees and can never move — which is why the tool used to print NOT FALSIFIED for a guard
+that was working. loft#1224 added the `refusals` and `expect` columns for exactly this, so the
+verdict now comes off the one channel that can move: `interpret expectations matched 4/6 -> 6/6`
+is a falsification, and the unmatched cells name themselves. **Read the column, not the
+verdict line alone** — a file whose annotations match on both trees is a file whose control
+does not fire, and the `expect` pair says so where the exit pair cannot.
 
 **The fallback has the same shape as the wrong answer.** `b.c ?? []` on a nullable
 collection field took the wrong branch and answered the empty field: length 0, which is

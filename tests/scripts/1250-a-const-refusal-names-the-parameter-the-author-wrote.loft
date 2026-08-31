@@ -1,0 +1,77 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `const` refusal names the parameter the AUTHOR wrote, at every parameter type
+// (loft#1250).
+//
+// A mutated `text` argument is promoted to a hidden `__tp_<name>` local so a rebind has a
+// slot to write, and the promoted local INHERITS the const axis so the guard still fires on
+// it.  What it does not inherit is a name a reader can find: `fn f(s: const text)` reported
+// *"Cannot modify const parameter '__tp_s'"*, sending the reader to look for a variable that
+// appears nowhere in their program.  Every other parameter type named its parameter
+// correctly, so the one type with a hidden work variable was the one type that lied.
+//
+// `Variables::const_report_var` is the one home for the question — it maps a promoted local
+// back to the parameter it came from and every other variable to itself — and it existed
+// throughout, asked by ONE of the five sites that report a const modification.  The other
+// four read the raw variable.  That is the shape QUALITY.md calls a restated predicate: the
+// home is not wrong, it is simply not asked, and the site that does ask it is the one that
+// happens to be right.
+//
+// The NOUN travels with the name for the same reason.  A promoted `__tp_` local is not
+// marked an argument, so a report against it would also say "const variable" where the
+// author wrote a parameter — the cells below assert the whole sentence, not the name alone.
+//
+// @falsified-at: 4c4a7a56 — interpret expectations matched 4/6 -> 6/6, native expectations
+//   matched 4/6 -> 6/6.  The two unmatched cells on that build are the `const text`
+//   PARAMETER pair, whose message reads `'__tp_s'`; the other four match on both builds and
+//   are what makes this a control rather than a file that simply stopped compiling.
+//   Note the channel: `make falsify` scores this through EXPECTATIONS, not exit — an
+//   annotation-gated file exits 1 while passing, and the `expect` column is what loft#1224
+//   added so a refusal could be scored at all.
+
+struct B1250 { n: integer }
+
+// @EXPECT_ERROR: Cannot modify const parameter 's'
+fn const_text_parameter_names_itself(s: const text) -> text {
+  s += "!";
+  s
+}
+
+// @EXPECT_ERROR: Cannot modify const parameter 's'
+fn const_text_parameter_names_itself_on_a_rebind(s: const text) -> text {
+  s = "z";
+  s
+}
+
+// The three that were already right, kept as the control: they share the diagnostic and not
+// the promotion, so a change that reached the message rather than the name moves them too.
+// @EXPECT_ERROR: Cannot modify const parameter 'a'
+fn const_integer_parameter(a: const integer) -> integer {
+  a += 1;
+  a
+}
+
+// @EXPECT_ERROR: Cannot modify const parameter 'v'
+fn const_vector_parameter(v: const vector<integer>) {
+  v += [1];
+}
+
+// @EXPECT_ERROR: Cannot modify const parameter 'b'
+fn const_struct_parameter(b: const B1250) {
+  b.n = 9;
+}
+
+// A const LOCAL says "const variable", which is the other half of the noun and the cell that
+// fails if `const_report_var` is applied where it does not belong.  The local must not BE the
+// function's returned text: a text local bound to the caller-supplied return buffer occupies
+// an argument slot, and `const_kind` reads that slot rather than the declaration, so it calls
+// such a local a "const parameter" — loft#1252, pre-existing, filed rather than folded in
+// because separating "declared parameter" from "occupies an argument slot" is a flag split
+// and not a message fix.
+// @EXPECT_ERROR: Cannot modify const variable 'u'
+fn const_text_local() -> integer {
+  const u: text = "abc";
+  u = "z";
+  5
+}

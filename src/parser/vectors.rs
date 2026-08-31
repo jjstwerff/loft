@@ -1994,12 +1994,18 @@ impl Parser {
                 // without it the promotion below would quietly hand the closure a
                 // writable cell (the crash it replaced at least failed loudly).
                 if self.vars.is_value_const(v_nr) {
+                    // `const_report_var` — see loft#1250.  `name` is the captured
+                    // spelling, which is the source one here; the KIND still has to come
+                    // from the original, because a promoted `__tp_` local is not marked an
+                    // argument and would demote "const parameter" to "const variable".
+                    let report = self.vars.const_report_var(v_nr);
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Cannot modify {} '{name}' from a closure; remove 'const' or \
+                        "Cannot modify {} '{}' from a closure; remove 'const' or \
                          capture a local copy",
-                        self.vars.const_kind(v_nr),
+                        self.vars.const_kind(report),
+                        self.vars.name(report)
                     );
                     continue;
                 }
