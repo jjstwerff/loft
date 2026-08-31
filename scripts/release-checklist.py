@@ -271,30 +271,168 @@ def check_ci_verdict():
     return OK, f"ALL GATES PASSED at {when}, newer than every source file"
 
 
-def check_reference_pdf():
-    """The reference PDF is not stale against its source.
+# What determines the reference's CONTENT.  `doc/loft-reference.typ` is itself generated
+# by `gendoc`, so comparing the PDF against it answers a question nobody asked: when the
+# real inputs move and nobody re-runs `gendoc`, BOTH derived files stay put and the
+# comparison reads green.  The chain is
+#   tests/docs/*.loft + default/*.loft + gendoc + Cargo.toml
+#     -> doc/loft-reference.typ -> doc/loft-reference.pdf
+# `tests/docs/` is where the prose and every example live (which is why page 1 can claim
+# every example is an executable part of the test suite), `default/` supplies the stdlib
+# API sections, and Cargo.toml supplies the version printed on the title page.
+PDF_INPUTS = [
+    "tests/docs",
+    "default",
+    "src/gendoc.rs",
+    "src/documentation.rs",
+    "Cargo.toml",
+]
 
-    `make-release.sh` copies `doc/loft-reference.pdf` into every bundle when the file
-    exists, and never builds it -- so a PDF older than `doc/loft-reference.typ` ships a
-    reference that does not describe the release, in all four zips, silently.  Unlike
-    the HTML docs, which the tag's `docs` job regenerates from source, nothing rebuilds
-    this one: `make pdf` is a hand-run step (RELEASE.md § 9).
+PDF = os.path.join("doc", "loft-reference.pdf")
+
+
+def check_reference_pdf():
+    """The reference PDF is current against what actually decides its content.
+
+    `make-release.sh` copies this file into every bundle when it exists, and never
+    builds it -- so a stale one ships a reference that does not describe the release, in
+    all four zips, silently.  Unlike the HTML docs, which the tag's `docs` job
+    regenerates from source, nothing rebuilds this: `make pdf` (after `gendoc`) is a
+    hand-run step, RELEASE.md § 9.
     """
-    pdf = os.path.join(ROOT, "doc", "loft-reference.pdf")
-    typ = os.path.join(ROOT, "doc", "loft-reference.typ")
-    if not os.path.isfile(typ):
-        return UNKNOWN, "doc/loft-reference.typ is missing"
+    pdf = os.path.join(ROOT, PDF)
     if not os.path.isfile(pdf):
-        return FAIL, "no doc/loft-reference.pdf — every bundle ships without a reference"
-    pdf_at, typ_at = os.path.getmtime(pdf), os.path.getmtime(typ)
+        return FAIL, f"no {PDF} — every bundle ships without a reference"
+    pdf_at = os.path.getmtime(pdf)
     when = datetime.datetime.fromtimestamp(pdf_at).strftime("%Y-%m-%d %H:%M")
-    if typ_at > pdf_at:
-        src = datetime.datetime.fromtimestamp(typ_at).strftime("%Y-%m-%d %H:%M")
+    src_at, who = newest_mtime(PDF_INPUTS)
+    if src_at > pdf_at:
+        src = datetime.datetime.fromtimestamp(src_at).strftime("%Y-%m-%d %H:%M")
         return FAIL, (
-            f"PDF built {when}, source edited {src} — run `make pdf`, or all four "
-            f"bundles ship a stale reference"
+            f"built {when}, but {who} changed at {src} — run `cargo run --bin gendoc && "
+            f"make pdf`, or all four bundles ship a stale reference"
         )
-    return OK, f"built {when}, newer than doc/loft-reference.typ"
+    return OK, f"built {when}, newer than every input that decides its content"
+
+
+def check_reference_pdf_version(version: str):
+    """The PDF SAYS it is this release.
+
+    Read out of the shipping artifact rather than off its source, because the two can
+    disagree in exactly the case that matters: `gendoc` stamps the title page and the
+    document keywords from `CARGO_PKG_VERSION`, so bumping Cargo.toml without
+    re-running it leaves a PDF headed "Version <previous>" -- correct-looking, freshly
+    dated, and wrong on the one page every reader sees first.  A timestamp cannot catch
+    that; the bytes can.
+    """
+    pdf = os.path.join(ROOT, PDF)
+    if not os.path.isfile(pdf):
+        return FAIL, f"no {PDF}"
+    code, out = sh("pdfinfo", pdf)
+    if code == 127:
+        return UNKNOWN, "pdfinfo not installed (poppler-utils) — cannot read the PDF"
+    if code != 0:
+        return FAIL, f"pdfinfo could not read {PDF}: {out.splitlines()[0] if out else ''}"
+    keywords = ""
+    for line in out.splitlines():
+        if line.startswith("Keywords:"):
+            keywords = line.split(":", 1)[1].strip()
+    tcode, text = sh("pdftotext", "-f", "1", "-l", "1", pdf, "-")
+    on_page = f"Version {version}" in text if tcode == 0 else None
+    if keywords and keywords != f"v{version}":
+        return FAIL, (
+            f"the PDF says it is {keywords}, this release is v{version} — re-run "
+            f"`cargo run --bin gendoc && make pdf` after the version bump"
+        )
+    if on_page is False:
+        return FAIL, f"the PDF's title page does not say `Version {version}`"
+    if not keywords and on_page is None:
+        return UNKNOWN, "could not read a version out of the PDF"
+    return OK, f"the PDF says v{version}, on its title page and in its metadata"
+
+
+def _pdf_text():
+    """The shipped PDF's text, flattened — or a reason it could not be read."""
+    pdf = os.path.join(ROOT, PDF)
+    if not os.path.isfile(pdf):
+        return None, f"no {PDF}"
+    code, out = sh("pdftotext", pdf, "-", timeout=120)
+    if code == 127:
+        return None, "pdftotext not installed (poppler-utils) — cannot read the PDF"
+    if code != 0:
+        return None, f"pdftotext failed on {PDF}"
+    return re.sub(r"\s+", " ", out), ""
+
+
+def check_reference_pdf_content(): 
+    """What is INSIDE the reference, read out of the shipping bytes.
+
+    Regenerating the PDF is the easy half and a timestamp can police it.  This is the
+    other half: a PDF can be freshly built, correctly versioned, and still be missing a
+    chapter -- `documentation::get_topic_sources` builds the topic list with `.ok()` and
+    `filter_map`, so a topic file it cannot read is DROPPED, silently, and the reference
+    simply comes out one chapter shorter.  Nothing downstream notices: the build
+    succeeds, the page count is still four figures, and the missing page is only missing
+    to the reader.
+
+    Three structural questions, each of which can only be answered against the artifact:
+    every topic in the corpus has its heading in the PDF (gendoc emits `@NAME` as the
+    level-1 heading, not `@TITLE`); the Standard Library section is there at all; and no
+    placeholder marker shipped in a document users read offline.
+
+    The stdlib count is EVIDENCE, not a gate.  The reference does not name every
+    `pub fn` -- a good share are documented as methods on their receiver instead -- so
+    "every function appears" would be a false failure, and picking a percentage would be
+    inventing a threshold.  The count is printed instead, where a DROP is visible to
+    whoever reads the line.
+    """
+    text, err = _pdf_text()
+    if text is None:
+        return UNKNOWN, err
+
+    missing = []
+    docs = os.path.join(ROOT, "tests", "docs")
+    for entry in sorted(os.listdir(docs)):
+        if not entry.endswith(".loft") or entry.startswith("00-"):
+            continue
+        path = os.path.join(docs, entry)
+        if not os.path.isfile(path):
+            continue
+        name = None
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("// @NAME: "):
+                    name = line[len("// @NAME: ") :].strip()
+        if not name:
+            missing.append(f"{entry} (no @NAME)")
+        elif name not in text:
+            missing.append(f"{entry} — \"{name}\"")
+    if missing:
+        return FAIL, (
+            f"{len(missing)} topic(s) in tests/docs are NOT in the reference: "
+            + "; ".join(missing[:4])
+            + (" …" if len(missing) > 4 else "")
+        )
+
+    if "Standard Library" not in text:
+        return FAIL, "the reference carries no Standard Library section"
+
+    for marker in ("TODO", "FIXME", "TBD", "not yet implemented"):
+        if marker in text:
+            return FAIL, f"the reference ships the placeholder {marker!r}"
+
+    fns = set()
+    default = os.path.join(ROOT, "default")
+    for entry in sorted(os.listdir(default)):
+        if entry.endswith(".loft"):
+            with open(os.path.join(default, entry), encoding="utf-8", errors="replace") as f:
+                fns.update(re.findall(r"^pub fn (\w+)", f.read(), re.M))
+    named = sum(1 for n in fns if n in text)
+    topics = len([e for e in os.listdir(docs) if e.endswith(".loft") and not e.startswith("00-")])
+    return OK, (
+        f"all {topics} topics present, Standard Library present, no placeholders; "
+        f"{named}/{len(fns)} stdlib pub fns named"
+    )
 
 
 def check_ignored_tests():
@@ -552,8 +690,28 @@ def build_items(version: str, network: bool) -> list[tuple[str, list[Item]]]:
         Item(
             "A-pdf",
             "The reference PDF is current (it ships in every bundle)",
-            "make pdf",
+            "cargo run --bin gendoc && make pdf",
             check=check_reference_pdf,
+        ),
+        Item(
+            "A-pdf-version",
+            "The reference PDF says it is THIS release",
+            "cargo run --bin gendoc && make pdf",
+            check=lambda: check_reference_pdf_version(version),
+        ),
+        Item(
+            "A-pdf-content",
+            "The reference's CONTENT is whole (topics, stdlib, no placeholders)",
+            "cargo run --bin gendoc && make pdf",
+            check=check_reference_pdf_content,
+        ),
+        Item(
+            "M-pdf-read",
+            "Read the reference as a user would",
+            "open doc/loft-reference.pdf",
+            "the automatic checks prove it is whole and current; whether it READS well "
+            "— a new feature explained, a removed one gone, examples that still teach — "
+            "is the half no script can reach, and it ships in all four bundles",
         ),
         Item(
             "A-ignores",
