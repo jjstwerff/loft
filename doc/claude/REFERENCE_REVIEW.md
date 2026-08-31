@@ -77,7 +77,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 |---|---|---|
 | `tests/docs/01-keywords.loft` | 2026-08-31 | `8f851965` |
 | `tests/docs/02-text.loft` | 2026-08-31 | `3e2555fc` |
-| `tests/docs/03-integer.loft` | 2026-08-31 | `c049205e` |
+| `tests/docs/03-integer.loft` | 2026-08-31 | `0c842212` |
 
 ## See also
 
