@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Where a `#cwd` test file's relative paths resolve, under `loft test`, on both backends.
+//
+// `#cwd` opts a program out of the portable-bundle default: a relative path resolves against
+// the PROCESS cwd instead of the program's own directory.  Under `loft test` the interpreter
+// honoured it and native did not — the runner baked `program_relative = true` into every
+// generated test main and chdir'd every spawned test binary to the test file's directory,
+// both unconditionally.  A `#cwd` file was therefore compiled and run as though it had never
+// written the directive, and a fixture that exists answered `NotExists` with no diagnostic:
+// `exists()` returned false for a file that is there.
+//
+// The anchor is pinned from BOTH sides on purpose.  A one-sided check that some repo-root
+// path exists passes under either anchor the moment a file of that name also sits beside the
+// test, and a guard that cannot distinguish the two anchors is not measuring the thing it is
+// named after.  So one cell names a file reachable ONLY from the repo root, and the other
+// names a file reachable ONLY from this directory and requires it to be absent.
+//
+// @falsified-at: 48c808b7d — native exit 1 -> 0, native 1 assertion failures -> 0; interpret INERT
+//   (expected for a backend-divergence guard — only one side can move, and the interpreter side
+//   was the one already right).
+
+#cwd
+
+fn a_cwd_file_resolves_against_the_process_cwd() {
+  // Reachable from the repo root, and NOT from tests/scripts/.
+  assert(exists("tests/example/map.png"), "a repo-root-relative fixture is reachable");
+  png = file("tests/example/map.png");
+  assert(png#format == TextFile, "and it opens: {png#format}");
+  assert((png#size ?? -1) > 0, "with a real size: {png#size ?? -1}");
+}
+
+fn and_not_against_the_files_own_directory() {
+  // This guard's own neighbours are reachable ONLY under the program-relative anchor.  Under
+  // `#cwd` they must be invisible, which is what separates the two anchors: without this cell
+  // a guard passes on a run that quietly re-homed every path.
+  assert(!exists("the-reference-float-boundary-is-where-it-says.loft"),
+         "a sibling script must NOT be reachable by its bare name under #cwd");
+  assert(exists("tests/scripts/the-reference-float-boundary-is-where-it-says.loft"),
+         "the same sibling IS reachable by its repo-root path");
+}

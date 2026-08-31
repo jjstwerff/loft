@@ -1490,9 +1490,17 @@ pub(crate) fn run_tests(
                             // back to passthrough (the process cwd / scratch dir),
                             // so a relative `file("asset")` missed under --native
                             // while passing under the interpreter.
+                            //
+                            // The anchor MODE is the program's own, not a constant:
+                            // a `#cwd` file asks for cwd-relative paths, and baking
+                            // `true` here compiled it as though it had never written
+                            // the directive.  `source_dir` is set either way — it is
+                            // what the `source_dir()` built-in answers, and
+                            // `resolve_path` ignores it when the mode is cwd.
                             writeln!(
                                 buf,
-                                "    {{ let s: &mut Stores = unsafe {{ &mut *cell.get() }}; s.source_dir = Stores::source_dir_native(); s.program_relative = true; }}"
+                                "    {{ let s: &mut Stores = unsafe {{ &mut *cell.get() }}; s.source_dir = Stores::source_dir_native(); s.program_relative = {}; }}",
+                                clean_db.program_relative
                             )
                             .unwrap();
                             writeln!(buf, "    init(&cell);").unwrap();
@@ -1750,10 +1758,14 @@ pub(crate) fn run_tests(
                             }
                             // Run the native test binary with cwd = source_dir so its
                             // raw `std::fs` (e.g. imaging's load_png/save_png) anchors
-                            // where its loft `file()` does — the test codegen always
-                            // sets `program_relative = true`.  Mirrors the in-process
-                            // interpreter guard above + the standalone path in main.rs.
-                            if let Some(dir) = std::path::Path::new(&abs_file).parent() {
+                            // where its loft `file()` does.  Gated on the program's own
+                            // mode, exactly as `enter_source_dir` gates the in-process
+                            // interpreter run: a `#cwd` program anchors loft I/O at the
+                            // cwd, so moving the child would put its raw `std::fs`
+                            // somewhere its `file()` is not.
+                            if clean_db.program_relative
+                                && let Some(dir) = std::path::Path::new(&abs_file).parent()
+                            {
                                 run_cmd.current_dir(dir);
                             }
                             let run_ok = run_cmd.status().map(|s| s.success()).unwrap_or(false);
