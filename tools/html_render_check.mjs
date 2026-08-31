@@ -48,14 +48,14 @@ import process from 'node:process';
 // Together they gate DPI behaviour, which no pixel check can see.
 const args = process.argv.slice(2);
 if (args.length < 1) {
-  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--screenshot PATH] [--port N] [--allow SUBSTRING] [--canvas SELECTOR] [--canvas-min-colors N] [--device-scale-factor N] [--assert EXPR]');
+  console.error('usage: html_render_check.mjs <url> [--wait-ms N] [--ready EXPR] [--screenshot PATH] [--port N] [--allow SUBSTRING] [--canvas SELECTOR] [--canvas-min-colors N] [--device-scale-factor N] [--assert EXPR]');
   process.exit(64);
 }
 const URL_ARG = args[0];
 const opts = {
   waitMs: 8000, screenshot: null, port: 9222, allow: [],
   canvasSelector: null, canvasMinColors: 20,
-  deviceScaleFactor: null, assertExpr: null,
+  deviceScaleFactor: null, assertExpr: null, readyExpr: null,
 };
 for (let i = 1; i < args.length; i++) {
   if (args[i] === '--wait-ms') opts.waitMs = parseInt(args[++i], 10);
@@ -69,6 +69,7 @@ for (let i = 1; i < args.length; i++) {
   // an upscaled canvas logs no error and has plenty of distinct colours.
   else if (args[i] === '--device-scale-factor') opts.deviceScaleFactor = parseFloat(args[++i]);
   else if (args[i] === '--assert') opts.assertExpr = args[++i];
+  else if (args[i] === '--ready') opts.readyExpr = args[++i];
   else { console.error('unknown flag: ' + args[i]); process.exit(64); }
 }
 
@@ -337,7 +338,36 @@ function decodePngRgb(pngBuf) {
     await send('Page.enable');
     await send('Log.enable');
     await send('Page.navigate', { url: URL_ARG });
-    await new Promise(r => setTimeout(r, opts.waitMs));
+    // `--wait-ms` alone is a fixed SLEEP, and a sleep answers a question the caller did not
+    // ask: it says "how long to wait" where the caller means "wait until the page has got
+    // there".  On a loaded runner the difference is a gate that reports the CLAIM as false
+    // when nothing was ever observed — `globalThis.loftFonts` undefined read as "the fonts
+    // resolved", with a message that sent the reader after a font bug.
+    //
+    // `--ready EXPR` polls for the observation to EXIST, up to the same budget, and reports
+    // its own failure kind when it never does.  That keeps the two shapes apart: `ready.timeout`
+    // means the page did not get there, `assert` means it did and the claim is false.
+    let readyReport = null;
+    if (opts.readyExpr) {
+      const deadline = Date.now() + opts.waitMs;
+      let last = null;
+      for (;;) {
+        const ev = await send('Runtime.evaluate', {
+          expression: `(() => { try { return JSON.stringify(!!(${opts.readyExpr})); }
+                                catch (e) { return 'ERR ' + e.message; } })()`,
+          returnByValue: true,
+        });
+        last = ev.result.value;
+        if (last === 'true') break;
+        if (Date.now() >= deadline) {
+          readyReport = { expr: opts.readyExpr, value: last, waited: opts.waitMs };
+          break;
+        }
+        await new Promise(r => setTimeout(r, 50));
+      }
+    } else {
+      await new Promise(r => setTimeout(r, opts.waitMs));
+    }
 
     // Optional screenshot
     if (opts.screenshot) {
@@ -408,6 +438,14 @@ function decodePngRgb(pngBuf) {
 
     // Collect failures
     const failures = [];
+    if (readyReport) {
+      failures.push({
+        kind: 'ready.timeout',
+        text: `--ready ${readyReport.expr} never became true within ${readyReport.waited}ms `
+          + `(last: ${readyReport.value}) — the page did not reach the state the assert is `
+          + `about, so nothing was observed`,
+      });
+    }
     if (assertReport) {
       if (assertReport.error || assertReport.value !== 'true') {
         failures.push({
