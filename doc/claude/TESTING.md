@@ -1361,6 +1361,14 @@ Configuration:
 | Env var | (off) | `LOFT_TIMEOUT=<secs> loft <program.loft>` |
 | Auto-arming under `--tests` / `loft test` | **on, 300s** | `loft --tests <file>` arms 300s unless explicitly overridden |
 
+⚠ **`--tests` takes its path as the next NON-FLAG argument, and it only steps over
+`--native`, `--no-warnings` and `--deny-warnings` on the way.** `--interpret` is not
+in that list, so `loft --tests --interpret <file>` does not run `<file>` — the path
+stays at its default `.` and the WHOLE TREE runs, `target/` included, for many
+minutes. Put the backend flag first (`loft --interpret --tests <file>`) or leave it
+off. The tell is a single-file run that does not finish; the parse site is the
+`--tests` arm in `src/main.rs`.
+
 Implementation lives in `src/timeout.rs` (watchdog thread, deadline atomics,
 breadcrumb store) + checkpoint calls scattered through `src/state/mod.rs`
 (interpreter dispatch), `src/codegen_runtime.rs` (`cr_check_deadline()` injected

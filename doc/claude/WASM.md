@@ -253,6 +253,18 @@ report; the table below is the reference.
 | **`wasm-opt`** (binaryen) | **`--html`** — the `--asyncify` pass that enables frame-yield | **bundle has no frame-yield → render loop HANGS the browser tab** ("page times out", @P337) |
 | `wasmtime` | `wasm32-wasip2` (`--native-wasm`), @P334 | can't run/test the wasip2 backend locally |
 | `wasm-pack` | `make wasm` (doc/pkg gallery + browser playground) | gallery/playground can't rebuild |
+
+⚠ **Editing `default/*.loft` — even one doc-comment — reddens the two
+`engine_host_connector` tests.** `doc/pkg` is a COMMITTED bundle, and
+`scripts/wasm_bundle_stamp.sh` hashes the whole of `default/` along with
+`src/{engine_host,wasm,native,compile}.rs`, `lib/engine_host/src/engine_host.loft`
+and three `doc/` page files. The stamp is a content hash, so it does not care that
+your change was a comment: the tests refuse to run against a bundle whose stamp
+disagrees, with *"doc/pkg was built from a different tree"*. The fix is the one they
+name — `make wasm`, then commit the rebuilt `doc/pkg` **and** `doc/pkg-src.stamp`
+together. Budget ~30 s and a ~4.5 MB re-commit. Before assuming the drift is yours,
+compare the stamp at HEAD against the committed one; the same failure appears when
+someone else's bundle was already stale.
 | `wasm-bindgen` CLI | *bundled by wasm-pack* | **not** needed for `--html` (it uses a raw `extern "C"` bridge, not wasm-bindgen) |
 | a browser (Chromium/Firefox) | real `--html` verification | can only stub-instantiate, not render |
 | rustup targets `wasm32-unknown-unknown` + `wasm32-wasip2` | `--html` / `--native-wasm` | cross-compile fails (E0463) |
