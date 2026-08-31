@@ -7688,10 +7688,48 @@ impl Scopes {
         if def.returns_borrowed_view() && !join_lifts {
             return None;
         }
+        // loft#1257 — and the collection arms need the oracle for the OPPOSITE reason: to
+        // stop lifting, not to start.  A collection return is delivered through a HIDDEN
+        // buffer, so its dep names only hidden attributes and `returns_borrowed_view()`
+        // answers false — *"the callee minted into its own buffer, the caller adopts"*.
+        // Right when the closure mints, wrong when its `??` hands back the caller's
+        // argument, and the proxy cannot tell those apart because they are the same call:
+        // `fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] }` reached the lift, and
+        // the lifted temp then EMPTIED the caller's own vector — `len(some)` reached 0 after
+        // five iterations, with nothing saying so.
+        //
+        // A `Join` whose base the bracket can NAME is exactly *"this may be that caller
+        // variable"*.  The `Reference` / `Enum` arms may still lift it, because
+        // `OpBindOrCopy` settles it per execution; a collection has no such guard, so here
+        // the answer is to decline.
+        //
+        // ⚠ THIS IS A TRADE AND THE COST IS MEASURED: the MINT arm of the same closure goes
+        // back to leaking one store per call (peak 4 -> 403 at N=400), which at scale is a
+        // store-table abort.  Taken deliberately — a leak announces itself and a container
+        // silently emptied does not, which is why `silent-wrong` outranks `sev:`
+        // (`.github/LABELS.md`).  It costs only the JOIN shape: a pure mint classifies
+        // `Owned`, or `Borrowed` of a hidden buffer with no nameable base, and loft#1177's
+        // cells are all pure mints and keep their lift.
+        //
+        // The closure is a WITNESSED lift, and `OpFreeRefIfDistinct` is the right shape for
+        // it — built and measured here.  It fixes `--native` and leaves the interpreter
+        // wrong, because on that side the damage is not the free but the RE-SET: one
+        // iteration is correct, two are not, so the transition-free on `__lift_N`'s
+        // reassignment releases the borrowed store before any scope-exit free runs.  Both
+        // halves are needed, and only the decline is correct on both backends today.
+        //
         // The fn-ref variable's own type is the declared shape; the definition is
         // the authority on what it returns.
         let _ = function;
         let (returned, opt) = def.returned().peel_optional();
+        if !matches!(returned, Type::Reference(_, _) | Type::Enum(_, true, _))
+            && matches!(
+                crate::use_analysis::ownership_of(data, self.d_nr, val),
+                crate::use_analysis::Own::Join { base } if base != u16::MAX
+            )
+        {
+            return None;
+        }
         match returned {
             Type::Reference(d, _) => Some(Self::reopt(opt, Type::Reference(*d, Deps::none()))),
             Type::Enum(d, true, _) => Some(Self::reopt(opt, Type::Enum(*d, true, Deps::none()))),

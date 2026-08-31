@@ -6,9 +6,11 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — a lambda's `??`-default store leaks one store per call where the borrow arm's
+OPEN: **2** — a lambda's `??`-default store leaks one store per call where the borrow arm's
 witness is a CAPTURE or a literal `null` (D-clo-7, below; that entry's value half, its
-BOUND-return leak half and its ARGUMENT-witness half are all closed).
+BOUND-return leak half and its ARGUMENT-witness half are all closed), and the same `??` at a
+COLLECTION return leaks its mint arm because declining the unguarded lift was the only cure
+correct on both backends (D-clo-14).
 
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
@@ -514,6 +516,46 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > which keeps the struct / nested-vector / keyed element types as controls — those are the
 > @PLN93 shapes the tuple row fell outside of, and a fix that took one of them down would be
 > worse than the defect.
+
+> **D-clo-14 — the OVER-FREE closed, the leak it traded for OPEN (2026-09-01, loft#1257).**
+> `g = fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] }` used INLINE inside a LOOP
+> answered `null` and left the caller's own vector EMPTY — `len(some)` reached 0 with nothing
+> saying so, on both backends. Both axes were required: the named twin was right, the bound
+> spelling was right, and one inline call outside a loop was right, so every single-axis probe
+> passed.
+>
+> **The same sentence as D-clo-7, at the collection arm, with the sign reversed.** There the
+> deps proxy called a JOIN a borrow and the mint arm went unowned; here it calls the same JOIN
+> *owned* and the borrow arm gets freed. A collection return is delivered through a HIDDEN
+> buffer, so its dep names only hidden attributes and `returns_borrowed_view()` reads
+> *"minted into its own buffer, the caller adopts"* — right when the closure mints, wrong when
+> the `??` hands back the argument, and those are the same call. `callref_owned_return` then
+> lifts it into a `__lift_N` typed with `Deps::none()`, and an empty dep list is what makes
+> `get_free_vars` emit the free that empties the source.
+>
+> `(O-Oracle)` answers what the proxy cannot: a `Join` whose base the @P290 bracket can NAME is
+> *"this may be that caller variable"*, so the collection arms decline it. The `Reference` /
+> record `Enum` arms still lift, because `OpBindOrCopy` settles it per execution (loft#1248).
+>
+> **OPEN: the mint arm of that same closure now leaks**, one store per call — measured peak 4
+> → 403 at N=400, a store-table abort at scale. Taken deliberately, and the reason is the
+> label doctrine rather than a preference: a leak announces itself and a silently emptied
+> container does not, so `silent-wrong` outranks `sev:`. It costs only the JOIN shape; a pure
+> mint classifies `Owned`, or `Borrowed` of a hidden buffer with no nameable base, and
+> loft#1177's cells all keep their lift.
+>
+> **A WITNESSED lift is the end state, and it was built and measured rather than proposed.**
+> `OpFreeRefIfDistinct` — the machinery `paired_witness` already drives for a work-ref — fixes
+> `--native` and leaves the INTERPRETER wrong. The interpreter's damage is not the scope-exit
+> free but the RE-SET: one iteration is correct and two are not, so the transition-free on
+> `__lift_N`'s reassignment releases the borrowed store before any scope-exit free runs. Both
+> halves are needed, and the next attempt should start from that measurement.
+>
+> Guard: `tests/scripts/1257-a-lifted-collection-return-does-not-empty-its-source.loft`, whose
+> last cell is the TRADE rather than a pass, and whose one- and two-iteration cells are what
+> located the interpreter's half. Falsified at `ca1a829e`. ⚠ Scored by VALUE: the leak channel
+> read `NO leak` on the broken build throughout, because a container emptied by a free of a
+> store that IS freed is not a leak.
 
 > **D-clo-7 — value half CLOSED, leak half OPEN (2026-08-27, loft#1114).** `(L-CapHeap)`
 > says a captured heap value is SHARED. A NULLABLE one was not: `closure_attr_type`
