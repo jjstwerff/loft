@@ -22,16 +22,12 @@
 // marked an argument, so a report against it would also say "const variable" where the
 // author wrote a parameter — the cells below assert the whole sentence, not the name alone.
 //
-// @falsified-at: 4c4a7a56 — interpret expectations matched 4/6 -> 6/6, native expectations
-//   matched 4/6 -> 6/6.  The two unmatched cells on that build are the `const text`
-//   PARAMETER pair, whose message reads `'__tp_s'`; the other four match on both builds and
-//   are what makes this a control rather than a file that simply stopped compiling.
-//   Note the channel: `make falsify` scores this through EXPECTATIONS, not exit — an
-//   annotation-gated file exits 1 while passing, and the `expect` column is what loft#1224
-//   added so a refusal could be scored at all.  That column counts ONE PARSE ROUND
-//   (loft#1253), so it is only exact for a file whose errors all report in one: this one's
-//   do — a direct run ends "aborting due to 6 previous errors" — which is why `4/6` is the
-//   file and not just its first cell.
+// @falsified-at: 4c4a7a56 — interpret exit 1 -> 0, interpret expectations FAIL/6 -> 6/6,
+//   native exit 1 -> 0, native expectations FAIL/6 -> 6/6.  On that build the two `const text`
+//   PARAMETER cells report `'__tp_s'`, so the suite does not accept the file; the other four
+//   match on both builds and are what makes this a control rather than a file that simply
+//   stopped compiling.  `FAIL/6` is the SUITE's verdict and deliberately not a count of
+//   matching cells — see loft#1253, which is why this file is scored through `--tests` at all.
 //
 // Non-vacuity, measured rather than assumed, because a guard made of expected failures is
 // the shape that most easily passes while proving nothing: each of the five distinct

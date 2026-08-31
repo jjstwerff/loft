@@ -2772,18 +2772,22 @@ that was working. loft#1224 added the `refusals` and `expect` columns for exactl
 verdict can now come off a channel that moves: `interpret expectations matched 4/6 -> 6/6` is a
 falsification, and the unmatched cells name themselves.
 
-⚠ **But `expect n/m` counts ONE PARSE ROUND, and the SUITE counts the file (loft#1253).** A
-direct `loft` run stops at *"aborting due to 1 previous error"*; `tests/wrap.rs` does not — since
-loft#1242 it attributes each error to its enclosing function, blanks that cell, re-parses, and
-checks against the UNION of every round. `falsify.sh` runs `loft` directly, so a file whose
-first error aborts the parse reads `expect 1/5` with all five cells matching — a number that is
-not merely incomplete but readable as its own opposite, and a reviewer who trusts it goes and
-repairs four cells that were never broken. Whether YOUR file is affected depends on its shape:
-run it directly and look: six independent `const` refusals all report in one round
-(*"aborting due to 6 previous errors"*), so `4/6 -> 6/6` there is exact. **Until loft#1253
-lands, read `expect n/m` as "the FIRST ROUND matched n" and hand-score a multi-cell refusal
-guard**: replace each expected substring in turn with a word the compiler never prints and check
-the suite fails, then restore it — five for five is the proof falsify cannot yet give you.
+**And the whole file is scored, because the run goes through the SUITE (loft#1253).** An
+annotation-scored guard used to be run as a plain program, on the reasoning that only a direct
+run PRINTS the diagnostic being compared. True, and it does not follow: `Parser::parse` runs
+pass 2 only when pass 1 finished clean, so ONE pass-1 refusal silences every pass-2 diagnostic
+in the file, and a guard mixing the two scored `expect 1/5` with all five cells matching — a
+number not merely incomplete but readable as its own opposite. `tests/wrap.rs` has peeled that
+since loft#1242 (attribute each error to its function, blank that cell, re-parse, check the
+UNION), so `falsify.sh` asks the suite instead of re-deriving it. Under `--tests` the EXIT
+channel moves as well: a file whose declared errors all occur exits 0, one with an unmatched
+declaration exits 1. The column now reads `FAIL/6 -> 6/6` — the suite's verdict and a declared
+count, never a guessed fraction, because a guessed fraction is what did the damage.
+
+**A guard of expected failures still needs its non-vacuity proved by hand**, and falsify cannot
+give you that in either direction: replace each expected substring in turn with a word the
+compiler never prints, check the suite fails, restore it. Five for five is the proof; the
+`@falsified-at` note is the place to record that you ran it.
 
 **The fallback has the same shape as the wrong answer.** `b.c ?? []` on a nullable
 collection field took the wrong branch and answered the empty field: length 0, which is

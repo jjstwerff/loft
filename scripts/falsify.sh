@@ -74,17 +74,24 @@ fi
 # zero-parameter function otherwise.  Picking the wrong one is the failure this tool exists
 # to stop, so it is derived from the file rather than passed in.
 entry_modes() { # <guard> ; sets MODE_I / MODE_N
-  # loft#1224 — an ANNOTATION-SCORED guard is run as a plain program whatever its entry point,
-  # because that is the only mode whose OUTPUT carries the thing being compared.
+  # An ANNOTATION-SCORED guard is run THROUGH THE SUITE, whatever its entry point, because the
+  # suite is the only thing that peels the file the way its annotations are written to be read.
   #
-  # `--tests` does ENFORCE the annotation — a declared error that never occurs is `FAIL
-  # (expected parse error but file parsed cleanly)`, exit 1, measured on all four fn-name ×
-  # has-main shapes.  What it does not do is PRINT the diagnostic: a passing file reports `ok`
-  # and exits 0, and the message text appears zero times.  The channel below matches on that
-  # text, so scored under `--tests` a refusal guard reads identical on both trees — `0/1`, exit
-  # 0 — and every such run was INERT.  The claim is checkable there; it is not COMPARABLE there.
+  # loft#1224 ran these as a plain program instead, reasoning that a direct run PRINTS the
+  # diagnostic while `--tests` consumes it, so only the direct run's output carries the thing
+  # being compared.  The premise is true and the conclusion does not follow, because a direct
+  # run does not see the whole FILE: `Parser::parse` runs pass 2 only when pass 1 finished
+  # clean, so ONE pass-1 refusal silences every pass-2 diagnostic in the file, and a mixed guard
+  # scored `expect 1/5` with all five cells matching (loft#1253).  The suite has peeled that
+  # since loft#1242 — it attributes each error to its enclosing function, blanks that cell and
+  # re-parses, checking the UNION of every round.
+  #
+  # And `--tests` is COMPARABLE after all, on the channel that was thought unusable: a file
+  # whose declared errors all occur exits 0, one with an unmatched declaration exits 1.
+  # Measured on both guard shapes — the mixed one reads 0 -> 0 (genuinely INERT, which the
+  # direct run reported as a misleading `1/5` on both trees) and an all-pass-2 one reads 1 -> 0.
   if grep -qE '@EXPECT_ERROR|@EXPECT_FAIL' "$1"; then
-    MODE_I=(--interpret); MODE_N=(--native)
+    MODE_I=(--tests); MODE_N=(--tests --native)
   elif grep -qE '^[[:space:]]*fn main[[:space:]]*\(' "$1"; then
     MODE_I=(--interpret); MODE_N=(--native)
   else
@@ -113,23 +120,40 @@ build() { # <dir> <target-dir> -> path to binary
 # channel is the diagnostic it declared, and reading only the five above scored it INERT
 # whatever it did (loft#1224).
 
-# How many of a guard's own `@EXPECT_ERROR` / `@EXPECT_FAIL` declarations the run produced,
-# as "matched/declared" — or "-" when the file declares none.
+# What the SUITE made of a guard's own `@EXPECT_ERROR` / `@EXPECT_FAIL` declarations —
+# "<matched>/<declared>" when it accepted them all, "FAIL/<declared>" when it did not, or "-"
+# when the file declares none.
 #
-# This is the channel an annotation-scored guard actually moves, and without it such a guard is
-# unscoreable here: its PASSING answer IS a diagnostic, so the exit code is 1 on both trees and
-# every other channel reads identical, while the thing that changed — whether the declared
-# message was produced at all — goes unread.  The bulk path skips these files for exactly that
-# reason; the single-guard path ran them anyway and called the result INERT (loft#1224).
-expect_channel() { # <guard-path> <output> -> "matched/declared" | "-"
-  local file="$1" out="$2" want matched=0 declared=0
-  while IFS= read -r want; do
-    [ -n "$want" ] || continue
-    declared=$((declared + 1))
-    case "$out" in *"$want"*) matched=$((matched + 1)) ;; esac
-  done < <(sed -n 's/.*@EXPECT_\(ERROR\|FAIL\)://p' "$file" \
-           | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-  if [ "$declared" -eq 0 ]; then echo "-"; else echo "$matched/$declared"; fi
+# Read off the suite's verdict rather than counted here, and that is the whole of loft#1253's
+# fix.  Counting matches in a DIRECT run's output looks equivalent and is not: one pass-1
+# refusal silences every pass-2 diagnostic in the file, so a mixed guard scored `1/5` with all
+# five cells matching — a number not merely incomplete but readable as its own opposite, which
+# sends a reviewer to repair four cells that were never broken.  The suite peels (loft#1242) and
+# already knows the answer; asking it is both correct and less code than re-deriving it.
+#
+# Deliberately NOT a partial count on failure.  The suite reports the file, not the cell, so a
+# fraction here would be a guess in exactly the position where a guessed fraction did the
+# damage.  `FAIL/6 -> 6/6` says what moved without inventing which cells did.
+expect_channel() { # <guard-path> <output> -> "<matched>/<declared>" | "FAIL/<declared>" | "-"
+  local file="$1" out="$2" declared matched
+  declared=$(sed -n 's/.*@EXPECT_\(ERROR\|FAIL\)://p' "$file" | grep -c .)
+  [ "$declared" -eq 0 ] && { echo "-"; return; }
+  matched=$(echo "$out" | sed -n 's/.*(\([0-9]\{1,\}\) expected errors:.*/\1/p' | head -1)
+  if [ -n "$matched" ]; then echo "$matched/$declared"; else echo "FAIL/$declared"; fi
+}
+
+# Does a signature read as a PASSING run?  One home, asked by the single-guard path and the
+# bulk sweep, because they had already drifted: the bulk one compared against the literal
+# `0|0|none|none|0` and `signature` has produced SIX fields since loft#1224 added `expect`, so
+# every guard in every sweep read `here-not-clean` — including a guard measured clean by the
+# single path one line of shell away (loft#1253).  A hand-spelled shape of another function's
+# return value is a restated predicate; this is the same class as the one loft#1250 closed.
+is_clean() { # <signature> -> 0 when the run passed
+  case "$1" in
+    0\|0\|none\|none\|0\|FAIL/*) return 1 ;;
+    0\|0\|none\|none\|0\|*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 signature() { # <binary> <guard-path> <extra-args…> ; "exit|asserts|leak|panic|refusals|expect"
@@ -177,27 +201,28 @@ if [ -n "$BULK" ]; then
       continue
     fi
     while read -r g <&4; do
-      # An annotation-scored file is not run for a verdict at all: the harness reads
-      # `@EXPECT_ERROR` / `@EXPECT_FAIL` and a REFUSAL is its passing answer, so comparing
-      # exit codes across two trees says nothing about whether the file ever caught anything.
-      if grep -qE '@EXPECT_ERROR|@EXPECT_FAIL' "$ROOT/$g"; then
-        printf '%s\t%s\tannotation-scored\t\n' "$g" "$ref"; continue
-      fi
+      # An annotation-scored file used to be skipped here, because run as a plain program its
+      # PASSING answer is a refusal and its exit code is 1 on both trees.  `entry_modes` runs it
+      # through the suite now (loft#1253), where a passing file exits 0 and an unmatched
+      # declaration exits 1 — so it is scoreable like any other and the sweep no longer has a
+      # blind category.
       entry_modes "$ROOT/$g"
       c=$(signature "$SHARED/debug/loft" "$ROOT/$g" --path "$wt/" "${MODE_I[@]}")
       h=$(signature "$HERE" "$ROOT/$g" --path "$ROOT/" "${MODE_I[@]}")
-      if [ "$h" != "0|0|none|none|0" ]; then
+      if ! is_clean "$h"; then
         printf '%s\t%s\there-not-clean\t%s\n' "$g" "$ref" "$h"
       elif [ "$c" = "$h" ]; then
         printf '%s\t%s\tINERT\t%s\n' "$g" "$ref" "$c"
       else
         ch=""
-        for i in 1 2 3 4; do
+        for i in 1 2 3 4 5 6; do
           cf=$(echo "$c" | cut -d'|' -f$i); hf=$(echo "$h" | cut -d'|' -f$i)
           [ "$cf" = "$hf" ] && continue
           case $i in
             1) d="exit $cf -> $hf";; 2) d="$cf assertion failures -> $hf";;
             3) d="leaked $cf -> clean";; 4) d="panicked -> clean";;
+            5) d="$cf stack-store free refusal(s) (BUG #306) -> $hf";;
+            6) d="expectations $cf -> $hf";;
           esac
           [ -n "$ch" ] && ch="$ch, "; ch="$ch$d"
         done
@@ -243,20 +268,18 @@ for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
   # reads as a difference and would score every guard as falsified for the wrong reason.
   # shellcheck disable=SC2086
   h=$(signature "$HERE" "$ROOT/$GUARD" --path "$ROOT/" $args)
-  h_expect=$(echo "$h" | cut -d'|' -f6)
   # loft#1224 — "clean" means the guard PASSES, and for an annotation-scored file passing is a
   # refusal: it exits 1 and prints the message it declared.  Judging it by exit code alone
   # reported THIS TREE IS NOT CLEAN for a guard that was working exactly as written.  So a file
   # that declares expectations is clean when it produced all of them, and every other file is
   # clean when it exits 0 with nothing leaked, asserted, panicked or refused.
+  # An annotation-scored file needs no special case any more.  Under `--tests` its passing
+  # answer is an ORDINARY pass — exit 0, nothing leaked, asserted, panicked or refused — because
+  # the suite consumes the declared diagnostics instead of letting them fail the run.  loft#1224
+  # needed the special case only because the file was run as a plain program, where a passing
+  # refusal guard exits 1; loft#1253 moved it onto the suite and the exception went with it.
   clean_here="ok"
-  if [ "$h_expect" = "-" ]; then
-    [ "${h%%|*}" = "0" ] || clean_here="NOT-CLEAN"
-    case "$h" in *"|none|none|0|-") ;; *) clean_here="NOT-CLEAN";; esac
-    [ "$(echo "$h" | cut -d'|' -f2)" = "0" ] || clean_here="NOT-CLEAN"
-  else
-    [ "${h_expect%/*}" = "${h_expect#*/}" ] || clean_here="NOT-CLEAN"
-  fi
+  is_clean "$h" || clean_here="NOT-CLEAN"
   if [ "$c" = "$h" ]; then
     verdict="INERT — the control and this tree answer the same"
     [ -n "$INERT_SIDES" ] && INERT_SIDES="$INERT_SIDES, "
@@ -278,7 +301,7 @@ for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
         3) d="leaked $cf -> clean";;
         4) d="panicked -> clean";;
         5) d="$cf stack-store free refusal(s) (BUG #306) -> $hf";;
-        6) d="expectations matched $cf -> $hf";;
+        6) d="expectations $cf -> $hf (the suite's verdict, not a count of matches)";;
       esac
       [ -n "$CHANNELS" ] && CHANNELS="$CHANNELS, "
       CHANNELS="$CHANNELS$name $d"
