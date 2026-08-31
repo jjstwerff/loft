@@ -2656,15 +2656,16 @@ fn ok_mutate(v: &vector<Item>, idx: integer, val: integer) {
 }
 ```
 
-Without `&`, element mutations on existing elements are also visible (the DbRef is shared).
-Use `&vector<T>` whenever the function needs to grow the vector: it is the spelling that says
-so in the signature, and a `&` never written through is refused.
+Without `&`, everything done to the CONTENTS is visible to the caller — element writes,
+appends, removes, clears. A heap parameter aliases the caller's value
+([formal/calls.md](formal/calls.md) `F-ParamHeap`, enumerated for containers as `F-ParamGrow`),
+so growing it is a mutation of the shared store rather than a local act.
 
-⚠ A plain (non-`&`) parameter is ALSO observed to grow the caller's vector today — measured on
-both backends, for integer and struct elements alike. This paragraph used to promise the
-opposite ("local to the callee"), and `formal/` settles neither side, so loft#1251 carries the
-measurement and the decision. Until it is settled, write `&` when you mean to grow and do not
-rely on a plain parameter's append staying local.
+`&` buys exactly one thing: a WHOLE-VALUE replacement writes back. `v = [7, 7]` inside a plain
+parameter gives that function a different vector and leaves the caller's alone
+(`F-ParamRebind`); through a `&vector<T>` the caller sees the new vector. So reach for `&` when
+the function REPLACES, not when it appends (loft#1251 — this paragraph previously claimed a
+plain append was local to the callee, which the rules never said).
 
 ### Polymorphic text methods on struct-enum variants
 
