@@ -407,6 +407,14 @@ fn reserve_poison_fires_on_uninit_slot_read() {
 /// a build that always runs.  The dep is the fact the rewrite changed
 /// (`formal/ownership.md` O-Deps), and the work-ref's own dep is asserted beside the slot so a
 /// fix that merely hid the slot would not pass.
+///
+/// `s` holding NO slot is itself the proof the fold still happens, so this cell doubles as its
+/// own control: switch the elision off and `s` is a real local again and the assertion fails.
+/// The RUN-COUNT control belongs to
+/// `tests/scripts/an-appended-source-is-built-as-often-as-the-append-runs.loft` and is not
+/// repeatable here — a loop cell reads the same slot table before and after the loft#1243 fix
+/// (folded-with-a-stale-dep and declined-outright both leave `s` slotted), so a cell of that
+/// shape would pass on the broken build and be a control in name only.
 #[test]
 fn a_retargeted_append_source_is_not_a_runtime_local() {
     let (_state, data) = build(
@@ -438,31 +446,5 @@ fn test() {
         "`{}` still borrows the erased `s`: {:?}",
         vars.name(elm),
         vars.tp(elm).depend()
-    );
-}
-
-/// The CONTROL for the test above: with the append inside a LOOP the fold is declined
-/// (loft#1243), so `s` stays a real local WITH a slot.  Without this cell, disabling the
-/// elision entirely would pass the assertion above.
-#[test]
-fn a_source_the_elision_declines_keeps_its_slot() {
-    let (_state, data) = build(
-        "struct FvBag2 { c: vector<integer> }
-fn test() {
-    d = FvBag2 { c: [1] };
-    s: vector<integer> = [7, 8];
-    for _i in 0..2 { d.c += s; }
-    assert(len(d.c) == 5);
-}",
-    );
-    let fn_d_nr = data.def_nr("n_test");
-    let vars = &data.def(fn_d_nr).variables;
-    let s = (0..vars.count())
-        .find(|&v| vars.name(v) == "s")
-        .expect("no var `s` in n_test");
-    assert_ne!(
-        vars.stack(s),
-        u16::MAX,
-        "the loop declines the fold, so `s` is built for real and must hold a slot"
     );
 }
