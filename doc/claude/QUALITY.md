@@ -2371,7 +2371,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 661 | 310 | 5 | **346** |
+| 663 | 311 | 5 | **347** |
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
