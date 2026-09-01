@@ -3270,3 +3270,88 @@ fn enum_variant_limit_refuses_the_255th() {
          and 0 and 255 are reserved at enum_variant_limit_refuses_the_255th:255:8",
     );
 }
+
+// ── generic bounds refuse exactly what they do not guarantee (Generics-chapter review) ──
+//
+// The reference's table of built-in interfaces was a copy of INTERFACES.md's DESIGN rather
+// than of `default/01_code.loft`, so it promised `-` under `Addable` and all four operators
+// under `Numeric`.  The permitted half is
+// `tests/scripts/the-reference-bounds-permit-what-it-lists.loft`; these are the refusals,
+// as Rust tests rather than `@EXPECT_ERROR` cells so that every one is matched instead of
+// only the first (loft#1261).
+
+/// `Addable` is `+` alone — its declaration carries one method and `-` is not it.
+#[test]
+fn generic_bound_addable_refuses_subtraction() {
+    code!("fn probe<T: Addable>(a: T, b: T) -> T { a - b }\nfn test() { }").error(
+        "generic type T: operator '-' requires a concrete type at \
+         generic_bound_addable_refuses_subtraction:1:47",
+    );
+}
+
+/// `Numeric` is `*` and the unary `-`; `+` belongs to `Addable` and is refused here.
+#[test]
+fn generic_bound_numeric_refuses_addition() {
+    code!("fn probe<T: Numeric>(a: T, b: T) -> T { a + b }\nfn test() { }").error(
+        "generic type T: operator '+' requires a concrete type at \
+         generic_bound_numeric_refuses_addition:1:47",
+    );
+}
+
+/// …and division, which no bound offers at all.
+#[test]
+fn generic_bound_numeric_refuses_division() {
+    code!("fn probe<T: Numeric>(a: T, b: T) -> T { a / b }\nfn test() { }").error(
+        "generic type T: operator '/' requires a concrete type at \
+         generic_bound_numeric_refuses_division:1:47",
+    );
+}
+
+/// An UNBOUNDED T carries no comparison either — the chapter's "you can only assign and
+/// return T" is about `==` as much as about arithmetic.
+#[test]
+fn an_unbounded_generic_refuses_equality() {
+    code!("fn probe<T>(a: T, b: T) -> boolean { a == b }\nfn test() { }").error(
+        "generic type T: operator '==' requires a concrete type at \
+         an_unbounded_generic_refuses_equality:1:45",
+    );
+}
+
+/// A field read needs a concrete type: the bound says which OPERATIONS exist, never which
+/// fields.
+#[test]
+fn a_generic_refuses_field_access() {
+    code!("struct P { f: integer }\nfn probe<T>(a: T) -> integer { a.f }\nfn test() { }").error(
+        "generic type T: field access requires a concrete type at \
+         a_generic_refuses_field_access:2:37",
+    );
+}
+
+/// The type variable has to be reachable from the FIRST argument, because that is what the
+/// call site infers it from.
+#[test]
+fn a_type_variable_must_reach_the_first_parameter() {
+    code!("fn probe<T>(tag: text, x: T) -> T { x }\nfn test() { }").error(
+        "Type variable T must appear in the first parameter — move T to the first parameter \
+         position at a_type_variable_must_reach_the_first_parameter:1:32",
+    )
+    .warning("Parameter tag is never read at a_type_variable_must_reach_the_first_parameter:1:36");
+}
+
+/// A user type that has not defined the bound's operator is refused at the CALL, which is
+/// where the concrete type is known — and the message names the function to write.
+#[test]
+fn a_user_type_missing_the_operator_is_refused_at_the_call() {
+    code!(
+        "struct Pri { value: integer }\n\
+         fn biggest<T: Ordered>(a: T, b: T) -> T { if a > b { a } else { b } }\n\
+         fn test() { r = biggest(Pri{value: 3}, Pri{value: 7}); }"
+    )
+    .error(
+        "'Pri' does not satisfy interface 'Ordered': missing OpLt at \
+         a_user_type_missing_the_operator_is_refused_at_the_call:3:54",
+    )
+    .warning(
+        "Variable r is never read at a_user_type_missing_the_operator_is_refused_at_the_call:3:16",
+    );
+}

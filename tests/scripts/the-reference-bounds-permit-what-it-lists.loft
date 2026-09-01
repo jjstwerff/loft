@@ -1,0 +1,142 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Each generic bound permits exactly the operations the reference lists for it.
+//
+// The Generics chapter's central table named six built-in interfaces and what each one
+// lets you write, and nothing checked it — the chapter's own cells exercised `Ordered` and
+// `Addable` on built-in scalars and no other row.  Three of the six were wrong, all in the
+// permissive direction, which is the direction a reader finds out about from the compiler
+// rather than from the page:
+//
+//     Addable    "addition and subtraction (+, -)"      `-` is REFUSED
+//     Numeric    "all four scalar operators (+,-,*,/)"  `+` and `/` are REFUSED
+//     Scalable   "multiplication by a float factor"     a `scale` METHOD, INTEGER factor,
+//                                                       answering `integer` rather than Self
+//
+// A bound is a promise about what compiles, so its table is checkable in exactly two
+// directions: what it PERMITS (here) and what it REFUSES (`tests/parse_errors.rs`, the
+// `generic_bound_refuses_*` family — a Rust test rather than `@EXPECT_ERROR` cells so that
+// every refusal is matched rather than only the first, loft#1261).
+//
+// The other half the chapter never showed is a USER type under a bound, which is what the
+// interfaces exist for.  The spelling that satisfies one is the operator's own name —
+// `OpLt`, `OpAdd`, `OpMul`, `OpMin`, `OpEq` — and it appeared in no chapter and in no
+// example of INTERFACES.md, whose own illustrations used a `less_than` method that the
+// built-in `Ordered` does not accept.
+//
+// @falsified-at: none — a LOCK.  Every cell passes on the build this was written against;
+//   what was wrong is the page.  The value is directional: a bound quietly GAINING an
+//   operation is not a bug a user reports, so the refusal half in `parse_errors.rs` is
+//   where a regression would show, and this file is what stops the permitted half being
+//   narrowed to match it.
+
+struct Cash { cents: integer }
+fn OpLt(self: Cash, other: Cash) -> boolean { self.cents < other.cents }
+fn OpEq(self: Cash, other: Cash) -> boolean { self.cents == other.cents }
+fn OpAdd(self: Cash, other: Cash) -> Cash { Cash { cents: self.cents + other.cents } }
+fn OpMul(self: Cash, other: Cash) -> Cash { Cash { cents: self.cents * other.cents } }
+fn OpMin(self: Cash) -> Cash { Cash { cents: -self.cents } }
+fn scale(self: Cash, factor: integer) -> integer { self.cents * factor }
+fn to_text(self: Cash) -> text { "{self.cents}c" }
+
+// `Ordered` declares only `<`; the other three comparisons DERIVE from it, so a type that
+// defines one operator gets four.
+fn gb_gt<T: Ordered>(a: T, b: T) -> boolean { a > b }
+fn gb_lt<T: Ordered>(a: T, b: T) -> boolean { a < b }
+fn gb_ge<T: Ordered>(a: T, b: T) -> boolean { a >= b }
+fn gb_le<T: Ordered>(a: T, b: T) -> boolean { a <= b }
+// `Equatable` declares `==`; `!=` derives.
+fn gb_eq<T: Equatable>(a: T, b: T) -> boolean { a == b }
+fn gb_ne<T: Equatable>(a: T, b: T) -> boolean { a != b }
+// `Addable` is `+` and nothing else.
+fn gb_add<T: Addable>(a: T, b: T) -> T { a + b }
+// `Numeric` is `*` and the UNARY `-`.  The binary spelling compiles under this bound and
+// answers `-a`, discarding the second operand (loft#1274) — it is pinned below rather than
+// used, because a guard that leaves a wrong answer unstated is how it stays.
+fn gb_mul<T: Numeric>(a: T, b: T) -> T { a * b }
+fn gb_sub<T: Numeric>(a: T, b: T) -> T { a - b }
+fn gb_neg<T: Numeric>(a: T) -> T { -a }
+// `Scalable` and `Printable` are METHODS, not operators.
+fn gb_scale<T: Scalable>(a: T) -> integer { a.scale(3) }
+fn gb_text<T: Printable>(a: T) -> text { a.to_text() }
+fn gb_interp<T: Printable>(a: T) -> text { "<{a}>" }
+// Bounds combine, and the combination permits both halves.
+fn gb_both<T: Ordered + Addable>(a: T, b: T) -> boolean {
+  s = a + b;
+  s > a
+}
+
+// Every row of the table, on a built-in type.
+fn each_bound_permits_exactly_its_own_operations() {
+  assert(gb_gt(7, 3), "Ordered: `>` derived from `<`");
+  assert(gb_lt(3, 7), "Ordered: `<`");
+  assert(gb_ge(7, 7), "Ordered: `>=` derived");
+  assert(gb_le(3, 3), "Ordered: `<=` derived");
+  assert(gb_eq(4, 4), "Equatable: `==`");
+  assert(gb_ne(4, 5), "Equatable: `!=` derived");
+  assert(gb_add(3, 4) == 7, "Addable: `+`");
+  assert(gb_mul(3, 4) == 12, "Numeric: `*`");
+  assert(gb_neg(5) == -5, "Numeric: unary `-`");
+  // loft#1274, pinned as the WRONG answer it currently gives: the binary `-` binds to the
+  // unary negation and drops its second operand.  When that closes this cell fails, which
+  // is the point — it is the reminder to restate the row in the chapter's table.
+  assert(gb_sub(9, 4) == -9, "loft#1274 changed: binary `-` under Numeric now gives {gb_sub(9, 4)}");
+  assert(gb_sub(3, 10) == -3, "loft#1274: the second operand is discarded, not subtracted");
+  assert(gb_text(7) == "7", "Printable: `to_text`");
+  assert(gb_interp(7) == "<7>", "Printable: interpolation");
+  assert(gb_both(3, 4), "a combined bound permits both halves");
+  // `Scalable` is deliberately absent from this cell: NO built-in type satisfies it
+  // (`'integer' does not satisfy interface 'Scalable': missing scale`), so it is the one
+  // row of the table that exists only for user types.  Its cell is the next function.
+}
+
+// …and the same table on a type the program declares itself, which is the case the chapter
+// never showed and the reason the interfaces exist.
+fn a_user_type_satisfies_a_bound_by_defining_the_operator_function() {
+  small = Cash { cents: 300 };
+  big = Cash { cents: 700 };
+  assert(gb_gt(big, small), "Ordered on a user type");
+  assert(gb_le(small, big), "…and the derived spellings too");
+  assert(gb_eq(small, Cash { cents: 300 }), "Equatable on a user type");
+  assert(gb_ne(small, big), "…and its derived `!=`");
+  // Bound rather than read inline: loft#1273 retains one record per call otherwise.
+  sum = gb_add(small, small);
+  assert(sum.cents == 600, "Addable on a user type: {sum.cents}");
+  prod = gb_mul(Cash { cents: 3 }, Cash { cents: 4 });
+  assert(prod.cents == 12, "Numeric `*` on a user type: {prod.cents}");
+  neg = gb_neg(small);
+  assert(neg.cents == -300, "Numeric unary `-` on a user type: {neg.cents}");
+  // …and the same loft#1274 answer on a user type, which is how it is known to be the
+  // OPERATOR RESOLUTION rather than anything about the built-in scalars.
+  wrong = gb_sub(big, small);
+  assert(wrong.cents == -700, "loft#1274 on a user type: {wrong.cents}");
+  assert(gb_scale(Cash { cents: 5 }) == 15, "Scalable on a user type");
+  assert(gb_text(big) == "700c", "Printable on a user type: {gb_text(big)}");
+}
+
+// One definition, two callers: the operator function a bound looks for is the SAME one the
+// bare operator dispatches to, so satisfying a bound is not a separate stub.
+fn one_definition_serves_the_bound_and_the_bare_operator() {
+  small = Cash { cents: 300 };
+  big = Cash { cents: 700 };
+  assert(small < big, "the bare `<` uses the same `OpLt` the bound asks for");
+  assert(big > small, "…and its derived form");
+  assert(small == Cash { cents: 300 }, "the bare `==` uses the same `OpEq`");
+  joined = small + big;
+  assert(joined.cents == 1000, "the bare `+` uses the same `OpAdd`: {joined.cents}");
+}
+
+// A CONSTANT index is trusted by the type system and is not trusted by the heap: `v[0]`
+// types as `T` and answers null on an empty vector, so the null crosses a return type that
+// says it cannot be there.  The chapter explains why the COMPUTED index is `T?` and this is
+// the half that explanation leaves out.
+fn a_constant_index_still_answers_null_on_an_empty_vector() {
+  filled = [10, 20, 30];
+  ge_first = filled[0];
+  assert(ge_first == 10, "a filled vector answers its element");
+  empty: vector<integer> = [];
+  ge_none = empty[0];
+  assert(!ge_none, "`v[0]` on an empty vector is not null");
+  assert(ge_none == null, "…and it compares equal to null");
+}

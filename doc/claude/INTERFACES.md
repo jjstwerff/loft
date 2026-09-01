@@ -93,7 +93,7 @@ the call site.
 ### Interface declaration
 
 ```loft
-interface Ordered {
+interface Comparable {
     fn less_than(self: Self, other: Self) -> boolean
 }
 
@@ -101,6 +101,10 @@ interface Printable {
     fn to_text(self: Self) -> text
 }
 ```
+
+⚠ The name here is `Comparable` on purpose: the SHIPPED `Ordered` is keyed to `OpLt`, the
+operator form, so a type defining `less_than` does not satisfy it. The method form is for
+interfaces you declare yourself — see the Note under § Bound checking.
 
 `interface` is a new top-level keyword. Each method is a bare signature
 (no body). `Self` is the only type variable allowed inside the interface body.
@@ -115,7 +119,7 @@ spelling that variable's name, and neither library author could see it happen.
 ### Bounded generic function
 
 ```loft
-fn max_of<T: Ordered>(v: vector<T>) -> T {
+fn max_of<T: Comparable>(v: vector<T>) -> T {
     result = v[0];
     for item in v {
         if result.less_than(item) { result = item; }
@@ -148,15 +152,24 @@ fn less_than(self: Priority, other: Priority) -> boolean {
     self.value < other.value
 }
 
-// Priority now satisfies Ordered — no explicit declaration.
+// Priority now satisfies Comparable — no explicit declaration.
 max_of([Priority{value: 3}, Priority{value: 1}, Priority{value: 7}])
 ```
 
-If a method is missing, the compiler reports an error at the call site:
+To satisfy a SHIPPED interface the method is the operator's own name, and one definition
+serves both the bound and the bare operator:
+
+```loft
+fn OpLt(self: Priority, other: Priority) -> boolean { self.value < other.value }
+
+// Priority now satisfies Ordered, and `a < b` works on it as well.
+```
+
+If a method is missing, the compiler reports an error at the call site, naming the one to
+write:
 
 ```
-error: Priority does not satisfy interface Ordered
-  missing: fn less_than(self: Priority, other: Priority) -> boolean
+error: 'Priority' does not satisfy interface 'Ordered': missing OpLt
 ```
 
 ---
@@ -768,7 +781,28 @@ generic constraints rather than classic Go interface values.
 
 ## Standard library interfaces
 
-Phase 1 defines these interfaces in `default/01_code.loft`:
+⚠ **The block below is the DESIGN, not what `default/01_code.loft` contains.** The file
+ships a narrower set, and the reference's Generics chapter copied this list and so promised
+operators the compiler refuses. What actually ships is:
+
+```loft
+pub interface Ordered   { op < (self: Self, other: Self) -> boolean }
+pub interface Equatable { op == (self: Self, other: Self) -> boolean }
+pub interface Addable   { op + (self: Self, other: Self) -> Self }
+pub interface Numeric   { op * (self: Self, other: Self) -> Self
+                          op - (self: Self) -> Self }              // unary negation
+pub interface Scalable  { fn scale(self: Self, factor: integer) -> integer }
+pub interface Printable { fn to_text(self: Self) -> text }
+```
+
+so `-` is not in `Addable`, `+` and `/` are not in `Numeric`, `Scalable` takes an INTEGER
+factor through a method and answers `integer` rather than `Self`, and no built-in type
+satisfies `Scalable` at all. The derived spellings come free: `>`/`<=`/`>=` from `<`, and
+`!=` from `==`. `tests/scripts/the-reference-bounds-permit-what-it-lists.loft` holds the
+permitted half and `tests/parse_errors.rs`'s `generic_bound_*` family the refused half; a
+binary `-` under `Numeric` is loft#1274 and answers `-a`.
+
+The design as originally written:
 
 ```loft
 // Comparison — for sorting and min/max
