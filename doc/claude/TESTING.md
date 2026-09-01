@@ -1437,6 +1437,27 @@ annotations in the tree were inert** (loft#929).  Both are now fatal, and the ch
 even when the file produced NO diagnostics at all — the other way an expectation went
 unlooked-at.
 
+The rule is per ANNOTATION, not per file, and that distinction is the whole of it.  An
+annotation written above a `fn` binds to that function; only one written ahead of every
+`fn`/`struct`/`enum` is file-level.  Both kinds are scored by the same predicate — the
+declared substring must appear in some error the file produced — because a per-function
+site that asked instead whether the file produced *any* error credited every annotation in
+a file that produced one anywhere (loft#1261).
+
+Two directions have to hold, and only together do they mean anything:
+
+* **every ERROR is claimed** by some annotation — this is what catches a diagnostic that
+  was reworded, since the new text matches nothing and is reported as unexpected;
+* **every ANNOTATION is matched** by some error — this is what catches a refusal that
+  stopped being emitted at all.  Nothing else can: the annotation goes unmatched while
+  every error present is still claimed, so the file looks exactly like one that passed.
+
+The second is the one worth the machinery.  A guarantee lapses, the annotation asserting it
+survives, and a suite checking only the first direction goes on reporting that the
+guarantee holds.  `tests/expectation_credit.rs` pins both, and its control row pins that a
+file whose expectations are genuine is still green — without which a harness that refused
+every annotated file would satisfy the rest.
+
 ### An error fixture asserts ONE pass, never both
 
 `Parser::parse` runs pass 2 only when pass 1 finished without an error:
