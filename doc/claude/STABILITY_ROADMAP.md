@@ -625,6 +625,28 @@ CODE.md checklist line with the next CODE.md touch); every M+ design through
 the design protocol; verify-armed before trusting the armed channel's silence
 ([reference: STABILITY_SWEEP § armed-channel restoration](STABILITY_SWEEP.md)).
 
+### Routed from the `2026-09` bug review — the runtime-join TRIGGER, asked six ways (M)
+
+`Scopes::free_vars` decides which return sources are routed through the runtime
+`OpFreeRefIfDistinct` decision instead of a plain scope-exit free, and it decides it in
+**six** places. The 2026-09 bug review collapsed the three that restate one OWNERSHIP
+predicate (onto `Scopes::owns_freeable_store`, IR byte-identical across the corpus). The
+remaining three are not copies — each is a different TRIGGER carrying its own ownership
+test: one takes every `Reference`/`Enum` source once a null arm is reachable and tests
+ownership not at all; one walks the *deps of* a collection source rather than the source;
+one is the inverse, selecting arguments by a hidden attribute.
+
+The predicate underneath all six is **"is this return a runtime join?"** — a question with
+no home, which is why each new shape arrived as a seventh leg (@PLN85 P4-records, loft#936,
+@PLN85 F2, loft#688, loft#1022, then the keyed leg). Twenty-two keyed-collection bugs
+landed in one window and eleven were `silent-wrong`; the join legs are where several of
+them live.
+
+M, not XS: folding the triggers changes which sources are routed, and the corpus cannot
+score that the way it scored the ownership collapse — the IR moves by design. Needs the
+boundary matrix first (null arm × multi-source × hidden-attr buffer × keyed × nullable),
+hand-computed, before any fold. See [BUG_REVIEW.md](BUG_REVIEW.md) § `2026-09`.
+
 ## Red-flag remediation — the live store-lifetime stream (2026-06-21 →)
 
 > **The H-register above is the forward-risk hardening (cleared 2026-06-17). This stream

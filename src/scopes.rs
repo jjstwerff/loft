@@ -5515,6 +5515,37 @@ impl Scopes {
         u16::try_from(idx).is_ok_and(|i| def.returned.depend().contains(&i))
     }
 
+    /// May this function free the store the source `v` names — or does it belong to
+    /// someone else?
+    ///
+    /// Enforces @FR-O-Proxy. The empty dep list is the cheap PROXY for "this binding owns
+    /// its store" and the rule says it is unsound alone, so the two obligations it names
+    /// are discharged together and in one place: the `O-Override` veto (`is_skip_free`,
+    /// whose contract is exactly "no `OpFreeRef` is ever emitted for this binding"), and
+    /// the carve-out that a user PARAMETER belongs to the caller while the promoted NRVO
+    /// buffer is the one argument that is really a local this function minted.
+    ///
+    /// One home because it was written three times inside [`free_vars`](Self::free_vars) —
+    /// once for a record source, once for a keyed one, once for the arm that disagrees
+    /// about ownership — and each copy had to be extended on its own when a new shape
+    /// arrived (loft#688, then loft#1022, then loft#1078 restating the same carve-out a
+    /// third time). The keyed copy never gained the promoted-buffer half at all.
+    ///
+    /// The override consult is new here and is a GUARD rather than a fix: measured across
+    /// `tests/scripts` and `tests/docs`, no `skip_free` binding currently reaches any of
+    /// these sites, so today the obligation holds by accident. It now holds by
+    /// construction.
+    fn owns_freeable_store(
+        &self,
+        function: &crate::variables::Function,
+        data: &Data,
+        v: u16,
+    ) -> bool {
+        function.tp(v).depend().is_empty()
+            && !function.is_skip_free(v)
+            && (!function.is_argument(v) || self.is_promoted_ret_buffer(function, data, v))
+    }
+
     fn free_vars(
         &mut self,
         is_return: bool,
@@ -5628,9 +5659,7 @@ impl Scopes {
                     if matches!(
                         function.tp(v),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
-                    ) && function.tp(v).depend().is_empty()
-                        && (!function.is_argument(v)
-                            || self.is_promoted_ret_buffer(function, data, v))
+                    ) && self.owns_freeable_store(function, data, v)
                         && !null_arm_record_sources.contains(&v)
                     {
                         null_arm_record_sources.push(v);
@@ -5764,13 +5793,14 @@ impl Scopes {
             // that showed the first version of this gate was short.  `return_has_non_source_arm`
             // is the record leg's spelling of the same idea and is kept beside it, for an arm
             // that names no source at all.
+            // A source that is itself a BORROW names what it views, and freeing that
+            // releases the CALLER's store — an over-free where the defect is a leak.
+            // `owns_freeable_store` is that question's one home; this leg asked it with a
+            // parameter carve-out of its own that never gained the promoted-NRVO-buffer
+            // half the record legs above carry.
             let owned_keyed_source = |v: u16| {
                 crate::parser::vectors::is_keyed(function.tp(v))
-                    // A source that is itself a BORROW names what it views, and freeing that
-                    // releases the CALLER's store — an over-free where the defect is a leak.
-                    && function.tp(v).depend().is_empty()
-                    // A parameter belongs to the caller and the callee frees none of it.
-                    && !function.is_argument(v)
+                    && self.owns_freeable_store(function, data, v)
             };
             let keyed_join = crate::parser::vectors::is_keyed(tp.base())
                 && (sources.len() > 1 || return_has_non_source_arm(expr, &sources))
@@ -5791,17 +5821,8 @@ impl Scopes {
                             function.tp(v),
                             Type::Reference(_, _) | Type::Enum(_, true, _)
                         )
-                        || !function.tp(v).depend().is_empty()
+                        || !self.owns_freeable_store(function, data, v)
                     {
-                        continue;
-                    }
-                    // A user PARAMETER belongs to the caller and the callee frees none of
-                    // it.  The promoted NRVO buffer is the one argument that is really a
-                    // local — loft#688's leg names it the same way, by its attribute
-                    // being HIDDEN — and it reaches the borrowing arm with a store this
-                    // function minted.  That leg cannot claim it here because it excludes
-                    // anything in `sources`, and the owning arm puts it there.
-                    if function.is_argument(v) && !self.is_promoted_ret_buffer(function, data, v) {
                         continue;
                     }
                     null_arm_record_sources.push(v);

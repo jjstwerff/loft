@@ -6,7 +6,8 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **2** (D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
+OPEN: **3** (D-own-26, opened 2026-09-01 and narrowed the same day — eleven of the
+seventeen free-deciding proxy sites still do not consult O-Override, measured; D-own-8, 2026-08-24, NARROWED 2026-08-25 to a single cell — an inline-minting
 `match` arm — with every other cell fixed, its Face B CLOSED the same day, and that cell's one
 known SYMPTOM closed 2026-08-26 with the FACT still wrong, loft#1098; and D-own-16, whose
 BOUNDARY was corrected and whose wider half CLOSED 2026-08-30, with three cures measured and
@@ -425,6 +426,36 @@ the emitted block instead, which says so: the wrapper shape contains the `OpGetF
 and the owning shape does not.  Guard:
 `tests/scripts/1121-a-backed-default-does-not-allocate-a-store-it-overwrites.loft`, which scores
 that 0 beside the leak.
+
+### D-own-26 — OPEN (2026-09-01): eleven free-deciding sites never consult O-Override, and the corpus cannot tell
+
+`O-Proxy` states an obligation in so many words: *"A site that FREES on the proxy MUST also
+consult O-Override — otherwise it frees a store someone else owns."* Measured in the 2026-09
+bug review ([BUG_REVIEW.md](../BUG_REVIEW.md)): **38** functions test
+`depend().is_empty()`, **17** of them decide a free, and **6** consult `is_skip_free`. The
+obligation is undischarged at eleven sites.
+
+**What makes it a deviation rather than a bug is that nothing fails.** A probe at every
+push into `free_vars`'s free list, run over `tests/scripts` and `tests/docs`, reported
+**zero** `skip_free` bindings arriving — so today the rule holds by accident, at sites that
+do not ask. A site that frees on the proxy and happens never to meet a marked binding is
+byte-for-byte indistinguishable from one that asks correctly, which is the same invisibility
+`O-Proxy`'s own ⚠ paragraph is about, one level down. It becomes a wrong answer the first
+time a `set_skip_free` call and one of these eleven meet, and the failure is an over-free:
+freeing a store the rule says must never be freed.
+
+**Narrowed on the day it opened.** Three of the seventeen were folded onto
+`Scopes::owns_freeable_store`, which discharges the override consult and the parameter
+carve-out together; emitted IR was verified byte-identical across all 1052 corpus files, so
+the fold changed nothing and the guard is now structural at those three. The remaining
+eleven are the open half.
+
+**Closing it needs a check, not eleven edits.** The honest cure is a way to fail a build in
+which a free-deciding site reads the proxy without the veto — the sites are recognisable
+(`depend().is_empty()` reaching an `OpFreeRef` decision), and enumerating them by grep is
+what produced the numbers above. Until such a check exists, each new free site restates the
+obligation or silently skips it, which is how the count went from the 24 written into
+`ownership.md` to 38.
 
 ### D-own-16 — OPEN, NARROWED 2026-08-30 (2026-08-27): a value that READS the local it assigns never frees the store it displaces
 

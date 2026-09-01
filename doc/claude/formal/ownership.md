@@ -142,12 +142,28 @@ for; `is_skip_free` is the patch that makes the stand-in safe at a free site; an
 `owned_refs` carries the two things a type cannot — *which* assignment, and *how deep in
 loops* it happened.
 
-⚠ **The reason to write this down is that the choice is currently invisible.** 24 functions
+⚠ **The reason to write this down is that the choice is currently invisible.** 38 functions
 test `depend().is_empty()`; some legitimately want the proxy (they are asking "is this a
 view?", not "may I free it?"), some memo the oracle, and some free. Nothing in the source
 distinguishes them, so a reader cannot tell a site that correctly reads one fact from a site
 that reached for the wrong one — and both compile. `O-Proxy`'s "MUST also consult
 O-Override" is the first checkable obligation in that space.
+
+**Seventeen of the 38 decide a free, and six of those consult the override.** Measured in
+the 2026-09 bug review ([BUG_REVIEW.md](../BUG_REVIEW.md)), which converted the largest
+group: `Scopes::owns_freeable_store` is now the one home for *"may this function free the
+store this source names?"*, discharging both obligations together — the `is_skip_free` veto
+and the carve-out that a user PARAMETER belongs to the caller while the promoted NRVO buffer
+is the one argument that is really a local. It replaced three copies inside `free_vars`,
+extended separately by loft#688, loft#1022 and loft#1078; the keyed copy never gained the
+promoted-buffer half at all.
+
+⚠ **And the obligation was holding by ACCIDENT, not by construction.** Before the fold, none
+of those three consulted `is_skip_free` — and the corpus never noticed, because no
+`skip_free` binding currently reaches them (measured over `tests/scripts` and `tests/docs`,
+zero hits). A site that frees on the proxy and happens never to meet a marked binding is
+indistinguishable from one that asks correctly, which is the same invisibility this section
+is about, one level down. The remaining eleven free-deciding sites are in that state now.
 
 ⚠ This does **not** re-open `D-own-1` (CLOSED: *"every free/copy/move reads `deps`"*). That
 remains true in the letter — these sites do read `deps`. What was never true is the
@@ -157,7 +173,8 @@ implication that reading `deps` is *sufficient*.
 
 ## Deviations
 
-**OPEN: 2.**
+**OPEN: 3.**
+- **D-own-26** — eleven free-deciding proxy sites never consult `O-Override` (measured; three folded onto `Scopes::owns_freeable_store` the day it opened)
 - **D-own-16** — a value that READS the local it assigns never frees the store it displaces
 - **D-own-8** — a Join's ownership fact is true on one path only
 

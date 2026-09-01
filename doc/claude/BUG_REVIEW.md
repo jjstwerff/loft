@@ -179,8 +179,10 @@ the NEXT cycle's step 5, which is what keeps the claim honest.
 | Cycle | Bands reviewed | Class named | Disposition | Payoff (filled next cycle) |
 |---|---|---|---|---|
 | `2026-08` | #246–#1029 (334 bugs) | tuple / generic / null → one root: the type-variable fact | **Collapse ×5, landed** ([Cluster F](STABILITY_REDFLAGS.md)): the deferred-marker walk onto `Value::for_each_child_mut`, `type_mentions_tv` onto `Type::contains_def`, the `__nullable<S>` eligibility onto one predicate, the tuple emitter's owned-text split, and `tuple_has_text_leaf` peeling `Optional`. One residual, characterised and unfixed. | **NO EFFECT.** Across the 26 bugs filed after the pass's own watermark (#1030–#1078), measured against the 100 immediately before it: generic/monomorph **6.4 % → 19.2 %**, tuple **12.8 % → 19.2 %**, null/sentinel **17.9 % → 15.4 %**. Two of the three named classes got LOUDER. Read below — the premise was not wrong, it was too coarse. |
-| `2026-08` (2nd) | #1030–#1078 (26 bugs) | generic/monomorph — still rising, and the titles name one mechanism: the type VARIABLE's layout / null / route used where the instantiation's belongs | **Collapse + check, landed.** `TYPEVAR_ROW_PREFIX` gets one home used by both the site that MINTS the row and the site that refuses it; `Stores::enum_parent_size` — the one call every record allocation makes with the type row in hand — now refuses to allocate a record with a type variable's row. | — |
-| `2026-08` (3rd) | #1096–#1123 (27 bugs, two checkouts in one window) | **rules the code does not represent** — 179 of 255 `@FR-` rules have no citation site, and of the 76 that do, 21 are enforced from 2+ files (`@FR-L-Null` from **13 sites across 8 files**). 14 of the 27 bugs name null/`??`/sentinel/absent. | **Queue, not a sweep.** Per uncited rule: evaluate its sites → de-duplicate onto one home → fix what the disagreement was causing → *then* cite. Starting at `@FR-L-Null`'s thirteen sites. Plus a MODE change: start from a defect, not a screen — measured 24 `Fixes` vs 2 across the two checkouts' original commits in the same window. | — |
+| `2026-08` (2nd) | #1030–#1078 (26 bugs) | generic/monomorph — still rising, and the titles name one mechanism: the type VARIABLE's layout / null / route used where the instantiation's belongs | **Collapse + check, landed.** `TYPEVAR_ROW_PREFIX` gets one home used by both the site that MINTS the row and the site that refuses it; `Stores::enum_parent_size` — the one call every record allocation makes with the type row in hand — now refuses to allocate a record with a type variable's row. | **PAID OFF.** Measured after its own watermark (#1079+, 151 bugs) against the 90 before it: generic/monomorph **15.6 % → 4.0 %**. The one conversion of the three that moved its class, and the contrast with the row below is the lesson: this one landed a REFUSAL at the point every escape ends up, rather than folding another site onto a fact. |
+| `2026-08` (3rd) | #1096–#1123 (27 bugs, two checkouts in one window) | **rules the code does not represent** — 179 of 255 `@FR-` rules have no citation site, and of the 76 that do, 21 are enforced from 2+ files (`@FR-L-Null` from **13 sites across 8 files**). 14 of the 27 bugs name null/`??`/sentinel/absent. | **Queue, not a sweep.** Per uncited rule: evaluate its sites → de-duplicate onto one home → fix what the disagreement was causing → *then* cite. Starting at `@FR-L-Null`'s thirteen sites. Plus a MODE change: start from a defect, not a screen — measured 24 `Fixes` vs 2 across the two checkouts' original commits in the same window. | **NO EFFECT.** After its watermark (#1124+, 108 bugs) against the 95 before: null/sentinel **17.9 % → 25.0 %**, the largest class in the window. `@FR-L-Null` went from 13 sites across 8 files to **34 across 15** — the walk CITED, and citing is the receipt, not the conversion. A rule gains nothing by being pointed at from more places; what retires its bugs is the sites agreeing, and no site was removed. |
+
+| `2026-09` | #1124–#1259 (108 bugs) | **keyed collections** — the biggest riser in the window (+14.1pp, 6 → 22 bugs, **11 of them `silent-wrong`**), and the titles name one mechanism rather than a subsystem: who owns a keyed collection's STORE, answered per SPELLING — literal, parameter, return, join arm, variant field, tuple element, capture, nullable. Routing says a code keystone, not a rule: 21 `contract:settled` against 1 `strained`, so the rules were already right and the code kept missing them. | **Collapse, landed.** `Scopes::owns_freeable_store` — the keystone already existed as `@FR-O-Proxy`, whose two obligations (the `is_skip_free` veto, and the parameter carve-out that exempts the promoted NRVO buffer) were written out THREE times inside `free_vars` and extended separately by loft#688, loft#1022 and loft#1078; the keyed copy never gained the promoted-buffer half at all. Emitted IR verified **byte-identical across all 1052 corpus files**. The override consult is a GUARD, not a fix: measured, no `skip_free` binding reaches these sites today, so the obligation held by accident and now holds by construction. | — |
 
 ### Why `2026-08` read NO EFFECT — the premise was too coarse, not wrong
 
@@ -219,7 +221,31 @@ Retrospective entries, measured when the protocol was written rather than by a p
 | Cycle | Class | Keystone landed | Payoff |
 |---|---|---|---|
 | `2026-06` | narrow-int / width | `IntegerSpec::range_to_width` | **9.6 % → 2.0 %** — the one measured payoff so far |
-| `2026-07` | keyed collections | `Stores::for_each_owned_child` | cannot judge — the class had no bugs before it landed |
+| `2026-07` | keyed collections | `Stores::for_each_owned_child` | **still abstains on the fall, and now says something else.** The class had nothing to fall from, so no fall can be demonstrated — but it has since produced 22 bugs in one window, so the keystone did not PREVENT the class once consumers started exercising it. Those two are different claims and only the first is what the abstain rule protects. |
+
+### `2026-09` — what the pass did NOT do, and why
+
+The conversion collapsed **three** of the six places `free_vars` decides which sources are
+routed through the runtime `OpFreeRefIfDistinct` decision. The other three are left alone
+deliberately, and they are not copies of the same predicate:
+
+- one tests neither ownership nor deps (it takes every `Reference`/`Enum` source once a null
+  arm is reachable),
+- one walks the *deps of* a collection source rather than the source,
+- one is the INVERSE — arguments only, selected by a hidden attribute.
+
+Each is a different TRIGGER wearing a different ownership test, so folding them needs the
+trigger question answered first: *when is a return a runtime join?* That is one predicate
+asked six ways, it is M-sized, and it is routed to
+[STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) rather than attempted here. Collapsing the
+three that genuinely restate one predicate is the conversion; collapsing six triggers that
+merely look alike would have changed behaviour the corpus cannot check.
+
+⚠ **The measurement that made this safe is worth reusing.** A behaviour-preserving collapse
+in the ownership path is provable, not arguable: build the pre-change binary in a detached
+worktree and diff `loft introspect` over the whole corpus. 1052 files, zero differences. Do
+it with `--path <tree>/` on BOTH sides — without it the control cannot find its stdlib and
+every file "differs", which reads as a catastrophic regression rather than a missing flag.
 
 ### `2026-08` (3rd) — what MODE produced the bugs, measured across two checkouts
 
