@@ -2776,8 +2776,9 @@ if !result.ok() { println("delete failed"); }
 ```
 
 `FileResult` variants: `Ok`, `NotFound`, `PermissionDenied`, `IsDirectory`,
-`Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
-`set_file_size`.
+`NotEmpty`, `Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`, `rmdir`,
+`set_file_size`.  `NotEmpty` is `rmdir`'s alone, and it has its own variant because
+it is the one failure a caller can act on: empty the directory and retry.
 
 There are no hidden exception paths — every function's failure mode is visible
 at the call site.  `assert` and `panic` are for programmer errors (bugs), not

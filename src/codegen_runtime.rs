@@ -4819,6 +4819,12 @@ const FS_NOT_FOUND: i64 = 1;
 const FS_PERMISSION_DENIED: i64 = 2;
 #[cfg(not(host_fs))]
 const FS_IS_DIRECTORY: i64 = 3;
+// loft#1256 — `rmdir` refused because the directory still holds entries.  Its own code
+// because it is the one failure a caller can ACT on: empty the directory and retry.  Folding
+// it into `FS_OTHER` would leave the only recoverable case indistinguishable from the
+// unrecoverable ones.
+#[cfg(not(host_fs))]
+const FS_NOT_EMPTY: i64 = 4;
 
 /// Classify a filesystem mutation's result into an `FS_*` code.  `dir_is_err`
 /// asks for the "target is a directory" failure to be reported as
@@ -4845,6 +4851,45 @@ fn fs_classify(r: std::io::Result<()>, path: &str, dir_is_err: bool) -> i64 {
                 std::io::ErrorKind::PermissionDenied => FS_PERMISSION_DENIED,
                 _ => FS_OTHER,
             }
+        }
+    }
+}
+
+/// Remove the EMPTY directory `path`.  Returns an `FS_*` code (mapped to `FileResult` by the
+/// `rmdir` wrapper).
+///
+/// Empty directories only, deliberately: a recursive removal is the sharpest tool a
+/// filesystem API has, and it deserves its own decision rather than arriving inside the
+/// primitive that closes the create/remove asymmetry.  A caller that wants one writes the
+/// walk with `list_dir` and this.
+///
+/// "Not empty" is detected by STATTING rather than by `ErrorKind::DirectoryNotEmpty`, for the
+/// reason the `IsADirectory` comment above gives: that variant stabilised in Rust 1.83, and
+/// this file is recompiled by the USER's rustc for `--native`.  The kind is consulted first
+/// so a genuine permission error on a non-empty directory keeps its own answer.
+pub fn fs_rmdir(path: &str) -> i64 {
+    #[cfg(host_fs)]
+    {
+        // The browser host bridges `mkdir` but has no `rmdir` counterpart, so this refuses
+        // rather than reporting a removal that did not happen — `FileResult.Other`, which the
+        // enum's own doc already names as the wasm host's catch-all.
+        let _ = path;
+        FS_OTHER
+    }
+    #[cfg(not(host_fs))]
+    {
+        match std::fs::remove_dir(path) {
+            Ok(()) => FS_OK,
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => FS_NOT_FOUND,
+                std::io::ErrorKind::PermissionDenied => FS_PERMISSION_DENIED,
+                _ if fs_is_dir(path)
+                    && std::fs::read_dir(path).is_ok_and(|mut d| d.next().is_some()) =>
+                {
+                    FS_NOT_EMPTY
+                }
+                _ => FS_OTHER,
+            },
         }
     }
 }

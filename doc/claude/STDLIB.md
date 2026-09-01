@@ -590,7 +590,7 @@ regardless of where it was launched from — "program + assets" is a portable
 bundle.  **Absolute paths are never rewritten.**
 
 This applies uniformly to every path-taking operation — `file()`, `exists()`,
-`read_file`/`write_file`, the `File` methods, `delete`/`move`/`mkdir`/`mkdir_all`,
+`read_file`/`write_file`, the `File` methods, `delete`/`move`/`mkdir`/`mkdir_all`/`rmdir`,
 and image loads — so they all agree on where a relative path points.
 
 **Opting into cwd-relative (CLI tools).** A program that takes a *user-supplied*
@@ -784,6 +784,7 @@ loft-level existence check.
 | `move(from: text, to: text) -> FileResult` | Renames or relocates a file. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
+| `rmdir(path: text) -> FileResult` | Removes an EMPTY directory; `NotEmpty` when it still holds entries. A recursive removal is the caller's walk — `list_dir`, `delete`, then `rmdir` deepest-first. |
 | `is_dir(path: text) -> boolean` | Returns `true` if the path exists and is a directory. |
 | `is_file(path: text) -> boolean` | Returns `true` if the path exists and is a regular file. |
 | `list_dir(path: text) -> vector<text>` | Entry names (base names, sorted) of a directory; empty when not a readable directory. |

@@ -41,6 +41,27 @@ fn main() {
   // asserted here: CI may run as root, which bypasses the permission check.)
   assert(delete("test_loft_fr_dir") == FileResult.IsDirectory, "delete directory -> IsDirectory");
 
+  // --- rmdir() returns FileResult, and this test now cleans up after itself ---
+  // loft#1256: until `rmdir` existed there was no way to remove a directory, so this file
+  // left `test_loft_fr_dir/a/b` on disk on EVERY run and only looked idempotent because
+  // `mkdir_all` is.  The removal is deepest-first, which is the walk the primitive is meant
+  // to make writable.
+  assert(rmdir("test_loft_fr_dir") == FileResult.NotEmpty, "rmdir a non-empty dir -> NotEmpty");
+  assert(rmdir("test_loft_fr_dir/a/b").ok(), "rmdir the deepest level");
+  assert(rmdir("test_loft_fr_dir/a").ok(), "rmdir the middle level");
+  assert(rmdir("test_loft_fr_dir").ok(), "rmdir the root of it");
+  assert(rmdir("test_loft_fr_dir") == FileResult.NotFound, "rmdir an absent dir -> NotFound");
+  assert(!exists("test_loft_fr_dir"), "the directory tree is gone");
+  // A FILE handed to rmdir is not a directory question, so it is Other rather than a
+  // silent success — the mirror of delete()'s IsDirectory above.
+  {
+    fdir = file("test_loft_fr_notadir.txt");
+    fdir += "x";
+  }
+  assert(rmdir("test_loft_fr_notadir.txt") == FileResult.Other, "rmdir a FILE -> Other");
+  assert(exists("test_loft_fr_notadir.txt"), "and the file is still there");
+  assert(delete("test_loft_fr_notadir.txt").ok(), "clean up the file");
+
   // --- move() returns FileResult ---
   {
     f2 = file("test_loft_fr.txt");

@@ -518,6 +518,21 @@ mint arm owned by nobody, released only at the caller's frame exit, so a loop hi
 answer share one predicate, `use_analysis::callref_join_first_bind` — the deps strip and both
 backends' guard, which must agree or the strip frees what no guard protects.
 
+**The sibling trap is TWO NUMBERING SPACES over one value.** A callee's parameters have an
+ATTRIBUTE index and a VARIABLE number, and they are not the same: in the closure loft#1248's
+capture half is about, `__closure` is variable **3** and attribute **2**. `caller_arg_base`
+indexes attributes and is right to; the capture lookup beside it had to index variables. An
+attr-indexed read into variable space does not fault — it reads OUT OF RANGE and returns the
+safe-looking answer, so it fails silently in precisely the case it exists for, and the
+"decline" it produces is indistinguishable from a correct one.
+
+This is a recurrence rather than a one-off: callers lower arguments in ATTRIBUTE order while
+callees slot them in VARIABLE order, and a retired argument variable has silently swapped two
+slots before. The rule: **when two numbering spaces coexist over one value, a test that
+consults only one is consistent with itself and proves nothing.** The probe that prints BOTH
+side by side is the only one that separates them — here it printed the variable's name and the
+whole attribute list, and the disagreement was immediate.
+
 **The general form, which is worth more than the instance: a predicate whose job is to
 WITHHOLD a licence must not fail open.** `_ => Own::Owned` is the permissive answer in a
 three-valued verdict where two of the three values mean "do not free" — so the shape the

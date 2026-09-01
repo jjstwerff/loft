@@ -306,6 +306,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     call_ref,
     mkdir,
     mkdir_all,
+    rmdir,
     reverse_vector,
     sort_vector,
     coroutine_create,
@@ -2574,6 +2575,12 @@ fn mkdir(s: &mut State) {
 fn mkdir_all(s: &mut State) {
     let v_path = s.string();
     let new_value = codegen_runtime::fs_mkdir_all(&s.database.resolve_path(v_path.str()));
+    s.put_stack(new_value);
+}
+
+fn rmdir(s: &mut State) {
+    let v_path = s.string();
+    let new_value = codegen_runtime::fs_rmdir(&s.database.resolve_path(v_path.str()));
     s.put_stack(new_value);
 }
 
