@@ -32,6 +32,11 @@ fn run(tag: &str, src: &str) -> String {
         .current_dir(&root)
         .args(["--interpret", "p.loft"])
         .env("LOFT_TIMEOUT", "120")
+        // The probes read the panic hook's own output.  A Rust backtrace prints frames
+        // spelled `at <path>:<line>:<col>` too, so leaving this to the harness makes the
+        // rows below answer differently under `RUST_BACKTRACE=1` — which every CI
+        // workflow here sets.
+        .env("RUST_BACKTRACE", "0")
         .output()
         .expect("run loft");
     let text = format!(
@@ -43,9 +48,15 @@ fn run(tag: &str, src: &str) -> String {
     text
 }
 
-/// The `at` line the panic hook prints, if any.
+/// The loft source position the panic hook prints, if any.
+///
+/// `at ` alone does not say it: a Rust backtrace frame is spelled the same way, so the
+/// bare prefix answers "yes" for `at /rustc/…/panicking.rs:679:5` — a line about the
+/// panic machinery, not a claim about the user's program.  The position this file is
+/// about always names a `.loft` file.
 fn at_line(out: &str) -> Option<&str> {
-    out.lines().find(|l| l.trim_start().starts_with("at "))
+    out.lines()
+        .find(|l| l.trim_start().starts_with("at ") && l.contains(".loft:"))
 }
 
 /// A write through a locked store panics from inside the store layer.  The write is
