@@ -568,7 +568,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
 | `tests/docs/33-features.loft` | 2026-09-01 | `0c3d4935` |
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
-| `tests/docs/35-testing.loft` | 2026-09-01 | `ecf73f76` |
+| `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 
 ## See also
 
