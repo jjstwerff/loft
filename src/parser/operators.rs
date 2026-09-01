@@ -353,7 +353,6 @@ impl Parser {
     /// Returns true when the rewrite happened so the caller short-
     /// circuits the rest of the assign pipeline.
     pub(crate) fn create_keyed(
-        &mut self,
         code: &mut Value,
         f_type: &Type,
         op: &str,

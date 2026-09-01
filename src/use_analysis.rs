@@ -2858,6 +2858,8 @@ pub fn callref_join_first_bind(
         return None;
     }
     Some((*rec, base))
+}
+
 /// Does this call go through a fn-ref that CAPTURES?
 ///
 /// The question matters wherever a site is about to decide that a returned store is the

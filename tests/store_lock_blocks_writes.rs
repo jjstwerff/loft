@@ -26,10 +26,8 @@ fn loft_bin() -> PathBuf {
 }
 
 fn write_temp(tag: &str, src: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "loft_store_lock_{tag}_{}.loft",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("loft_store_lock_{tag}_{}.loft", std::process::id()));
     std::fs::write(&path, src).expect("write probe");
     path
 }

@@ -1301,7 +1301,14 @@ pub(crate) fn drop_bearing_source(src: &Value) -> Option<u16> {
     }
 }
 
-fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
+/// Which DEFINITION each fn-ref variable in `code` was assigned, `u32::MAX` where the
+/// assignments disagree or the target cannot be named.
+///
+/// `pub(crate)` because two readers need the same answer and a second spelling of it could
+/// only agree by accident: the scope pass decides here whether a `CallRef` result may be
+/// lifted, and the ownership oracle needs the same target to resolve that call through the
+/// callee's return summary (`@FR-O-Oracle`).
+pub(crate) fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32> {
     let mut out: HashMap<u16, u32> = HashMap::new();
     code.walk(&mut |v| {
         let Value::Set(var, rhs) = v else { return };
@@ -1319,6 +1326,64 @@ fn collect_fnref_targets(code: &Value, function: &Function) -> HashMap<u16, u32>
                 *slot = u32::MAX;
             }
         }
+    });
+    out
+}
+
+/// The CALLER variables written into each fn-ref's closure record, in capture-slot order.
+///
+/// A capturing lambda's assignment is a BLOCK that mints the record, writes each captured
+/// value into it and then yields the `FnRef` — so `OpSetDbRef(___clos_N, <slot>, <var>)`
+/// already says which caller variable a capture slot holds, and nothing else has to be
+/// derived to know it.
+///
+/// Only the `DbRef` writes are collected, and that is the question rather than a shortcut:
+/// this exists to answer *"which caller store might the closure hand back?"*, and a capture
+/// that is not a store cannot be handed back as one.  A scalar capture is written with
+/// `OpSetInt` and correctly contributes nothing.
+///
+/// `pub(crate)` for the same reason as [`collect_fnref_targets`] beside it: the ownership
+/// oracle needs the same answer, and a second spelling of it could only agree by accident.
+pub(crate) fn collect_fnref_captures(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+) -> HashMap<u16, Vec<u16>> {
+    let set_dbref = data.def_nr("OpSetDbRef");
+    let mut out: HashMap<u16, Vec<u16>> = HashMap::new();
+    code.walk(&mut |v| {
+        let Value::Set(var, rhs) = v else { return };
+        if !matches!(function.tp(*var).base(), Type::Function(_, _, _)) {
+            return;
+        }
+        // The closure variable this assignment builds — named by the `FnRef` it yields, so a
+        // block that happens to touch another record contributes nothing.
+        let mut clos: Option<u16> = None;
+        rhs.walk(&mut |inner| {
+            if let Value::FnRef(_, c, _) = inner {
+                clos = Some(*c);
+            }
+        });
+        let Some(clos) = clos else { return };
+        let mut slots: Vec<(i32, u16)> = Vec::new();
+        rhs.walk(&mut |inner| {
+            let Value::Call(d, args) = inner else { return };
+            if *d != set_dbref || args.len() < 3 {
+                return;
+            }
+            let (Some(Value::Var(target)), Some(Value::Int(slot)), Some(Value::Var(src))) = (
+                args.first().map(Value::unspan),
+                args.get(1).map(Value::unspan),
+                args.get(2).map(Value::unspan),
+            ) else {
+                return;
+            };
+            if *target == clos {
+                slots.push((*slot, *src));
+            }
+        });
+        slots.sort_by_key(|(slot, _)| *slot);
+        out.insert(*var, slots.into_iter().map(|(_, v)| v).collect());
     });
     out
 }
@@ -1892,6 +1957,7 @@ fn move_elide(data: &mut Data) {
                 .filter(|&s| source_escapes(&code, s, &co))
                 .collect();
             // B1.3b — reorder-free field-appends (`x.field += src`, container already exists).
+            let mut moved_into: HashMap<u16, u16> = HashMap::new();
             construct_move_rewrite(
                 &mut code,
                 &con_sources,
@@ -1900,7 +1966,28 @@ fn move_elide(data: &mut Data) {
                 &bad_containers,
                 &escaping,
                 &mut skip,
+                &mut moved_into,
             );
+            // A retargeted source is ERASED: its wrapper alloc, its view-def and the append are
+            // all gone, so nothing writes it any more.  What still names it is the `deps` of the
+            // element work-refs whose builds were just re-pointed — and a dep is the statement
+            // "my store belongs to that variable", which after the retarget belongs to the
+            // CONTAINER instead.  Left stale it is wrong twice over: the ownership derivation
+            // reads a var that owns nothing (@FR-O-Deps — every store-lifetime
+            // decision reads this one fact), and the scope pass declares the dep var so a borrower
+            // can name it, which hands the erased local a stack slot no instruction ever writes.
+            // That slot is what @PLN120 A's store-span check reports (loft#1241): the local is
+            // not merely unrecorded, it is not there.  Re-pointing states the fact the rewrite
+            // created rather than exempting the symptom by name.
+            for (&src, &cvar) in &moved_into {
+                let vars = &mut data.definitions[d_nr as usize].variables;
+                for v in 0..vars.next_var() {
+                    if v != src && vars.tp(v).depend().contains(&src) {
+                        vars.make_independent(v, src);
+                        vars.depend(v, cvar);
+                    }
+                }
+            }
             // B1.3c — fresh construction (`a = Bag { items: base }`, container built after the
             // source): hoist `a`'s alloc, then retarget. Runs on the copies B1.3b left standing.
             // B1.4 — the interprocedural mutation set (`find_written_vars` knows which callees
@@ -2347,6 +2434,11 @@ struct ConstructOps {
 /// (`a = Bag { items: base }` — `a` built AFTER `base`) needs a build-order reorder and is NOT
 /// handled here; it is left as a copy. `skip` receives ONLY the backings of sources actually
 /// rewritten, so a skipped source keeps its free (no live-store suppression).
+// The eight parameters are one act's worth of state: the code being rewritten, the four
+// read-only sets that decide whether a source may move, and the two out-parameters the
+// caller reads back.  Bundling them into a struct would put a name between each set and
+// the predicate that reads it without removing anything.
+#[allow(clippy::too_many_arguments)]
 fn construct_move_rewrite(
     code: &mut Value,
     con_sources: &HashSet<u16>,
@@ -2355,26 +2447,23 @@ fn construct_move_rewrite(
     bad_containers: &HashSet<u16>,
     escaping: &HashSet<u16>,
     skip: &mut HashSet<u16>,
+    moved_into: &mut HashMap<u16, u16>,
 ) {
     // Pass 1 — pre-scan: per source capture the append destination, its backing wrapper, the
-    // destination's container var, and the `OpDatabase` encounter order (for the reorder guard).
-    let mut idx = 0usize;
-    let mut db_order: HashMap<u16, usize> = HashMap::new();
-    let mut dest: HashMap<u16, Value> = HashMap::new();
-    let mut ambiguous: HashSet<u16> = HashSet::new();
-    let mut vdb: HashMap<u16, u16> = HashMap::new();
-    let mut container: HashMap<u16, Option<u16>> = HashMap::new();
-    construct_prescan(
-        code,
-        co,
-        con_sources,
-        &mut idx,
-        &mut db_order,
-        &mut dest,
-        &mut ambiguous,
-        &mut vdb,
-        &mut container,
-    );
+    // destination's container var, the `OpDatabase` encounter order (for the reorder guard) and
+    // the control-flow position of the build and of the append (for the run-count guard).
+    let mut sc = ConstructScan::default();
+    construct_prescan(code, co, con_sources, &mut sc);
+    let ConstructScan {
+        db_order,
+        db_path,
+        dest,
+        dest_path,
+        ambiguous,
+        vdb,
+        container,
+        ..
+    } = sc;
 
     // A destination TOUCHED between the source's build and the append cannot take the retarget:
     // the append would move ahead of that access.  `escaping` above guards the SOURCE being read
@@ -2402,6 +2491,20 @@ fn construct_move_rewrite(
                 // the result), and the source may even READ the field (`s.v = s.v[1..]`). Leave the
                 // replace to B1.3d (which moves the clear) or to a copy.
                 && !field_is_cleared(code, &dest[s], co)
+                // The rewrite leaves the element builds where the source is BUILT and DROPS the
+                // append, so the program it produces runs the build as often as the append it
+                // replaced only when the two sit in the same control-flow region.  Where they do
+                // not, the count is simply wrong in whichever direction the region runs: an
+                // append inside a loop ran once per turn and now runs once for the whole loop
+                // (`for i in 0..3 { d.c += s }` grew `d.c` by one copy, not three), and an append
+                // inside a branch NOT TAKEN did not run at all and now always does (`if false {
+                // d.c += s }` appended anyway).  Both answer wrong with nothing said, on both
+                // backends, because this is one shared IR pass (@FR-O-NoDiverge).
+                // Equality of the whole path, not of its depth: two arms of one `if` are equally
+                // deep and never run together.  @FR-O-Latest — a binding's ownership
+                // lives at the LOOP DEPTH its assignment was taken at, which no type-level fact
+                // can carry, so the depth has to be measured here.  loft#1243.
+                && db_path.get(&vdb[s]) == dest_path.get(s)
                 && container.get(s).and_then(|c| *c).is_some_and(|cvar| {
                     // The container must PRE-EXIST when the source is built. A FRESH `OpNewRecord`
                     // element (`[Chunk { … }]` → `_elm_N.field += src`) has no `OpDatabase` but is
@@ -2425,6 +2528,13 @@ fn construct_move_rewrite(
 
     // Pass 2 — retarget the element builds + drop the wrapper / view / prealloc / copy.
     construct_rewrite_ops(code, &ready, &vdbs, &dest, co);
+    // Report where each source's records now live, so its borrowers can be re-pointed there
+    // (loft#1241).  `ready` already proved the container is a `OpGetField(Var(c), …)` base.
+    for s in &ready {
+        if let Some(Some(cvar)) = container.get(s) {
+            moved_into.insert(*s, *cvar);
+        }
+    }
     // The moved-out owned store is the backing wrapper (`src` is a borrow of it) — suppress ITS
     // free. Only ready sources' backings are added, so a skipped source keeps its free.
     skip.extend(vdbs);
@@ -2441,33 +2551,55 @@ fn get_field_base(expr: &Value, co: &ConstructOps) -> Option<u16> {
     None
 }
 
+/// Where a statement sits in the control flow: the chain of enclosing regions that run
+/// zero, one, or MANY times — a loop body, an `if` arm, a parallel arm, an iterator's
+/// step.  Every region gets its own id, so two statements carry the same path exactly
+/// when each execution of one is an execution of the other.  That is the question
+/// [`construct_move_rewrite`] has to answer before it may move a build and drop a copy.
+type CfPath = Vec<u32>;
+
+/// What [`construct_prescan`] gathers in one walk of a function body, for
+/// [`construct_move_rewrite`] to filter.
+#[derive(Default)]
+struct ConstructScan {
+    /// `OpDatabase` encounter index per var (first allocation wins) — the build-order guard.
+    db_order: HashMap<u16, usize>,
+    /// Where each var's `OpDatabase` sits: the site the retargeted element builds stay at.
+    db_path: HashMap<u16, CfPath>,
+    /// The one append destination expression per source.
+    dest: HashMap<u16, Value>,
+    /// Where that append sits: the site whose copy the rewrite DROPS.
+    dest_path: HashMap<u16, CfPath>,
+    /// Sources appended into two places — not the clean shape, so not rewritten.
+    ambiguous: HashSet<u16>,
+    /// Source → the backing wrapper it is a view of.
+    vdb: HashMap<u16, u16>,
+    /// Source → the destination's container var, when the destination is a field read.
+    container: HashMap<u16, Option<u16>>,
+    /// Walk state: the `OpDatabase` counter, the region-id counter, and the current path.
+    idx: usize,
+    next_region: u32,
+    path: CfPath,
+}
+
 /// Pass 1 of [`construct_move_rewrite`]: gather the append destination / backing / container /
-/// `OpDatabase` order for every construct source.
-#[allow(clippy::too_many_arguments)]
-fn construct_prescan(
-    node: &Value,
-    co: &ConstructOps,
-    con: &HashSet<u16>,
-    idx: &mut usize,
-    db_order: &mut HashMap<u16, usize>,
-    dest: &mut HashMap<u16, Value>,
-    ambiguous: &mut HashSet<u16>,
-    vdb: &mut HashMap<u16, u16>,
-    container: &mut HashMap<u16, Option<u16>>,
-) {
+/// `OpDatabase` order — and the control-flow position of the build and the append — for every
+/// construct source.
+fn construct_prescan(node: &Value, co: &ConstructOps, con: &HashSet<u16>, sc: &mut ConstructScan) {
     match node.unspan() {
         Value::Call(d, args) => {
             if *d == co.op_database {
                 if let Some(Value::Var(v)) = args.first().map(Value::unspan) {
-                    db_order.entry(*v).or_insert(*idx);
+                    sc.db_order.entry(*v).or_insert(sc.idx);
+                    sc.db_path.entry(*v).or_insert_with(|| sc.path.clone());
                 }
-                *idx += 1;
+                sc.idx += 1;
             } else if *d == co.op_append
                 && let Some(dst) = args.first()
                 && let Some(Value::Var(s)) = args.get(1).map(Value::unspan)
                 && con.contains(s)
             {
-                if dest.contains_key(s) {
+                if sc.dest.contains_key(s) {
                     // ⚠ NOT idempotent, and this function double-visits a spanned node: the
                     // scrutinee above is peeled while `for_each_child` below walks the ORIGINAL,
                     // and that walk sees through a `Span` itself.  A second visit of the SAME
@@ -2476,10 +2608,11 @@ fn construct_prescan(
                     // first-appends in 45 files and exactly ONE mark, which is genuine — it
                     // survives binding the peel.  So the hazard does not fire today; it is one
                     // edit away from firing.  See `sandbox::intrinsic_space` for the shape biting.
-                    ambiguous.insert(*s); // appended into two places — not the clean shape.
+                    sc.ambiguous.insert(*s); // appended into two places — not the clean shape.
                 } else {
-                    container.insert(*s, get_field_base(dst, co));
-                    dest.insert(*s, dst.clone());
+                    sc.container.insert(*s, get_field_base(dst, co));
+                    sc.dest.insert(*s, dst.clone());
+                    sc.dest_path.insert(*s, sc.path.clone());
                 }
             }
         }
@@ -2489,14 +2622,28 @@ fn construct_prescan(
                 && *gd == co.op_get_field
                 && let Some(Value::Var(vd)) = gargs.first().map(Value::unspan)
             {
-                vdb.insert(*s, *vd);
+                sc.vdb.insert(*s, *vd);
             }
         }
         _ => {}
     }
-    node.for_each_child(&mut |c| {
-        construct_prescan(c, co, con, idx, db_order, dest, ambiguous, vdb, container);
-    });
+    // A node whose children do NOT run exactly once with it opens a region, so everything
+    // below carries a path the statements outside cannot match.  Scoped to the whole node
+    // rather than to the arms alone: an `if` CONDITION does run once, but charging it the
+    // region too only ever withholds a rewrite, and this walk visits a span-wrapped node
+    // twice (the ⚠ above), which arm-precise pushes could not survive.
+    let region = matches!(
+        node.unspan(),
+        Value::Loop(_) | Value::If(_, _, _) | Value::Parallel(_) | Value::Iter(_, _, _, _)
+    );
+    if region {
+        sc.path.push(sc.next_region);
+        sc.next_region += 1;
+    }
+    node.for_each_child(&mut |c| construct_prescan(c, co, con, sc));
+    if region {
+        sc.path.pop();
+    }
 }
 
 /// Pass 2 of [`construct_move_rewrite`]: DROP the wrapper/view/prealloc/copy statements and
@@ -4946,6 +5093,14 @@ impl Scopes {
         // the scanned form — emits the guard anyway.  Then the local owns a store with no
         // free: one leaked record per call on the minting arm, from the two readers of ONE
         // predicate disagreeing about which value they were reading.
+        //
+        // loft#1248 — and the same sentence for a bind from a CLOSURE call, which reaches
+        // neither this strip's sibling above nor the `Value::Call` strip earlier in this
+        // function: both are keyed on the call spelling that names its definition, and a
+        // `CallRef` names a runtime value.  So a closure whose return may be its argument or
+        // may be a store it minted kept the argument's dep, read as a permanent borrow, and
+        // the minted arm's store was owned by nobody — one per call, to FRAME exit, which a
+        // loop turns into the 65535-store ceiling.
         if crate::use_analysis::nullable_join_first_bind(
             data,
             self.d_nr,
@@ -4953,6 +5108,13 @@ impl Scopes {
             &set_value,
         )
         .is_some()
+            || crate::use_analysis::callref_join_first_bind(
+                data,
+                self.d_nr,
+                function.tp(v),
+                &set_value,
+            )
+            .is_some()
         {
             let deps: Vec<u16> = function.tp(v).depend().clone();
             for d in deps {
@@ -5337,6 +5499,37 @@ impl Scopes {
         u16::try_from(idx).is_ok_and(|i| def.returned.depend().contains(&i))
     }
 
+    /// May this function free the store the source `v` names — or does it belong to
+    /// someone else?
+    ///
+    /// Enforces @FR-O-Proxy. The empty dep list is the cheap PROXY for "this binding owns
+    /// its store" and the rule says it is unsound alone, so the two obligations it names
+    /// are discharged together and in one place: the `O-Override` veto (`is_skip_free`,
+    /// whose contract is exactly "no `OpFreeRef` is ever emitted for this binding"), and
+    /// the carve-out that a user PARAMETER belongs to the caller while the promoted NRVO
+    /// buffer is the one argument that is really a local this function minted.
+    ///
+    /// One home because it was written three times inside [`free_vars`](Self::free_vars) —
+    /// once for a record source, once for a keyed one, once for the arm that disagrees
+    /// about ownership — and each copy had to be extended on its own when a new shape
+    /// arrived (loft#688, then loft#1022, then loft#1078 restating the same carve-out a
+    /// third time). The keyed copy never gained the promoted-buffer half at all.
+    ///
+    /// The override consult is new here and is a GUARD rather than a fix: measured across
+    /// `tests/scripts` and `tests/docs`, no `skip_free` binding currently reaches any of
+    /// these sites, so today the obligation holds by accident. It now holds by
+    /// construction.
+    fn owns_freeable_store(
+        &self,
+        function: &crate::variables::Function,
+        data: &Data,
+        v: u16,
+    ) -> bool {
+        function.tp(v).depend().is_empty()
+            && !function.is_skip_free(v)
+            && (!function.is_argument(v) || self.is_promoted_ret_buffer(function, data, v))
+    }
+
     fn free_vars(
         &mut self,
         is_return: bool,
@@ -5450,9 +5643,7 @@ impl Scopes {
                     if matches!(
                         function.tp(v),
                         Type::Reference(_, _) | Type::Enum(_, true, _)
-                    ) && function.tp(v).depend().is_empty()
-                        && (!function.is_argument(v)
-                            || self.is_promoted_ret_buffer(function, data, v))
+                    ) && self.owns_freeable_store(function, data, v)
                         && !null_arm_record_sources.contains(&v)
                     {
                         null_arm_record_sources.push(v);
@@ -5586,13 +5777,14 @@ impl Scopes {
             // that showed the first version of this gate was short.  `return_has_non_source_arm`
             // is the record leg's spelling of the same idea and is kept beside it, for an arm
             // that names no source at all.
+            // A source that is itself a BORROW names what it views, and freeing that
+            // releases the CALLER's store — an over-free where the defect is a leak.
+            // `owns_freeable_store` is that question's one home; this leg asked it with a
+            // parameter carve-out of its own that never gained the promoted-NRVO-buffer
+            // half the record legs above carry.
             let owned_keyed_source = |v: u16| {
                 crate::parser::vectors::is_keyed(function.tp(v))
-                    // A source that is itself a BORROW names what it views, and freeing that
-                    // releases the CALLER's store — an over-free where the defect is a leak.
-                    && function.tp(v).depend().is_empty()
-                    // A parameter belongs to the caller and the callee frees none of it.
-                    && !function.is_argument(v)
+                    && self.owns_freeable_store(function, data, v)
             };
             let keyed_join = crate::parser::vectors::is_keyed(tp.base())
                 && (sources.len() > 1 || return_has_non_source_arm(expr, &sources))
@@ -5613,17 +5805,8 @@ impl Scopes {
                             function.tp(v),
                             Type::Reference(_, _) | Type::Enum(_, true, _)
                         )
-                        || !function.tp(v).depend().is_empty()
+                        || !self.owns_freeable_store(function, data, v)
                     {
-                        continue;
-                    }
-                    // A user PARAMETER belongs to the caller and the callee frees none of
-                    // it.  The promoted NRVO buffer is the one argument that is really a
-                    // local — loft#688's leg names it the same way, by its attribute
-                    // being HIDDEN — and it reaches the borrowing arm with a store this
-                    // function minted.  That leg cannot claim it here because it excludes
-                    // anything in `sources`, and the owning arm puts it there.
-                    if function.is_argument(v) && !self.is_promoted_ret_buffer(function, data, v) {
                         continue;
                     }
                     null_arm_record_sources.push(v);
@@ -7518,7 +7701,13 @@ impl Scopes {
     /// An unknown or ambiguous target answers `None`: the result is not lifted,
     /// which is the pre-existing behaviour (it leaks, and a leak is recoverable
     /// where a premature free is not).
-    fn callref_owned_return(&self, val: &Value, data: &Data, function: &Function) -> Option<Type> {
+    fn callref_owned_return(
+        &self,
+        val: &Value,
+        data: &Data,
+        function: &Function,
+        outer_call: u32,
+    ) -> Option<Type> {
         let Value::CallRef(v_nr, _) = val.unspan() else {
             return None;
         };
@@ -7536,17 +7725,104 @@ impl Scopes {
         // ARGUMENTS (which `protectable_ref_args` names) and its CAPTURES (which nothing at
         // the call site can name).  So the lift is admissible exactly when the witness set
         // is COMPLETE and the fn-ref captures nothing.
-        if def.code == Value::Null
-            || crate::use_analysis::callref_captures(data, self.d_nr, val)
-            || (def.returns_borrowed_view()
-                && !crate::use_analysis::protectable_ref_args(data, self.d_nr, val).1)
-        {
+        if def.code == Value::Null {
             return None;
         }
+        // `returns_borrowed_view()` is the deps PROXY (@FR-O-Proxy), and for a closure whose
+        // return is a `??` it is right about one arm and wrong about the other: the dep names
+        // the parameter or the capture the SUBJECT arm hands back, so the whole return reads
+        // as a borrow and the DEFAULT arm's minted store is left owned by nobody — one store
+        // per call, to frame exit, which a loop turns into the 65535-store ceiling
+        // (loft#1248).
+        //
+        // @FR-O-Oracle is the authority, and this is the chokepoint that should read it —
+        // the same sentence the direct-call branch below already acts on.  A `Join` lifts
+        // only where the bind that follows is the runtime guard `OpBindOrCopy`: the witness
+        // has to be NAMEABLE, and the statement has to be one that BINDS.  `outer_call ==
+        // u32::MAX` is the bare-statement lowering, which gets no such bind, so there the
+        // conservative no-lift stands and costs the mint arm's leak instead.
+        //
+        // ⚠ The relaxation reaches exactly as far as the GUARD does, and no further.  The
+        // arms below also answer for the collection returns, and a lifted collection gets a
+        // scope-exit free with nothing deciding per execution whether the store is the
+        // caller's — `callref_join_first_bind`, which is what emits `OpBindOrCopy` on both
+        // backends, answers only for a `Reference` / record `Enum`.  Widening past that
+        // would trade this leak for the over-free in the other direction, which is the
+        // trade the whole gate exists to refuse.
+        let join_lifts = matches!(
+            def.returned().peel_optional().0,
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && matches!(
+            crate::use_analysis::ownership_of(data, self.d_nr, val),
+            crate::use_analysis::Own::Join { base }
+                if base != u16::MAX && outer_call != u32::MAX
+        );
+        // A fn-ref borrows from two places and only one of them is witnessable at the call:
+        // its ARGUMENTS, which `protectable_ref_args` names, and its CAPTURES, which nothing
+        // at the call site can.  So a lift is admissible two ways, and needing EITHER is what
+        // keeps both halves closed at once:
+        //
+        //   * `join_lifts` — the oracle named a WITNESS and the statement BINDS, so
+        //     `OpBindOrCopy` decides per execution whose store it is (loft#1248);
+        //   * `witnessed_lifts` — the witness set is COMPLETE and the fn-ref captures
+        //     nothing, so there is nothing borrowed for the lift to free (loft#1245).
+        //
+        // The capture test is separate and unconditional because `returns_borrowed_view()`
+        // is FALSE for one: a capture reaches the return through `__closure`, a hidden
+        // attribute, and a hidden-only dep otherwise reads as *"the callee minted this"*.
+        // A complete witness set says nothing there either — it reads complete VACUOUSLY for
+        // a call whose arguments are all scalars, having witnessed nothing.
+        let captures = crate::use_analysis::callref_captures(data, self.d_nr, val);
+        let witnessed_lifts =
+            !captures && crate::use_analysis::protectable_ref_args(data, self.d_nr, val).1;
+        if captures && !join_lifts {
+            return None;
+        }
+        if def.returns_borrowed_view() && !join_lifts && !witnessed_lifts {
+            return None;
+        }
+        // loft#1257 — and the collection arms need the oracle for the OPPOSITE reason: to
+        // stop lifting, not to start.  A collection return is delivered through a HIDDEN
+        // buffer, so its dep names only hidden attributes and `returns_borrowed_view()`
+        // answers false — *"the callee minted into its own buffer, the caller adopts"*.
+        // Right when the closure mints, wrong when its `??` hands back the caller's
+        // argument, and the proxy cannot tell those apart because they are the same call:
+        // `fn(q: vector<integer>?) -> vector<integer> { q ?? [7, 8] }` reached the lift, and
+        // the lifted temp then EMPTIED the caller's own vector — `len(some)` reached 0 after
+        // five iterations, with nothing saying so.
+        //
+        // A `Join` whose base the bracket can NAME is exactly *"this may be that caller
+        // variable"*.  The `Reference` / `Enum` arms may still lift it, because
+        // `OpBindOrCopy` settles it per execution; a collection has no such guard, so here
+        // the answer is to decline.
+        //
+        // ⚠ THIS IS A TRADE AND THE COST IS MEASURED: the MINT arm of the same closure goes
+        // back to leaking one store per call (peak 4 -> 403 at N=400), which at scale is a
+        // store-table abort.  Taken deliberately — a leak announces itself and a container
+        // silently emptied does not, which is why `silent-wrong` outranks `sev:`
+        // (`.github/LABELS.md`).  It costs only the JOIN shape: a pure mint classifies
+        // `Owned`, or `Borrowed` of a hidden buffer with no nameable base, and loft#1177's
+        // cells are all pure mints and keep their lift.
+        //
+        // The closure is a WITNESSED lift, and `OpFreeRefIfDistinct` is the right shape for
+        // it — built and measured here.  It fixes `--native` and leaves the interpreter
+        // wrong, because on that side the damage is not the free but the RE-SET: one
+        // iteration is correct, two are not, so the transition-free on `__lift_N`'s
+        // reassignment releases the borrowed store before any scope-exit free runs.  Both
+        // halves are needed, and only the decline is correct on both backends today.
+        //
         // The fn-ref variable's own type is the declared shape; the definition is
         // the authority on what it returns.
         let _ = function;
         let (returned, opt) = def.returned().peel_optional();
+        if !matches!(returned, Type::Reference(_, _) | Type::Enum(_, true, _))
+            && matches!(
+                crate::use_analysis::ownership_of(data, self.d_nr, val),
+                crate::use_analysis::Own::Join { base } if base != u16::MAX
+            )
+        {
+            return None;
+        }
         match returned {
             Type::Reference(d, _) => Some(Self::reopt(opt, Type::Reference(*d, Deps::none()))),
             Type::Enum(d, true, _) => Some(Self::reopt(opt, Type::Enum(*d, true, Deps::none()))),
@@ -7735,7 +8011,7 @@ impl Scopes {
     ) -> Option<Type> {
         // loft#721 — a closure call is lifted only when its target definition is
         // known AND that definition does not return a borrowed view.
-        if let Some(tp) = self.callref_owned_return(val, data, function) {
+        if let Some(tp) = self.callref_owned_return(val, data, function, outer_call) {
             return Some(tp);
         }
         // loft#879 — a null-coalesce (`??`) lowers to an `ncc` value-block that

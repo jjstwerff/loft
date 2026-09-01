@@ -3663,7 +3663,7 @@ use a separate collection or add after the loop"
         // at the declaration site (not lazily on first write).
         // Falls through to the standard assign path which emits
         // Set(v, code) — codegen then takes the Null arm.
-        if var_nr != u16::MAX && !self.first_pass && self.create_keyed(code, f_type, op, var_nr) {
+        if var_nr != u16::MAX && !self.first_pass && Self::create_keyed(code, f_type, op, var_nr) {
             // Don't return here — let the standard pipeline emit
             // Set(v, Null) so codegen sees it.  No further special-
             // case handling needed: the rest of the pipeline tolerates
