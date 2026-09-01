@@ -1664,6 +1664,20 @@ impl Parser {
         if self.first_pass || self.default || !crate::keys::complexity_lint_enabled() {
             return;
         }
+        // Only whoever can act on it.  The cure this advice names — lift the innermost
+        // part into its own function — is an edit to the function's OWN source, so a
+        // consumer importing a library gets a nudge about code they cannot change:
+        // three of the six bundled libraries printed one into every build that `use`d
+        // them, the Lexer chapter of the reference among them.  `source_is_owned` is
+        // relative to what is being built, so the library's own author still sees it
+        // when they compile the library.  Same gate, same reason, as
+        // `advise_group_apart`.
+        if !self
+            .data
+            .source_is_owned(self.data.def(self.context).source)
+        {
+            return;
+        }
         let score = self.complexity.get(&self.context).copied().unwrap_or(0);
         if score < crate::keys::COMPLEXITY_ADVICE_AT {
             return;
