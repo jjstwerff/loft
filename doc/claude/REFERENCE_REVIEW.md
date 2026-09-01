@@ -611,7 +611,7 @@ whose entry list changed has.
 | `tests/docs/33-features.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
-| `tests/docs/36-debugging.loft` | 2026-09-02 | `27dc74ad` |
+| `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
 
 ## See also
 
