@@ -171,6 +171,26 @@ updated — the later, more specific sentence was right each time, but that is a
 not a rule, and the only way to know is to run them. A chapter that contradicts itself is
 the cheapest review lead there is: it has already told you where to look.
 
+⚠ **A chapter's table may be a copy of a DESIGN doc rather than of the code.** Chapter 25
+listed six built-in interfaces and what each one lets you write, and three rows were wrong
+in the permissive direction — `Addable` "addition and subtraction" (`-` is refused),
+`Numeric` "all four scalar operators" (`+` and `/` are refused), `Scalable` "multiplication
+by a float factor" (a `scale` METHOD taking an INTEGER, answering `integer`, and satisfied
+by no built-in type at all). Every row was a faithful copy of INTERFACES.md's
+*"Phase 1 defines these interfaces in `default/01_code.loft`"* block — which is the design
+as written, not the file as shipped. So the chapter was not careless; it trusted a sibling
+doc that made a claim ABOUT A FILE without being checked against it. **When a chapter's
+table names a code artefact, diff it against that artefact, and fix the doc the table came
+from too** — otherwise the next chapter copies it again.
+
+⚠ **A cell that only asks "does this compile" passes on a wrong answer.** Writing the
+completeness guard for that table, the cell for `a - b` under `Numeric` was built from a
+probe that had reported "compiled" — and asserting its VALUE showed it answers `-a`, with
+the second operand discarded, on both backends (loft#1274). A bound is a promise about what
+compiles, so a compile check feels like the whole of it; it is half. **Assert the value of
+every operation a bound is said to permit**, because an operator that binds to the wrong
+overload compiles perfectly.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -224,6 +244,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/22-time.loft` | 2026-09-01 | `ded1a65b` |
 | `tests/docs/23-safety.loft` | 2026-09-01 | `56e176b4` |
 | `tests/docs/24-json.loft` | 2026-09-01 | `aa90d2c3` |
+| `tests/docs/25-generics.loft` | 2026-09-01 | `550d9914` |
 
 ## See also
 
