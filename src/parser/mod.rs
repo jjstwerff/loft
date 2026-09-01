@@ -5074,7 +5074,21 @@ impl Parser {
     /// that declares it), which is why this used to read only the function. An interface's
     /// ASSOCIATED type carries its own bounds — `type Rows: Cursor` says which methods a
     /// `Self.Rows` value has, and the enclosing generic's bounds say nothing about it.
-    pub(crate) fn has_bound_for_method(&self, method: &str, holder_nr: u32) -> bool {
+    ///
+    /// `arity` is the number of arguments the use site passes, INCLUDING the receiver, or
+    /// `None` where the caller has no arity to offer (a field, a bare method name). It is not
+    /// decoration: `formal/interfaces.md` (G-Sat) satisfies a bound only when a function with
+    /// the interface's SIGNATURE is visible, and a name alone is not a signature. `Numeric`
+    /// declares `op - (self: Self) -> Self` — UNARY negation — and a binary `a - b` in a
+    /// `<T: Numeric>` body desugars to the same `OpMin`, so a name-only test said the bound
+    /// covered it. The call then bound one operand too many, dropped `b`, and computed `-a`
+    /// on both backends with no diagnostic (loft#1274).
+    pub(crate) fn has_bound_for_method(
+        &self,
+        method: &str,
+        holder_nr: u32,
+        arity: Option<usize>,
+    ) -> bool {
         let from_holder = (holder_nr != u32::MAX)
             .then(|| &self.data.definitions[holder_nr as usize].bounds)
             .filter(|b| !b.is_empty());
@@ -5087,7 +5101,11 @@ impl Parser {
         };
         for &iface_nr in bounds {
             for child_nr in self.data.children_of(iface_nr) {
-                if Self::interface_method_name(&self.data, child_nr).as_deref() == Some(method) {
+                if Self::interface_method_name(&self.data, child_nr).as_deref() != Some(method) {
+                    continue;
+                }
+                // A name is not a signature: where the caller knows the arity, it must match.
+                if arity.is_none_or(|n| self.data.attributes(child_nr) == n) {
                     return true;
                 }
             }
@@ -10676,7 +10694,11 @@ impl Parser {
             // sum<T: Addable>) would leak into unbound generics like `fn bad<T>(x+y)`.
             if stub_nr != u32::MAX
                 && self.context != u32::MAX
-                && self.has_bound_for_method(&op_method, self.data.def_nr(&tv_name))
+                && self.has_bound_for_method(
+                    &op_method,
+                    self.data.def_nr(&tv_name),
+                    Some(list.len()),
+                )
             {
                 let tp = self.call_nr(code, stub_nr, list, types, false, &[], None);
                 if tp != Type::Null {
@@ -10704,7 +10726,7 @@ impl Parser {
             // above has come up empty — a bound that DOES declare `!=` keeps its own.
             if op == "!="
                 && self.context != u32::MAX
-                && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name))
+                && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name), Some(2))
             {
                 let eq_stub = crate::data::Data::bound_stub_name(&tv_name, "OpEq");
                 let eq_nr = self.data.def_nr(&eq_stub);
@@ -10738,7 +10760,7 @@ impl Parser {
             if op == "<="
                 && self.context != u32::MAX
                 && list.len() == 2
-                && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name))
+                && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name), Some(2))
             {
                 let lt_stub = crate::data::Data::bound_stub_name(&tv_name, "OpLt");
                 let lt_nr = self.data.def_nr(&lt_stub);

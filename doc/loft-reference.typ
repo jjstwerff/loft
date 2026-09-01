@@ -5209,16 +5209,18 @@ fn test_vector_generics() {
 
 By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: `\<T: Ordered\>` means T must support `\<`, `\<=`, `\>`, `\>=` comparisons.
 
-Built-in interfaces:
+Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: `\>`, `\<=` and `\>=` all come from `\<`, and `!=` comes from `==`.
 
 ```
-Ordered    — comparison operators (<, <=, >, >=)
-Equatable  — equality operators (==, !=)
-Addable    — addition and subtraction (+, -)
-Numeric    — all four scalar operators (+, -, *, /)
-Scalable   — multiplication by a float factor (* float)
+Ordered    — declares `<`; gives you <, <=, >, >=
+Equatable  — declares `==`; gives you == and !=
+Addable    — addition (+)
+Numeric    — multiplication (*) and UNARY negation (-a)
+Scalable   — `scale(self, factor: integer) -> integer`, a method rather than an operator
 Printable  — text conversion (to_text)
 ```
+
+`Numeric`'s `-` is the unary negation `-a`, so `a - b` under a bound is refused: no built-in interface offers binary subtraction, because `-` desugars to the same `OpMin` name at both arities.  Write the subtraction against a concrete type.
 
 ```rust
 fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {

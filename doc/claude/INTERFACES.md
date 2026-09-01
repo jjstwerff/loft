@@ -771,48 +771,55 @@ generic constraints rather than classic Go interface values.
 Phase 1 defines these interfaces in `default/01_code.loft`:
 
 ```loft
-// Comparison — for sorting and min/max
-interface Ordered {
-    fn OpLt(self: Self, other: Self) -> boolean
-    fn OpGt(self: Self, other: Self) -> boolean
+// Comparison.  `>`, `<=` and `>=` all DERIVE from `<`, so one operator is the whole bound.
+pub interface Ordered {
+  op < (self: Self, other: Self) -> boolean
 }
 
-// Equality — for set membership and index lookup
-interface Equatable {
-    fn OpEq(self: Self, other: Self) -> boolean
-    fn OpNe(self: Self, other: Self) -> boolean
+// Equality.  `!=` derives from `==` for the same reason.
+pub interface Equatable {
+  op == (self: Self, other: Self) -> boolean
 }
 
-// Addition and subtraction — for sum_of and generic accumulators
-interface Addable {
-    fn OpAdd(self: Self, other: Self) -> Self
-    fn OpMin(self: Self, other: Self) -> Self
+// Addition, returning the same type.
+pub interface Addable {
+  op + (self: Self, other: Self) -> Self
 }
 
-// Full scalar arithmetic — all four operators, same-type
-interface Numeric {
-    fn OpAdd(self: Self, other: Self) -> Self
-    fn OpMin(self: Self, other: Self) -> Self
-    fn OpMul(self: Self, other: Self) -> Self
-    fn OpDiv(self: Self, other: Self) -> Self
-    fn OpNeg(self: Self) -> Self
-    fn OpLt(self: Self, other: Self) -> boolean
-    fn OpGt(self: Self, other: Self) -> boolean
+// Multiplication, and UNARY negation.
+pub interface Numeric {
+  op * (self: Self, other: Self) -> Self
+  op - (self: Self) -> Self
 }
 
-// Scaling by a float factor — for normalisation and interpolation
-interface Scalable {
-    fn OpMul(self: Self, factor: float) -> Self
+// Integer scaling, as a METHOD rather than `op *` — see the note below.
+pub interface Scalable {
+  fn scale(self: Self, factor: integer) -> integer
 }
 
-// Text conversion — for generic print/log helpers
-interface Printable {
-    fn to_text(self: Self) -> text
+// Text conversion — for generic print/log helpers.
+pub interface Printable {
+  fn to_text(self: Self) -> text
 }
 ```
 
-Built-in types (`integer`, `float`) automatically satisfy `Ordered`,
-`Equatable`, `Addable`, and `Numeric` via their existing operator definitions.
+Built-in types (`integer`, `single`, `float`, and for the two comparison bounds `text` and
+`boolean`) satisfy these through their existing operator definitions.
+
+**The list is narrower than it looks, and deliberately so.** Each bound names the FEWEST
+operators the derivations need: `Ordered` carries only `<` because `>`, `<=` and `>=` are
+derived from it, and `Equatable` only `==` for the same reason. An interface demanding every
+spelling would break every user type that implements the minimum.
+
+⚠ **`Numeric`'s `-` is UNARY negation, and no bound offers binary subtraction.** The two
+share one desugared name — `-` becomes `OpMin` at either arity — which is what "avoid
+stub-name collision" means in `Scalable`'s comment and why `Scalable` scales through a method
+instead of `op *`. So `a - b` inside a `<T: Numeric>` body is refused with *"generic type T:
+operator '-' requires a concrete type"*, exactly as it is under `Addable`. It used to bind to
+the unary op, drop the second operand and compute `-a` on both backends with no diagnostic;
+bound satisfaction now compares the SIGNATURE rather than the name (`formal/interfaces.md`
+(G-Sat), loft#1274). Whether a bound SHOULD offer binary subtraction is open — it needs the
+two arities of `OpMin` to coexist in one interface — and is loft#1275.
 `text` satisfies `Ordered` and `Equatable`. No extra declarations are needed.
 
 **Stdlib functions converted from native to bounded-generic loft** (depends on I8):

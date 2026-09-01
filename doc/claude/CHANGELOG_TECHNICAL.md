@@ -9,6 +9,25 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A bound is satisfied by a signature, not by a name (2026-09-01)
+
+`a - b` inside a `<T: Numeric>` body compiled and computed `-a`, dropping the second operand,
+on both backends with no diagnostic — and the float case answered an integer, so the result
+type was wrong too (loft#1274).
+
+`formal/interfaces.md` (G-Sat) satisfies an interface when a function with the interface's
+SIGNATURE is visible, parameter list included. `has_bound_for_method` compared only the name,
+and `-` desugars to `OpMin` at BOTH arities: `Numeric` declares `op - (self: Self) -> Self`,
+the unary negation, so a binary `-` matched it and the call bound one operand too many. It now
+compares the arity the use site passes, and `a - b` takes the refusal `Addable` already gave
+the same expression.
+
+No built-in bound offers binary subtraction — `-` being one name at two arities is why — which
+is loft#1275, a design question rather than part of this fix. `INTERFACES.md` § Standard
+library interfaces and the reference's Generics chapter both claimed a wider `Numeric` and a
+wider `Addable` than `default/01_code.loft` ships; both now describe the file.
+
+
 ### `#remove` inside a keyed range: an ICE, and then a skipped element (2026-09-01)
 
 Two defects, one behind the other (loft#1272).

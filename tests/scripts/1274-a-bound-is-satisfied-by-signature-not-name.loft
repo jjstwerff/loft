@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A bound is satisfied by a SIGNATURE, not by a name (loft#1274).
+//
+// `formal/interfaces.md` (G-Sat) satisfies an interface when a function with the interface's
+// SIGNATURE is visible — `[Self ↦ C](p̄ -> R)`, parameter list included. `has_bound_for_method`
+// compared only the name, and `-` desugars to `OpMin` at BOTH arities: `Numeric` declares
+// `op - (self: Self) -> Self`, the unary negation, so a binary `a - b` in a `<T: Numeric>`
+// body matched it. The call then bound one operand too many, dropped `b`, and computed `-a`
+// on both backends with no diagnostic — and the float case answered an INTEGER, so the result
+// type was wrong as well.
+//
+// The refusal half lives in `tests/parse_errors.rs`
+// (`binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op`), because a file that
+// contains the refused expression cannot also be parsed to run these rows.
+//
+// Everything here is a CONTROL: it is the surface the arity check must not have narrowed.
+// Adding a parameter-count test to bound satisfaction could plausibly have broken any bound
+// whose stub arity the call site does not match, and the derived operators are the sharpest
+// of those — `!=`, `<=` and `>=` are not declared by any interface at all. They resolve
+// through the bound's `==` and `<`, which the check now asks for at arity 2.
+//
+// @falsified-at: INERT by construction, and that is the point. These rows PASS on both trees;
+//   the row that moves is the refusal in `parse_errors.rs`, which the pre-fix build accepts
+//   and answers `-9` for. A control that also moved would not be a control.
+
+fn nmul<T: Numeric>(a: T, b: T) -> T { a * b }
+fn nneg<T: Numeric>(a: T) -> T { -a }
+fn aadd<T: Addable>(a: T, b: T) -> T { a + b }
+fn eeq<T: Equatable>(a: T, b: T) -> boolean { a == b }
+fn ene<T: Equatable>(a: T, b: T) -> boolean { a != b }
+fn olt<T: Ordered>(a: T, b: T) -> boolean { a < b }
+fn ogt<T: Ordered>(a: T, b: T) -> boolean { a > b }
+fn ole<T: Ordered>(a: T, b: T) -> boolean { a <= b }
+fn oge<T: Ordered>(a: T, b: T) -> boolean { a >= b }
+fn ptext<T: Printable>(a: T) -> text { a.to_text() }
+
+// The two operators `Numeric` actually declares, at the arity it declares them.
+fn test_1274_numeric_keeps_what_it_declares() {
+  assert(nmul(9, 4) == 36, "integer *: got {nmul(9, 4)}");
+  assert(nmul(1.5, 2.0) == 3.0, "float *: got {nmul(1.5, 2.0)}");
+  assert(nneg(7) == -7, "integer unary -: got {nneg(7)}");
+  assert(nneg(-7) == 7, "integer unary - twice: got {nneg(-7)}");
+  // The float row is the one the defect got wrong in TYPE as well as value.
+  assert(nneg(2.5) == -2.5, "float unary -: got {nneg(2.5)}");
+}
+
+// `Addable` is `+` only, and `+` still resolves.
+fn test_1274_addable_keeps_its_one_operator() {
+  assert(aadd(9, 4) == 13, "integer +: got {aadd(9, 4)}");
+  assert(aadd(1.5, 2.25) == 3.75, "float +: got {aadd(1.5, 2.25)}");
+  // `text` is deliberately absent: it does not satisfy `Addable` (concatenation is not
+  // `OpAdd`), on this build and on the released one alike.
+}
+
+// The DERIVED operators, which no interface declares — the sharpest control for an arity
+// test, because they are resolved through a different operator's stub.
+fn test_1274_the_derived_operators_still_resolve() {
+  assert(eeq(3, 3), "== true");
+  assert(!eeq(3, 4), "== false");
+  assert(ene(3, 4), "!= derives from ==");
+  assert(!ene(3, 3), "!= false");
+  assert(olt(3, 4), "< true");
+  assert(ogt(4, 3), "> derives from <");
+  assert(ole(4, 4), "<= derives from <");
+  assert(!oge(4, 5), ">= derives from <");
+  assert(oge(5, 4), ">= true");
+}
+
+// A bound whose requirement is a plain METHOD, not an operator — the `arity: None` side of
+// the same predicate, which must keep matching on the name alone.
+fn test_1274_a_method_bound_is_unaffected() {
+  assert(ptext(42) == "42", "Printable on integer: got {ptext(42)}");
+  assert(ptext(true) == "true", "Printable on boolean: got {ptext(true)}");
+}
+
+// Subtraction on a CONCRETE type was never in question and must stay exact.
+fn test_1274_concrete_subtraction_is_unchanged() {
+  a = 9; b = 4;
+  assert(a - b == 5, "integer -: got {a - b}");
+  c = 3; d = 10;
+  assert(c - d == -7, "integer - negative: got {c - d}");
+  e = 9.5; f = 4.25;
+  assert(e - f == 5.25, "float -: got {e - f}");
+}

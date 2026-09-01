@@ -64,7 +64,8 @@
 }</code></pre>
 <h2 id="bounded-generics-with-interfaces">Bounded generics with interfaces</h2>
 <p>By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: <code>&lt;T: Ordered&gt;</code> means T must support <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> comparisons.</p>
-<p>Built-in interfaces: Ordered    — comparison operators (&lt;, &lt;=, &gt;, &gt;=) Equatable  — equality operators (==, !=) Addable    — addition and subtraction (+, -) Numeric    — all four scalar operators (+, -, *, /) Scalable   — multiplication by a float factor (* float) Printable  — text conversion (to_text)</p>
+<p>Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: <code>&gt;</code>, <code>&lt;=</code> and <code>&gt;=</code> all come from <code>&lt;</code>, and <code>!=</code> comes from <code>==</code>. Ordered    — declares <code>&lt;</code>; gives you &lt;, &lt;=, &gt;, &gt;= Equatable  — declares <code>==</code>; gives you == and != Addable    — addition (+) Numeric    — multiplication (*) and UNARY negation (-a) Scalable   — <code>scale(self, factor: integer) -&gt; integer</code>, a method rather than an operator Printable  — text conversion (to_text)</p>
+<p><code>Numeric</code>'s <code>-</code> is the unary negation <code>-a</code>, so <code>a - b</code> under a bound is refused: no built-in interface offers binary subtraction, because <code>-</code> desugars to the same <code>OpMin</code> name at both arities.  Write the subtraction against a concrete type.</p>
 <pre><code><span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
   <span class="kw">if</span> gen_x &gt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
 }
@@ -165,13 +166,18 @@ fn test_vector_generics() {
 // To use operators on T, add an interface bound: `&lt;T: Ordered&gt;` means T must
 // support `&lt;`, `&lt;=`, `&gt;`, `&gt;=` comparisons.
 //
-// Built-in interfaces:
-//   Ordered    — comparison operators (&lt;, &lt;=, &gt;, &gt;=)
-//   Equatable  — equality operators (==, !=)
-//   Addable    — addition and subtraction (+, -)
-//   Numeric    — all four scalar operators (+, -, *, /)
-//   Scalable   — multiplication by a float factor (* float)
+// Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are
+// derived: `&gt;`, `&lt;=` and `&gt;=` all come from `&lt;`, and `!=` comes from `==`.
+//   Ordered    — declares `&lt;`; gives you &lt;, &lt;=, &gt;, &gt;=
+//   Equatable  — declares `==`; gives you == and !=
+//   Addable    — addition (+)
+//   Numeric    — multiplication (*) and UNARY negation (-a)
+//   Scalable   — `scale(self, factor: integer) -&gt; integer`, a method rather than an operator
 //   Printable  — text conversion (to_text)
+//
+// `Numeric`'s `-` is the unary negation `-a`, so `a - b` under a bound is refused: no
+// built-in interface offers binary subtraction, because `-` desugars to the same `OpMin`
+// name at both arities.  Write the subtraction against a concrete type.
 fn gen_max&lt;T: Ordered&gt;(gen_x: T, gen_y: T) -&gt; T {
   if gen_x &gt; gen_y { gen_x } else { gen_y }
 }

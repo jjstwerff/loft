@@ -265,7 +265,7 @@ impl Parser {
                 };
                 let stub_nr = self.data.find_fn(u16::MAX, &field, &t);
                 if stub_nr != u32::MAX
-                    && self.has_bound_for_method(&field, holder_nr)
+                    && self.has_bound_for_method(&field, holder_nr, None)
                     && self.lexer.has_token("(")
                 {
                     return self.parse_method(code, stub_nr, t.clone());
@@ -1335,7 +1335,7 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // subscript a type it was never promised anything about. So for a holder the
         // lookup is not enough; the BOUNDS have to declare it. (The same guard the
         // binary-operator path carries, for the same reason.)
-        if self.data.is_type_var_placeholder(d) && !self.has_bound_for_method("OpIndex", d) {
+        if self.data.is_type_var_placeholder(d) && !self.has_bound_for_method("OpIndex", d, None) {
             return u32::MAX;
         }
         md
