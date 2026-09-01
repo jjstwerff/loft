@@ -526,9 +526,26 @@ impl Parser {
             if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
             }
-            if nr == 255 {
-                self.lexer
-                    .diagnostic(Level::Error, "Too many enumerate values");
+            // A plain enum is ONE BYTE and both ends of it are reserved: `0` is the
+            // undefined value the variants are numbered away from (`nr + 1` below), and
+            // `255` is the null sentinel every scalar type has
+            // (formal/types.md § Per-type null, `OpConvBoolFromEnum` = `@v1 != 255 && @v1
+            // != 0`).  So the highest variant a program can READ BACK is `254`, and the
+            // 254th variant is the last one.  The refusal has to come BEFORE the next
+            // variant is numbered, because numbering it is what breaks: variant 255 takes
+            // the null sentinel and answers `null` from a name that matched, and variant
+            // 256 overflows the `u8` — an internal compiler error under debug assertions,
+            // a wrap to the reserved `0` without them.
+            if nr == 253 {
+                self.lexer.diagnostic(
+                    Level::Error,
+                    "Too many enum variants — an enum holds at most 254, because a variant is one byte and 0 and 255 are reserved",
+                );
+                // Skip the rest of the variant list rather than breaking out mid-name: the
+                // caller's `token("}")` is standing at the next variant otherwise, and one
+                // count mistake reported four diagnostics — the real one and three
+                // `Expect token` cascades behind it.  The `}` is left for that caller.
+                self.lexer.recover_to(&["}"]);
                 break;
             }
             nr += 1;
