@@ -2399,36 +2399,14 @@ pub fn OpRemove<S: IterState>(
                 return;
             }
             let tp = arg as u16;
-            let fields = stores.fields(tp);
-            let cur_ref = iter_ref(&data, cur_u, fields);
-            // Compute successor BEFORE removing so tree pointers are still intact.
-            let n_after = {
-                let store = crate::keys::store(&data, &stores.allocations);
-                if reverse {
-                    tree::previous(store, &cur_ref)
-                } else {
-                    tree::next(store, &cur_ref)
-                }
-            };
-            stores.remove_owned(&data, &cur_ref, tp);
-            if n_after == 0 {
-                // Removed the last element: signal end-of-iteration.
-                state.set_finish(u32::MAX);
-            } else {
-                // Set cur to predecessor of n_after so the next OpStep visits n_after.
-                let pred = {
-                    let store = crate::keys::store(&data, &stores.allocations);
-                    if reverse {
-                        tree::next(store, &iter_ref(&data, n_after, fields))
-                    } else {
-                        tree::previous(store, &iter_ref(&data, n_after, fields))
-                    }
-                };
-                state.set_cur(pred.cast_signed());
-                // If n_after equals the finish boundary, signal end-of-iteration.
-                if n_after == state.get_finish() {
-                    state.set_finish(u32::MAX);
-                }
+            // The removal and the cursor it leaves behind are one decision, shared with the
+            // interpreter (loft#1272).
+            match stores.remove_during_tree_iteration(&data, tp, cur_u, state.get_finish(), reverse)
+            {
+                // Nothing follows in range: signal end-of-iteration.
+                None => state.set_finish(u32::MAX),
+                // Park at the predecessor so the next OpStep visits what followed.
+                Some(pred) => state.set_cur(pred.cast_signed()),
             }
         }
         2 => {

@@ -652,6 +652,9 @@ impl Parser {
                     );
                     let state_var = self.create_var(&iter_state_name, &crate::data::I64);
                     self.vars.defined(state_var);
+                    // Tell the loop which local its cursor is, so `#remove` reads it instead
+                    // of rebuilding the name (loft#1272).
+                    self.vars.set_loop_state_var(state_var);
                     let mut ls = Vec::new();
                     self.fill_iter(&mut ls, code, is_type, true, true);
                     ls.push(Value::Int(0));
@@ -1744,21 +1747,34 @@ use #count instead"
                 }
             }
             let on = self.vars.loop_on(index_var);
-            let state_name = if on & 63 >= 1 && on & 63 <= 3 {
-                let state_key = format!("{base}#iter_state");
-                if self.vars.name_exists(&state_key) {
-                    state_key
+            // The loop records its own cursor, because the two keyed lowerings name it
+            // differently — `{base}#iter_state` for an unbounded walk, `_iter_N` for a
+            // bounded range — and reconstructing the first spelling here silently missed the
+            // second. The fallback then named `{base}#index`, which a range ELIDES, so the
+            // operand was measured against a slot that does not exist (loft#1272).
+            let recorded = self.vars.loop_state_var(index_var);
+            let state_var = if recorded == u16::MAX {
+                // No cursor was recorded: a vector walk, a range, a custom iterator. Fall
+                // back to the historical name-based lookup, which those shapes still satisfy.
+                let state_name = if on & 63 >= 1 && on & 63 <= 3 {
+                    let state_key = format!("{base}#iter_state");
+                    if self.vars.name_exists(&state_key) {
+                        state_key
+                    } else {
+                        format!("{base}#index")
+                    }
                 } else {
                     format!("{base}#index")
-                }
+                };
+                self.vars.var(&state_name)
             } else {
-                format!("{base}#index")
+                recorded
             };
             let coll = self.vars.loop_value(index_var).clone();
             let remove = self.cl(
                 "OpRemove",
                 &[
-                    Value::Var(self.vars.var(&state_name)),
+                    Value::Var(state_var),
                     coll.clone(),
                     Value::Int(i32::from(on)),
                     Value::Int(i32::from(self.vars.loop_db_tp(index_var))),

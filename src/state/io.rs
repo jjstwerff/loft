@@ -1460,47 +1460,23 @@ impl State {
                 if cur == u32::MAX {
                     return;
                 }
-                // tp is now the Index type index (not fields_offset); get the actual
-                // fields byte offset for tree navigation.
-                let fields = self.database.fields(tp);
-                let cur_ref = new_ref(&data, cur, fields);
-                // Compute n_after = in-order successor (or predecessor for reverse) of cur
-                // BEFORE removing cur, so the tree pointers are still intact.
-                let n_after = {
-                    let store = crate::keys::store(&data, &self.database.allocations);
-                    if reverse {
-                        tree::previous(store, &cur_ref)
-                    } else {
-                        tree::next(store, &cur_ref)
-                    }
-                };
-                self.database.remove_owned(&data, &cur_ref, tp);
-                if n_after == 0 {
-                    // Removed the last element in iteration order; signal end-of-iteration
-                    // by overwriting the finish slot (same as step's put_var(state_var-12)).
-                    self.put_var(state_var - 12, u32::MAX);
-                } else {
-                    // Set slot = predecessor of n_after in the modified tree so the next
-                    // step() call computes next(pred) = n_after and visits n_after.
-                    let pred = {
-                        let store = crate::keys::store(&data, &self.database.allocations);
-                        let n_ref = new_ref(&data, n_after, fields);
-                        if reverse {
-                            tree::next(store, &n_ref)
-                        } else {
-                            tree::previous(store, &n_ref)
-                        }
-                    };
-                    self.put_var(state_var - 8, pred);
-                    // If n_after is the finish boundary, also signal end-of-iteration.
-                    // @PLAN53 cluster 2 / 2f: get_var adds NO step, so this finish-read
-                    // delta must thread step(12) the other way: −(step(12)+4) = −16 off
-                    // (identity), −20 aligned.  Latent (no test exercises case-1 index
-                    // #remove under V2 yet) but the same disease as the case-0 fix above.
-                    let finish = *self.get_var::<u32>(state_var - (self.stack_step(12) + 4) as u16);
-                    if n_after == finish {
-                        self.put_var(state_var - 12, u32::MAX);
-                    }
+                // @PLAN53 cluster 2 / 2f: get_var adds NO step, so this finish-read delta
+                // must thread step(12) the other way: −(step(12)+4) = −16 off (identity),
+                // −20 aligned.  The same disease as the case-0 fix above.
+                let finish = *self.get_var::<u32>(state_var - (self.stack_step(12) + 4) as u16);
+                // The removal and the cursor it leaves behind are one decision, shared with
+                // the native runtime (loft#1272) — `tp` is the Index TYPE, which the shared
+                // side turns into the fields offset tree navigation needs.
+                match self
+                    .database
+                    .remove_during_tree_iteration(&data, tp, cur, finish, reverse)
+                {
+                    // Nothing follows in range; signal end-of-iteration by overwriting the
+                    // finish slot (same as step's put_var(state_var-12)).
+                    None => self.put_var(state_var - 12, u32::MAX),
+                    // Park at the predecessor so the next step() computes next(pred) and
+                    // visits it.
+                    Some(pred) => self.put_var(state_var - 8, pred),
                 }
             }
             2 => {

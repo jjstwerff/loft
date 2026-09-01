@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `#remove` inside a keyed range: an ICE, and then a skipped element (2026-09-01)
+
+Two defects, one behind the other (loft#1272).
+
+**It did not compile.** A keyed iteration has two lowerings and they name their cursor
+differently — `{loop}#iter_state` for an unbounded walk, `_iter_N` for a bounded range.
+`#remove` rebuilt the first spelling by hand and fell back to `{loop}#index` when it missed;
+a range ELIDES that local, so `add_const` measured the operand against a slot that does not
+exist and `before_stack - r` underflowed. An ICE on both backends, and on the released
+2026.8.0 the same program compiled and read a corrupt reference out of the store. The loop
+now records its cursor at the site that creates it (`Vars::set_loop_state_var`).
+
+**Then it skipped an element.** `remove` ended the walk when the SUCCESSOR of the removed
+node was `finish`, but `finish` names the last node to VISIT — `step` yields it and only then
+marks the end. So removing consecutive elements dropped one: `[1..4]` over 1..5 removing
+everything left `3` behind. The test belongs on the node removed (`cur == finish`). Invisible
+on an unbounded walk, where `finish` is `0` and the comparison can never fire, and that was
+the only shape the suite covered.
+
+Both backends carried their own copy of that decision and both carried the defect, so it now
+has one home, `Stores::remove_during_tree_iteration` — the same treatment
+`tree::range_cursors` and `vector::ordered_range_cursors` already had.
+
+
 ### A descending key orders an `index` twice, so every query answers the reverse (2026-09-01)
 
 `keys::compare` reverses per descending key, so the red-black tree `tree::put` builds is already

@@ -2603,6 +2603,10 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 }
             }
             let iter = self.create_unique("iter", &crate::data::I64);
+            // A bounded range is the OTHER lowering of a keyed iteration, and this is its
+            // cursor. Record it on the loop so `#remove` inside `for x in c[a..b]` reaches
+            // the same local `OpStep` does (loft#1272).
+            self.vars.set_loop_state_var(iter);
             let mut ls = Vec::new();
             if !self.first_pass {
                 self.fill_iter(&mut ls, code, typedef, true, inclusive);
