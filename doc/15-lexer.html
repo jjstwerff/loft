@@ -46,12 +46,27 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">matches</span>(<span class="st">"&gt;"</span>), <span class="st">"Incorrect higher"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"&gt;&gt;"</span>), <span class="st">"Incorrect logical shift"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call"><a href="stdlib-file-system.html">position</a></span>() == <span class="st">"Tokens:1:17"</span>, <span class="st">"Incorrect position {l.position()}"</span>);</code></pre>
+<p><code>long_int()</code> reads an integer written with an <code>l</code> suffix. The suffix is part of the token, not part of the value.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Long"</span>, <span class="st">"9000000000l"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">long_int</span>() == <span class="nm">9000000000</span>, <span class="st">"Long integer"</span>);</code></pre>
+<p>A registered keyword is reported exactly as written, so a parser can tell it from an ordinary name without keeping a second list of its own.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Keywords"</span>, <span class="st">"for name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">peek</span>() == <span class="st">"for"</span>, <span class="st">"A keyword reads back as itself"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"for"</span>), <span class="st">"and matches by that spelling"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">peek</span>() == <span class="st">"name"</span>, <span class="st">"while an ordinary name is just a name"</span>);</code></pre>
 <h2 id="string-literals-and-comments">String Literals and Comments</h2>
-<p><code>constant_text()</code> reads a double-quoted string and handles special codes like \n (newline) and \\ (backslash). <code>constant_character()</code> reads a single-quoted character literal and returns it as text.</p>
+<p><code>constant_text()</code> reads a double-quoted string and decodes the escapes inside it: <code>\n</code> becomes one newline, <code>\t</code> one tab, <code>\r</code> one return, and <code>\\</code> and <code>\"</code> stand for a single backslash and quote, and <code>\xNN</code> is the character with that two-digit hex code — <code>\x41</code> is <code>A</code>. An escape the lexer does not recognise stands for its own character, so <code>\q</code> is just <code>q</code>, and an <code>\x</code> without two hex digits after it is treated the same way rather than eating what follows.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Texts"</span>, <span class="st">"\"</span><span class="nm">123</span>\<span class="st">" + '4'"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"123"</span>, <span class="st">"Incorrect text literal"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect add"</span>);</code></pre>
-<p><code>constant_character()</code> returns a <code>character</code>, so compare it as one (<code>l.constant_character() == '4'</code>), not against the text "123". The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
+<p><code>constant_character()</code> reads a single-quoted literal and returns a <code>character</code>, not text — so compare it against a character.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_character</span>() == <span class="ch">'4'</span>, <span class="st">"Incorrect character literal"</span>);</code></pre>
+<p>An escape counts as ONE character, in a text and in a character literal alike. <code>size()</code> is what shows it: two source characters, one value.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Escapes"</span>, <span class="st">"\"</span>a\\nb\<span class="st">" '\\t'"</span>);
+  nl = l.<span class="fn-call">constant_text</span>() ?? <span class="st">""</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(nl) == <span class="nm">3</span>, <span class="st">"'a\\nb' is three characters, not four: {size(nl)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_character</span>() == <span class="ch">'\t'</span>, <span class="st">"An escaped character literal decodes too"</span>);</code></pre>
+<p>The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Comments"</span>, <span class="st">"// starting comments\n123 // same line comment\n// extra comment\n4"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">comment_behind</span>(), <span class="st">"Initial comment not behind"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">"starting comments"</span>, <span class="st">"Initial comment"</span>);
@@ -63,7 +78,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">""</span>, <span class="st">"No remaining comment"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">is_finished</span>(), <span class="st">"Ready"</span>);</code></pre>
 <h2 id="embedded-format-expressions">Embedded Format Expressions</h2>
-<p>Loft string literals can embed expressions with <code>{expr}</code>. The lexer exposes a protocol that lets you parse these yourself. When <code>constant_text()</code> reaches a <code>{</code>, it returns the literal text before it and sets <code>is_formatting()</code> to true. At that point call <code>set_formatting(false)</code> and parse the embedded expression normally using the usual token readers. When the expression is done, call <code>set_formatting(true)</code> and consume the closing <code>}}</code>. Then <code>constant_text()</code> continues with the next segment of the string.</p>
+<p>Loft string literals can embed expressions with <code>{expr}</code>. The lexer exposes a protocol that lets you parse these yourself. When <code>constant_text()</code> reaches a <code>{</code>, it returns the literal text before it and sets <code>is_formatting()</code> to true. At that point call <code>set_formatting(false)</code> and parse the embedded expression normally using the usual token readers. When the expression is done, call <code>set_formatting(true)</code> and consume the closing <code>}</code>. Then <code>constant_text()</code> continues with the next segment of the string. The example below writes that brace as "}}" because a literal brace inside a loft string is doubled — the TOKEN the lexer matches is the single <code>}</code>.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Formatting"</span>, <span class="st">"\"</span>abc{{<span class="nm">12</span> + <span class="nm">34</span>}}def\<span class="st">""</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"abc"</span>, <span class="st">"Before formatting"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">is_formatting</span>(), <span class="st">"Formatting"</span>);
@@ -130,15 +145,36 @@ fn main() {
   assert(!l.matches("&gt;"), "Incorrect higher");
   assert(l.matches("&gt;&gt;"), "Incorrect logical shift");
   assert(l.position() == "Tokens:1:17", "Incorrect position {l.position()}");
+  // `long_int()` reads an integer written with an `l` suffix. The suffix is part
+  // of the token, not part of the value.
+  l.parse_string("Long", "9000000000l");
+  assert(l.long_int() == 9000000000, "Long integer");
+  // A registered keyword is reported exactly as written, so a parser can tell it
+  // from an ordinary name without keeping a second list of its own.
+  l.parse_string("Keywords", "for name");
+  assert(l.peek() == "for", "A keyword reads back as itself");
+  assert(l.matches("for"), "and matches by that spelling");
+  assert(l.peek() == "name", "while an ordinary name is just a name");
   // ## String Literals and Comments
-  // `constant_text()` reads a double-quoted string and handles special codes
-  // like \n (newline) and \\ (backslash). `constant_character()` reads a
-  // single-quoted character literal and returns it as text.
+  // `constant_text()` reads a double-quoted string and decodes the escapes
+  // inside it: `\n` becomes one newline, `\t` one tab, `\r` one return, and
+  // `\\` and `\"` stand for a single backslash and quote, and `\xNN` is the
+  // character with that two-digit hex code — `\x41` is `A`. An escape the lexer
+  // does not recognise stands for its own character, so `\q` is just `q`, and an
+  // `\x` without two hex digits after it is treated the same way rather than
+  // eating what follows.
   l.parse_string("Texts", "\"123\" + '4'");
   assert(l.constant_text() == "123", "Incorrect text literal");
   assert(l.matches("+"), "Incorrect add");
-  // `constant_character()` returns a `character`, so compare it as one
-  // (`l.constant_character() == '4'`), not against the text "123".
+  // `constant_character()` reads a single-quoted literal and returns a
+  // `character`, not text — so compare it against a character.
+  assert(l.constant_character() == '4', "Incorrect character literal");
+  // An escape counts as ONE character, in a text and in a character literal
+  // alike. `size()` is what shows it: two source characters, one value.
+  l.parse_string("Escapes", "\"a\\nb\" '\\t'");
+  nl = l.constant_text() ?? "";
+  assert(size(nl) == 3, "'a\\nb' is three characters, not four: {size(nl)}");
+  assert(l.constant_character() == '\t', "An escaped character literal decodes too");
   // The lexer collects `//` comments automatically as it scans. You do not
   // need to handle them yourself. `last_comment()` returns the accumulated
   // comment text since the last consumed token. When multiple comment lines
@@ -163,8 +199,10 @@ fn main() {
   // and sets `is_formatting()` to true. At that point call
   // `set_formatting(false)` and parse the embedded expression normally using
   // the usual token readers. When the expression is done, call
-  // `set_formatting(true)` and consume the closing `}}`. Then
-  // `constant_text()` continues with the next segment of the string.
+  // `set_formatting(true)` and consume the closing `}`. Then `constant_text()`
+  // continues with the next segment of the string.
+  // The example below writes that brace as "}}" because a literal brace inside a
+  // loft string is doubled — the TOKEN the lexer matches is the single `}`.
   l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
   assert(l.constant_text() == "abc", "Before formatting");
   assert(l.is_formatting(), "Formatting");

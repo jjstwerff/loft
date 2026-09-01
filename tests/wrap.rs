@@ -469,6 +469,22 @@ fn a_refusal_file_carries_no_runtime_assertions() {
         if !common::declares_expect_error(&src) {
             continue;
         }
+        // loft#1242 — the rule now holds only where the cells cannot be ISOLATED.
+        //
+        // `run_test` blanks the functions an error points into and re-runs the rest, so in a
+        // fn-per-cell file an assertion outside the refusing function DOES run and the `<n>b-…`
+        // split is no longer needed. What it cannot do is isolate a file with a `main`: the
+        // harness then runs only `main`, so a helper it calls cannot be removed without changing
+        // what `main` means, and an assertion there is still compiled-and-never-run.
+        //
+        // Checked against `top_level_fn_spans` rather than a `fn main` grep, so this agrees with
+        // the isolation itself about what a top-level function is — the two must not drift, or
+        // the guard forbids exactly the files the harness now handles.
+        let isolatable = top_level_fn_spans(&src)
+            .is_some_and(|spans| !spans.iter().any(|(n, _, _)| n == "main"));
+        if isolatable {
+            continue;
+        }
         for f in corpus_fns(&src) {
             if f.asserts > 0 && !f.expect_error {
                 bad.push(format!(
@@ -484,7 +500,10 @@ fn a_refusal_file_carries_no_runtime_assertions() {
     assert!(
         bad.is_empty(),
         "these functions assert in a file that stops at its expected error, so nothing \
-         they claim is ever checked — move them to a companion file that RUNS (the \
+         they claim is ever checked. This file has a `main`, so the harness cannot isolate \
+         the refusing cell (it runs `main` only, and a helper `main` calls cannot be \
+         removed) — either drop the `main` so each cell is its own entry point and the \
+         cells run independently, or move these to a companion file that RUNS (the \
          `<n>b-…` convention):\n  {}",
         bad.join("\n  ")
     );
@@ -1315,7 +1334,262 @@ fn expected_annotations(source: &str) -> (Vec<String>, Vec<String>) {
 }
 
 #[cfg_attr(not(debug_assertions), allow(unused_variables, unused_mut))]
+
+/// The 1-based source lines an ERROR-level diagnostic points at, for `path`.
+///
+/// The compact renderer the harness pins ends every diagnostic with ` at <file>:<line>:<col>`,
+/// which is what makes attribution possible at all. A diagnostic naming another file (the
+/// stdlib, an `@ARGS --lib` fixture) is skipped: it cannot be isolated by editing THIS source.
+fn error_lines_in(diags: &[String], path: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    for d in diags {
+        if !matches!(
+            loft::diagnostics::compact_level(d),
+            Some(loft::diagnostics::Level::Error)
+        ) {
+            continue;
+        }
+        // `… at /abs/path.loft:12:3` — take the LAST such marker, since a message may
+        // quote a path of its own.
+        if let Some(at) = d.rfind(&format!("{path}:")) {
+            let tail = &d[at + path.len() + 1..];
+            let line: String = tail.chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(n) = line.parse::<usize>() {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
+/// Top-level `fn NAME(…) { … }` spans as `(name, first_line, last_line)`, 1-based inclusive.
+///
+/// Returns `None` the moment the scan is not certain — an unbalanced file, a `fn` whose body
+/// never closes. A wrong span would silently remove the wrong cell, which is worse than not
+/// isolating at all, so every ambiguity falls back to the old behaviour.
+fn top_level_fn_spans(src: &str) -> Option<Vec<(String, usize, usize)>> {
+    top_level_fn_spans_full(src).map(|v| v.into_iter().map(|(n, a, b, _)| (n, a, b)).collect())
+}
+
+/// [`top_level_fn_spans`] plus, per function, whether isolating the file would actually RUN an
+/// assertion of that function: it takes no parameters (so the harness runs it as an entry point)
+/// and its body contains an `assert(`.  A file with no such survivor is not worth a second
+/// parse, and one whose survivors all take parameters makes `entry_point_names` assert rather
+/// than return empty — so the isolation has to know before it commits (loft#1242).
+fn top_level_fn_spans_full(src: &str) -> Option<Vec<(String, usize, usize, bool)>> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    while i < lines.len() {
+        let t = lines[i].trim_start();
+        let is_fn = t.starts_with("fn ") || t.starts_with("pub fn ");
+        if !is_fn {
+            i += 1;
+            continue;
+        }
+        let name: String = t
+            .trim_start_matches("pub ")
+            .trim_start_matches("fn ")
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        // Brace-match from here, ignoring braces inside line comments and string literals.
+        // loft interpolates with `{…}` INSIDE strings, so skipping string bodies is not an
+        // optimisation — a counter that saw them would close the function early.
+        let mut depth = 0i32;
+        let mut opened = false;
+        let mut j = i;
+        while j < lines.len() {
+            let mut in_str = false;
+            let mut prev_backslash = false;
+            let bytes: Vec<char> = lines[j].chars().collect();
+            let mut k = 0usize;
+            while k < bytes.len() {
+                let c = bytes[k];
+                if in_str {
+                    if c == '\\' && !prev_backslash {
+                        prev_backslash = true;
+                        k += 1;
+                        continue;
+                    }
+                    if c == '"' && !prev_backslash {
+                        in_str = false;
+                    }
+                    prev_backslash = false;
+                } else if c == '"' {
+                    in_str = true;
+                } else if c == '/' && k + 1 < bytes.len() && bytes[k + 1] == '/' {
+                    break; // rest of the line is a comment
+                } else if c == '{' {
+                    depth += 1;
+                    opened = true;
+                } else if c == '}' {
+                    depth -= 1;
+                    if depth < 0 {
+                        return None;
+                    }
+                }
+                k += 1;
+            }
+            if opened && depth == 0 {
+                // `fn name()` — empty parens on the declaring line is the whole test; a
+                // parameter list that wraps lines is not a shape this corpus uses, and a
+                // false "has parameters" only costs the fallback.
+                let zero_param = lines[i].contains(&format!("{name}()"));
+                // "Would isolating this actually run an assertion?" is the real question, and
+                // it is not the same as "is this an entry point": `1215`'s only surviving
+                // function after blanking is the helper `mk1215() -> float { 2.5 }`, which is a
+                // zero-param entry point that asserts nothing.  Isolating there costs a second
+                // parse to run a cell that cannot fail.
+                let asserts = lines[i..=j].iter().any(|l| l.contains("assert("));
+                spans.push((name, i + 1, j + 1, zero_param && asserts));
+                break;
+            }
+            j += 1;
+        }
+        if !(opened && depth == 0) {
+            return None; // never closed — do not guess
+        }
+        i = j + 1;
+    }
+    Some(spans)
+}
+
+/// `src` with every function an ERROR points into blanked out, or `None` when the file cannot
+/// be isolated that way.
+///
+/// The point (loft#1242): a file should be able to assert a REFUSAL and still run the cells the
+/// refusal has nothing to do with. Until now one `@EXPECT_ERROR` stopped the whole file before
+/// execution, so a companion `<n>b-…` file had to exist purely to hold the runnable half — and
+/// the split is not free, because the two halves drift and a reader has to find both.
+///
+/// Blanking rather than deleting keeps every LINE NUMBER stable, so a diagnostic from the second
+/// parse still points where the reader expects.
+///
+/// Returns `None` — keeping the old "errors consumed" behaviour — when:
+///   * the file has a `main`, because the harness then runs only `main` and a helper it calls
+///     cannot be removed without changing what `main` means;
+///   * an error sits outside every function (a file-scope refusal), which cannot be isolated;
+///   * removing the failing cells would leave nothing to run;
+///   * the brace scan was not certain.
+fn source_without_failing_fns(src: &str, diags: &[String], path: &str) -> Option<String> {
+    let full = top_level_fn_spans_full(src)?;
+    let spans: Vec<(String, usize, usize)> = full
+        .iter()
+        .map(|(n, a, b, _)| (n.clone(), *a, *b))
+        .collect();
+    if spans.iter().any(|(n, _, _)| n == "main") {
+        return None;
+    }
+    let lines = error_lines_in(diags, path);
+    if lines.is_empty() {
+        return None;
+    }
+    let mut failing: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for l in &lines {
+        // A refusal outside any function cannot be isolated — `?` returns `None` and the
+        // caller falls back to the old behaviour.
+        let idx = spans.iter().position(|(_, a, b)| *l >= *a && *l <= *b)?;
+        failing.insert(idx);
+    }
+    if failing.len() == spans.len() {
+        return None; // every cell failed; there is nothing left to run
+    }
+    // …and something that SURVIVES must be worth running: a zero-parameter cell that carries an
+    // assertion.  Two measured shapes make this the right test rather than "is there an entry
+    // point".  `1103b`'s surviving function takes parameters, so the runner finds NO entry point
+    // and asserts rather than returning; `1215`'s survivor is `mk1215() -> float { 2.5 }`, an
+    // entry point that claims nothing.  Neither is worth a second parse, and the first one
+    // crashes the suite.
+    if !full
+        .iter()
+        .enumerate()
+        .any(|(i, (_, _, _, runnable))| *runnable && !failing.contains(&i))
+    {
+        return None;
+    }
+    // ⚠ A blanked cell must not be REACHABLE from a surviving one.
+    //
+    // Isolation is only sound while the cells are independent. If a surviving function calls a
+    // blanked one, removing it does not narrow the file — it changes what the survivor MEANS,
+    // and the most likely way that shows up is an assertion quietly becoming a no-op, which
+    // reads green. That is the failure this whole change exists to remove, so re-introducing it
+    // one level down would be the worst possible trade.
+    //
+    // Conservative by name: any mention of `<name>(` outside the blanked spans is treated as a
+    // call and stops the isolation. It over-refuses (a comment naming the function counts), and
+    // over-refusing costs only the fallback to the old behaviour, while under-refusing costs a
+    // silent wrong pass.
+    let survivor_text: String = src
+        .lines()
+        .enumerate()
+        .filter(|(i, _)| {
+            let line = i + 1;
+            !failing
+                .iter()
+                .any(|idx| line >= spans[*idx].1 && line <= spans[*idx].2)
+        })
+        .map(|(_, l)| l)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for idx in &failing {
+        let called = format!("{}(", spans[*idx].0);
+        if survivor_text.contains(&called) {
+            return None;
+        }
+    }
+    let mut out: Vec<String> = src.lines().map(str::to_string).collect();
+    for idx in &failing {
+        let (_, a, b) = &spans[*idx];
+        for l in *a..=*b {
+            if l >= 1 && l <= out.len() {
+                out[l - 1] = String::new();
+            }
+        }
+    }
+    Some(out.join("\n"))
+}
+
 fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()> {
+    let mut collected: Vec<String> = Vec::new();
+    run_test_inner(entry, debug, allow_dump, None, 0, &mut collected)
+}
+
+/// How many times a file may be peeled before the harness gives up (loft#1242).
+///
+/// Each round blanks the cells that errored and re-parses, so a file needs one round per LAYER
+/// of masking, not per error. Bounded because a pathological file could otherwise loop: the
+/// limit is far above anything the corpus needs (the deepest real case is two).
+const MAX_PEEL: u32 = 8;
+
+/// `override_src` is the peeled re-run (loft#1242): the same file with the cells an error touched
+/// blanked out, so the rest parses and runs. `depth` counts the peels; `collected` accumulates
+/// EVERY round's diagnostics, because that union is what the declarations are checked against.
+///
+/// The union is the point, not an implementation detail. `Parser::parse` runs pass 2 only when
+/// pass 1 finished clean, so ONE pass-1 error silences every `!first_pass` diagnostic in the file
+/// — `Unknown variable`, the const/ref checks, match exhaustiveness, the whole N-Store family.
+/// A file could therefore assert pass-1 errors OR pass-2 errors and never both, which is the
+/// other half of why the `<n>b-…` split exists. Peeling the pass-1 cell lets the next round reach
+/// pass 2, and checking the union means both are verified against one file's declarations.
+///
+/// Only depth 0 checks, and it checks after the recursion has returned — an inner round's
+/// diagnostics have to be in the union before the verdict is taken.
+///
+/// ⚠ The two `allow`s are about `debug-assertions = false`, which `Cargo.toml` sets for the
+/// `loft` package in EVERY profile: the only uses of `allow_dump`, and the only mutations of
+/// `p_data`, are inside `#[cfg(debug_assertions)]` blocks, so with those compiled out clippy sees
+/// a parameter that merely recurses and a binding never mutated. Both are real in a
+/// debug-assertions build — silencing is right here, deleting them would break that build.
+#[allow(clippy::only_used_in_recursion, unused_mut)]
+fn run_test_inner(
+    entry: PathBuf,
+    debug: bool,
+    allow_dump: bool,
+    override_src: Option<String>,
+    depth: u32,
+    collected: &mut Vec<String>,
+) -> std::io::Result<()> {
     // Idempotent: installs SIGSEGV/SIGABRT handler once per test
     // process so crashes print the last-executed opcode + PC.
     loft::crash_report::install("wrap");
@@ -1329,7 +1603,10 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     if std::env::var_os("LOFT_TRACE_SCRIPT").is_some() {
         eprintln!("run {entry:?}");
     }
-    let source = std::fs::read_to_string(&entry)?;
+    let source = match override_src {
+        Some(ref t) => t.clone(),
+        None => std::fs::read_to_string(&entry)?,
+    };
     let expected = expected_warnings(&source);
     let (exp_errors, exp_ann_warns) = expected_annotations(&source);
     let (expect_fail, file_level_fail) = expect_fail_fns(&source);
@@ -1360,7 +1637,16 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     let types = p.database.types.len();
     let start_def = p.data.definitions();
     let path = entry.to_string_lossy().to_string();
-    p.parse(&path, false);
+    // loft#1242 — the isolated re-run parses the REDUCED TEXT, not the file. `parse` reads from
+    // disk, so overriding `source` alone left the second pass re-parsing the original and
+    // re-reporting the very error it was meant to step around. `parse_str` is handed the same
+    // `path` as its filename so diagnostics and `@ARGS` positions still name the real file, and
+    // the blanking preserved line numbers so those positions stay true.
+    if let Some(ref text) = override_src {
+        p.parse_str(text, &path, false);
+    } else {
+        let _ = p.parse(&path, false);
+    }
     let had_errors = !p.diagnostics.is_empty()
         && p.diagnostics.lines().iter().any(|l| {
             !matches!(
@@ -1377,23 +1663,44 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     // went inert: a file whose diagnostics disappeared entirely never reached
     // `check_diagnostics`, so its `@EXPECT_ERROR` lines were not merely unmatched — they
     // were never looked at (loft#929).
-    if !p.diagnostics.is_empty()
-        || !expected.is_empty()
-        || !exp_errors.is_empty()
-        || !exp_ann_warns.is_empty()
-    {
-        check_diagnostics(
-            &p.diagnostics.lines(),
-            &expected,
-            &exp_errors,
-            &exp_ann_warns,
-            had_errors,
-        )?;
+    // ⚠ Each round contributes to the union EXACTLY ONCE, and where matters. The post-compile
+    // block below re-reads the same diagnostics (`std::mem::take` of `p.diagnostics`, plus the
+    // lints), so extending here as well would double every parse diagnostic — and a duplicate
+    // has no second `@EXPECT_ERROR` to match, so `check_diagnostics` would report it as
+    // unexpected and fail the file. The extends therefore sit on the three paths that LEAVE this
+    // function: before recursing, before the errors-consumed return, and in the post-compile
+    // block, which already includes the parse diagnostics it took.
+    // Decide whether to peel BEFORE any verdict: an inner round's diagnostics must be in the
+    // union first, or a pass-2 error unmasked by peeling would be reported as unexpected.
+    let reduced = if had_errors && depth < MAX_PEEL {
+        source_without_failing_fns(&source, &p.diagnostics.lines(), &path)
+    } else {
+        None
+    };
+    if let Some(text) = reduced {
+        println!("  errors consumed; running the cells they did not touch");
+        collected.extend(p.diagnostics.lines());
+        let ran = run_test_inner(
+            entry.clone(),
+            debug,
+            allow_dump,
+            Some(text),
+            depth + 1,
+            collected,
+        );
+        if depth == 0 {
+            check_diagnostics(collected, &expected, &exp_errors, &exp_ann_warns, true)?;
+        }
+        return ran;
     }
     // Only skip execution when the file actually has unresolved parse errors.
     // If @EXPECT_ERROR annotations exist but the errors are gone (bug fixed),
     // proceed to execution so the fix can be verified.
     if had_errors {
+        collected.extend(p.diagnostics.lines());
+        if depth == 0 {
+            check_diagnostics(collected, &expected, &exp_errors, &exp_ann_warns, true)?;
+        }
         println!("  ok (errors consumed)");
         return Ok(());
     }
@@ -1444,18 +1751,11 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     for l in diagnostics.lines() {
         println!("{l}");
     }
-    if !diagnostics.is_empty()
-        || !expected.is_empty()
-        || !exp_errors.is_empty()
-        || !exp_ann_warns.is_empty()
-    {
-        check_diagnostics(
-            &diagnostics.lines(),
-            &expected,
-            &exp_errors,
-            &exp_ann_warns,
-            true,
-        )?;
+    // The post-compile lints join the union too (`warn_dead_stores` and friends run only on a
+    // clean parse, so they can only ever appear on the round that reaches here).
+    collected.extend(diagnostics.lines());
+    if depth == 0 {
+        check_diagnostics(collected, &expected, &exp_errors, &exp_ann_warns, true)?;
     }
 
     // Discover all zero-parameter user functions as entry points.

@@ -30,6 +30,30 @@ export function compile_and_run(files_json: string): string;
 export function compile_and_start(files_json: string): string;
 
 /**
+ * Apply one debug command to the live session.
+ *
+ * Returns JSON `{"replies":[…],"output":"…"}` — the `D:` replies the command produced and
+ * whatever the program printed while it ran.  The two travel together because a `run` or a
+ * `resume` produces both, and a page fetching them separately could paint a pause before
+ * the output that led to it.
+ *
+ * The grammar is [`command`]'s: `bp <fn>` / `bp <line>`, `run`, `resume`, `step`,
+ * `eval <expr>`, `fns`.
+ */
+export function debug_command(cmd: string): string;
+
+/**
+ * Start a debug session over `source`, replacing any previous one.
+ *
+ * Returns JSON `{"ok":true}`, or `{"ok":false,"error":"…"}` carrying the diagnostics — a
+ * page that offers to run the code in front of the reader has to say why it will not.
+ *
+ * A bare script (top-level statements, no `fn main`) is desugared exactly as
+ * `compile_and_run` desugars it, so the two entries accept the same inputs.
+ */
+export function debug_start(source: string): string;
+
+/**
  * Resume execution after a frame yield.  Returns JSON:
  * `{"running":true}` — yielded again, call on next requestAnimationFrame
  * `{"running":false,"output":"..."}` — program finished
@@ -58,6 +82,8 @@ export interface InitOutput {
     readonly resume_frame: () => [number, number];
     readonly swap_export: () => [number, number];
     readonly swap_stage: (a: number, b: number) => void;
+    readonly debug_command: (a: number, b: number) => [number, number];
+    readonly debug_start: (a: number, b: number) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

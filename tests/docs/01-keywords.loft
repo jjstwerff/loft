@@ -4,8 +4,9 @@
 // @TITLE: Keywords and control flow
 // This page covers the building blocks that shape how your program makes
 // decisions and repeats work: conditions, loops, breaks, and a few loop
-// helpers that make common patterns shorter. Every example is verified with
-// an assert so you can see the exact expected result.
+// helpers that make common patterns shorter. Every example is verified: most
+// with an assert naming the exact expected result, and the first with a panic
+// that would fire if the rule it shows did not hold.
 fn main() {
   // ## Conditionals
   // 'if' runs a block only when its condition is true. If the condition is
@@ -32,9 +33,11 @@ fn main() {
   // second argument is printed as an error message.
   assert(a == 13, "Incorrect value {a} != 13");
   // ## if as an expression
-  // Every block in Loft produces a value — the last expression inside it.
-  // That means you can use 'if/else' on the right-hand side of an assignment,
-  // picking between two values based on a condition. No ternary operator needed.
+  // An 'if', a 'match', and a bare '{ }' block all produce a value — the last
+  // expression inside them. That means you can use 'if/else' on the right-hand
+  // side of an assignment, picking between two values based on a condition. No
+  // ternary operator needed. Loops are the exception: 'for' and 'while' are
+  // statements, so 'x = for i in 1..3 { i }' does not compile.
   b = if a == 13 {
     "Correct"
   } else {
@@ -58,11 +61,21 @@ fn main() {
     t = t * 10 + i;
   }
   assert(t == 54321, "Result was {t} instead of 54321");
-  // ## Nested loops and break
+  // ## The other loop: while
   // Loft has two loop statements: 'for', which walks a range or a collection, and
   // 'while', which repeats as long as its condition holds. A 'for' over a range
   // carries its own upper bound, so it is the one to reach for; a 'while' does not,
-  // and 'while true { }' runs until something stops it.
+  // and 'while true { }' runs until something stops it. Because nothing bounds a
+  // 'while', its body must move the condition towards false — here 'n += 1' is what
+  // ends the loop. This is the same sum as the 'for' above, written the other way.
+  n = 1;
+  t = 0;
+  while n <= 5 {
+    t += n;
+    n += 1;
+  }
+  assert(t == 15, "while summed to {t} instead of 15");
+  // ## Nested loops and break
   // 'break' exits the nearest enclosing loop immediately.
   // To exit an outer loop from inside an inner one, write 'outerVar#break'.
   // Here x#break leaves both loops when the product x*y reaches 16.
@@ -74,7 +87,7 @@ fn main() {
         // this breaks the inner y loop
       }
       if x * y >= 16 {
-        x# break;
+        x#break;
       }
       if len(b) > 0 {
         b += "; ";

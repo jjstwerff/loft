@@ -41,15 +41,36 @@ fn main() {
   assert(!l.matches(">"), "Incorrect higher");
   assert(l.matches(">>"), "Incorrect logical shift");
   assert(l.position() == "Tokens:1:17", "Incorrect position {l.position()}");
+  // `long_int()` reads an integer written with an `l` suffix. The suffix is part
+  // of the token, not part of the value.
+  l.parse_string("Long", "9000000000l");
+  assert(l.long_int() == 9000000000, "Long integer");
+  // A registered keyword is reported exactly as written, so a parser can tell it
+  // from an ordinary name without keeping a second list of its own.
+  l.parse_string("Keywords", "for name");
+  assert(l.peek() == "for", "A keyword reads back as itself");
+  assert(l.matches("for"), "and matches by that spelling");
+  assert(l.peek() == "name", "while an ordinary name is just a name");
   // ## String Literals and Comments
-  // `constant_text()` reads a double-quoted string and handles special codes
-  // like \n (newline) and \\ (backslash). `constant_character()` reads a
-  // single-quoted character literal and returns it as text.
+  // `constant_text()` reads a double-quoted string and decodes the escapes
+  // inside it: `\n` becomes one newline, `\t` one tab, `\r` one return, and
+  // `\\` and `\"` stand for a single backslash and quote, and `\xNN` is the
+  // character with that two-digit hex code — `\x41` is `A`. An escape the lexer
+  // does not recognise stands for its own character, so `\q` is just `q`, and an
+  // `\x` without two hex digits after it is treated the same way rather than
+  // eating what follows.
   l.parse_string("Texts", "\"123\" + '4'");
   assert(l.constant_text() == "123", "Incorrect text literal");
   assert(l.matches("+"), "Incorrect add");
-  // `constant_character()` returns a `character`, so compare it as one
-  // (`l.constant_character() == '4'`), not against the text "123".
+  // `constant_character()` reads a single-quoted literal and returns a
+  // `character`, not text — so compare it against a character.
+  assert(l.constant_character() == '4', "Incorrect character literal");
+  // An escape counts as ONE character, in a text and in a character literal
+  // alike. `size()` is what shows it: two source characters, one value.
+  l.parse_string("Escapes", "\"a\\nb\" '\\t'");
+  nl = l.constant_text() ?? "";
+  assert(size(nl) == 3, "'a\\nb' is three characters, not four: {size(nl)}");
+  assert(l.constant_character() == '\t', "An escaped character literal decodes too");
   // The lexer collects `//` comments automatically as it scans. You do not
   // need to handle them yourself. `last_comment()` returns the accumulated
   // comment text since the last consumed token. When multiple comment lines
@@ -74,8 +95,10 @@ fn main() {
   // and sets `is_formatting()` to true. At that point call
   // `set_formatting(false)` and parse the embedded expression normally using
   // the usual token readers. When the expression is done, call
-  // `set_formatting(true)` and consume the closing `}}`. Then
-  // `constant_text()` continues with the next segment of the string.
+  // `set_formatting(true)` and consume the closing `}`. Then `constant_text()`
+  // continues with the next segment of the string.
+  // The example below writes that brace as "}}" because a literal brace inside a
+  // loft string is doubled — the TOKEN the lexer matches is the single `}`.
   l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
   assert(l.constant_text() == "abc", "Before formatting");
   assert(l.is_formatting(), "Formatting");

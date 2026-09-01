@@ -6,12 +6,114 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **0** — `D-Null-Elem` was opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — `D-Narrow-Res`, `D-Narrow-Asgn` and `D-Null-Elem` were all opened and closed 2026-08-31 (below); `D-Chk-Yield` was opened and closed 2026-08-28 (below); `D-Var-Join` was opened and closed 2026-08-27 (below); `D-Null-Join` was opened and closed 2026-08-26 (below); `D-Opt-Zero` is CLOSED (2026-08-24, below); the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+
+### D-Narrow-Res — OPENED AND CLOSED (2026-08-31, loft#1249): `(N-Reserve)` held for a packed slot and not a register one
+
+`(N-Reserve)` says a reserved null is a value OF THE TYPE and is excluded from `τ?`'s range
+everywhere the value can be.  loft#334 implemented that for a nullable byte-width FIELD (its
+option 1: *"nullable byte ranges cap at 255 values"*) and the reservation stopped at the store
+layer.  A local is a full i64 slot that never packs, so the sentinel survives there and dies on
+the way to any packed position:
+
+```loft
+x: u8? = 255;            // 255      <- a value the type does not have
+t.a    = 255;            // null
+n = 250;  t.a = n + 5;   // null     <- ordinary in-range arithmetic, destroyed in silence
+```
+
+The last line is the sharp end: `250 + 5` is `255`, a legal `u8`.  Nothing overflows, nothing is
+uncomputable, and the result reaches the field as `null` with no diagnostic.  Measured identical
+on both backends; the register positions that keep 255 are the local, the parameter, the return,
+the vector element read and the cast result, and the packed ones that answer null are the struct
+field and the vector element write.
+
+`IntegerSpec::usable_min/usable_max` already answers which specs spend an edge, precisely (only a
+fixed 1- or 2-byte width whose range exactly fills it — an `i32?` has a spare code outside its
+range and an `integer limit(0,255)?` widens to get one).  **What is missing is not the bound but
+a way to ask "is this target a nullable SLOT?"**, and two cure directions were built, measured
+and rejected on 2026-08-31:
+
+1. **Bound the CAST** (`dn4_checked_cast` reads `usable_*`).  Rejected: `(mat as u8?) ?? 0` is
+   the shipped idiom for *"narrow this, or 0"*, it never keeps a `u8?` at all, and the bound
+   turned its legal `255` into the default.  `hex_field` 0.1.0 asserts exactly that value and
+   failed `scripts/revalidate_libs_local.sh` — the gate `make ci` cannot give, because a language
+   change that retro-breaks a shipped library is invisible to every branch gate.  A lexical peek
+   at the cast cannot separate the two either: a parenthesised `(e as u8?) ?? d` reads `)` at
+   that moment.
+2. **Bound the STORE SEAM** (`declared_range` answers for a nullable narrow alias, so every
+   store guard applies the usable range).  Rejected for a sharper reason: **`Type::Optional` at
+   a write target means two different things.**  An element write `e.m[i] = …` on a
+   `vector<u8>` — a NON-nullable element — presents its target as `integer(0,255)?`, because
+   `(N-Domain)` makes an index expression nullable for the miss.  The guard then bounded a
+   non-null slot by the usable range and wrote the null sentinel into it, which the store
+   flattened to `0`: `hex_field`'s `edge_set_mat` stored `255` as `0` (measured
+   `OpRangeDefault(…, 0, 254, i64::MIN)` emitted for a `vector<u8>` element).
+
+**Closed by resolving the index-write conflation first**, which turned out to be one predicate
+rather than the larger change it was feared to be.  `expressions::target_holds_null` is the one
+home for *"does the slot this store TARGETS hold null?"*: `parent_tp` is what the place is read
+out of, so a collection there carries the DECLARED element type and `Type::content` unwraps it —
+`vector<u8>` says no, `vector<u8?>` says yes, and anything that is not a collection falls back to
+the target's own wrapper.  The three range-guard seams take the answer as a REQUIRED PARAMETER
+rather than re-deriving it, which is what made the compiler enumerate them (there are exactly
+three, and a grep for the diagnostic text would have found fewer).
+
+With that in place cure 2 became correct, and it is the fix: `declared_range` answers for a
+nullable narrow alias — the compile-time narrowing refusal does not cover one, because
+`(I-Narrow-Opt)` makes that narrowing implicit and checked — and bounds it by `usable_*`.
+
+Both rejected cures are now CELLS in the guard rather than only prose here, because each looked
+obviously right: `test_a_cast_is_not_a_slot` fails on the build where cure 1 was live, and
+`test_a_non_null_element_is_not_a_nullable_slot` on the build where cure 2 was.  Guard
+`tests/scripts/1249-a-nullable-narrow-sentinel-is-not-a-value.loft`, falsified at 95a7f949 on
+both backends.
+
+⚠ **`(N-Store)` is deliberately NOT changed.** That seam's `f_type` feeds `n_store_violation`
+too, and passing it the peeled answer would make storing a nullable into a `vector<u8>` element
+a violation where today it silently is not — which is `(N-Dense)` working rather than a
+regression, but it is a second behaviour change and it wants its own measurement and its own
+guard.  The range guards take the new fact; the null-store check still reads the target type.
+
+### D-Narrow-Asgn — OPENED AND CLOSED (2026-08-31, loft#1246): a narrowing store into a NULLABLE narrow LOCAL was neither refused nor checked
+
+`(I-Narrow)` says a narrowing store needs an explicit `as` or a literal that plainly fits, and
+the 2026-07-10 refinement below completes it for a NULLABLE narrow target: no `as`, but a
+CHECKED narrowing — the value when it fits, `null` when it does not.  An annotated local
+assignment got neither:
+
+```loft
+p = 250;
+d: u8? = p + 10;                 // kept 260 — outside the range its own type declares
+s.un = p + 10;   f(p + 10);      // null, correctly — field and argument
+S { un: p + 10 };                // null, correctly — struct literal
+```
+
+The refinement lives in `convert`, which the struct literal, the argument and the return all
+reach.  The ASSIGNMENT seam never reaches `convert` for this pair, because `integer` and
+`integer(0,255)?` are `is_equal` — so it runs its own narrowing test instead, and that test is a
+REFUSAL with no checked-cast arm which additionally did not peel the `Optional` wrapper.  It
+therefore refused nothing and checked nothing, and the value landed raw.
+
+`implicit_checked_narrow` (`parser/mod.rs`) is now the one home for the refinement, asked by
+`convert` and by the assignment seam.  The rule gained the clause it was missing —
+`(I-Narrow-Opt)` in types.md — because a two-clause `(I-Narrow)` cannot express a target whose
+type already says what an out-of-range value becomes, which is why this register could read
+`OPEN: 0` while the defect stood.
+
+⚠ **The refinement's own guard was green throughout.**
+`tests/scripts/25-nullable-narrow-implicit-checked.loft` has seven cells over four functions,
+two source types and in-range/out-of-range arms — and every cell is a RETURN, so all seven enter
+through `convert`.  TESTING.md § How a guard reads green carries the general shape ("every cell
+reaches the same SEAM").  The replacement guard,
+`tests/scripts/1246-a-nullable-narrow-slot-answers-null.loft`, is written as seams first and
+values second: local, field, struct literal, vector element, argument, return and compound, each
+in both spellings of the range.
 
 ### D-Null-Elem — OPENED AND CLOSED (2026-08-31, loft#1232): a nullable stored into a collection LITERAL's element, in silence
 

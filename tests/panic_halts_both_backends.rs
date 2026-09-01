@@ -214,3 +214,107 @@ fn log_family_writes_on_both_backends() {
         "the backends write DIFFERENT log records for the same program"
     );
 }
+
+/// Production mode logs the fault and CONTINUES — on both backends (loft#1263).
+///
+/// `production = true` is documented to turn `panic()` into a fatal log entry and a failing
+/// `assert()` into an error entry, with execution carrying on, "useful for long-running
+/// services where a single error should not bring everything down"
+/// (`DESIGN_DECISIONS.md § C66`).  It was implemented for the interpreter only: on
+/// `--native` the panic aborted, the log stayed empty, and the statements after it never
+/// ran — the exact outcome the feature exists to prevent, on the backend a user reaches by
+/// typing `loft`.
+///
+/// The coverage that existed could not see it, and how is worth keeping: `runtime_logging.rs`
+/// exercises production mode on `--interpret` only, and the rows above exercise both backends
+/// with `production = false`.  Each axis was covered and the PAIR was not.
+///
+/// The halting rows above are this one's control.  Without them a `panic` that had become a
+/// no-op again — which is what shipped once already, and is what the module header is about
+/// — would satisfy every assertion here.
+#[test]
+fn production_mode_logs_and_continues_on_both_backends() {
+    if !have_rustc() {
+        println!("production_mode_logs_and_continues_on_both_backends: skipped (no rustc)");
+        return;
+    }
+    let conf = "[log]\nfile = log.txt\nlevel = info\nproduction = true\n";
+    // Both halting builtins, because they reach the same decision by different routes and
+    // the native generator emits a separate body for each.
+    for (what, prog, want_label) in [
+        (
+            "panic",
+            "fn main() {\n  println(\"BEFORE\");\n  panic(\"boom\");\n  println(\"AFTER\");\n}\n",
+            "[user_panic]",
+        ),
+        (
+            "assert",
+            "fn main() {\n  println(\"BEFORE\");\n  assert(1 == 2, \"bad\");\n  \
+             println(\"AFTER\");\n}\n",
+            "[assertion_failed]",
+        ),
+    ] {
+        let mut rendered = Vec::new();
+        for (tag, backend) in [("pi", "--interpret"), ("pn", "--native")] {
+            let dir =
+                std::env::temp_dir().join(format!("loft_prod_{}_{what}_{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("mkdir");
+            std::fs::write(dir.join("p.loft"), prog).expect("write prog");
+            std::fs::write(dir.join("log.conf"), conf).expect("write conf");
+            let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+                .args([backend, dir.join("p.loft").to_str().unwrap()])
+                .env("LOFT_TIMEOUT", "180")
+                .current_dir(&dir)
+                .output()
+                .expect("spawn loft");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let log = std::fs::read_to_string(dir.join("log.txt")).unwrap_or_default();
+
+            // 1. It CONTINUED.  This is the property the feature exists for, and the one
+            //    `--native` did not have.
+            assert!(
+                stdout.contains("AFTER"),
+                "[{backend}/{what}] production must continue past the fault; \
+                 stdout: {stdout:?}\nstderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // 2. It SAID so.  An empty log file looks like a program with nothing to say.
+            assert!(
+                log.contains(want_label),
+                "[{backend}/{what}] no {want_label} record reached the log — production \
+                 mode was read and not honoured.\nlog: {log:?}"
+            );
+            // 3. The fault still COUNTED.  Production changes when the program stops, not
+            //    whether the run failed.
+            assert_eq!(
+                out.status.code().unwrap_or(-1),
+                1,
+                "[{backend}/{what}] a logged fault must still exit non-zero"
+            );
+
+            // Same normalisation as `log_family_writes_on_both_backends`: drop the
+            // timestamp and reduce every path token to its basename, since the two legs
+            // run in separate directories.
+            rendered.push(
+                log.lines()
+                    .map(|l| {
+                        l.split_whitespace()
+                            .skip(1)
+                            .map(|tok| match tok.rsplit(['/', '\\']).next() {
+                                Some(base) if tok.contains(['/', '\\']) => base.to_string(),
+                                _ => tok.to_string(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        assert_eq!(
+            rendered[0], rendered[1],
+            "[{what}] the backends write DIFFERENT production records for the same program"
+        );
+    }
+}

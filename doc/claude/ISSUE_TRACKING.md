@@ -126,7 +126,40 @@ So, in the body of any issue whose repro was run from a work branch:
 And when a repro's symptom does not match its report, **suspect the base before the report**:
 re-run it on `main` and on the filer's branch tip before concluding the issue is wrong. The
 cheap isolating move is to apply the other issue's own WORKAROUND — that is what separated
-#1135 from #1130 in one run. Related: [DEBUG.md](DEBUG.md) § matrix-first, and
+#1135 from #1130 in one run.
+
+### The CONTRAST cell carries the base too — and it is the one nobody re-measures
+
+The cases above are about the cell that BREAKS. A differential claim — *"X leaks, its twin does
+not, so the axis is D"* — rests just as hard on the cell that WORKS, and that half fails
+differently: the broken cell reproduces everywhere, so the issue looks solid, while the twin
+that makes it a contrast is flat only on the filer's tree.
+
+loft#1248 read *"the non-capturing twin and the named twin are both flat — the axis is the
+capture, not the shape."* Measured at N=400, one loop per run:
+
+| cell | `main` | pre-#1245 (the fix's own parent) | post-#1245 |
+|---|---|---|---|
+| capturing | 404 | 404 | 404 |
+| non-capturing twin | 403 | 403 | 5 |
+| named twin | 4 | 4 | 4 |
+
+The leak is 404 on every tree — a `main` defect, correctly filed. But loft#1245 moved the twin
+from 403 to 5, and *only* the twin. On `main` the two cells read 404 and 403, so the axis the
+issue names is not derivable there at all. The sibling checkout re-measured it, found both
+lambdas leaking, and had every reason to read the report as misfiled.
+
+So for a differential claim:
+
+* **measure the contrast cell on the tree the READER will be on**, not only on yours — it is
+  load-bearing evidence, not background;
+* **prefer the fix's own PARENT as the control over `main`.** `ee1993019` isolates loft#1245;
+  `main` confounds it with the ~90 other commits on the branch, which is why the parent column
+  above is the one that settles it;
+* if the contrast needs a fix to exist at all, say so — the issue is then *under-witnessed*, not
+  misfiled, and those want opposite responses from a reader.
+
+Related: [DEBUG.md](DEBUG.md) § matrix-first, and
 STABILITY_METHOD.md § *When a filed issue names which route is broken*.
 
 ## Workarounds — the agent's "can you keep moving?" signal

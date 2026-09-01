@@ -25,7 +25,7 @@
 <article>
 <p>A file handle lets you read and write files without worrying about when the OS opens or closes them. The file opens on the first read or write and closes automatically when the handle goes out of scope.</p>
 <h2 id="inspecting-the-file-system">Inspecting the File System</h2>
-<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns a <code>FileResult</code> enum; use <code>.ok()</code> to check success. Clean up any leftover files from a previous interrupted run. <code>#cwd</code> opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default) — see @PLN9.</p>
+<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> is the mode the handle will read and write in. Two of its values answer what the path IS — Directory, and NotExists for a path with nothing at it. The other three are modes you choose: TextFile (UTF-8 text, and the default for any file that exists), LittleEndian (binary, bytes stored least-significant first — common on most PCs) and BigEndian (binary, most-significant first — common in network protocols). It does not inspect content: a PNG you have not set a format on reads as TextFile, so <code>#format</code> cannot tell you a file is text. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns a <code>FileResult</code> enum; use <code>.ok()</code> to check success. Clean up any leftover files from a previous interrupted run. <code>#cwd</code> opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default).</p>
 <pre><code>#cwd
 <span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test.bin"</span>);
@@ -43,20 +43,20 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ex#format == <span class="en">Directory</span>, <span class="st">"example is a directory"</span>);
   c = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example/config/terrain.txt"</span>).<span class="fn-call"><a href="stdlib-file-system.html">lines</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c[<span class="nm">1</span>] == <span class="st">"    terrain = ["</span>, <span class="st">"Line was '{c[1]}'"</span>);</code></pre>
-<p><code>exists</code> and <code>delete</code> are safe to call when the file is absent. <code>delete</code> returns false rather than crashing when nothing is there.</p>
+<p><code>exists</code> and <code>delete</code> are safe to call when the file is absent. Nothing crashes: <code>delete</code> answers <code>FileResult.NotFound</code>, whose <code>.ok()</code> is false.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">exists</a></span>(<span class="st">"test.bin"</span>), <span class="st">"File should not exist before the test."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"nonexistent_xyz.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete on missing file not ok"</span>);</code></pre>
 <h2 id="writing-a-text-or-binary-file">Writing a Text or Binary File</h2>
-<p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set <code>f#format</code> to LittleEndian or BigEndian before writing binary data. Use <code>f += value</code> to append the raw bytes of any scalar value (u8, u16, i32, integer, single, float, or text). An <code>integer</code> is 8 bytes wide (see the size assertions below).</p>
+<p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set <code>f#format</code> to LittleEndian or BigEndian before writing binary data. Use <code>f += value</code> to append the raw bytes of any scalar value: u8, i8, u16, i16, u32, i32, integer, single, float, boolean, or text. Cast to the width you mean — an uncast <code>integer</code> writes 8 bytes, which is rarely the record width a binary format wants, so the compiler asks you to say it. Write <code>as integer</code> where the 8 bytes are deliberate.</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"test.bin"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#format == <span class="en">NotExists</span>, <span class="st">"File should not exist yet."</span>);
   f#format = <span class="en">BigEndian</span>;  <span class="cm">// BigEndian: most-significant byte written first.</span>
   f += <span class="nm">0</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">0x203</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u16</a></span>;
-  f += <span class="nm">0x4050607</span>;
-  f += <span class="nm">0x8090a0b0c0d0e0f</span>;</code></pre>
-<p><code>f#size</code> returns the total number of bytes written so far. Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.</p>
+  f += <span class="nm">0x4050607</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;
+  f += <span class="nm">0x8090a0b0c0d0e0f</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</code></pre>
+<p><code>f#size</code> returns the total number of bytes written so far. An integer is 8 bytes, so the total is 1 + 1 + 2 + 8 + 8 = 20.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">20</span>, <span class="st">"Should have written 20 bytes."</span>);</code></pre>
 <p>Text is written as raw UTF-8 bytes with no length prefix.</p>
 <pre><code>  f += <span class="st">"Hello world!"</span>;
@@ -75,7 +75,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v == <span class="nm">0x3020100</span>, <span class="st">"BigEndian bytes 0..3 read as LittleEndian i32."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="ty">index</span> == <span class="nm">0</span>, <span class="st">"Last read started at byte 0."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#next == <span class="nm">4</span>, <span class="st">"Next read starts at byte 4."</span>);</code></pre>
-<p>Seek to byte 20 to skip past the integers and read the text directly. (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)</p>
+<p>Seek to byte 20 to skip past the integers and read the text directly. (The u8+u8+u16+integer+integer header is 1+1+2+8+8 = 20 bytes, so the text starts there.)</p>
 <pre><code>  f#next = <span class="nm">20</span>;
   s = f#<span class="fn-call">read</span>(<span class="nm">5</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">text</a></span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="st">"Hello"</span>, <span class="st">"Partial text read from offset 20."</span>);
@@ -96,10 +96,14 @@
   f#format = <span class="en">LittleEndian</span>;
   ints =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>];
   f += ints;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">32</span>, <span class="st">"Four integers = 32 bytes (8 each, post-2c)"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">32</span>, <span class="st">"Four integers = 32 bytes (8 each)"</span>);</code></pre>
 <p>Truncate to the first two integers.</p>
 <pre><code>  f#size = <span class="nm">16</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">16</span>, <span class="st">"Truncated to 16 bytes"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">16</span>, <span class="st">"Truncated to 16 bytes"</span>);</code></pre>
+<p>Growing works the same way, and the bytes you gain are zero.</p>
+<pre><code>  f#size = <span class="nm">24</span>;
+  f#next = <span class="nm">16</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="fn-call">read</span>(<span class="nm">8</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">0</span>, <span class="st">"The extension reads as zero bytes."</span>);
  }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin after vector write test."</span>);</code></pre>
 <p>Write a count followed by individual float values. <code>sizeof(T)</code> returns the byte width of a type, so you can compute the correct read length without hard-coding magic numbers.</p>
@@ -122,16 +126,38 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((b.data[<span class="nm">0</span>] ?? <span class="nm">0.0f</span>) == <span class="nm">1.1f</span>, <span class="st">"First float survives the round-trip."</span>);
  }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin."</span>);</code></pre>
+<h2 id="directories">Directories</h2>
+<p><code>is_dir(path)</code> and <code>is_file(path)</code> answer the question directly, without going through a handle. <code>files()</code> lists a directory as File handles, so every entry carries its own path and format; <code>list_dir(path)</code> gives you just the names. Both are sorted by name, so an index means the same entry on every machine — but they disagree on a path that is not a directory: <code>files()</code> answers an empty list and <code>list_dir</code> answers null, so discharge that one with <code>?? []</code>.</p>
+<pre><code>  dir = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">is_dir</a></span>(<span class="st">"tests/example"</span>), <span class="st">"the example directory is a directory"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">is_file</a></span>(<span class="st">"tests/example"</span>), <span class="st">"a directory is not a file"</span>);
+  entries = dir.<span class="fn-call"><a href="stdlib-file-system.html">files</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(entries) &gt; <span class="nm">0</span>, <span class="st">"the example directory is not empty"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((entries[<span class="nm">0</span>] ?? <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">""</span>)).path == <span class="st">"tests/example/config"</span>, <span class="st">"first entry path"</span>);</code></pre>
+<p><code>mkdir(path)</code> creates one level and <code>mkdir_all(path)</code> creates every missing level. <code>mkdir_all</code> is idempotent — a directory that already exists is Ok, which is what makes it safe to call on the way into a run.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">mkdir_all</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir_all on an existing directory is Ok"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">mkdir</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir on an existing directory is not Ok"</span>);</code></pre>
+<p><code>delete</code> is a file operation and answers FileResult.IsDirectory when you point it at a directory. <code>rmdir</code> is the one that removes a directory, and only an EMPTY one — it answers NotEmpty while entries remain. A recursive removal is yours to write: list_dir() the children, delete() the files, rmdir() the directory, deepest first.</p>
 <h2 id="error-handling">Error handling</h2>
-<p>File operations that can fail return a <code>FileResult</code> enum. Call <code>.ok()</code> to check success. The program does not crash on failure — you decide what to do.</p>
+<p>Filesystem operations that can fail return a <code>FileResult</code>, and it is an enum with six variants, not a boolean. <code>.ok()</code> is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.</p>
 <pre><code>  result = <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"this_file_does_not_exist.txt"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!result.<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete missing file returns not-ok"</span>);</code></pre>
-<p>Reading a non-existent file produces an empty result, not a crash.</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!result.<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete missing file returns not-ok"</span>);
+  why = match result {
+    <span class="en">Ok</span> =&gt; <span class="st">"deleted"</span>,
+    <span class="en">NotFound</span> =&gt; <span class="st">"there was nothing there"</span>,
+    <span class="en">PermissionDenied</span> =&gt; <span class="st">"the OS refused"</span>,
+    <span class="en">IsDirectory</span> =&gt; <span class="st">"that is a directory"</span>,
+    <span class="en">NotEmpty</span> =&gt; <span class="st">"the directory still has entries in it"</span>,
+    <span class="en">Other</span> =&gt; <span class="st">"it failed for another reason"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(why == <span class="st">"there was nothing there"</span>, <span class="st">"delete on a missing file is NotFound"</span>);</code></pre>
+<p>A handle to a path with nothing at it is safe to hold and safe to read. Nothing crashes: the format is NotExists and <code>lines()</code> is empty. A sized <code>f#read</code> on it answers null rather than a value you might mistake for data, and says so on stderr.</p>
 <pre><code>  ghost = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_file.txt"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ghost#format == <span class="en">NotExists</span>, <span class="st">"non-existent file has NotExists format"</span>);</code></pre>
-<p><code>move</code> reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains <code>..</code> (loft#712).</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ghost#format == <span class="en">NotExists</span>, <span class="st">"non-existent file has NotExists format"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(ghost.<span class="fn-call"><a href="stdlib-file-system.html">lines</a></span>()) == <span class="nm">0</span>, <span class="st">"lines() on a missing file is empty"</span>);</code></pre>
+<p><code>move</code> reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains <code>..</code>.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"any.txt"</span>, <span class="st">"../escape.txt"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"move with a missing source fails"</span>);</code></pre>
-<p>Writing to a read-only or invalid path also returns a FileResult. Always check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
+<p>One asymmetry to know: <code>f += value</code> is a statement and reports nothing. If the path cannot be opened for writing, the bytes are dropped and the run carries on with a message on stderr. Use <code>f.write(text)</code> when you need the write itself to answer a FileResult, and check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
 <pre><code>}</code></pre>
 <section id="loft-panel" class="loft-panel" hidden>
 <h2>Run it yourself</h2>
@@ -153,10 +179,13 @@
 // closes automatically when the handle goes out of scope.
 // ## Inspecting the File System
 // `file(path)` creates a File handle without opening anything yet.
-// `f#format` tells you what kind of path you are looking at: TextFile (plain text),
-// LittleEndian (binary, bytes stored least-significant first — common on most PCs),
-// BigEndian (binary, bytes stored most-significant first — common in network protocols),
-// Directory, or NotExists.
+// `f#format` is the mode the handle will read and write in. Two of its values
+// answer what the path IS — Directory, and NotExists for a path with nothing at
+// it. The other three are modes you choose: TextFile (UTF-8 text, and the default
+// for any file that exists), LittleEndian (binary, bytes stored least-significant
+// first — common on most PCs) and BigEndian (binary, most-significant first —
+// common in network protocols). It does not inspect content: a PNG you have not
+// set a format on reads as TextFile, so `#format` cannot tell you a file is text.
 // `lines()` reads a text file and returns it as a vector of lines.
 // `exists(path)` is a convenience shorthand for checking that a path is not
 // NotExists. `delete(path)` removes a file and returns a `FileResult` enum;
@@ -165,7 +194,7 @@
 // `#cwd` opts this program into cwd-relative paths (CLI-tool semantics): a
 // relative path resolves against the working directory, not the program's own
 // directory.  Without it, relative paths re-home next to the program (the
-// portable-bundle default) — see @PLN9.
+// portable-bundle default).
 #cwd
 fn cleanup() {
   delete("test.bin");
@@ -186,26 +215,28 @@ fn main() {
   assert(ex#format == Directory, "example is a directory");
   c = file("tests/example/config/terrain.txt").lines();
   assert(c[1] == "    terrain = [", "Line was '{c[1]}'");
-  // `exists` and `delete` are safe to call when the file is absent.
-  // `delete` returns false rather than crashing when nothing is there.
+  // `exists` and `delete` are safe to call when the file is absent. Nothing
+  // crashes: `delete` answers `FileResult.NotFound`, whose `.ok()` is false.
   assert(!exists("test.bin"), "File should not exist before the test.");
   assert(!delete("nonexistent_xyz.bin").ok(), "delete on missing file not ok");
   // ## Writing a Text or Binary File
   // Wrapping the file handle in a block ensures the file closes the moment
   // the block ends. Set `f#format` to LittleEndian or BigEndian before
   // writing binary data. Use `f += value` to append the raw bytes of any
-  // scalar value (u8, u16, i32, integer, single, float, or text). An `integer`
-  // is 8 bytes wide (see the size assertions below).
+  // scalar value: u8, i8, u16, i16, u32, i32, integer, single, float, boolean,
+  // or text. Cast to the width you mean — an uncast `integer` writes 8 bytes,
+  // which is rarely the record width a binary format wants, so the compiler
+  // asks you to say it. Write `as integer` where the 8 bytes are deliberate.
  {f = file("test.bin");
   assert(f#format == NotExists, "File should not exist yet.");
   f#format = BigEndian;  // BigEndian: most-significant byte written first.
   f += 0 as u8;
   f += 1 as u8;
   f += 0x203 as u16;
-  f += 0x4050607;
-  f += 0x8090a0b0c0d0e0f;
+  f += 0x4050607 as integer;
+  f += 0x8090a0b0c0d0e0f as integer;
   // `f#size` returns the total number of bytes written so far.
-  // Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.
+  // An integer is 8 bytes, so the total is 1 + 1 + 2 + 8 + 8 = 20.
   assert(f#size == 20, "Should have written 20 bytes.");
   // Text is written as raw UTF-8 bytes with no length prefix.
   f += "Hello world!";
@@ -232,7 +263,8 @@ fn main() {
   assert(f#index == 0, "Last read started at byte 0.");
   assert(f#next == 4, "Next read starts at byte 4.");
   // Seek to byte 20 to skip past the integers and read the text directly.
-  // (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)
+  // (The u8+u8+u16+integer+integer header is 1+1+2+8+8 = 20 bytes, so the
+  // text starts there.)
   f#next = 20;
   s = f#read(5) as text;
   assert(s == "Hello", "Partial text read from offset 20.");
@@ -256,10 +288,14 @@ fn main() {
   f#format = LittleEndian;
   ints =[1, 2, 3, 4];
   f += ints;
-  assert(f#size == 32, "Four integers = 32 bytes (8 each, post-2c)");
+  assert(f#size == 32, "Four integers = 32 bytes (8 each)");
   // Truncate to the first two integers.
   f#size = 16;
   assert(f#size == 16, "Truncated to 16 bytes");
+  // Growing works the same way, and the bytes you gain are zero.
+  f#size = 24;
+  f#next = 16;
+  assert(f#read(8) as integer == 0, "The extension reads as zero bytes.");
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin after vector write test.");
   // Write a count followed by individual float values. `sizeof(T)` returns
@@ -289,23 +325,65 @@ fn main() {
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
 
+  // ## Directories
+  // `is_dir(path)` and `is_file(path)` answer the question directly, without
+  // going through a handle. `files()` lists a directory as File handles, so
+  // every entry carries its own path and format; `list_dir(path)` gives you
+  // just the names. Both are sorted by name, so an index means the same entry
+  // on every machine — but they disagree on a path that is not a directory:
+  // `files()` answers an empty list and `list_dir` answers null, so discharge
+  // that one with `?? []`.
+  dir = file("tests/example");
+  assert(is_dir("tests/example"), "the example directory is a directory");
+  assert(!is_file("tests/example"), "a directory is not a file");
+  entries = dir.files();
+  assert(len(entries) &gt; 0, "the example directory is not empty");
+  assert((entries[0] ?? file("")).path == "tests/example/config", "first entry path");
+  // `mkdir(path)` creates one level and `mkdir_all(path)` creates every missing
+  // level. `mkdir_all` is idempotent — a directory that already exists is Ok,
+  // which is what makes it safe to call on the way into a run.
+  assert(mkdir_all("tests/example").ok(), "mkdir_all on an existing directory is Ok");
+  assert(!mkdir("tests/example").ok(), "mkdir on an existing directory is not Ok");
+  // `delete` is a file operation and answers FileResult.IsDirectory when you
+  // point it at a directory. `rmdir` is the one that removes a directory, and
+  // only an EMPTY one — it answers NotEmpty while entries remain. A recursive
+  // removal is yours to write: list_dir() the children, delete() the files,
+  // rmdir() the directory, deepest first.
+
   // ## Error handling
-  // File operations that can fail return a `FileResult` enum.
-  // Call `.ok()` to check success. The program does not crash on failure —
-  // you decide what to do.
+  // Filesystem operations that can fail return a `FileResult`, and it is an enum
+  // with six variants, not a boolean. `.ok()` is the shorthand for the Ok one;
+  // match when you need to tell the failures apart. The program does not crash
+  // on failure — you decide what to do.
   result = delete("this_file_does_not_exist.txt");
   assert(!result.ok(), "delete missing file returns not-ok");
+  why = match result {
+    Ok =&gt; "deleted",
+    NotFound =&gt; "there was nothing there",
+    PermissionDenied =&gt; "the OS refused",
+    IsDirectory =&gt; "that is a directory",
+    NotEmpty =&gt; "the directory still has entries in it",
+    Other =&gt; "it failed for another reason"
+  };
+  assert(why == "there was nothing there", "delete on a missing file is NotFound");
 
-  // Reading a non-existent file produces an empty result, not a crash.
+  // A handle to a path with nothing at it is safe to hold and safe to read.
+  // Nothing crashes: the format is NotExists and `lines()` is empty. A sized
+  // `f#read` on it answers null rather than a value you might mistake for data,
+  // and says so on stderr.
   ghost = file("no_such_file.txt");
   assert(ghost#format == NotExists, "non-existent file has NotExists format");
+  assert(len(ghost.lines()) == 0, "lines() on a missing file is empty");
 
   // `move` reports on the FILES, not on the shape of the path: a missing source
-  // is NotFound whether or not the path contains `..` (loft#712).
+  // is NotFound whether or not the path contains `..`.
   assert(!move("any.txt", "../escape.txt").ok(), "move with a missing source fails");
 
-  // Writing to a read-only or invalid path also returns a FileResult.
-  // Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir_all`.
+  // One asymmetry to know: `f += value` is a statement and reports nothing. If
+  // the path cannot be opened for writing, the bytes are dropped and the run
+  // carries on with a message on stderr. Use `f.write(text)` when you need the
+  // write itself to answer a FileResult, and check `.ok()` after `delete`,
+  // `move`, `mkdir`, and `mkdir_all`.
 }
 </pre>
 <style>.loft-panel{margin:2em 0;padding:1em;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa}.loft-panel h2{margin-top:0}.lp-note{color:#57606a;font-size:0.9em;margin:0 0 0.8em}.lp-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0.8em}.loft-panel button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:5px 14px;font-size:0.9em;font-weight:600;cursor:pointer}.loft-panel button:disabled{opacity:0.4;cursor:default}.lp-status{font-size:0.85em;color:#57606a}.lp-status.lp-ok{color:#1a7f37}.lp-status.lp-err{color:#cf222e}.lp-status.lp-info{color:#57606a}.lp-output{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;min-height:2.2em;max-height:16em;overflow:auto;white-space:pre-wrap;margin:0 0 0.8em}.lp-frame{background:#fff;border:1px solid #d0d7de;border-radius:4px;padding:8px;margin-bottom:0.8em}.lp-frame-head{font-size:0.85em;color:#57606a;margin-bottom:6px}.lp-locals{display:flex;gap:6px;flex-wrap:wrap}.lp-local,.lp-callable{background:#eaeef2;border-radius:3px;padding:2px 6px;font-size:0.85em;cursor:pointer}.lp-local:hover,.lp-callable:hover{background:#d0d7de}.lp-callables{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:0.8em}.lp-prompt{display:flex;gap:6px;align-items:center}.lp-caret{color:#2563eb;font-weight:700}.lp-prompt input{flex:1;padding:6px 8px;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em}.lp-log{margin-top:0.6em;display:flex;flex-direction:column;gap:4px;max-height:14em;overflow:auto}.lp-row{display:flex;gap:8px;align-items:baseline;font-size:0.9em}.lp-q{color:#2563eb;flex:0 0 auto}.lp-a{color:#1f2328;word-break:break-word}.lp-row.lp-warn .lp-a{color:#9a6700}.lp-lines{margin-top:1em}.lp-lines summary{cursor:pointer;font-size:0.9em;color:#57606a}.lp-src{margin:0.6em 0 0;padding-left:3.5em;background:#fff;border:1px solid #d0d7de;border-radius:4px;max-height:20em;overflow:auto}.lp-line{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.82em;white-space:pre;cursor:pointer;padding:0 4px}.lp-line:hover{background:#eaeef2}.lp-line.lp-break{background:#ffebe9;outline:1px solid #cf222e}@media print{.loft-panel{display:none}}</style>

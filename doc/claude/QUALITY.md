@@ -479,10 +479,19 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 344 | 327 | **17** |
+| 358 | 334 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
+
+⚠ **The row moved from 344 · 327 · 17 to 356 · 332 · 24 with nothing about the code changing,
+and the reason is worth keeping: the census USED TO DEPEND ON FORMATTING.** `DISCRIM` ends in
+`(?:=>|\||\)\s*=)`, and its `|` alternative was matching the first bar of a boolean `||` — so
+`if def.code == Value::Null || f()` counted as discrimination and the same test on its own line
+did not. Rewrapping one condition in `scopes.rs` moved the published total by one. An equality
+test against a variant discriminates on it exactly as a pattern does, and a `Span` defeats it
+the same way, so `EQ_TEST` now recognises it by design rather than by accident. The +12 and the
++7 are sites that were always in scope and never counted; nothing regressed to produce them.
 The figures below the fold were measured against the NARROWER matcher this audit shipped with
 (221 · 211 · 10); B4g says what widening it added, why the backlog grew without anything
 regressing, and which site the measurement then took back off it.
@@ -497,6 +506,16 @@ loft#1200 moved it to 339 · 322 · 17 with `scopes::nullable_locals_that_displa
 pre-scan that decides whether a nullable heap-record local is worth an ownership witness; it
 unspans before matching `Set`, so it lands on the peeling side and leaves the opaque column
 alone.
+
+loft#1245 moved it to 346 · 329 · 17, and the pair it added is the audit's own subject: both
+`use_analysis::callee_of` and `use_analysis::call_return_frees_source` went from naming ONE
+`Value` variant to naming two (`Call` and `CallRef`), which is what put them in scope at all.
+Both unspan first, so the opaque column is unchanged. The defect that fix closed is the same
+shape one variant further out — not a missing `unspan` but a missing VARIANT, a call spelled
+`CallRef` that five readers of "is this a call?" could not see. This audit cannot ask that
+question (its predicate is `Span`-peeling, not variant coverage); `ir_walker_audit.py
+spellings` is the one that can, and the general lesson is in
+[IMPLEMENTATIONS.md § One notion, how many SPELLINGS?](formal/IMPLEMENTATIONS.md).
 
 loft#1194/#1195 moved the table twice: 337 · 319 · 18 → 337 · 320 · **17**, then
 338 · 321 · 17 as `parser::field_place` entered it — a new site that discriminates `Var` from
@@ -526,7 +545,7 @@ match, for the reason the column exists: each is deciding what an assignment WRI
 `Span` that hid the shape would leave the statement writing nothing.
 
 loft#1236 adds one more peeling site — `source_names_a_collection`, which asks what an append's
-source IS and therefore has to look through a `Span` to see it — for 344 · 327 · **17**.
+source IS and therefore has to look through a `Span` to see it — for 346 · 329 · **17**.
 
 loft#1227 moved it to 343 · 326 · **17** with `use_analysis::GroupAppends::collect`, which tells
 a `Span`, a `Line` marker, a nested `Block` and an `OpNewRecord` call apart while walking one
@@ -2183,6 +2202,32 @@ written before the call that still needed it. The register numbers collided as w
 checkouts had "one home for the fact" and it did not help, because **one home secures the
 QUESTION and says nothing about WHICH VALUE each caller hands it, or WHEN.**
 
+##### 5b. A home that is RIGHT and not asked leaves no trace to screen for
+
+The one-home work has so far been about a question with **N spellings**, where the fix is to make
+the readers agree and the screen is `scripts/rule_predicate_audit.py` finding the duplicated
+variant sets. loft#1250 is the other failure in the family and it is invisible to that screen.
+
+`Variables::const_report_var` maps a promoted `__tp_` text local back to the parameter it came
+from and every other variable to itself. It was written for exactly this, its doc-comment says
+so — and it was asked by **one of the five sites that report a const modification**: the one
+that was already right. The other four read the raw variable, so `fn f(s: const text)` refused
+with *"Cannot modify const parameter `'__tp_s'`"*, naming a variable that appears nowhere in the
+author's program.
+
+**Nothing about that is detectable by looking for drift.** There is no second home, no
+disagreeing spelling, no duplicated variant list — the four silent sites contain nothing to
+match, because what they do is the RAW thing the helper wraps, which is also what every correct
+site that does not need the helper does. The home being right is what makes it invisible.
+
+If a screen for this is worth writing, the shape to look for is: **a `pub(crate)` predicate
+whose doc-comment names a question, with callers performing the raw operation it wraps in the
+same diagnostic or decision.** A weaker but cheaper proxy that would have caught this one: a
+helper with exactly ONE call site and a doc-comment written as a general rule — the mismatch
+between "here is how to answer X" and "answered once" is the signal. Neither is built; the
+observation is recorded because the class is now known to exist and cost a shipped diagnostic
+that named a variable the program does not contain.
+
 ##### 6. Performance is invisible to the whole apparatus
 
 loft#1109 — a 26 % regression on the tuple return introduced by loft#1102 — was found by hand
@@ -2374,14 +2419,34 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 663 | 311 | 5 | **347** |
+| 670 | 318 | 5 | **347** |
+
+loft#1245 added `use_analysis::callref_captures` on the seeing-through side (the opaque
+column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function` through
+`.base()`, because the same fn-ref reaches it as `fn(τ) -> ρ` and as `fn(τ) -> ρ?` and a
+capture is a capture either way.
+
+loft#1254 added the empty-stub return classifier on the same side, and the opaque column again
+did not move: it asks whether a stub's return is HANDLE-carried, peeling first for the same
+reason — a stub declared `-> P?` needs the twelve-byte null exactly as `-> P` does, so the
+question is about the storage and not about the wrapper.  Joining the two checkouts put the
+row at 668 · 316 · 5 · 347: both sides had moved it, and neither side's number is right after
+a join, so it is re-measured rather than added up.
 
 Two moving checkouts, and the movements are independent.  loft#1200 added
 `scopes::nullable_locals_that_displace` on the seeing-through side: it asks BOTH questions on
 purpose — `Type::Optional` names the spelling it is looking for, and `.base()` peels it to ask
 what the storage is.  loft#1204, loft#1207 and loft#1212 then REPAIRED sites out of the opaque
-column, which is the movement this column exists to report.  loft#1227's `GroupAppends::report` is one the screen caught on BRAND-NEW code rather than on
-the backlog: it matched its holder against `Type::Reference` bare, which reads a `Counter` local
+column, which is the movement this column exists to report.  loft#1246 moved both of the first two columns by +2 and left the opaque column where it was:
+`uncomputable_default` and `implicit_checked_narrow` are new sites that ask the wrapper
+question deliberately — each is the ONE home for a rule whose answer turns on nullability, so
+naming `Type::Optional` there is the point rather than a spelling to peel.  loft#1254's
+`uninitialised_native_value` is another: it states the two arms where a type's DEFAULT differs
+from its NULL and delegates the rest, and its `Optional` arm is that decision, not a peel it
+forgot.  loft#1249's `target_holds_null` is the sharpest of the three — it exists BECAUSE
+`Type::Optional` on a write target means two things, so naming the variant there is the whole
+function rather than a spelling it failed to peel.  loft#1227's `GroupAppends::report` is one the screen caught on BRAND-NEW code rather
+than on the backlog: it matched its holder against `Type::Reference` bare, which reads a `Counter` local
 and misses a `Counter?` one holding the same fields and the same groups.  Named on the first run
 after the lint was written, so the blindness never shipped — `.base()`, and the opaque column
 did not grow.

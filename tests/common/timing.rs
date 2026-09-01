@@ -43,8 +43,29 @@
 
 use std::time::{Duration, Instant};
 
-/// CPU consumed so far by `who` (`RUSAGE_SELF` or `RUSAGE_CHILDREN`).
-fn cpu(who: i32) -> Duration {
+/// Which process tree a CPU reading is about.  Spelled here rather than as `libc`'s constants
+/// because `libc` is a `cfg(unix)` dependency: naming its types in a signature is what made
+/// this file fail to COMPILE on Windows, where `getrusage` does not exist and the crate is not
+/// linked (`error[E0433]: cannot find module or crate 'libc'`, the nightly's windows leg).
+#[derive(Clone, Copy)]
+pub enum Who {
+    /// This process.
+    Own,
+    /// Children already reaped.
+    Kids,
+}
+
+/// CPU consumed so far by `who`.
+///
+/// Unix reads it from `getrusage`.  Everywhere else there is no equivalent this file can reach
+/// without a new dependency, so it reads ZERO — and [`Unit::finish`] says so once per armed run
+/// rather than writing plausible zeros into a report nobody can tell from a fast test.
+#[cfg(unix)]
+fn cpu(who: Who) -> Duration {
+    let who = match who {
+        Who::Own => libc::RUSAGE_SELF,
+        Who::Kids => libc::RUSAGE_CHILDREN,
+    };
     // SAFETY: `getrusage` writes a plain POD struct; the zeroed value is a valid
     // `rusage`, and failure leaves it zeroed, which reads as "no CPU" rather than as
     // garbage.  A wrong-but-monotonic zero is the safe failure for a REPORT.
@@ -56,6 +77,11 @@ fn cpu(who: i32) -> Duration {
         Duration::from_secs(t.tv_sec.max(0) as u64) + Duration::from_micros(t.tv_usec.max(0) as u64)
     };
     secs(ru.ru_utime) + secs(ru.ru_stime)
+}
+
+#[cfg(not(unix))]
+fn cpu(_who: Who) -> Duration {
+    Duration::ZERO
 }
 
 /// An open measurement.  Take one before the work, call [`finish`](Self::finish) after.
@@ -72,8 +98,8 @@ impl Unit {
     pub fn start() -> Self {
         Self {
             wall: Instant::now(),
-            own: cpu(libc::RUSAGE_SELF),
-            kids: cpu(libc::RUSAGE_CHILDREN),
+            own: cpu(Who::Own),
+            kids: cpu(Who::Kids),
         }
     }
 
@@ -87,8 +113,21 @@ impl Unit {
         };
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         let wall = ms(self.wall.elapsed());
-        let own = ms(cpu(libc::RUSAGE_SELF).saturating_sub(self.own));
-        let kids = ms(cpu(libc::RUSAGE_CHILDREN).saturating_sub(self.kids));
+        let own = ms(cpu(Who::Own).saturating_sub(self.own));
+        let kids = ms(cpu(Who::Kids).saturating_sub(self.kids));
+        // A platform with no `getrusage` writes wall-clock and two zeros, which is a report
+        // that reads as "this test used no CPU" — indistinguishable from a very fast one.  Say
+        // it once per armed run, and only when armed, so an ordinary run stays silent.
+        #[cfg(not(unix))]
+        {
+            static SAID: std::sync::Once = std::sync::Once::new();
+            SAID.call_once(|| {
+                eprintln!(
+                    "loft: LOFT_TEST_TIMING is armed on a platform without `getrusage` — the \
+                     wall column is real and the two CPU columns are 0, not measured."
+                );
+            });
+        }
         // Tabs, and the label last, so a label containing a tab cannot shift a number
         // into the wrong column — the failure would be silent and the numbers plausible.
         let row = format!(

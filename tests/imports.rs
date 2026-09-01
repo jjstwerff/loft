@@ -150,6 +150,14 @@ fn pln22_phase4_flat_list_rejected() {
         p.diagnostics.level() >= Level::Error,
         "Expected the flat `use lib::a, b` list to be rejected"
     );
+    // The Libraries chapter quotes this sentence, so the reader who wrote the flat list
+    // recognises the answer they get.  A refusal the reference describes in its own words
+    // is a promise about a string, and only a substring match keeps it.
+    let said = p.diagnostics.lines().join("\n");
+    assert!(
+        said.contains("import multiple names with parentheses"),
+        "the refusal must still say what the Libraries chapter quotes; got: {said}"
+    );
 }
 
 /// @PLN102 C97 — a library may define a name that also exists in the stdlib (`clamp`);

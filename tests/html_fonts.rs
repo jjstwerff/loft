@@ -163,10 +163,35 @@ const ctrl = {{ ac: null, assets: {{}} }};
 
 /// Run one probe page and return the harness's verdict plus its output.
 fn check(url: &str, assert_expr: &str, wait_ms: u32, port: u16) -> (bool, String) {
+    check_when(url, PAGE_RAN, assert_expr, wait_ms, port)
+}
+
+/// The state every assertion in this file is ABOUT: the page reached the bridge and recorded
+/// all three declarations.  `f.resolved` is a snapshot `loft_gl_load_font` takes SYNCHRONOUSLY
+/// (`familyResolves` at call time), so once these records exist the answer is frozen — which is
+/// why waiting longer is safe here and cannot turn a control green.
+const PAGE_RAN: &str = "Array.isArray(globalThis.loftFonts) && globalThis.loftFonts.length===3";
+
+/// Run one probe page, waiting for `ready_expr` to hold before asserting `assert_expr`.
+///
+/// The two are separate on purpose.  A fixed sleep answers "how long to wait" where this file
+/// means "wait until the page got there", and on a loaded runner the difference is a gate that
+/// reports its CLAIM as false when nothing was observed at all: `globalThis.loftFonts` was
+/// `undefined` at 1500ms and the control read it as *"a throttled font still resolved"*, which
+/// is a font-ordering bug that was not there.  The harness reports a `ready.timeout` failure
+/// for that shape, and [`page_never_ran`] is how the assertions tell the two apart.
+fn check_when(
+    url: &str,
+    ready_expr: &str,
+    assert_expr: &str,
+    wait_ms: u32,
+    port: u16,
+) -> (bool, String) {
     let out = Command::new("node")
         .arg(repo_root().join("tools/html_render_check.mjs"))
         .arg(url)
         .args(["--wait-ms", &wait_ms.to_string()])
+        .args(["--ready", ready_expr])
         .args(["--port", &port.to_string()])
         .args(["--assert", assert_expr])
         .output()
@@ -177,6 +202,16 @@ fn check(url: &str, assert_expr: &str, wait_ms: u32, port: u16) -> (bool, String
         String::from_utf8_lossy(&out.stderr)
     );
     (out.status.success(), text)
+}
+
+/// Did the run observe NOTHING — the page never reached the bridge inside its budget — rather
+/// than observe the page and find the claim false?
+///
+/// Every assertion here is about what the bridge RECORDED, so a run that recorded nothing has
+/// no reading to report and must not be described as one.  Without this the same message
+/// covered both, and the one it printed named the wrong cause.
+fn page_never_ran(text: &str) -> bool {
+    text.contains("ready.timeout")
 }
 
 /// Every declared family resolved to the family the program asked for.  Reads the
@@ -292,8 +327,14 @@ fn the_boot_await_holds_the_program_until_a_slow_font_has_arrived() {
     );
     assert!(
         ok,
-        "a throttled font did not resolve even though the page waited for it — \
-         the emitted `document.fonts.load` await is not holding the program.\n{text}"
+        "{}\n{text}",
+        if page_never_ran(&text) {
+            "the awaited page never reached the bridge inside its budget, so this run observed \
+             NOTHING about the await — raise the budget rather than reading it as a font result"
+        } else {
+            "a throttled font did not resolve even though the page waited for it — the emitted \
+             `document.fonts.load` await is not holding the program"
+        }
     );
 
     // The control: the same page, the same server, no await.  The two families this
@@ -304,13 +345,25 @@ fn the_boot_await_holds_the_program_until_a_slow_font_has_arrived() {
         "globalThis.loftFonts.length===3 && \
          globalThis.loftFonts.filter(f=>!f.resolved).map(f=>f.base).join('|')===\
          'LoftProbeFace|LoftCdnFace'",
-        1500,
+        // The same budget as the awaited half, and it cannot make this control pass by
+        // waiting: the records it reads are a SNAPSHOT taken when the bridge was called, so
+        // a font arriving later cannot change them.  1500ms was chosen as if the snapshot
+        // were live, and on a loaded runner it expired before the page had booted.
+        5000,
         port.wrapping_add(2),
     );
     assert!(
         ok,
-        "the CONTROL did not fire: without the await a throttled font still resolved, \
-         so this gate cannot tell a page that waits from one that does not.\n{text}"
+        "{}\n{text}",
+        if page_never_ran(&text) {
+            "the control page never reached the bridge inside its budget, so this run observed \
+             NOTHING — that is not the control firing, and reading it as one sends the next \
+             reader after a font-ordering bug that is not there (this is what the nightly's \
+             ubuntu leg was reporting)"
+        } else {
+            "the CONTROL did not fire: without the await a throttled font still resolved, so \
+             this gate cannot tell a page that waits from one that does not"
+        }
     );
 }
 

@@ -114,10 +114,11 @@ pub fn find(
 /// node: `#remove` during iteration restructures the tree under the walk, so a baked end
 /// node can stop it early.
 ///
-/// `from` is always INCLUSIVE and `ex` describes `till` — but a DESCENDING primary key
-/// reverses tree order, so there `till` is the tree-earlier bound and `from` the
-/// tree-later one. Reading that off `keys[0]` is what keeps a descending index
-/// (`index<T[-cat]>`) iterating its range instead of coming back empty.
+/// `from` is always INCLUSIVE and `ex` describes `till`, whichever way the keys are
+/// declared. A descending key does not move a bound to the other end of the tree:
+/// `find` navigates through `keys::key_compare`, which reverses per descending key, so
+/// `from` is the tree-earlier bound in EVERY declaration. Direction lives in the
+/// comparator and is applied exactly once (@FR-Col-Order-Sign).
 #[must_use]
 // The arguments are the range's own description; bundling them into a struct would add a
 // type whose only job is to be unpacked here and packed at the two call sites.
@@ -139,12 +140,7 @@ pub fn range_cursors(
         pos: u32::from(fields),
     };
     // Which user bound sits at which end of TREE order.
-    let descending = keys.first().is_some_and(|k| k.type_nr < 0);
-    let (lo_key, lo_inclusive, hi_key, hi_inclusive) = if descending {
-        (till, !ex, from, true)
-    } else {
-        (from, true, till, !ex)
-    };
+    let (lo_key, lo_inclusive, hi_key, hi_inclusive) = (from, true, till, !ex);
 
     let low = if lo_key.is_empty() {
         first(data, fields, stores).rec

@@ -248,7 +248,7 @@ pub(crate) const WASM_THREAD_FLAGS: &[&str] = &[
 
 impl WasmRuntimeShape {
     /// The rustc/rustup target triple this shape compiles for.
-    fn triple(self) -> &'static str {
+    pub(crate) fn triple(self) -> &'static str {
         match self {
             WasmRuntimeShape::Html | WasmRuntimeShape::HtmlThreads => "wasm32-unknown-unknown",
             WasmRuntimeShape::Wasi => "wasm32-wasip2",
@@ -256,7 +256,7 @@ impl WasmRuntimeShape {
     }
 
     /// Short name for diagnostics / the isolated directory.
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             WasmRuntimeShape::Html => "html",
             WasmRuntimeShape::HtmlThreads => "html-mt",
@@ -390,14 +390,35 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
         // runner every wasm-shaped process reaches this lock at once after a loft rebuild, so
         // the wall-clock a single run reports can be almost entirely SOMEONE ELSE'S build; a
         // report that folded the two together would name cargo for time cargo did not spend.
+        // loft#1238 — name the wait to the TIMEOUT as well as to the ledger: a process killed
+        // here is queued behind another's cold build, and its kill message used to say
+        // `phase=parse`.
+        let waiting = format!(
+            "the global native-build lock (for the {} wasm runtime rlib)",
+            shape.name()
+        );
+        // loft#1238 — bounded by the run's remaining budget; see `timeout::lock_within_budget`.
+        let mut gave_up = None;
         crate::platform::timing_exec(
             "lock",
             shape.name(),
             "waiting for the global build lock",
             || {
-                let _ = f.lock();
+                if let Err(waited) = loft::timeout::lock_within_budget(f, &waiting) {
+                    gave_up = Some(waited);
+                }
             },
         );
+        if let Some(waited) = gave_up {
+            eprintln!(
+                "loft: gave up waiting for {waiting} after {:.1}s — another process is \
+                 building it and this run's timeout would expire first.\n  Build it once up \
+                 front (`loft cache warm`), raise the timeout, or re-run when that build has \
+                 finished.",
+                waited.as_secs_f64()
+            );
+            return rlib.exists().then_some(profile_dir);
+        }
     }
     if fresh(&profile_dir) {
         // A process we waited on just produced it.
@@ -1784,7 +1805,13 @@ pub(crate) fn add_native_extern_flags(
                     // dynamic loader expands it at run time.  Windows has no RPATH
                     // (the arm above); it stages the DLL beside the binary instead.
                     cmd.arg(format!("-Clink-arg=-Wl,-rpath,{}", so_dir.display()));
+                    // `$ORIGIN` is the ELF spelling and Mach-O does not know it; the dyld
+                    // form is `@loader_path`.  Both are emitted, because a linker ignores an
+                    // rpath entry it cannot parse and the cost of the spare one is a string.
                     cmd.arg("-Clink-arg=-Wl,-rpath,$ORIGIN");
+                    if cfg!(target_os = "macos") {
+                        cmd.arg("-Clink-arg=-Wl,-rpath,@loader_path");
+                    }
                 }
             }
             continue;

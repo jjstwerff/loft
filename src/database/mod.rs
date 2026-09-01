@@ -1609,6 +1609,75 @@ impl Stores {
         self.had_fatal = true;
     }
 
+    /// Remove `cur` from a tree-backed collection MID-ITERATION and answer the cursor that
+    /// continues the walk: `None` when the walk is over, `Some(park)` when the caller should
+    /// park the cursor at `park` so the next `OpStep` yields whatever followed `cur`.
+    ///
+    /// One home, because the two backends each had this and each had the same defect. The
+    /// walk ends when the node REMOVED was the range's last (`cur == finish`) — not when its
+    /// SUCCESSOR is. `finish` names the last node to VISIT: `step` yields it and only then
+    /// marks the end. Ending a step early meant the successor was never visited, so removing
+    /// consecutive elements skipped one — `for r in c[1..4] { r#remove; }` over 1..5 left
+    /// `3` behind. It was invisible on an unbounded walk, where `finish` is `0` and the test
+    /// could never fire, and that is the only shape the suite covered (loft#1272).
+    ///
+    /// The successor is read BEFORE the removal, while the tree pointers still stand, and the
+    /// predecessor AFTER it, in the tree the removal left.
+    pub fn remove_during_tree_iteration(
+        &mut self,
+        data: &DbRef,
+        tp: u16,
+        cur: u32,
+        finish: u32,
+        reverse: bool,
+    ) -> Option<u32> {
+        let fields = self.fields(tp);
+        let cur_ref = crate::keys::DbRef {
+            store_nr: data.store_nr,
+            rec: cur,
+            pos: u32::from(fields),
+        };
+        let n_after = {
+            let store = crate::keys::store(data, &self.allocations);
+            if reverse {
+                crate::tree::previous(store, &cur_ref)
+            } else {
+                crate::tree::next(store, &cur_ref)
+            }
+        };
+        // Read before the removal: `cur` is about to stop being a node.
+        let removed_the_last = cur == finish;
+        self.remove_owned(data, &cur_ref, tp);
+        if n_after == 0 || removed_the_last {
+            return None;
+        }
+        let n_ref = crate::keys::DbRef {
+            store_nr: data.store_nr,
+            rec: n_after,
+            pos: u32::from(fields),
+        };
+        let store = crate::keys::store(data, &self.allocations);
+        Some(if reverse {
+            crate::tree::next(store, &n_ref)
+        } else {
+            crate::tree::previous(store, &n_ref)
+        })
+    }
+
+    /// Did this run end on a fault?  The exit-code question, asked in one place because
+    /// three exits ask it: the interpreter's `main`, and the two generated `fn main()`
+    /// templates the native emitter writes.
+    ///
+    /// `had_fatal` alone does not answer it. An integer overflow surfaced by
+    /// `--dev-soft-halt` is reported from `ops`, which has no `Stores` to mark (see
+    /// `ops::note_integer_overflow`), so a run whose only fault was an overflow would
+    /// print its `soft-halt:` line and still exit 0 — clean, to anything reading the
+    /// status rather than the output.
+    #[must_use]
+    pub fn run_failed(&self) -> bool {
+        self.had_fatal || crate::ops::overflow_surfaced()
+    }
+
     /// @P356 — Stores-side counterpart of `State::raise_recoverable`.  Logs a
     /// `Warn` and returns WITHOUT halting, so the native backend continues
     /// with the null sentinel — identical to the interpreter.

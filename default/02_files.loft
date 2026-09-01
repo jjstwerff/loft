@@ -33,7 +33,8 @@ pub enum Format {
 // detailed error handling.  Every variant can actually be produced: Ok on
 // success, NotFound for a missing / out-of-project path, PermissionDenied when
 // the OS refuses access, IsDirectory when a file op targets a directory
-// (e.g. deleting a directory with delete()), and Other for anything else.
+// (e.g. deleting a directory with delete()), NotEmpty when rmdir() is given a
+// directory that still holds entries, and Other for anything else.
 // (--native and --interpret classify from the OS error; the wasm host reports
 // only Ok / Other, and NotFound still comes from the loft-level existence check.)
 pub enum FileResult {
@@ -41,6 +42,7 @@ pub enum FileResult {
   NotFound,
   PermissionDenied,
   IsDirectory,
+  NotEmpty,
   Other,
 }
 
@@ -59,6 +61,7 @@ fn fs_result(code: integer) -> FileResult {
     1 => FileResult.NotFound,
     2 => FileResult.PermissionDenied,
     3 => FileResult.IsDirectory,
+    4 => FileResult.NotEmpty,
     _ => FileResult.Other,
   }
 }
@@ -130,6 +133,8 @@ fn OpMkdir(path: text) -> integer fs#update;
 #rust"codegen_runtime::fs_mkdir(&s.database.resolve_path(@path))"
 fn OpMkdirAll(path: text) -> integer fs#update;
 #rust"codegen_runtime::fs_mkdir_all(&s.database.resolve_path(@path))"
+fn OpRmdir(path: text) -> integer fs#update;
+#rust"codegen_runtime::fs_rmdir(&s.database.resolve_path(@path))"
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 // Example: @STD-010
@@ -250,7 +255,10 @@ pub fn file(path: text) -> File fs#read {
 // Stat-equivalent filesystem read; par-safe.
 #impure(io)
 // Use to check whether a path is accessible before reading or writing it.
-// Paths outside the project directory are always absent.
+// A RELATIVE path resolves against the program's own directory, or against the
+// working directory under `#cwd`; an absolute path is used as given, including
+// one outside the project.  This is not an access boundary — the boundary is the
+// `fs` capability a `[sandbox]` profile grants or withholds.
 
 pub fn exists(path: text) -> boolean fs#read {
   file(path).format != Format.NotExists
@@ -264,8 +272,9 @@ pub fn exists(both: File) -> boolean fs#read {
 }
 #pure
 // Use to remove a file after processing or as a cleanup step.
-// Returns FileResult.Ok on success, FileResult.NotFound when the file did
-// not exist or is outside the project directory.
+// Returns FileResult.Ok on success and FileResult.NotFound when the file did
+// not exist.  A path outside the project is deleted like any other; withhold
+// the `fs` capability in a `[sandbox]` profile to prevent that.
 
 pub fn delete(path: text) -> FileResult fs#update {
   if !exists(path) { return FileResult.NotFound }
@@ -273,9 +282,9 @@ pub fn delete(path: text) -> FileResult fs#update {
 }
 // Par-safe filesystem write; the host bridge serialises mutations.
 #impure(io)
-// Use to rename or relocate a file within the project.
-// Both paths must stay within the project directory; the destination must
-// not already exist.
+// Use to rename or relocate a file.  The destination must not already exist
+// (FileResult.Other if it does), and a missing source is FileResult.NotFound.
+// Neither path is confined to the project directory.
 
 pub fn move(from: text, to: text) -> FileResult fs#update {
   if !exists(from) { return FileResult.NotFound }
@@ -283,18 +292,32 @@ pub fn move(from: text, to: text) -> FileResult fs#update {
   fs_result(OpMoveFile(from, to))
 }
 #impure(io)
-// Create a single directory level. Returns FileResult.NotFound if the path
-// is outside the project directory.
+// Create a single directory level; the parent must already exist.
+// FileResult.Other when the directory is already there.  There is no
+// counterpart that REMOVES a directory (loft#1256).
 
 pub fn mkdir(path: text) -> FileResult fs#update {
   fs_result(OpMkdir(path))
 }
 #impure(io)
 // Create a directory and all missing parents (like Unix mkdir -p).
-// Returns FileResult.NotFound if the path is outside the project directory.
+// Idempotent: a directory that already exists is FileResult.Ok, which is what
+// makes it safe on the way into a run.  There is no counterpart that REMOVES a
+// directory (loft#1256).
 
 pub fn mkdir_all(path: text) -> FileResult fs#update {
   fs_result(OpMkdirAll(path))
+}
+#impure(io)
+// Remove the EMPTY directory `path`.  Returns FileResult.NotEmpty when it still
+// holds entries, NotFound when it does not exist, and Other when `path` is a
+// file rather than a directory.
+// Empty directories only: a recursive removal is a separate decision, and the
+// walk is writable here — list_dir() the children, delete() the files, rmdir()
+// the directory, deepest first.
+// Use to undo a mkdir(), or to clean up a scratch directory a program made.
+pub fn rmdir(path: text) -> FileResult fs#update {
+  fs_result(OpRmdir(path))
 }
 #impure(io)
 // Returns true if `path` exists and is a directory.
@@ -917,8 +940,10 @@ pub fn sync(self: File) -> boolean fs#update {
   OpSyncFile(self)
 }
 #impure(io)
-// Returns the entries inside a directory.
-// The File must have format == Format.Directory.
+// Returns the entries inside a directory, sorted by path — the same order as
+// `list_dir`, so an index into either listing means the same entry.
+// The File must have format == Format.Directory; anything else lists as `[]`
+// (where `list_dir` answers null, because it has no format to check first).
 // Use to iterate over all files in a folder.
 
 pub fn files(self: File) -> vector<File> fs#read {

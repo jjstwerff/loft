@@ -60,7 +60,22 @@ correctly on the same file.
 
 ## Null Sentinels
 
-- Integer null: `i64::MIN` for a full-width `integer`; narrow integer aliases use the minimum of their storage width (`i32::MIN` for an `i32`-backed field). Float null: `f64::NAN`. Reference null: `store_nr == 0 && rec == 0`.
+- Integer null: `i64::MIN` for a full-width `integer`. A narrow alias spends an EDGE of its
+  own range, and which edge follows the sign: an unsigned one gives up its top value (`u8?`
+  is `0..=254`), a signed one its bottom (`i8?` is `-127..=127`). Float null: `f64::NAN`.
+  Reference null: `store_nr == 0 && rec == 0`.
+- **The edge is spent only in the `τ?` form, and only where the range fills the width.** A
+  non-null `u8` uses all 256 codes, so `255` is a real `u8`; an `i32?` and an `integer
+  limit(0,255)?` have a spare code outside their range and give up nothing.
+  `IntegerSpec::usable_min` / `usable_max` is the one home that answers which spec spends
+  what.
+- **The reservation is a property of the TYPE**, so it holds wherever a value is KEPT — local,
+  field, element, parameter, return alike (`formal/types.md` `@FR-N-Reserve`). An expression
+  in FLIGHT is not a slot and spends nothing: `e as u8?` yields `255` and `(e as u8?) ?? d`
+  keeps it, because neither ever holds a `u8?`. `expressions::target_holds_null` is the one
+  home for which is which — an element write on a non-null `vector<u8>` presents its target
+  as `u8?` for the out-of-bounds MISS, and that is not a nullable slot. loft#1249 records two
+  cures that got this backwards and what each broke.
 - All arithmetic operations must propagate null (if either operand is null, result is null).
 - Never use `0` as a sentinel for integers or references in new code.
 - **A not-found answer must not be usable as an index, an offset, a length or a count.**

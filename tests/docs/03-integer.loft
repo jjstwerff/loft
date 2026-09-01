@@ -15,8 +15,11 @@
 fn main() {
   // ## Converting between numbers and text
   // Wrapping a value in '{...}' inside a string formats it as text.
-  // Going the other way, 'as integer' parses a text value into a number.
-  // If the text cannot be parsed, the result is null — not a crash.
+  // Going the other way, 'as integer?' parses a text value into a number. Write
+  // the '?': a text parse can fail, so a bare 'as integer' is refused at compile
+  // time ("a text parse `as integer` may fail, and a bare cast asserts it cannot").
+  // The '?' is you accepting the failure case, and the result is null — not a
+  // crash — when the text does not parse.
   v = 4;
   assert("{v}" == "4", "Format integer as text");
   assert("123" as integer? == 123, "Parse text to integer");
@@ -25,13 +28,26 @@ fn main() {
   // Loft follows standard mathematical precedence: '*' and '/' before '+' and '-'.
   // Bitwise operators (<<, &, ^) have their own precedence — when mixing them with
   // arithmetic, parentheses make your intent clear and avoid surprises.
-  // Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.
+  // Note: '^' is XOR, not exponentiation. For powers use 'pow(base, exp)' — a FLOAT
+  // function, so 'pow(2, 3)' does not resolve: raise in floats and come back. It
+  // answers a NULLABLE float ('float?'), because a power can be uncomputable, so the
+  // trip back is a checked cast or a discharge:
+  //   pow(base, exp) as integer?           // the number, or null
+  //   (pow(base, exp) ?? 0.0) as integer   // your own default instead
+  // A bare 'as integer' is refused ("cannot cast a possibly-null `float?` to the
+  // non-null `integer`"). It does compile when BOTH arguments are literals, and that
+  // is the one shape which does not generalise — write the '?' and it works wherever
+  // the base is a variable, which is everywhere real.
   assert(1 + 2 * 4 == 9, "Multiplication before addition");
   assert(1 + 2 << 2 == 12, "Shift: (1+2) << 2 = 12");
   assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
   assert(42 ^ 0b111111 == 21, "Bitwise XOR");
   assert(105 % 100 == 5, "Modulus (remainder)");
-  assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
+  // Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the
+  // one that stops compiling the moment a reader puts their own number in it.
+  pw_base = 2.0;
+  assert(pow(pw_base, 3.0) as integer? == 8, "pow() for exponentiation");
+  assert((pow(pw_base, 10.0) ?? 0.0) as integer == 1024, "…or discharge, then cast");
   // 'abs()' returns the absolute value — the distance from zero, always positive.
   assert(1 + abs(-2) == 3, "abs(-2) == 2");
   // ## Division by zero — produces null and keeps running
@@ -40,11 +56,12 @@ fn main() {
   // CONTINUES — the spreadsheet model, where one bad cell shows an error but
   // the rest still recalculate.  This holds the same everywhere (development,
   // test, and production) — one bad calculation never halts the run.
-  // - **Undefended** (bare `1 / 0`): you get null, and at this unguarded site
-  //   loft also reports a warning so the divide-by-zero is not invisible.
-  // - **Defended** (`1 / 0 ?? fallback`, or a following `if x != null`):
-  //   `??` supplies a non-null fallback and the warning is suppressed —
-  //   you have explicitly handled the case.
+  // Where the divisor is a literal zero in your source, loft can see it before the
+  // program runs and warns (next section). Where it is only zero at RUN time there is
+  // no warning — you get null, and when loft knows the reason it prints it, so a bare
+  // '{12 / a}' shows 'null(/0)' rather than a bare 'null'. Recover with '??', or test
+  // the result for null: nothing else tells you, so a divide whose divisor could be
+  // zero is one you handle rather than one you are reminded about.
   a = 2 * 2;
   a -= 4;
   // a is now 0
@@ -91,4 +108,18 @@ fn main() {
   // a silently-wrong number, and it never crashes; execution continues with the
   // null, exactly like divide-by-zero above. Check the result for null (or keep
   // intermediate values in range) when multiplying or summing very large numbers.
+  //
+  // A sized integer ('u8', 'i16', a field declared 'integer limit(0, 255)') has
+  // a smaller range, so it overflows sooner — and where it lands depends on one
+  // thing: whether the slot can hold null. A nullable one ('u8?') gets the null,
+  // the same as above. A non-nullable one has nowhere to put it, so it gets the
+  // type's default instead — 0 for every range that includes zero. What you
+  // never get is a wrapped number.
+  small: u8? = 250;
+  small += 10;
+  assert(small == null, "A nullable sized integer overflows to null");
+  assert((small ?? 0) == 0, "…and '??' recovers from it, like any other null");
+  fixed: u8 = 250;
+  fixed += 10;
+  assert(fixed == 0, "A non-nullable one takes its type's default instead");
 }

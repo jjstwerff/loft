@@ -852,6 +852,12 @@ impl Lexer {
         &self.diagnostics
     }
 
+    /// loft#1260 — tell this lexer's diagnostics who the compilation's lints are addressed
+    /// to.  See [`Diagnostics::reaches_author`].
+    pub fn set_lint_scope_for(&mut self, entry: &str) {
+        self.diagnostics.set_lint_scope_for(entry);
+    }
+
     pub fn mode(&self) -> Mode {
         self.mode.clone()
     }

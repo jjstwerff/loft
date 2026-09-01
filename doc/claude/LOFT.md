@@ -242,9 +242,15 @@ descending instead of ascending.  Reading the query site alone never
 reveals the direction: the `-` lives in the struct declaration, possibly
 hundreds of lines away.  When reviewing a query, cross-check the index
 declaration before reasoning about what "starts at X" means.
+`index` and `sorted` answer identically for the same declaration — the `-` is applied
+by the key comparator and by nothing else, so a range names its bounds in the
+COLLECTION's key order too: on `[-key]` the walk runs high-to-low, which makes
+`c["c".."a"]` the non-empty half and `c["a".."c"]` the inverted, empty one.
 Regression guards in `tests/issues.rs` (`inc12_sorted_ascending_iterates_forward`,
 `inc12_sorted_descending_iterates_backward`) lock the two directions on
-otherwise-identical structs.
+otherwise-identical `sorted` structs, and
+`tests/scripts/1267-a-descending-key-orders-the-index-once.loft` does the same for
+`index`, pairing every row against its `sorted` twin.
 
 ### Enum types
 
@@ -2656,9 +2662,16 @@ fn ok_mutate(v: &vector<Item>, idx: integer, val: integer) {
 }
 ```
 
-Without `&`, element mutations on existing elements are also visible (the DbRef is shared),
-but appending via `v += [x]` is local to the callee — the caller's vector length does not
-change. Use `&vector<T>` whenever the function needs to grow the vector.
+Without `&`, everything done to the CONTENTS is visible to the caller — element writes,
+appends, removes, clears. A heap parameter aliases the caller's value
+([formal/calls.md](formal/calls.md) `F-ParamHeap`, enumerated for containers as `F-ParamGrow`),
+so growing it is a mutation of the shared store rather than a local act.
+
+`&` buys exactly one thing: a WHOLE-VALUE replacement writes back. `v = [7, 7]` inside a plain
+parameter gives that function a different vector and leaves the caller's alone
+(`F-ParamRebind`); through a `&vector<T>` the caller sees the new vector. So reach for `&` when
+the function REPLACES, not when it appends (loft#1251 — this paragraph previously claimed a
+plain append was local to the callee, which the rules never said).
 
 ### Polymorphic text methods on struct-enum variants
 
@@ -2776,8 +2789,9 @@ if !result.ok() { println("delete failed"); }
 ```
 
 `FileResult` variants: `Ok`, `NotFound`, `PermissionDenied`, `IsDirectory`,
-`Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
-`set_file_size`.
+`NotEmpty`, `Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`, `rmdir`,
+`set_file_size`.  `NotEmpty` is `rmdir`'s alone, and it has its own variant because
+it is the one failure a caller can act on: empty the directory and retry.
 
 There are no hidden exception paths — every function's failure mode is visible
 at the call site.  `assert` and `panic` are for programmer errors (bugs), not

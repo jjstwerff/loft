@@ -176,15 +176,144 @@ pub fn deadline_reached() -> bool {
 fn graceful_exit() -> ! {
     let (phase, fn_name, file, line) = report_fields();
     eprintln!(
-        "[timeout] deadline reached after {}s (graceful): phase={} fn={} file={}:{}{}",
+        "[timeout] deadline reached after {}s (graceful): phase={} fn={} file={}:{}{}{}",
         TIMEOUT_SECS.load(Ordering::Relaxed),
         phase,
         fn_name,
         file,
         line,
-        entry_suffix(&fn_name)
+        entry_suffix(&fn_name),
+        blocked_suffix()
     );
     std::process::exit(124);
+}
+
+/// What this process is BLOCKED on, if anything, and since when (loft#1238).
+///
+/// The breadcrumb answers *where in the program are we*; a process waiting on a cross-process
+/// lock is still "in parse" by that measure, and both timeout reports said so — `phase=parse`
+/// for a process that was not parsing, was not going to parse, and would have been unblocked by
+/// nothing it could do. The one fact that explains the kill is the one neither report carried.
+///
+/// Measured: a feature example hit its 60s budget with `lockwait` recorded and no `lockheld`,
+/// i.e. killed while queued behind another process's cold cdylib build. Reading that took the
+/// timing ledger, two lines of it, and knowing the convention that an unmatched `lockwait` means
+/// "still waiting". It should take reading the kill message.
+static BLOCKED: std::sync::Mutex<Option<(String, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+/// Note that this process is about to block on `what` — a cross-process lock, a subprocess build.
+/// Pair with [`unblocked`]. Cheap and inert when no timeout is armed.
+pub fn blocked_on(what: &str) {
+    if !ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut b) = BLOCKED.try_lock() {
+        *b = Some((what.to_string(), std::time::Instant::now()));
+    }
+}
+
+/// Time left before the armed deadline, or `None` when no timeout is armed.
+#[must_use]
+pub fn remaining() -> Option<std::time::Duration> {
+    DEADLINE
+        .get()
+        .map(|d| d.saturating_duration_since(Instant::now()))
+}
+
+/// Has this process already reported giving up on `key`?  One report per subject per process.
+///
+/// The resolution is attempted more than once in a run (pass 1 and pass 2 both resolve `use`),
+/// and each attempt legitimately gives up — the second having waited only what was left of the
+/// budget. Printing the full explanation each time turns one fact into a wall, and the second
+/// figure (`after 0.8s`) reads like a different, faster failure.
+pub fn first_giveup_report(key: &str) -> bool {
+    static SEEN: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+    let Ok(mut g) = SEEN.lock() else {
+        return true;
+    };
+    let seen = g.get_or_insert_with(Vec::new);
+    if seen.iter().any(|k| k == key) {
+        return false;
+    }
+    seen.push(key.to_string());
+    true
+}
+
+/// Acquire an advisory file lock, giving up rather than letting the wait consume the run's
+/// budget.  `Err(waited)` means it gave up; the caller reports and fails.
+///
+/// **Why a bounded wait (loft#1238).**  The global native-build lock serialises cold cdylib
+/// builds across processes, which is right.  Under a parallel test runner every process reaches
+/// a stale artifact at once, and the ones at the back of the queue were killed by their own
+/// timeout while still waiting — SIGABRT, `phase=parse`, nothing built, nothing stamped, so the
+/// next attempt repeated it.  An unbounded wait inside a time-budgeted run cannot succeed; it can
+/// only convert a queue into a hard kill.
+///
+/// So when a deadline is armed the wait is bounded by what is left of it, minus a margin big
+/// enough for the caller to report and exit cleanly.  The run still fails — the artifact really
+/// is missing — but it fails SAYING SO, with the lock named and the wait measured, instead of
+/// being aborted mid-queue.
+///
+/// With no deadline armed this blocks exactly as before: an interactive build should wait for
+/// the lock however long the other build takes, because it has no budget to lose.
+///
+/// # Errors
+///
+/// `Err(waited)` when a deadline is armed and the lock was still held with too little budget
+/// left to use it — `waited` is how long this process queued before giving up.
+pub fn lock_within_budget(f: &std::fs::File, what: &str) -> Result<(), std::time::Duration> {
+    let started = Instant::now();
+    let Some(budget) = remaining() else {
+        // Unarmed: the historical behaviour, and the right one — nothing is counting.
+        blocked_on(what);
+        let _ = f.lock();
+        unblocked();
+        return Ok(());
+    };
+    // Leave room to report and unwind. Never more than half the remaining budget, so a short
+    // deadline still gets a real (if brief) attempt rather than an instant refusal.
+    let margin = std::time::Duration::from_millis(1500).min(budget / 2);
+    let deadline = started + budget.saturating_sub(margin);
+    blocked_on(what);
+    loop {
+        if f.try_lock().is_ok() {
+            unblocked();
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            unblocked();
+            return Err(started.elapsed());
+        }
+        // Coarse on purpose: this is a queue measured in seconds, and a tight spin would burn
+        // the CPU the holder needs to finish.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Clear the blocked note set by [`blocked_on`].
+pub fn unblocked() {
+    if !ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut b) = BLOCKED.try_lock() {
+        *b = None;
+    }
+}
+
+/// ` blocked=<what> for <n>s` when this process is waiting on something, else empty.
+///
+/// `try_lock` like [`report_fields`]: a held or poisoned mutex costs the note, never the kill.
+fn blocked_suffix() -> String {
+    match BLOCKED.try_lock() {
+        Ok(b) => match &*b {
+            Some((what, since)) => {
+                format!(" blocked={what} for {:.1}s", since.elapsed().as_secs_f64())
+            }
+            None => String::new(),
+        },
+        Err(_) => String::new(),
+    }
 }
 
 /// The `phase` / `fn` / `file` / `line` both timeout reports print, with the
@@ -362,14 +491,15 @@ fn print_breadcrumb_and_abort(timeout: u64, grace: u64) {
     let (phase, fn_name, file, line) = report_fields();
     eprintln!(
         "[timeout] hard-kill after {}s+{}s grace: \
-         phase={} fn={} file={}:{}{}",
+         phase={} fn={} file={}:{}{}{}",
         timeout,
         grace,
         phase,
         fn_name,
         file,
         line,
-        entry_suffix(&fn_name)
+        entry_suffix(&fn_name),
+        blocked_suffix()
     );
     // `process::abort()` raises SIGABRT — useful for debugging
     // (core dump on `ulimit -c`).  Test/CI runs may prefer the

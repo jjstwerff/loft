@@ -245,11 +245,18 @@ the threads would still have to come from the host — which is what @PLN117 alr
 | `fn <name>` resolves to a `DefType::Function` | `parse_fn_ref` | `"'{name}' is not a function"` |
 | First `parallel_for` arg is `Type::Function` | `parse_parallel_for` | `"first argument must be a function reference (use fn <name>)"` |
 | Second arg is `Type::Vector` | `parse_parallel_for` | `"second argument must be a vector"` |
-| Worker return type is primitive | `parse_parallel_for` | `"worker return type '…' must be integer, float, or boolean"` |
 | Extra arg count matches worker | `parse_parallel_for` | `"wrong number of extra arguments"` |
+| Every captured argument but the element is a scalar | `parse_parallel_worker_fn` | `"captured argument '<c>' is a reference (<T>)…"` |
+| A worker does not write captured state | `parse_parallel_worker_fn` | `"writes captured '<c>' — a par worker's captured state is READ-ONLY"` |
 | Worker's first argument IS the loop element | `parse_parallel_worker_fn` | `"its first argument is the loop element '<a>'"` |
 | Worker declares a parameter to receive it | `parse_parallel_worker_fn` | `"it declares no parameters"` |
 | Worker's first parameter accepts the element type | `parse_parallel_worker_fn` | `"receives the loop element, but expected <T>, got <U>"` |
+
+**The worker's RETURN type is not restricted.** This table carried a
+*"worker return type '…' must be integer, float, or boolean"* row until 2026-09-01; no such
+diagnostic exists in `src/`, and `text`, `character`, a struct and `vector<integer>` were all
+measured working on both backends. Struct and text results are deep-copied out of the
+worker's store ([heap.md](formal/heap.md) `H-Copy`), which is what makes them safe to return.
 
 ---
 

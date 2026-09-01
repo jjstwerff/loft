@@ -77,7 +77,7 @@
 </nav>
 <section class="print-section" id="01-keywords">
 <h1>Keywords</h1>
-<p>This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified with an assert so you can see the exact expected result.</p>
+<p>This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified: most with an assert naming the exact expected result, and the first with a panic that would fire if the rule it shows did not hold.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="conditionals">Conditionals</h2>
 <p><code>if</code> runs a block only when its condition is true. If the condition is false the block is skipped entirely — nothing else happens. <code>panic</code> stops the program immediately with a message. During development it is a clear way to mark situations that should never occur.</p>
@@ -94,7 +94,7 @@
 <p>Text enclosed in double quotes can contain expressions inside curly braces — the expression is evaluated and its result is inserted into the text. <code>assert</code> checks that its first argument is true; if it is false the second argument is printed as an error message.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">13</span>, <span class="st">"Incorrect value {a} != 13"</span>);</code></pre>
 <h2 id="if-as-an-expression">if as an expression</h2>
-<p>Every block in Loft produces a value — the last expression inside it. That means you can use <code>if/else</code> on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed.</p>
+<p>An <code>if</code>, a <code>match</code>, and a bare <code>{ }</code> block all produce a value — the last expression inside them. That means you can use <code>if/else</code> on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed. Loops are the exception: <code>for</code> and <code>while</code> are statements, so <code>x = for i in 1..3 { i }</code> does not compile.</p>
 <pre><code>  b = <span class="kw">if</span> a == <span class="nm">13</span> {
     <span class="st">"Correct"</span>
   } <span class="kw">else</span> {
@@ -114,8 +114,17 @@
     t = t * <span class="nm">10</span> + i;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">54321</span>, <span class="st">"Result was {t} instead of 54321"</span>);</code></pre>
+<h2 id="the-other-loop-while">The other loop: while</h2>
+<p>Loft has two loop statements: <code>for</code>, which walks a range or a collection, and <code>while</code>, which repeats as long as its condition holds. A <code>for</code> over a range carries its own upper bound, so it is the one to reach for; a <code>while</code> does not, and <code>while true { }</code> runs until something stops it. Because nothing bounds a <code>while</code>, its body must move the condition towards false — here <code>n += 1</code> is what ends the loop. This is the same sum as the <code>for</code> above, written the other way.</p>
+<pre><code>  n = <span class="nm">1</span>;
+  t = <span class="nm">0</span>;
+  while n &lt;= <span class="nm">5</span> {
+    t += n;
+    n += <span class="nm">1</span>;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">15</span>, <span class="st">"while summed to {t} instead of 15"</span>);</code></pre>
 <h2 id="nested-loops-and-break">Nested loops and break</h2>
-<p>Loft has two loop statements: <code>for</code>, which walks a range or a collection, and <code>while</code>, which repeats as long as its condition holds. A <code>for</code> over a range carries its own upper bound, so it is the one to reach for; a <code>while</code> does not, and <code>while true { }</code> runs until something stops it. <code>break</code> exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write <code>outerVar#break</code>. Here x#break leaves both loops when the product x*y reaches 16.</p>
+<p><code>break</code> exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write <code>outerVar#break</code>. Here x#break leaves both loops when the product x*y reaches 16.</p>
 <pre><code>  b = <span class="st">""</span>;
   <span class="kw">for</span> x <span class="kw">in</span> <span class="nm">1..5</span> {
     <span class="kw">for</span> y <span class="kw">in</span> <span class="nm">1..5</span> {
@@ -124,7 +133,7 @@
 <p>this breaks the inner y loop</p>
 <pre><code>      }
       <span class="kw">if</span> x * y &gt;= <span class="nm">16</span> {
-        x# <span class="kw">break</span>;
+        x#<span class="kw">break</span>;
       }
       <span class="kw">if</span> <span class="bi"><a href="stdlib-text.html">len</a></span>(b) &gt; <span class="nm">0</span> {
         b += <span class="st">"; "</span>;
@@ -161,7 +170,7 @@
 <section class="print-section" id="02-text">
 <h1>Texts</h1>
 <p>Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.</p>
-<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.</p>
+<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. So there are two different counts, and which one you get depends on the operation: anything that takes a POSITION — indexing, slicing, <code>find</code> — counts bytes, while <code>len()</code> and iterating a text count characters. Positions in bytes are fast and simple; the thing to watch is mixing the two counts, which has its own section below.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="joining-and-measuring-text">Joining and measuring text</h2>
 <p>Use <code>+</code> to join two pieces of text into one. The result is a new value — neither of the originals is modified. Placing a value name inside curly braces inside a format string inserts the value as text. You can also control the width: <code>{a:4}</code> pads the value on the right to at least 4 characters.</p>
@@ -172,6 +181,11 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"😃"</span>) == <span class="nm">1</span>, <span class="st">"Emoji is one character"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"♥"</span>) == <span class="nm">1</span>, <span class="st">"Heart is one character"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"abc"</span>) == <span class="nm">3</span>, <span class="st">"ASCII character count"</span>);</code></pre>
+<h2 id="do-not-mix-the-two-counts">Do not mix the two counts</h2>
+<p><code>len()</code> is a character count and <code>s[i]</code> is a byte index, so walking one with the other goes wrong on any text that is not pure ASCII: the loop runs too few times AND re-reads the bytes inside a multi-byte character. Over "Hi 😊!", <code>for i in 0..len(s) { s[i] }</code> yields "Hi 😊😊" — the <code>!</code> is silently gone and the emoji appears twice. Nothing fails; the answer is just wrong. Iterate the characters with <code>for c in text</code>, or, when you really do mean bytes, walk <code>0..size(text)</code>. The compiler reports the mix for you as warning[text-index-char-bound].</p>
+<pre><code>  mixed = <span class="st">"Hi 😊!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(mixed) == <span class="nm">5</span>, <span class="st">"five characters, not eight"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(mixed) == <span class="nm">8</span>, <span class="st">"eight bytes, not five"</span>);</code></pre>
 <h2 id="reading-individual-characters">Reading individual characters</h2>
 <p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.</p>
 <pre><code>  s = <span class="st">"ABCDE"</span>;
@@ -186,6 +200,9 @@
 <p>A negative end index counts backwards from the end of the text. <code>-1</code> means "stop one byte before the very last byte". Combined with a start offset this lets you trim a known suffix without knowing the exact length.</p>
 <pre><code>  txt = <span class="st">"12😊🙃45"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(txt[<span class="nm">2..</span> - <span class="nm">1</span>] == <span class="st">"😊🙃4"</span>, <span class="st">"UTF-8 sub-string by byte range"</span>);</code></pre>
+<p>That counts BYTES, and the offset still snaps to a character boundary — so it trims a one-byte suffix like <code>5</code> above, and leaves a multi-byte one whole. Here both -1 and -2 land inside the trailing emoji and snap back around it, returning the text unchanged. Trim by bytes only when you know the suffix is ASCII.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab😊"</span>[.. - <span class="nm">1</span>] == <span class="st">"ab😊"</span>, <span class="st">"a multi-byte suffix is not trimmed by -1"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab😊"</span>[.. - <span class="nm">2</span>] == <span class="st">"ab😊"</span>, <span class="st">"nor by -2"</span>);</code></pre>
 <h2 id="iterating-over-characters">Iterating over characters</h2>
 <p>A <code>for</code> loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: <code>c#index</code> is the byte offset where the current character starts. <code>c#next</code> is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
 <pre><code>  result = <span class="st">""</span>;
@@ -212,7 +229,7 @@
 <pre><code>  brace_inner = <span class="st">"cd"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab{{cd}}e"</span> == <span class="st">"ab{{{brace_inner}}}e"</span>, <span class="st">"Escaping braces"</span>);</code></pre>
 <h2 id="aligning-text-in-a-fixed-width-field">Aligning text in a fixed-width field</h2>
-<p>The <code>:</code> specifier controls alignment and width. <code>&lt;</code> left-aligns the value, <code>&gt;</code> right-aligns it (the default). The width can be a constant or a small arithmetic expression — here <code>2+3</code> evaluates to 5, giving a field of width 5.</p>
+<p>The <code>:</code> specifier controls alignment and width. <code>&lt;</code> left-aligns the value and <code>&gt;</code> right-aligns it. The default depends on the TYPE: text is left-aligned (as <code>{a:4}</code> and <code>{vr:6}</code> here both show), while numbers are right-aligned, which is what lines a column of figures up. The width can be a constant or a small arithmetic expression — here <code>2+3</code> evaluates to 5, giving a field of width 5.</p>
 <pre><code>  vr = <span class="st">"abc"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1{vr:&lt;2+3}2{vr}3{vr:6}4{vr:&gt;7}"</span> == <span class="st">"1abc  2abc3abc   4    abc"</span>, <span class="st">"Text alignment"</span>);
 }</code></pre>
@@ -223,27 +240,26 @@
 <p>The default number type is <code>integer</code>: a 64-bit signed whole number, the same as i64 in Rust. It can hold values from about −9 quintillion to +9 quintillion (roughly ±9.2 × 10^18), so everyday counts and very large numbers both fit in the one type — there is no separate <code>long</code>. For decimal (fractional) numbers, see the Float page.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="converting-between-numbers-and-text">Converting between numbers and text</h2>
-<p>Wrapping a value in <code>{...}</code> inside a string formats it as text. Going the other way, <code>as integer</code> parses a text value into a number. If the text cannot be parsed, the result is null — not a crash.</p>
+<p>Wrapping a value in <code>{...}</code> inside a string formats it as text. Going the other way, <code>as integer?</code> parses a text value into a number. Write the <code>?</code>: a text parse can fail, so a bare <code>as integer</code> is refused at compile time ("a text parse <code>as integer</code> may fail, and a bare cast asserts it cannot"). The <code>?</code> is you accepting the failure case, and the result is null — not a crash — when the text does not parse.</p>
 <pre><code>  v = <span class="nm">4</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"4"</span>, <span class="st">"Format integer as text"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"123"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>? == <span class="nm">123</span>, <span class="st">"Parse text to integer"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="st">"abc"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>?), <span class="st">"Unparseable text gives null"</span>);</code></pre>
 <h2 id="arithmetic-and-operator-precedence">Arithmetic and operator precedence</h2>
-<p>Loft follows standard mathematical precedence: <code>*</code> and <code>/</code> before <code>+</code> and <code>-</code>. Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: <code>^</code> is XOR, not exponentiation. Use pow(base, exp) for powers.</p>
+<p>Loft follows standard mathematical precedence: <code>*</code> and <code>/</code> before <code>+</code> and <code>-</code>. Bitwise operators (&lt;&lt;, &amp;, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: <code>^</code> is XOR, not exponentiation. For powers use <code>pow(base, exp)</code> — a FLOAT function, so <code>pow(2, 3)</code> does not resolve: raise in floats and come back. It answers a NULLABLE float (<code>float?</code>), because a power can be uncomputable, so the trip back is a checked cast or a discharge: pow(base, exp) as integer?           // the number, or null (pow(base, exp) ?? 0.0) as integer   // your own default instead A bare <code>as integer</code> is refused ("cannot cast a possibly-null <code>float?</code> to the non-null <code>integer</code>"). It does compile when BOTH arguments are literals, and that is the one shape which does not generalise — write the <code>?</code> and it works wherever the base is a variable, which is everywhere real.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> * <span class="nm">4</span> == <span class="nm">9</span>, <span class="st">"Multiplication before addition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="nm">2</span> &lt;&lt; <span class="nm">2</span> == <span class="nm">12</span>, <span class="st">"Shift: (1+2) &lt;&lt; 2 = 12"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0x0a8</span> &amp; <span class="nm">15</span> == <span class="nm">8</span>, <span class="st">"Bitwise AND masks low 4 bits"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">42</span> ^ <span class="nm">0b111111</span> == <span class="nm">21</span>, <span class="st">"Bitwise XOR"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() for exponentiation"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">105</span> % <span class="nm">100</span> == <span class="nm">5</span>, <span class="st">"Modulus (remainder)"</span>);</code></pre>
+<p>Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the one that stops compiling the moment a reader puts their own number in it.</p>
+<pre><code>  pw_base = <span class="nm">2.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(pw_base, <span class="nm">3.0</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>? == <span class="nm">8</span>, <span class="st">"pow() for exponentiation"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(pw_base, <span class="nm">10.0</span>) ?? <span class="nm">0.0</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">1024</span>, <span class="st">"…or discharge, then cast"</span>);</code></pre>
 <p><code>abs()</code> returns the absolute value — the distance from zero, always positive.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> + <span class="bi"><a href="stdlib-math.html">abs</a></span>(-<span class="nm">2</span>) == <span class="nm">3</span>, <span class="st">"abs(-2) == 2"</span>);</code></pre>
 <h2 id="division-by-zero-produces-null-and-keeps-running">Division by zero — produces null and keeps running</h2>
-<p>Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run.</p>
-<ul>
-<li><strong>Undefended</strong> (bare <code>1 / 0</code>): you get null, and at this unguarded site loft also reports a warning so the divide-by-zero is not invisible.</li>
-<li><strong>Defended</strong> (<code>1 / 0 ?? fallback</code>, or a following <code>if x != null</code>): <code>??</code> supplies a non-null fallback and the warning is suppressed — you have explicitly handled the case.</li>
-</ul>
+<p>Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run. Where the divisor is a literal zero in your source, loft can see it before the program runs and warns (next section). Where it is only zero at RUN time there is no warning — you get null, and when loft knows the reason it prints it, so a bare <code>{12 / a}</code> shows <code>null(/0)</code> rather than a bare <code>null</code>. Recover with <code>??</code>, or test the result for null: nothing else tells you, so a divide whose divisor could be zero is one you handle rather than one you are reminded about.</p>
 <pre><code>  a = <span class="nm">2</span> * <span class="nm">2</span>;
   a -= <span class="nm">4</span>;</code></pre>
 <p>a is now 0</p>
@@ -272,7 +288,15 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{big}"</span> == <span class="st">"5000000000"</span>, <span class="st">"Large integer formatted as text"</span>);</code></pre>
 <h2 id="common-pitfall-integer-overflow">Common pitfall: integer overflow</h2>
 <p>A calculation whose result is too large to represent overflows — and in loft an overflow is uncomputable, so the result is null. It never wraps to a silently-wrong number, and it never crashes; execution continues with the null, exactly like divide-by-zero above. Check the result for null (or keep intermediate values in range) when multiplying or summing very large numbers.</p>
-<pre><code>}</code></pre>
+<p>A sized integer (<code>u8</code>, <code>i16</code>, a field declared <code>integer limit(0, 255)</code>) has a smaller range, so it overflows sooner — and where it lands depends on one thing: whether the slot can hold null. A nullable one (<code>u8?</code>) gets the null, the same as above. A non-nullable one has nowhere to put it, so it gets the type's default instead — 0 for every range that includes zero. What you never get is a wrapped number.</p>
+<pre><code>  small: <span class="ty"><a href="stdlib-types.html">u8</a></span>? = <span class="nm">250</span>;
+  small += <span class="nm">10</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(small == <span class="kw">null</span>, <span class="st">"A nullable sized integer overflows to null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((small ?? <span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"…and '??' recovers from it, like any other null"</span>);
+  fixed: <span class="ty"><a href="stdlib-types.html">u8</a></span> = <span class="nm">250</span>;
+  fixed += <span class="nm">10</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fixed == <span class="nm">0</span>, <span class="st">"A non-nullable one takes its type's default instead"</span>);
+}</code></pre>
 </section>
 <section class="print-section" id="04-boolean">
 <h1>Boolean</h1>
@@ -289,9 +313,12 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> &amp;&amp; <span class="nm">3</span> &gt; <span class="nm">2</span>), <span class="st">"First false → whole 'and' is false"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> || <span class="nm">3</span> &gt; <span class="nm">4</span>), <span class="st">"Both false → 'or' is false"</span>);</code></pre>
 <h2 id="null-in-boolean-context">Null in boolean context</h2>
-<p>Division by zero (and other failed operations) produce null when defended with <code>?? null</code> (or <code>if result != null { ... }</code> after the assignment).  Null in a boolean context is treated as false, so <code>!</code> is true.  This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... } Even without <code>?? null</code>, a bare <code>1 / 0</code> never halts: it yields null and logs a warning, behaving the same everywhere — development, test, and production. The <code>?? null</code> above just marks the case as handled, which suppresses that warning.</p>
+<p>Division by zero (and other failed operations) produce null when defended with <code>?? null</code> (or <code>if result != null { ... }</code> after the assignment).  Null in a boolean context is treated as false, so <code>!</code> is true.  This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... } Even without <code>?? null</code>, a bare divide never halts: it yields null and execution continues, the same everywhere — development, test, and production.</p>
+<p>The <code>?? null</code> is not what makes that safe, and it silences nothing. loft warns about a divisor that is a literal 0 in your source, while READING your code, and it warns whether or not you wrote <code>?? null</code>; a divisor that is only zero at RUN time is not warned about at all. What <code>?? null</code> changes is the VALUE: loft prints the reason it knows, so an undefended result formats as <code>null(/0)</code>, and coalescing it to a plain null throws that reason away. Reach for <code>?? null</code> when you want the bare null, and for <code>?? &lt;value&gt;</code> when you want a number — not to quiet a warning.</p>
 <pre><code>  zero = <span class="nm">0</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / zero ?? <span class="kw">null</span>), <span class="st">"null from division-by-zero is false-like when defended"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12 / zero}"</span> == <span class="st">"null(/0)"</span>, <span class="st">"an undefended result carries its reason"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12 / zero ?? null}"</span> == <span class="st">"null"</span>, <span class="st">"…and `?? null` trades the reason for a plain null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12</span> &gt; <span class="nm">0</span>, <span class="st">"positive integer is true"</span>);</code></pre>
 <h2 id="bitwise-operators">Bitwise operators</h2>
 <p>While <code>and</code>/<code>or</code> work on true/false values, bitwise operators work on the individual bits of an integer. They are useful for flags, masks, and low-level data manipulation.</p>
@@ -330,14 +357,24 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1.5</span> + <span class="nm">0.5</span> == <span class="nm">2.0</span>, <span class="st">"Float addition"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3.0</span> / <span class="nm">2.0</span> == <span class="nm">1.5</span>, <span class="st">"Float division"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2.0</span> * <span class="nm">1.5</span> == <span class="nm">3.0</span>, <span class="st">"Float multiplication"</span>);</code></pre>
-<h2 id="undefined-results-are-null-float">Undefined results are null (<code>float?</code>)</h2>
-<p>Some float operations have no real answer for some inputs: dividing or taking <code>%</code> by zero, <code>sqrt</code> of a negative, <code>ln</code>/<code>log</code> of zero or a negative, <code>asin</code>/<code>acos</code> outside -1..1, or an out-of-domain <code>pow</code>. Rather than crash, Loft yields null for these — so <code>/</code>, <code>%</code>, <code>sqrt</code>, <code>ln</code>, <code>log</code>, <code>pow</code>, <code>asin</code> and <code>acos</code> each produce a NULLABLE float (<code>float?</code>). The null then propagates: any further arithmetic on a null stays null. Discharge it with <code>?? fallback</code> when you need a plain float (just as <code>"1.5" as float?</code> below is a float? you can default).</p>
+<h2 id="undefined-results-are-null-float-but-infinities-are-not-undefined">Undefined results are null (<code>float?</code>) — but infinities are NOT undefined</h2>
+<p>Some float operations have no real answer for some inputs: <code>sqrt</code> of a negative, <code>ln</code>/<code>log</code> of a NEGATIVE, <code>asin</code>/<code>acos</code> outside -1..1, an out-of-domain <code>pow</code>, <code>%</code> by zero, and 0.0/0.0. Rather than crash, Loft yields null for these — so <code>/</code>, <code>%</code>, <code>sqrt</code>, <code>ln</code>, <code>log</code>, <code>pow</code>, <code>asin</code> and <code>acos</code> each produce a NULLABLE float (<code>float?</code>). The null then propagates: any further arithmetic on a null stays null, and <code>?? fallback</code> discharges it when you need a plain float.</p>
+<p>Read the boundary carefully, because it is not "anything unusual is null". Floats keep IEEE INFINITY, and infinity is a value, not a missing one:</p>
+<pre><code>1.0 / 0.0   is  inf        0.0 / 0.0   is  null
+</code></pre>
+<p> -1.0 / 0.0   is -inf        1.0 % 0.0   is  null ln(0.0)     is -inf        ln(-1.0)    is  null</p>
+<p>So a <code>?? fallback</code> does NOT rescue a division by zero the way it rescues a sqrt of a negative — the infinity is not null, sails through the guard, and propagates through every later sum. When a zero divisor is possible, test the DIVISOR rather than defending the result.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"sqrt of a negative is null"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) + <span class="nm">5.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"null propagates through arithmetic"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((<span class="bi"><a href="stdlib-math.html">sqrt</a></span>(-<span class="nm">1.0</span>) + <span class="nm">5.0</span>) ?? <span class="nm">0.0</span>) == <span class="nm">0.0</span>, <span class="st">"null propagates through arithmetic"</span>);
+  fz = <span class="nm">0.0</span>;
+  fp = <span class="nm">1.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{fp / fz}"</span> == <span class="st">"inf"</span>, <span class="st">"a non-zero over zero is an infinity, not a null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((fp / fz) ?? -<span class="nm">1.0</span>) &gt; <span class="nm">1000000.0</span>, <span class="st">"…so `??` does not rescue it"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(((fz / fz) ?? -<span class="nm">1.0</span>) == -<span class="nm">1.0</span>, <span class="st">"…while 0.0/0.0 really is null, and `??` does"</span>);</code></pre>
 <p>The <code>f</code> suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.</p>
 <pre><code>  x = <span class="nm">0.1f</span> + <span class="nm">2</span> * <span class="nm">1.0f</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(x == <span class="nm">2.1f</span>, <span class="st">"Single precision float"</span>);</code></pre>
-<p><code>as float</code> converts an integer to a float so you can mix them in calculations. Putting a float inside <code>{...}</code> converts it to text for display. You can also go the other way: <code>"1.5" as float</code> parses the text back to a number.</p>
+<p><code>as float</code> converts an integer to a float so you can mix them in calculations. Putting a float inside <code>{...}</code> converts it to text for display. You can also go the other way: <code>"1.5" as float?</code> parses the text back to a number. The <code>?</code> is required — a bare <code>as float</code> on text is refused for the same reason a bare <code>as integer</code> is ("a text parse <code>as float</code> may fail, and a bare cast asserts it cannot"), because the text might not be a number.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">3</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span> == <span class="nm">3.0</span>, <span class="st">"Integer to float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1.5"</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">float</a></span>? == <span class="nm">1.5</span>, <span class="st">"Text to float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1.5}"</span> == <span class="st">"1.5"</span>, <span class="st">"Float formatted as text"</span>);</code></pre>
@@ -399,12 +436,16 @@
   <span class="st">"positive"</span>
 }</code></pre>
 <h2 id="const-and-reference-parameters">Const and Reference Parameters</h2>
-<p><code>const</code> on a parameter tells the compiler "this function must never change this value." The compiler enforces it — any assignment to a const parameter is a compile error. <code>&amp;</code> is the opposite promise: "this function will modify this value." Declaring <code>&amp;</code> without actually writing to the parameter is also a compile error. These rules make it easy to read a function signature and know what it does to its inputs.</p>
+<p>Write <code>const</code> with the TYPE, not before the name — <code>fn f(s: const text)</code>, not <code>fn f(const s: text)</code>, which does not parse. It tells the compiler "this function must never change this value", and the compiler enforces it: assigning to a const parameter is a compile error ("Cannot modify const parameter"). <code>&amp;</code> is the opposite promise: "this function will modify this value." Declaring <code>&amp;</code> without actually writing to the parameter is also a compile error ("Parameter <code>a</code> has &amp; but is never modified; remove the &amp;"). These rules make it easy to read a function signature and know what it does to its inputs.</p>
+<p><code>const</code> earns its keep on a parameter the function COULD write through — a text, a vector, a struct. On a primitive you never modify it is reported as needless (<code>needless-const-parameter</code>), because a plain <code>integer</code> parameter is already a copy and const adds nothing to it.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">shout</span>(s: const <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  s + <span class="st">"!"</span>
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">scale</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   a * factor
 }</code></pre>
 <h2 id="type-based-dispatch">Type-Based Dispatch</h2>
-<p>You can define two functions with the same name as integer as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
+<p>You can define two functions with the same name as long as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">describe_int</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
   <span class="st">"integer:{v}"</span>
 }</code></pre>
@@ -412,7 +453,7 @@
   <span class="st">"text:{v}"</span>
 }</code></pre>
 <h2 id="function-references">Function References</h2>
-<p><code>fn &lt;name&gt;</code> creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type <code>fn(param_types) -&gt; return_type</code> and can be: - stored in a variable, - called directly with <code>f(args)</code>, and - passed as a parameter to another function.</p>
+<p>Writing a function's NAME on its own creates a reference to it that you can store or pass around — <code>f = double_it</code>, with no <code>fn</code> in front. (<code>fn double_it</code> is refused: "Use the function name directly, without <code>fn</code> prefix".) The compiler checks that the name exists — a typo is a compile error. The result has type <code>fn(param_types) -&gt; return_type</code> and can be: - stored in a variable, - called directly with <code>f(args)</code>, and - passed as a parameter to another function.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">2</span>
 }</code></pre>
@@ -442,6 +483,8 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">3</span>) == <span class="st">"positive"</span>, <span class="st">"Classify positive"</span>);</code></pre>
 <p><code>scale</code> uses plain parameters (no <code>const</code>, no <code>&amp;</code>): it only reads them to compute the product, so the caller's values are never touched.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">scale</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">21</span>, <span class="st">"scale(3,7)"</span>);</code></pre>
+<p><code>shout</code> promises not to change its text, and the compiler holds it to that.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">shout</span>(<span class="st">"hi"</span>) == <span class="st">"hi!"</span>, <span class="st">"const parameter: {shout(\"</span>hi\<span class="st">")}"</span>);</code></pre>
 <p>Loft selects the right function based on the type of the argument.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_int</span>(<span class="nm">42</span>) == <span class="st">"integer:42"</span>, <span class="st">"Integer describe"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_text</span>(<span class="st">"hi"</span>) == <span class="st">"text:hi"</span>, <span class="st">"Text describe"</span>);</code></pre>
@@ -483,7 +526,7 @@
 <h1>Vector</h1>
 <p>A vector is an ordered list of values that can grow and shrink while your program runs. Every element must have the same type — you cannot mix integers and text in one vector. Write a vector literal with square brackets: <code>[1, 2, 3]</code>. Loft automatically manages the storage, so vectors grow as you add elements without you having to say how large they will be up front.</p>
 <h2 id="transforming-vectors-map-filter-reduce">Transforming vectors: map, filter, reduce</h2>
-<p><code>map</code>, <code>filter</code>, and <code>reduce</code> each take a function and apply it to the vector. Pass the function using <code>fn &lt;name&gt;</code> to refer to a named function by name. map(v, f)          — apply f to every element; returns a new vector filter(v, pred)    — keep only elements for which pred returns true reduce(v, init, f) — combine all elements into a single value, starting from init</p>
+<p><code>map</code>, <code>filter</code>, and <code>reduce</code> each take a function and apply it to the vector. Pass the function by writing its NAME on its own — <code>map(v, triple)</code>, with no <code>fn</code> in front of it. map(v, f)          — apply f to every element; returns a new vector filter(v, pred)    — keep only elements for which pred returns true reduce(v, init, f) — combine all elements into a single value, starting from init</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">triple</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   x * <span class="nm">3</span>
 }</code></pre>
@@ -495,6 +538,18 @@
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">mul_acc</span>(acc: <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   acc * x
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">set_first_v</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  v[<span class="nm">0</span>] = x;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">append_one_v</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  v += [x];
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">replace_all_plain</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) {
+  v = [<span class="nm">7</span>, <span class="nm">7</span>];
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">replace_all</span>(v: &amp;<span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) {
+  v = [<span class="nm">7</span>, <span class="nm">7</span>];
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Create a vector with a literal and loop over it with <code>for</code>. Two special loop annotations help when you need to know where you are: <code>v#first</code>  is true only on the very first iteration — useful for skipping separators. <code>v#index</code>  holds the zero-based position of the current element.</p>
@@ -548,15 +603,29 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c == <span class="nm">8421</span>, <span class="st">"Reverse sub-vector iteration"</span>);</code></pre>
 <p>You can fill a vector with many copies of the same value using <code>; count</code> syntax: [SomeStruct { field: value }; 16] This creates 16 identical copies in one expression. See 08-struct.loft for examples.</p>
 <h2 id="passing-vectors-to-functions">Passing vectors to functions</h2>
-<p>When you pass a vector to a function, the function receives a <strong>slice</strong> — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with <code>+=</code> inside the function creates a local copy that the caller never sees.</p>
-<p>To let a function append to the caller's vector, mark the parameter with <code>&amp;</code>. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.</p>
-<pre><code>fn append_one(v: &amp;vector&lt;integer&gt;, x: integer) { v += [x]; }
+<p>A vector parameter is a shared view of the caller's vector — no data is copied. So everything the function does to the CONTENTS is visible to the caller once it returns: writing an element, appending, removing, clearing. You do not need to mark the parameter for any of that.</p>
+<p>Exactly one thing stays local: replacing the WHOLE value. Writing <code>v = [7, 7]</code> inside the function gives that function a different vector and leaves the caller's alone. Mark the parameter <code>&amp;</code> when you want that replacement to reach the caller as well.</p>
+<pre><code>fn replace_all(v: &amp;vector&lt;integer&gt;) { v = [7, 7]; }   // caller sees the new vector
 </code></pre>
-<p>Without <code>&amp;</code>, only element-level mutations are visible to the caller:</p>
-<pre><code>fn set_first(v: vector&lt;integer&gt;, x: integer) { v[0] = x; }  // caller sees the change
-fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does NOT see the append
-</code></pre>
-<p>The same rule applies to slices: <code>v[2..5]</code> passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.</p>
+<p>So <code>&amp;</code> means "I may replace this", not "I may add to it".</p>
+<p>A SLICE is a different thing again. <code>v[2..5]</code> builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a <code>vector&lt;T&gt;</code> parameter is expected — bind it to a variable first, and remember you are then working on a copy.</p>
+<pre><code>  passed: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">set_first_v</span>(passed, <span class="nm">99</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(passed[<span class="nm">0</span>] == <span class="nm">99</span>, <span class="st">"a write to an existing element reaches the caller"</span>);
+  grown: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">append_one_v</span>(grown, <span class="nm">4</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(grown) == <span class="nm">4</span>, <span class="st">"…and so does an append, with no '&amp;' needed"</span>);
+  kept: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">replace_all_plain</span>(kept);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(kept) == <span class="nm">3</span>, <span class="st">"replacing the whole value stays inside the function"</span>);
+  swapped: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="fn-call">replace_all</span>(swapped);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(swapped[<span class="nm">0</span>] == <span class="nm">7</span>, <span class="st">"…unless the parameter is marked '&amp;'"</span>);
+  source: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
+  window = source[<span class="nm">2..5</span>];
+  <span class="fn-call">set_first_v</span>(window, <span class="nm">77</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(window[<span class="nm">0</span>] == <span class="nm">77</span>, <span class="st">"the slice itself is written"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(source[<span class="nm">2</span>] == <span class="nm">3</span>, <span class="st">"…and the original is untouched, because a slice is a copy"</span>);</code></pre>
 <h2 id="higher-order-functions">Higher-order functions</h2>
 <p><code>map</code> applies a function to every element and returns a new vector.</p>
 <pre><code>  nums =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
@@ -584,7 +653,8 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   stock: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
 <h2 id="field-constraints">Field Constraints</h2>
-<p>You can restrict what values a field may hold. <code>limit(min, max)</code> rejects any value outside that range at runtime. <code>not null</code> tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need <code>not null</code>. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
+<p>You can restrict what values a field may hold. <code>limit(min, max)</code> gives the field a smaller range. It is not a rejection and it never stops your program: a value outside the range cannot be represented, so the field takes the same answer any uncomputable number takes (see the Integers page). That is null when the field is nullable, and the type's default when it is not — 0 for a range that includes zero. Zero is an ordinary value here. A Colour of 0, 0, 0 is pure black and reads back as three zeros, with nothing extra to write. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
+<p>You may meet <code>not null</code> on a field in older code. It has no effect — a type is non-null by default now — and the compiler advises removing it.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Colour</span> {
   r: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>),
   g: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>),
@@ -624,10 +694,17 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <li>Binding a whole value COPIES it, always. After <code>b = a</code> the two names are independent, and writing <code>b</code> never changes <code>a</code>. The copy goes all the way down, including nested structs and vectors.</li>
 <li>Reading a struct-typed field or element gives you a VIEW: <code>w = o.inner</code> and <code>c = v[i]</code> name the record in place, so <code>w.n = 42</code> changes <code>o.inner</code> too. A view is not a copy — it points at the interior of what you read it from. (A vector-typed field is a whole value, so <code>av = bx.v</code> copies.)</li>
 <li>Write <code>&amp;</code> when you want a live link where a bind would copy: <code>b = &amp;a</code> and <code>av = &amp;bx.v</code> both write through to the source.</li>
+<li>⚠ The same expression can COPY in one position and ALIAS in another. <code>av = bx.v</code> copies, because binding a whole value always copies — but <code>f(bx.v)</code> hands the field itself to the function, and a heap parameter shares what it is given (see the Vector page), so the function writes through to <code>bx.v</code>. Binding is the copy; passing is not. Read the position, not just the expression.</li>
 </ul>
 <pre><code>value <span class="kw">struct</span> <span class="en">Point</span> {
   x: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   y: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Holder8</span> {
+  v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">touch8</span>(w8: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) {
+  w8[<span class="nm">0</span>] = <span class="nm">99</span>;
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Constructing a struct: name the fields you want to set. Fields you leave out default to zero (or null for nullable fields).</p>
@@ -637,9 +714,16 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <p>You can read and write individual fields after construction.</p>
 <pre><code>  apple.stock -= <span class="nm">1</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(apple.stock == <span class="nm">49</span>, <span class="st">"stock after one sale: {apple.stock}"</span>);</code></pre>
-<p>A field omitted from the constructor gets zero as its default.</p>
+<p>A field omitted from the constructor gets zero as its default. loft points this out (<code>omitted-field-zero</code>): the zero is the type's, and nothing in the declaration chose it. That is fine when zero is what you meant, and a trap when zero is a meaningful value in your data — an index where 0 is the first entry, say. Give the field a declared default when you want a different one, the way <code>Item.name_length</code> does above.</p>
 <pre><code>  col = <span class="en">Colour</span> {r: <span class="nm">128</span>, b: <span class="nm">128</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(col.g == <span class="nm">0</span>, <span class="st">"omitted green channel defaults to zero"</span>);</code></pre>
+<p>Zero is a real value in a limited field — pure black needs nothing extra.</p>
+<pre><code>  black = <span class="en">Colour</span> {r: <span class="nm">0</span>, g: <span class="nm">0</span>, b: <span class="nm">0</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(black.r == <span class="nm">0</span> <span class="kw">and</span> black.g == <span class="nm">0</span> <span class="kw">and</span> black.b == <span class="nm">0</span>, <span class="st">"pure black reads back as zeros"</span>);</code></pre>
+<p>A value outside the range takes the type's default rather than being rejected.</p>
+<pre><code>  over = <span class="nm">300</span>;
+  black.r = over;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(black.r == <span class="nm">0</span>, <span class="st">"out of range takes the default: {black.r}"</span>);</code></pre>
 <p>Formatting a struct shows all fields compactly.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col}"</span> == <span class="st">"{{r:128,g:0,b:128}}"</span>, <span class="st">"Struct compact formatting"</span>);</code></pre>
 <p><code>:j</code> produces JSON output — a text format used by many web APIs and config tools.</p>
@@ -685,13 +769,21 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   spare.stock = <span class="nm">3</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">7</span>, <span class="st">"a whole-value bind copies"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(spare.stock == <span class="nm">3</span>, <span class="st">"and the copy moves on its own"</span>);</code></pre>
+<p>The same field expression, in the two positions: bound it copies, passed it does not. This pair is easy to generalise the wrong way in either direction.</p>
+<pre><code>  bx8 = <span class="en">Holder8</span> { v: [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>] };
+  av8 = bx8.v;
+  av8[<span class="nm">0</span>] = <span class="nm">42</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bx8.v[<span class="nm">0</span>] == <span class="nm">1</span>, <span class="st">"binding a vector field copies it"</span>);
+  cx8 = <span class="en">Holder8</span> { v: [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>] };
+  <span class="fn-call">touch8</span>(cx8.v);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cx8.v[<span class="nm">0</span>] == <span class="nm">99</span>, <span class="st">"passing the same field shares it"</span>);</code></pre>
 <p>Write <code>&amp;</code> to get a live link where a bind would otherwise copy.</p>
 <pre><code>  linked = &amp;item;
   linked.stock = <span class="nm">1</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(item.stock == <span class="nm">1</span>, <span class="st">"'&amp;' binds a live link"</span>);</code></pre>
 <h2 id="sizeof">sizeof</h2>
 <p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (post-2c i64 storage)"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (i64 storage)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u8</a></span>) == <span class="nm">1</span>, <span class="st">"u8: 1 byte (packed)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u16</a></span>) == <span class="nm">2</span>, <span class="st">"u16: 2 bytes (packed)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="en">Colour</span>) == <span class="nm">3</span>, <span class="st">"Colour: 3 × u8 = 3 bytes"</span>);
@@ -766,7 +858,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.<span class="fn-call">describe</span>() == <span class="st">"circle with radius 1"</span>, <span class="st">"describe circle: {c.describe()}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r.<span class="fn-call">describe</span>() == <span class="st">"rect 4 by 5"</span>, <span class="st">"describe rect: {r.describe()}"</span>);</code></pre>
 <h2 id="stubs-for-missing-implementations">Stubs for missing implementations</h2>
-<p>If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it: fn area(self: SomeVariant) -&gt; float { } A stub returns null at runtime and suppresses the warning.</p>
+<p>If a variant intentionally has no implementation of a method, the compiler emits a warning ("no implementation of <code>area</code> for variant <code>Rect</code>"). Provide an empty-body stub to silence it: fn area(self: SomeVariant) -&gt; float { } Give the stub a real body — <code>{ 0.0 }</code> — when anything reads its result. An empty body silences the warning and hands back the type's default (0.0 for a float, 0 for an integer, "" for text), which is the same on both backends. That is a real value, not a marker: it is not null, so there is nothing to test for, and a caller cannot tell it from a computed 0.0.</p>
 <h2 id="match-expressions-on-enums">Match expressions on enums</h2>
 <p>Match picks a code path based on the active variant. You must handle every variant, or include a <code>_</code> wildcard arm that catches the rest.</p>
 <pre><code>  axis = match d {
@@ -801,7 +893,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
     _         =&gt; <span class="st">"high"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(kind == <span class="st">"low"</span>, <span class="st">"scalar or-pattern"</span>);</code></pre>
-<p>A <code>null</code> pattern matches when the value is absent (e.g. a defended division by zero — <code>?? null</code> marks the division as handled, so no undefended-site warning is logged; the result is null either way).</p>
+<p>A <code>null</code> pattern matches when the value is absent — here a division by zero, which yields null (see the Integers page). The <code>?? null</code> turns the reasoned null into a plain one; it is the value that is being matched either way.</p>
 <pre><code>  zero = <span class="nm">0</span>;
   check = match <span class="nm">1</span> / zero ?? <span class="kw">null</span> {
     <span class="kw">null</span> =&gt; <span class="st">"absent"</span>,
@@ -923,20 +1015,36 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main_ranges</span>() {</code></pre>
 <h2 id="iterating-a-key-range">Iterating a Key Range</h2>
-<p>Use an <code>if</code> guard inside a <code>for</code> loop to visit only records whose key falls within a range. Because the collection is sorted the guard still sees all elements, but the body only runs for the matching ones.</p>
+<p>Give the collection a RANGE in square brackets and the loop starts and stops at the right places, without looking at the records outside it. This is the operation a sorted collection exists for. c[lo..hi]   from lo up to but NOT including hi c[lo..=hi]  from lo up to AND including hi c[lo..]     from lo to the end c[..hi]     from the start up to but not including hi Mind the two spellings: <code>..</code> leaves the last key out, <code>..=</code> keeps it. That is the same rule as a vector slice.</p>
 <pre><code>  d = <span class="en">Dict</span> { words: [
     <span class="en">Word</span> { name: <span class="st">"apple"</span>,      score: <span class="nm">5</span> },
     <span class="en">Word</span> { name: <span class="st">"banana"</span>,     score: <span class="nm">3</span> },
     <span class="en">Word</span> { name: <span class="st">"cherry"</span>,     score: <span class="nm">8</span> },
     <span class="en">Word</span> { name: <span class="st">"date"</span>,       score: <span class="nm">2</span> },
     <span class="en">Word</span> { name: <span class="st">"elderberry"</span>, score: <span class="nm">1</span> }
-  ] };</code></pre>
-<p>Closed range: keys &gt;= "banana" and &lt;= "date".</p>
-<pre><code>  range_total = <span class="nm">0</span>;
-  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"date"</span> {
-    range_total += w.score
+  ] };
+  slice_total = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words[<span class="st">"banana"</span>..=<span class="st">"date"</span>] {
+    slice_total += w.score
   }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(range_total == <span class="nm">13</span>, <span class="st">"banana(3)+cherry(8)+date(2) = {range_total}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(slice_total == <span class="nm">13</span>, <span class="st">"banana(3)+cherry(8)+date(2) = {slice_total}"</span>);
+  half_open = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words[<span class="st">"banana"</span>..<span class="st">"date"</span>] {
+    half_open += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(half_open == <span class="nm">11</span>, <span class="st">"'..' leaves date out: {half_open}"</span>);
+  head_total = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words[..<span class="st">"cherry"</span>] {
+    head_total += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(head_total == <span class="nm">8</span>, <span class="st">"apple(5)+banana(3) = {head_total}"</span>);</code></pre>
+<h2 id="filtering-on-something-that-is-not-the-key">Filtering on something that is NOT the key</h2>
+<p>An <code>if</code> guard inside the loop still works, and it is what you want when the condition is not about the key: the guard sees every element and the body runs only for the matching ones. Use a range when you are selecting BY key, and a guard when you are selecting by anything else.</p>
+<pre><code>  cheap = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.score &lt; <span class="nm">4</span> {
+    cheap += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cheap == <span class="nm">6</span>, <span class="st">"banana(3)+date(2)+elderberry(1) = {cheap}"</span>);</code></pre>
 <h2 id="open-ended-range-tail">Open-ended Range (tail)</h2>
 <p>All records from "cherry" onward to the end of the sorted order.</p>
 <pre><code>  tail_count = <span class="nm">0</span>;
@@ -961,7 +1069,8 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 </section>
 <section class="print-section" id="11-index">
 <h1>Index</h1>
-<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending. Note: each record can only belong to one index at a time.</p>
+<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending.</p>
+<p>Two keyed collections over the SAME element type are two ROUTES to one set of records, not two collections. Give records to either one and both see them; write through one and the other reads the change; remove through one and it is gone from both. That is the point of declaring a second one — a second way in, by a different key — and loft says so if a literal fills both (<code>linked-group-double-fill</code>), because then one record set ends up holding everything they were given.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
   nr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
@@ -986,6 +1095,12 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"Key lookup"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">12</span>, <span class="st">""</span>], <span class="st">"Missing key returns null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">83</span>, <span class="st">"One"</span>], <span class="st">"Wrong secondary key returns null"</span>);</code></pre>
+<p>Fewer fields than the key has: every record sharing that prefix.</p>
+<pre><code>  prefix_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> r <span class="kw">in</span> db.map[<span class="nm">83</span>] {
+    prefix_sum += r.value
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(prefix_sum == <span class="nm">12</span>, <span class="st">"the three nr=83 records: {prefix_sum}"</span>);</code></pre>
 <h2 id="iterating-in-order">Iterating in Order</h2>
 <p>A <code>for</code> loop visits all elements in key order.</p>
 <pre><code>  total = <span class="nm">0</span>;
@@ -1029,7 +1144,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 </section>
 <section class="print-section" id="12-hash">
 <h1>Hash</h1>
-<p>A <code>hash</code> lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike <code>sorted</code> and <code>index</code>, a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: <code>hash&lt;Type[field]&gt;</code>. Combine a hash with a vector when you want both fast lookup and a stable iteration order.</p>
+<p>A <code>hash</code> lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike <code>sorted</code> and <code>index</code>, a hash does not keep its records in order — that is exactly what makes the lookup fast. You can still iterate one and get a predictable order (ascending key), but the hash has to sort a snapshot to do it; see <code>Iterating a Hash</code> at the bottom of this page. List the key fields in brackets: <code>hash&lt;Type[field]&gt;</code>. Combine a hash with a vector when you want both fast lookup and a stable iteration order.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Keyword</span> {
   name: <span class="ty"><a href="stdlib-types.html">text</a></span>
 }</code></pre>
@@ -1080,22 +1195,24 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  d.h[<span class="st">"three"</span>] = <span class="kw">null</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!d.h[<span class="st">"three"</span>], <span class="st">"three was removed"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.h[<span class="st">"one"</span>], <span class="st">"one still present"</span>);
-  d.h[<span class="st">"missing"</span>] = <span class="kw">null</span>;</code></pre>
-<p>no-op; does not panic</p>
+  d.h[<span class="st">"missing"</span>] = <span class="kw">null</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.h[<span class="st">"one"</span>], <span class="st">"removing a key that is not there leaves the others alone"</span>);</code></pre>
 <h2 id="iterating-a-hash">Iterating a Hash</h2>
 <p><code>for e in h { ... }</code> walks the hash in ascending key order.  The loop variable has the same shape as a <code>sorted&lt;T&gt;</code> iteration — a <code>reference&lt;T&gt;</code> with <code>#index</code>, <code>#count</code>, and <code>#first</code> available.  Multi-field keys sort lexicographically.</p>
 <p>Under the hood the compiler builds a one-shot sorted snapshot of the hash's record-numbers and walks it, so iteration cost is O(n) + O(n log n) per <code>for</code>, not amortised across calls.  For a hot loop, pair the hash with a <code>vector&lt;T&gt;</code> or <code>sorted&lt;T[k]&gt;</code> on the same record type and iterate the companion collection.</p>
-<p><code>e#remove</code> is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use <code>h[key] = null</code> to remove an entry.</p>
+<p><code>e#remove</code> is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use <code>h[key] = null</code> to remove an entry. Adding the values up cannot show you the order — a sum is the same whichever way you walk. Collect the keys instead: they come out alphabetically, not in the order they went in.</p>
 <pre><code>  sum = <span class="nm">0</span>;
-  <span class="kw">for</span> e <span class="kw">in</span> c.lookup { sum += e.v; }
+  order = <span class="st">""</span>;
+  <span class="kw">for</span> e <span class="kw">in</span> c.lookup { sum += e.v; order += <span class="st">"{e.t} "</span>; }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">10</span>, <span class="st">"Sum via hash iteration: {sum}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(order == <span class="st">"Four One Three Two "</span>, <span class="st">"hash walks in key order: {order}"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="13-file">
 <h1>File</h1>
 <p>A file handle lets you read and write files without worrying about when the OS opens or closes them. The file opens on the first read or write and closes automatically when the handle goes out of scope.</p>
 <h2 id="inspecting-the-file-system">Inspecting the File System</h2>
-<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns a <code>FileResult</code> enum; use <code>.ok()</code> to check success. Clean up any leftover files from a previous interrupted run. <code>#cwd</code> opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default) — see @PLN9.</p>
+<p><code>file(path)</code> creates a File handle without opening anything yet. <code>f#format</code> is the mode the handle will read and write in. Two of its values answer what the path IS — Directory, and NotExists for a path with nothing at it. The other three are modes you choose: TextFile (UTF-8 text, and the default for any file that exists), LittleEndian (binary, bytes stored least-significant first — common on most PCs) and BigEndian (binary, most-significant first — common in network protocols). It does not inspect content: a PNG you have not set a format on reads as TextFile, so <code>#format</code> cannot tell you a file is text. <code>lines()</code> reads a text file and returns it as a vector of lines. <code>exists(path)</code> is a convenience shorthand for checking that a path is not NotExists. <code>delete(path)</code> removes a file and returns a <code>FileResult</code> enum; use <code>.ok()</code> to check success. Clean up any leftover files from a previous interrupted run. <code>#cwd</code> opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default).</p>
 <pre><code>#cwd
 <span class="kw">fn</span> <span class="fn-call">cleanup</span>() {
   <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"test.bin"</span>);
@@ -1113,20 +1230,20 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ex#format == <span class="en">Directory</span>, <span class="st">"example is a directory"</span>);
   c = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example/config/terrain.txt"</span>).<span class="fn-call"><a href="stdlib-file-system.html">lines</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c[<span class="nm">1</span>] == <span class="st">"    terrain = ["</span>, <span class="st">"Line was '{c[1]}'"</span>);</code></pre>
-<p><code>exists</code> and <code>delete</code> are safe to call when the file is absent. <code>delete</code> returns false rather than crashing when nothing is there.</p>
+<p><code>exists</code> and <code>delete</code> are safe to call when the file is absent. Nothing crashes: <code>delete</code> answers <code>FileResult.NotFound</code>, whose <code>.ok()</code> is false.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">exists</a></span>(<span class="st">"test.bin"</span>), <span class="st">"File should not exist before the test."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"nonexistent_xyz.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete on missing file not ok"</span>);</code></pre>
 <h2 id="writing-a-text-or-binary-file">Writing a Text or Binary File</h2>
-<p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set <code>f#format</code> to LittleEndian or BigEndian before writing binary data. Use <code>f += value</code> to append the raw bytes of any scalar value (u8, u16, i32, integer, single, float, or text). An <code>integer</code> is 8 bytes wide (see the size assertions below).</p>
+<p>Wrapping the file handle in a block ensures the file closes the moment the block ends. Set <code>f#format</code> to LittleEndian or BigEndian before writing binary data. Use <code>f += value</code> to append the raw bytes of any scalar value: u8, i8, u16, i16, u32, i32, integer, single, float, boolean, or text. Cast to the width you mean — an uncast <code>integer</code> writes 8 bytes, which is rarely the record width a binary format wants, so the compiler asks you to say it. Write <code>as integer</code> where the 8 bytes are deliberate.</p>
 <pre><code> {f = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"test.bin"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#format == <span class="en">NotExists</span>, <span class="st">"File should not exist yet."</span>);
   f#format = <span class="en">BigEndian</span>;  <span class="cm">// BigEndian: most-significant byte written first.</span>
   f += <span class="nm">0</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">1</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u8</a></span>;
   f += <span class="nm">0x203</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">u16</a></span>;
-  f += <span class="nm">0x4050607</span>;
-  f += <span class="nm">0x8090a0b0c0d0e0f</span>;</code></pre>
-<p><code>f#size</code> returns the total number of bytes written so far. Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.</p>
+  f += <span class="nm">0x4050607</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;
+  f += <span class="nm">0x8090a0b0c0d0e0f</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</code></pre>
+<p><code>f#size</code> returns the total number of bytes written so far. An integer is 8 bytes, so the total is 1 + 1 + 2 + 8 + 8 = 20.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">20</span>, <span class="st">"Should have written 20 bytes."</span>);</code></pre>
 <p>Text is written as raw UTF-8 bytes with no length prefix.</p>
 <pre><code>  f += <span class="st">"Hello world!"</span>;
@@ -1145,7 +1262,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v == <span class="nm">0x3020100</span>, <span class="st">"BigEndian bytes 0..3 read as LittleEndian i32."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="ty">index</span> == <span class="nm">0</span>, <span class="st">"Last read started at byte 0."</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#next == <span class="nm">4</span>, <span class="st">"Next read starts at byte 4."</span>);</code></pre>
-<p>Seek to byte 20 to skip past the integers and read the text directly. (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)</p>
+<p>Seek to byte 20 to skip past the integers and read the text directly. (The u8+u8+u16+integer+integer header is 1+1+2+8+8 = 20 bytes, so the text starts there.)</p>
 <pre><code>  f#next = <span class="nm">20</span>;
   s = f#<span class="fn-call">read</span>(<span class="nm">5</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">text</a></span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="st">"Hello"</span>, <span class="st">"Partial text read from offset 20."</span>);
@@ -1166,10 +1283,14 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   f#format = <span class="en">LittleEndian</span>;
   ints =[<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>];
   f += ints;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">32</span>, <span class="st">"Four integers = 32 bytes (8 each, post-2c)"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">32</span>, <span class="st">"Four integers = 32 bytes (8 each)"</span>);</code></pre>
 <p>Truncate to the first two integers.</p>
 <pre><code>  f#size = <span class="nm">16</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">16</span>, <span class="st">"Truncated to 16 bytes"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#size == <span class="nm">16</span>, <span class="st">"Truncated to 16 bytes"</span>);</code></pre>
+<p>Growing works the same way, and the bytes you gain are zero.</p>
+<pre><code>  f#size = <span class="nm">24</span>;
+  f#next = <span class="nm">16</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(f#<span class="fn-call">read</span>(<span class="nm">8</span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span> == <span class="nm">0</span>, <span class="st">"The extension reads as zero bytes."</span>);
  }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin after vector write test."</span>);</code></pre>
 <p>Write a count followed by individual float values. <code>sizeof(T)</code> returns the byte width of a type, so you can compute the correct read length without hard-coding magic numbers.</p>
@@ -1192,16 +1313,38 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((b.data[<span class="nm">0</span>] ?? <span class="nm">0.0f</span>) == <span class="nm">1.1f</span>, <span class="st">"First float survives the round-trip."</span>);
  }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"buffer.bin"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"Could not remove buffer.bin."</span>);</code></pre>
+<h2 id="directories">Directories</h2>
+<p><code>is_dir(path)</code> and <code>is_file(path)</code> answer the question directly, without going through a handle. <code>files()</code> lists a directory as File handles, so every entry carries its own path and format; <code>list_dir(path)</code> gives you just the names. Both are sorted by name, so an index means the same entry on every machine — but they disagree on a path that is not a directory: <code>files()</code> answers an empty list and <code>list_dir</code> answers null, so discharge that one with <code>?? []</code>.</p>
+<pre><code>  dir = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">is_dir</a></span>(<span class="st">"tests/example"</span>), <span class="st">"the example directory is a directory"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">is_file</a></span>(<span class="st">"tests/example"</span>), <span class="st">"a directory is not a file"</span>);
+  entries = dir.<span class="fn-call"><a href="stdlib-file-system.html">files</a></span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(entries) &gt; <span class="nm">0</span>, <span class="st">"the example directory is not empty"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((entries[<span class="nm">0</span>] ?? <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">""</span>)).path == <span class="st">"tests/example/config"</span>, <span class="st">"first entry path"</span>);</code></pre>
+<p><code>mkdir(path)</code> creates one level and <code>mkdir_all(path)</code> creates every missing level. <code>mkdir_all</code> is idempotent — a directory that already exists is Ok, which is what makes it safe to call on the way into a run.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">mkdir_all</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir_all on an existing directory is Ok"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">mkdir</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir on an existing directory is not Ok"</span>);</code></pre>
+<p><code>delete</code> is a file operation and answers FileResult.IsDirectory when you point it at a directory. <code>rmdir</code> is the one that removes a directory, and only an EMPTY one — it answers NotEmpty while entries remain. A recursive removal is yours to write: list_dir() the children, delete() the files, rmdir() the directory, deepest first.</p>
 <h2 id="error-handling">Error handling</h2>
-<p>File operations that can fail return a <code>FileResult</code> enum. Call <code>.ok()</code> to check success. The program does not crash on failure — you decide what to do.</p>
+<p>Filesystem operations that can fail return a <code>FileResult</code>, and it is an enum with six variants, not a boolean. <code>.ok()</code> is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.</p>
 <pre><code>  result = <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"this_file_does_not_exist.txt"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!result.<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete missing file returns not-ok"</span>);</code></pre>
-<p>Reading a non-existent file produces an empty result, not a crash.</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!result.<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete missing file returns not-ok"</span>);
+  why = match result {
+    <span class="en">Ok</span> =&gt; <span class="st">"deleted"</span>,
+    <span class="en">NotFound</span> =&gt; <span class="st">"there was nothing there"</span>,
+    <span class="en">PermissionDenied</span> =&gt; <span class="st">"the OS refused"</span>,
+    <span class="en">IsDirectory</span> =&gt; <span class="st">"that is a directory"</span>,
+    <span class="en">NotEmpty</span> =&gt; <span class="st">"the directory still has entries in it"</span>,
+    <span class="en">Other</span> =&gt; <span class="st">"it failed for another reason"</span>
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(why == <span class="st">"there was nothing there"</span>, <span class="st">"delete on a missing file is NotFound"</span>);</code></pre>
+<p>A handle to a path with nothing at it is safe to hold and safe to read. Nothing crashes: the format is NotExists and <code>lines()</code> is empty. A sized <code>f#read</code> on it answers null rather than a value you might mistake for data, and says so on stderr.</p>
 <pre><code>  ghost = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_file.txt"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ghost#format == <span class="en">NotExists</span>, <span class="st">"non-existent file has NotExists format"</span>);</code></pre>
-<p><code>move</code> reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains <code>..</code> (loft#712).</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ghost#format == <span class="en">NotExists</span>, <span class="st">"non-existent file has NotExists format"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(ghost.<span class="fn-call"><a href="stdlib-file-system.html">lines</a></span>()) == <span class="nm">0</span>, <span class="st">"lines() on a missing file is empty"</span>);</code></pre>
+<p><code>move</code> reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains <code>..</code>.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">move</a></span>(<span class="st">"any.txt"</span>, <span class="st">"../escape.txt"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"move with a missing source fails"</span>);</code></pre>
-<p>Writing to a read-only or invalid path also returns a FileResult. Always check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
+<p>One asymmetry to know: <code>f += value</code> is a statement and reports nothing. If the path cannot be opened for writing, the bytes are dropped and the run carries on with a message on stderr. Use <code>f.write(text)</code> when you need the write itself to answer a FileResult, and check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="15-lexer">
@@ -1229,12 +1372,27 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">matches</span>(<span class="st">"&gt;"</span>), <span class="st">"Incorrect higher"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"&gt;&gt;"</span>), <span class="st">"Incorrect logical shift"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call"><a href="stdlib-file-system.html">position</a></span>() == <span class="st">"Tokens:1:17"</span>, <span class="st">"Incorrect position {l.position()}"</span>);</code></pre>
+<p><code>long_int()</code> reads an integer written with an <code>l</code> suffix. The suffix is part of the token, not part of the value.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Long"</span>, <span class="st">"9000000000l"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">long_int</span>() == <span class="nm">9000000000</span>, <span class="st">"Long integer"</span>);</code></pre>
+<p>A registered keyword is reported exactly as written, so a parser can tell it from an ordinary name without keeping a second list of its own.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Keywords"</span>, <span class="st">"for name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">peek</span>() == <span class="st">"for"</span>, <span class="st">"A keyword reads back as itself"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"for"</span>), <span class="st">"and matches by that spelling"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">peek</span>() == <span class="st">"name"</span>, <span class="st">"while an ordinary name is just a name"</span>);</code></pre>
 <h2 id="string-literals-and-comments">String Literals and Comments</h2>
-<p><code>constant_text()</code> reads a double-quoted string and handles special codes like \n (newline) and \\ (backslash). <code>constant_character()</code> reads a single-quoted character literal and returns it as text.</p>
+<p><code>constant_text()</code> reads a double-quoted string and decodes the escapes inside it: <code>\n</code> becomes one newline, <code>\t</code> one tab, <code>\r</code> one return, and <code>\\</code> and <code>\"</code> stand for a single backslash and quote, and <code>\xNN</code> is the character with that two-digit hex code — <code>\x41</code> is <code>A</code>. An escape the lexer does not recognise stands for its own character, so <code>\q</code> is just <code>q</code>, and an <code>\x</code> without two hex digits after it is treated the same way rather than eating what follows.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Texts"</span>, <span class="st">"\"</span><span class="nm">123</span>\<span class="st">" + '4'"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"123"</span>, <span class="st">"Incorrect text literal"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect add"</span>);</code></pre>
-<p><code>constant_character()</code> returns a <code>character</code>, so compare it as one (<code>l.constant_character() == '4'</code>), not against the text "123". The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
+<p><code>constant_character()</code> reads a single-quoted literal and returns a <code>character</code>, not text — so compare it against a character.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_character</span>() == <span class="ch">'4'</span>, <span class="st">"Incorrect character literal"</span>);</code></pre>
+<p>An escape counts as ONE character, in a text and in a character literal alike. <code>size()</code> is what shows it: two source characters, one value.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Escapes"</span>, <span class="st">"\"</span>a\\nb\<span class="st">" '\\t'"</span>);
+  nl = l.<span class="fn-call">constant_text</span>() ?? <span class="st">""</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(nl) == <span class="nm">3</span>, <span class="st">"'a\\nb' is three characters, not four: {size(nl)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_character</span>() == <span class="ch">'\t'</span>, <span class="st">"An escaped character literal decodes too"</span>);</code></pre>
+<p>The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Comments"</span>, <span class="st">"// starting comments\n123 // same line comment\n// extra comment\n4"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">comment_behind</span>(), <span class="st">"Initial comment not behind"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">"starting comments"</span>, <span class="st">"Initial comment"</span>);
@@ -1246,7 +1404,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">""</span>, <span class="st">"No remaining comment"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">is_finished</span>(), <span class="st">"Ready"</span>);</code></pre>
 <h2 id="embedded-format-expressions">Embedded Format Expressions</h2>
-<p>Loft string literals can embed expressions with <code>{expr}</code>. The lexer exposes a protocol that lets you parse these yourself. When <code>constant_text()</code> reaches a <code>{</code>, it returns the literal text before it and sets <code>is_formatting()</code> to true. At that point call <code>set_formatting(false)</code> and parse the embedded expression normally using the usual token readers. When the expression is done, call <code>set_formatting(true)</code> and consume the closing <code>}}</code>. Then <code>constant_text()</code> continues with the next segment of the string.</p>
+<p>Loft string literals can embed expressions with <code>{expr}</code>. The lexer exposes a protocol that lets you parse these yourself. When <code>constant_text()</code> reaches a <code>{</code>, it returns the literal text before it and sets <code>is_formatting()</code> to true. At that point call <code>set_formatting(false)</code> and parse the embedded expression normally using the usual token readers. When the expression is done, call <code>set_formatting(true)</code> and consume the closing <code>}</code>. Then <code>constant_text()</code> continues with the next segment of the string. The example below writes that brace as "}}" because a literal brace inside a loft string is doubled — the TOKEN the lexer matches is the single <code>}</code>.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Formatting"</span>, <span class="st">"\"</span>abc{{<span class="nm">12</span> + <span class="nm">34</span>}}def\<span class="st">""</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"abc"</span>, <span class="st">"Before formatting"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">is_formatting</span>(), <span class="st">"Formatting"</span>);
@@ -1270,18 +1428,19 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 </ul>
 <p>Together the <code>lexer</code> and <code>parser</code> libraries are designed as a reusable foundation. You can use them to build entirely new languages: feed the lexer your own token rules, then layer a custom parser on top. This keeps the tokeniser and grammar logic separate from the language runtime so you only bring in what you need.</p>
 <p><code>parse(name, source)</code> is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.</p>
-<p>If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.</p>
+<p>parse() answers how many errors the source contained — <code>0</code> for a snippet that parsed cleanly. The diagnostics themselves go to the log as it reads; the count is what a caller can branch on.</p>
 <h2 id="what-the-parser-understands">What the parser understands</h2>
-<p>The parser handles all Loft syntax:</p>
+<p>The parser handles most of Loft's syntax:</p>
 <ul>
 <li><code>struct Name { field: type [= default] }</code> — data containers with named fields</li>
 <li><code>enum Name { Variant [{ field: type }] }</code> — named choices, each with optional data</li>
 <li><code>fn name(params) [-&gt; type] { body }</code> — functions with a block body</li>
 <li><code>fn name(params) [-&gt; type]; #rust "template"</code> — operator templates backed by Rust</li>
 <li><code>use module;</code> — module imports</li>
-<li>Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals</li>
-<li>Type expressions: plain names, generic types like <code>vector&lt;T&gt;</code>, keyed collections (sorted/hash/index), and integer ranges with <code>limit(min, max)</code></li>
+<li>Expressions: binary operators with precedence, function calls, field access, if/else, for loops, and blocks</li>
+<li>Type expressions: plain names, generic types like <code>vector&lt;T&gt;</code>, keyed collections (sorted/hash/index), and integer ranges with <code>integer limit(min, max)</code> — in parameter, field, and return position</li>
 </ul>
+<p>Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>), and a formatted string literal (<code>"v={n}"</code>). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept. Tracked as loft#1259.</p>
 <pre><code><span class="kw">use</span> parser;
 <span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
@@ -1301,7 +1460,7 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"body"</span>, <span class="st">"fn m() {{ println(\"</span>a\<span class="st">"); println(\"</span>b\<span class="st">"); }}"</span>) == <span class="nm">0</span>,
          <span class="st">"a body of several statements parses cleanly"</span>);</code></pre>
 <h2 id="parsing-assignments-and-operators">Parsing assignments and operators</h2>
-<p>Every binary operator in the table above is accepted, including assignment.</p>
+<p>Binary operators parse with their normal precedence, and so does assignment.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"assign"</span>, <span class="st">"fn f() {{ t = 0; t += 1; }}"</span>) == <span class="nm">0</span>,
          <span class="st">"assignment and compound assignment parse cleanly"</span>);</code></pre>
 <h2 id="parsing-a-for-loop-and-arithmetic">Parsing a for loop and arithmetic</h2>
@@ -1325,23 +1484,23 @@ if parser::parse("user_code", snippet) &gt; 0 {
 </section>
 <section class="print-section" id="17-libraries">
 <h1>Libraries</h1>
-<p>A library is a <code>.loft</code> file you can share across projects. Place it in a <code>lib/</code> directory, import it with <code>use name;</code> at the top of your file, and then refer to its types and functions using the <code>name::</code> prefix. All types and functions in a library are accessible — there is no way to mark something as internal or hidden. <code>use</code> statements must come before any <code>fn</code> or <code>struct</code> definition in your file. Putting a <code>use</code> after a definition is a syntax error.</p>
+<p>A library is a <code>.loft</code> file you can share across projects. Place it in a <code>lib/</code> directory and import it with <code>use name;</code> at the top of your file. That one line does two things: it brings every <code>pub</code> name in the library into your own namespace, so you can write them bare, and it gives you the <code>name::</code> prefix, which reaches everything the library defines. A definition without <code>pub</code> is reachable only through the prefix. So <code>pub</code> is about the BARE spelling rather than about secrecy: leaving it off keeps a name out of your namespace and out of any import, but <code>name::thing</code> still finds it. <code>use</code> statements must come before any <code>fn</code> or <code>struct</code> definition in your file. Putting a <code>use</code> after a definition is a syntax error.</p>
 <pre><code><span class="kw">use</span> testlib;</code></pre>
 <h2 id="constants-and-enums">Constants and Enums</h2>
-<p>Library constants and enum variants are accessed with the <code>libname::</code> prefix. You can compare, order, and convert enum values exactly as you would with enums defined in the same file.</p>
+<p>A library constant reads like one of your own, and so does an enum variant. You can compare, order, and convert enum values exactly as you would with enums defined in the same file. The <code>libname::</code> prefix is always available and is what disambiguates a variant name two enums share.</p>
 <h2 id="struct-construction-and-field-access">Struct Construction and Field Access</h2>
-<p>Construct a library struct with its full namespace prefix. Omitting the prefix is a parse error. Once you have a value, field access uses the plain dot notation with no prefix needed.</p>
+<p>A library struct is constructed like any other. For a <code>pub</code> type the prefix is optional — <code>testlib::Point {…}</code> and <code>Point {…}</code> build the same value — and it is what you reach for when a name of your own would otherwise win. Field access never takes a prefix.</p>
 <h2 id="calling-library-methods">Calling Library Methods</h2>
-<p>Methods defined in the library are called on the value directly — no prefix on the call site. Free functions (not methods) do need the <code>libname::</code> prefix.</p>
+<p>Methods defined in the library are called on the value directly — no prefix on the call site. A <code>pub</code> free function is callable bare as well; the prefix is how you reach one that is not <code>pub</code>, and how you say which library you meant.</p>
 <h2 id="extending-a-library-type">Extending a Library Type</h2>
 <p>You can add new methods to a library type from your own file. Write the <code>self</code> parameter type with the <code>::</code> separator and the compiler treats the function as a method on that type.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">shifted</span>(self: testlib::<span class="en">Point</span>, dx: <span class="ty"><a href="stdlib-types.html">float</a></span>, dy: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; testlib::<span class="en">Point</span> {
   testlib::<span class="en">Point</span> {x: self.x + dx, y: self.y + dy }
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<p>Constants from a library require the library prefix.</p>
+<p>A library constant, both ways: the prefix always works, and the bare name works because <code>use testlib;</code> brought every <code>pub</code> name into this file.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(testlib::<span class="en">MAX_SIZE</span> == <span class="nm">100</span>, <span class="st">"library constant MAX_SIZE"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(testlib::<span class="en">MIN_SIZE</span> == <span class="nm">1</span>, <span class="st">"library constant MIN_SIZE"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="en">MIN_SIZE</span> == <span class="nm">1</span>, <span class="st">"the same constant, written bare"</span>);</code></pre>
 <p>Library enum variants: comparison and ordering work as normal.</p>
 <pre><code>  s = testlib::<span class="en">Ok</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == testlib::<span class="en">Ok</span>, <span class="st">"enum equality"</span>);
@@ -1350,7 +1509,7 @@ if parser::parse("user_code", snippet) &gt; 0 {
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"Warning"</span> <span class="kw">as</span> testlib::<span class="en">Status</span> == testlib::<span class="en">Warning</span>, <span class="st">"text to enum"</span>);</code></pre>
 <p>Library enum values can be passed to library free functions.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(testlib::<span class="fn-call">status_text</span>(testlib::<span class="en">Error</span>) == <span class="st">"err"</span>, <span class="st">"free fn with enum arg"</span>);</code></pre>
-<p>Structs are constructed with namespace prefix and accessed by field.</p>
+<p>A struct built through the prefix, and read by plain field access.</p>
 <pre><code>  p = testlib::<span class="en">Point</span> {x: <span class="nm">3.0</span>, y: <span class="nm">4.0</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(p.x == <span class="nm">3.0</span>, <span class="st">"field access: x={p.x}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(p.y == <span class="nm">4.0</span>, <span class="st">"field access: y={p.y}"</span>);</code></pre>
@@ -1369,9 +1528,12 @@ if parser::parse("user_code", snippet) &gt; 0 {
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b.count == <span class="nm">1</span>, <span class="st">"method scalar mutation: count={b.count}"</span>);
   b.<span class="fn-call">bump</span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b.count == <span class="nm">2</span>, <span class="st">"method scalar mutation: count={b.count}"</span>);</code></pre>
-<p>Free functions: called with the library prefix.</p>
+<p>Free functions: a <code>pub</code> one answers to either spelling.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(testlib::<span class="fn-call">add</span>(<span class="nm">3</span>, <span class="nm">4</span>) == <span class="nm">7</span>, <span class="st">"free function add"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(testlib::<span class="fn-call">add</span>(<span class="nm">0</span>, -<span class="nm">5</span>) == -<span class="nm">5</span>, <span class="st">"free function negative"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">add</span>(<span class="nm">0</span>, -<span class="nm">5</span>) == -<span class="nm">5</span>, <span class="st">"the same free function, written bare"</span>);</code></pre>
+<p>A definition the library did NOT mark <code>pub</code> is reachable only through the prefix — <code>internal_add(3, 4)</code> on its own is an unknown function here.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(testlib::<span class="fn-call">internal_add</span>(<span class="nm">3</span>, <span class="nm">4</span>) == <span class="nm">7</span>, <span class="st">"non-pub free function via the prefix"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(testlib::<span class="en">INTERNAL_LIMIT</span> == <span class="nm">42</span>, <span class="st">"non-pub constant via the prefix"</span>);</code></pre>
 <p>Library types work as function parameter types when written with their full namespace prefix in the function signature. A struct with a vector field can be initialised via a struct literal, including elements that are themselves library structs.</p>
 <pre><code>  bag2 = testlib::<span class="en">Bag</span> {label: <span class="st">"full"</span>, count: <span class="nm">3</span>, items: [
   testlib::<span class="en">Point</span> {x: <span class="nm">1.0</span>, y: <span class="nm">0.0</span> },
@@ -1396,8 +1558,9 @@ if parser::parse("user_code", snippet) &gt; 0 {
   src/
     mylib.loft        library source (default entry)
 </code></pre>
-<p>When the interpreter searches a lib directory and finds <code>&lt;dir&gt;/mylib/</code> it looks for <code>&lt;dir&gt;/mylib/src/mylib.loft</code> automatically.</p>
-<p>The optional <code>loft.toml</code> manifest supports two settings:</p>
+<p>The directory form is found in any search directory you NAMED — <code>--lib &lt;dir&gt;</code>, a path in <code>LOFT_LIB</code>, <code>~/.loft/lib/</code> — and in your own project's <code>lib/</code> once your program is itself a package, with a <code>loft.toml</code> of its own at the top. In all of those, <code>&lt;dir&gt;/mylib/</code> resolves to <code>&lt;dir&gt;/mylib/src/mylib.loft</code> on its own.</p>
+<p>A lone script with no manifest above it reads its <code>lib/</code> flat, so there a library must be the single file <code>lib/mylib.loft</code> — a <code>lib/mylib/</code> directory beside such a script answers "Library <code>mylib</code> not found". Giving the script a <code>loft.toml</code> is what turns the directory form on.</p>
+<p>The <code>loft.toml</code> manifest carries the whole package declaration — name, version, dependencies, native crates, build targets. Two of its settings decide how the library above is LOADED:</p>
 <pre><code>[package]
 loft = "&gt;=1.0"        minimum interpreter version required
 </code></pre>
@@ -1406,58 +1569,78 @@ entry = "src/mylib.loft"   override the default entry path
 </code></pre>
 <p>If the interpreter version is below the stated minimum, loading the library produces a fatal compile error describing the version mismatch. If no manifest is present, the default entry <code>src/&lt;name&gt;.loft</code> is used.</p>
 <h2 id="wildcard-and-selective-imports">Wildcard and Selective Imports</h2>
-<p>By default, library names require the <code>libname::</code> prefix. You can import names directly into your namespace with <code>use lib::*</code> (wildcard) or <code>use lib::Name, Other</code> (selective). Only <code>pub</code>-marked definitions in the library are imported this way. Non-pub definitions remain accessible via the <code>lib::name</code> prefix.</p>
+<p>A bare <code>use lib;</code> already brings in every <code>pub</code> name, and <code>use lib::*</code> says the same thing out loud. What the other forms buy you is a say in WHICH names arrive: <code>use lib::Name</code> takes one, and <code>use lib::(Name, Other)</code> takes a group. Multiple names must be parenthesised — the flat <code>use lib::Name, Other</code> is refused ("import multiple names with parentheses"). Only <code>pub</code> definitions can be named this way; the rest stay reachable as <code>lib::name</code>.</p>
+<p>Taking only what you name is the stronger position, because it makes you immune to the library GROWING a name. A bare import and your own definition of a name the library exports are a conflict, and it is refused naming both sites; under a selective import every name you did not ask for stays yours.</p>
+<p><code>use lib as short;</code> gives you the qualifier alone — <code>short::name</code> — and brings nothing in bare, which is the escape hatch when a name does clash. Single names alias too: <code>use lib::Name as N</code>, or <code>use lib::(Name as N, other)</code>.</p>
 <h2 id="limitations">Limitations</h2>
 <p><strong>`use` must appear before all definitions.</strong> If you write a function first and then a <code>use</code>, the compiler reports a syntax error.</p>
-<p><strong>`pub` controls import visibility.</strong> Only <code>pub</code>-marked definitions are available via wildcard (<code>use lib::*</code>) or selective import. Non-pub definitions are still accessible with the <code>lib::name</code> prefix.</p>
-<p><strong>Native extensions.</strong> A library can be pure <code>.loft</code>, or ship a Rust crate beside it: declare <code>native = "..."</code> in <code>loft.toml</code> and loft builds and links it for you. See PACKAGES.md for the build + binding model.</p>
+<p><strong>`pub` decides the bare spelling.</strong> Only <code>pub</code> definitions come in bare or can be named by an import; the rest are still reachable as <code>lib::name</code>. A library therefore has no hidden half — <code>pub</code> says which names are ready to be written without ceremony, not which ones exist.</p>
+<p><strong>Native extensions.</strong> A library can be pure <code>.loft</code>, or ship a Rust crate beside it: declare <code>[library] native = "..."</code> in <code>loft.toml</code> and loft builds and links it for you. See PACKAGES.md for the build + binding model.</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="18-locks">
 <h1>Store Locks</h1>
 <p>Loft gives you two separate ways to protect a value from accidental changes:</p>
-<p>1. <strong>Compile-time const</strong>: mark a variable or parameter with <code>const</code> and the compiler refuses to compile any code that tries to reassign it. The check happens before the program even runs — zero runtime cost.</p>
+<p>1. <strong>Compile-time const</strong>: mark a variable or parameter with <code>const</code> and the compiler refuses to compile the writes that word forbids. The check happens before the program even runs — zero runtime cost.</p>
 <p>2. <strong>Runtime lock</strong>: the <code>#lock</code> attribute on a reference lets you lock a store at runtime so that any write attempt panics immediately, even across function boundaries. This is useful for debugging: turn it on when you suspect an unexpected mutation.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Counter</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
-<h2 id="const-parameters">const parameters</h2>
-<p><code>const</code> on a parameter is a compile-time promise: "this function will not modify this value." The compiler enforces it — any assignment to a const parameter is a compile error, caught before you run anything.</p>
+<h2 id="the-two-places-const-can-go">The two places <code>const</code> can go</h2>
+<p>A name has a slot, and the slot holds a value. Those are two different things to freeze, so <code>const</code> has two positions and they mean opposite halves:</p>
+<ul>
+<li><strong>'const' before the NAME</strong> — <code>const x = …</code> — freezes the <strong>slot</strong>. You can never point <code>x</code> at something else, but the value it holds stays mutable: you may still append to it and write its elements and fields. This is the builder shape — set it up once, fill it in place.</li>
+<li><strong>'const' before the TYPE</strong> — <code>x: const T</code> — freezes the <strong>value</strong>. You may swap in a whole new value, but you can never reach into the one that is there. This is the read-only shape — a shared table, a parameter a function promises not to touch.</li>
+</ul>
+<p>Write both — <code>const x: const T</code> — and the name is fully immutable.</p>
+<p>A plain number or boolean has no interior separate from its slot, so for those the two positions mean the same thing: both freeze it completely.</p>
+<p><code>const</code> before the TYPE is what a function uses to promise "I will not modify this". Every write through the parameter is a compile error: appending to it, writing an element, writing a field, or writing a field of a field.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">read_value</span>(self: const <span class="en">Counter</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   self.value
 }</code></pre>
-<p>A non-const parameter leaves the store unlocked so the function can write.</p>
+<p>A parameter without <code>const</code> can write, and the write reaches the caller.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">increment</span>(self: <span class="en">Counter</span>) {
   self.value += <span class="nm">1</span>
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="const-local-variables">const local variables</h2>
-<p>Declare a local variable with <code>const</code> to signal that it will not change after its first assignment. The compiler rejects any later assignment to it — reassigning or appending to a const variable is a compile error.</p>
-<p>This is handy for configuration values or lookup tables that should never be overwritten by accident deep inside a long function.</p>
+<p><code>const</code> before the name is the common case for a local: a configuration value or a lookup table that should never be pointed somewhere else deep inside a long function.</p>
 <pre><code>  const <span class="kw">limit</span> = <span class="nm">100</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">limit</span> == <span class="nm">100</span>, <span class="st">"const integer is readable"</span>);</code></pre>
-<p>const also works for struct references.</p>
+<p>For a whole number the two positions agree, so this one is frozen outright: <code>limit = 200</code> and <code>limit += 1</code> are both compile errors.</p>
+<p>A const local holding a collection is the builder shape — the slot is write-once, the contents keep growing.</p>
+<pre><code>  const totals = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  totals += [<span class="nm">4</span>];
+  totals[<span class="nm">0</span>] = <span class="nm">9</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(totals) == <span class="nm">4</span>, <span class="st">"a const local still appends: {len(totals)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(totals[<span class="nm">0</span>] == <span class="nm">9</span>, <span class="st">"a const local still takes an element write"</span>);</code></pre>
+<p>The other position freezes the contents instead, and leaves the slot free.</p>
+<pre><code>  frozen: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  frozen = [<span class="nm">7</span>, <span class="nm">8</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(frozen) == <span class="nm">2</span>, <span class="st">"a value-const local still re-points: {len(frozen)}"</span>);</code></pre>
+<p><code>frozen += [9]</code> would not compile: the value is read-only.</p>
+<p>The same split applies to a struct.</p>
 <pre><code>  const cfg = <span class="en">Counter</span> {value: <span class="nm">42</span> };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cfg.value == <span class="nm">42</span>, <span class="st">"const reference is readable"</span>);</code></pre>
-<p>Passing a const reference to a const parameter is always allowed.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(cfg) == <span class="nm">42</span>, <span class="st">"const passed to const param"</span>);</code></pre>
-<h2 id="calling-methods-on-const-references">Calling methods on const references</h2>
-<p>A non-const method can still be called on a non-const variable even after you have manually locked the store; the lock is a runtime check.</p>
-<pre><code>  c = <span class="en">Counter</span> {value: <span class="nm">10</span> };
-  <span class="fn-call">increment</span>(c);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.value == <span class="nm">11</span>, <span class="st">"increment modified c"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cfg.value == <span class="nm">42</span>, <span class="st">"const reference is readable"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(cfg) == <span class="nm">42</span>, <span class="st">"const passed to const param"</span>);</code></pre>
 <h2 id="runtime-store-locks-with-lock">Runtime store locks with #lock</h2>
-<p><code>#lock</code> is an attribute on any reference variable. Setting it to true turns on a runtime guard: any write to that store will panic immediately, wherever it happens. A freshly created reference starts unlocked.</p>
+<p><code>const</code> is checked once, when the program is compiled. A lock is checked on every write, while the program runs — so it catches a write the compiler cannot see coming, wherever in the program it happens.</p>
+<p><code>#lock</code> is an attribute on any reference variable: a struct, a vector, any value that lives in a store. A freshly created one starts unlocked.</p>
 <pre><code>  d = <span class="en">Counter</span> {value: <span class="nm">5</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!d#lock, <span class="st">"new store starts unlocked"</span>);
   d#lock = <span class="kw">true</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d#lock, <span class="st">"store is locked after assignment"</span>);</code></pre>
-<p>You can still read from a locked store — only writes are blocked.</p>
+<p>Reading a locked store is still fine — only writes are blocked.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(d) == <span class="nm">5</span>, <span class="st">"locked store is still readable"</span>);</code></pre>
+<p>A write is not. <code>d.value = 6</code> panics here, and so does <code>increment(d)</code> — the guard is on the store, so it fires wherever the write is written. That is the point of the lock: the program stops at the write instead of carrying a value someone changed behind your back.</p>
+<p>Set it back to false to lift the guard.</p>
+<pre><code>  d#lock = <span class="kw">false</span>;
+  <span class="fn-call">increment</span>(d);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.value == <span class="nm">6</span>, <span class="st">"unlocking lets the write through again"</span>);</code></pre>
 <h2 id="when-to-use-each-approach">When to use each approach</h2>
 <ul>
 <li>Use <code>const</code> on parameters and locals to express your design intent and get compile-time safety at zero cost.</li>
-<li>Use <code>#lock = true</code> when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to panic with a precise location rather than corrupt silently.</li>
+<li>Use <code>#lock = true</code> when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to stop at that write rather than corrupt silently.</li>
 </ul>
 <p>get_store_lock() is the function form of the #lock attribute. Both return the same boolean.</p>
 <pre><code>  e = <span class="en">Counter</span> {value: <span class="nm">99</span> };
@@ -1468,32 +1651,36 @@ entry = "src/mylib.loft"   override the default entry path
 </section>
 <section class="print-section" id="19-threading">
 <h1>Parallel execution</h1>
-<p>The <code>par(b=worker_call, threads)</code> clause on a <code>for</code> loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.</p>
+<p>The <code>par(b=worker_call, threads)</code> clause on a <code>for</code> loop runs a function on every element of a collection in parallel and gives you the results one by one in the loop body.</p>
 <h2 id="why-parallel-loops">Why parallel loops?</h2>
-<p>When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — <code>par()</code> splits the work across CPU cores automatically.  You write a normal for loop; adding <code>par(...)</code> makes it parallel with no other changes.</p>
+<p>When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — <code>par()</code> splits the work across CPU cores automatically.  You move the per-element work into a function and name it in the clause; the loop body then reads that function's result instead of computing it.</p>
 <h2 id="syntax">Syntax</h2>
-<pre><code>`for a in vec par(b=func(a), N) { body }`
+<pre><code>`for a in src par(b = func(a), N) { body }`
 </code></pre>
 <ul>
-<li><code>a</code> — loop variable, read-only reference to the current element</li>
+<li><code>a</code> — loop variable, bound to the current element, exactly as in a loop without <code>par</code>.  The body may still read it alongside the result.</li>
 <li><code>b</code> — result variable, holds the return value of <code>func(a)</code></li>
 <li><code>func(a)</code> — worker function called on each element</li>
 <li><code>N</code> — number of threads (1 = sequential, 4 = typical)</li>
 </ul>
+<p><code>src</code> is any source a <code>for</code> loop accepts: a vector, a range, a text, or a keyed collection.  See "Order" below for what a <code>hash</code> source changes.</p>
 <h2 id="two-call-forms">Two call forms</h2>
 <ul>
-<li><strong>Form 1</strong> — global function: <code>par(b=my_func(a), 4)</code></li>
-<li><strong>Form 2</strong> — method on element: <code>par(b=a.my_method(), 4)</code></li>
+<li><strong>Form 1</strong> — a free function: <code>par(b=my_func(a), 4)</code></li>
+<li><strong>Form 2</strong> — a method on the element: <code>par(b=a.my_method(), 4)</code></li>
 </ul>
-<h2 id="worker-function-rules">Worker function rules</h2>
-<p>The worker function:</p>
+<p>These are two spellings for two kinds of declaration, not two ways to write the same call: a function whose first parameter is <code>self</code> is reachable only by Form 2, and a free function only by Form 1.  Reach for the wrong one and the compiler says the name is unknown.</p>
+<h2 id="what-a-worker-may-do">What a worker may do</h2>
+<p>The compiler holds two of these for you, and you hold the third:</p>
 <ul>
-<li>Takes a <code>const</code> reference to the element (read-only, no mutation)</li>
-<li>Returns a value (integer, float, boolean, text, or a struct)</li>
-<li>Must not use global state or I/O (no println, no file access)</li>
-<li>Can accept extra arguments forwarded from the calling scope</li>
+<li><strong>The loop element may be a reference</strong> — a struct, say.  Marking it <code>const</code> documents that the worker only reads it.  For a plain number the <code>const</code> has nothing to freeze and the compiler says so, so leave it off.</li>
+<li><strong>Every OTHER argument must be a scalar.</strong> A worker runs on its own copy of the heap, so it cannot reach a struct or vector from the calling scope.  Read what you need into a number before the loop and forward that.</li>
+<li><strong>The worker must not touch anything shared</strong> — no global state, no <code>println</code>, no file access.  This one is yours to keep: a worker that writes shared state is a program loft does not define, and it will not stop you.  Three workers appending to one file leave one line, and which line survives changes from run to run.</li>
 </ul>
-<p>Results are delivered in the original order regardless of which thread finishes first.</p>
+<p>The compiler does refuse the case it can see: a worker that writes to state captured from around the loop.</p>
+<h2 id="order">Order</h2>
+<p>The body sees results in the order the source produced them, whatever order the threads finished in — so for a vector, a range, a text or a <code>sorted</code>, <code>par</code> gives exactly what the sequential loop gives, and <code>N</code> is a speed knob that never changes the answer.</p>
+<p>A <code>hash</code> is the one exception, and it is worth knowing before you rely on it: <code>par</code> walks it in storage order rather than key order, so the results arrive in a different order from the plain <code>for</code> loop over the same hash — and in a different order on each run.  Iterate a <code>sorted</code> instead when the order matters.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
@@ -1523,7 +1710,7 @@ entry = "src/mylib.loft"   override the default entry path
 }</code></pre>
 <p>@FTR-070 — a <code>par</code> loop across threads: the worker runs on every element and the results come back in order, whatever the thread count</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="global-function-form-1">Global Function (Form 1)</h2>
+<h2 id="free-function-form-1">Free function (Form 1)</h2>
 <p>Each Score's value is doubled by <code>double_score</code> across 4 threads. The loop body sees <code>b</code> with the doubled value, in original order.</p>
 <pre><code>  q = <span class="fn-call">make_scores</span>();
   sum = <span class="nm">0</span>;
@@ -1533,7 +1720,7 @@ entry = "src/mylib.loft"   override the default entry path
 <p>10*2 + 20*2 + 30*2 = 120</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">120</span>, <span class="st">"parallel double: sum == 120"</span>);</code></pre>
 <h2 id="extra-arguments">Extra Arguments</h2>
-<p>The worker function can take extra arguments from the calling scope. Here <code>scale_score(a, factor)</code> passes <code>factor=3</code> to every worker.</p>
+<p>The worker function can take extra arguments from the calling scope, as long as each is a number, a boolean or a character.  Here <code>scale_score(a, factor)</code> passes <code>factor=3</code> to every worker.</p>
 <pre><code>  q1b = <span class="fn-call">make_scores</span>();
   factor = <span class="nm">3</span>;
   scaled_sum = <span class="nm">0</span>;
@@ -1543,21 +1730,29 @@ entry = "src/mylib.loft"   override the default entry path
 <p>10*3 + 20*3 + 30*3 = 180</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(scaled_sum == <span class="nm">180</span>, <span class="st">"extra arg: scaled sum == 180"</span>);</code></pre>
 <h2 id="struct-return">Struct Return</h2>
-<p>Workers can return a struct.  Text fields are deep-copied so they remain valid after the worker thread exits.</p>
+<p>A worker returns whatever its own type says: a number, a boolean, a character, a text, a struct, or a vector.  Text and struct results are deep-copied, so they stay valid after the worker thread exits.</p>
 <pre><code>  q2 = <span class="fn-call">make_scores</span>();
   labels = <span class="st">""</span>;
   <span class="kw">for</span> thr_sa <span class="kw">in</span> q2.items <span class="fn-call">par</span>(thr_ds = <span class="fn-call">make_doubled</span>(thr_sa), <span class="nm">1</span>) {
     labels += <span class="st">"{thr_ds.label},"</span>;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(labels == <span class="st">"v10,v20,v30,"</span>, <span class="st">"struct return: {labels}"</span>);</code></pre>
-<h2 id="method-call-form-2">Method Call (Form 2)</h2>
-<p><code>b=a.get_value()</code> dispatches the method on each element in parallel. This is syntactic sugar — equivalent to <code>b=get_value(a)</code>.</p>
+<h2 id="method-call-form-2">Method call (Form 2)</h2>
+<p><code>get_value</code> takes <code>self</code>, so it is a method and <code>b=a.get_value()</code> is the spelling that reaches it.</p>
 <pre><code>  q3 = <span class="fn-call">make_scores</span>();
   total = <span class="nm">0</span>;
   <span class="kw">for</span> thr_a <span class="kw">in</span> q3.items <span class="fn-call">par</span>(thr_b = thr_a.<span class="fn-call">get_value</span>(), <span class="nm">4</span>) {
     total += thr_b;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"method call: total == 60"</span>);</code></pre>
+<h2 id="any-for-source">Any for-source</h2>
+<p>A range is a source like any other, and a worker over plain numbers wants no <code>const</code>.</p>
+<pre><code>  thr_range_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> thr_i <span class="kw">in</span> <span class="nm">0..5</span> <span class="fn-call">par</span>(thr_d = <span class="fn-call">thr_double</span>(thr_i), <span class="nm">4</span>) {
+    thr_range_sum += thr_d;
+  }</code></pre>
+<p>(0+1+2+3+4) * 2</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(thr_range_sum == <span class="nm">20</span>, <span class="st">"range source: {thr_range_sum}"</span>);</code></pre>
 <h2 id="empty-vector">Empty Vector</h2>
 <p>An empty vector is safe — the loop body never executes, no threads are spawned.</p>
 <pre><code>  empty = <span class="en">ScoreList</span> { };
@@ -1567,13 +1762,16 @@ entry = "src/mylib.loft"   override the default entry path
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(thr_n == <span class="nm">0</span>, <span class="st">"empty: 0 iterations"</span>);</code></pre>
 <h2 id="sequential-fallback">Sequential fallback</h2>
-<p>Using <code>par(..., 1)</code> runs the worker on a single thread — useful for debugging.  The behaviour is identical; only the parallelism changes.</p>
+<p>Using <code>par(..., 1)</code> runs the worker on a single thread — useful for debugging.  The answer is the same one every thread count gives; only the parallelism changes.</p>
 <pre><code>  q4 = <span class="fn-call">make_scores</span>();
   seq_sum = <span class="nm">0</span>;
   <span class="kw">for</span> thr_a <span class="kw">in</span> q4.items <span class="fn-call">par</span>(thr_b = <span class="fn-call">double_score</span>(thr_a), <span class="nm">1</span>) {
     seq_sum += thr_b;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(seq_sum == <span class="nm">120</span>, <span class="st">"sequential par(1): same result"</span>);
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">thr_double</span>(thr_n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  thr_n * <span class="nm">2</span>
 }</code></pre>
 </section>
 <section class="print-section" id="20-logging">
@@ -1594,12 +1792,13 @@ entry = "src/mylib.loft"   override the default entry path
 <li><code>log_fatal</code> — a condition so serious that normal operation is impossible. Example: "cannot open database", "required config file not found".</li>
 </ul>
 <h2 id="configuring-the-log-destination">Configuring the log destination</h2>
-<p>By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a <code>log.conf</code> file in the same directory as your <code>.loft</code> file, or pass <code>--log-conf path/to/log.conf</code> on the command line.</p>
-<p>Generate a documented template with all defaults by running: loft --generate-log-config</p>
+<p>By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a <code>log.conf</code> file in the same directory as your <code>.loft</code> file, or pass <code>--log-conf path/to/log.conf</code> on the command line. The directory is exact: a <code>log.conf</code> one level up is not found, and a program with no config logs nothing and says nothing.</p>
+<p>To see every setting with its default, print a documented template: loft --generate-log-config              # writes it to the terminal loft --generate-log-config log.conf     # writes it to that file</p>
 <p>A minimal <code>log.conf</code> looks like this:</p>
 <pre><code>[log]
 file  = log.txt    # write messages here (relative to the .loft file)
 level = info       # minimum level to record; choices: info warn error fatal
+                   # (the default, when you leave this out, is 'warn')
 </code></pre>
 <pre><code>[rotation]
 max_size_mb = 500  # start a new log file after this many megabytes
@@ -1610,19 +1809,21 @@ max_files   = 10   # keep at most this many log files (older ones are deleted)
 per_site = 5       # suppress messages from the same source line after 5/minute
 </code></pre>
 <pre><code>[levels]
-# Override the global level for a specific file:
-# "debug_tool.loft" = info
-# "src/"            = error
+# Override the global level for one file, by its name alone:
+"debug_tool.loft" = info
+"src/"            = error   # a path prefix — see loft#1264 before relying on it
 </code></pre>
 <h2 id="production-mode">Production mode</h2>
-<p>When <code>production = true</code> is set in log.conf:</p>
+<p>With <code>production = true</code> in the <code>[log]</code> section of log.conf, or <code>--production</code> on the command line:</p>
 <ul>
 <li><code>panic()</code> becomes a fatal log entry instead of aborting the process.</li>
 <li>A failing <code>assert()</code> becomes an error log entry instead of aborting.</li>
 </ul>
-<p>The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down.</p>
+<p>The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down. It still exits non-zero at the end, so a supervisor watching the exit status learns that something went wrong.</p>
+<p>⚠ This works on the interpreter only. On the <code>--native</code> backend — which is what you get by default — <code>panic()</code> still aborts and writes nothing to the log (loft#1263). Until that is closed, run a service that relies on production mode with <code>--interpret</code>.</p>
 <h2 id="using-format-strings-in-log-messages">Using format strings in log messages</h2>
-<p>Log messages are plain text, but you can embed any expression using the same <code>{...}</code> format syntax as everywhere else in Loft. The interpolation happens only when the message is actually going to be written; if the configured level is higher than the call, the string is never evaluated (no performance cost for suppressed messages).</p>
+<p>Log messages are plain text, but you can embed any expression using the same <code>{...}</code> format syntax as everywhere else in Loft.</p>
+<p>The message is built BEFORE the call decides whether to write it — the argument is an ordinary expression, evaluated like any other. So a message that is discarded still costs what it costs, and that is true whether it was filtered out by the level, suppressed by the rate limit, or dropped because there is no log.conf at all. Keep an expensive call out of a message on a hot path, or guard the whole log line with an <code>if</code>.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Without a log.conf these calls do nothing — the tests below pass even though no output is produced.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"starting up"</span>);
@@ -1631,12 +1832,12 @@ per_site = 5       # suppress messages from the same source line after 5/minute
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_fatal</a></span>(<span class="st">"critical failure"</span>);</code></pre>
 <h2 id="example-log-txt-output">Example log.txt output</h2>
 <p>When a <code>log.conf</code> is present with <code>level = info</code>, the four calls above produce entries like this in <code>log.txt</code>:</p>
-<pre><code>2026-03-24 09:15:00 INFO   app.loft:3  starting up
-2026-03-24 09:15:00 WARN   app.loft:4  this is a warning
-2026-03-24 09:15:00 ERROR  app.loft:5  something went wrong
-2026-03-24 09:15:00 FATAL  app.loft:6  critical failure
+<pre><code>2026-09-01T08:35:38.971Z INFO   /home/you/app/app.loft:3  starting up
+2026-09-01T08:35:38.971Z WARN   /home/you/app/app.loft:4  this is a warning
+2026-09-01T08:35:38.971Z ERROR  /home/you/app/app.loft:5  something went wrong
+2026-09-01T08:35:38.971Z FATAL  /home/you/app/app.loft:6  critical failure
 </code></pre>
-<p>Each line contains: timestamp, severity level, source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. A true assert never logs anything — it is only the false case that logs.</p>
+<p>Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute (loft#1264). A true assert never logs anything — it is only the false case that logs.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span>, <span class="st">"this should never fail"</span>);</code></pre>
 <h2 id="typical-usage-pattern">Typical usage pattern</h2>
 <p>In a real program you would write something like:</p>
@@ -1656,22 +1857,33 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 </section>
 <section class="print-section" id="22-time">
 <h1>Time</h1>
-<p>Loft provides two time functions:</p>
+<p>Loft's standard library has two time functions, and they answer two different questions:</p>
 <pre><code>now()     — milliseconds since the Unix epoch (wall-clock time).
 ticks()   — microseconds elapsed since program start (monotonic clock).
 </code></pre>
-<p>Both return an <code>integer</code> (loft's 64-bit integer).</p>
-<p>Use <code>now()</code> for timestamps, log entries, and date calculations. Use <code>ticks()</code> for benchmarks and frame timing — it is unaffected by system clock changes or NTP adjustments.</p>
+<p>Both return an <code>integer</code> (loft's 64-bit integer) — which they need, since a millisecond timestamp passed 32 bits in 1970 plus a few weeks.</p>
+<p>Use <code>now()</code> when you want to know WHEN something happened: timestamps, log entries, anything you will compare against a calendar. Use <code>ticks()</code> when you want to know HOW LONG something took: benchmarks and frame timing. It is unaffected by system clock changes or NTP adjustments, which is exactly what <code>now()</code> cannot promise.</p>
+<h2 id="calendars-are-a-library">Calendars are a library</h2>
+<p>These two are the whole clock surface: there is no year, month or weekday in the standard library, and no formatting. That is deliberate — calendar arithmetic is a large, opinionated subject — and it is a package away:</p>
+<pre><code>use time;
+fn main() {
+    ms = now();
+    println(format_iso(ms));                    // 2026-09-01T09:03:58Z
+    println("{year(ms)} {month_name(ms)} {day(ms)}, a {weekday_name(ms)}");
+    println(format_date(add_days(ms, 30)));     // 2026-10-01
+}
+</code></pre>
+<p>The <code>time</code> package works on the same millisecond-since-epoch integer <code>now()</code> returns, so nothing has to be converted. Install it with <code>loft install time</code>.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="wall-clock-time-now">Wall-clock time: now()</h2>
-<p><code>now()</code> returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.</p>
+<p><code>now()</code> returns the current time as milliseconds since 1970-01-01T00:00:00 UTC, so it is well past the range a 32-bit number could hold.</p>
 <pre><code>  t = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">0</span>, <span class="st">"now() must be positive"</span>);</code></pre>
-<p>Two successive calls return non-decreasing values.</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">2147483647</span>, <span class="st">"now() is a 64-bit millisecond stamp: {t}"</span>);</code></pre>
+<p>It reads the system clock, so it usually moves forward — but it is the system's clock, not yours: an NTP correction or a manual change can step it in either direction. Never subtract two <code>now()</code> values to time something. That is what <code>ticks()</code> is for.</p>
 <pre><code>  t2 = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t2 &gt;= t, <span class="st">"now() must be non-decreasing"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t2 &gt; <span class="nm">2147483647</span>, <span class="st">"a second reading is a timestamp too: {t2}"</span>);</code></pre>
 <h2 id="elapsed-time-ticks">Elapsed time: ticks()</h2>
-<p><code>ticks()</code> measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.</p>
+<p><code>ticks()</code> measures microseconds since the program started, so it begins near zero and only ever climbs. It uses a monotonic clock, which is the guarantee <code>now()</code> does not have: it never jumps backward, whatever happens to the system clock while your program runs.</p>
 <pre><code>  start = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(start &gt;= <span class="nm">0</span>, <span class="st">"ticks() must be non-negative"</span>);
   end = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
@@ -1693,8 +1905,8 @@ elapsed_ms  = elapsed_us / 1000
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">499500</span>, <span class="st">"loop produced wrong sum: {sum}"</span>);</code></pre>
 <h2 id="common-patterns">Common patterns</h2>
 <p>Timestamp a log entry (seconds since epoch): seconds = now() / 1000</p>
-<p>Seed the random number generator with the current time (now() already returns an integer, so no cast is needed): rand_seed(now())</p>
-<p>Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000} ms")</p>
+<p>Seed the random number generator with the current time. The generator is in the <code>random</code> package rather than the standard library, so the import is part of the pattern — without it the name does not resolve: use random; rand_seed(now())</p>
+<p>Simple stopwatch (integer division, so this truncates to whole ms): start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000} ms")</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="23-safety">
@@ -3161,6 +3373,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub interface Ordered</code></pre>
 <p>Types that support the `&lt;` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.</p>
+<p>`boolean` is NOT among them, deliberately: it satisfies Equatable below and has no ordering, so `false &lt; true` is a refusal rather than a convention the language picks for you.  A program that wants it says so — `(a as integer) &lt; (b as integer)`.  Note this is what bounds the null-ordering half of @FR-E-NullArg, which applies to the ORDERED types only; boolean null still compares with `==` like every other scalar.</p>
 <p>ONE method is all a type has to define: inside a generic bounded by this, `&gt;`, `&lt;=` and `&gt;=` all derive from `&lt;` — `a &gt; b` is `b &lt; a`, `a &lt;= b` is `!(b &lt; a)`, `a &gt;= b` is `!(a &lt; b)`.  Each evaluates its operands exactly once.</p>
 </div>
 <div class="item">
@@ -3697,9 +3910,10 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   NotFound,
   PermissionDenied,
   IsDirectory,
+  NotEmpty,
   Other,
 }</code></pre>
-<p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
+<p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), NotEmpty when rmdir() is given a directory that still holds entries, and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
@@ -3757,6 +3971,10 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn mkdir_all(path: text) -&gt; FileResult fs#update</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn rmdir(path: text) -&gt; FileResult fs#update</code></pre>
+<p>Remove the EMPTY directory `path`.  Returns FileResult.NotEmpty when it still holds entries, NotFound when it does not exist, and Other when `path` is a file rather than a directory. Empty directories only: a recursive removal is a separate decision, and the walk is writable here — list_dir() the children, delete() the files, rmdir() the directory, deepest first. Use to undo a mkdir(), or to clean up a scratch directory a program made.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_dir(path: text) -&gt; boolean fs#read</code></pre>

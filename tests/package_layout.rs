@@ -48,6 +48,57 @@ fn package_layout_version_mismatch_is_fatal() {
     );
 }
 
+/// A manifest REFUSAL speaks alone: the package was found and rejected, so the search
+/// that follows must not also report it missing.
+///
+/// The three manifest gates above (version, malformed constraint, contract) each raise a
+/// fatal and then resolve to nothing, and "nothing" is what the `use` arm reads as "not
+/// found".  The author of a package that needs a newer loft was therefore told both that
+/// it needs a newer loft AND that it does not exist — and the second sentence is the one
+/// that reads like the answer, because it names the search that just ran.
+///
+/// Checked on the version gate and paired with its control below, since a suppression is
+/// the kind of fix that passes by silencing more than it was asked to.
+#[test]
+fn a_refused_package_is_not_also_reported_missing() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(
+        &format!("tests{s}lib{s}package_version_test_main.loft"),
+        false,
+    );
+    let said = p.diagnostics.lines().join("\n");
+    assert!(
+        said.contains("requires loft"),
+        "the version refusal must still be reported; got: {said}"
+    );
+    assert!(
+        !said.contains("not found"),
+        "a package that was FOUND and refused must not also be reported missing; got: {said}"
+    );
+}
+
+/// The control for the suppression above — a library that genuinely is not there still
+/// says so.  Without this cell, deleting the "not found" arm entirely would pass.
+#[test]
+fn a_library_that_is_really_absent_still_says_not_found() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(
+        &format!("tests{s}lib{s}package_absent_test_main.loft"),
+        false,
+    );
+    let said = p.diagnostics.lines().join("\n");
+    assert!(
+        said.contains("not found"),
+        "an absent library must still be reported missing; got: {said}"
+    );
+}
+
 /// @PLN102 arc B — a package whose `loft.toml` carries a MALFORMED version
 /// constraint (`^0.9`, an unsupported operator) is rejected LOUDLY at load,
 /// not silently accepted.  Before arc B, `check_version` degraded any non-`>=`

@@ -107,6 +107,18 @@ struct Iterator {
     /// is a bare `len(<addressable vector>)`; `None` for `0..n`, slices, or collection loops.
     /// Read by the gated `LOFT_LINT_STRICT_INDEX` warning to flag `w[i]` where `w != X`.
     len_bound: Option<crate::parser::operators::VecKey>,
+    /// The I64 local holding this loop's packed iterator state (`cur << 32 | finish`), the
+    /// one `OpStep` steps and `OpRemove` rewinds. `u16::MAX` when the loop has none (a
+    /// range, a vector walk, a custom iterator).
+    ///
+    /// Recorded by whoever CREATES the cursor, because there are two lowerings of a keyed
+    /// iteration and they name it differently: an unbounded walk builds `{loop}#iter_state`
+    /// (parser/collections.rs) while a bounded RANGE builds `_iter_N`
+    /// (parser/fields.rs::parse_key). `#remove` used to rebuild the first spelling by hand
+    /// and fall back to `{loop}#index` when it missed — and for a range that fallback names
+    /// a local the lowering ELIDES, so the operand was measured against a slot that does not
+    /// exist and the compile ended in an arithmetic overflow (loft#1272).
+    state_var: u16,
 }
 
 /// @PLAN28 C4 — borrowed view of the codegen-read fields of one `Variable`,
@@ -741,6 +753,7 @@ impl Function {
             coll_var: u16::MAX,
             counter: u16::MAX,
             len_bound: None,
+            state_var: u16::MAX,
         });
         self.current_loop = self.loops.len() as u16 - 1;
         self.current_loop
@@ -795,6 +808,16 @@ impl Function {
         } else {
             u16::MAX
         };
+    }
+
+    /// Record the local holding this loop's packed iterator state — see `Iterator::state_var`.
+    /// Called from the site that CREATES the cursor, so the two keyed lowerings cannot drift
+    /// in what they call it. No-op when there is no active loop, matching `set_loop`.
+    pub(crate) fn set_loop_state_var(&mut self, var_nr: u16) {
+        if self.current_loop == u16::MAX || self.current_loop as usize >= self.loops.len() {
+            return;
+        }
+        self.loops[self.current_loop as usize].state_var = var_nr;
     }
 
     /// Override the iterated collection variable after `set_loop`.
@@ -1015,6 +1038,20 @@ impl Function {
             c = self.loops[c as usize].inside;
         }
         &Value::Null
+    }
+
+    /// The local holding the iterator state of the active loop whose variable is `var_nr`,
+    /// or `u16::MAX` when that loop keeps none. Walks the active-loop chain like `loop_on`.
+    #[must_use]
+    pub fn loop_state_var(&self, var_nr: u16) -> u16 {
+        let mut c = self.current_loop;
+        while c != u16::MAX {
+            if self.loops[c as usize].variable == var_nr {
+                return self.loops[c as usize].state_var;
+            }
+            c = self.loops[c as usize].inside;
+        }
+        u16::MAX
     }
 
     pub fn loop_db_tp(&self, var_nr: u16) -> u16 {
@@ -2591,8 +2628,33 @@ impl Function {
 
     /// Returns the appropriate error noun for a const-modification diagnostic.
     /// Parameters say "const parameter"; local variables say "const variable".
-    pub fn const_kind(&self, var_nr: u16) -> &'static str {
-        if (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument {
+    ///
+    /// `argument` alone is not the question.  It marks a variable that OCCUPIES an argument
+    /// slot, and a heap-typed LOCAL that supplies the function's return value occupies one
+    /// too: `ref_return` promotes it to the hidden destination parameter, so
+    /// `fn f() -> text { const u: text = "abc"; u = "z"; u }` reported a "const PARAMETER"
+    /// about a function that has none (loft#1252).
+    ///
+    /// `promoted` is the caller's half and has to be passed rather than derived here, because
+    /// the fact lives on the DEFINITION: `text_return` / `ref_return` mark the hidden
+    /// destination as `attributes[…].hidden` at the same moment they call `become_argument`,
+    /// and a variable table cannot see its own definition's attributes.
+    /// [`Parser::const_noun`] is the one place that joins the two.
+    ///
+    /// Do not try to read it off the TYPE.  The promoted local is a `RefVar` and that looked
+    /// like a free discriminator — until the shipped suite produced `fn f(a: &const integer)`,
+    /// a DECLARED parameter that is also a `RefVar`, and the noun flipped the other way for
+    /// it.  (`const &integer` is what does not parse; the `&` goes first.)
+    ///
+    /// Deliberately NOT a split of the `argument` flag, which is what the issue proposed:
+    /// `is_argument` has 141 readers across the parser, codegen, the LSP and introspection,
+    /// and `ir_schema` / `ir_store` persist the field — so splitting it is a serialised-format
+    /// change, and this question needs no new state to answer.
+    pub fn const_kind(&self, var_nr: u16, promoted: bool) -> &'static str {
+        if (var_nr as usize) < self.variables.len()
+            && self.variables[var_nr as usize].argument
+            && !promoted
+        {
             "const parameter"
         } else {
             "const variable"

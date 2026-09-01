@@ -3984,6 +3984,27 @@ full `cargo build` of that rlib (25.6 s here); the second is 0.55 s.  That is th
 guarantee that a codegen change reaches an already-built artifact, not a defect, but it was
 invisible and it is why a wasm-shaped test can look like a hang.
 
+**`loft cache warm` builds that set up front, and `make ci` runs it** (loft#1238).  The cost
+above is unavoidable per artifact, but WHO pays it is not: left alone it lands on whichever test
+reaches the artifact first, while the rest queue on the global build lock, and the charge shows
+up as that test blowing a per-test deadline it has nothing to do with.  `loft cache warm --from
+tests` builds them once, before the parallel section, with the same calls a test would make — so
+the artifacts are stamped with the same key and every test afterwards takes the ordinary hit
+path.  0.3–0.5 s once warm, and it never fails the caller: a package that cannot be warmed is
+simply built by the test that needs it, exactly as before.
+
+**Scope is the whole design of that command.**  The first version warmed every stale tree under
+`~/.loft/build-cache/`, which on this box is 61 of 71 — generations belonging to OTHER loft
+builds, none of which the run would touch — and was still going minutes later.  The set that
+costs a test its budget is the INTERSECTION of two smaller ones: packages the corpus actually
+`use`s, and trees already on disk under a previous key.  Neither alone is right — used-but-absent
+is a first build no warming can avoid, and stale-but-unused is somebody else's cache.
+
+⚠ **Warm with the RELEASE binary.**  The cdylib key is profile-independent (`BUILD_ID` is the
+git-HEAD id, so debug/release/test share it), but `loft_build_fingerprint` — which gates the wasm
+runtime rlib — is a content hash of the binary, so a debug-warmed rlib leaves a release-driven
+test (`html_asyncify` runs `target/release/loft`) still cold.
+
 **The lock is timed apart from the build on purpose.**  Under a parallel runner every
 wasm-shaped process reaches `/tmp/loft-native-build.lock` at once after a loft rebuild, so a
 single run's wall-clock can be almost entirely SOMEONE ELSE'S build.  Folding the two together

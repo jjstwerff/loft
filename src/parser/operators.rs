@@ -64,6 +64,30 @@ impl Parser {
         binding_blocks || value_blocks
     }
 
+    /// Reject a write that `const` forbids on `nr`, reporting against the binding the
+    /// SOURCE names.
+    ///
+    /// The one home for the const question on the assignment path: [`Parser::parse_assign_op_inner`]
+    /// calls it before it picks a lowering route, because the answer is a property of the
+    /// binding and not of the route.  Held inside a route, the guard is only as complete as
+    /// that route's target-shape test, and the shapes it declines fall through unchecked.
+    pub(crate) fn guard_const_write(&mut self, nr: u16, op: &str) {
+        if !self.const_write_blocked(nr, op) {
+            return;
+        }
+        // `const_report_var` — see loft#1250: a const text argument is promoted to a
+        // `__tp_` local, and the promoted local is not marked an argument, so reporting
+        // against it demotes "const parameter" to "const variable".
+        let report = self.vars.const_report_var(nr);
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "Cannot modify {} '{}'; remove 'const' or use a local copy",
+            self.const_noun(report),
+            self.vars.name(report)
+        );
+    }
+
     pub(crate) fn assign_text(
         &mut self,
         code: &mut Value,
@@ -72,19 +96,7 @@ impl Parser {
         op: &str,
         var_nr: u16,
     ) {
-        if self.const_write_blocked(var_nr, op) {
-            // Report against the ORIGINAL parameter, not the `__tp_` local a text arg is
-            // promoted into (@PLN40 — a const text arg still promotes so a rebind has a
-            // slot; the shadow inherits the const axis, so the guard fires on the shadow).
-            let report = self.vars.const_report_var(var_nr);
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(report),
-                self.vars.name(report)
-            );
-        }
+        // The const guard is `parse_assign_op_inner`'s, run before it routed here.
         if let Value::Call(_, parms) = to.unspan().clone() {
             if op == "=" {
                 let mut p = parms.clone();
@@ -185,15 +197,7 @@ impl Parser {
         // path and the EMPTY literal was what rescued it.
         let f_storage = f_type.base();
         if let (Value::Insert(ls), Type::Vector(tp, _)) = (code, f_storage) {
-            if self.const_write_blocked(var_nr, op) {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                    self.vars.const_kind(var_nr),
-                    self.vars.name(var_nr)
-                );
-            }
+            // The const guard is `parse_assign_op_inner`'s, run before it routed here.
             if op == "=" {
                 // Self-concat reassign `v = v + [...]` (sibling of @P390's
                 // self-slice `v = v[a..b]`): `parse_append_vector` emitted a
@@ -348,13 +352,7 @@ impl Parser {
     ///
     /// Returns true when the rewrite happened so the caller short-
     /// circuits the rest of the assign pipeline.
-    pub(crate) fn create_keyed(
-        &mut self,
-        code: &mut Value,
-        f_type: &Type,
-        op: &str,
-        var_nr: u16,
-    ) -> bool {
+    pub(crate) fn create_keyed(code: &mut Value, f_type: &Type, op: &str, var_nr: u16) -> bool {
         if op != "=" || var_nr == u16::MAX || !crate::parser::vectors::is_keyed(f_type) {
             return false;
         }
@@ -362,15 +360,7 @@ impl Parser {
         if !is_empty_insert {
             return false;
         }
-        if self.const_write_blocked(var_nr, op) {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(var_nr),
-                self.vars.name(var_nr)
-            );
-        }
+        // The const guard is `parse_assign_op_inner`'s, asked before it routed here.
         // Codegen's Set(v, Null) arm matches keyed types and dispatches
         // to gen_set_first_keyed_null — emits OpInitRef + OpDatabase
         // for the slot, anchored at the declaration's statement
@@ -432,10 +422,12 @@ impl Parser {
         let mut any_freeing_call = false;
         for a in &arms {
             if self.is_struct_returning_call(a)
-                && crate::use_analysis::call_return_frees_source(&self.data, a)
+                && crate::use_analysis::call_return_frees_source(&self.data, self.context, a)
             {
                 any_freeing_call = true;
-                witnesses.extend(crate::use_analysis::protectable_ref_args(&self.data, a).0);
+                witnesses.extend(
+                    crate::use_analysis::protectable_ref_args(&self.data, self.context, a).0,
+                );
                 continue;
             }
             witnesses.extend(crate::use_analysis::view_root_slots(&self.data, a)?);
@@ -2447,7 +2439,19 @@ impl Parser {
         // vector default types Unknown and collapses to `null` (the P365 family),
         // which downstream classifies the ncc `if` as a null-arm shape — the
         // return delivery then skips materialisation and native emits `()`.
-        let rhs_hint = if matches!(var_tp, Type::Unknown(_) | Type::Null) {
+        // loft#1208 — a POSTFIX `x?` supplies its own default, and `(N-Default)` says exactly
+        // which one: `construct_default(τ)` for the SUBJECT's τ.  `var_tp` is the type the
+        // enclosing context wants from the whole postfix CHAIN — `integer` in `e = v?[0]`,
+        // because `?` binds tighter than `[]` and the chain continues after it
+        // (@FR-G-Post-Default).  That is a different expression, so it is never the hint for
+        // this default.  Preferring it parsed the collection default `[]` against `integer`
+        // and then reported the disagreement it had just created: *"`??` default of type
+        // `integer` is not assignable to `vector<integer>`"* — naming a `??` the program does
+        // not contain.  The parenthesised `(v?)[0]` escaped only because a sub-expression
+        // parse enters with no expected type, which falls through to the same `lhs_type.base()`
+        // this now takes directly.
+        let postfix_default = self.pending_default_src.is_some();
+        let rhs_hint = if postfix_default || matches!(var_tp, Type::Unknown(_) | Type::Null) {
             lhs_type.base()
         } else if let (Type::Enum(syn, true, _), Type::Reference(struct_d, _)) =
             (lhs_type.base(), var_tp.base())

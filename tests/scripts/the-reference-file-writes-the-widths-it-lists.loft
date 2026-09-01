@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// How many bytes `f += value` writes, for every scalar the File chapter says you can append.
+//
+// The chapter lists eleven appendable types in one sentence and demonstrates six of them,
+// because a page met by someone writing their first binary file teaches more by showing a
+// record being built than by tabulating every width.  This is where the rest of the list
+// lives.
+//
+// The widths are worth pinning completely because they are the file FORMAT.  A reader who
+// takes the chapter's list and writes a header gets a layout whose every later offset is
+// decided here: one width that moves silently re-homes every field after it, and the file
+// still opens, still reads, and answers wrong numbers.  That is also why the chapter now
+// tells the reader to cast — `f += <integer>` with no cast writes 8 bytes and the compiler
+// says so (`warning[file-write-width]`), which is a diagnostic about exactly this table.
+//
+// The second half pins the sentence the chapter needed most: `#format` is the mode a handle
+// READS in, not a fact discovered about the bytes.  A PNG answers TextFile.  A reader who
+// believes `#format` detects content writes `if f#format == TextFile` and treats every
+// binary file as text.
+//
+// @falsified-at: none — for the WIDTHS, which is what this file is named after.  They have
+//   been where they are for as long as the corpus records and there is no build on which they
+//   fail, which makes that half a LOCK rather than a regression test.  Checked in the other
+//   direction by hand instead: changing any single expected width below fails this file, and
+//   changing the PNG cell to expect LittleEndian fails it too, so it is not passing by
+//   proving nothing.
+//
+//   `make falsify REF=48c808b7d` DOES report this file falsified on native, and the reason is
+//   not a width.  The PNG cell reads a repo-root-relative path, and on that build `loft test
+//   --native` ignored `#cwd` — so the cell failed for the anchor, not for the format.  That
+//   defect has its own guard now (`a-cwd-test-file-anchors-at-the-cwd-on-both-backends.loft`),
+//   which is where that receipt belongs; taking the tool's line verbatim here would have
+//   recorded these widths as having once been wrong, which they never were.
+#cwd
+
+fn the_append_widths_are_the_ones_the_chapter_lists() {
+  delete("widths_ref_probe.bin");
+  {f = file("widths_ref_probe.bin");
+   f#format = LittleEndian;
+   // Each cell asserts the TOTAL after its append, so a width that moves is reported at the
+   // type that moved it rather than at the end of the file.
+   f += 1 as u8;              assert(f#size == 1,  "u8 is 1 byte, total {f#size}");
+   f += 2 as i8;              assert(f#size == 2,  "i8 is 1 byte, total {f#size}");
+   f += 3 as u16;             assert(f#size == 4,  "u16 is 2 bytes, total {f#size}");
+   f += 4 as i16;             assert(f#size == 6,  "i16 is 2 bytes, total {f#size}");
+   f += 5 as u32;             assert(f#size == 10, "u32 is 4 bytes, total {f#size}");
+   f += 6 as i32;             assert(f#size == 14, "i32 is 4 bytes, total {f#size}");
+   f += 7 as integer;         assert(f#size == 22, "integer is 8 bytes, total {f#size}");
+   f += 1.5f;                 assert(f#size == 26, "single is 4 bytes, total {f#size}");
+   f += 1.5;                  assert(f#size == 34, "float is 8 bytes, total {f#size}");
+   f += true;                 assert(f#size == 35, "boolean is 1 byte, total {f#size}");
+   // Text is raw UTF-8 with no length prefix, so its width is its byte count and a
+   // multi-byte character costs more than one.
+   f += "ab";                 assert(f#size == 37, "ascii text is 1 byte per char, total {f#size}");
+   f += "é";                  assert(f#size == 39, "a 2-byte character costs 2, total {f#size}");
+  }
+  assert(delete("widths_ref_probe.bin").ok(), "clean up the width probe");
+}
+
+// `sizeof(T)` is the same table, reached the other way round — the chapter tells the reader
+// to compute read lengths with it, so it must agree with what the writes above produced.
+fn sizeof_agrees_with_what_the_appends_wrote() {
+  assert(sizeof(u8) == 1, "sizeof(u8) is {sizeof(u8)}");
+  assert(sizeof(i8) == 1, "sizeof(i8) is {sizeof(i8)}");
+  assert(sizeof(u16) == 2, "sizeof(u16) is {sizeof(u16)}");
+  assert(sizeof(i16) == 2, "sizeof(i16) is {sizeof(i16)}");
+  assert(sizeof(u32) == 4, "sizeof(u32) is {sizeof(u32)}");
+  assert(sizeof(i32) == 4, "sizeof(i32) is {sizeof(i32)}");
+  assert(sizeof(integer) == 8, "sizeof(integer) is {sizeof(integer)}");
+  assert(sizeof(single) == 4, "sizeof(single) is {sizeof(single)}");
+  assert(sizeof(float) == 8, "sizeof(float) is {sizeof(float)}");
+}
+
+fn a_format_is_a_mode_not_a_detector() {
+  // A PNG is binary by every reading of the word, and it answers TextFile — because
+  // TextFile is the default for a file that exists, not a conclusion about its bytes.
+  png = file("tests/example/map.png");
+  assert(png#format == TextFile, "an unset PNG reads as TextFile, not as binary");
+  // The two values that DO answer what a path is.
+  dir = file("tests/example");
+  assert(dir#format == Directory, "a directory answers Directory");
+  gone = file("no_such_path_ref_probe");
+  assert(gone#format == NotExists, "an absent path answers NotExists");
+  // And the mode is yours to set: assigning it changes how the handle reads, and asking
+  // again returns what you assigned rather than anything about the file.
+  png#format = BigEndian;
+  assert(png#format == BigEndian, "the format is whatever you last set");
+}

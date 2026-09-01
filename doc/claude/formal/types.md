@@ -378,6 +378,19 @@ old auto-`τ?` reading. Design record:
               `τ?`.
             Representability is a property of τ (table).  REFINES the old uniform-error
             (N-Store): every type warns EXCEPT the narrow widths, which error.
+
+(N-Reserve) a reserved null is a VALUE OF THE TYPE, so it is excluded from `τ?`'s non-null
+            range — and excluded EVERYWHERE the value can be, not only where the bytes are
+            packed.  `255` is a real `u8` and IS the null of a `u8?`, so a `u8?` ranges over
+            `0..=254` in a local, a field, an element, a parameter and a return alike.  What
+            spends the edge is a SLOT — a place a value is KEPT — and an expression in flight
+            is not one: `e as u8?` yields `255` and `(e as u8?) ?? d` keeps it, because
+            neither ever holds a `u8?`; assign the same cast into a `u8?` and it is null.
+            Which types spend an edge follows from the table above: only a narrow width whose
+            range exactly fills a fixed 1- or 2-byte storage — an `i32?` has a spare code
+            outside its range and an `integer limit(0,255)?` widens to get one, so neither
+            gives anything up.  The COMPLEMENT is the same statement: a NON-null narrow
+            reserves nothing, because it has no null to encode.
 ```
 
 **Per-type null + store verdict** — the verdict follows the *representability* test, not
@@ -434,7 +447,18 @@ gap, see [../plans/102-stability-contract/formal-audit.md](../plans/102-stabilit
   (I-Widen)   widening (a superset target) is implicit.
   (I-Narrow)  narrowing (a non-superset target) is NOT implicit: it needs either
                 – an explicit  e as σ , or
-                – e is a literal whose value ∈ range(σ).
+                – e is a literal whose value ∈ range(σ), or
+                – σ is NULLABLE (σ = τ?), in which case the narrowing is implicit and
+                  CHECKED: it is  e as τ?  , yielding the value when it fits and `null`
+                  when it does not (I-Narrow-Opt, below).
+  (I-Narrow-Opt)  a narrowing into  τ?  is the checked cast, not a refusal.  The reason the
+                  first two clauses ask for an `as` is that a narrowing has no defined
+                  answer for a value outside the range, and the author is the only one who
+                  can supply it — but a NULLABLE target already carries that answer: `null`
+                  means "this did not fit", it is visible, and `??` recovers from it.  So
+                  the marker would ask for intent the type has already stated.  A
+                  NON-nullable narrow target has no such value and is still refused, and
+                  the refusal names `τ?` as the cure.
   (I-Lit)     an integer literal n  has every type Integer[a,b] with a ≤ n ≤ b
               (it checks at the expected width; it does not force i64).
   (I-Join)    a variable assigned e₁ … eₙ in a scope has type  ⨆ᵢ τᵢ  where τᵢ are the
@@ -444,7 +468,8 @@ gap, see [../plans/102-stability-contract/formal-audit.md](../plans/102-stabilit
 
 **In words.** An integer's type is its value *range*. A narrower integer fits a wider one
 for free (`u8` flows into `integer`); the other way round (wider into narrower) needs an
-explicit `as`, unless the value is a literal that plainly fits. A literal takes whatever
+explicit `as`, unless the value is a literal that plainly fits — or unless the target is
+NULLABLE, which is the one target that already says what an out-of-range value becomes. A literal takes whatever
 width is expected of it. And a variable written in several places gets the type big enough
 for *all* its writes (the join) — not just its first one. That last point was the
 #433-residual; `(I-Join)` is now implemented for inferred locals (an inferred local widens
@@ -503,8 +528,16 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
-the companion [types-history.md](types-history.md).
+**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in the companion
+[types-history.md](types-history.md).
+
+⚠ **This line read `OPEN: 0` while D-Narrow-Asgn and D-Narrow-Res were both live, and the
+oracle under it could not have moved either** — `(I-Narrow)` had only two clauses, so a
+nullable target was not a case the rule could be checked against at all; and the sentinel's
+exclusion from `τ?`'s range was prose in a table rather than a rule, so nothing could be
+checked against it either.  Both gained the clause they were missing — `(I-Narrow-Opt)`, which
+closed D-Narrow-Asgn, and `(N-Reserve)`, which turns an open design question into a stated
+deviation.  A register is only as strong as the completeness of the rules above it.
 
 ## Conformance check (how we know a deviation is real)
 

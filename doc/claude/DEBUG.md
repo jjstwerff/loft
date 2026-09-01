@@ -913,6 +913,22 @@ program never calls. A confident wrong location is worse than none: silence make
 you look, an answer sends you away. So treat any non-zero `pc+` as "the nearest
 thing recorded", and `fn:`/`op:` as the reliable pair.
 
+**The `  at file:line:col` line of an internal PANIC is a different half of the
+same table, and it is exact.** A panic — the store-lock write guard, a broken
+runtime invariant — goes through the Rust panic hook rather than the signal
+handler, and prints no `pc+` suffix, so a reader has nothing to discount. It
+therefore prints only when a recorded span COVERS the crashing pc, and stays
+silent otherwise; the span table carries each entry's pc RANGE so that question
+can be answered rather than guessed. Before that it inherited like the signal
+path but read like an answer, putting a `#lock` write on the line of the
+arithmetic above it and — with nothing preceding it in the user's file — in
+`default/05_coroutine.loft` (loft#1262). A wrapped construct still resolves: a
+call is wrapped, which is why a failing `assert` and a `panic` still name their
+own line.
+
+So the two halves differ on purpose. The signal report keeps the nearest span
+because it can label it (`pc+280`); the panic hook drops it because it cannot.
+
 **`last op:` names the opcode**, resolved through a table the interpreter
 publishes once per process (`crash_report::set_op_names`) — a signal handler
 cannot borrow the definitions table, so the names are made `'static` up front.
@@ -1361,6 +1377,66 @@ whose result stays a temporary, with the reported `??` incidental — peeling `O
 the discarded call, the argument case, the vector case and the loop, and **the filed repro
 still leaked**, because the `??` half was a second, independent defect. Re-run the ORIGINAL
 repro after the matrix goes green.
+
+**An assertion that fires can be reporting a WRONG ANSWER, not the invariant it names.** A
+debug-assertion is written to catch one property, so the report describes that property and
+nothing else — and the shape that trips it is then read as a question about the assertion.
+loft#1241 was filed that way: a store-span check firing on a local the lowering had elided, with
+the answer measured as *"right — `len=3` on both backends"* and the remaining question presented
+as a choice between two ways to reshape the check. Both proposed cures would have silenced it.
+One `for` around the same append and the answer was 3 where the program says 7 — at every
+iteration count, because the rewrite had folded the append out of the loop (loft#1243). The
+assertion was the only thing in the tree that had noticed. **Before treating an assertion as a
+question about itself, sweep its shape over CONTROL FLOW** — a loop around it, a branch not
+taken, the same statement at two nesting depths. An issue's own "the answer is right" is a
+measurement of the cells its author ran.
+
+**A rewrite's guard list can be complete on DATA and empty on CONTROL FLOW.** The move-elision's
+`ready` filter asked seven questions — does the source escape, is the destination disturbed or
+cleared, is the container allocated first, is the destination unique — and every one of them is
+about values. None asked whether the statement it was DELETING runs as often as the code it was
+keeping, and its prescan walked the whole body, so an append inside a loop was folded exactly
+like one written beside the declaration. When reading any pass that MOVES or DROPS a statement,
+count the two kinds of guard separately: the question "is this value still valid there?" and the
+question "is that place reached the same number of times?" are answered by different machinery,
+and a list can be exhaustive in one and empty in the other.
+
+**A bound belongs to where the value LANDS, not to the type that named it.** Two expression
+forms can name the same target type and put the result in different places, and a bound
+attached to the named type then reaches one of them wrongly. `e as u8?` and `e as u8 ?? d`
+both name `u8` and both lower through the same checked-cast helper — but the first stays a
+`u8?`, whose sentinel is reserved, and the second is discharged to a non-null `u8`, which
+reserves nothing. Narrowing the helper's bound to the reserved range was right for the first
+and silently turned `255` into the default for the second (loft#1249) — a value the published
+`hex_field` asserts, so it broke a shipped library. **When a fix makes a shared helper's
+answer depend on a property the callers do not currently pass, that property is the new
+parameter** — deriving it inside the helper from what it already has is the same guess in a
+place the caller cannot see. And when NO caller can supply it either, that is the finding:
+the same attempt moved to the store seam and hit the harder half — `Type::Optional` on a
+write target means *"this slot holds null"* for a `u8?` local and *"this read may miss"* for
+an element of a non-null `vector<u8>`, so one predicate cannot serve both and the fix was
+withdrawn rather than shipped half-right.
+
+**Two coverage instruments each caught a different half of that, and neither was looking for
+it.** `scripts/matrix_axes.py` reported `A9 evaluation count` missing `loop`; writing the
+loop cell needed a non-nullable control, which could only be spelled with the coalesced cast,
+which is what exposed the first half. `scripts/revalidate_libs_local.sh` — the shipped
+libraries, which `make ci` says nothing about — caught the second on a real consumer after a
+full green gate. **Run both before believing a semantic change**: a green `make ci` is not
+evidence about the language's users.
+
+**When you write a predicate over a type, read that type's own doc-comment for the shapes it
+says it takes.** `target_holds_null` asks whether a store's target is a nullable slot, keyed on
+what the place is read OUT of, and it handled a variable, a field and an element correctly on
+the first try. It missed `&vector<u8>` — a write through a `&`-parameter — and fell through to
+the answer meant for the other shapes, so a fully-opaque `255` written into a non-null
+`vector<u8>` came back `null` and every proxy test in published `assets` failed (loft#1249).
+The field it reads, `AssignPlace::parent_tp`, is documented as *"`Reference(S)` for `s.f`, **`&S`
+for the same write inside a `&`-parameter**, `vector<τ>` for `v[i]`"* — the missing case is the
+second of the three it names. **The enumeration you need is usually already written where the
+data is declared**; a predicate built from the cases you happened to probe will match them and
+nothing else, and the shapes it misses are the ones the type system spells differently for the
+same thing.
 
 **A precedent transfers along the MECHANISM, not the problem statement.** Before reusing a
 neighbouring solution, ask what its unit of work is — per member, per record, per call, per

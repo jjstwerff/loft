@@ -1,0 +1,127 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @falsified-at: cd7a8bf7 — interpret exit 1 -> 0, interpret 6 assertion failures -> 0, native exit 1 -> 0, native 1 assertion failures -> 0
+// @PLN90 phase B move-elision, loft#1243: the retargeted build must run exactly as often as
+// the append it replaces.
+//
+// `construct_move_rewrite` folds `x.field += src` into `src`'s own construction — it retargets
+// the element builds onto `x.field` and DROPS the append.  Every guard it consulted asked a
+// DATA question (does the source escape, is the destination disturbed or cleared, is the
+// container built first).  None asked a CONTROL-FLOW one, and the prescan finds the append at
+// any depth, so an append inside a loop or a branch folded exactly like one written beside the
+// declaration.  The build then runs once whatever the append would have done:
+//
+//     for _i in 0..3 { d.c += s; }     grew d.c by ONE copy, not three  — for every count
+//     if <false> { d.c += s; }        appended anyway
+//
+// Both answers were wrong on both backends with no diagnostic, because this is one shared IR
+// pass (formal/ownership.md O-NoDiverge).  The invariant is O-Latest: a binding's ownership
+// lives at the LOOP DEPTH its assignment was taken at, and no type-level fact carries that
+// depth — the site has to measure it.
+//
+// The cells move the axes the filed shape held fixed:
+//   * the ITERATION COUNT, because a cell at one count cannot tell "the append ran once" from
+//     "it ran the right number of times" — 2 and 3 must give different answers;
+//   * `for` and `while`, and an `if` nested inside a loop;
+//   * the ZERO direction (a branch not taken), which the loop cells cannot reach;
+//   * nullable and non-null sources — nullability is NOT an axis of the defect, and a cell
+//     of each says so rather than leaving it assumed;
+//   * VALUES as well as lengths: a length alone passes on a copy landing in the wrong order.
+// The last two are the CONTROLS.  This is an optimisation, so a fix that merely switched it
+// off would pass every cell above them.
+
+struct AoBag { c: vector<integer> }
+
+fn test_a_loop_appends_once_per_turn() {
+  d = AoBag { c: [1] };
+  s: vector<integer> = [7, 8];
+  for _i in 0..2 { d.c += s; }
+  assert(len(d.c) == 5, "two turns: {d.c}");
+  assert((d.c[0] ?? 0) == 1, "two turns [0]: {d.c}");
+  assert((d.c[1] ?? 0) == 7, "two turns [1]: {d.c}");
+  assert((d.c[3] ?? 0) == 7, "two turns [3]: {d.c}");
+  assert((d.c[4] ?? 0) == 8, "two turns [4]: {d.c}");
+}
+
+// The count must MOVE with the iteration count.  Held at one count, the broken build answered
+// 3 for two turns and 3 for three turns alike, so a single-count cell reads as one wrong
+// number rather than as a run-count that was never consulted.
+fn test_the_appended_length_follows_the_iteration_count() {
+  d = AoBag { c: [1] };
+  s: vector<integer> = [7, 8];
+  for _i in 0..3 { d.c += s; }
+  assert(len(d.c) == 7, "three turns: {d.c}");
+  assert((d.c[5] ?? 0) == 7, "three turns [5]: {d.c}");
+  assert((d.c[6] ?? 0) == 8, "three turns [6]: {d.c}");
+}
+
+fn test_a_while_loop_appends_once_per_turn() {
+  d = AoBag { c: [1] };
+  s: vector<integer> = [7, 8];
+  n = 0;
+  while n < 2 { d.c += s; n += 1; }
+  assert(len(d.c) == 5, "while: {d.c}");
+  assert((d.c[2] ?? 0) == 8, "while [2]: {d.c}");
+}
+
+// A branch INSIDE a loop: the append runs on a subset of the turns, so neither "once" nor
+// "once per turn" is the right count.
+fn test_a_branch_inside_a_loop_appends_on_its_own_turns() {
+  d = AoBag { c: [1] };
+  s: vector<integer> = [7, 8];
+  for i in 0..3 { if i > 0 { d.c += s; } }
+  assert(len(d.c) == 5, "branch in loop: {d.c}");
+  assert((d.c[1] ?? 0) == 7, "branch in loop [1]: {d.c}");
+}
+
+// The ZERO direction, which no loop cell reaches: the append does not run, so nothing may be
+// appended.  This is the shape that answered furthest from the program as written.
+fn test_a_branch_not_taken_appends_nothing() {
+  d = AoBag { c: [1] };
+  s: vector<integer> = [7, 8];
+  if len(d.c) > 99 { d.c += s; }
+  assert(len(d.c) == 1, "branch not taken: {d.c}");
+  assert((d.c[0] ?? 0) == 1, "branch not taken [0]: {d.c}");
+}
+
+fn test_a_branch_taken_appends_once() {
+  d = AoBag { c: [1] };
+  s: vector<integer> = [7, 8];
+  if len(d.c) > 0 { d.c += s; }
+  assert(len(d.c) == 3, "branch taken: {d.c}");
+  assert((d.c[2] ?? 0) == 8, "branch taken [2]: {d.c}");
+}
+
+// A NULLABLE source takes the same path — the `@PLN120 A` assertion that surfaced this fires
+// only on this subset, which is why the shape was first read as a nullability question.
+fn test_a_nullable_source_follows_the_same_count() {
+  d = AoBag { c: [1] };
+  s: vector<integer>? = [7, 8];
+  for _i in 0..2 { d.c += s; }
+  assert(len(d.c) == 5, "nullable in loop: {d.c}");
+  assert((d.c[4] ?? 0) == 8, "nullable in loop [4]: {d.c}");
+}
+
+// CONTROL: declared beside the append, nothing between — the move must still be taken, and the
+// answer is the one append that was written.
+fn test_the_straight_line_append_still_elides() {
+  d = AoBag { c: [1] };
+  s: vector<integer> = [7, 8];
+  d.c += s;
+  assert(len(d.c) == 3, "straight line: {d.c}");
+  assert((d.c[1] ?? 0) == 7, "straight line [1]: {d.c}");
+  assert((d.c[2] ?? 0) == 8, "straight line [2]: {d.c}");
+}
+
+// CONTROL: the source declared INSIDE the loop is built and appended on the same turn, so the
+// fold stays legal there — the guard must decline the cross-region case, not every loop.
+fn test_a_source_built_inside_the_loop_still_elides() {
+  d = AoBag { c: [1] };
+  for _i in 0..2 {
+    s: vector<integer> = [7, 8];
+    d.c += s;
+  }
+  assert(len(d.c) == 5, "source in loop: {d.c}");
+  assert((d.c[1] ?? 0) == 7, "source in loop [1]: {d.c}");
+  assert((d.c[4] ?? 0) == 8, "source in loop [4]: {d.c}");
+}

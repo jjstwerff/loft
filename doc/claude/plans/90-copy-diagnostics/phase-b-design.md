@@ -277,6 +277,53 @@ param-container append, two-appends-in-one-fn — all value-identical + leak-cle
 copies; fresh construction stays a copy (guard fires). Guards:
 `tests/use_analysis.rs::move_elide_construct_*`. OFF byte-identical (early return).
 
+#### The guard the list was missing — how OFTEN the append runs (loft#1243)
+
+Every guard above asks a DATA question: does the source escape, is the destination disturbed or
+cleared, is the container allocated first, is the destination unique. The prescan walks the whole
+body, so it finds the `OpAppendVector` at any depth — and none of the guards asked whether that
+append is reached the same number of times as the build it is being folded into. It is not, in two
+directions, and the answers were wrong on both backends with nothing said:
+
+```loft
+for _i in 0..3 { d.c += s; }     // grew d.c by ONE copy, not three — at every iteration count
+if <false> { d.c += s; }         // appended anyway
+```
+
+The fold leaves the element builds where the source is BUILT and drops the append, so the program
+it produces matches the one written only where the two run together. The invariant is
+[`formal/ownership.md`](../../formal/ownership.md) **O-Latest** — ownership is a property of the
+latest assignment *at the loop depth at which that assignment was taken*, and no type-level fact
+carries that depth, so the site has to measure it.
+
+`construct_prescan` therefore carries a **control-flow path**: the chain of enclosing regions that
+run zero, one or many times — a loop body, an `if` arm, a parallel arm, an iterator's step — each
+with its own id. It records the path for the source's `OpDatabase` and for the append, and the fold
+is admitted only when the two are **equal**. Equality of the whole path, not of its depth: two arms
+of one `if` are equally deep and never run together.
+
+Declining here is the same answer the design already gives the reorder cases, so it costs the
+optimisation and never correctness. Guard:
+`tests/scripts/an-appended-source-is-built-as-often-as-the-append-runs.loft`, whose two control
+cells (a straight-line append, and a source declared INSIDE the loop) fail any fix that simply
+switches the fold off.
+
+#### A retargeted source is erased, and its borrowers must say so (loft#1241)
+
+The fold removes the wrapper alloc, the view-def and the append, so after it the IR holds no `Set`
+for `src` at all. What still named it was a stale `deps`: the element work-ref whose builds had
+just been re-pointed onto `x.field` went on saying its store belonged to `src`. A dep is the
+statement "my store belongs to that variable" (**O-Deps**), so leaving it wrong made the ownership
+derivation name a variable that owns nothing — and made the scope pass declare `src` so a borrower
+could name it, which handed the erased local a stack slot no instruction writes. That slot is what
+@PLN120 A's store-span check reported.
+
+`construct_move_rewrite` now reports which container each source was retargeted into, and every var
+that borrowed the source is re-pointed there. The work-ref reads `deps=[container]` exactly as its
+siblings do, `src` is named by nothing, and no declaration, interval or slot follows. Guard:
+`tests/frame_vars.rs::a_retargeted_append_source_is_not_a_runtime_local` — the slot in an ordinary
+build, since the check itself exists only under `-C debug-assertions=on`.
+
 **Why the reorder-free split (not the full reorder) first:** the reorder-free case is a pure
 retarget (the Record machinery, extended to the vector-build ops) — representation-safe, no code
 motion. It captures the field-append subset of Construct now; the fresh-construction reorder (B1.3c)

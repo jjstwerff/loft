@@ -23,8 +23,8 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>graphics source</h1>
 <article>
-<p><a href="lib-graphics.html">← graphics</a> · <a href="lib-graphics-api.html">API reference</a> · version 0.8.0</p>
-<p class="lib-legend">16 file(s), 3680 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
+<p><a href="lib-graphics.html">← graphics</a> · <a href="lib-graphics-api.html">API reference</a> · version 0.9.0</p>
+<p class="lib-legend">16 file(s), 3710 lines. This is the source the published version ships, and it is loft — the library is written in the same language you call it from.</p>
 <h2 id="items">Public items</h2>
 <p class="lib-legend">A <em>worked example</em> is a call site the author chose as the thing to read first. <em>Call sites</em> are every line naming the item, found mechanically over the source with comments excluded — so an item with no worked example is not an item nobody uses.</p>
 <table class="lib-table">
@@ -148,15 +148,18 @@
 <tr><td><code>draw_texture_at</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1681">1681</a></td><td>—</td><td>none in this package</td></tr>
 <tr><td><code>create_text_texture</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1696">1696</a></td><td>—</td><td>none in this package</td></tr>
 <tr><td><code>audio_load</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1708">1708</a></td><td>—</td><td>none in this package</td></tr>
-<tr><td><code>audio_play</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1711">1711</a></td><td>—</td><td>none in this package</td></tr>
-<tr><td><code>audio_stop</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1714">1714</a></td><td>—</td><td>none in this package</td></tr>
-<tr><td><code>audio_set_volume</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1717">1717</a></td><td>—</td><td>none in this package</td></tr>
-<tr><td><code>audio_play_raw</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1721">1721</a></td><td>—</td><td><a href="#src-graphics-loft-L1765">1765</a> <a href="#src-graphics-loft-L1778">1778</a> <a href="#src-graphics-loft-L1791">1791</a> <a href="#src-graphics-loft-L1804">1804</a></td></tr>
-<tr><td><code>sfx_beep</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1758">1758</a></td><td>—</td><td><a href="#src-graphics-loft-L1809">1809</a></td></tr>
-<tr><td><code>sfx_descend</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1769">1769</a></td><td>—</td><td>none in this package</td></tr>
-<tr><td><code>sfx_chirp</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1782">1782</a></td><td>—</td><td>none in this package</td></tr>
-<tr><td><code>sfx_noise</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1795">1795</a></td><td>—</td><td>none in this package</td></tr>
-<tr><td><code>sfx_bounce</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1808">1808</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>audio_play</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1723">1723</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>audio_stop</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1727">1727</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>audio_stop_all</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1730">1730</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>audio_set_volume</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1733">1733</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>audio_set_pan</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1740">1740</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>audio_seek</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1747">1747</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>audio_play_raw</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1751">1751</a></td><td>—</td><td><a href="#src-graphics-loft-L1795">1795</a> <a href="#src-graphics-loft-L1808">1808</a> <a href="#src-graphics-loft-L1821">1821</a> <a href="#src-graphics-loft-L1834">1834</a></td></tr>
+<tr><td><code>sfx_beep</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1788">1788</a></td><td>—</td><td><a href="#src-graphics-loft-L1839">1839</a></td></tr>
+<tr><td><code>sfx_descend</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1799">1799</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>sfx_chirp</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1812">1812</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>sfx_noise</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1825">1825</a></td><td>—</td><td>none in this package</td></tr>
+<tr><td><code>sfx_bounce</code> <span class="search-kind">fn</span></td><td><a href="#src-graphics-loft-L1838">1838</a></td><td>—</td><td>none in this package</td></tr>
 <tr><td><code>Renderer</code> <span class="search-kind">struct</span></td><td><a href="#src-render-loft-L113">113</a></td><td>—</td><td><a href="#src-render-loft-L129">129</a> <a href="#src-render-loft-L131">131</a> <a href="#src-render-loft-L139">139</a> <a href="#src-render-loft-L155">155</a> <a href="#src-render-loft-L160">160</a> <a href="#src-render-loft-L180">180</a> … (9 total)</td></tr>
 <tr><td><code>create_renderer</code> <span class="search-kind">fn</span></td><td><a href="#src-render-loft-L129">129</a></td><td>—</td><td>none in this package</td></tr>
 <tr><td><code>elapsed</code> <span class="search-kind">fn</span></td><td><a href="#src-render-loft-L155">155</a></td><td>—</td><td>none in this package</td></tr>
@@ -1876,107 +1879,137 @@
 <span id="src-graphics-loft-L1707"><span class="cm">// Load an audio clip (WAV or OGG). Returns handle (&gt;= 0) or null on failure.</span></span>
 <span id="src-graphics-loft-L1708"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_load</span>(path: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
 <span id="src-graphics-loft-L1709">#native <span class="st">"loft_audio_load"</span></span>
-<span id="src-graphics-loft-L1710"><span class="cm">// Play a loaded clip at the given volume (0.0-1.0). Returns playback handle.</span></span>
-<span id="src-graphics-loft-L1711"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_play</span>(clip: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
-<span id="src-graphics-loft-L1712">#native <span class="st">"loft_audio_play"</span></span>
-<span id="src-graphics-loft-L1713"><span class="cm">// Stop a playing clip by its playback handle.</span></span>
-<span id="src-graphics-loft-L1714"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_stop</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>);</span>
-<span id="src-graphics-loft-L1715">#native <span class="st">"loft_audio_stop"</span></span>
-<span id="src-graphics-loft-L1716"><span class="cm">// Set volume of a playing clip (0.0-1.0).</span></span>
-<span id="src-graphics-loft-L1717"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_set_volume</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>);</span>
-<span id="src-graphics-loft-L1718">#native <span class="st">"loft_audio_set_volume"</span></span>
-<span id="src-graphics-loft-L1719"><span class="cm">// Play raw PCM samples (mono, values -1.0 to 1.0) at the given sample rate.</span></span>
-<span id="src-graphics-loft-L1720"><span class="cm">// Returns playback handle, or null on failure.</span></span>
-<span id="src-graphics-loft-L1721"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_play_raw</span>(samples: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;, sample_rate: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
-<span id="src-graphics-loft-L1722">#native <span class="st">"loft_audio_play_raw"</span></span>
-<span id="src-graphics-loft-L1723"></span>
-<span id="src-graphics-loft-L1724"><span class="cm">// --- Procedural audio synthesis (chiptune) ---</span></span>
-<span id="src-graphics-loft-L1725"></span>
-<span id="src-graphics-loft-L1726"><span class="en">SFX_RATE</span> = <span class="nm">22050</span>;</span>
-<span id="src-graphics-loft-L1727"></span>
-<span id="src-graphics-loft-L1728"><span class="cm">// Square wave sample: phase 0.0-1.0, duty 0.0-1.0.</span></span>
-<span id="src-graphics-loft-L1729"><span class="kw">fn</span> <span class="fn-call">sfx_sq</span>(sfx_sq_phase: <span class="ty"><a href="stdlib-types.html">single</a></span>, sfx_sq_duty: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
-<span id="src-graphics-loft-L1730">  <span class="kw">if</span> sfx_sq_phase &lt; sfx_sq_duty { <span class="kw">return</span> <span class="nm">1.0f</span>; }</span>
-<span id="src-graphics-loft-L1731">  <span class="kw">return</span> -<span class="nm">1.0f</span>;</span>
-<span id="src-graphics-loft-L1732">}</span>
-<span id="src-graphics-loft-L1733"><span class="cm">// Triangle wave sample: phase 0.0-1.0.</span></span>
-<span id="src-graphics-loft-L1734"><span class="kw">fn</span> <span class="fn-call">sfx_tri</span>(sfx_tri_p: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
-<span id="src-graphics-loft-L1735">  <span class="kw">if</span> sfx_tri_p &lt; <span class="nm">0.5f</span> { <span class="kw">return</span> sfx_tri_p * <span class="nm">4.0f</span> - <span class="nm">1.0f</span>; }</span>
-<span id="src-graphics-loft-L1736">  <span class="kw">return</span> <span class="nm">3.0f</span> - sfx_tri_p * <span class="nm">4.0f</span>;</span>
-<span id="src-graphics-loft-L1737">}</span>
-<span id="src-graphics-loft-L1738"><span class="cm">// Sawtooth wave sample: phase 0.0-1.0.</span></span>
-<span id="src-graphics-loft-L1739"><span class="kw">fn</span> <span class="fn-call">sfx_saw</span>(sfx_saw_p: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
-<span id="src-graphics-loft-L1740">  <span class="kw">return</span> sfx_saw_p * <span class="nm">2.0f</span> - <span class="nm">1.0f</span>;</span>
-<span id="src-graphics-loft-L1741">}</span>
-<span id="src-graphics-loft-L1742"><span class="cm">// Linear attack-decay envelope: returns 0.0-1.0.</span></span>
-<span id="src-graphics-loft-L1743"><span class="kw">fn</span> <span class="fn-call">sfx_env</span>(sfx_env_t: <span class="ty"><a href="stdlib-types.html">single</a></span>, sfx_env_atk: <span class="ty"><a href="stdlib-types.html">single</a></span>, sfx_env_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
-<span id="src-graphics-loft-L1744">  <span class="cm">// `?? 0.0f` is lint suppression — the attack branch only fires when</span></span>
-<span id="src-graphics-loft-L1745">  <span class="cm">// `sfx_env_t &lt; sfx_env_atk`, which transitively implies atk &gt; 0</span></span>
-<span id="src-graphics-loft-L1746">  <span class="cm">// unless sfx_env_t is negative (caller invariant).</span></span>
-<span id="src-graphics-loft-L1747">  <span class="kw">if</span> sfx_env_t &lt; sfx_env_atk { <span class="kw">return</span> (sfx_env_t / sfx_env_atk) ?? <span class="nm">0.0f</span>; }</span>
-<span id="src-graphics-loft-L1748">  sfx_env_rem = sfx_env_dur - sfx_env_t;</span>
-<span id="src-graphics-loft-L1749">  <span class="kw">if</span> sfx_env_rem &lt; <span class="nm">0.0f</span> { <span class="kw">return</span> <span class="nm">0.0f</span>; }</span>
-<span id="src-graphics-loft-L1750">  sfx_env_dec = sfx_env_dur - sfx_env_atk;</span>
-<span id="src-graphics-loft-L1751">  <span class="kw">if</span> sfx_env_dec &lt;= <span class="nm">0.0f</span> { <span class="kw">return</span> <span class="nm">0.0f</span>; }</span>
-<span id="src-graphics-loft-L1752">  <span class="cm">// `?? 0.0f` is lint suppression — `sfx_env_dec &gt; 0.0f` is enforced</span></span>
-<span id="src-graphics-loft-L1753">  <span class="cm">// by the early-return guard above.</span></span>
-<span id="src-graphics-loft-L1754">  <span class="kw">return</span> (sfx_env_rem / sfx_env_dec) ?? <span class="nm">0.0f</span>;</span>
-<span id="src-graphics-loft-L1755">}</span>
-<span id="src-graphics-loft-L1756"></span>
-<span id="src-graphics-loft-L1757"><span class="cm">// Short percussive beep — brick hit, UI click.</span></span>
-<span id="src-graphics-loft-L1758"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_beep</span>(sb_freq: <span class="ty"><a href="stdlib-types.html">single</a></span>, sb_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sb_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
-<span id="src-graphics-loft-L1759">  sb_n = (sb_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
-<span id="src-graphics-loft-L1760">  sb_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sb_i <span class="kw">in</span> <span class="nm">0..</span>sb_n {</span>
-<span id="src-graphics-loft-L1761">    sb_t = sb_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
-<span id="src-graphics-loft-L1762">    sb_p = (sb_t * sb_freq) % <span class="nm">1.0f</span>;</span>
-<span id="src-graphics-loft-L1763">    <span class="fn-call">sfx_sq</span>(sb_p, <span class="nm">0.5f</span>) * <span class="fn-call">sfx_env</span>(sb_t, <span class="nm">0.005f</span>, sb_dur) * sb_vol</span>
-<span id="src-graphics-loft-L1764">  }];</span>
-<span id="src-graphics-loft-L1765">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sb_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
-<span id="src-graphics-loft-L1766">}</span>
-<span id="src-graphics-loft-L1767"></span>
-<span id="src-graphics-loft-L1768"><span class="cm">// Descending tone — life lost, negative event.</span></span>
-<span id="src-graphics-loft-L1769"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_descend</span>(sd_f0: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_f1: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
-<span id="src-graphics-loft-L1770">  sd_n = (sd_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
-<span id="src-graphics-loft-L1771">  sd_ph = <span class="nm">0.0f</span>;</span>
-<span id="src-graphics-loft-L1772">  sd_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sd_i <span class="kw">in</span> <span class="nm">0..</span>sd_n {</span>
-<span id="src-graphics-loft-L1773">    sd_t = sd_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
-<span id="src-graphics-loft-L1774">    sd_f = sd_f0 + (sd_f1 - sd_f0) * ((sd_t / sd_dur) ?? <span class="nm">0.0f</span>);</span>
-<span id="src-graphics-loft-L1775">    sd_ph = (sd_ph + sd_f / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) % <span class="nm">1.0f</span>;</span>
-<span id="src-graphics-loft-L1776">    <span class="fn-call">sfx_saw</span>(sd_ph) * <span class="fn-call">sfx_env</span>(sd_t, <span class="nm">0.01f</span>, sd_dur) * sd_vol</span>
-<span id="src-graphics-loft-L1777">  }];</span>
-<span id="src-graphics-loft-L1778">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sd_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
-<span id="src-graphics-loft-L1779">}</span>
-<span id="src-graphics-loft-L1780"></span>
-<span id="src-graphics-loft-L1781"><span class="cm">// Rising chirp — pickup collected, positive event.</span></span>
-<span id="src-graphics-loft-L1782"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_chirp</span>(sc_f0: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_f1: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
-<span id="src-graphics-loft-L1783">  sc_n = (sc_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
-<span id="src-graphics-loft-L1784">  sc_ph = <span class="nm">0.0f</span>;</span>
-<span id="src-graphics-loft-L1785">  sc_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sc_i <span class="kw">in</span> <span class="nm">0..</span>sc_n {</span>
-<span id="src-graphics-loft-L1786">    sc_t = sc_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
-<span id="src-graphics-loft-L1787">    sc_f = sc_f0 + (sc_f1 - sc_f0) * ((sc_t / sc_dur) ?? <span class="nm">0.0f</span>);</span>
-<span id="src-graphics-loft-L1788">    sc_ph = (sc_ph + sc_f / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) % <span class="nm">1.0f</span>;</span>
-<span id="src-graphics-loft-L1789">    <span class="fn-call">sfx_tri</span>(sc_ph) * <span class="fn-call">sfx_env</span>(sc_t, <span class="nm">0.005f</span>, sc_dur) * sc_vol</span>
-<span id="src-graphics-loft-L1790">  }];</span>
-<span id="src-graphics-loft-L1791">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sc_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
-<span id="src-graphics-loft-L1792">}</span>
-<span id="src-graphics-loft-L1793"></span>
-<span id="src-graphics-loft-L1794"><span class="cm">// White noise burst — percussion, explosion, brick break.</span></span>
-<span id="src-graphics-loft-L1795"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_noise</span>(sn_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sn_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
-<span id="src-graphics-loft-L1796">  sn_n = (sn_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
-<span id="src-graphics-loft-L1797">  sn_seed = <span class="nm">12345</span>;</span>
-<span id="src-graphics-loft-L1798">  sn_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sn_i <span class="kw">in</span> <span class="nm">0..</span>sn_n {</span>
-<span id="src-graphics-loft-L1799">    sn_t = sn_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
-<span id="src-graphics-loft-L1800">    sn_seed = (sn_seed * <span class="nm">1103515245</span> + <span class="nm">12345</span>) % <span class="nm">2147483647</span>;</span>
-<span id="src-graphics-loft-L1801">    sn_rnd = (sn_seed <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="nm">1073741824.0f</span>) - <span class="nm">1.0f</span>;</span>
-<span id="src-graphics-loft-L1802">    sn_rnd * <span class="fn-call">sfx_env</span>(sn_t, <span class="nm">0.002f</span>, sn_dur) * sn_vol</span>
-<span id="src-graphics-loft-L1803">  }];</span>
-<span id="src-graphics-loft-L1804">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sn_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
-<span id="src-graphics-loft-L1805">}</span>
-<span id="src-graphics-loft-L1806"></span>
-<span id="src-graphics-loft-L1807"><span class="cm">// Paddle bounce — low square wave thud with pitch drop.</span></span>
-<span id="src-graphics-loft-L1808"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_bounce</span>(sp_freq: <span class="ty"><a href="stdlib-types.html">single</a></span>, sp_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
-<span id="src-graphics-loft-L1809">  <span class="kw">return</span> <span class="fn-call">sfx_beep</span>(sp_freq, <span class="nm">0.08f</span>, sp_vol);</span>
-<span id="src-graphics-loft-L1810">}</span>
+<span id="src-graphics-loft-L1710"><span class="cm">// Play a loaded clip.  Returns a playback handle, or -1 when it will not play.</span></span>
+<span id="src-graphics-loft-L1711"><span class="cm">//</span></span>
+<span id="src-graphics-loft-L1712"><span class="cm">// `volume` is 0.0-1.0, `looping` repeats the clip until it is stopped, `pan`</span></span>
+<span id="src-graphics-loft-L1713"><span class="cm">// places it across the stereo field (-1 left, 0 centre, 1 right), and `start`</span></span>
+<span id="src-graphics-loft-L1714"><span class="cm">// begins that many seconds in.  Everything past `volume` has a default, so an</span></span>
+<span id="src-graphics-loft-L1715"><span class="cm">// existing `audio_play(clip, 0.8)` keeps meaning what it meant.</span></span>
+<span id="src-graphics-loft-L1716"><span class="cm">//</span></span>
+<span id="src-graphics-loft-L1717"><span class="cm">// `start` skips into the FIRST pass only: a looping clip then repeats whole,</span></span>
+<span id="src-graphics-loft-L1718"><span class="cm">// which is what a browser's `start(when, offset)` with `loop` does.</span></span>
+<span id="src-graphics-loft-L1719"><span class="cm">//</span></span>
+<span id="src-graphics-loft-L1720"><span class="cm">// A handle is never handed out twice.  When a clip finishes its slot is reused,</span></span>
+<span id="src-graphics-loft-L1721"><span class="cm">// but the handle carries which use it belongs to, so an `audio_stop` on a</span></span>
+<span id="src-graphics-loft-L1722"><span class="cm">// finished sound stops nothing instead of stopping whatever took its place.</span></span>
+<span id="src-graphics-loft-L1723"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_play</span>(clip: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>, looping: <span class="ty"><a href="stdlib-types.html">boolean</a></span> = <span class="kw">false</span>,</span>
+<span id="src-graphics-loft-L1724">                  pan: <span class="ty"><a href="stdlib-types.html">float</a></span> = <span class="nm">0.0</span>, start: <span class="ty"><a href="stdlib-types.html">float</a></span> = <span class="nm">0.0</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
+<span id="src-graphics-loft-L1725">#native <span class="st">"loft_audio_play"</span></span>
+<span id="src-graphics-loft-L1726"><span class="cm">// Stop a playing clip by its playback handle.</span></span>
+<span id="src-graphics-loft-L1727"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_stop</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>);</span>
+<span id="src-graphics-loft-L1728">#native <span class="st">"loft_audio_stop"</span></span>
+<span id="src-graphics-loft-L1729"><span class="cm">// Stop every playing clip — a pause menu, a scene change, a game over.</span></span>
+<span id="src-graphics-loft-L1730"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_stop_all</span>();</span>
+<span id="src-graphics-loft-L1731">#native <span class="st">"loft_audio_stop_all"</span></span>
+<span id="src-graphics-loft-L1732"><span class="cm">// Set volume of a playing clip (0.0-1.0).</span></span>
+<span id="src-graphics-loft-L1733"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_set_volume</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>);</span>
+<span id="src-graphics-loft-L1734">#native <span class="st">"loft_audio_set_volume"</span></span>
+<span id="src-graphics-loft-L1735"><span class="cm">// Move a playing clip across the stereo field: -1 left, 0 centre, 1 right.</span></span>
+<span id="src-graphics-loft-L1736"><span class="cm">//</span></span>
+<span id="src-graphics-loft-L1737"><span class="cm">// The law is Web Audio's `StereoPannerNode`, equal-power for a mono clip: a</span></span>
+<span id="src-graphics-loft-L1738"><span class="cm">// sweep holds its loudness through the middle rather than dipping.  A stereo</span></span>
+<span id="src-graphics-loft-L1739"><span class="cm">// clip is narrowed toward the near side rather than having the far one muted.</span></span>
+<span id="src-graphics-loft-L1740"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_set_pan</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>, pan: <span class="ty"><a href="stdlib-types.html">float</a></span>);</span>
+<span id="src-graphics-loft-L1741">#native <span class="st">"loft_audio_set_pan"</span></span>
+<span id="src-graphics-loft-L1742"><span class="cm">// Jump a playing clip to `seconds` from its start.  Answers whether it moved.</span></span>
+<span id="src-graphics-loft-L1743"><span class="cm">//</span></span>
+<span id="src-graphics-loft-L1744"><span class="cm">// A LOOPING clip cannot seek — repeating needs a buffered source, which has no</span></span>
+<span id="src-graphics-loft-L1745"><span class="cm">// earlier position to go back to — and this answers false rather than leaving</span></span>
+<span id="src-graphics-loft-L1746"><span class="cm">// the caller believing a jump happened.</span></span>
+<span id="src-graphics-loft-L1747"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_seek</span>(sink: <span class="ty"><a href="stdlib-types.html">integer</a></span>, seconds: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span>;</span>
+<span id="src-graphics-loft-L1748">#native <span class="st">"loft_audio_seek"</span></span>
+<span id="src-graphics-loft-L1749"><span class="cm">// Play raw PCM samples (mono, values -1.0 to 1.0) at the given sample rate.</span></span>
+<span id="src-graphics-loft-L1750"><span class="cm">// Returns playback handle, or null on failure.</span></span>
+<span id="src-graphics-loft-L1751"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">audio_play_raw</span>(samples: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt;, sample_rate: <span class="ty"><a href="stdlib-types.html">integer</a></span>, volume: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
+<span id="src-graphics-loft-L1752">#native <span class="st">"loft_audio_play_raw"</span></span>
+<span id="src-graphics-loft-L1753"></span>
+<span id="src-graphics-loft-L1754"><span class="cm">// --- Procedural audio synthesis (chiptune) ---</span></span>
+<span id="src-graphics-loft-L1755"></span>
+<span id="src-graphics-loft-L1756"><span class="en">SFX_RATE</span> = <span class="nm">22050</span>;</span>
+<span id="src-graphics-loft-L1757"></span>
+<span id="src-graphics-loft-L1758"><span class="cm">// Square wave sample: phase 0.0-1.0, duty 0.0-1.0.</span></span>
+<span id="src-graphics-loft-L1759"><span class="kw">fn</span> <span class="fn-call">sfx_sq</span>(sfx_sq_phase: <span class="ty"><a href="stdlib-types.html">single</a></span>, sfx_sq_duty: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
+<span id="src-graphics-loft-L1760">  <span class="kw">if</span> sfx_sq_phase &lt; sfx_sq_duty { <span class="kw">return</span> <span class="nm">1.0f</span>; }</span>
+<span id="src-graphics-loft-L1761">  <span class="kw">return</span> -<span class="nm">1.0f</span>;</span>
+<span id="src-graphics-loft-L1762">}</span>
+<span id="src-graphics-loft-L1763"><span class="cm">// Triangle wave sample: phase 0.0-1.0.</span></span>
+<span id="src-graphics-loft-L1764"><span class="kw">fn</span> <span class="fn-call">sfx_tri</span>(sfx_tri_p: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
+<span id="src-graphics-loft-L1765">  <span class="kw">if</span> sfx_tri_p &lt; <span class="nm">0.5f</span> { <span class="kw">return</span> sfx_tri_p * <span class="nm">4.0f</span> - <span class="nm">1.0f</span>; }</span>
+<span id="src-graphics-loft-L1766">  <span class="kw">return</span> <span class="nm">3.0f</span> - sfx_tri_p * <span class="nm">4.0f</span>;</span>
+<span id="src-graphics-loft-L1767">}</span>
+<span id="src-graphics-loft-L1768"><span class="cm">// Sawtooth wave sample: phase 0.0-1.0.</span></span>
+<span id="src-graphics-loft-L1769"><span class="kw">fn</span> <span class="fn-call">sfx_saw</span>(sfx_saw_p: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
+<span id="src-graphics-loft-L1770">  <span class="kw">return</span> sfx_saw_p * <span class="nm">2.0f</span> - <span class="nm">1.0f</span>;</span>
+<span id="src-graphics-loft-L1771">}</span>
+<span id="src-graphics-loft-L1772"><span class="cm">// Linear attack-decay envelope: returns 0.0-1.0.</span></span>
+<span id="src-graphics-loft-L1773"><span class="kw">fn</span> <span class="fn-call">sfx_env</span>(sfx_env_t: <span class="ty"><a href="stdlib-types.html">single</a></span>, sfx_env_atk: <span class="ty"><a href="stdlib-types.html">single</a></span>, sfx_env_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">single</a></span> {</span>
+<span id="src-graphics-loft-L1774">  <span class="cm">// `?? 0.0f` is lint suppression — the attack branch only fires when</span></span>
+<span id="src-graphics-loft-L1775">  <span class="cm">// `sfx_env_t &lt; sfx_env_atk`, which transitively implies atk &gt; 0</span></span>
+<span id="src-graphics-loft-L1776">  <span class="cm">// unless sfx_env_t is negative (caller invariant).</span></span>
+<span id="src-graphics-loft-L1777">  <span class="kw">if</span> sfx_env_t &lt; sfx_env_atk { <span class="kw">return</span> (sfx_env_t / sfx_env_atk) ?? <span class="nm">0.0f</span>; }</span>
+<span id="src-graphics-loft-L1778">  sfx_env_rem = sfx_env_dur - sfx_env_t;</span>
+<span id="src-graphics-loft-L1779">  <span class="kw">if</span> sfx_env_rem &lt; <span class="nm">0.0f</span> { <span class="kw">return</span> <span class="nm">0.0f</span>; }</span>
+<span id="src-graphics-loft-L1780">  sfx_env_dec = sfx_env_dur - sfx_env_atk;</span>
+<span id="src-graphics-loft-L1781">  <span class="kw">if</span> sfx_env_dec &lt;= <span class="nm">0.0f</span> { <span class="kw">return</span> <span class="nm">0.0f</span>; }</span>
+<span id="src-graphics-loft-L1782">  <span class="cm">// `?? 0.0f` is lint suppression — `sfx_env_dec &gt; 0.0f` is enforced</span></span>
+<span id="src-graphics-loft-L1783">  <span class="cm">// by the early-return guard above.</span></span>
+<span id="src-graphics-loft-L1784">  <span class="kw">return</span> (sfx_env_rem / sfx_env_dec) ?? <span class="nm">0.0f</span>;</span>
+<span id="src-graphics-loft-L1785">}</span>
+<span id="src-graphics-loft-L1786"></span>
+<span id="src-graphics-loft-L1787"><span class="cm">// Short percussive beep — brick hit, UI click.</span></span>
+<span id="src-graphics-loft-L1788"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_beep</span>(sb_freq: <span class="ty"><a href="stdlib-types.html">single</a></span>, sb_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sb_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-graphics-loft-L1789">  sb_n = (sb_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
+<span id="src-graphics-loft-L1790">  sb_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sb_i <span class="kw">in</span> <span class="nm">0..</span>sb_n {</span>
+<span id="src-graphics-loft-L1791">    sb_t = sb_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
+<span id="src-graphics-loft-L1792">    sb_p = (sb_t * sb_freq) % <span class="nm">1.0f</span>;</span>
+<span id="src-graphics-loft-L1793">    <span class="fn-call">sfx_sq</span>(sb_p, <span class="nm">0.5f</span>) * <span class="fn-call">sfx_env</span>(sb_t, <span class="nm">0.005f</span>, sb_dur) * sb_vol</span>
+<span id="src-graphics-loft-L1794">  }];</span>
+<span id="src-graphics-loft-L1795">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sb_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
+<span id="src-graphics-loft-L1796">}</span>
+<span id="src-graphics-loft-L1797"></span>
+<span id="src-graphics-loft-L1798"><span class="cm">// Descending tone — life lost, negative event.</span></span>
+<span id="src-graphics-loft-L1799"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_descend</span>(sd_f0: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_f1: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sd_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-graphics-loft-L1800">  sd_n = (sd_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
+<span id="src-graphics-loft-L1801">  sd_ph = <span class="nm">0.0f</span>;</span>
+<span id="src-graphics-loft-L1802">  sd_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sd_i <span class="kw">in</span> <span class="nm">0..</span>sd_n {</span>
+<span id="src-graphics-loft-L1803">    sd_t = sd_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
+<span id="src-graphics-loft-L1804">    sd_f = sd_f0 + (sd_f1 - sd_f0) * ((sd_t / sd_dur) ?? <span class="nm">0.0f</span>);</span>
+<span id="src-graphics-loft-L1805">    sd_ph = (sd_ph + sd_f / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) % <span class="nm">1.0f</span>;</span>
+<span id="src-graphics-loft-L1806">    <span class="fn-call">sfx_saw</span>(sd_ph) * <span class="fn-call">sfx_env</span>(sd_t, <span class="nm">0.01f</span>, sd_dur) * sd_vol</span>
+<span id="src-graphics-loft-L1807">  }];</span>
+<span id="src-graphics-loft-L1808">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sd_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
+<span id="src-graphics-loft-L1809">}</span>
+<span id="src-graphics-loft-L1810"></span>
+<span id="src-graphics-loft-L1811"><span class="cm">// Rising chirp — pickup collected, positive event.</span></span>
+<span id="src-graphics-loft-L1812"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_chirp</span>(sc_f0: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_f1: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sc_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-graphics-loft-L1813">  sc_n = (sc_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
+<span id="src-graphics-loft-L1814">  sc_ph = <span class="nm">0.0f</span>;</span>
+<span id="src-graphics-loft-L1815">  sc_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sc_i <span class="kw">in</span> <span class="nm">0..</span>sc_n {</span>
+<span id="src-graphics-loft-L1816">    sc_t = sc_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
+<span id="src-graphics-loft-L1817">    sc_f = sc_f0 + (sc_f1 - sc_f0) * ((sc_t / sc_dur) ?? <span class="nm">0.0f</span>);</span>
+<span id="src-graphics-loft-L1818">    sc_ph = (sc_ph + sc_f / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) % <span class="nm">1.0f</span>;</span>
+<span id="src-graphics-loft-L1819">    <span class="fn-call">sfx_tri</span>(sc_ph) * <span class="fn-call">sfx_env</span>(sc_t, <span class="nm">0.005f</span>, sc_dur) * sc_vol</span>
+<span id="src-graphics-loft-L1820">  }];</span>
+<span id="src-graphics-loft-L1821">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sc_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
+<span id="src-graphics-loft-L1822">}</span>
+<span id="src-graphics-loft-L1823"></span>
+<span id="src-graphics-loft-L1824"><span class="cm">// White noise burst — percussion, explosion, brick break.</span></span>
+<span id="src-graphics-loft-L1825"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_noise</span>(sn_dur: <span class="ty"><a href="stdlib-types.html">single</a></span>, sn_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-graphics-loft-L1826">  sn_n = (sn_dur * <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>) <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">integer</a></span>;</span>
+<span id="src-graphics-loft-L1827">  sn_seed = <span class="nm">12345</span>;</span>
+<span id="src-graphics-loft-L1828">  sn_buf: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">single</a></span>&gt; = [<span class="kw">for</span> sn_i <span class="kw">in</span> <span class="nm">0..</span>sn_n {</span>
+<span id="src-graphics-loft-L1829">    sn_t = sn_i <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="en">SFX_RATE</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span>;</span>
+<span id="src-graphics-loft-L1830">    sn_seed = (sn_seed * <span class="nm">1103515245</span> + <span class="nm">12345</span>) % <span class="nm">2147483647</span>;</span>
+<span id="src-graphics-loft-L1831">    sn_rnd = (sn_seed <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">single</a></span> / <span class="nm">1073741824.0f</span>) - <span class="nm">1.0f</span>;</span>
+<span id="src-graphics-loft-L1832">    sn_rnd * <span class="fn-call">sfx_env</span>(sn_t, <span class="nm">0.002f</span>, sn_dur) * sn_vol</span>
+<span id="src-graphics-loft-L1833">  }];</span>
+<span id="src-graphics-loft-L1834">  <span class="kw">return</span> <span class="fn-call">audio_play_raw</span>(sn_buf, <span class="en">SFX_RATE</span>, <span class="nm">1.0</span>);</span>
+<span id="src-graphics-loft-L1835">}</span>
+<span id="src-graphics-loft-L1836"></span>
+<span id="src-graphics-loft-L1837"><span class="cm">// Paddle bounce — low square wave thud with pitch drop.</span></span>
+<span id="src-graphics-loft-L1838"><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">sfx_bounce</span>(sp_freq: <span class="ty"><a href="stdlib-types.html">single</a></span>, sp_vol: <span class="ty"><a href="stdlib-types.html">single</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {</span>
+<span id="src-graphics-loft-L1839">  <span class="kw">return</span> <span class="fn-call">sfx_beep</span>(sp_freq, <span class="nm">0.08f</span>, sp_vol);</span>
+<span id="src-graphics-loft-L1840">}</span>
 </code></pre>
 <h2 id="src-render-loft">src/render.loft</h2>
 <pre class="src"><code><span id="src-render-loft-L1"><span class="cm">// Copyright (c) 2026 Jurjen Stellingwerff</span></span>

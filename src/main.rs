@@ -404,6 +404,10 @@ fn print_help() {
     );
     println!("                                prune            — drop what this loft cannot reuse");
     println!("                                prune --all      — drop the live generation too");
+    println!("                                warm [--from <dir>] [pkg…]");
+    println!(
+        "                                                 — build what a run will need, first"
+    );
     println!("  generate [path]               generate Rust stubs for #native declarations");
     println!("                                writes native/src/generated.rs in the package");
     println!("  package [path]                build a publishable <pkg>-<version>.tar.gz");
@@ -4234,9 +4238,203 @@ fn handle_cache(argv: &[String], i: &mut usize) {
             }
             cache_report(&cache_areas(), true, all);
         }
+        "warm" => cache_warm(argv, *i),
         _ => {
-            eprintln!("usage: loft cache <status|prune> [--all] [--force]");
+            eprintln!("usage: loft cache <status|prune|warm> [--all] [--force]");
             std::process::exit(1);
+        }
+    }
+}
+
+/// loft#1238 — build the native artifacts a run is about to need, once, up front.
+///
+/// `native_artifact_cache_key()` folds in a content hash of the loft build, so rebuilding loft
+/// invalidates every cached artifact keyed on it. That is deliberate — it is what makes a codegen
+/// fix reach an already-built dependency (#433) — but it means the FIRST user of each artifact
+/// pays a full rebuild, and under a parallel test runner every user arrives at once and
+/// serialises on the global build lock. Measured on this box: loft's wasm runtime rlib is 25.6 s
+/// and the `random` cdylib 1.8 s idle, against a 60 s per-test budget that a loaded CI box blew
+/// twice.
+///
+/// Warming is not a cache-correctness change: each artifact is built by the SAME call a test
+/// would make (`ensure_loft_runtime_rlib` / `resolve_native_lib`), so it is stamped with the same
+/// key and a test running afterwards takes the ordinary hit path. It only moves the cost out of
+/// the parallel section, where it is charged to whichever test happened to arrive first.
+///
+/// ⚠ SCOPE IS THE WHOLE DESIGN. The first version warmed every stale tree under
+/// `~/.loft/build-cache/`, which on this box is 61 of 71 — generations belonging to OTHER loft
+/// builds, none of which this run would touch. It was still going minutes later. The set that
+/// costs a test its budget is the intersection of two much smaller ones: packages the corpus
+/// actually `use`s, and trees already on disk under a previous key. Neither alone is right —
+/// used-but-absent is a first build that no warming can avoid, and stale-but-unused is somebody
+/// else's cache.
+///
+/// Never fails the caller. A package that cannot be warmed is simply built by the test that
+/// needs it, exactly as before, so this is an optimisation with no new failure mode.
+fn cache_warm(argv: &[String], from: usize) {
+    let mut wanted: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut idx = from;
+    while idx < argv.len() {
+        let a = argv[idx].as_str();
+        if a == "--from" {
+            if let Some(dir) = argv.get(idx + 1) {
+                collect_used_packages(std::path::Path::new(dir), &mut wanted);
+                idx += 1;
+            }
+        } else if !a.starts_with('-') {
+            wanted.insert(a.to_string());
+        }
+        idx += 1;
+    }
+
+    let mut built = 0usize;
+    let mut skipped = 0usize;
+
+    // 1. loft's own wasm runtime rlibs — one per shape, and only where the target is installed.
+    //    A missing target is a skip, not a failure: a box without that target has no wasm test
+    //    to warm for. `HtmlThreads` is deliberately absent — it needs a nightly `-Z build-std`,
+    //    which is far too big a thing to start implicitly before a test run.
+    let installed = std::process::Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    for shape in [
+        native_utils::WasmRuntimeShape::Wasi,
+        native_utils::WasmRuntimeShape::Html,
+    ] {
+        if !installed.lines().any(|l| l.trim() == shape.triple()) {
+            println!(
+                "  skip  {} — {} not installed",
+                shape.name(),
+                shape.triple()
+            );
+            skipped += 1;
+            continue;
+        }
+        if native_utils::ensure_loft_runtime_rlib(shape).is_some() {
+            built += 1;
+        } else {
+            println!(
+                "  warn  {} — could not build its runtime rlib",
+                shape.name()
+            );
+            skipped += 1;
+        }
+    }
+
+    // 2. Package cdylibs: USED by the corpus, and already on disk under a stale key.
+    let home = loft_home();
+    let build_cache = home.join("build-cache");
+    let registry = home.join("registry");
+    let mut entries: Vec<String> = std::fs::read_dir(&build_cache)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    // Keep only the NEWEST version of each wanted package.  A bare `use <pkg>` in a script with
+    // no manifest above it resolves to the newest installed, so the older trees on disk are
+    // generations nothing in this run can select — warming them is pure waste, and it showed:
+    // the first gate run through here rebuilt `graphics` seventeen times, once per version back
+    // to 0.1.0, and printed a warning for each.  A package that is actually PINNED by a
+    // manifest is the case this heuristic can miss, and missing it costs one first build in the
+    // test that needs it — the cost this command exists to move, not to create.
+    let mut newest: std::collections::BTreeMap<String, (Vec<u64>, String)> =
+        std::collections::BTreeMap::new();
+    for name in entries {
+        // `<pkg>-<ver>` — the package name is everything before the LAST hyphen.
+        let Some((pkg, ver)) = name.rsplit_once('-') else {
+            continue;
+        };
+        if !wanted.contains(pkg) {
+            continue;
+        }
+        // Compare numerically, not lexically: `0.10.0` is newer than `0.9.0`.
+        let parts: Vec<u64> = ver
+            .split(['.', '-', '+'])
+            .map(|c| c.parse::<u64>().unwrap_or(0))
+            .collect();
+        let e = newest.entry(pkg.to_string());
+        match e {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert((parts, name.clone()));
+            }
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                if parts > o.get().0 {
+                    o.insert((parts, name.clone()));
+                }
+            }
+        }
+    }
+    for (_pkg, (_parts, name)) in newest {
+        let Some((pkg, _ver)) = name.rsplit_once('-') else {
+            continue;
+        };
+        // ⚠ NO staleness pre-filter here, deliberately.  The obvious optimisation — skip a
+        // package whose stamp already matches — needs to know WHICH key the loader compares,
+        // and there is more than one: the cdylib check is keyed on the loft-ffi ABI
+        // (`loft_ffi_fingerprint`), while loft's own wasm runtime rlib is keyed on
+        // `loft_build_fingerprint`, a content hash of the binary.  Asking with the wrong one
+        // SILENTLY SKIPS a package that is genuinely stale, which is the one failure this
+        // command must not have — measured: a pre-filter on `native_artifact_cache_key`
+        // reported a stale `random` as current and warmed nothing.
+        //
+        // `resolve_native_lib` is the one home for that question and already returns fast on a
+        // hit, so asking it unconditionally is both correct and cheap (0.1s for the whole set
+        // when everything is warm).  Duplicating its test bought nothing and could only be
+        // wrong.
+        let pkg_dir = registry.join(&name);
+        if !pkg_dir.is_dir() {
+            continue; // a build tree whose package is gone; `loft cache prune` owns that
+        }
+        let stem = format!("loft_{pkg}");
+        if loft::extensions::resolve_native_lib(&pkg_dir.to_string_lossy(), &stem).is_some() {
+            built += 1;
+        } else {
+            println!("  warn  {name} — could not rebuild {stem}");
+            skipped += 1;
+        }
+    }
+    println!("loft cache warm: {built} artifact(s) current, {skipped} skipped");
+}
+
+/// Every `use <name>;` under `dir` — the packages a run there can ask for.
+///
+/// A plain scan rather than a manifest read on purpose: the corpus is thousands of standalone
+/// `.loft` files with no `loft.toml` between them, so `use` is the only statement of what they
+/// need. Over-collecting is harmless here (an unused name simply matches no stale build tree);
+/// under-collecting would leave the cost where it was.
+fn collect_used_packages(dir: &std::path::Path, out: &mut std::collections::BTreeSet<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_used_packages(&p, out);
+        } else if p
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("loft"))
+            && let Ok(src) = std::fs::read_to_string(&p)
+        {
+            for line in src.lines() {
+                let t = line.trim();
+                if let Some(rest) = t.strip_prefix("use ")
+                    && let Some(name) = rest.strip_suffix(';')
+                {
+                    let name = name.trim();
+                    if !name.is_empty()
+                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        out.insert(name.to_string());
+                    }
+                }
+            }
         }
     }
 }
@@ -6731,9 +6929,16 @@ fn main() {
     // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
     // that surfaces the loft source position of the offending pc
     // before the default panic message.  Reads the per-thread snapshot
-    // published by `State::execute_argv` via `crash_report`.  Falls
-    // through to the default hook if no source-span snapshot is
-    // active or no entry precedes the offending pc.
+    // published by `State::execute_argv` via `crash_report`.
+    //
+    // It prints a position only when a recorded span COVERS the pc, and
+    // otherwise says nothing.  The line renders exactly like a position the
+    // reader can act on, so there is nothing to mark it a guess — and the span
+    // table is sparse, so an inherited answer names whatever statement happened
+    // to be wrapped last.  It sent a `#lock` write on line 8 to line 7, and,
+    // with nothing preceding it in the user's file, to a stdlib file the program
+    // never mentions (loft#1262).  A wrapped construct — a call, an arithmetic
+    // fault site — still resolves, which is the case this exists for.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let (pc, _op, _fn_d_nr) = loft::crash_report::last_context();
@@ -11544,7 +11749,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         // came to report the same fault two different ways (loft#1056).
         eprint!("{}", err.render());
     }
-    if state.database.had_fatal {
+    if state.database.run_failed() {
         std::process::exit(1);
     }
 }

@@ -59,6 +59,60 @@ export function compile_and_start(files_json) {
 }
 
 /**
+ * Apply one debug command to the live session.
+ *
+ * Returns JSON `{"replies":[…],"output":"…"}` — the `D:` replies the command produced and
+ * whatever the program printed while it ran.  The two travel together because a `run` or a
+ * `resume` produces both, and a page fetching them separately could paint a pause before
+ * the output that led to it.
+ *
+ * The grammar is [`command`]'s: `bp <fn>` / `bp <line>`, `run`, `resume`, `step`,
+ * `eval <expr>`, `fns`.
+ * @param {string} cmd
+ * @returns {string}
+ */
+export function debug_command(cmd) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(cmd, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.debug_command(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Start a debug session over `source`, replacing any previous one.
+ *
+ * Returns JSON `{"ok":true}`, or `{"ok":false,"error":"…"}` carrying the diagnostics — a
+ * page that offers to run the code in front of the reader has to say why it will not.
+ *
+ * A bare script (top-level statements, no `fn main`) is desugared exactly as
+ * `compile_and_run` desugars it, so the two entries accept the same inputs.
+ * @param {string} source
+ * @returns {string}
+ */
+export function debug_start(source) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.debug_start(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
  * Resume execution after a frame yield.  Returns JSON:
  * `{"running":true}` — yielded again, call on next requestAnimationFrame
  * `{"running":false,"output":"..."}` — program finished

@@ -39,6 +39,26 @@ leak:snapshot
 # benign leak reds the gate again.
 leak:fold_declared_default
 
+# The SAME interner class on the DIAGNOSTIC-CACHE side (loft#1240 nightly).  A warm bundle
+# load decodes cached diagnostics back into `DiagEntry`s, and the diagnostic CODE is a frozen
+# public surface (DIAGNOSTICS.md), so `DiagEntry::decode_from_cache` interns each one as a
+# `&'static str` through the same intentional `Box::leak` — BOUNDED by the number of distinct
+# codes, deduplicated by the pool, never one per read.
+#
+# Reachability is why it is intermittent rather than constant: the leaked `&'static str` is
+# held by a `OnceLock` pool, so Linux LSan (reachability-based) usually walks to it from the
+# statics and says nothing, while a run that does not reach it reports a Direct leak.  A gate
+# that depends on whether a scan happens to find a root is not a gate, so it is suppressed
+# outright, like every other interner above.
+#
+# `decode_from_cache` is the anchor rather than `intern` or `unesc`: suppressions match by
+# SUBSTRING, and `intern` is a substring of `internal` / `internally` / `internal_copies`
+# (12 identifiers in src/) while `unesc` is one of `unescape_text` / `unescaped_content` (6).
+# `decode_from_cache` is unique in the tree, and it encloses BOTH the `unesc` allocation and
+# the `intern` call, so it survives either being inlined.  It carries `#[inline(never)]` FOR
+# this line — keep the two in step, as with `fold_declared_default` above.
+leak:decode_from_cache
+
 # The fault-path text class (@PLN102).  When a loft program raises a fault (a failed
 # `assert`, `panic`, a `raise`d OOB/DivByZero) WHILE a text is mid-construction, the
 # compiler-emitted drop of that in-flight text local never runs, so its `String` buffer

@@ -53,6 +53,113 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
     }
 }
 
+/// The value an uncomputable result takes in a slot of type `tp` whose range is `spec` —
+/// the one place that chooses between the two rules `formal/operational.md` states.
+///
+/// @FR-E-Uncomp answers **null**, and that is the answer wherever the slot can hold one:
+/// `null` says "this did not happen", which is what an overflow or a divide by zero is.
+/// @FR-E-Uncomp-NN is the completion for a slot that CANNOT hold null — it takes the
+/// type's DEFAULT instead, the value it would have had if nobody had assigned.
+///
+/// Which of the two applies is decided by the WRAPPER, not by the width spelling, and
+/// that is the whole content of this function: `integer limit(0,255)?` and `u8?` are the
+/// same range and the same nullability, so they take the same answer.  Read off the two
+/// range paths separately they did not — the `limit(…)` spelling asked `Type::Optional`
+/// and the narrow ALIAS asked nothing at all, so a `u8?` overflow answered `0` where the
+/// rule requires null and `??`, the documented recovery, was inert on it (D-op-8,
+/// loft#1246).  A local's slot is a full i64, and `OpRangeDefault` passes `i64::MIN`
+/// through untouched, so the null reaches a narrow FIELD as the field store's own
+/// sentinel rather than as a number.
+///
+/// The non-nullable ANSWER is not decided here: `IntegerSpec::default_value` is its one
+/// home, shared with `data::to_default` and the native generator, which answered it
+/// separately until loft#1254.
+/// Does the slot this store TARGETS hold null?
+///
+/// The one home for a question `Type::Optional` on a write target cannot answer, because it
+/// means two different things there.  For a variable or a field it is the DECLARED
+/// nullability and the answer.  For an ELEMENT it is not: `(N-Domain)` makes an index
+/// expression nullable for the MISS, so `v[i]` on a NON-nullable `vector<u8>` presents its
+/// target as `u8?` — *"this read may miss"* wearing the spelling of *"this slot holds null"*.
+///
+/// `parent` is what the place is read out of, so a collection there carries the DECLARED
+/// element type and `Type::content` is the existing home that unwraps it: `vector<u8>` says
+/// no, `vector<u8?>` says yes, and everything that is not a collection falls back to the
+/// target's own wrapper.
+///
+/// This blocked loft#1249 for a session.  Bounding the store seam by the target's `Optional`
+/// looked right and wrote the null sentinel into a non-null `vector<u8>` element, which the
+/// store flattened to `0` — measured in published `hex_field`, where `255` became `0`.
+pub(crate) fn target_holds_null(target: &Type, parent: &Type) -> bool {
+    // `&τ` first: `AssignPlace::parent_tp` is documented as `&S` for a write inside a
+    // `&`-parameter, and the referent is what carries the element type.  Missing this peel
+    // read a `&vector<u8>` as "not a collection" and fell through to the target's own
+    // wrapper — which for an element write is the out-of-bounds one — so published `assets`
+    // wrote a fully-opaque alpha of `255` into a non-null `vector<u8>` and got `null`.
+    let parent = match parent {
+        Type::RefVar(inner) => inner.as_ref(),
+        other => other,
+    };
+    if crate::parser::vectors::is_collection(parent) {
+        matches!(parent.content(), Type::Optional(_))
+    } else {
+        matches!(target, Type::Optional(_))
+    }
+}
+
+fn uncomputable_default(nullable: bool, spec: &crate::data::IntegerSpec) -> i64 {
+    if nullable {
+        i64::MIN
+    } else {
+        spec.default_value()
+    }
+}
+
+/// loft#984 — the DECLARED range of a store target, and the default a value outside it
+/// takes: `(lo, hi, default)`.  The default is `uncomputable_default`'s; this function
+/// answers only which range applies.
+///
+/// `None` when the question does not arise — the target declares no range of its own (the
+/// plain `integer` / i32 templates), or it is not an integer at all.
+fn declared_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
+    let Type::Integer(spec) = tp.base() else {
+        return None;
+    };
+    if spec.is_wide_template() || spec.is_signed32_template() {
+        return None;
+    }
+    // The `limit(lo, hi)` spelling, and a NULLABLE narrow alias.
+    //
+    // A NON-NULLABLE narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`, which is what `forced_size`
+    // marks) is already guarded at COMPILE time — storing a plain integer into one is an
+    // error demanding `as u8` — so a runtime default there would be redundant where the
+    // check holds and WRONG where it does not: it fired 24 times inside the stdlib's own
+    // `i8` stores and handed them `-128`.  Neither half of that reasoning survives the `?`.
+    // The compile-time check does not fire (@FR-I-Narrow-Opt makes the narrowing implicit
+    // and CHECKED for a nullable target), and the slot has a reserved edge a value can land
+    // on — so this is the seam that has to bound it (@FR-N-Reserve, loft#1249).
+    //
+    // `nullable` is the CALLER's answer and not `matches!(tp, Optional(_))`, which is what
+    // makes this safe: an element write on a non-null `vector<u8>` presents its target as
+    // `u8?` for the out-of-bounds MISS, and bounding that by the usable range wrote the
+    // sentinel into a slot that cannot hold one.  `target_holds_null` is the one home.
+    if spec.forced_size.is_some() && !nullable {
+        return None;
+    }
+    // @FR-N-Reserve — a nullable narrow slot's bound is its USABLE range: the sentinel is a
+    // value of the type, so a `u8?` is `0..=254` (loft#1249).  `usable_*` answers the
+    // declared bound unchanged for every non-nullable spec and for every width with a spare
+    // code, so passing `nullable` here only adds the case that reserves an edge.
+    let lo = i64::from(spec.usable_min(nullable));
+    let hi = spec.usable_max(nullable);
+    // @FR-E-Uncomp / @FR-E-Uncomp-NN — `uncomputable_default` is the one home for which
+    // of the two applies, shared with the compound path.  The default is NOT the range's
+    // floor: `lo` is zero for `u8` and so looked right, while an `i16` answered `-32768`
+    // and an `i32` `-2147483647` — in range, type-correct, and as unrelated to the
+    // computation as a wrapped value would be.
+    Some((lo, hi, uncomputable_default(nullable, spec)))
+}
+
 /// The base variable at the root of an lvalue access chain, or `u16::MAX` if the
 /// chain does not bottom out in a plain variable.  A field/element access lowers to
 /// `Call(op, [inner, …])` whose FIRST argument is the object being accessed
@@ -60,42 +167,6 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
 /// base is found by walking `args[0]` to the leaf `Var`.  @PLN40 step 3 uses this to
 /// find which binding a component write (`p.x = …`, `p[i] = …`) mutates THROUGH, so a
 /// write through a value-const binding can be rejected at its root.
-/// loft#984 — the DECLARED range of a store target, and the default a value outside it
-/// takes: `(lo, hi, default)`.
-///
-/// `None` when the question does not arise — the target declares no range of its own (the
-/// plain `integer` / i32 templates), or it is not an integer at all.
-///
-/// The default is the LOWEST value in range, except where the slot admits null, which
-/// takes `null` instead: absence is a value that type can hold, and it is the honest
-/// answer for "this did not fit". A non-nullable slot has no such value, so it takes `lo`.
-fn declared_range(tp: &Type) -> Option<(i64, i64, i64)> {
-    let Type::Integer(spec) = tp.base() else {
-        return None;
-    };
-    if spec.is_wide_template() || spec.is_signed32_template() {
-        return None;
-    }
-    // Only the `limit(lo, hi)` spelling. A narrow ALIAS (`u8`/`i8`/`u16`/`i16`/`i32`,
-    // which is what `forced_size` marks) is already guarded at COMPILE time — storing a
-    // plain integer into one is an error demanding `as u8` — so a runtime default there
-    // would be redundant where the check holds and WRONG where it does not: it fired 24
-    // times inside the stdlib's own `i8` stores and handed them `-128`. The gap this
-    // closes is that `limit(...)` sets no `forced_size`, so none of that machinery sees
-    // it (`is_narrowing_int_store`), which is why a declared range went unenforced.
-    if spec.forced_size.is_some() {
-        return None;
-    }
-    let lo = i64::from(spec.min);
-    let hi = i64::from(spec.max);
-    let dflt = if matches!(tp, Type::Optional(_)) {
-        i64::MIN
-    } else {
-        lo
-    };
-    Some((lo, hi, dflt))
-}
-
 fn lhs_base_var(v: &Value, data: &crate::parser::Data) -> u16 {
     match v.unspan() {
         Value::Var(nr) => *nr,
@@ -180,7 +251,7 @@ fn inline_ref_set_in(val: &Value, r: u16) -> bool {
 ///   - root = t_var_nr
 ///   - chain = []
 ///   - leaf_idx = 0
-struct NestedTupleLhs {
+pub(super) struct NestedTupleLhs {
     root: u16,
     /// Pairs of `(work_var, index_into_parent)`, ordered root → leaf.
     chain: Vec<(u16, u16)>,
@@ -190,7 +261,7 @@ struct NestedTupleLhs {
 /// Walk a Value that might be a chained tuple read (single `TupleGet`
 /// or nested `Block[Set(w, source), TupleGet(w, idx)]`) and return a
 /// flattened `NestedTupleLhs`.  Returns `None` for any other shape.
-fn extract_nested_tuple_lhs(code: &Value) -> Option<NestedTupleLhs> {
+pub(super) fn extract_nested_tuple_lhs(code: &Value) -> Option<NestedTupleLhs> {
     match code.unspan() {
         Value::TupleGet(var_nr, idx) => Some(NestedTupleLhs {
             root: *var_nr,
@@ -225,7 +296,11 @@ fn extract_nested_tuple_lhs(code: &Value) -> Option<NestedTupleLhs> {
 /// `TuplePut(deepest_w, leaf_idx, rhs)`, then write each intermediate
 /// back to its parent in reverse so the modification propagates up
 /// to `root`.
-fn build_nested_tuple_assign(orig_code: &Value, lhs: &NestedTupleLhs, rhs: Value) -> Value {
+pub(super) fn build_nested_tuple_assign(
+    orig_code: &Value,
+    lhs: &NestedTupleLhs,
+    rhs: Value,
+) -> Value {
     if lhs.chain.is_empty() {
         return Value::TuplePut(lhs.root, lhs.leaf_idx, Box::new(rhs));
     }
@@ -2156,6 +2231,12 @@ use a separate collection or add after the loop"
         skip_validate: bool,
     ) -> Type {
         self.check_iter_safety(to, f_type, op);
+        // @FR-Const-Value / @FR-Const-Bind — ask the const question ONCE, here, ahead of
+        // every route below.  Whether a write is allowed is a property of the BINDING, not
+        // of the route that lowers it, so a guard held inside a route is only as complete
+        // as that route's target-shape test and every shape it declines falls through
+        // unchecked.  Two did.
+        self.guard_const_write(var_nr, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         // …and, for the same reason, the attribute a `fn(…)` field read on the LEFT came
@@ -3475,6 +3556,34 @@ use a separate collection or add after the loop"
                     && crate::parser::vectors::boxed_cell_def(self.vars.tp(v_nr), &self.data)
                         .is_some()
             });
+        // loft#1228 — a TUPLE ELEMENT of text type takes its own lowering, because text concat
+        // is inherently variable-based: every route below builds through a destination VARIABLE
+        // (`OpAppendText(var, …)`) and a tuple slot is not one.  Minting a work variable and
+        // appending into it — which is what this branch used to do here — produced an append
+        // that was never written back: codegen then saw a variable naming no slot, SIGSEGV on
+        // the interpreter and `E0425` from rustc.
+        //
+        // So build the sequence the `=` branch already builds for a self-reference — clear a
+        // work text, append the CURRENT value, append the operand — and finish it with the
+        // `TuplePut` a tuple slot is written through.  Reading the place for the append and
+        // writing it back addresses it twice, which `(E-Asgn-Compound)` permits here: a tuple
+        // root is a plain variable and the index is a constant, so there is no addressing to
+        // duplicate.
+        if op == "+="
+            && matches!(f_type.base(), Type::Text(_))
+            && !self.first_pass
+            && let Some(tuple_lhs) = extract_nested_tuple_lhs(to)
+        {
+            let work = self.vars.work_text(&mut self.lexer);
+            let mut ls = vec![
+                self.cl("OpClearText", &[Value::Var(work)]),
+                self.cl("OpAppendText", &[Value::Var(work), to.clone()]),
+                self.cl("OpAppendText", &[Value::Var(work), code.clone()]),
+            ];
+            ls.push(build_nested_tuple_assign(to, &tuple_lhs, Value::Var(work)));
+            *code = Value::Insert(ls);
+            return Type::Void;
+        }
         if matches!(f_type.base(), Type::Text(_)) && !is_boxed_text_lhs {
             // A text assignment needs somewhere to assign TO. Every other type
             // falls through to the general operator dispatch, which refuses a
@@ -3554,7 +3663,7 @@ use a separate collection or add after the loop"
         // at the declaration site (not lazily on first write).
         // Falls through to the standard assign path which emits
         // Set(v, code) — codegen then takes the Null arm.
-        if var_nr != u16::MAX && !self.first_pass && self.create_keyed(code, f_type, op, var_nr) {
+        if var_nr != u16::MAX && !self.first_pass && Self::create_keyed(code, f_type, op, var_nr) {
             // Don't return here — let the standard pipeline emit
             // Set(v, Null) so codegen sees it.  No further special-
             // case handling needed: the rest of the pipeline tolerates
@@ -3998,7 +4107,7 @@ use a separate collection or add after the loop"
             let join_witnesses = self.join_source_frees(code);
             #[cfg(not(feature = "wasm"))]
             let tp_val = if (self.is_struct_returning_call(code)
-                && crate::use_analysis::call_return_frees_source(&self.data, code))
+                && crate::use_analysis::call_return_frees_source(&self.data, self.context, code))
                 || join_witnesses.is_some()
             {
                 i32::from(kt) | 0x8000
@@ -4075,7 +4184,7 @@ use a separate collection or add after the loop"
             } else if let Some(w) = join_witnesses {
                 w
             } else {
-                crate::use_analysis::protectable_ref_args(&self.data, code).0
+                crate::use_analysis::protectable_ref_args(&self.data, self.context, code).0
             };
             for av in &guarded {
                 seq.push(self.cl("n_protect_store_frees", &[Value::Var(*av)]));
@@ -4116,11 +4225,49 @@ use a separate collection or add after the loop"
         // dense-destination direction is loft#1210, where the interpreter panics writing a
         // read-only store and `--native` emits Rust that will not compile.  Widening the
         // destination must not quietly widen the source with it.
+        // loft#1228 — …unless the right-hand side ALREADY appended into the destination.
+        //
+        // A vector literal is parsed with the left-hand PLACE as its accumulator.  For a bare
+        // variable or a struct field `build_vector_list` builds the elements straight into it
+        // and hands back a `Value::Insert`, which the guard below excludes — that is why both
+        // of those place-kinds were always correct.  A TUPLE ELEMENT is neither, so the literal
+        // opens a block by ADOPTING the place's store (`_vec_N = t.0`) and builds into that;
+        // the block is a `Value::Block`, the exclusion misses it, and this concat then appends
+        // the destination to ITSELF.
+        //
+        // Measured: `t.0 += [7]` on an empty element answered `[7, 7]`, on `[1, 2]` it answered
+        // `[1, 2, 7, 1, 2, 7]`, and `+= [7, 8]` answered `[7, 8, 7, 8]` — the correct result
+        // concatenated with itself, which is the signature of one append too many rather than
+        // of a wrong element.  `(E-Asgn-Compound)` is the rule: the place is addressed exactly
+        // once, and here it was the accumulator AND the destination.
+        //
+        // The test is that the block's head adopts exactly `to`.  A destination is a PLACE, so
+        // it can never be the fresh-storage temp the adopt exists for, and the two cannot be
+        // confused.
+        //
+        // Gated on the PLACE-KIND, not on the adopt shape alone: a CAPTURED collection
+        // (`OpGetDbRef`) reaches the same shape and NEEDS the append — suppressing it there
+        // sent the write into the const store (`505-collection-capture.loft`: *"Write to
+        // read-only store … (CONST_STORE init)"*).  The shape is shared; the correct lowering
+        // is not.
+        //
+        // The place-kind is asked through [`extract_nested_tuple_lhs`], which is the one home
+        // for what a tuple place looks like, because a tuple projection has TWO IR spellings —
+        // a bare `TupleGet` at depth 1 and a `Block[Set(w, …), TupleGet(w, idx)]` chain deeper —
+        // and matching `TupleGet` here saw only the first.  Measured: with that narrower test
+        // `t.0 += [7]` was fixed while `n.0.0 += [7]` still answered `[7, 7]`.  QUALITY.md's
+        // `spellings` screen is what named it — the audit row moved, and the cell built to
+        // answer *why* found the half-fix.
+        let rhs_built_into_place = extract_nested_tuple_lhs(to).is_some()
+            && matches!(code.unspan(), Value::Block(bl)
+                if matches!(bl.operators.first().map(Value::unspan), Some(Value::Set(_, adopted))
+                    if adopted.unspan() == to.unspan()));
         if !self.first_pass
             && op == "+="
             && let Type::Vector(elm_tp, _) = &f_type.base().clone()
             && matches!(s_type, Type::Vector(_, _))
             && !matches!(code, Value::Insert(_))
+            && !rhs_built_into_place
         {
             if !s_type.is_equal(f_type.base()) {
                 diagnostic!(
@@ -4378,6 +4525,12 @@ use a separate collection or add after the loop"
                 f_type.name(&self.data),
             );
         }
+        // A NULLABLE narrow target takes the implicit CHECKED narrowing instead of the
+        // refusal below — `implicit_checked_narrow` is the one home, and this seam has to
+        // ask it by hand because `is_equal` above kept it out of `convert` (loft#1246).
+        if op == "=" && !matches!(s_type, Type::Null) {
+            self.implicit_checked_narrow(code, &s_type, f_type);
+        }
         // @PLAN48 P2: `x: i32 = some_integer` narrows (loses data) but integer and
         // i32 are `is_equal`, so it bypasses the convert-based check above.  Require
         // an explicit `as` unless the RHS is a constant that provably fits.
@@ -4409,26 +4562,15 @@ use a separate collection or add after the loop"
         // `is_narrowing_int_store` above cannot see it — which is why a declared range on
         // a LOCAL went unenforced entirely, not merely mis-stored.
         if op == "=" && !self.first_pass {
-            self.guard_declared_range(code, f_type, &s_type);
+            let holds_null = target_holds_null(f_type, &lhs_parent_tp);
+            self.guard_declared_range(code, f_type, &s_type, holds_null);
         }
         if self.validate_lock_assign(code, to) {
             return Type::Void;
         }
-        // For const variables the Insert path (e.g. struct constructor) bypasses
-        // towards_set, so check const here before that path can be taken.
-        if matches!(code, Value::Insert(_))
-            && !self.first_pass
-            && var_nr != u16::MAX
-            && self.vars.is_const_binding(var_nr)
-        {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(var_nr),
-                self.vars.name(var_nr)
-            );
-        }
+        // The const guard for `var_nr` is the one `guard_const_write` call above, asked
+        // before any of these routes: the `Value::Insert` path (a struct constructor)
+        // bypasses `towards_set` and used to need its own copy here.
         if !matches!(code, Value::Insert(_)) {
             let lhs = crate::parser::collections::AssignPlace {
                 parent_tp: &lhs_parent_tp,
@@ -5508,18 +5650,7 @@ use a separate collection or add after the loop"
         var_nr: u16,
         s_type: &Type,
     ) {
-        // A direct text write `s = …` / `s += …`: reject a binding-const rebind and a
-        // value-const append via the shared guard.  The `Insert` re-init form is a
-        // rebind handled by the `towards_set` check, so skip it here.
-        if !matches!(code, Value::Insert(_)) && self.const_write_blocked(var_nr, op) {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(var_nr),
-                self.vars.name(var_nr)
-            );
-        }
+        // The const guard is `parse_assign_op_inner`'s, asked before it routed here.
         if let Value::Insert(ls) = code {
             // P217: same self-append handling as `Parser::assign_text`
             // (operators.rs).  When the RHS expression was `var + parts`,
@@ -5638,8 +5769,8 @@ use a separate collection or add after the loop"
     /// (`is_narrowing_int_store`), and `declared_range`'s own comment records what happens
     /// when a runtime default is added on top of a check that already holds — it handed 24
     /// of the stdlib's own `i8` stores a `-128`.
-    pub(crate) fn guard_compound_range(&mut self, code: &mut Value, target: &Type) {
-        let Some((lo, hi, dflt)) = Self::compound_range(target) else {
+    pub(crate) fn guard_compound_range(&mut self, code: &mut Value, target: &Type, nullable: bool) {
+        let Some((lo, hi, dflt)) = Self::compound_range(target, nullable) else {
             return;
         };
         // Two seams can reach one store, so never wrap a guard in a guard: harmless
@@ -5674,15 +5805,15 @@ use a separate collection or add after the loop"
     /// no guard on the compound path at all and `l: integer limit(0,255) = 250; l += 10`
     /// kept 260 while the `u8` spelling of that identical range clamped (loft#1030).
     ///
-    /// The default is the range's LOW end, which is what a slot that cannot take the
-    /// write already answers — measured across `u8` / `i8` / `u16` / `i16` in both
-    /// directions and on both backends (commit 447564a1's table), so this reads the
-    /// existing behaviour off rather than choosing a new one.
-    fn compound_range(tp: &Type) -> Option<(i64, i64, i64)> {
+    /// The default a value outside the range takes is `uncomputable_default`'s, not this
+    /// function's: @FR-E-Uncomp for a slot that can hold null and @FR-E-Uncomp-NN for one
+    /// that cannot.  Both arms ask it, so the two spellings of one range cannot answer
+    /// differently.
+    fn compound_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
         // `declared_range` answers the `limit(lo, hi)` spelling and deliberately nothing
         // else — it returns `None` the moment `forced_size` is set.  So the two arms
         // below partition the bounded types rather than overlapping.
-        if let Some(r) = declared_range(tp) {
+        if let Some(r) = declared_range(tp, nullable) {
             return Some(r);
         }
         let Type::Integer(spec) = tp.base() else {
@@ -5703,12 +5834,24 @@ use a separate collection or add after the loop"
         if spec.forced_size.is_none() || spec.is_wide_template() {
             return None;
         }
-        let lo = i64::from(spec.min);
-        Some((lo, i64::from(spec.max), lo))
+        // @FR-N-Reserve, as in `declared_range` — a nullable narrow alias is bounded by its
+        // usable range, and this arm is the one every `u8?` / `i16?` reaches (loft#1249).
+        let lo = i64::from(spec.usable_min(nullable));
+        let hi = spec.usable_max(nullable);
+        // @FR-E-Uncomp / @FR-E-Uncomp-NN through the same home the `limit(…)` arm uses.
+        // Asking it HERE rather than answering `range_default` directly is what makes a
+        // nullable narrow alias answer null: this arm is the only one a `u8?` reaches.
+        Some((lo, hi, uncomputable_default(nullable, spec)))
     }
 
-    pub(crate) fn guard_declared_range(&mut self, code: &mut Value, target: &Type, source: &Type) {
-        let Some((lo, hi, dflt)) = declared_range(target) else {
+    pub(crate) fn guard_declared_range(
+        &mut self,
+        code: &mut Value,
+        target: &Type,
+        source: &Type,
+        nullable: bool,
+    ) {
+        let Some((lo, hi, dflt)) = declared_range(target, nullable) else {
             return;
         };
         // Two seams reach the same store — the assignment path and `convert` — so guard
@@ -5969,6 +6112,13 @@ use a separate collection or add after the loop"
     ) -> u16 {
         if let Value::Var(v_nr) = *code {
             v_nr
+        } else if extract_nested_tuple_lhs(code).is_some() {
+            // loft#1228 — a TUPLE ELEMENT keeps `u16::MAX` and takes the general path, whose
+            // `towards_set` now has a `TuplePut` route for it.  Minting the text work variable
+            // below put the append in a local that is never written back, so the statement
+            // reached codegen with a variable naming no slot — SIGSEGV on the interpreter and
+            // `E0425` from rustc on `--native`.
+            u16::MAX
         } else if op == "+=" && matches!(f_type.base(), Type::Text(_)) {
             // The temp holds what the field holds, NULL INCLUDED, so it is typed the way
             // the field is.  `--native` decides whether an append propagates a null from
@@ -6281,12 +6431,14 @@ use a separate collection or add after the loop"
         if !self.first_pass {
             let base = lhs_base_var(to, &self.data);
             if base != u16::MAX && self.vars.is_value_const(base) {
+                // `const_report_var` — see loft#1250.
+                let report = self.vars.const_report_var(base);
                 diagnostic!(
                     self.lexer,
                     Level::Error,
                     "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                    self.vars.const_kind(base),
-                    self.vars.name(base)
+                    self.const_noun(report),
+                    self.vars.name(report)
                 );
             } else if let Some(frozen) = self.lhs_frozen_through(to) {
                 // @PLN40 Phase 2 — the write DEREFERENCES THROUGH a value-const field

@@ -153,10 +153,28 @@ every read would then pay for the check.
                   index   → key order (its tree side)
                   spatial → Morton / Z-order
                   trie    → key order (lexicographic over the text key)
+
+  (Col-Order-Sign)  a `-` on a key field is applied by the COMPARATOR and by nothing else, so
+                    exactly once.  The stored form (a red-black tree, a sorted vector) is
+                    therefore already in the declared order, and every reader walks it FORWARD:
+                    no consumer of an ordered collection re-reads `keys[i].type_nr` to decide a
+                    direction, and the iterator's reverse bit carries one fact only — did the
+                    caller write `rev(...)`.  It follows that a range names its bounds in the
+                    COLLECTION's key order (`ix[from..till]` starts at `from` and walks toward
+                    `till` whichever way the keys are declared), and that `sorted` and `index`
+                    answer identically for the same declaration.
 ```
 *Anchor:* concurrency.md `C-Order` (hash); STDLIB.md/DATABASE.md (spatial Morton). **This is the
 divergence-prone rule** (interp store-walk vs native emitted loop) — the whole reason the area needs
 pinning. `C-Order` already states the hash edge; `Col-Order` generalises it to every kind.
+
+`Col-Order-Sign` is the half that was violated rather than merely unpinned. `index` applied the
+sign a second time in two places — the iterator bit (`fill_iter`) and the range-cursor bound swap
+(`tree::range_cursors`) — and reversing a total order twice is the identity, so every query on a
+descending `index` answered the exact reverse of its declaration. One key hid it (`[-nr]` reversed
+reads as `[nr]`); two keys did not, because `[-nr, key]` reversed is `[nr, -key]`. `sorted` never
+carried either site, which is why it stayed correct and is the oracle a guard pairs against
+(loft#1267).
 
 ### 1.5 Value slices (vector / text) — `Slice-Value`
 
@@ -253,6 +271,26 @@ with a bare variant test, so a member spelled `hash<S[k]>?` — or a vector spel
 Every one of them **failed silently** — the pairing was never refused, a second independent
 collection was built instead, and `len` of the empty view is a legal value.  That is the shape
 to test for: a group's failure mode is not an error, it is a zero.
+
+**The demonstration, on real data, in one line of arithmetic.**  `tools/indexer/src/scan.loft`
+declared its distinct-tag set and its distinct-link-target set over ONE element type, so they
+were one set.  `make index` over this repo reported
+
+```
+before   1781 distinct tags   1781 link targets     ← identical, both are |tags ∪ links|
+after    1002 distinct tags    779 link targets     ← 1002 + 779 = 1781
+```
+
+Two counts reading the same number is the suspicion; the two halves summing to it is the proof,
+and it takes one line to state.  Reach for that shape whenever a group is suspected — a merged
+set and a coincidence are hard to tell apart by eye and trivial to tell apart by addition.  The
+same run shows why the zero is only half the failure mode: this group's members were both
+NON-empty and both wrong, because each walk saw the union (every link target was emitted with a
+tag bucket, and every tag with a link bucket).  A group that fails by over-filling reads as a
+plausible number rather than as a zero.
+
+Confirmed independently from a second checkout: 779 of that build's index entries are
+path-shaped link targets, matching the after-count exactly from a tree built before the fix.
 
 ⚠ **Not settled by this rule: which member HOLDS the records.**  The first-declared member is
 the holder and the rest are views.  loft#1158 predicted that a keyed-first group would need the

@@ -282,6 +282,52 @@ impl State {
         self.arguments = stack.position;
         stack.position += stack.step(4); // keep space for the code return address
         if is_empty_stub {
+            // loft#1254 — a stub with an empty body still has to RETURN something, and
+            // `add_return` only copies `size(return_type)` bytes off the frame: with
+            // nothing pushed it copied whatever the stack happened to hold.  That is the
+            // one answer `formal/operational.md` forbids outright — "never … whatever the
+            // hardware happened to leave in the register" — and it was not even stable
+            // (three runs of one program gave three integers, and a struct return indexed
+            // a record by garbage and panicked).
+            //
+            // The value a type takes when nothing chooses one is `Data::to_default`, the
+            // one home for `construct_default` (@FR-D-Scalar / D-Text / D-Coll / D-Enum /
+            // D-Rec / D-Opt) — the same answer an omitted struct field and a
+            // default-initialised local already take.  A type that HAS no default
+            // (@FR-D-NoRef) keeps the old path rather than inventing one.
+            let stub_ret = stack.data.def(def_nr).returned().clone();
+            if stub_ret != Type::Void && stack.data.has_default(&stub_ret).is_ok() {
+                // A HANDLE-carried return needs a well-formed `DbRef`, and `to_default`
+                // answers `Value::Null` for one — which pushes none of the twelve bytes
+                // `add_return` then copies, so the caller read a garbage handle and
+                // indexed a record by it ("index out of bounds: the len is 2 but the
+                // index is 8658").  `OpNullRefSentinel` is the no-allocation spelling of
+                // that null (`DbRef::NULL`), which is what `--native` already returns
+                // here, so the two backends agree.
+                //
+                // Whether a NON-nullable heap return should answer null or a
+                // default-constructed record is loft#1254 cell 2's question, not this
+                // one: that cell decides the policy for every non-nullable return, and
+                // this site follows it.  What is settled either way is that reading an
+                // unwritten frame is not an answer.
+                let heap_ret = matches!(
+                    stub_ret.base(),
+                    Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Sorted(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Radix(_, _, _)
+                        | Type::Trie(_, _, _)
+                        | Type::Enum(_, true, _)
+                );
+                let dflt = if heap_ret {
+                    Value::Call(stack.data.def_nr("OpNullRefSentinel"), Vec::new())
+                } else {
+                    crate::data::to_default(&stub_ret, stack.data)
+                };
+                self.generate(&dflt, &mut stack, false);
+            }
             self.add_return(&mut stack, start);
             data.definitions[def_nr as usize].code_position = start;
             data.definitions[def_nr as usize].code_length = self.code_pos - start;
@@ -664,13 +710,22 @@ impl State {
             // @PLN11 G2/M3.4 — Span passthrough + the two never-reachable
             // rewrite placeholders.
             ValueType::Span => {
-                // Plan-07 phase 1 step 1.20 — record the entry pc → source
-                // position so phase 3's runtime-error printer can surface
-                // `at file:line:col`, then lower the wrapped inner node.
-                self.source_spans.insert(self.code_pos, node.span_pos());
+                // Plan-07 phase 1 step 1.20 — record the pc RANGE this construct
+                // occupies against its source position, so phase 3's runtime-error
+                // printer can surface `at file:line:col` for a fault inside it.
+                //
+                // The end is only knowable here, on the far side of lowering the
+                // inner node, and it is what lets the lookup tell a pc inside this
+                // construct from one past it.  Without it every pc inherited the
+                // nearest preceding span, so a fault in an unwrapped statement was
+                // reported at an unrelated earlier one (loft#1262).
+                let start = self.code_pos;
                 // The published snapshot is now behind the table it snapshots.
                 self.published_spans = None;
-                self.generate_inner(node.span_inner(), stack, top)
+                let inner = self.generate_inner(node.span_inner(), stack, top);
+                self.source_spans
+                    .insert(start, (node.span_pos(), self.code_pos));
+                inner
             }
             ValueType::Iter => {
                 panic!("Iter node should have been rewritten before codegen")
@@ -2273,24 +2328,33 @@ impl State {
                 // `has_ref_params` proxy this fact replaced — it MISSED a
                 // callee borrowing from a visible VECTOR param, taking the
                 // plain-adopt path for a borrowed return.
+                // loft#1245 — BOTH spellings, and this is the site the LOOP case needs.
+                // A lifted inline call is declared at function scope and assigned inside
+                // the loop body, so its `Set` is a REASSIGNMENT, not a first bind, and
+                // reads `Value::Call` alone sent every fn-ref one to the plain-adopt
+                // fallthrough: `CallRef` then `PutRef`, with no `OpDatabase`, no
+                // `OpCopyRecord` and no @P290 bracket.  `--native` had it right through
+                // `output_set_witnessed`, so the two backends disagreed about the same IR.
                 if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
                     stack.function.tp(v).clone()
                     && !stack.function.is_argument(v)
-                    && let Value::Call(fn_nr, _) = value.unspan()
+                    && matches!(value.unspan(), Value::Call(_, _) | Value::CallRef(_, _))
+                    && let Some(fn_nr) =
+                        crate::use_analysis::callee_of(stack.data, stack.def_nr, value)
                     // The shared gate on the carried ownership facts — a METHOD
                     // (`t_`) takes a caller-allocated buffer exactly like a global
                     // (`n_`) does, and reading the fact for only one of them is what
                     // made a method's return adopt the buffer and then free it
                     // (loft#810).  See `Def::is_loft_defined`.
-                    && stack.data.def(*fn_nr).is_loft_defined()
+                    && stack.data.def(fn_nr).is_loft_defined()
                     && (if crate::keys::reassign_copy_enabled() {
                         // The carried A.3 fact (see the comment above).
-                        !stack.data.def(*fn_nr).return_adopts_fresh_store()
+                        !stack.data.def(fn_nr).return_adopts_fresh_store()
                     } else {
                         // Preserved raw path (LOFT_NO_REASSIGN_COPY) — the old
                         // visible-Reference/Enum proxy, kept ONLY so the fuzz
                         // gate's crash control can still reproduce the class.
-                        stack.data.def(*fn_nr).attributes().iter().any(|a| {
+                        stack.data.def(fn_nr).attributes().iter().any(|a| {
                             !a.hidden
                                 && matches!(
                                     a.typedef,
@@ -2312,7 +2376,7 @@ impl State {
                     // returned dep names a VISIBLE param), not the inline visible-dep
                     // scan; identical verdict, one fewer per-site re-derivation
                     // (siblings at 1845/2582 already read it).
-                    && !(stash_old_for_post_free && stack.data.def(*fn_nr).returns_borrowed_view())
+                    && !(stash_old_for_post_free && stack.data.def(fn_nr).returns_borrowed_view())
                 {
                     let tp_nr = stack.data.def(d_nr).known_type();
                     // Plan-04 Phase B.3.f: allocate fresh store directly
@@ -2362,8 +2426,11 @@ impl State {
                     // bracket refuses the free on a protected argument's store and
                     // allows it on a callee-minted one, so the split is decided per
                     // execution instead of by a static bit that cannot express it.
-                    let tp_val = if crate::use_analysis::call_return_frees_source(stack.data, value)
-                    {
+                    let tp_val = if crate::use_analysis::call_return_frees_source(
+                        stack.data,
+                        stack.def_nr,
+                        value,
+                    ) {
                         i32::from(tp_nr) | 0x8000
                     } else {
                         i32::from(tp_nr)
@@ -2390,7 +2457,8 @@ impl State {
                     // above (which asks whether these cover every ref argument) and with
                     // the native backend.  Two lists of the same arguments drift.
                     let ref_args: Vec<u16> =
-                        crate::use_analysis::protectable_ref_args(stack.data, value).0;
+                        crate::use_analysis::protectable_ref_args(stack.data, stack.def_nr, value)
+                            .0;
                     // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf
                     // work-ref args.  After the OpCopyRecord wrap frees
                     // the source store (via 0x8000), the caller's slot
@@ -2757,6 +2825,24 @@ impl State {
             // now aliases on BOTH backends, exactly as the undestructured read `ca = t.0`
             // already did on both.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
+        } else if let Some((join_d_nr, base)) = crate::use_analysis::callref_join_first_bind(
+            stack.data,
+            stack.def_nr,
+            stack.function.tp(v),
+            value,
+        ) {
+            // loft#1248 — a first bind from a CLOSURE call whose return may borrow.  The arm
+            // below that asks this for a direct call is keyed on `Value::Call`, so a
+            // `CallRef` — which names a runtime value rather than a definition — reached
+            // neither it nor the plain-adopt paths' deps strip.  The bind stayed an alias
+            // carrying the argument's dep, and the arm where the closure MINTED its store
+            // left it with no owner: one per call, released only when the CALLER's frame
+            // exits, so a loop reaches the store-table ceiling.
+            //
+            // Same guard as its direct-call twin, for the same reason: `OpBindOrCopy` copies
+            // when the returned store is the witness's and adopts when it is not, so the
+            // scope-exit free the deps strip enables is right on both arms.
+            self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
         } else if let Some((join_d_nr, base)) = crate::use_analysis::nullable_join_first_bind(
             stack.data,
             stack.def_nr,
@@ -2779,13 +2865,21 @@ impl State {
             self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
         } else if let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) =
             stack.function.tp(v).clone()
-            && let Value::Call(fn_nr, _) = value.unspan()
+            // loft#1245 — BOTH spellings of a call, because a `CallRef` reaching a
+            // definition is the same question as a `Call` reaching one and only the
+            // second was asked.  Reading `Value::Call` alone sent every fn-ref bind to
+            // the plain-adopt fallthrough at the bottom of this dispatch: a borrowed
+            // return was then ALIASED (a write through the bind reached the caller's own
+            // variable, which B-Copy forbids) and a minted one was left with no owner.
+            // An unresolved fn-ref answers `None` and keeps that fallthrough, which is
+            // the behaviour every fn-ref had before.
+            && let Some(fn_nr) = crate::use_analysis::callee_of(stack.data, stack.def_nr, value)
             // The shared gate on the carried ownership facts (`Def::is_loft_defined`) —
             // methods and generic monomorphs (`t_`) reach this arm too.  While it read
             // `n_` alone, a method returning through the caller's `__ref_N` fell to the
             // plain-adopt fallthrough at the bottom of this dispatch and was then freed
             // as an owner, taking the caller's buffer with it (loft#810).
-            && stack.data.def(*fn_nr).is_loft_defined()
+            && stack.data.def(fn_nr).is_loft_defined()
         {
             // Cluster A.3 (OWNERSHIP_MODEL row 102): read the carried
             // adopt-vs-copy fact.  When the callee returns a genuinely FRESH
@@ -2820,7 +2914,7 @@ impl State {
                 && base != u16::MAX
             {
                 self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
-            } else if stack.data.def(*fn_nr).return_adopts_fresh_store() {
+            } else if stack.data.def(fn_nr).return_adopts_fresh_store() {
                 // runtime tolerates double-free as a no-op so leaving
                 // __ref_N to be freed by scopes.rs's is_work_ref gate at
                 // scope exit is safe in both adoption and orphan cases.
@@ -3300,7 +3394,8 @@ impl State {
         // so OpCopyRecord's `0x8000` source-free skips them.  loft#981/#982 — ONE
         // derivation, shared with the source-free gate below (which asks whether these
         // cover every ref argument) and with the native backend.
-        let ref_args: Vec<u16> = crate::use_analysis::protectable_ref_args(stack.data, value).0;
+        let ref_args: Vec<u16> =
+            crate::use_analysis::protectable_ref_args(stack.data, stack.def_nr, value).0;
         // @PLAN51 Cluster II Step 2 — collect caller-hidden-buf work-ref
         // args for the post-wrap sentinel reset (see the reassignment
         // path's matching comment for rationale).
@@ -3338,11 +3433,12 @@ impl State {
         // above decides per execution.  Same fact, same three emitters (the sibling
         // reassignment path here, and native `generation/dispatch.rs`).
         #[cfg(not(feature = "wasm"))]
-        let tp_with_free = if crate::use_analysis::call_return_frees_source(stack.data, value) {
-            i32::from(tp_nr) | 0x8000
-        } else {
-            i32::from(tp_nr)
-        };
+        let tp_with_free =
+            if crate::use_analysis::call_return_frees_source(stack.data, stack.def_nr, value) {
+                i32::from(tp_nr) | 0x8000
+            } else {
+                i32::from(tp_nr)
+            };
         #[cfg(feature = "wasm")]
         let tp_with_free = i32::from(tp_nr);
         // Push the call result, then OpCopyRefOrNull binds it into v's slot: a

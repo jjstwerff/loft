@@ -152,16 +152,33 @@ fn scan(self: Lexer) {
   negative = false;
   l = self.data[self.index];
   if l == null {
+    // No token here at all, so leave none behind: `skip_whitespace` is what normally
+    // moves `start` up to `index`, and it is skipped while a format literal is being
+    // continued.  Without this the token just consumed stayed current at end of data, so
+    // the `}` closing a formatting hole answered `test("}")` a second time and an
+    // unterminated literal parsed as a complete function.
     self.scanned = Finished;
+    self.start = self.index;
     return;
   }
   if l == '"' || self.formatting {
-    // Constant string
-    if self.formatting { self.formatting = false; }
-    self.index += 1;
+    // Constant string.  A fresh literal starts at its opening quote, which is skipped; a
+    // CONTINUATION after a formatting hole starts at the first content character, which
+    // must still be tested below.  Skipping it too stepped over the terminator of a hole
+    // that ends the text (`"v={n}"`), so the scan ran off the end of the data and the
+    // reported column came from the loop bound rather than the source (loft#1259).
+    if self.formatting { self.formatting = false; } else { self.index += 1; }
     self.scanned = Text;
     for t in 0..60000 {
       l = self.data[self.index];
+      if l == null {
+        // The data ran out before the closing quote: this text is `Partial`, not `Text`,
+        // so `constant_text` refuses it and the caller reports an unterminated literal.
+        // Walking on instead leaves `index` far beyond `start`, and `skip_whitespace` adds
+        // that span to `pos` — which is how a 37-character source reported column 60035.
+        self.scanned = Partial;
+        return;
+      }
       if l == '"' {
         // The end of the text
         self.index += 1;
@@ -179,13 +196,10 @@ fn scan(self: Lexer) {
         return;
       }
       if l == '\\' {
-        // Encountered an escape sequence
-        self.index += 1;
-        n = self.data[self.index];
-        if n == '"' || n == '\n' {
-          // Skip escaped token or newline
-          self.index += 1;
-        }
+        // An escape hides the next character WHATEVER it is, so step over both.
+        // Skipping only a quote or a newline left the second half of `\\` to be
+        // read as a fresh escape, which then swallowed the delimiter after it.
+        self.index += 2;
       } else { self.index += 1; }
     }
     return;
@@ -201,12 +215,8 @@ fn scan(self: Lexer) {
         return;
       }
       if l == '\\' {
-        // Encountered an escape sequence
-        self.index += 1;
-        if self.data[self.index] == '\'' {
-          // Skip escaped token
-          self.index += 1;
-        }
+        // Step over the escape and the character it hides — see the text branch.
+        self.index += 2;
       } else { self.index += 1; }
     }
   } else if l == '-' {
@@ -318,32 +328,98 @@ pub fn get_single(self: Lexer) -> single? {
 pub fn is_finished(self: Lexer) -> boolean {
   self.scanned == Finished
 }
+// Keep only the FIRST character of the current multi-character token and leave the rest to
+// be scanned again; answer whether there was anything to split.
+//
+// Maximal munch is the right rule for expressions and the wrong one for nested generics:
+// the `>>` that closes `vector<vector<integer>>` is one token to the scanner and two
+// closers to the grammar.  Only the lexer owns the cursor, so only the lexer can offer the
+// other reading — see `parser::close_generic`, which asks for it at the one place the
+// grammar means a single `>`.
+
+pub fn split_token(self: Lexer) -> boolean {
+  if self.scanned != Token || self.index - self.start < 2 { return false; }
+  self.index = self.start + 1;
+  true
+}
+
+// The value of one hex digit, or -1 when the character is not one.
+fn hex_digit(c: character) -> integer {
+  v = c as integer;
+  if v >= 48 and v <= 57 { v - 48 } else if v >= 97 and v <= 102 {
+    v - 87
+  } else if v >= 65 and v <= 70 { v - 55 } else { -1 }
+}
+#pure
+// The code point of a well-formed `\xNN` whose backslash is at `i`, or -1.
+//
+// One home for the question, because `escaped` and `escape_width` must give the same
+// answer about the SAME escape: if the decoder treats `\xZZ` as a plain unrecognised
+// escape while the width still claims four characters, the two digits after it are
+// swallowed and the text silently loses them.  Both ask this.
+//
+// `as integer` cannot be used to read the digits — loft's text-to-integer parses base
+// ten only, so the previous "0" + "xNN" route answered null for every input and the
+// branch decoded nothing at all (loft#1258).
+fn hex_escape(self: Lexer, i: integer) -> integer {
+  if self.data[i + 1] != 'x' { return -1; }
+  // Both digits have to be inside this token; `self.index - 2` is its last content
+  // character, so a truncated `"\x4"` at the end reads as an ordinary escape rather
+  // than off the end of the literal.
+  if i + 3 > self.index - 2 { return -1; }
+  hi = hex_digit(self.data[i + 2]);
+  lo = hex_digit(self.data[i + 3]);
+  if hi < 0 or lo < 0 { return -1; }
+  hi * 16 + lo
+}
+// How many characters AFTER the backslash this escape consumes.
+fn escape_width(self: Lexer, i: integer) -> integer {
+  if self.hex_escape(i) >= 0 { 3 } else { 1 }
+}
 
 fn escaped(self: Lexer, i: integer) -> character {
   c = self.data[i + 1];
   if c == '"' or c == '\'' or c == '\\' or c == '\n' or c == '{' or c == '}' { c } else if c == 't' {
     '\t'
   } else if c == 'r' { '\r' } else if c == 'n' { '\n' } else if c == 'x' {
-    // ascii token
-    total = "0" + self.data[i + 1..i + 4];
-    nr = total as integer ?? 0;
-    nr as character
+    nr = self.hex_escape(i);
+    // An ill-formed `\xZZ` is an unrecognised escape like any other and stands for
+    // its own character; `escape_width` reads the same answer, so the digits after
+    // it stay in the text instead of being eaten.
+    if nr < 0 { c } else { nr as character }
   } else if c == 'u' {
-    // not implemented yet unicode token
-    0 as character
+    // Unicode escapes are not implemented.  Until they are, `\u` is an unrecognised
+    // escape like any other and stands for its own character — it must not answer NUL,
+    // for the reason spelled out below: the escaped character is stepped over now, so a
+    // NUL would DELETE the `u` and leave its digits as text (`\u0041` read as `0041`).
+    c
   } else {
-    // unknown token
-    0 as character
+    // An unrecognised escape stands for the character itself — `\q` is `q`.  It
+    // must not answer NUL: the escaped character is skipped now, so a NUL here
+    // would drop both characters and silently shorten the text.
+    c
   }
 }
 
 pub fn constant_text(self: Lexer) -> text? {
   if self.scanned != Text { return null; }
   result = "";
+  // A two-character sequence is decoded at its FIRST character, so the second one
+  // must not be walked onto: without this the decoded value was emitted and then
+  // the escape letter was emitted again as a literal, so "a\nb" read back as
+  // a-newline-n-b.  `\\` and `\"` looked correct only because the character after
+  // them was then misread as another escape whose unknown target contributed
+  // nothing — two faults cancelling, which is why the suite never saw this.
+  skip = 0;
   for i in self.start + 1..self.index - 1 {
-    if self.data[i..i + 2] == "{{" { result += '{'; } else if self.data[i..i + 2] == "}}" {
+    if skip > 0 { skip -= 1; continue; }
+    if self.data[i..i + 2] == "{{" { result += '{'; skip = 1; } else if self.data[i..i + 2] == "}}" {
       result += '}';
-    } else if self.data[i] == '\\' { result += self.escaped(i); } else { result += self.data[i]; }
+      skip = 1;
+    } else if self.data[i] == '\\' {
+      result += self.escaped(i);
+      skip = self.escape_width(i);
+    } else { result += self.data[i]; }
   }
   if self.formatting {
     self.formatting = false;
@@ -356,7 +432,10 @@ pub fn constant_text(self: Lexer) -> text? {
 
 pub fn constant_character(self: Lexer) -> character {
   if self.scanned != Character { return 0 as character; }
-  result = if self.data[self.start + 1] == '\\' { self.escaped(self.start + 2) } else {
+  // `escaped` reads the character AFTER the index it is given, so it takes the
+  // position of the backslash.  Passing the character after it read one too far —
+  // the closing quote — so every escaped character literal answered `'` (39).
+  result = if self.data[self.start + 1] == '\\' { self.escaped(self.start + 1) } else {
     self.data[self.start + 1]
   };
   self.scan();
@@ -405,4 +484,13 @@ pub fn revert(self: Lexer, to: Anchor) {
 
 pub fn get_line(self: Lexer) -> integer {
   self.line
+}
+// How far the cursor has advanced through the source, in characters.
+//
+// A parser loop that repeats a construct uses this to tell "one more item" from "the same
+// token again": if an iteration ends on the offset it started at, nothing was consumed and
+// repeating can only repeat the same error.  See `parser::stalled`.
+
+pub fn offset(self: Lexer) -> integer {
+  self.index
 }

@@ -239,7 +239,14 @@ impl DiagEntry {
     /// Rebuild an entry from [`encode_for_cache`].  `None` on any malformed line, which the
     /// caller treats as a cache MISS rather than as an absent diagnostic — a bundle that
     /// cannot reproduce what the parse said must not be served.
+    ///
+    /// `#[inline(never)]` is load-bearing: this frame is the anchor for the
+    /// `leak:decode_from_cache` line in `.github/lsan_suppressions.txt`, which covers the
+    /// bounded `intern` Box::leak below.  Inlined, the frame the leak reports would be a
+    /// caller's, and suppressing THAT name would blind the leak gate to everything else
+    /// allocated there.  Keep the two in step.
     #[must_use]
+    #[inline(never)]
     pub fn decode_from_cache(line: &str) -> Option<Self> {
         fn unesc(s: &str) -> String {
             let mut out = String::with_capacity(s.len());
@@ -382,9 +389,40 @@ pub fn strip_compact_code(line: &str) -> String {
     line.to_string()
 }
 
+/// loft#1260 — the files a LINT's cure may live in for it to be worth printing.
+///
+/// See [`Diagnostics::reaches_author`], the one home for the question.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LintScope {
+    /// The entry sits in a package: its whole directory TREE is the author's own, which is
+    /// what keeps a `loft test` loud — its entry is `tests/` and the code under review is
+    /// `src/`.
+    Project(std::path::PathBuf),
+    /// No `loft.toml` above the entry: the files BESIDE it are the author's own, and its
+    /// subdirectories are not. A bare program is `main.loft` plus the modules next to it,
+    /// so scoping to the entry file alone would drop the lints of every module but one;
+    /// a vendored dependency goes in a `lib/` below, which is not beside anything.
+    Directory(std::path::PathBuf),
+    /// An entry with no directory at all — a REPL snippet, a probe, `<live-reload>`. Only
+    /// itself: there is nowhere else it could own.
+    Virtual(String),
+}
+
+/// The comparable form of a source path: canonical when the file exists, and the path as
+/// written otherwise — a virtual source (`<probe>`, a REPL snippet, `<live-reload>`) is not
+/// openable on any platform and must still compare equal to itself.
+#[must_use]
+pub fn canonical_source_path(file: &str) -> String {
+    std::fs::canonicalize(file)
+        .map_or_else(|_| file.to_string(), |p| p.to_string_lossy().into_owned())
+}
+
 pub struct Diagnostics {
     entries: Vec<DiagEntry>,
     level: Level,
+    /// Who this compilation's lints are addressed to; `None` = everything is printed.
+    /// Set from the entry file at the start of a program parse.
+    lint_scope: Option<LintScope>,
 }
 
 impl Default for Diagnostics {
@@ -441,6 +479,60 @@ impl Diagnostics {
         Diagnostics {
             entries: Vec::new(),
             level: Level::Debug,
+            lint_scope: None,
+        }
+    }
+
+    /// loft#1260 — say who this compilation's lints are addressed to, from its entry file.
+    ///
+    /// The scope is the PROJECT (the nearest `loft.toml` above the entry), not the entry
+    /// file, and that distinction is the whole correctness of the gate: under `loft test` a
+    /// package's entry is `tests/*.loft` while the code under review is `src/*.loft`, so an
+    /// entry-file rule would silence a library's lints in exactly the run that exists to
+    /// catch them.
+    pub fn set_lint_scope_for(&mut self, entry: &str) {
+        self.lint_scope = Some(
+            crate::resolution_scope::project_root(entry)
+                .map(LintScope::Project)
+                .or_else(|| {
+                    std::path::Path::new(&canonical_source_path(entry))
+                        .parent()
+                        .filter(|d| !d.as_os_str().is_empty())
+                        .map(|d| LintScope::Directory(d.to_path_buf()))
+                })
+                .unwrap_or_else(|| LintScope::Virtual(entry.to_string())),
+        );
+    }
+
+    /// **A diagnostic reaches only whoever can act on its cure.**
+    ///
+    /// Every `warning` and `advice` loft emits names a cure that is an edit to the code it
+    /// points at — rename the field, declare the default, split the function. Pointing one
+    /// at a reader who cannot make that edit is noise by construction, and noise that reads
+    /// as *their* defect: the Parser chapter of the reference, whose whole content is four
+    /// `parser::parse` calls, printed eleven notes about the internals of two libraries the
+    /// reader did not write.
+    ///
+    /// This axis is orthogonal to the [`Level`] split. That one asks whether ignoring the
+    /// diagnostic can produce a WRONG RESULT, and so decides whether it gates CI; this one
+    /// asks WHO IS ADDRESSED. A `warning` gets the same answer as an `advice` here — a
+    /// consumer who cannot edit a dependency is not helped by learning it has a lint, only
+    /// told that something they cannot fix is wrong. Its own author still sees it, and
+    /// `LOFT_DENY_WARNINGS=1` still gates on it there, because when the author builds the
+    /// library the library IS the project.
+    ///
+    /// An unset scope answers TRUE: a lint whose audience is not established is printed
+    /// rather than dropped, because a missing diagnostic is the harder failure to notice.
+    #[must_use]
+    pub fn reaches_author(&self, file: &str) -> bool {
+        let at = || std::fs::canonicalize(file).unwrap_or_else(|_| std::path::PathBuf::from(file));
+        match &self.lint_scope {
+            None => true,
+            Some(LintScope::Virtual(entry)) => {
+                file == entry || canonical_source_path(file) == *entry
+            }
+            Some(LintScope::Directory(dir)) => at().parent() == Some(dir.as_path()),
+            Some(LintScope::Project(root)) => at().starts_with(root),
         }
     }
 
@@ -475,6 +567,12 @@ impl Diagnostics {
         line: u32,
         col: u32,
     ) {
+        // loft#1260 — the reach axis.  A lint is dropped when its cure lies outside the
+        // project being built; errors are never dropped, because a program that will not
+        // run has to say so whoever is reading.
+        if matches!(level, Level::Advice | Level::Warning) && !self.reaches_author(file) {
+            return;
+        }
         self.entries.push(DiagEntry {
             level,
             message: message.to_string(),

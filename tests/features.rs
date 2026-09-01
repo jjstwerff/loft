@@ -36,6 +36,38 @@ fn features_examples_interpret() {
         !files.is_empty(),
         "no tests/docs/features/*.loft found — run `make features-gen`"
     );
+    // loft#1238 — establish the precondition instead of assuming it.
+    //
+    // Each example runs under a 60s budget. An example that `use`s a library needs that
+    // library's cdylib BUILT, and a loft commit moves the artifact cache key (deliberately —
+    // #433), so the first run after any commit finds it stale. Under a parallel runner every
+    // process that wants it arrives at once, they queue on the one global native-build lock,
+    // and whoever is at the back is killed by its own budget having built nothing — so the next
+    // attempt starts from the same stale state and repeats it. That is this test's flake, and
+    // it is not the example being slow: the one that tripped it takes 0.1s warm, and twelve
+    // concurrent copies finish in 0.16s.
+    //
+    // `make ci` warms before the suite, and while that holds this is a no-op costing one
+    // subprocess. But a test that depends on the Makefile having warmed for it is a test whose
+    // precondition lives somewhere else — it passes or fails on invocation order, which is
+    // exactly how this reached the flake list. Warming here makes the test self-sufficient
+    // under `cargo test`, `cargo nextest`, and a bare `--test features` alike.
+    //
+    // Deliberately NOT under a timeout: a cold build legitimately takes minutes, and it happens
+    // ONCE here rather than inside some example's budget. A failure to warm is not fatal either
+    // — the examples then behave as they did before, and the timing report below says why.
+    let warm = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .args(["cache", "warm", "--from", "tests/docs/features"])
+        .output();
+    if let Ok(w) = warm
+        && !w.status.success()
+    {
+        eprintln!(
+            "note: `loft cache warm` returned {} before the feature examples — a library-using \
+             example may now pay a cold build inside its 60s budget (loft#1238)",
+            w.status
+        );
+    }
     let mut failures = Vec::new();
     // loft#1238 — time every example, and report the slowest few WITH the failure.
     //

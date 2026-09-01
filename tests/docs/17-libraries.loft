@@ -3,24 +3,30 @@
 // @NAME: Libraries
 // @TITLE: Library system — importing and using external loft modules.
 // A library is a `.loft` file you can share across projects. Place it in a
-// `lib/` directory, import it with `use name;` at the top of your file, and
-// then refer to its types and functions using the `name::` prefix. All types
-// and functions in a library are accessible — there is no way to mark something
-// as internal or hidden.
+// `lib/` directory and import it with `use name;` at the top of your file.
+// That one line does two things: it brings every `pub` name in the library into
+// your own namespace, so you can write them bare, and it gives you the `name::`
+// prefix, which reaches everything the library defines.
+// A definition without `pub` is reachable only through the prefix. So `pub` is
+// about the BARE spelling rather than about secrecy: leaving it off keeps a name
+// out of your namespace and out of any import, but `name::thing` still finds it.
 // `use` statements must come before any `fn` or `struct` definition in your
 // file. Putting a `use` after a definition is a syntax error.
 use testlib;
 // ## Constants and Enums
-// Library constants and enum variants are accessed with the `libname::`
-// prefix. You can compare, order, and convert enum values exactly as you
-// would with enums defined in the same file.
+// A library constant reads like one of your own, and so does an enum variant.
+// You can compare, order, and convert enum values exactly as you would with
+// enums defined in the same file. The `libname::` prefix is always available and
+// is what disambiguates a variant name two enums share.
 // ## Struct Construction and Field Access
-// Construct a library struct with its full namespace prefix. Omitting the
-// prefix is a parse error. Once you have a value, field access uses the plain
-// dot notation with no prefix needed.
+// A library struct is constructed like any other. For a `pub` type the prefix is
+// optional — `testlib::Point {…}` and `Point {…}` build the same value — and it
+// is what you reach for when a name of your own would otherwise win. Field
+// access never takes a prefix.
 // ## Calling Library Methods
 // Methods defined in the library are called on the value directly — no prefix
-// on the call site. Free functions (not methods) do need the `libname::` prefix.
+// on the call site. A `pub` free function is callable bare as well; the prefix is
+// how you reach one that is not `pub`, and how you say which library you meant.
 // ## Extending a Library Type
 // You can add new methods to a library type from your own file. Write the
 // `self` parameter type with the `::` separator and the compiler treats the
@@ -30,9 +36,10 @@ fn shifted(self: testlib::Point, dx: float, dy: float) -> testlib::Point {
 }
 
 fn main() {
-  // Constants from a library require the library prefix.
+  // A library constant, both ways: the prefix always works, and the bare name
+  // works because `use testlib;` brought every `pub` name into this file.
   assert(testlib::MAX_SIZE == 100, "library constant MAX_SIZE");
-  assert(testlib::MIN_SIZE == 1, "library constant MIN_SIZE");
+  assert(MIN_SIZE == 1, "the same constant, written bare");
   // Library enum variants: comparison and ordering work as normal.
   s = testlib::Ok;
   assert(s == testlib::Ok, "enum equality");
@@ -41,7 +48,7 @@ fn main() {
   assert("Warning" as testlib::Status == testlib::Warning, "text to enum");
   // Library enum values can be passed to library free functions.
   assert(testlib::status_text(testlib::Error) == "err", "free fn with enum arg");
-  // Structs are constructed with namespace prefix and accessed by field.
+  // A struct built through the prefix, and read by plain field access.
   p = testlib::Point {x: 3.0, y: 4.0 };
   assert(p.x == 3.0, "field access: x={p.x}");
   assert(p.y == 4.0, "field access: y={p.y}");
@@ -60,9 +67,13 @@ fn main() {
   assert(b.count == 1, "method scalar mutation: count={b.count}");
   b.bump();
   assert(b.count == 2, "method scalar mutation: count={b.count}");
-  // Free functions: called with the library prefix.
+  // Free functions: a `pub` one answers to either spelling.
   assert(testlib::add(3, 4) == 7, "free function add");
-  assert(testlib::add(0, -5) == -5, "free function negative");
+  assert(add(0, -5) == -5, "the same free function, written bare");
+  // A definition the library did NOT mark `pub` is reachable only through the
+  // prefix — `internal_add(3, 4)` on its own is an unknown function here.
+  assert(testlib::internal_add(3, 4) == 7, "non-pub free function via the prefix");
+  assert(testlib::INTERNAL_LIMIT == 42, "non-pub constant via the prefix");
   // Library types work as function parameter types when written with their
   // full namespace prefix in the function signature.
   // A struct with a vector field can be initialised via a struct literal,
@@ -94,10 +105,20 @@ fn main() {
   //     src/
   //       mylib.loft        library source (default entry)
   //
-  // When the interpreter searches a lib directory and finds `<dir>/mylib/`
-  // it looks for `<dir>/mylib/src/mylib.loft` automatically.
+  // The directory form is found in any search directory you NAMED — `--lib
+  // <dir>`, a path in `LOFT_LIB`, `~/.loft/lib/` — and in your own project's
+  // `lib/` once your program is itself a package, with a `loft.toml` of its own
+  // at the top. In all of those, `<dir>/mylib/` resolves to
+  // `<dir>/mylib/src/mylib.loft` on its own.
   //
-  // The optional `loft.toml` manifest supports two settings:
+  // A lone script with no manifest above it reads its `lib/` flat, so there a
+  // library must be the single file `lib/mylib.loft` — a `lib/mylib/` directory
+  // beside such a script answers "Library 'mylib' not found". Giving the script a
+  // `loft.toml` is what turns the directory form on.
+  //
+  // The `loft.toml` manifest carries the whole package declaration — name,
+  // version, dependencies, native crates, build targets. Two of its settings
+  // decide how the library above is LOADED:
   //
   //   [package]
   //   loft = ">=1.0"        minimum interpreter version required
@@ -109,21 +130,32 @@ fn main() {
   // library produces a fatal compile error describing the version mismatch.
   // If no manifest is present, the default entry `src/<name>.loft` is used.
   // ## Wildcard and Selective Imports
-  // By default, library names require the `libname::` prefix. You can
-  // import names directly into your namespace with `use lib::*` (wildcard)
-  // or `use lib::Name, Other` (selective). Only `pub`-marked definitions
-  // in the library are imported this way. Non-pub definitions remain
-  // accessible via the `lib::name` prefix.
+  // A bare `use lib;` already brings in every `pub` name, and `use lib::*` says
+  // the same thing out loud. What the other forms buy you is a say in WHICH
+  // names arrive: `use lib::Name` takes one, and `use lib::(Name, Other)` takes
+  // a group. Multiple names must be parenthesised — the flat `use lib::Name,
+  // Other` is refused ("import multiple names with parentheses"). Only `pub`
+  // definitions can be named this way; the rest stay reachable as `lib::name`.
+  //
+  // Taking only what you name is the stronger position, because it makes you
+  // immune to the library GROWING a name. A bare import and your own definition
+  // of a name the library exports are a conflict, and it is refused naming both
+  // sites; under a selective import every name you did not ask for stays yours.
+  //
+  // `use lib as short;` gives you the qualifier alone — `short::name` — and
+  // brings nothing in bare, which is the escape hatch when a name does clash.
+  // Single names alias too: `use lib::Name as N`, or `use lib::(Name as N, other)`.
   // ## Limitations
   //
   // **`use` must appear before all definitions.** If you write a function
   // first and then a `use`, the compiler reports a syntax error.
   //
-  // **`pub` controls import visibility.** Only `pub`-marked definitions
-  // are available via wildcard (`use lib::*`) or selective import.
-  // Non-pub definitions are still accessible with the `lib::name` prefix.
+  // **`pub` decides the bare spelling.** Only `pub` definitions come in bare or
+  // can be named by an import; the rest are still reachable as `lib::name`. A
+  // library therefore has no hidden half — `pub` says which names are ready to
+  // be written without ceremony, not which ones exist.
   //
   // **Native extensions.** A library can be pure `.loft`, or ship a Rust crate
-  // beside it: declare `native = "..."` in `loft.toml` and loft builds and links
-  // it for you. See PACKAGES.md for the build + binding model.
+  // beside it: declare `[library] native = "..."` in `loft.toml` and loft builds
+  // and links it for you. See PACKAGES.md for the build + binding model.
 }

@@ -528,3 +528,14 @@ fn concat_mixed_offset_elements() {
   x = u + s;
   _ = x;
 }
+
+// `limit(lo, hi)`'s upper bound is stored in `IntegerSpec::max`, a `u32`, so a range
+// lying entirely below zero has no encoding.  Refusing it is the honest answer; what it
+// must NOT do is desync the parser, which read the `-` in no branch at all and reported
+// *"Expect token )"* — a punctuation error for a bound the type system cannot carry
+// (loft#1246's measurement; the lower bound's too-wide case was fixed the same way).
+// @EXPECT_ERROR: upper bound cannot be negative
+fn limit_with_a_negative_upper_bound() {
+  b: integer limit(-200, -10) = -50;
+  _ = b;
+}

@@ -92,8 +92,9 @@ with the closure's environment in scope.
 
 ## Deviations
 
-**OPEN: 1.**
-- **D-clo-7** — a lambda's `??`-default store discarded INLINE leaks one store per call; that entry's value half and its BOUND-return leak half are both closed
+**OPEN: 2.**
+- **D-clo-7** — a lambda's `??`-default store leaks one store per call where the borrow arm's witness cannot be NAMED and the call has nothing to witness either: TWO store-bearing captures, whose return dep names `__closure` and not which slot; that entry's value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness and its literal-`null` argument are all closed (loft#1248, loft#1245)
+- **D-clo-14** — a closure's `??` at a COLLECTION return leaks its mint arm; the over-free half (the lift emptied the caller's own vector) is closed, and declining the unguarded lift was the only cure correct on both backends (loft#1257)
 
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [closures-history.md](closures-history.md).

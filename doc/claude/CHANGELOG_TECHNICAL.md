@@ -9,6 +9,72 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `#remove` inside a keyed range: an ICE, and then a skipped element (2026-09-01)
+
+Two defects, one behind the other (loft#1272).
+
+**It did not compile.** A keyed iteration has two lowerings and they name their cursor
+differently — `{loop}#iter_state` for an unbounded walk, `_iter_N` for a bounded range.
+`#remove` rebuilt the first spelling by hand and fell back to `{loop}#index` when it missed;
+a range ELIDES that local, so `add_const` measured the operand against a slot that does not
+exist and `before_stack - r` underflowed. An ICE on both backends, and on the released
+2026.8.0 the same program compiled and read a corrupt reference out of the store. The loop
+now records its cursor at the site that creates it (`Vars::set_loop_state_var`).
+
+**Then it skipped an element.** `remove` ended the walk when the SUCCESSOR of the removed
+node was `finish`, but `finish` names the last node to VISIT — `step` yields it and only then
+marks the end. So removing consecutive elements dropped one: `[1..4]` over 1..5 removing
+everything left `3` behind. The test belongs on the node removed (`cur == finish`). Invisible
+on an unbounded walk, where `finish` is `0` and the comparison can never fire, and that was
+the only shape the suite covered.
+
+Both backends carried their own copy of that decision and both carried the defect, so it now
+has one home, `Stores::remove_during_tree_iteration` — the same treatment
+`tree::range_cursors` and `vector::ordered_range_cursors` already had.
+
+
+### A descending key orders an `index` twice, so every query answers the reverse (2026-09-01)
+
+`keys::compare` reverses per descending key, so the red-black tree `tree::put` builds is already
+in the declared order and a forward walk of it IS the declared order. Two sites applied the sign
+a SECOND time: `fill_iter` XOR-ed the iterator's reverse bit when `keys[0].type_nr < 0`, and
+`tree::range_cursors` swapped which user bound sat at which end of tree order. Reversing a total
+order twice is the identity, so every query on a descending `index` — plain `for`, `rev(...)`,
+and every range form — answered the exact reverse of its declaration, on both backends, with no
+diagnostic (loft#1267).
+
+One key hid what it was: `[-nr]` reversed reads as plain `[nr]`, so it looked like the `-` was
+being dropped. Two keys showed it, because `[-nr, key]` reversed is `[nr, -key]` — the SECOND
+field came back descending though it is declared ascending.
+
+`sorted` was correct throughout and is the fix's oracle: `vector::ordered_range_cursors` reads no
+sign at all and leaves direction to its comparator. That is now the written rule
+(`formal/collections.md` `Col-Order-Sign`) — a `-` is applied by the comparator and by nothing
+else, from which it follows that a range names its bounds in the COLLECTION's key order and that
+`sorted` and `index` answer identically for the same declaration.
+
+The P98 guard had locked the compensated behaviour, and could not have caught it: it summed the
+scores over `["a".."c"]` on a descending index and read 3, which is `{a, b}` — the ascending
+answer, and a number indistinguishable from `{c}`. It asserts which records, in which order, now,
+beside its `sorted` twin.
+
+### `--dev-soft-halt` surfaces integer overflow (2026-09-01)
+
+`(E-Report)` promises the flag surfaces the recoverable faults uniformly — div0, overflow, OOB —
+and overflow was the one it missed. It is also the one with no other channel: its peers write a
+log record and overflow deliberately does not, the null being the signal, so this flag was the
+whole of its observability (loft#1265, deviation D-op-9, now closed).
+
+Reported from `checked_long!`'s `None` arm — the single place an overflow becomes the sentinel,
+and a branch that already existed to build it, so no operation that does not overflow gained a
+test. Both backends call the same `ops::` functions, so one site serves the interpreter and
+`--native` alike. The guarded peer `checked_long_nullable!` stays silent, which is the answer
+`(E-Report)` already gives that site's divide-by-zero half.
+
+The run now also ends non-zero, the way its peers do; `Stores::run_failed` is the one home for
+that question, asked by the interpreter's `main` and by both generated `fn main()` templates.
+
+
 ### A nullable element meets @PLAN52's bracket rule, and the push branch it kept alive is dead (2026-08-31)
 
 @PLAN52's rule is a blanket requirement on the SPELLING — `vector += elem` is refused whatever

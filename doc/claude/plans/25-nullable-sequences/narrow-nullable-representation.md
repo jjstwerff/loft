@@ -3,7 +3,7 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Narrow-nullable representation — the deferred family (post-@PLN25-core)
+# Narrow-nullable representation — the deferred family (post-@PLN25-core) — ALL THREE CLOSED
 
 The null/dense value model landed (see [RESUME.md](RESUME.md); `formal/types.md` at
 0 open deviations). This file records the one **residual family** it left behind: how a
@@ -107,24 +107,48 @@ matrix (non-nullable `vector<u8>`, `vector<boolean?>`/`character?`, field reads)
 Two forks reverted here rather than half-build; this wants a FRESH focused session starting
 from the read-side hypothesis, not another one-shot on saturated context.
 
-## 3. LOW — narrow field sentinel collision
+## 3. LOW — narrow field sentinel collision — ✅ CLOSED (2026-08-31, loft#1249), and it was not a collision
 
-A `u8?` field storing its **extreme** value reads back as `null`: `255 → null` (255 is
-the in-band null sentinel); likewise `u16?`=65535, `i8?`=-128, `i16?`=-32768. The extreme
-value doubles as the sentinel, so it is unrepresentable-as-a-value in the nullable form.
+A `u8?` field storing its **extreme** value reads back as `null`: `255 → null`; likewise
+`u16?`=65535, `i8?`=-128, `i16?`=-32768. Filed here as a storage limitation whose real fix was
+"a wider packed representation that reserves a sentinel *outside* the value range".
 
-**Why low priority:** the extreme is rarely the intended payload, the behaviour is
-consistent across backends, and the real fix (a wider packed representation that reserves
-a sentinel *outside* the value range) is the same deep storage change as items 1–2 — so
-this rides along with them rather than earning its own effort.
+**It closed the other way, and the rules had said so all along.** `formal/types.md`
+§ Representation states that the narrow sentinel is *"excluded from `τ?`'s non-null range"* and
+that *"a nullable narrow type cannot store its one reserved value"* is a **documented
+limitation** — statements about the TYPE. So the field was the only position implementing the
+rule, and this item's premise (that 255 ought to be a `u8?` value and the field was failing to
+hold it) inverted it. Reading the type off the REPRESENTATION is what produced the inversion: a
+`u8?` VALUE is carried in a full-width i64, so the extreme survived in a local, a parameter, a
+return and a cast — and died on the way into a field. `formal/types.md` names that step as the
+invalid one: how a null is stored *"follows from the base type and is **not part of the
+type**"*.
+
+The cost of getting it backwards was larger than this item estimated, because the extreme is not
+only written deliberately: `n = 250; t.a = n + 5` is ordinary in-range arithmetic whose result
+IS the sentinel, and it reached the field as `null` with nothing to say so.
+
+**Closed by making the TYPE carry the reservation**, not by widening the storage.
+`IntegerSpec::usable_min` / `usable_max` already answered which specs spend an edge — only a
+fixed 1- or 2-byte width whose range exactly fills it, so an `i32?` has a spare code and an
+`integer limit(0,255)?` widens to get one — and the range-guard seams now ask it.
+
+It needed one prerequisite that is not visible from here: **`Type::Optional` on a write target
+means two different things**, because `(N-Domain)` makes an index expression nullable for the
+MISS, so an element write on a non-null `vector<u8>` presents its target as `u8?`.
+`expressions::target_holds_null` separates them; until it existed, every seam-level fix spent
+the sentinel on slots that had never reserved one — measured, in published `hex_field`.
+
+Guards: `tests/scripts/1249-a-nullable-narrow-sentinel-is-not-a-value.loft` (the sweep, with
+both rejected cures as cells) and `tests/scripts/25-narrow-nullable-field-sentinel-collision.loft`
+(this item's own file, an `@EXPECT_FAIL` that is now a positive guard).
 
 ## Relationship
 
 Items 1 and 2 are fixed. Both turned out to be bounded, separable fixes — NOT the deep
 storage redesign first feared: item 1 a store-write-width bug, item 2 a single missing
 type-fact threaded to the op selector (the reserved-sentinel encoding a field already had,
-extended to the vector element). **Item 3 is the only residual** — a narrow field storing
-its EXTREME value reads back as null (the extreme doubles as the in-band sentinel). Its real
-fix is a wider packed representation that reserves a sentinel *outside* the value range; it is
-low priority (the extreme is rarely the intended payload, behaviour is consistent across
-backends) and stands alone now that item 2 no longer needs it.
+extended to the vector element). **Item 3 closed 2026-08-31 and this family has no residual left** — and it closed by reading the
+rules rather than by the deep storage redesign all three items were first feared to need. All
+three turned out bounded: a store-write width, one type-fact threaded to an op selector, and a
+reservation that belonged to the type rather than to the storage.

@@ -564,6 +564,14 @@ jobs:
         # Best-effort: a package that fails to build here is not fatal — the test that
         # needs it retries and reports properly.  `|| true` keeps a warm-up from turning a
         # green suite red.
+        #
+        # `shell: bash` because this body IS bash — a glob `for`, `[ -f … ]`, a subshell and
+        # `./target/release/loft`.  Windows defaults to PowerShell, which parses `for d in …`
+        # as its own `for` and stops at *"Missing opening '(' after keyword 'for'"*, so the
+        # step failed before running a single build and took `Install cargo-nextest` and
+        # `Test` down with it.  Invisible until now only because the job died two steps
+        # earlier, at Build.
+        shell: bash
         run: |
           set -u
           # Half 1 — the in-tree native test packages, sequentially.

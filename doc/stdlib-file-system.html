@@ -45,9 +45,10 @@
   NotFound,
   PermissionDenied,
   IsDirectory,
+  NotEmpty,
   Other,
 }</code></pre>
-<p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
+<p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), NotEmpty when rmdir() is given a directory that still holds entries, and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
@@ -105,6 +106,10 @@
 </div>
 <div class="item">
 <pre><code>pub fn mkdir_all(path: text) -&gt; FileResult fs#update</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn rmdir(path: text) -&gt; FileResult fs#update</code></pre>
+<p>Remove the EMPTY directory `path`.  Returns FileResult.NotEmpty when it still holds entries, NotFound when it does not exist, and Other when `path` is a file rather than a directory. Empty directories only: a recursive removal is a separate decision, and the walk is writable here — list_dir() the children, delete() the files, rmdir() the directory, deepest first. Use to undo a mkdir(), or to clean up a scratch directory a program made.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_dir(path: text) -&gt; boolean fs#read</code></pre>

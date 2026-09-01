@@ -36,9 +36,12 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> &amp;&amp; <span class="nm">3</span> &gt; <span class="nm">2</span>), <span class="st">"First false → whole 'and' is false"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> || <span class="nm">3</span> &gt; <span class="nm">4</span>), <span class="st">"Both false → 'or' is false"</span>);</code></pre>
 <h2 id="null-in-boolean-context">Null in boolean context</h2>
-<p>Division by zero (and other failed operations) produce null when defended with <code>?? null</code> (or <code>if result != null { ... }</code> after the assignment).  Null in a boolean context is treated as false, so <code>!</code> is true.  This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... } Even without <code>?? null</code>, a bare <code>1 / 0</code> never halts: it yields null and logs a warning, behaving the same everywhere — development, test, and production. The <code>?? null</code> above just marks the case as handled, which suppresses that warning.</p>
+<p>Division by zero (and other failed operations) produce null when defended with <code>?? null</code> (or <code>if result != null { ... }</code> after the assignment).  Null in a boolean context is treated as false, so <code>!</code> is true.  This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... } Even without <code>?? null</code>, a bare divide never halts: it yields null and execution continues, the same everywhere — development, test, and production.</p>
+<p>The <code>?? null</code> is not what makes that safe, and it silences nothing. loft warns about a divisor that is a literal 0 in your source, while READING your code, and it warns whether or not you wrote <code>?? null</code>; a divisor that is only zero at RUN time is not warned about at all. What <code>?? null</code> changes is the VALUE: loft prints the reason it knows, so an undefended result formats as <code>null(/0)</code>, and coalescing it to a plain null throws that reason away. Reach for <code>?? null</code> when you want the bare null, and for <code>?? &lt;value&gt;</code> when you want a number — not to quiet a warning.</p>
 <pre><code>  zero = <span class="nm">0</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / zero ?? <span class="kw">null</span>), <span class="st">"null from division-by-zero is false-like when defended"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12 / zero}"</span> == <span class="st">"null(/0)"</span>, <span class="st">"an undefended result carries its reason"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{12 / zero ?? null}"</span> == <span class="st">"null"</span>, <span class="st">"…and `?? null` trades the reason for a plain null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12</span> &gt; <span class="nm">0</span>, <span class="st">"positive integer is true"</span>);</code></pre>
 <h2 id="bitwise-operators">Bitwise operators</h2>
 <p>While <code>and</code>/<code>or</code> work on true/false values, bitwise operators work on the individual bits of an integer. They are useful for flags, masks, and low-level data manipulation.</p>
@@ -112,12 +115,20 @@ fn main() {
   // '!' is true.  This lets you write guard clauses without a separate
   // null-check syntax:
   //   if !result { ... handle missing value ... }
-  // Even without `?? null`, a bare `1 / 0` never halts: it yields null and
-  // logs a warning, behaving the same everywhere — development, test, and
-  // production. The `?? null` above just marks the case as handled, which
-  // suppresses that warning.
+  // Even without `?? null`, a bare divide never halts: it yields null and execution
+  // continues, the same everywhere — development, test, and production.
+  //
+  // The `?? null` is not what makes that safe, and it silences nothing. loft warns
+  // about a divisor that is a literal 0 in your source, while READING your code, and
+  // it warns whether or not you wrote `?? null`; a divisor that is only zero at RUN
+  // time is not warned about at all. What `?? null` changes is the VALUE: loft prints
+  // the reason it knows, so an undefended result formats as 'null(/0)', and coalescing
+  // it to a plain null throws that reason away. Reach for `?? null` when you want the
+  // bare null, and for `?? &lt;value&gt;` when you want a number — not to quiet a warning.
   zero = 0;
   assert(!(12 / zero ?? null), "null from division-by-zero is false-like when defended");
+  assert("{12 / zero}" == "null(/0)", "an undefended result carries its reason");
+  assert("{12 / zero ?? null}" == "null", "…and `?? null` trades the reason for a plain null");
   assert(12 &gt; 0, "positive integer is true");
   // ## Bitwise operators
   // While 'and'/'or' work on true/false values, bitwise operators work on

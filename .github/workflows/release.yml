@@ -22,7 +22,13 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
           - target: x86_64-apple-darwin
+            # macos-14 is Apple Silicon, so this leg CROSS-builds and the bundle it
+            # produces cannot run natively on the runner that made it.  Declared here
+            # rather than discovered in the smoke step: which legs can run their own
+            # artifact is a fact about the matrix, and a skip nobody chose is the kind
+            # that goes unnoticed.
             os: macos-14
+            cross: rosetta
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
@@ -41,11 +47,11 @@ jobs:
       # Windows runs the script under Git-Bash and gets zip from chocolatey.
       - name: Install packaging tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools zip
+        run: sudo apt-get update && sudo apt-get install -y musl-tools zip unzip
 
       - name: Install packaging tools (Windows)
         if: runner.os == 'Windows'
-        run: choco install zip -y
+        run: choco install zip unzip -y
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -64,6 +70,103 @@ jobs:
       - name: Build self-contained release bundle
         shell: bash
         run: scripts/make-release.sh ${{ matrix.target }}
+
+      # Run the bundle we just built.  Everything before this proves the SOURCE
+      # compiles; these are ARTIFACT properties, which only exist once the zip does —
+      # so the tag pipeline is the only place they can be checked at all, and until
+      # now it uploaded four bundles without executing a byte of one.
+      #
+      # It unpacks the ZIP rather than reusing make-release.sh's staging directory:
+      # the zip is what a user downloads, and the round-trip is part of what is under
+      # test (a lost executable bit is invisible in the stage).
+      #
+      # The stderr assertion is what keeps this from being vacuous.  A loft program
+      # that cannot write its output file prints `... — write skipped` and still
+      # exits 0, so an exit-code-only smoke passes on a bundle whose examples do
+      # nothing — which is exactly what `examples/files.loft` did on Windows while it
+      # hardcoded `/tmp`.  All seven examples are stderr-clean, so any byte there is
+      # a real diagnostic from a program we ship.
+      - name: Smoke-test the bundle
+        shell: bash
+        env:
+          # CLAUDE.md § bound ad-hoc runs.  The examples finish in milliseconds; this
+          # only bounds a hang, so a stuck leg fails instead of burning the job clock.
+          LOFT_TIMEOUT: 60
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="loft-$version-${{ matrix.target }}"
+          exe="bin/loft"
+          case "${{ matrix.target }}" in *windows*) exe="bin/loft.exe";; esac
+
+          # `make-release.sh` names the bundle from Cargo.toml while the tag names this
+          # variable, so a version bump that never reached the manifest lands here as a
+          # missing file.  `gen-toolchain-entry.py` catches the same mismatch, but only
+          # after all four legs have built; saying it plainly here is the cheaper half.
+          if [ ! -f "dist/$name.zip" ]; then
+            echo "no dist/$name.zip — the tag says $version, but the bundle is named" >&2
+            echo "from Cargo.toml, which says $(grep -m1 '^version = ' Cargo.toml)." >&2
+            ls dist/ >&2
+            exit 1
+          fi
+
+          # A leg that cross-builds cannot run its own artifact without an emulator.
+          # Reported loudly and skipped rather than failed: no release should be
+          # blocked because a runner image dropped Rosetta.  The manual per-release
+          # checklist carries the bundle this leaves unproven — `make release-checklist`.
+          if [ "${{ matrix.cross }}" = "rosetta" ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "::warning title=Bundle smoke skipped::${{ matrix.target }} is cross-built on an arm64 runner and Rosetta 2 is unavailable — this bundle was NOT executed.  Run it by hand before publishing."
+            echo "### :warning: Bundle smoke SKIPPED — ${{ matrix.target }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "Cross-built on an arm64 runner with no Rosetta 2.  **This bundle has not been run.**  Smoke it by hand on an Intel Mac before publishing the draft." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          rm -rf smoke && mkdir smoke
+          unzip -q "dist/$name.zip" -d smoke
+          logs="$PWD/smoke-logs"; mkdir -p "$logs"
+          cd "smoke/$name"
+
+          # 1 — the binary runs at all, and it is the version the tag claims.  A bundle
+          #     named for one version carrying the binary of another is the failure the
+          #     hashes cannot see: every digest would be internally consistent.
+          got="$("./$exe" --version)"
+          if [ "$got" != "loft $version" ]; then
+            echo "version mismatch: tag says 'loft $version', binary says '$got'" >&2
+            exit 1
+          fi
+          echo "  ok  $got"
+
+          # 2 — every file the bundle shipped still hashes to its manifest, and nothing
+          #     unlisted sits in default/.  Exit 2 ("nothing to verify") fails here as
+          #     surely as exit 1: a bundle with no SHA256SUMS is a packaging bug, and
+          #     `set -e` is what keeps "could not check" from reading as a pass.
+          "./$exe" verify-self
+
+          # 3 — the programs we ship actually run under the mode QUICKSTART documents.
+          #     `--interpret` is the offline runtime: the whole point of the bundle is
+          #     that it needs nothing else, and `--native` would shell out to a rustc
+          #     the downloading user may not have.
+          for f in examples/*.loft; do
+            base="$(basename "$f")"
+            if ! "./$exe" --interpret "$f" >"$logs/$base.out" 2>"$logs/$base.err"; then
+              echo "$base exited non-zero:" >&2
+              cat "$logs/$base.err" >&2
+              exit 1
+            fi
+            if [ ! -s "$logs/$base.out" ]; then
+              echo "$base produced no output — it ran and did nothing" >&2
+              exit 1
+            fi
+            if [ -s "$logs/$base.err" ]; then
+              echo "$base wrote to stderr — a shipped example must be diagnostic-free:" >&2
+              cat "$logs/$base.err" >&2
+              exit 1
+            fi
+            echo "  ok  $base ($(wc -c <"$logs/$base.out" | tr -d ' ') bytes)"
+          done
+
+          echo "### Bundle smoke passed — ${{ matrix.target }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$got\`, manifest verified, $(ls examples/*.loft | wc -l | tr -d ' ') examples run under \`--interpret\`." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

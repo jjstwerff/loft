@@ -577,6 +577,23 @@ requires one on every file added under `tests/scripts/`, against the ratchet in
 `tests/falsified.baseline`; `// @falsified-at: none — <reason>` is the honest opt-out for a
 file that genuinely cannot fail on any earlier build.
 
+⚠ **Two shapes it cannot score, and both report INERT — which reads as "your guard measures
+the wrong thing" when the truth is "this tool cannot see this kind of fix".**
+
+*A guard with no `main`.*  `falsify` runs the file as a PROGRAM, so a file whose cells are
+each their own entry point (the `tests/scripts/` convention) runs NOTHING there and reports
+`0|0` on both sides.  The tell is **zero assertion failures on the CONTROL** — a real control
+almost always has some.  Give such a guard a `main()` that calls its cells; the suite runner
+is happy either way.
+
+*A fix in a `lib/*.loft` library.*  `falsify` swaps the BINARY and passes `--path <worktree>/`
+for the stdlib, but `use <name>` resolves to the repo-relative `lib/<name>.loft` — strace shows
+the process opening that literal path — so the control run loads the CURRENT, fixed library and
+both sides agree.  `--lib` does not redirect it either: a deliberately corrupted copy behind
+`--lib` changed nothing.  Verify by hand instead — restore the library from the ref in place,
+run the guard, restore it byte-identically — and record THAT in `@falsified-at` rather than the
+line the tool prints.  `the-lexer-decodes-an-escape-once.loft` is the worked example.
+
 **Why a record and not just a habit.** Four distinct channels reported success while
 measuring nothing in a single afternoon (QUALITY.md § B6m), and two defects passed a full
 green gate the same day:
@@ -1361,6 +1378,14 @@ Configuration:
 | Env var | (off) | `LOFT_TIMEOUT=<secs> loft <program.loft>` |
 | Auto-arming under `--tests` / `loft test` | **on, 300s** | `loft --tests <file>` arms 300s unless explicitly overridden |
 
+⚠ **`--tests` takes its path as the next NON-FLAG argument, and it only steps over
+`--native`, `--no-warnings` and `--deny-warnings` on the way.** `--interpret` is not
+in that list, so `loft --tests --interpret <file>` does not run `<file>` — the path
+stays at its default `.` and the WHOLE TREE runs, `target/` included, for many
+minutes. Put the backend flag first (`loft --interpret --tests <file>`) or leave it
+off. The tell is a single-file run that does not finish; the parse site is the
+`--tests` arm in `src/main.rs`.
+
 Implementation lives in `src/timeout.rs` (watchdog thread, deadline atomics,
 breadcrumb store) + checkpoint calls scattered through `src/state/mod.rs`
 (interpreter dispatch), `src/codegen_runtime.rs` (`cr_check_deadline()` injected
@@ -1389,7 +1414,17 @@ continue.  Full closure record at
    annotations.  Unexpected errors fail the test; unexpected warnings are logged
    but tolerated.
 3. If the file has `@EXPECT_ERROR` annotations, execution is skipped (the compiler
-   can't produce valid bytecode for a file with intentional parse errors).
+   can't produce valid bytecode for a file with intentional parse errors).  Since
+   loft#1242 the RUST suite does better than skipping: it attributes each error to its
+   enclosing function, blanks that cell and re-parses, so a refusing cell and a running
+   cell share a file and both are checked.
+
+   ⚠ **The CLI does not do that peel.** `loft --tests <file>` on a mixed file runs the
+   refusal cells and SKIPS every running one, silently — a deliberately broken assertion
+   in such a file still reports `ok`.  So a guard verified with the documented CLI command
+   has had only half of itself checked.  Either verify a mixed guard through
+   `cargo nextest --test wrap loft_suite`, or **keep the two kinds in separate files**,
+   which is what the two `the-reference-par-…` guards do and why they are a pair.
 4. Runs `scopes::check` and `byte_code` inside `catch_unwind`.  If the compiler
    panics and the file has `@EXPECT_FAIL` annotations, the panic is tolerated.
 5. Discovers all zero-parameter user functions as entry points.  If `main` exists,
@@ -1436,6 +1471,27 @@ or removed kept passing.  When that was measured, **56 of the 167 `@EXPECT_ERROR
 annotations in the tree were inert** (loft#929).  Both are now fatal, and the check runs
 even when the file produced NO diagnostics at all — the other way an expectation went
 unlooked-at.
+
+The rule is per ANNOTATION, not per file, and that distinction is the whole of it.  An
+annotation written above a `fn` binds to that function; only one written ahead of every
+`fn`/`struct`/`enum` is file-level.  Both kinds are scored by the same predicate — the
+declared substring must appear in some error the file produced — because a per-function
+site that asked instead whether the file produced *any* error credited every annotation in
+a file that produced one anywhere (loft#1261).
+
+Two directions have to hold, and only together do they mean anything:
+
+* **every ERROR is claimed** by some annotation — this is what catches a diagnostic that
+  was reworded, since the new text matches nothing and is reported as unexpected;
+* **every ANNOTATION is matched** by some error — this is what catches a refusal that
+  stopped being emitted at all.  Nothing else can: the annotation goes unmatched while
+  every error present is still claimed, so the file looks exactly like one that passed.
+
+The second is the one worth the machinery.  A guarantee lapses, the annotation asserting it
+survives, and a suite checking only the first direction goes on reporting that the
+guarantee holds.  `tests/expectation_credit.rs` pins both, and its control row pins that a
+file whose expectations are genuine is still green — without which a harness that refused
+every annotated file would satisfy the rest.
 
 ### An error fixture asserts ONE pass, never both
 
@@ -2749,6 +2805,26 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**An ad-hoc `--native` run LINKS `libloft.rlib`, and `cargo build --bin loft` does not
+rebuild it.** So the loop *edit → `cargo build --bin loft` → `loft --native probe.loft`*
+compiles the probe with the NEW compiler and links the OLD library, and the answer reads as a
+measurement. Measured 2026-09-01: a whole native verification of a store-lifetime fix was
+taken this way, looked green, and the regression it hid — `1114`'s named twin reading `7` from
+a recycled slot after a capture was freed — surfaced only from `make ci`.
+
+The tell is what makes it convincing rather than suspicious: **`--interpret` runs inside the
+binary and is always current, so the two backends "agree" precisely because one of them is not
+being tested.** That defeats the repo's own *"verify on BOTH backends"* rule by making the
+cheap way to obey it dishonest — an agreement oracle is only as good as the guarantee that
+both sides are live, and a stale rlib silently turns a differential test into a single-backend
+one that reports as a double.
+
+`make check-rlib` is a one-second pre-flight that says so, and it is worth running before
+treating ANY ad-hoc `--native` result as evidence, not only before a bare `cargo test`. The
+iteration loop for codegen or store-lifetime work is `cargo build --release --lib --bin loft`.
+Note this is NOT the native artifact cache, which keys on `BUILD_ID` and flips correctly on a
+source change — it is the rlib alone.
+
 **A CONTROL cell scored in the same file as the thing it controls can blank every channel
 `falsify.sh` reads.** A control usually fails on the pre-fix build too — that is what makes it a
 control — and if it fails LOUDLY it fixes the file's exit code at the same value on both trees.
@@ -2765,11 +2841,73 @@ another, whose `@falsified-at` records the diagnostic identity instead and says 
 mechanism dies outright still fails an `@EXPECT_ERROR` file on its own unmatched annotation, so
 the control's job is often already done by the harness.
 
-⚠ **`make falsify` cannot render a verdict for an annotation-scored file at all.** A passing
-`@EXPECT_ERROR` guard exits 1, which its exit channel reads as *"THIS TREE IS NOT CLEAN"* — so
-the tool prints NOT FALSIFIED for a guard that is working. Read the control/here pair it prints
-(0 → 1 is the movement you want) and record the real gating channel, `check_diagnostics` in
-`tests/wrap.rs`, in the `@falsified-at` note.
+**`make falsify` scores an annotation-gated file through its EXPECTATIONS, not its exit.** A
+passing `@EXPECT_ERROR` guard exits 1, so the exit channel reads *"THIS TREE IS NOT CLEAN"* on
+both trees and can never move — which is why the tool used to print NOT FALSIFIED for a guard
+that was working. loft#1224 added the `refusals` and `expect` columns for exactly this, so the
+verdict can now come off a channel that moves: `interpret expectations matched 4/6 -> 6/6` is a
+falsification, and the unmatched cells name themselves.
+
+**And the whole file is scored, because the run goes through the SUITE (loft#1253).** An
+annotation-scored guard used to be run as a plain program, on the reasoning that only a direct
+run PRINTS the diagnostic being compared. True, and it does not follow: `Parser::parse` runs
+pass 2 only when pass 1 finished clean, so ONE pass-1 refusal silences every pass-2 diagnostic
+in the file, and a guard mixing the two scored `expect 1/5` with all five cells matching — a
+number not merely incomplete but readable as its own opposite. `tests/wrap.rs` has peeled that
+since loft#1242 (attribute each error to its function, blank that cell, re-parse, check the
+UNION), so `falsify.sh` asks the suite instead of re-deriving it. Under `--tests` the EXIT
+channel moves as well: a file whose declared errors all occur exits 0, one with an unmatched
+declaration exits 1. The column now reads `FAIL/6 -> 6/6` — the suite's verdict and a declared
+count, never a guessed fraction, because a guessed fraction is what did the damage.
+
+**The GATE has the same failure mode as a guard, and its verdict line is the channel.**
+`make ci` printed `CI-RESULT: ALL GATES PASSED` beside `error: could not compile` — its clippy
+phase had failed, the run continued into the tests, and the success line was emitted anyway.
+Reading that line, or the `4537/4537` count beside it, measures the test phase alone. Check
+`grep -c "^error" result.txt` as well; CI_BUDGET.md § `CI-RESULT` carries the detail and the
+`-D warnings` half (a bare `cargo clippy` does not show you what the gate denies). The general
+form is the one this section is about, one level up: **a channel that reports success while
+measuring nothing is not less likely because the channel is the gate.**
+
+**A doc-comment lands on the NEXT item, so an insert between a doc and its function silently
+re-parents it.** Three times in one day: `lhs_base_var`'s and `declared_range`'s docs had both
+drifted onto `range_default`, and fixing that I twice created the same thing — a new helper
+inserted above `default_native_value` and above `construct_move_rewrite` took their docs with
+it. The reader then lands on a function described by someone else's paragraph, and nothing
+fails. `clippy::doc_lazy_continuation` catches only the sub-case where the stolen doc ends in a
+list item. **When inserting a function, put it after the previous item's `}` and before the next
+item's doc — not before the doc you happen to be reading.**
+
+⚠ **`FAIL/1` on a guard the suite runs green was the READER of that column, not the guard.** The
+suite pluralises its own noun — "1 expected error", "6 expected errors" — and the pattern that
+scraped the count matched only the plural, so every guard declaring exactly ONE expectation
+scored `FAIL/1` on both trees while passing. Twenty-four of the corpus's guards declare exactly
+one. Fixed 2026-09-01; the lesson generalises past the regex, because the column a reviewer
+consults to find out whether a guard is live is the last place an unread failure can hide.
+
+**A boolean prints `false` for every byte that is not `1`.** So a garbage `u8` in a boolean
+slot renders exactly like the right answer, `!b` reads `true` for it, and only `b == false`
+separates them — the two spellings a reader reaches for first are the two that hide it.
+Measured on loft#1254's empty-body stub, where the value printed `false` on both backends
+while `b == false` was FALSE on the broken one. **Assert the COMPARISON, not the rendering**,
+whenever the subject is a boolean; a guard grepping stdout for `false` passes on the defect.
+The same caution reads across to `character` (codepoint 0 renders as nothing) and to any type
+whose formatter maps several bit-patterns onto one glyph.
+
+**Two `@EXPECT_ERROR` cells declaring the IDENTICAL substring make each other vacuous.** The
+suite matches declarations against the UNION of every parse round (loft#1242), not cell by
+cell, so either annotation consumes either diagnostic: corrupt one and the other still
+satisfies the file. Measured — a guard's two `const` locals were both named `u`, so
+`Cannot modify const variable 'u'` was declared twice, and the cell added for loft#1252 passed
+while proving nothing. **Give each cell a distinguishable subject** (rename the variable, the
+function, the field) so its declared substring can only be satisfied by its own diagnostic.
+The hand check below is what finds this; reading the file does not, because two cells that
+differ in the shape being tested can still be identical in the sentence the compiler prints.
+
+**A guard of expected failures still needs its non-vacuity proved by hand**, and falsify cannot
+give you that in either direction: replace each expected substring in turn with a word the
+compiler never prints, check the suite fails, restore it. Five for five is the proof; the
+`@falsified-at` note is the place to record that you ran it.
 
 **The fallback has the same shape as the wrong answer.** `b.c ?? []` on a nullable
 collection field took the wrong branch and answered the empty field: length 0, which is
@@ -2792,6 +2930,30 @@ the probe point sat where the camera missed the target anyway, so it answered `-
 without the guard. The cell asserted the right conclusion from a condition that was never
 load-bearing. **Assert the precondition first** — that the mark IS under the point — so the
 only thing left saying no is the guard under test.
+
+**A control reads the same on both trees for OPPOSITE reasons.** The "does not fire" trap has a
+harder sibling: a control cell whose reading is identical before and after, arrived at by two
+different mechanisms, so it can never say which tree it is on. A cell written for loft#1241 —
+*"with the append inside a loop the fold is declined, so the local must keep its slot"* — reads
+"slotted" on the fixed build because the fold is declined, and reads "slotted" on the broken one
+because the fold happened and left a stale dep behind. Passing on both, it is a control in name
+only. Before writing a control, name what it reads on the CONTROL tree and check that against the
+build, exactly as for the guard itself; where the two readings coincide, say so and put the
+control where it can differ (that one moved to the `.loft` guard, which scores the ANSWER and
+falsifies with six assertion failures on the control build).
+
+**Every cell reaches the same SEAM.** A guard can sweep values, types and directions
+thoroughly and still ask one question, because all of its cells enter the machinery at the
+same place. `tests/scripts/25-nullable-narrow-implicit-checked.loft` pins the implicit
+checked narrowing into a nullable narrow target across four functions, an `if` in each,
+in-range and out-of-range arms and two source types — and every one of them is a RETURN.
+A return, an argument and a struct-literal field all reach that rule through `convert`; an
+annotated local assignment does not reach `convert` at all. So `d: u8? = p + 10` kept a
+value outside its own declared range for seven weeks under a green guard whose author had
+plainly enumerated (loft#1246). **Ask a guard which SEAM each cell enters, not only which
+value it carries** — the seams a store can enter are countable (local, field, element,
+struct literal, argument, return, compound), and a guard that names them is checkable
+against that list, while one that varies values inside a single seam is not.
 
 **The predicate has no reachable negative.** A predicate that cannot be false in your
 program cannot be wrong in a way anything notices. `document.fonts.check()` answers *true*

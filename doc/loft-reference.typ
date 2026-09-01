@@ -991,7 +991,7 @@ Downside Python's \*\* additionally handles complex numbers, and its three-argum
 
 = Keywords
 
-This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified with an assert so you can see the exact expected result.
+This page covers the building blocks that shape how your program makes decisions and repeats work: conditions, loops, breaks, and a few loop helpers that make common patterns shorter. Every example is verified: most with an assert naming the exact expected result, and the first with a panic that would fire if the rule it shows did not hold.
 
 ```rust
 fn main() {
@@ -1026,7 +1026,7 @@ Text enclosed in double quotes can contain expressions inside curly braces — t
 
 === if as an expression
 
-Every block in Loft produces a value — the last expression inside it. That means you can use 'if/else' on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed.
+An 'if', a 'match', and a bare '{ }' block all produce a value — the last expression inside them. That means you can use 'if/else' on the right-hand side of an assignment, picking between two values based on a condition. No ternary operator needed. Loops are the exception: 'for' and 'while' are statements, so 'x = for i in 1..3 { i }' does not compile.
 
 ```rust
   b = if a == 13 {
@@ -1059,9 +1059,23 @@ Every block in Loft produces a value — the last expression inside it. That mea
   assert(t == 54321, "Result was {t} instead of 54321");
 ```
 
+=== The other loop: while
+
+Loft has two loop statements: 'for', which walks a range or a collection, and 'while', which repeats as long as its condition holds. A 'for' over a range carries its own upper bound, so it is the one to reach for; a 'while' does not, and 'while true { }' runs until something stops it. Because nothing bounds a 'while', its body must move the condition towards false — here 'n += 1' is what ends the loop. This is the same sum as the 'for' above, written the other way.
+
+```rust
+  n = 1;
+  t = 0;
+  while n <= 5 {
+    t += n;
+    n += 1;
+  }
+  assert(t == 15, "while summed to {t} instead of 15");
+```
+
 === Nested loops and break
 
-Loft has two loop statements: 'for', which walks a range or a collection, and 'while', which repeats as long as its condition holds. A 'for' over a range carries its own upper bound, so it is the one to reach for; a 'while' does not, and 'while true { }' runs until something stops it. 'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar\#break'. Here x\#break leaves both loops when the product x\*y reaches 16.
+'break' exits the nearest enclosing loop immediately. To exit an outer loop from inside an inner one, write 'outerVar\#break'. Here x\#break leaves both loops when the product x\*y reaches 16.
 
 ```rust
   b = "";
@@ -1076,7 +1090,7 @@ this breaks the inner y loop
 ```rust
       }
       if x * y >= 16 {
-        x# break;
+        x#break;
       }
       if len(b) > 0 {
         b += "; ";
@@ -1131,7 +1145,7 @@ A for loop can appear inside a format string. The results are collected into a b
 
 Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.
 
-The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.
+The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. So there are two different counts, and which one you get depends on the operation: anything that takes a POSITION — indexing, slicing, 'find' — counts bytes, while 'len()' and iterating a text count characters. Positions in bytes are fast and simple; the thing to watch is mixing the two counts, which has its own section below.
 
 ```rust
 fn main() {
@@ -1153,6 +1167,16 @@ Use '+' to join two pieces of text into one. The result is a new value — neith
   assert(len("😃") == 1, "Emoji is one character");
   assert(len("♥") == 1, "Heart is one character");
   assert(len("abc") == 3, "ASCII character count");
+```
+
+=== Do not mix the two counts
+
+'len()' is a character count and 's\[i\]' is a byte index, so walking one with the other goes wrong on any text that is not pure ASCII: the loop runs too few times AND re-reads the bytes inside a multi-byte character. Over "Hi 😊!", 'for i in 0..len(s) { s\[i\] }' yields "Hi 😊😊" — the '!' is silently gone and the emoji appears twice. Nothing fails; the answer is just wrong. Iterate the characters with 'for c in text', or, when you really do mean bytes, walk '0..size(text)'. The compiler reports the mix for you as warning\[text-index-char-bound\].
+
+```rust
+  mixed = "Hi 😊!";
+  assert(len(mixed) == 5, "five characters, not eight");
+  assert(size(mixed) == 8, "eight bytes, not five");
 ```
 
 === Reading individual characters
@@ -1181,6 +1205,13 @@ A negative end index counts backwards from the end of the text. '-1' means "stop
 ```rust
   txt = "12😊🙃45";
   assert(txt[2.. - 1] == "😊🙃4", "UTF-8 sub-string by byte range");
+```
+
+That counts BYTES, and the offset still snaps to a character boundary — so it trims a one-byte suffix like '5' above, and leaves a multi-byte one whole. Here both -1 and -2 land inside the trailing emoji and snap back around it, returning the text unchanged. Trim by bytes only when you know the suffix is ASCII.
+
+```rust
+  assert("ab😊"[.. - 1] == "ab😊", "a multi-byte suffix is not trimmed by -1");
+  assert("ab😊"[.. - 2] == "ab😊", "nor by -2");
 ```
 
 === Iterating over characters
@@ -1229,7 +1260,7 @@ Inside a format string '{' and '}' are special: they introduce an interpolated e
 
 === Aligning text in a fixed-width field
 
-The ':' specifier controls alignment and width. '\<' left-aligns the value, '\>' right-aligns it (the default). The width can be a constant or a small arithmetic expression — here '2+3' evaluates to 5, giving a field of width 5.
+The ':' specifier controls alignment and width. '\<' left-aligns the value and '\>' right-aligns it. The default depends on the TYPE: text is left-aligned (as '{a:4}' and '{vr:6}' here both show), while numbers are right-aligned, which is what lines a column of figures up. The width can be a constant or a small arithmetic expression — here '2+3' evaluates to 5, giving a field of width 5.
 
 ```rust
   vr = "abc";
@@ -1250,7 +1281,7 @@ fn main() {
 
 === Converting between numbers and text
 
-Wrapping a value in '{...}' inside a string formats it as text. Going the other way, 'as integer' parses a text value into a number. If the text cannot be parsed, the result is null — not a crash.
+Wrapping a value in '{...}' inside a string formats it as text. Going the other way, 'as integer?' parses a text value into a number. Write the '?': a text parse can fail, so a bare 'as integer' is refused at compile time ("a text parse `as integer` may fail, and a bare cast asserts it cannot"). The '?' is you accepting the failure case, and the result is null — not a crash — when the text does not parse.
 
 ```rust
   v = 4;
@@ -1261,7 +1292,14 @@ Wrapping a value in '{...}' inside a string formats it as text. Going the other 
 
 === Arithmetic and operator precedence
 
-Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. Bitwise operators (\<\<, &, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: '^' is XOR, not exponentiation. Use pow(base, exp) for powers.
+Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. Bitwise operators (\<\<, &, ^) have their own precedence — when mixing them with arithmetic, parentheses make your intent clear and avoid surprises. Note: '^' is XOR, not exponentiation. For powers use 'pow(base, exp)' — a FLOAT function, so 'pow(2, 3)' does not resolve: raise in floats and come back. It answers a NULLABLE float ('float?'), because a power can be uncomputable, so the trip back is a checked cast or a discharge:
+
+```
+pow(base, exp) as integer?           // the number, or null
+(pow(base, exp) ?? 0.0) as integer   // your own default instead
+```
+
+A bare 'as integer' is refused ("cannot cast a possibly-null `float?` to the non-null `integer`"). It does compile when BOTH arguments are literals, and that is the one shape which does not generalise — write the '?' and it works wherever the base is a variable, which is everywhere real.
 
 ```rust
   assert(1 + 2 * 4 == 9, "Multiplication before addition");
@@ -1269,7 +1307,14 @@ Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. 
   assert(0x0a8 & 15 == 8, "Bitwise AND masks low 4 bits");
   assert(42 ^ 0b111111 == 21, "Bitwise XOR");
   assert(105 % 100 == 5, "Modulus (remainder)");
-  assert(pow(2.0, 3.0) == 8.0, "pow() for exponentiation");
+```
+
+Raised from a VARIABLE base on purpose: the literal-only spelling is exactly the one that stops compiling the moment a reader puts their own number in it.
+
+```rust
+  pw_base = 2.0;
+  assert(pow(pw_base, 3.0) as integer? == 8, "pow() for exponentiation");
+  assert((pow(pw_base, 10.0) ?? 0.0) as integer == 1024, "…or discharge, then cast");
 ```
 
 'abs()' returns the absolute value — the distance from zero, always positive.
@@ -1280,20 +1325,7 @@ Loft follows standard mathematical precedence: '\*' and '/' before '+' and '-'. 
 
 === Division by zero — produces null and keeps running
 
-Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run.
-
-- \*\*Undefended\*\* (bare `1 / 0`): you get null, and at this unguarded site
-
-```
-loft also reports a warning so the divide-by-zero is not invisible.
-```
-
-- \*\*Defended\*\* (`1 / 0 ?? fallback`, or a following `if x != null`):
-
-```
-`??` supplies a non-null fallback and the warning is suppressed —
-you have explicitly handled the case.
-```
+Most languages crash on division by zero.  Loft does NOT: a divide (or modulo) by zero is uncomputable, so it produces null and execution CONTINUES — the spreadsheet model, where one bad cell shows an error but the rest still recalculate.  This holds the same everywhere (development, test, and production) — one bad calculation never halts the run. Where the divisor is a literal zero in your source, loft can see it before the program runs and warns (next section). Where it is only zero at RUN time there is no warning — you get null, and when loft knows the reason it prints it, so a bare '{12 / a}' shows 'null(/0)' rather than a bare 'null'. Recover with '??', or test the result for null: nothing else tells you, so a divide whose divisor could be zero is one you handle rather than one you are reminded about.
 
 ```rust
   a = 2 * 2;
@@ -1372,7 +1404,16 @@ Because 'integer' is 64-bit, values far past the old 2-billion limit work direct
 
 A calculation whose result is too large to represent overflows — and in loft an overflow is uncomputable, so the result is null. It never wraps to a silently-wrong number, and it never crashes; execution continues with the null, exactly like divide-by-zero above. Check the result for null (or keep intermediate values in range) when multiplying or summing very large numbers.
 
+A sized integer ('u8', 'i16', a field declared 'integer limit(0, 255)') has a smaller range, so it overflows sooner — and where it lands depends on one thing: whether the slot can hold null. A nullable one ('u8?') gets the null, the same as above. A non-nullable one has nowhere to put it, so it gets the type's default instead — 0 for every range that includes zero. What you never get is a wrapped number.
+
 ```rust
+  small: u8? = 250;
+  small += 10;
+  assert(small == null, "A nullable sized integer overflows to null");
+  assert((small ?? 0) == 0, "…and '??' recovers from it, like any other null");
+  fixed: u8 = 250;
+  fixed += 10;
+  assert(fixed == 0, "A non-nullable one takes its type's default instead");
 }
 ```
 
@@ -1413,11 +1454,15 @@ Division by zero (and other failed operations) produce null when defended with `
 if !result { ... handle missing value ... }
 ```
 
-Even without `?? null`, a bare `1 / 0` never halts: it yields null and logs a warning, behaving the same everywhere — development, test, and production. The `?? null` above just marks the case as handled, which suppresses that warning.
+Even without `?? null`, a bare divide never halts: it yields null and execution continues, the same everywhere — development, test, and production.
+
+The `?? null` is not what makes that safe, and it silences nothing. loft warns about a divisor that is a literal 0 in your source, while READING your code, and it warns whether or not you wrote `?? null`; a divisor that is only zero at RUN time is not warned about at all. What `?? null` changes is the VALUE: loft prints the reason it knows, so an undefended result formats as 'null(/0)', and coalescing it to a plain null throws that reason away. Reach for `?? null` when you want the bare null, and for `?? \<value\>` when you want a number — not to quiet a warning.
 
 ```rust
   zero = 0;
   assert(!(12 / zero ?? null), "null from division-by-zero is false-like when defended");
+  assert("{12 / zero}" == "null(/0)", "an undefended result carries its reason");
+  assert("{12 / zero ?? null}" == "null", "…and `?? null` trades the reason for a plain null");
   assert(12 > 0, "positive integer is true");
 ```
 
@@ -1497,13 +1542,32 @@ Write a decimal point in a literal and Loft treats the whole expression as a flo
   assert(2.0 * 1.5 == 3.0, "Float multiplication");
 ```
 
-=== Undefined results are null ('float?')
+=== Undefined results are null ('float?') — but infinities are NOT undefined
 
-Some float operations have no real answer for some inputs: dividing or taking '%' by zero, 'sqrt' of a negative, 'ln'/'log' of zero or a negative, 'asin'/'acos' outside -1..1, or an out-of-domain 'pow'. Rather than crash, Loft yields null for these — so '/', '%', 'sqrt', 'ln', 'log', 'pow', 'asin' and 'acos' each produce a NULLABLE float ('float?'). The null then propagates: any further arithmetic on a null stays null. Discharge it with '?? fallback' when you need a plain float (just as '"1.5" as float?' below is a float? you can default).
+Some float operations have no real answer for some inputs: 'sqrt' of a negative, 'ln'/'log' of a NEGATIVE, 'asin'/'acos' outside -1..1, an out-of-domain 'pow', '%' by zero, and 0.0/0.0. Rather than crash, Loft yields null for these — so '/', '%', 'sqrt', 'ln', 'log', 'pow', 'asin' and 'acos' each produce a NULLABLE float ('float?'). The null then propagates: any further arithmetic on a null stays null, and '?? fallback' discharges it when you need a plain float.
+
+Read the boundary carefully, because it is not "anything unusual is null". Floats keep IEEE INFINITY, and infinity is a value, not a missing one:
+
+```
+1.0 / 0.0   is  inf        0.0 / 0.0   is  null
+```
+
+ -1.0 / 0.0   is -inf        1.0 % 0.0   is  null
+
+```
+ln(0.0)     is -inf        ln(-1.0)    is  null
+```
+
+So a '?? fallback' does NOT rescue a division by zero the way it rescues a sqrt of a negative — the infinity is not null, sails through the guard, and propagates through every later sum. When a zero divisor is possible, test the DIVISOR rather than defending the result.
 
 ```rust
   assert((sqrt(-1.0) ?? 0.0) == 0.0, "sqrt of a negative is null");
   assert(((sqrt(-1.0) + 5.0) ?? 0.0) == 0.0, "null propagates through arithmetic");
+  fz = 0.0;
+  fp = 1.0;
+  assert("{fp / fz}" == "inf", "a non-zero over zero is an infinity, not a null");
+  assert(((fp / fz) ?? -1.0) > 1000000.0, "…so `??` does not rescue it");
+  assert(((fz / fz) ?? -1.0) == -1.0, "…while 0.0/0.0 really is null, and `??` does");
 ```
 
 The 'f' suffix selects single-precision floats, which take half the memory of a regular float but have fewer decimal digits of accuracy. This trade-off is common in graphics and audio code where exact decimal values matter less than speed or memory.
@@ -1513,7 +1577,7 @@ The 'f' suffix selects single-precision floats, which take half the memory of a 
   assert(x == 2.1f, "Single precision float");
 ```
 
-'as float' converts an integer to a float so you can mix them in calculations. Putting a float inside '{...}' converts it to text for display. You can also go the other way: '"1.5" as float' parses the text back to a number.
+'as float' converts an integer to a float so you can mix them in calculations. Putting a float inside '{...}' converts it to text for display. You can also go the other way: '"1.5" as float?' parses the text back to a number. The '?' is required — a bare 'as float' on text is refused for the same reason a bare 'as integer' is ("a text parse `as float` may fail, and a bare cast asserts it cannot"), because the text might not be a number.
 
 ```rust
   assert(3 as float == 3.0, "Integer to float");
@@ -1636,7 +1700,15 @@ fn classify(n: integer) -> text {
 
 === Const and Reference Parameters
 
-'const' on a parameter tells the compiler "this function must never change this value." The compiler enforces it — any assignment to a const parameter is a compile error. '&' is the opposite promise: "this function will modify this value." Declaring '&' without actually writing to the parameter is also a compile error. These rules make it easy to read a function signature and know what it does to its inputs.
+Write 'const' with the TYPE, not before the name — 'fn f(s: const text)', not 'fn f(const s: text)', which does not parse. It tells the compiler "this function must never change this value", and the compiler enforces it: assigning to a const parameter is a compile error ("Cannot modify const parameter"). '&' is the opposite promise: "this function will modify this value." Declaring '&' without actually writing to the parameter is also a compile error ("Parameter 'a' has & but is never modified; remove the &"). These rules make it easy to read a function signature and know what it does to its inputs.
+
+'const' earns its keep on a parameter the function COULD write through — a text, a vector, a struct. On a primitive you never modify it is reported as needless ('needless-const-parameter'), because a plain 'integer' parameter is already a copy and const adds nothing to it.
+
+```rust
+fn shout(s: const text) -> text {
+  s + "!"
+}
+```
 
 ```rust
 fn scale(a: integer, factor: integer) -> integer {
@@ -1646,7 +1718,7 @@ fn scale(a: integer, factor: integer) -> integer {
 
 === Type-Based Dispatch
 
-You can define two functions with the same name as integer as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.
+You can define two functions with the same name as long as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.
 
 ```rust
 fn describe_int(v: integer) -> text {
@@ -1662,7 +1734,7 @@ fn describe_text(v: text) -> text {
 
 === Function References
 
-'fn \<name\>' creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type 'fn(param\_types) -\> return\_type' and can be:
+Writing a function's NAME on its own creates a reference to it that you can store or pass around — 'f = double\_it', with no 'fn' in front. ('fn double\_it' is refused: "Use the function name directly, without 'fn' prefix".) The compiler checks that the name exists — a typo is a compile error. The result has type 'fn(param\_types) -\> return\_type' and can be:
 
 ```
 - stored in a variable,
@@ -1753,6 +1825,12 @@ v = 3 + 4 + 1 = 8
   assert(scale(3, 7) == 21, "scale(3,7)");
 ```
 
+'shout' promises not to change its text, and the compiler holds it to that.
+
+```rust
+  assert(shout("hi") == "hi!", "const parameter: {shout(\"hi\")}");
+```
+
 Loft selects the right function based on the type of the argument.
 
 ```rust
@@ -1832,7 +1910,7 @@ A vector is an ordered list of values that can grow and shrink while your progra
 
 === Transforming vectors: map, filter, reduce
 
-'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function using 'fn \<name\>' to refer to a named function by name.
+'map', 'filter', and 'reduce' each take a function and apply it to the vector. Pass the function by writing its NAME on its own — 'map(v, triple)', with no 'fn' in front of it.
 
 ```
 map(v, f)          — apply f to every element; returns a new vector
@@ -1861,6 +1939,30 @@ fn sum_acc(acc: integer, x: integer) -> integer {
 ```rust
 fn mul_acc(acc: integer, x: integer) -> integer {
   acc * x
+}
+```
+
+```rust
+fn set_first_v(v: vector<integer>, x: integer) {
+  v[0] = x;
+}
+```
+
+```rust
+fn append_one_v(v: vector<integer>, x: integer) {
+  v += [x];
+}
+```
+
+```rust
+fn replace_all_plain(v: vector<integer>) {
+  v = [7, 7];
+}
+```
+
+```rust
+fn replace_all(v: &vector<integer>) {
+  v = [7, 7];
 }
 ```
 
@@ -1975,22 +2077,37 @@ This creates 16 identical copies in one expression. See 08-struct.loft for examp
 
 === Passing vectors to functions
 
-When you pass a vector to a function, the function receives a \*\*slice\*\* — a start position and a length inside the storage of the caller. This is efficient because no data is copied, but it has an important consequence: the function can read and modify existing elements (because it shares the same storage), but it cannot grow or shrink the vector. Appending with '+=' inside the function creates a local copy that the caller never sees.
+A vector parameter is a shared view of the caller's vector — no data is copied. So everything the function does to the CONTENTS is visible to the caller once it returns: writing an element, appending, removing, clearing. You do not need to mark the parameter for any of that.
 
-To let a function append to the caller's vector, mark the parameter with '&'. This tells the compiler to propagate structural changes (appends, clears) back to the caller when the function returns.
-
-```
-fn append_one(v: &vector<integer>, x: integer) { v += [x]; }
-```
-
-Without '&', only element-level mutations are visible to the caller:
+Exactly one thing stays local: replacing the WHOLE value. Writing 'v = \[7, 7\]' inside the function gives that function a different vector and leaves the caller's alone. Mark the parameter '&' when you want that replacement to reach the caller as well.
 
 ```
-fn set_first(v: vector<integer>, x: integer) { v[0] = x; }  // caller sees the change
-fn try_push(v: vector<integer>, x: integer) { v += [x]; }   // caller does NOT see the append
+fn replace_all(v: &vector<integer>) { v = [7, 7]; }   // caller sees the new vector
 ```
 
-The same rule applies to slices: 'v\[2..5\]' passed to a function is a narrower window into the same storage, so element writes are visible but appends are not.
+So '&' means "I may replace this", not "I may add to it".
+
+A SLICE is a different thing again. 'v\[2..5\]' builds a FRESH vector holding copies of those elements, so writing to the slice does not reach the original. A slice is also not accepted where a 'vector\<T\>' parameter is expected — bind it to a variable first, and remember you are then working on a copy.
+
+```rust
+  passed: vector<integer> = [1, 2, 3];
+  set_first_v(passed, 99);
+  assert(passed[0] == 99, "a write to an existing element reaches the caller");
+  grown: vector<integer> = [1, 2, 3];
+  append_one_v(grown, 4);
+  assert(len(grown) == 4, "…and so does an append, with no '&' needed");
+  kept: vector<integer> = [1, 2, 3];
+  replace_all_plain(kept);
+  assert(len(kept) == 3, "replacing the whole value stays inside the function");
+  swapped: vector<integer> = [1, 2, 3];
+  replace_all(swapped);
+  assert(swapped[0] == 7, "…unless the parameter is marked '&'");
+  source: vector<integer> = [1, 2, 3, 4, 5];
+  window = source[2..5];
+  set_first_v(window, 77);
+  assert(window[0] == 77, "the slice itself is written");
+  assert(source[2] == 3, "…and the original is untouched, because a slice is a copy");
+```
 
 === Higher-order functions
 
@@ -2041,7 +2158,9 @@ struct Product {
 
 === Field Constraints
 
-You can restrict what values a field may hold. 'limit(min, max)' rejects any value outside that range at runtime. 'not null' tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need 'not null'. Fields you omit in a constructor receive zero (or null for nullable fields) by default.
+You can restrict what values a field may hold. 'limit(min, max)' gives the field a smaller range. It is not a rejection and it never stops your program: a value outside the range cannot be represented, so the field takes the same answer any uncomputable number takes (see the Integers page). That is null when the field is nullable, and the type's default when it is not — 0 for a range that includes zero. Zero is an ordinary value here. A Colour of 0, 0, 0 is pure black and reads back as three zeros, with nothing extra to write. Fields you omit in a constructor receive zero (or null for nullable fields) by default.
+
+You may meet 'not null' on a field in older code. It has no effect — a type is non-null by default now — and the compiler advises removing it.
 
 ```rust
 struct Colour {
@@ -2127,10 +2246,31 @@ from. (A vector-typed field is a whole value, so 'av = bx.v' copies.)
 'av = &bx.v' both write through to the source.
 ```
 
+- ⚠ The same expression can COPY in one position and ALIAS in another. 'av = bx.v'
+
+```
+copies, because binding a whole value always copies — but 'f(bx.v)' hands the
+field itself to the function, and a heap parameter shares what it is given (see
+the Vector page), so the function writes through to 'bx.v'. Binding is the copy;
+passing is not. Read the position, not just the expression.
+```
+
 ```rust
 value struct Point {
   x: integer,
   y: integer
+}
+```
+
+```rust
+struct Holder8 {
+  v: vector<integer>
+}
+```
+
+```rust
+fn touch8(w8: vector<integer>) {
+  w8[0] = 99;
 }
 ```
 
@@ -2153,11 +2293,26 @@ You can read and write individual fields after construction.
   assert(apple.stock == 49, "stock after one sale: {apple.stock}");
 ```
 
-A field omitted from the constructor gets zero as its default.
+A field omitted from the constructor gets zero as its default. loft points this out ('omitted-field-zero'): the zero is the type's, and nothing in the declaration chose it. That is fine when zero is what you meant, and a trap when zero is a meaningful value in your data — an index where 0 is the first entry, say. Give the field a declared default when you want a different one, the way 'Item.name\_length' does above.
 
 ```rust
   col = Colour {r: 128, b: 128 };
   assert(col.g == 0, "omitted green channel defaults to zero");
+```
+
+Zero is a real value in a limited field — pure black needs nothing extra.
+
+```rust
+  black = Colour {r: 0, g: 0, b: 0 };
+  assert(black.r == 0 and black.g == 0 and black.b == 0, "pure black reads back as zeros");
+```
+
+A value outside the range takes the type's default rather than being rejected.
+
+```rust
+  over = 300;
+  black.r = over;
+  assert(black.r == 0, "out of range takes the default: {black.r}");
 ```
 
 Formatting a struct shows all fields compactly.
@@ -2253,6 +2408,18 @@ Binding the whole value copies it, so the original keeps its own stock.
   assert(spare.stock == 3, "and the copy moves on its own");
 ```
 
+The same field expression, in the two positions: bound it copies, passed it does not. This pair is easy to generalise the wrong way in either direction.
+
+```rust
+  bx8 = Holder8 { v: [1, 2, 3] };
+  av8 = bx8.v;
+  av8[0] = 42;
+  assert(bx8.v[0] == 1, "binding a vector field copies it");
+  cx8 = Holder8 { v: [1, 2, 3] };
+  touch8(cx8.v);
+  assert(cx8.v[0] == 99, "passing the same field shares it");
+```
+
 Write '&' to get a live link where a bind would otherwise copy.
 
 ```rust
@@ -2266,7 +2433,7 @@ Write '&' to get a live link where a bind would otherwise copy.
 'sizeof(Type)' returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.
 
 ```rust
-  assert(sizeof(integer) == 8, "integer: 8 bytes (post-2c i64 storage)");
+  assert(sizeof(integer) == 8, "integer: 8 bytes (i64 storage)");
   assert(sizeof(u8) == 1, "u8: 1 byte (packed)");
   assert(sizeof(u16) == 2, "u16: 2 bytes (packed)");
   assert(sizeof(Colour) == 3, "Colour: 3 × u8 = 3 bytes");
@@ -2400,13 +2567,13 @@ describe() uses format strings with field access inside each variant's method.
 
 === Stubs for missing implementations
 
-If a variant intentionally has no implementation of a method, the compiler emits a warning. Provide an empty-body stub to silence it:
+If a variant intentionally has no implementation of a method, the compiler emits a warning ("no implementation of 'area' for variant 'Rect'"). Provide an empty-body stub to silence it:
 
 ```
 fn area(self: SomeVariant) -> float { }
 ```
 
-A stub returns null at runtime and suppresses the warning.
+Give the stub a real body — '{ 0.0 }' — when anything reads its result. An empty body silences the warning and hands back the type's default (0.0 for a float, 0 for an integer, "" for text), which is the same on both backends. That is a real value, not a marker: it is not null, so there is nothing to test for, and a caller cannot tell it from a computed 0.0.
 
 === Match expressions on enums
 
@@ -2465,7 +2632,7 @@ Or-patterns work on scalars too.
   assert(kind == "low", "scalar or-pattern");
 ```
 
-A `null` pattern matches when the value is absent (e.g. a defended division by zero — `?? null` marks the division as handled, so no undefended-site warning is logged; the result is null either way).
+A `null` pattern matches when the value is absent — here a division by zero, which yields null (see the Integers page). The `?? null` turns the reasoned null into a plain one; it is the value that is being matched either way.
 
 ```rust
   zero = 0;
@@ -2680,7 +2847,16 @@ fn main_ranges() {
 
 === Iterating a Key Range
 
-Use an `if` guard inside a `for` loop to visit only records whose key falls within a range. Because the collection is sorted the guard still sees all elements, but the body only runs for the matching ones.
+Give the collection a RANGE in square brackets and the loop starts and stops at the right places, without looking at the records outside it. This is the operation a sorted collection exists for.
+
+```
+c[lo..hi]   from lo up to but NOT including hi
+c[lo..=hi]  from lo up to AND including hi
+c[lo..]     from lo to the end
+c[..hi]     from the start up to but not including hi
+```
+
+Mind the two spellings: '..' leaves the last key out, '..=' keeps it. That is the same rule as a vector slice.
 
 ```rust
   d = Dict { words: [
@@ -2690,16 +2866,33 @@ Use an `if` guard inside a `for` loop to visit only records whose key falls with
     Word { name: "date",       score: 2 },
     Word { name: "elderberry", score: 1 }
   ] };
+  slice_total = 0;
+  for w in d.words["banana"..="date"] {
+    slice_total += w.score
+  }
+  assert(slice_total == 13, "banana(3)+cherry(8)+date(2) = {slice_total}");
+  half_open = 0;
+  for w in d.words["banana".."date"] {
+    half_open += w.score
+  }
+  assert(half_open == 11, "'..' leaves date out: {half_open}");
+  head_total = 0;
+  for w in d.words[.."cherry"] {
+    head_total += w.score
+  }
+  assert(head_total == 8, "apple(5)+banana(3) = {head_total}");
 ```
 
-Closed range: keys \>= "banana" and \<= "date".
+=== Filtering on something that is NOT the key
+
+An `if` guard inside the loop still works, and it is what you want when the condition is not about the key: the guard sees every element and the body runs only for the matching ones. Use a range when you are selecting BY key, and a guard when you are selecting by anything else.
 
 ```rust
-  range_total = 0;
-  for w in d.words if w.name >= "banana" && w.name <= "date" {
-    range_total += w.score
+  cheap = 0;
+  for w in d.words if w.score < 4 {
+    cheap += w.score
   }
-  assert(range_total == 13, "banana(3)+cherry(8)+date(2) = {range_total}");
+  assert(cheap == 6, "banana(3)+date(2)+elderberry(1) = {cheap}");
 ```
 
 === Open-ended Range (tail)
@@ -2742,7 +2935,9 @@ filling and finding values
 
 = Index
 
-An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending. Note: each record can only belong to one index at a time.
+An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
+
+Two keyed collections over the SAME element type are two ROUTES to one set of records, not two collections. Give records to either one and both see them; write through one and the other reads the change; remove through one and it is gone from both. That is the point of declaring a second one — a second way in, by a different key — and loft says so if a literal fills both ('linked-group-double-fill'), because then one record set ends up holding everything they were given.
 
 ```rust
 struct Elm {
@@ -2785,6 +2980,16 @@ Provide all key fields together inside brackets to find a record. Supply fewer f
   assert(db.map[101, "One"].value == 1, "Key lookup");
   assert(!db.map[12, ""], "Missing key returns null");
   assert(!db.map[83, "One"], "Wrong secondary key returns null");
+```
+
+Fewer fields than the key has: every record sharing that prefix.
+
+```rust
+  prefix_sum = 0;
+  for r in db.map[83] {
+    prefix_sum += r.value
+  }
+  assert(prefix_sum == 12, "the three nr=83 records: {prefix_sum}");
 ```
 
 === Iterating in Order
@@ -2858,7 +3063,7 @@ no-op; does not panic
 
 = Hash
 
-A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash has no meaningful order — you use it purely for fast lookups. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
+A 'hash' lets you find a record by its key in the same time whether you have 10 records or 10 million — there is no searching through a list, just a direct jump to the answer. Unlike 'sorted' and 'index', a hash does not keep its records in order — that is exactly what makes the lookup fast. You can still iterate one and get a predictable order (ascending key), but the hash has to sort a snapshot to do it; see 'Iterating a Hash' at the bottom of this page. List the key fields in brackets: 'hash\<Type\[field\]\>'. Combine a hash with a vector when you want both fast lookup and a stable iteration order.
 
 ```rust
 struct Keyword {
@@ -2948,9 +3153,8 @@ Assigning null to a hash subscript removes that element. Removing a key that is 
   assert(!d.h["three"], "three was removed");
   assert(d.h["one"], "one still present");
   d.h["missing"] = null;
+  assert(d.h["one"], "removing a key that is not there leaves the others alone");
 ```
-
-no-op; does not panic
 
 === Iterating a Hash
 
@@ -2958,12 +3162,14 @@ no-op; does not panic
 
 Under the hood the compiler builds a one-shot sorted snapshot of the hash's record-numbers and walks it, so iteration cost is O(n) + O(n log n) per `for`, not amortised across calls.  For a hot loop, pair the hash with a `vector\<T\>` or `sorted\<T\[k\]\>` on the same record type and iterate the companion collection.
 
-`e\#remove` is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use `h\[key\] = null` to remove an entry.
+`e\#remove` is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use `h\[key\] = null` to remove an entry. Adding the values up cannot show you the order — a sum is the same whichever way you walk. Collect the keys instead: they come out alphabetically, not in the order they went in.
 
 ```rust
   sum = 0;
-  for e in c.lookup { sum += e.v; }
+  order = "";
+  for e in c.lookup { sum += e.v; order += "{e.t} "; }
   assert(sum == 10, "Sum via hash iteration: {sum}");
+  assert(order == "Four One Three Two ", "hash walks in key order: {order}");
 }
 ```
 
@@ -2974,7 +3180,7 @@ A file handle lets you read and write files without worrying about when the OS o
 
 === Inspecting the File System
 
-`file(path)` creates a File handle without opening anything yet. `f\#format` tells you what kind of path you are looking at: TextFile (plain text), LittleEndian (binary, bytes stored least-significant first — common on most PCs), BigEndian (binary, bytes stored most-significant first — common in network protocols), Directory, or NotExists. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns a `FileResult` enum; use `.ok()` to check success. Clean up any leftover files from a previous interrupted run. `\#cwd` opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default) — see \@PLN9.
+`file(path)` creates a File handle without opening anything yet. `f\#format` is the mode the handle will read and write in. Two of its values answer what the path IS — Directory, and NotExists for a path with nothing at it. The other three are modes you choose: TextFile (UTF-8 text, and the default for any file that exists), LittleEndian (binary, bytes stored least-significant first — common on most PCs) and BigEndian (binary, most-significant first — common in network protocols). It does not inspect content: a PNG you have not set a format on reads as TextFile, so `\#format` cannot tell you a file is text. `lines()` reads a text file and returns it as a vector of lines. `exists(path)` is a convenience shorthand for checking that a path is not NotExists. `delete(path)` removes a file and returns a `FileResult` enum; use `.ok()` to check success. Clean up any leftover files from a previous interrupted run. `\#cwd` opts this program into cwd-relative paths (CLI-tool semantics): a relative path resolves against the working directory, not the program's own directory.  Without it, relative paths re-home next to the program (the portable-bundle default).
 
 ```rust
 #cwd
@@ -3006,7 +3212,7 @@ Asking for the format of a directory path returns Directory, not a file format. 
   assert(c[1] == "    terrain = [", "Line was '{c[1]}'");
 ```
 
-`exists` and `delete` are safe to call when the file is absent. `delete` returns false rather than crashing when nothing is there.
+`exists` and `delete` are safe to call when the file is absent. Nothing crashes: `delete` answers `FileResult.NotFound`, whose `.ok()` is false.
 
 ```rust
   assert(!exists("test.bin"), "File should not exist before the test.");
@@ -3015,7 +3221,7 @@ Asking for the format of a directory path returns Directory, not a file format. 
 
 === Writing a Text or Binary File
 
-Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f\#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value (u8, u16, i32, integer, single, float, or text). An `integer` is 8 bytes wide (see the size assertions below).
+Wrapping the file handle in a block ensures the file closes the moment the block ends. Set `f\#format` to LittleEndian or BigEndian before writing binary data. Use `f += value` to append the raw bytes of any scalar value: u8, i8, u16, i16, u32, i32, integer, single, float, boolean, or text. Cast to the width you mean — an uncast `integer` writes 8 bytes, which is rarely the record width a binary format wants, so the compiler asks you to say it. Write `as integer` where the 8 bytes are deliberate.
 
 ```rust
  {f = file("test.bin");
@@ -3024,11 +3230,11 @@ Wrapping the file handle in a block ensures the file closes the moment the block
   f += 0 as u8;
   f += 1 as u8;
   f += 0x203 as u16;
-  f += 0x4050607;
-  f += 0x8090a0b0c0d0e0f;
+  f += 0x4050607 as integer;
+  f += 0x8090a0b0c0d0e0f as integer;
 ```
 
-`f\#size` returns the total number of bytes written so far. Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.
+`f\#size` returns the total number of bytes written so far. An integer is 8 bytes, so the total is 1 + 1 + 2 + 8 + 8 = 20.
 
 ```rust
   assert(f#size == 20, "Should have written 20 bytes.");
@@ -3068,7 +3274,7 @@ The file was written as BigEndian, so reading the same 4 bytes as LittleEndian p
   assert(f#next == 4, "Next read starts at byte 4.");
 ```
 
-Seek to byte 20 to skip past the integers and read the text directly. (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)
+Seek to byte 20 to skip past the integers and read the text directly. (The u8+u8+u16+integer+integer header is 1+1+2+8+8 = 20 bytes, so the text starts there.)
 
 ```rust
   f#next = 20;
@@ -3104,7 +3310,7 @@ You can seek back to any position and re-read.
   f#format = LittleEndian;
   ints =[1, 2, 3, 4];
   f += ints;
-  assert(f#size == 32, "Four integers = 32 bytes (8 each, post-2c)");
+  assert(f#size == 32, "Four integers = 32 bytes (8 each)");
 ```
 
 Truncate to the first two integers.
@@ -3112,6 +3318,14 @@ Truncate to the first two integers.
 ```rust
   f#size = 16;
   assert(f#size == 16, "Truncated to 16 bytes");
+```
+
+Growing works the same way, and the bytes you gain are zero.
+
+```rust
+  f#size = 24;
+  f#next = 16;
+  assert(f#read(8) as integer == 0, "The extension reads as zero bytes.");
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin after vector write test.");
 ```
@@ -3144,29 +3358,61 @@ Read the count, then use it to read exactly that many floats directly into a str
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin.");
 ```
 
+=== Directories
+
+`is\_dir(path)` and `is\_file(path)` answer the question directly, without going through a handle. `files()` lists a directory as File handles, so every entry carries its own path and format; `list\_dir(path)` gives you just the names. Both are sorted by name, so an index means the same entry on every machine — but they disagree on a path that is not a directory: `files()` answers an empty list and `list\_dir` answers null, so discharge that one with `?? \[\]`.
+
+```rust
+  dir = file("tests/example");
+  assert(is_dir("tests/example"), "the example directory is a directory");
+  assert(!is_file("tests/example"), "a directory is not a file");
+  entries = dir.files();
+  assert(len(entries) > 0, "the example directory is not empty");
+  assert((entries[0] ?? file("")).path == "tests/example/config", "first entry path");
+```
+
+`mkdir(path)` creates one level and `mkdir\_all(path)` creates every missing level. `mkdir\_all` is idempotent — a directory that already exists is Ok, which is what makes it safe to call on the way into a run.
+
+```rust
+  assert(mkdir_all("tests/example").ok(), "mkdir_all on an existing directory is Ok");
+  assert(!mkdir("tests/example").ok(), "mkdir on an existing directory is not Ok");
+```
+
+`delete` is a file operation and answers FileResult.IsDirectory when you point it at a directory. `rmdir` is the one that removes a directory, and only an EMPTY one — it answers NotEmpty while entries remain. A recursive removal is yours to write: list\_dir() the children, delete() the files, rmdir() the directory, deepest first.
+
 === Error handling
 
-File operations that can fail return a `FileResult` enum. Call `.ok()` to check success. The program does not crash on failure — you decide what to do.
+Filesystem operations that can fail return a `FileResult`, and it is an enum with six variants, not a boolean. `.ok()` is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.
 
 ```rust
   result = delete("this_file_does_not_exist.txt");
   assert(!result.ok(), "delete missing file returns not-ok");
+  why = match result {
+    Ok => "deleted",
+    NotFound => "there was nothing there",
+    PermissionDenied => "the OS refused",
+    IsDirectory => "that is a directory",
+    NotEmpty => "the directory still has entries in it",
+    Other => "it failed for another reason"
+  };
+  assert(why == "there was nothing there", "delete on a missing file is NotFound");
 ```
 
-Reading a non-existent file produces an empty result, not a crash.
+A handle to a path with nothing at it is safe to hold and safe to read. Nothing crashes: the format is NotExists and `lines()` is empty. A sized `f\#read` on it answers null rather than a value you might mistake for data, and says so on stderr.
 
 ```rust
   ghost = file("no_such_file.txt");
   assert(ghost#format == NotExists, "non-existent file has NotExists format");
+  assert(len(ghost.lines()) == 0, "lines() on a missing file is empty");
 ```
 
-`move` reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains `..` (loft\#712).
+`move` reports on the FILES, not on the shape of the path: a missing source is NotFound whether or not the path contains `..`.
 
 ```rust
   assert(!move("any.txt", "../escape.txt").ok(), "move with a missing source fails");
 ```
 
-Writing to a read-only or invalid path also returns a FileResult. Always check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir\_all`.
+One asymmetry to know: `f += value` is a statement and reports nothing. If the path cannot be opened for writing, the bytes are dropped and the run carries on with a message on stderr. Use `f.write(text)` when you need the write itself to answer a FileResult, and check `.ok()` after `delete`, `move`, `mkdir`, and `mkdir\_all`.
 
 ```rust
 }
@@ -3210,9 +3456,25 @@ fn main() {
   assert(l.position() == "Tokens:1:17", "Incorrect position {l.position()}");
 ```
 
+`long\_int()` reads an integer written with an `l` suffix. The suffix is part of the token, not part of the value.
+
+```rust
+  l.parse_string("Long", "9000000000l");
+  assert(l.long_int() == 9000000000, "Long integer");
+```
+
+A registered keyword is reported exactly as written, so a parser can tell it from an ordinary name without keeping a second list of its own.
+
+```rust
+  l.parse_string("Keywords", "for name");
+  assert(l.peek() == "for", "A keyword reads back as itself");
+  assert(l.matches("for"), "and matches by that spelling");
+  assert(l.peek() == "name", "while an ordinary name is just a name");
+```
+
 === String Literals and Comments
 
-`constant\_text()` reads a double-quoted string and handles special codes like \\n (newline) and \\\\ (backslash). `constant\_character()` reads a single-quoted character literal and returns it as text.
+`constant\_text()` reads a double-quoted string and decodes the escapes inside it: `\\n` becomes one newline, `\\t` one tab, `\\r` one return, and `\\\\` and `\\"` stand for a single backslash and quote, and `\\xNN` is the character with that two-digit hex code — `\\x41` is `A`. An escape the lexer does not recognise stands for its own character, so `\\q` is just `q`, and an `\\x` without two hex digits after it is treated the same way rather than eating what follows.
 
 ```rust
   l.parse_string("Texts", "\"123\" + '4'");
@@ -3220,7 +3482,22 @@ fn main() {
   assert(l.matches("+"), "Incorrect add");
 ```
 
-`constant\_character()` returns a `character`, so compare it as one (`l.constant\_character() == '4'`), not against the text "123". The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last\_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment\_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is\_finished()` returns true once every token has been consumed.
+`constant\_character()` reads a single-quoted literal and returns a `character`, not text — so compare it against a character.
+
+```rust
+  assert(l.constant_character() == '4', "Incorrect character literal");
+```
+
+An escape counts as ONE character, in a text and in a character literal alike. `size()` is what shows it: two source characters, one value.
+
+```rust
+  l.parse_string("Escapes", "\"a\\nb\" '\\t'");
+  nl = l.constant_text() ?? "";
+  assert(size(nl) == 3, "'a\\nb' is three characters, not four: {size(nl)}");
+  assert(l.constant_character() == '\t', "An escaped character literal decodes too");
+```
+
+The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last\_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment\_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is\_finished()` returns true once every token has been consumed.
 
 ```rust
   l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
@@ -3237,7 +3514,7 @@ fn main() {
 
 === Embedded Format Expressions
 
-Loft string literals can embed expressions with `{expr}`. The lexer exposes a protocol that lets you parse these yourself. When `constant\_text()` reaches a `{`, it returns the literal text before it and sets `is\_formatting()` to true. At that point call `set\_formatting(false)` and parse the embedded expression normally using the usual token readers. When the expression is done, call `set\_formatting(true)` and consume the closing `}}`. Then `constant\_text()` continues with the next segment of the string.
+Loft string literals can embed expressions with `{expr}`. The lexer exposes a protocol that lets you parse these yourself. When `constant\_text()` reaches a `{`, it returns the literal text before it and sets `is\_formatting()` to true. At that point call `set\_formatting(false)` and parse the embedded expression normally using the usual token readers. When the expression is done, call `set\_formatting(true)` and consume the closing `}`. Then `constant\_text()` continues with the next segment of the string. The example below writes that brace as "}}" because a literal brace inside a loft string is doubled — the TOKEN the lexer matches is the single `}`.
 
 ```rust
   l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
@@ -3267,11 +3544,11 @@ Together the 'lexer' and 'parser' libraries are designed as a reusable foundatio
 
 'parse(name, source)' is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.
 
-If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.
+parse() answers how many errors the source contained — '0' for a snippet that parsed cleanly. The diagnostics themselves go to the log as it reads; the count is what a caller can branch on.
 
 === What the parser understands
 
-The parser handles all Loft syntax:
+The parser handles most of Loft's syntax:
 
 - 'struct Name { field: type \[= default\] }' — data containers with named fields
 - 'enum Name { Variant \[{ field: type }\] }' — named choices, each with optional data
@@ -3281,14 +3558,17 @@ The parser handles all Loft syntax:
 - Expressions: binary operators with precedence, function calls, field access,
 
 ```
-index expressions, if/else, for loops, blocks, and formatted string literals
+if/else, for loops, and blocks
 ```
 
 - Type expressions: plain names, generic types like 'vector\<T\>', keyed
 
 ```
-collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
+collections (sorted/hash/index), and integer ranges with
+'integer limit(min, max)' — in parameter, field, and return position
 ```
+
+Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression ('v\[0\]'), the null-coalescing operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept. Tracked as loft\#1259.
 
 ```rust
 use parser;
@@ -3333,7 +3613,7 @@ A body is a sequence of statements; each call below is one.
 
 === Parsing assignments and operators
 
-Every binary operator in the table above is accepted, including assignment.
+Binary operators parse with their normal precedence, and so does assignment.
 
 ```rust
   assert(parser::parse("assign", "fn f() {{ t = 0; t += 1; }}") == 0,
@@ -3376,7 +3656,7 @@ The count is the whole point: a snippet that does not parse answers a NON-zero n
 
 = Libraries
 
-A library is a `.loft` file you can share across projects. Place it in a `lib/` directory, import it with `use name;` at the top of your file, and then refer to its types and functions using the `name::` prefix. All types and functions in a library are accessible — there is no way to mark something as internal or hidden. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
+A library is a `.loft` file you can share across projects. Place it in a `lib/` directory and import it with `use name;` at the top of your file. That one line does two things: it brings every `pub` name in the library into your own namespace, so you can write them bare, and it gives you the `name::` prefix, which reaches everything the library defines. A definition without `pub` is reachable only through the prefix. So `pub` is about the BARE spelling rather than about secrecy: leaving it off keeps a name out of your namespace and out of any import, but `name::thing` still finds it. `use` statements must come before any `fn` or `struct` definition in your file. Putting a `use` after a definition is a syntax error.
 
 ```rust
 use testlib;
@@ -3384,15 +3664,15 @@ use testlib;
 
 === Constants and Enums
 
-Library constants and enum variants are accessed with the `libname::` prefix. You can compare, order, and convert enum values exactly as you would with enums defined in the same file.
+A library constant reads like one of your own, and so does an enum variant. You can compare, order, and convert enum values exactly as you would with enums defined in the same file. The `libname::` prefix is always available and is what disambiguates a variant name two enums share.
 
 === Struct Construction and Field Access
 
-Construct a library struct with its full namespace prefix. Omitting the prefix is a parse error. Once you have a value, field access uses the plain dot notation with no prefix needed.
+A library struct is constructed like any other. For a `pub` type the prefix is optional — `testlib::Point {…}` and `Point {…}` build the same value — and it is what you reach for when a name of your own would otherwise win. Field access never takes a prefix.
 
 === Calling Library Methods
 
-Methods defined in the library are called on the value directly — no prefix on the call site. Free functions (not methods) do need the `libname::` prefix.
+Methods defined in the library are called on the value directly — no prefix on the call site. A `pub` free function is callable bare as well; the prefix is how you reach one that is not `pub`, and how you say which library you meant.
 
 === Extending a Library Type
 
@@ -3408,11 +3688,11 @@ fn shifted(self: testlib::Point, dx: float, dy: float) -> testlib::Point {
 fn main() {
 ```
 
-Constants from a library require the library prefix.
+A library constant, both ways: the prefix always works, and the bare name works because `use testlib;` brought every `pub` name into this file.
 
 ```rust
   assert(testlib::MAX_SIZE == 100, "library constant MAX_SIZE");
-  assert(testlib::MIN_SIZE == 1, "library constant MIN_SIZE");
+  assert(MIN_SIZE == 1, "the same constant, written bare");
 ```
 
 Library enum variants: comparison and ordering work as normal.
@@ -3431,7 +3711,7 @@ Library enum values can be passed to library free functions.
   assert(testlib::status_text(testlib::Error) == "err", "free fn with enum arg");
 ```
 
-Structs are constructed with namespace prefix and accessed by field.
+A struct built through the prefix, and read by plain field access.
 
 ```rust
   p = testlib::Point {x: 3.0, y: 4.0 };
@@ -3470,11 +3750,18 @@ Methods that mutate scalar fields work.
   assert(b.count == 2, "method scalar mutation: count={b.count}");
 ```
 
-Free functions: called with the library prefix.
+Free functions: a `pub` one answers to either spelling.
 
 ```rust
   assert(testlib::add(3, 4) == 7, "free function add");
-  assert(testlib::add(0, -5) == -5, "free function negative");
+  assert(add(0, -5) == -5, "the same free function, written bare");
+```
+
+A definition the library did NOT mark `pub` is reachable only through the prefix — `internal\_add(3, 4)` on its own is an unknown function here.
+
+```rust
+  assert(testlib::internal_add(3, 4) == 7, "non-pub free function via the prefix");
+  assert(testlib::INTERNAL_LIMIT == 42, "non-pub constant via the prefix");
 ```
 
 Library types work as function parameter types when written with their full namespace prefix in the function signature. A struct with a vector field can be initialised via a struct literal, including elements that are themselves library structs.
@@ -3514,9 +3801,11 @@ mylib/
     mylib.loft        library source (default entry)
 ```
 
-When the interpreter searches a lib directory and finds `\<dir\>/mylib/` it looks for `\<dir\>/mylib/src/mylib.loft` automatically.
+The directory form is found in any search directory you NAMED — `--lib \<dir\>`, a path in `LOFT\_LIB`, `~/.loft/lib/` — and in your own project's `lib/` once your program is itself a package, with a `loft.toml` of its own at the top. In all of those, `\<dir\>/mylib/` resolves to `\<dir\>/mylib/src/mylib.loft` on its own.
 
-The optional `loft.toml` manifest supports two settings:
+A lone script with no manifest above it reads its `lib/` flat, so there a library must be the single file `lib/mylib.loft` — a `lib/mylib/` directory beside such a script answers "Library 'mylib' not found". Giving the script a `loft.toml` is what turns the directory form on.
+
+The `loft.toml` manifest carries the whole package declaration — name, version, dependencies, native crates, build targets. Two of its settings decide how the library above is LOADED:
 
 ```
 [package]
@@ -3532,15 +3821,19 @@ If the interpreter version is below the stated minimum, loading the library prod
 
 === Wildcard and Selective Imports
 
-By default, library names require the `libname::` prefix. You can import names directly into your namespace with `use lib::\*` (wildcard) or `use lib::Name, Other` (selective). Only `pub`-marked definitions in the library are imported this way. Non-pub definitions remain accessible via the `lib::name` prefix.
+A bare `use lib;` already brings in every `pub` name, and `use lib::\*` says the same thing out loud. What the other forms buy you is a say in WHICH names arrive: `use lib::Name` takes one, and `use lib::(Name, Other)` takes a group. Multiple names must be parenthesised — the flat `use lib::Name, Other` is refused ("import multiple names with parentheses"). Only `pub` definitions can be named this way; the rest stay reachable as `lib::name`.
+
+Taking only what you name is the stronger position, because it makes you immune to the library GROWING a name. A bare import and your own definition of a name the library exports are a conflict, and it is refused naming both sites; under a selective import every name you did not ask for stays yours.
+
+`use lib as short;` gives you the qualifier alone — `short::name` — and brings nothing in bare, which is the escape hatch when a name does clash. Single names alias too: `use lib::Name as N`, or `use lib::(Name as N, other)`.
 
 === Limitations
 
 \*\*`use` must appear before all definitions.\*\* If you write a function first and then a `use`, the compiler reports a syntax error.
 
-\*\*`pub` controls import visibility.\*\* Only `pub`-marked definitions are available via wildcard (`use lib::\*`) or selective import. Non-pub definitions are still accessible with the `lib::name` prefix.
+\*\*`pub` decides the bare spelling.\*\* Only `pub` definitions come in bare or can be named by an import; the rest are still reachable as `lib::name`. A library therefore has no hidden half — `pub` says which names are ready to be written without ceremony, not which ones exist.
 
-\*\*Native extensions.\*\* A library can be pure `.loft`, or ship a Rust crate beside it: declare `native = "..."` in `loft.toml` and loft builds and links it for you. See PACKAGES.md for the build + binding model.
+\*\*Native extensions.\*\* A library can be pure `.loft`, or ship a Rust crate beside it: declare `\[library\] native = "..."` in `loft.toml` and loft builds and links it for you. See PACKAGES.md for the build + binding model.
 
 ```rust
 }
@@ -3554,8 +3847,8 @@ Loft gives you two separate ways to protect a value from accidental changes:
 1. \*\*Compile-time const\*\*: mark a variable or parameter with 'const' and the
 
 ```
- compiler refuses to compile any code that tries to reassign it. The check
- happens before the program even runs — zero runtime cost.
+ compiler refuses to compile the writes that word forbids. The check happens
+ before the program even runs — zero runtime cost.
 ```
 
 2. \*\*Runtime lock\*\*: the '\#lock' attribute on a reference lets you lock a
@@ -3572,9 +3865,31 @@ struct Counter {
 }
 ```
 
-=== const parameters
+=== The two places 'const' can go
 
-'const' on a parameter is a compile-time promise: "this function will not modify this value." The compiler enforces it — any assignment to a const parameter is a compile error, caught before you run anything.
+A name has a slot, and the slot holds a value. Those are two different things to freeze, so 'const' has two positions and they mean opposite halves:
+
+- \*\*'const' before the NAME\*\* — `const x = …` — freezes the \*\*slot\*\*. You can
+
+```
+never point `x` at something else, but the value it holds stays mutable:
+you may still append to it and write its elements and fields. This is the
+builder shape — set it up once, fill it in place.
+```
+
+- \*\*'const' before the TYPE\*\* — `x: const T` — freezes the \*\*value\*\*. You may
+
+```
+swap in a whole new value, but you can never reach into the one that is
+there. This is the read-only shape — a shared table, a parameter a function
+promises not to touch.
+```
+
+Write both — `const x: const T` — and the name is fully immutable.
+
+A plain number or boolean has no interior separate from its slot, so for those the two positions mean the same thing: both freeze it completely.
+
+'const' before the TYPE is what a function uses to promise "I will not modify this". Every write through the parameter is a compile error: appending to it, writing an element, writing a field, or writing a field of a field.
 
 ```rust
 fn read_value(self: const Counter) -> integer {
@@ -3582,7 +3897,7 @@ fn read_value(self: const Counter) -> integer {
 }
 ```
 
-A non-const parameter leaves the store unlocked so the function can write.
+A parameter without 'const' can write, and the write reaches the caller.
 
 ```rust
 fn increment(self: Counter) {
@@ -3596,41 +3911,48 @@ fn main() {
 
 === const local variables
 
-Declare a local variable with 'const' to signal that it will not change after its first assignment. The compiler rejects any later assignment to it — reassigning or appending to a const variable is a compile error.
-
-This is handy for configuration values or lookup tables that should never be overwritten by accident deep inside a long function.
+`const` before the name is the common case for a local: a configuration value or a lookup table that should never be pointed somewhere else deep inside a long function.
 
 ```rust
   const limit = 100;
   assert(limit == 100, "const integer is readable");
 ```
 
-const also works for struct references.
+For a whole number the two positions agree, so this one is frozen outright: `limit = 200` and `limit += 1` are both compile errors.
+
+A const local holding a collection is the builder shape — the slot is write-once, the contents keep growing.
+
+```rust
+  const totals = [1, 2, 3];
+  totals += [4];
+  totals[0] = 9;
+  assert(len(totals) == 4, "a const local still appends: {len(totals)}");
+  assert(totals[0] == 9, "a const local still takes an element write");
+```
+
+The other position freezes the contents instead, and leaves the slot free.
+
+```rust
+  frozen: const vector<integer> = [1, 2, 3];
+  frozen = [7, 8];
+  assert(len(frozen) == 2, "a value-const local still re-points: {len(frozen)}");
+```
+
+`frozen += \[9\]` would not compile: the value is read-only.
+
+The same split applies to a struct.
 
 ```rust
   const cfg = Counter {value: 42 };
   assert(cfg.value == 42, "const reference is readable");
-```
-
-Passing a const reference to a const parameter is always allowed.
-
-```rust
   assert(read_value(cfg) == 42, "const passed to const param");
-```
-
-=== Calling methods on const references
-
-A non-const method can still be called on a non-const variable even after you have manually locked the store; the lock is a runtime check.
-
-```rust
-  c = Counter {value: 10 };
-  increment(c);
-  assert(c.value == 11, "increment modified c");
 ```
 
 === Runtime store locks with \#lock
 
-'\#lock' is an attribute on any reference variable. Setting it to true turns on a runtime guard: any write to that store will panic immediately, wherever it happens. A freshly created reference starts unlocked.
+`const` is checked once, when the program is compiled. A lock is checked on every write, while the program runs — so it catches a write the compiler cannot see coming, wherever in the program it happens.
+
+`\#lock` is an attribute on any reference variable: a struct, a vector, any value that lives in a store. A freshly created one starts unlocked.
 
 ```rust
   d = Counter {value: 5 };
@@ -3639,10 +3961,20 @@ A non-const method can still be called on a non-const variable even after you ha
   assert(d#lock, "store is locked after assignment");
 ```
 
-You can still read from a locked store — only writes are blocked.
+Reading a locked store is still fine — only writes are blocked.
 
 ```rust
   assert(read_value(d) == 5, "locked store is still readable");
+```
+
+A write is not. `d.value = 6` panics here, and so does `increment(d)` — the guard is on the store, so it fires wherever the write is written. That is the point of the lock: the program stops at the write instead of carrying a value someone changed behind your back.
+
+Set it back to false to lift the guard.
+
+```rust
+  d#lock = false;
+  increment(d);
+  assert(d.value == 6, "unlocking lets the write through again");
 ```
 
 === When to use each approach
@@ -3657,7 +3989,7 @@ and get compile-time safety at zero cost.
 
 ```
 code path is mutating a value it should not touch, and you want the
-program to panic with a precise location rather than corrupt silently.
+program to stop at that write rather than corrupt silently.
 ```
 
 get\_store\_lock() is the function form of the \#lock attribute. Both return the same boolean.
@@ -3673,38 +4005,71 @@ get\_store\_lock() is the function form of the \#lock attribute. Both return the
 
 = Parallel execution
 
-The `par(b=worker\_call, threads)` clause on a `for` loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.
+The `par(b=worker\_call, threads)` clause on a `for` loop runs a function on every element of a collection in parallel and gives you the results one by one in the loop body.
 
 === Why parallel loops?
 
-When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — `par()` splits the work across CPU cores automatically.  You write a normal for loop; adding `par(...)` makes it parallel with no other changes.
+When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — `par()` splits the work across CPU cores automatically.  You move the per-element work into a function and name it in the clause; the loop body then reads that function's result instead of computing it.
 
 === Syntax
 
 ```
-`for a in vec par(b=func(a), N) { body }`
+`for a in src par(b = func(a), N) { body }`
 ```
 
-- `a` — loop variable, read-only reference to the current element
+- `a` — loop variable, bound to the current element, exactly as in a loop
+
+```
+without `par`.  The body may still read it alongside the result.
+```
+
 - `b` — result variable, holds the return value of `func(a)`
 - `func(a)` — worker function called on each element
 - `N` — number of threads (1 = sequential, 4 = typical)
 
+`src` is any source a `for` loop accepts: a vector, a range, a text, or a keyed collection.  See "Order" below for what a `hash` source changes.
+
 === Two call forms
 
-- \*\*Form 1\*\* — global function: `par(b=my\_func(a), 4)`
-- \*\*Form 2\*\* — method on element: `par(b=a.my\_method(), 4)`
+- \*\*Form 1\*\* — a free function: `par(b=my\_func(a), 4)`
+- \*\*Form 2\*\* — a method on the element: `par(b=a.my\_method(), 4)`
 
-=== Worker function rules
+These are two spellings for two kinds of declaration, not two ways to write the same call: a function whose first parameter is `self` is reachable only by Form 2, and a free function only by Form 1.  Reach for the wrong one and the compiler says the name is unknown.
 
-The worker function:
+=== What a worker may do
 
-- Takes a `const` reference to the element (read-only, no mutation)
-- Returns a value (integer, float, boolean, text, or a struct)
-- Must not use global state or I/O (no println, no file access)
-- Can accept extra arguments forwarded from the calling scope
+The compiler holds two of these for you, and you hold the third:
 
-Results are delivered in the original order regardless of which thread finishes first.
+- \*\*The loop element may be a reference\*\* — a struct, say.  Marking it
+
+```
+`const` documents that the worker only reads it.  For a plain number the
+`const` has nothing to freeze and the compiler says so, so leave it off.
+```
+
+- \*\*Every OTHER argument must be a scalar.\*\* A worker runs on its own copy
+
+```
+of the heap, so it cannot reach a struct or vector from the calling
+scope.  Read what you need into a number before the loop and forward that.
+```
+
+- \*\*The worker must not touch anything shared\*\* — no global state, no
+
+```
+`println`, no file access.  This one is yours to keep: a worker that
+writes shared state is a program loft does not define, and it will not
+stop you.  Three workers appending to one file leave one line, and which
+line survives changes from run to run.
+```
+
+The compiler does refuse the case it can see: a worker that writes to state captured from around the loop.
+
+=== Order
+
+The body sees results in the order the source produced them, whatever order the threads finished in — so for a vector, a range, a text or a `sorted`, `par` gives exactly what the sequential loop gives, and `N` is a speed knob that never changes the answer.
+
+A `hash` is the one exception, and it is worth knowing before you rely on it: `par` walks it in storage order rather than key order, so the results arrive in a different order from the plain `for` loop over the same hash — and in a different order on each run.  Iterate a `sorted` instead when the order matters.
 
 ```rust
 struct Score {
@@ -3763,7 +4128,7 @@ fn make_scores() -> ScoreList {
 fn main() {
 ```
 
-=== Global Function (Form 1)
+=== Free function (Form 1)
 
 Each Score's value is doubled by `double\_score` across 4 threads. The loop body sees `b` with the doubled value, in original order.
 
@@ -3783,7 +4148,7 @@ Each Score's value is doubled by `double\_score` across 4 threads. The loop body
 
 === Extra Arguments
 
-The worker function can take extra arguments from the calling scope. Here `scale\_score(a, factor)` passes `factor=3` to every worker.
+The worker function can take extra arguments from the calling scope, as long as each is a number, a boolean or a character.  Here `scale\_score(a, factor)` passes `factor=3` to every worker.
 
 ```rust
   q1b = make_scores();
@@ -3802,7 +4167,7 @@ The worker function can take extra arguments from the calling scope. Here `scale
 
 === Struct Return
 
-Workers can return a struct.  Text fields are deep-copied so they remain valid after the worker thread exits.
+A worker returns whatever its own type says: a number, a boolean, a character, a text, a struct, or a vector.  Text and struct results are deep-copied, so they stay valid after the worker thread exits.
 
 ```rust
   q2 = make_scores();
@@ -3813,9 +4178,9 @@ Workers can return a struct.  Text fields are deep-copied so they remain valid a
   assert(labels == "v10,v20,v30,", "struct return: {labels}");
 ```
 
-=== Method Call (Form 2)
+=== Method call (Form 2)
 
-`b=a.get\_value()` dispatches the method on each element in parallel. This is syntactic sugar — equivalent to `b=get\_value(a)`.
+`get\_value` takes `self`, so it is a method and `b=a.get\_value()` is the spelling that reaches it.
 
 ```rust
   q3 = make_scores();
@@ -3824,6 +4189,23 @@ Workers can return a struct.  Text fields are deep-copied so they remain valid a
     total += thr_b;
   }
   assert(total == 60, "method call: total == 60");
+```
+
+=== Any for-source
+
+A range is a source like any other, and a worker over plain numbers wants no `const`.
+
+```rust
+  thr_range_sum = 0;
+  for thr_i in 0..5 par(thr_d = thr_double(thr_i), 4) {
+    thr_range_sum += thr_d;
+  }
+```
+
+(0+1+2+3+4) \* 2
+
+```rust
+  assert(thr_range_sum == 20, "range source: {thr_range_sum}");
 ```
 
 === Empty Vector
@@ -3841,7 +4223,7 @@ An empty vector is safe — the loop body never executes, no threads are spawned
 
 === Sequential fallback
 
-Using `par(..., 1)` runs the worker on a single thread — useful for debugging.  The behaviour is identical; only the parallelism changes.
+Using `par(..., 1)` runs the worker on a single thread — useful for debugging.  The answer is the same one every thread count gives; only the parallelism changes.
 
 ```rust
   q4 = make_scores();
@@ -3850,6 +4232,12 @@ Using `par(..., 1)` runs the worker on a single thread — useful for debugging.
     seq_sum += thr_b;
   }
   assert(seq_sum == 120, "sequential par(1): same result");
+}
+```
+
+```rust
+fn thr_double(thr_n: integer) -> integer {
+  thr_n * 2
 }
 ```
 
@@ -3890,12 +4278,13 @@ Example: "cannot open database", "required config file not found".
 
 === Configuring the log destination
 
-By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line.
+By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a 'log.conf' file in the same directory as your '.loft' file, or pass '--log-conf path/to/log.conf' on the command line. The directory is exact: a 'log.conf' one level up is not found, and a program with no config logs nothing and says nothing.
 
-Generate a documented template with all defaults by running:
+To see every setting with its default, print a documented template:
 
 ```
-loft --generate-log-config
+loft --generate-log-config              # writes it to the terminal
+loft --generate-log-config log.conf     # writes it to that file
 ```
 
 A minimal 'log.conf' looks like this:
@@ -3904,6 +4293,7 @@ A minimal 'log.conf' looks like this:
 [log]
 file  = log.txt    # write messages here (relative to the .loft file)
 level = info       # minimum level to record; choices: info warn error fatal
+                   # (the default, when you leave this out, is 'warn')
 ```
 
 ```
@@ -3920,23 +4310,27 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 
 ```
 [levels]
-# Override the global level for a specific file:
-# "debug_tool.loft" = info
-# "src/"            = error
+# Override the global level for one file, by its name alone:
+"debug_tool.loft" = info
+"src/"            = error   # a path prefix — see loft#1264 before relying on it
 ```
 
 === Production mode
 
-When 'production = true' is set in log.conf:
+With 'production = true' in the '\[log\]' section of log.conf, or '--production' on the command line:
 
 - 'panic()' becomes a fatal log entry instead of aborting the process.
 - A failing 'assert()' becomes an error log entry instead of aborting.
 
-The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down.
+The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down. It still exits non-zero at the end, so a supervisor watching the exit status learns that something went wrong.
+
+⚠ This works on the interpreter only. On the '--native' backend — which is what you get by default — 'panic()' still aborts and writes nothing to the log (loft\#1263). Until that is closed, run a service that relies on production mode with '--interpret'.
 
 === Using format strings in log messages
 
-Log messages are plain text, but you can embed any expression using the same '{...}' format syntax as everywhere else in Loft. The interpolation happens only when the message is actually going to be written; if the configured level is higher than the call, the string is never evaluated (no performance cost for suppressed messages).
+Log messages are plain text, but you can embed any expression using the same '{...}' format syntax as everywhere else in Loft.
+
+The message is built BEFORE the call decides whether to write it — the argument is an ordinary expression, evaluated like any other. So a message that is discarded still costs what it costs, and that is true whether it was filtered out by the level, suppressed by the rate limit, or dropped because there is no log.conf at all. Keep an expensive call out of a message on a hot path, or guard the whole log line with an 'if'.
 
 ```rust
 fn main() {
@@ -3956,13 +4350,13 @@ Without a log.conf these calls do nothing — the tests below pass even though n
 When a 'log.conf' is present with 'level = info', the four calls above produce entries like this in 'log.txt':
 
 ```
-2026-03-24 09:15:00 INFO   app.loft:3  starting up
-2026-03-24 09:15:00 WARN   app.loft:4  this is a warning
-2026-03-24 09:15:00 ERROR  app.loft:5  something went wrong
-2026-03-24 09:15:00 FATAL  app.loft:6  critical failure
+2026-09-01T08:35:38.971Z INFO   /home/you/app/app.loft:3  starting up
+2026-09-01T08:35:38.971Z WARN   /home/you/app/app.loft:4  this is a warning
+2026-09-01T08:35:38.971Z ERROR  /home/you/app/app.loft:5  something went wrong
+2026-09-01T08:35:38.971Z FATAL  /home/you/app/app.loft:6  critical failure
 ```
 
-Each line contains: timestamp, severity level, source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. A true assert never logs anything — it is only the false case that logs.
+Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute (loft\#1264). A true assert never logs anything — it is only the false case that logs.
 
 ```rust
   assert(true, "this should never fail");
@@ -3994,16 +4388,32 @@ The log messages give you a record of exactly what the program did and where it 
 
 = Time
 
-Loft provides two time functions:
+Loft's standard library has two time functions, and they answer two different questions:
 
 ```
 now()     — milliseconds since the Unix epoch (wall-clock time).
 ticks()   — microseconds elapsed since program start (monotonic clock).
 ```
 
-Both return an 'integer' (loft's 64-bit integer).
+Both return an 'integer' (loft's 64-bit integer) — which they need, since a millisecond timestamp passed 32 bits in 1970 plus a few weeks.
 
-Use 'now()' for timestamps, log entries, and date calculations. Use 'ticks()' for benchmarks and frame timing — it is unaffected by system clock changes or NTP adjustments.
+Use 'now()' when you want to know WHEN something happened: timestamps, log entries, anything you will compare against a calendar. Use 'ticks()' when you want to know HOW LONG something took: benchmarks and frame timing. It is unaffected by system clock changes or NTP adjustments, which is exactly what 'now()' cannot promise.
+
+=== Calendars are a library
+
+These two are the whole clock surface: there is no year, month or weekday in the standard library, and no formatting. That is deliberate — calendar arithmetic is a large, opinionated subject — and it is a package away:
+
+```
+use time;
+fn main() {
+    ms = now();
+    println(format_iso(ms));                    // 2026-09-01T09:03:58Z
+    println("{year(ms)} {month_name(ms)} {day(ms)}, a {weekday_name(ms)}");
+    println(format_date(add_days(ms, 30)));     // 2026-10-01
+}
+```
+
+The 'time' package works on the same millisecond-since-epoch integer 'now()' returns, so nothing has to be converted. Install it with 'loft install time'.
 
 ```rust
 fn main() {
@@ -4011,23 +4421,23 @@ fn main() {
 
 === Wall-clock time: now()
 
-'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.
+'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC, so it is well past the range a 32-bit number could hold.
 
 ```rust
   t = now();
-  assert(t > 0, "now() must be positive");
+  assert(t > 2147483647, "now() is a 64-bit millisecond stamp: {t}");
 ```
 
-Two successive calls return non-decreasing values.
+It reads the system clock, so it usually moves forward — but it is the system's clock, not yours: an NTP correction or a manual change can step it in either direction. Never subtract two 'now()' values to time something. That is what 'ticks()' is for.
 
 ```rust
   t2 = now();
-  assert(t2 >= t, "now() must be non-decreasing");
+  assert(t2 > 2147483647, "a second reading is a timestamp too: {t2}");
 ```
 
 === Elapsed time: ticks()
 
-'ticks()' measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.
+'ticks()' measures microseconds since the program started, so it begins near zero and only ever climbs. It uses a monotonic clock, which is the guarantee 'now()' does not have: it never jumps backward, whatever happens to the system clock while your program runs.
 
 ```rust
   start = ticks();
@@ -4067,13 +4477,14 @@ Timestamp a log entry (seconds since epoch):
 seconds = now() / 1000
 ```
 
-Seed the random number generator with the current time (now() already returns an integer, so no cast is needed):
+Seed the random number generator with the current time. The generator is in the 'random' package rather than the standard library, so the import is part of the pattern — without it the name does not resolve:
 
 ```
+use random;
 rand_seed(now())
 ```
 
-Simple stopwatch:
+Simple stopwatch (integer division, so this truncates to whole ms):
 
 ```
 start = ticks()
@@ -6264,6 +6675,7 @@ pub interface Ordered
 ```
 
 Types that support the `\<` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.
+`boolean` is NOT among them, deliberately: it satisfies Equatable below and has no ordering, so `false \< true` is a refusal rather than a convention the language picks for you.  A program that wants it says so — `(a as integer) \< (b as integer)`.  Note this is what bounds the null-ordering half of \@FR-E-NullArg, which applies to the ORDERED types only; boolean null still compares with `==` like every other scalar.
 ONE method is all a type has to define: inside a generic bounded by this, `\>`, `\<=` and `\>=` all derive from `\<` — `a \> b` is `b \< a`, `a \<= b` is `!(b \< a)`, `a \>= b` is `!(a \< b)`.  Each evaluates its operands exactly once.
 
 ```rust
@@ -7038,11 +7450,12 @@ pub enum FileResult {
   NotFound,
   PermissionDenied,
   IsDirectory,
+  NotEmpty,
   Other,
 }
 ```
 
-Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)
+Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), NotEmpty when rmdir() is given a directory that still holds entries, and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)
 
 ```rust
 pub fn ok(self: FileResult) -> boolean
@@ -7117,6 +7530,12 @@ pub fn mkdir(path: text) -> FileResult fs#update
 ```rust
 pub fn mkdir_all(path: text) -> FileResult fs#update
 ```
+
+```rust
+pub fn rmdir(path: text) -> FileResult fs#update
+```
+
+Remove the EMPTY directory `path`.  Returns FileResult.NotEmpty when it still holds entries, NotFound when it does not exist, and Other when `path` is a file rather than a directory. Empty directories only: a recursive removal is a separate decision, and the walk is writable here — list\_dir() the children, delete() the files, rmdir() the directory, deepest first. Use to undo a mkdir(), or to clean up a scratch directory a program made.
 
 ```rust
 pub fn is_dir(path: text) -> boolean fs#read

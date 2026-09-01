@@ -1,0 +1,2 @@
+use no_such_package_anywhere;
+fn main() { print("x"); }

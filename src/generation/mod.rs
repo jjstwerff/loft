@@ -738,11 +738,42 @@ fn sanitize(name: &str) -> String {
 #[must_use]
 fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     match tp {
-        Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => Some("u8"),
-        Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => Some("u16"),
-        Type::Integer(s) if s.range() - 1 <= 255 => Some("i8"),
-        Type::Integer(s) if s.range() - 1 <= 65536 => Some("i16"),
+        Type::Integer(s) => native_narrow_int(s),
         _ => boolean_u8_cast(tp),
+    }
+}
+
+/// The narrow Rust type a value of this integer range fits UNENCODED, or `None` when it needs
+/// the full width.
+///
+/// The ONE home for that question, asked by `rust_type`'s Result arms (which pick the
+/// signature) and by [`narrow_int_cast`] (which casts the value at the return site).  They
+/// have to agree or the generated code does not compile — and they were two copies of the
+/// same four-line predicate, which is how they came to share a defect.
+///
+/// The test is which VALUES the range holds, not how MANY.  Read off the SPAN
+/// (`range() - 1 <= 255`) both answered `u8` for `integer limit(300, 400)` — 101 values,
+/// which fit a byte only OFFSET-encoded, which is what the store layer does and a register
+/// does not.  A body of `350` came back as `94` on `--native` and `350` on `--interpret`,
+/// silently, on every build back to the last release; `limit(70000, 70100)` is the cell that
+/// shows it is not a u8-vs-u16 boundary question at all, since a 101-wide range picked `u8`
+/// for a five-digit number (loft#1255).
+///
+/// `formal/layout.md` is why the answer is the values: the packed encoding is a STORAGE fact,
+/// so the span belongs to `bytes_for_range` and never to a register.  A value in flight is
+/// its plain number, which is what the interpreter's i64 slot already does.
+fn native_narrow_int(s: &crate::data::IntegerSpec) -> Option<&'static str> {
+    let (min, max) = (i64::from(s.min), i64::from(s.max));
+    if min >= 0 && max <= 255 {
+        Some("u8")
+    } else if min >= 0 && max <= 65535 {
+        Some("u16")
+    } else if min >= -128 && max <= 127 {
+        Some("i8")
+    } else if min >= -32768 && max <= 32767 {
+        Some("i16")
+    } else {
+        None
     }
 }
 
@@ -999,16 +1030,14 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         // cascading type-mismatch errors when the variable is passed to a template
         // operation (e.g. `set_short`) that expects `i32`.  The `return` site adds an
         // explicit `as u16` / `as u8` cast (see `narrow_int_cast`).
-        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 && s.min >= 0 => {
-            "u8"
-        }
+        //
+        // WHICH narrow type is `native_narrow_int`'s answer, shared with `narrow_int_cast` so
+        // the signature and the cast at the return site cannot disagree (loft#1255).
         Type::Integer(s)
-            if context == &Context::Result && s.range() - 1 <= 65536 && s.min >= 0 =>
+            if context == &Context::Result && native_narrow_int(s).is_some() =>
         {
-            "u16"
+            native_narrow_int(s).unwrap_or("i64")
         }
-        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 => "i8",
-        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 65536 => "i16",
         Type::Enum(_, false, _) => "u8",
         Type::Character | Type::Null => "i32",
         Type::Integer(_) => "i64",
@@ -1185,6 +1214,39 @@ fn collect_scope_hoists(code: &Value) -> std::collections::HashSet<u16> {
     let mut next_id = 0u32;
     walk(code, &mut path, &mut next_id, &mut first_set, &mut hoist);
     hoist
+}
+
+/// @FR-E-Uncomp-NN — the value a slot of `tp` holds when nobody assigned one.
+///
+/// NOT [`default_native_value`], which despite its name answers the type's NULL: a
+/// `boolean`'s `255u8` sentinel, a text's `STRING_NULL`, a flat `0` for every integer
+/// whatever its declared range.  That is the right answer where a null is what is wanted —
+/// an explicit `return null`, a `Value::Null` store — and the wrong one for a NON-NULLABLE
+/// destination, which is what an empty-bodied function's return is: `fn f() -> boolean { }`
+/// answered `null` natively where the interpreter said `false`, and
+/// `fn f() -> integer limit(10, 20) { }` answered `0`, a value that type does not have
+/// (loft#1254).
+///
+/// Only the two arms that differ are stated here; everything else delegates, because for
+/// every other type the null IS the zero-shaped default (an empty collection's `DbRef::NULL`,
+/// `0.0` for a float).  `character` is the documented exception and stays: its null is
+/// codepoint 0 and so is its default, so the collision `formal/types.md` records for `Char`
+/// leaves nothing better to return.
+pub(super) fn uninitialised_native_value(tp: &Type, context: &Context) -> String {
+    match tp {
+        // The storage form of `false`; the null is `255u8`.
+        Type::Boolean => "0u8".into(),
+        Type::Integer(spec) => spec.default_value().to_string(),
+        // `to_default` says a text's default is the EMPTY string (@FR-D-Text); the null is
+        // the `STRING_NULL` sentinel `default_native_value_in` answers, which is a different
+        // value and the one an uninitialised slot must not take.  Spelled per context for
+        // the reason that function's own doc gives: `String` where the destination is
+        // declared as one, `Str` in a return.
+        Type::Text(_) if context == &Context::Variable => "String::new()".into(),
+        Type::Text(_) => "Str::new(\"\")".into(),
+        Type::Optional(inner) => default_native_value_in(inner, context),
+        _ => default_native_value_in(tp, context),
+    }
 }
 
 /// The native-Rust DEFAULT-INIT literal for a variable / return of type `tp` —
@@ -2835,7 +2897,7 @@ extern crate loft;"
             // ~8 MiB OS main-thread stack), then the optional native leak check.
             write!(
                 w,
-                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n{prelude}    n_main(&cell{args});\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n{prelude}    n_main(&cell{args});\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.run_failed() {{ std::process::exit(1); }} }}\n"
             )?;
             writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
@@ -2876,7 +2938,7 @@ extern crate loft;"
             // references no `live_dispatch` symbol at all.
             write!(
                 w,
-                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    init(&cell);\n{prelude}    n_main(&cell{args});\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    init(&cell);\n{prelude}    n_main(&cell{args});\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.run_failed() {{ std::process::exit(1); }} }}\n"
             )?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
             w.write_all(NATIVE_STRICT_STORE_TAIL.as_bytes())?;
@@ -3688,11 +3750,26 @@ extern crate loft;"
                 // `init()`, i.e. the library simply failed to build (loft#797).
                 let field_type = a.typedef.base();
                 let dep_tp = match field_type {
-                    Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
-                        (*c_nr != u32::MAX)
-                            .then(|| self.data.def(*c_nr).known_type())
-                            .filter(|t| *t != u16::MAX)
-                    }
+                    // loft#1222 — every KEYED former belongs here, and `Trie` / `Radix` were
+                    // missing.  Their field emitters build the collection inline exactly as
+                    // Sorted / Hash / Index do (`db.trie(c_ref, key)`, `db.spatial(c_ref,
+                    // keys)`), so they need the content type declared just as much; falling to
+                    // `_ => None` meant no hoist, and a `trie<Tk[k]>` or `spatial<Pt[x,y]>`
+                    // field whose element struct is declared LATER emitted `db.trie(t80, "k")`
+                    // two lines before `let t80 = …`.  rustc rejected the generated `init()`
+                    // with E0425 while the interpreter ran the same program — a backend
+                    // divergence reported in a language the author never wrote.
+                    //
+                    // The set is the five store-backed keyed formers, which is what
+                    // `emit_db_field`'s arms above already enumerate; keeping the two lists in
+                    // step is the whole obligation here.
+                    Type::Sorted(c_nr, _, _)
+                    | Type::Hash(c_nr, _, _)
+                    | Type::Index(c_nr, _, _)
+                    | Type::Trie(c_nr, _, _)
+                    | Type::Radix(c_nr, _, _) => (*c_nr != u32::MAX)
+                        .then(|| self.data.def(*c_nr).known_type())
+                        .filter(|t| *t != u16::MAX),
                     Type::Vector(c_type, _) => {
                         let n = self.data.type_def_nr(c_type);
                         (n != u32::MAX)
@@ -4589,7 +4666,7 @@ extern crate loft;"
         if def.name() == "n_assert" && *def.code() == Value::Null {
             writeln!(
                 w,
-                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: u8, msg: M, file: F, line: i64) {{"
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, test: u8, msg: M, file: F, line: i64) {{"
             )?;
             // @PLN17: `test` is a boolean in storage form (u8); the assert fails
             // when it is not the true byte (1) — i.e. false (0) OR null (255).
@@ -4604,9 +4681,14 @@ extern crate loft;"
             // target and `report_and_exit` printed none; the frames now come from the
             // shadow call stack inside `report_and_exit` itself, so nothing is traded away
             // — and `--interpret`, which had no frames here either, gains them too.
+            // Production mode logs and continues (C66), through the same
+            // `logged_in_production` the interpreter's `native.rs::n_assert` calls — the
+            // two backends implement one documented behaviour and only the interpreter
+            // used to honour it, so `loft app.loft` aborted where `loft --interpret`
+            // carried on (loft#1263).
             writeln!(
                 w,
-                "  if test != 1 {{ loft::runtime_error::RuntimeError::assertion_failed(msg.to_string(), file.to_string(), line as u32).report_and_exit(); }}"
+                "  if test != 1 {{\n    let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n    let kind = loft::runtime_error::RuntimeErrorKind::AssertionFailed {{ message: msg.to_string() }};\n    if loft::runtime_error::logged_in_production(stores, &kind, &file.to_string(), line as u32) {{ return; }}\n    loft::runtime_error::RuntimeError::assertion_failed(msg.to_string(), file.to_string(), line as u32).report_and_exit();\n  }}"
             )?;
             writeln!(w, "}}\n")?;
             return Ok(());
@@ -4662,11 +4744,12 @@ extern crate loft;"
         if def.name() == "n_panic" && *def.code() == Value::Null {
             writeln!(
                 w,
-                "fn n_panic<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {{"
+                "fn n_panic<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {{"
             )?;
+            // Same shared decision as `n_assert` above (loft#1263).
             writeln!(
                 w,
-                "  loft::runtime_error::RuntimeError::user_panic(msg.to_string(), file.to_string(), line as u32).report_and_exit();"
+                "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  let kind = loft::runtime_error::RuntimeErrorKind::UserPanic {{ message: msg.to_string() }};\n  if loft::runtime_error::logged_in_production(stores, &kind, &file.to_string(), line as u32) {{ return; }}\n  loft::runtime_error::RuntimeError::user_panic(msg.to_string(), file.to_string(), line as u32).report_and_exit();"
             )?;
             writeln!(w, "}}\n")?;
             return Ok(());
@@ -4874,7 +4957,22 @@ extern crate loft;"
                     w,
                     "  let _stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
                 )?;
-                writeln!(w, "  {}", default_native_value(def.returned()))?;
+                // An empty body assigns nothing, so the return takes the type's DEFAULT —
+                // not its null (@FR-E-Uncomp-NN, loft#1254).
+                //
+                // Which SPELLING that default takes is `returns_owned_string`'s decision,
+                // and the signature above already asked it; its own doc is the contract —
+                // "the single decision lives in `returns_owned_string` … so the signature
+                // and the body never disagree".  Asking it here too is what stops a `-> text`
+                // stub emitting a `Str` under a `-> String` signature, which rustc rejects
+                // (E0308): a raw compiler error reaching the user for a program loft
+                // accepted (loft#1254).
+                let ctx = if returns_owned_string(def) {
+                    Context::Variable
+                } else {
+                    Context::Result
+                };
+                writeln!(w, "  {}", uninitialised_native_value(def.returned(), &ctx))?;
                 writeln!(w, "}}")?;
             } else if instrument {
                 // Emit shadow call stack instrumentation before the block body.

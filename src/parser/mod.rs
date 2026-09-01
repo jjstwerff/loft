@@ -1664,6 +1664,20 @@ impl Parser {
         if self.first_pass || self.default || !crate::keys::complexity_lint_enabled() {
             return;
         }
+        // Only whoever can act on it.  The cure this advice names — lift the innermost
+        // part into its own function — is an edit to the function's OWN source, so a
+        // consumer importing a library gets a nudge about code they cannot change:
+        // three of the six bundled libraries printed one into every build that `use`d
+        // them, the Lexer chapter of the reference among them.  `source_is_owned` is
+        // relative to what is being built, so the library's own author still sees it
+        // when they compile the library.  Same gate, same reason, as
+        // `advise_group_apart`.
+        if !self
+            .data
+            .source_is_owned(self.data.def(self.context).source)
+        {
+            return;
+        }
         let score = self.complexity.get(&self.context).copied().unwrap_or(0);
         if score < crate::keys::COMPLEXITY_ADVICE_AT {
             return;
@@ -1903,6 +1917,14 @@ impl Parser {
         // *first* (main) file winning over later directory/import re-parses.
         // (main.rs additionally sets it for the startup-cache path, which loads a
         // pre-parsed snapshot and never calls `parse()`.)
+        // loft#1260 — say who this compilation's lints are addressed to.  Both instances:
+        // the lexer's is what the parse writes into, and `p.diagnostics` is what the
+        // post-scope lints are handed.  Same place and same entry file as `source_dir`
+        // just below, which answers the same shape of question.
+        if !default {
+            self.lexer.set_lint_scope_for(filename);
+            self.diagnostics.set_lint_scope_for(filename);
+        }
         if !default && self.database.source_dir.is_empty() {
             self.database.source_dir = std::path::Path::new(filename)
                 .parent()
@@ -2892,6 +2914,14 @@ impl Parser {
     pub fn parse_source(&mut self, content: &str, filename: &str, default: bool) -> bool {
         // @PLN13 — establish `source_dir` from `filename` (like `parse`) so a `--script`
         // run resolves `use` imports + relative I/O against the script's own directory.
+        // loft#1260 — say who this compilation's lints are addressed to.  Both instances:
+        // the lexer's is what the parse writes into, and `p.diagnostics` is what the
+        // post-scope lints are handed.  Same place and same entry file as `source_dir`
+        // just below, which answers the same shape of question.
+        if !default {
+            self.lexer.set_lint_scope_for(filename);
+            self.diagnostics.set_lint_scope_for(filename);
+        }
         if !default && self.database.source_dir.is_empty() {
             self.database.source_dir = std::path::Path::new(filename)
                 .parent()
@@ -3623,6 +3653,70 @@ impl Parser {
     /// smaller explicit width (e.g. `integer` → `i32`, or `i32` → `u8`), which
     /// loses data.  Widening (`i32` → `integer`) and same-width are not narrowing.
     /// A plain `integer`/`wide`/`u32` has no `forced_size` and is treated as 8 bytes.
+    /// The noun a const-modification diagnostic should use — "const parameter" for one the
+    /// author declared, "const variable" for a local.  The one place that joins the two facts
+    /// the answer needs, because they live apart: the variable table knows the variable
+    /// OCCUPIES an argument slot, and only the DEFINITION knows whether that slot is a hidden
+    /// one the return mechanism promoted it into.
+    ///
+    /// `text_return` / `ref_return` set `attributes[…].hidden` and call `become_argument` at
+    /// the same moment, so a heap-typed local supplying the function's return value is an
+    /// argument by the time any diagnostic sees it — and a const one was reported as a "const
+    /// PARAMETER" in a function that has none (loft#1252).  Matching by NAME is what
+    /// `scopes.rs`'s worker-output check already does with the same pair of facts.
+    fn const_noun(&self, var_nr: u16) -> &'static str {
+        let promoted =
+            self.context != u32::MAX && (self.context as usize) < self.data.definitions.len() && {
+                let name = self.vars.name(var_nr);
+                self.data
+                    .def(self.context)
+                    .attributes()
+                    .iter()
+                    .any(|a| a.hidden && a.name == name)
+            };
+        self.vars.const_kind(var_nr, promoted)
+    }
+
+    /// @FR-I-Narrow, completed by @PLN25 DN4 `(N-Cast?)` — the implicit CHECKED narrowing
+    /// a NULLABLE narrow target takes in place of a refusal.  Answers whether it applied.
+    ///
+    /// `(I-Narrow)` says a narrowing store is not implicit: it needs an explicit `as` or a
+    /// literal that plainly fits.  DN4 completes that for the one target which has
+    /// somewhere to put a miss — an out-of-range value lands in a `u8?` as a VISIBLE
+    /// `null`, never as a truncation — so the store needs no `as`, and the diagnostic that
+    /// refuses the NON-nullable spelling already names `u8?` as the cure.  A non-nullable
+    /// narrow target has no such value and is still refused.
+    ///
+    /// This is the ONE home because the two seams that store into a slot ask the question
+    /// in different words.  [`Self::convert`] reaches the struct literal, the call argument
+    /// and the return; the ASSIGNMENT seam never reaches `convert` for this pair at all,
+    /// because `integer` and `integer(0,255)?` are `is_equal` — so it runs its own
+    /// narrowing test, and that test is a REFUSAL with no checked-cast arm.  Read off
+    /// separately the two disagreed: `d: u8? = p + 10` kept **260**, a value outside the
+    /// range its own type declares, while `f(p + 10)` on a `u8?` parameter and
+    /// `S { u: p + 10 }` on a `u8?` field both answered null (loft#1246).
+    ///
+    /// The `limit(lo, hi)` spelling of the same range deliberately does NOT come here: it
+    /// sets no `forced_size`, so `is_narrowing_int` declines it, and its bound is the
+    /// runtime `OpRangeDefault` every seam already applies (`guard_declared_range`).  Two
+    /// mechanisms, one answer — checked here cell for cell in
+    /// `tests/scripts/1246-a-nullable-narrow-slot-answers-null.loft`.
+    fn implicit_checked_narrow(&mut self, code: &mut Value, is_type: &Type, should: &Type) -> bool {
+        if self.first_pass {
+            return false;
+        }
+        let Type::Optional(inner) = should else {
+            return false;
+        };
+        if !Self::is_narrowing_int(is_type.base(), inner.base()) {
+            return false;
+        }
+        let dst_base = inner.base().clone();
+        let src_base = is_type.base().clone();
+        self.dn4_checked_cast(code, &dst_base, &src_base);
+        true
+    }
+
     fn is_narrowing_int(src: &Type, dst: &Type) -> bool {
         let (Type::Integer(s), Type::Integer(d)) = (src, dst) else {
             return false;
@@ -3684,7 +3778,12 @@ impl Parser {
     fn int_type_name(&self, t: &Type) -> String {
         if let Type::Integer(s) = t {
             match s.forced_size.map(std::num::NonZeroU8::get) {
-                Some(4) => return "i32".to_string(),
+                // Every width picks its spelling from the sign of the range, and the
+                // four-byte case was the one that did not — so a `u32` reported itself
+                // as `i32`, and the message's own advice (`cast explicitly with
+                // `as i32``) named a type with a different range than the one the
+                // author declared (loft#1247).
+                Some(4) => return if s.min < 0 { "i32" } else { "u32" }.to_string(),
                 Some(2) => return if s.min < 0 { "i16" } else { "u16" }.to_string(),
                 Some(1) => return if s.min < 0 { "i8" } else { "u8" }.to_string(),
                 _ => {}
@@ -4067,7 +4166,11 @@ impl Parser {
         // own answer for a value that does not fit (`400 as u8` is null), and folding the
         // default in would silently change it.
         if !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
-            self.guard_declared_range(code, should, is_type);
+            // A struct LITERAL's field, an ARGUMENT and a RETURN all name a DECLARED type,
+            // so the wrapper is the answer here — the element-write ambiguity
+            // `target_holds_null` exists for cannot arise at this seam.
+            let holds_null = matches!(should, Type::Optional(_));
+            self.guard_declared_range(code, should, is_type, holds_null);
         }
         if is_type.is_equal(should) {
             return true;
@@ -4099,15 +4202,9 @@ impl Parser {
                 self.convert(code, is_type, inner);
                 return true;
             }
-            // Implicit CHECKED narrowing into a nullable narrow target: an integer or
-            // `integer?` coerced into `Optional(narrow int)` (e.g. `u8?`) yields the value
-            // when it fits, else null. Allowed WITHOUT an explicit `as` because the target is
-            // nullable — an out-of-range value becomes a VISIBLE null, never a silent
-            // truncation. A non-null narrow target (`u8`) is unchanged (still needs `as`).
-            if !self.first_pass && Self::is_narrowing_int(is_type.base(), inner.base()) {
-                let dst_base = inner.base().clone();
-                let src_base = is_type.base().clone();
-                self.dn4_checked_cast(code, &dst_base, &src_base);
+            // Implicit CHECKED narrowing into a nullable narrow target — see
+            // `implicit_checked_narrow`, which is the one home for it.
+            if self.implicit_checked_narrow(code, is_type, should) {
                 return true;
             }
             // `@FR-L-Null-Tag` — a tagged `__nullable<S>` flowing into a NULLABLE target has to
@@ -12063,7 +12160,19 @@ impl Parser {
                         }
                         continue;
                     }
+                    // A manifest check inside `lib_path` can REFUSE a package it found —
+                    // the wrong loft version, an unreadable version constraint, a contract
+                    // this loft is too old for.  Each of those raises its own Fatal and then
+                    // resolves to nothing, which used to fall through to the "not found"
+                    // arm below: the author of a package that needs a newer loft was told
+                    // both that it needs a newer loft AND that it does not exist, and the
+                    // second sentence is the one that reads like the answer.  So the level
+                    // is snapshotted across the search and the specific refusal is left to
+                    // speak alone.
+                    let level_before = self.lexer.diagnostics().level();
                     let f = self.lib_path(&id);
+                    let refused = self.lexer.diagnostics().level() == Level::Fatal
+                        && level_before != Level::Fatal;
                     let f_exists = std::path::Path::new(&f).exists() || {
                         #[cfg(feature = "wasm")]
                         {
@@ -12089,11 +12198,13 @@ impl Parser {
                         drop(spec);
                         self.switch_to_dep(&f);
                     } else {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "Library '{id}' not found — searched lib/, lib_dirs, and sibling packages"
-                        );
+                        if !refused {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Library '{id}' not found — searched lib/, lib_dirs, and sibling packages"
+                            );
+                        }
                         self.lexer.has_token(";");
                     }
                 }

@@ -1,0 +1,165 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `e#remove` works inside a keyed RANGE slice, and the walk it interrupts stays correct
+// (loft#1272).
+//
+// Two defects, one shape each, and the second only became reachable once the first was fixed.
+//
+// 1. IT DID NOT COMPILE.  A keyed iteration has two lowerings and they name their cursor
+//    differently: an unbounded walk builds `{loop}#iter_state` (parser/collections.rs) while a
+//    bounded range builds `_iter_N` (parser/fields.rs::parse_key).  `#remove` rebuilt the
+//    first spelling by hand and fell back to `{loop}#index` when it missed -- and a range
+//    ELIDES that local, so the operand was measured against a slot that does not exist and
+//    `add_const`'s `before_stack - r` underflowed.  An ICE here; on the released 2026.8.0 the
+//    same program compiled and read a corrupt reference out of the store.  The loop now
+//    RECORDS its cursor (`Vars::set_loop_state_var`) at the site that creates it, so the two
+//    lowerings cannot disagree about the name.
+//
+// 2. IT SKIPPED AN ELEMENT.  `remove` ended the walk when the SUCCESSOR of the removed node
+//    was `finish` -- but `finish` names the last node to VISIT, which `step` yields before
+//    marking the end.  Ending a step early meant that node was never visited, so removing
+//    consecutive elements dropped one: `[1..4]` over 1..5 removing everything left `3` behind.
+//    The correct test is on the node REMOVED (`cur == finish`).  This was invisible on an
+//    unbounded walk, where `finish` is `0` and the comparison can never fire -- and that was
+//    the only shape the suite covered.
+//
+// The two backends each carried their own copy of that decision and each carried the defect,
+// so it now has one home: `Stores::remove_during_tree_iteration`.
+//
+// The unbounded rows are the controls: they were correct before and must stay correct, which
+// is what separates "the range case was fixed" from "the rewind was changed for everyone".
+//
+// @falsified-at: c0156053 -- interpret exit 1 -> 0, native exit 101 -> 0, and 0 assertion
+//   failures on BOTH trees.  Zero is right and is the shape to read: on the control tree the
+//   file does not run at all, because defect 1 is an ICE at parse time, so no row of it --
+//   the unbounded controls included -- can be scored there.
+//
+//   That means the control tree cannot pin defect 2, and this line does not claim it does.
+//   Defect 2 was measured directly instead, on the intermediate tree where defect 1 was fixed
+//   and defect 2 still stood: `test_1272_removes_every_element_in_the_range` read `345` for
+//   `45` and the descending row read `321` for `21`, while every single-removal row and every
+//   unbounded row already passed.  That is the separation the two halves need -- one is a
+//   compile failure, the other a wrong answer, and only the second has numbers on both sides.
+
+struct Rec  { nr: integer }
+struct Asc  { m: index<Rec[nr]> }
+struct Desc { m: index<Rec[-nr]> }
+struct Ord  { m: sorted<Rec[nr]> }
+struct Solo { snr: integer }
+
+// A single removal inside a range: the element goes, the rest stay, in order.
+fn test_1272_a_single_removal_inside_a_range() {
+  a = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in a.m[1..4] if r.nr == 2 { r#remove; }
+  o = ""; for r in a.m { o += "{r.nr}"; }
+  assert(o == "1345", "removing 2 from [1..4]: expected 1345 got {o}");
+
+  b = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in b.m[1..4] if r.nr == 1 { r#remove; }
+  ob = ""; for r in b.m { ob += "{r.nr}"; }
+  assert(ob == "2345", "removing the range's FIRST: expected 2345 got {ob}");
+
+  c = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in c.m[1..4] if r.nr == 3 { r#remove; }
+  oc = ""; for r in c.m { oc += "{r.nr}"; }
+  assert(oc == "1245", "removing the range's LAST: expected 1245 got {oc}");
+}
+
+// The row defect 2 was hiding in: every element of the range, so each removal's successor is
+// the next removal's subject and the last one IS `finish`.
+fn test_1272_removes_every_element_in_the_range() {
+  a = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  seen = "";
+  for r in a.m[1..4] { seen += "{r.nr}"; r#remove; }
+  assert(seen == "123", "the range visits exactly 1,2,3: got {seen}");
+  o = ""; for r in a.m { o += "{r.nr}"; }
+  assert(o == "45", "removing all of [1..4]: expected 45 got {o}");
+
+  i = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}] };
+  si = "";
+  for r in i.m[1..=3] { si += "{r.nr}"; r#remove; }
+  assert(si == "123", "the inclusive range visits 1,2,3: got {si}");
+  oi = ""; for r in i.m { oi += "{r.nr}"; }
+  assert(oi == "", "removing all of [1..=3] empties it: got {oi}");
+  assert(len(i.m) == 0, "and the length agrees: got {len(i.m)}");
+}
+
+// The walk must not run PAST the range because the node it stopped at was removed.
+fn test_1272_removing_the_last_in_range_does_not_walk_on() {
+  a = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  seen = "";
+  for r in a.m[1..4] { seen += "{r.nr}"; if r.nr == 3 { r#remove; } }
+  assert(seen == "123", "the walk stops at the range end: visited {seen}");
+  o = ""; for r in a.m { o += "{r.nr}"; }
+  assert(o == "1245", "and only 3 was removed: got {o}");
+}
+
+// A descending primary key reverses which end the bounds name, and `#remove` rewinds with
+// `next` instead of `previous` there -- both halves have to be right at once.
+fn test_1272_a_descending_range_removes_correctly() {
+  d = Desc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  seen = "";
+  for r in d.m[5..2] { seen += "{r.nr}"; r#remove; }
+  assert(seen == "543", "the descending range visits 5,4,3: got {seen}");
+  o = ""; for r in d.m { o += "{r.nr}"; }
+  assert(o == "21", "removing all of [5..2] on [-nr]: expected 21 got {o}");
+
+  e = Desc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in e.m[4..1] if r.nr == 3 { r#remove; }
+  oe = ""; for r in e.m { oe += "{r.nr}"; }
+  assert(oe == "5421", "a single descending removal: expected 5421 got {oe}");
+}
+
+// The open and reversed forms take the same cursor path.
+fn test_1272_open_and_reversed_ranges() {
+  a = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in a.m[3..] if r.nr == 4 { r#remove; }
+  o = ""; for r in a.m { o += "{r.nr}"; }
+  assert(o == "1235", "open-end [3..]: expected 1235 got {o}");
+
+  b = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in b.m[..3] if r.nr == 1 { r#remove; }
+  ob = ""; for r in b.m { ob += "{r.nr}"; }
+  assert(ob == "2345", "open-start [..3]: expected 2345 got {ob}");
+
+  c = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in rev(c.m[1..4]) if r.nr == 2 { r#remove; }
+  oc = ""; for r in c.m { oc += "{r.nr}"; }
+  assert(oc == "1345", "rev over a range: expected 1345 got {oc}");
+}
+
+// The other keyed kinds reach the same code by their own lowerings.
+fn test_1272_the_other_ordered_kinds() {
+  o1 = Ord { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in o1.m[1..4] if r.nr == 2 { r#remove; }
+  a = ""; for r in o1.m { a += "{r.nr}"; }
+  assert(a == "1345", "the ordered twin: expected 1345 got {a}");
+
+  s: sorted<Solo[snr]> = [Solo{snr:1}, Solo{snr:2}, Solo{snr:3}, Solo{snr:4}, Solo{snr:5}];
+  for r in s[1..4] if r.snr == 2 { r#remove; }
+  b = ""; for r in s { b += "{r.snr}"; }
+  assert(b == "1345", "the sorted vector: expected 1345 got {b}");
+}
+
+// THE CONTROL.  An unbounded walk was correct before either fix and must stay correct: its
+// `finish` is 0, so the comparison defect 2 lived in could never fire there.  Without this
+// row, "the ranged rows pass" is equally satisfied by a rewind that changed for everyone.
+fn test_1272_an_unbounded_walk_is_unchanged() {
+  a = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  seen = "";
+  for r in a.m { seen += "{r.nr}"; r#remove; }
+  assert(seen == "12345", "the unbounded walk visits every element: got {seen}");
+  o = ""; for r in a.m { o += "{r.nr}"; }
+  assert(o == "", "and removes them all: got {o}");
+
+  b = Asc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in b.m if r.nr <= 3 { r#remove; }
+  ob = ""; for r in b.m { ob += "{r.nr}"; }
+  assert(ob == "45", "a guarded unbounded removal: expected 45 got {ob}");
+
+  d = Desc { m: [Rec{nr:1}, Rec{nr:2}, Rec{nr:3}, Rec{nr:4}, Rec{nr:5}] };
+  for r in d.m if r.nr % 2 == 0 { r#remove; }
+  od = ""; for r in d.m { od += "{r.nr}"; }
+  assert(od == "531", "an unbounded descending removal: expected 531 got {od}");
+}

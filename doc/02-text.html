@@ -24,7 +24,7 @@
 <h1>Texts</h1>
 <article>
 <p>Text is one of the most frequently used types in any real program — for output, for reading input, for building messages. This page shows you how Loft stores and manipulates text, how to measure it, slice it, search it, and format it exactly the way you need.</p>
-<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. Most operations count bytes rather than visible characters. That makes them fast and simple, but you need to keep multi-byte characters in mind when you slice by position.</p>
+<p>The key thing to know upfront: Loft stores text as a sequence of bytes using UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits, and punctuation each take exactly one byte. Accented letters, emoji, and many non-Latin scripts take 2–4 bytes. So there are two different counts, and which one you get depends on the operation: anything that takes a POSITION — indexing, slicing, <code>find</code> — counts bytes, while <code>len()</code> and iterating a text count characters. Positions in bytes are fast and simple; the thing to watch is mixing the two counts, which has its own section below.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="joining-and-measuring-text">Joining and measuring text</h2>
 <p>Use <code>+</code> to join two pieces of text into one. The result is a new value — neither of the originals is modified. Placing a value name inside curly braces inside a format string inserts the value as text. You can also control the width: <code>{a:4}</code> pads the value on the right to at least 4 characters.</p>
@@ -35,6 +35,11 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"😃"</span>) == <span class="nm">1</span>, <span class="st">"Emoji is one character"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"♥"</span>) == <span class="nm">1</span>, <span class="st">"Heart is one character"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"abc"</span>) == <span class="nm">3</span>, <span class="st">"ASCII character count"</span>);</code></pre>
+<h2 id="do-not-mix-the-two-counts">Do not mix the two counts</h2>
+<p><code>len()</code> is a character count and <code>s[i]</code> is a byte index, so walking one with the other goes wrong on any text that is not pure ASCII: the loop runs too few times AND re-reads the bytes inside a multi-byte character. Over "Hi 😊!", <code>for i in 0..len(s) { s[i] }</code> yields "Hi 😊😊" — the <code>!</code> is silently gone and the emoji appears twice. Nothing fails; the answer is just wrong. Iterate the characters with <code>for c in text</code>, or, when you really do mean bytes, walk <code>0..size(text)</code>. The compiler reports the mix for you as warning[text-index-char-bound].</p>
+<pre><code>  mixed = <span class="st">"Hi 😊!"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(mixed) == <span class="nm">5</span>, <span class="st">"five characters, not eight"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(mixed) == <span class="nm">8</span>, <span class="st">"eight bytes, not five"</span>);</code></pre>
 <h2 id="reading-individual-characters">Reading individual characters</h2>
 <p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.</p>
 <pre><code>  s = <span class="st">"ABCDE"</span>;
@@ -49,6 +54,9 @@
 <p>A negative end index counts backwards from the end of the text. <code>-1</code> means "stop one byte before the very last byte". Combined with a start offset this lets you trim a known suffix without knowing the exact length.</p>
 <pre><code>  txt = <span class="st">"12😊🙃45"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(txt[<span class="nm">2..</span> - <span class="nm">1</span>] == <span class="st">"😊🙃4"</span>, <span class="st">"UTF-8 sub-string by byte range"</span>);</code></pre>
+<p>That counts BYTES, and the offset still snaps to a character boundary — so it trims a one-byte suffix like <code>5</code> above, and leaves a multi-byte one whole. Here both -1 and -2 land inside the trailing emoji and snap back around it, returning the text unchanged. Trim by bytes only when you know the suffix is ASCII.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab😊"</span>[.. - <span class="nm">1</span>] == <span class="st">"ab😊"</span>, <span class="st">"a multi-byte suffix is not trimmed by -1"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab😊"</span>[.. - <span class="nm">2</span>] == <span class="st">"ab😊"</span>, <span class="st">"nor by -2"</span>);</code></pre>
 <h2 id="iterating-over-characters">Iterating over characters</h2>
 <p>A <code>for</code> loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: <code>c#index</code> is the byte offset where the current character starts. <code>c#next</code> is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
 <pre><code>  result = <span class="st">""</span>;
@@ -75,7 +83,7 @@
 <pre><code>  brace_inner = <span class="st">"cd"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"ab{{cd}}e"</span> == <span class="st">"ab{{{brace_inner}}}e"</span>, <span class="st">"Escaping braces"</span>);</code></pre>
 <h2 id="aligning-text-in-a-fixed-width-field">Aligning text in a fixed-width field</h2>
-<p>The <code>:</code> specifier controls alignment and width. <code>&lt;</code> left-aligns the value, <code>&gt;</code> right-aligns it (the default). The width can be a constant or a small arithmetic expression — here <code>2+3</code> evaluates to 5, giving a field of width 5.</p>
+<p>The <code>:</code> specifier controls alignment and width. <code>&lt;</code> left-aligns the value and <code>&gt;</code> right-aligns it. The default depends on the TYPE: text is left-aligned (as <code>{a:4}</code> and <code>{vr:6}</code> here both show), while numbers are right-aligned, which is what lines a column of figures up. The width can be a constant or a small arithmetic expression — here <code>2+3</code> evaluates to 5, giving a field of width 5.</p>
 <pre><code>  vr = <span class="st">"abc"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1{vr:&lt;2+3}2{vr}3{vr:6}4{vr:&gt;7}"</span> == <span class="st">"1abc  2abc3abc   4    abc"</span>, <span class="st">"Text alignment"</span>);
 }</code></pre>
@@ -102,9 +110,11 @@
 // The key thing to know upfront: Loft stores text as a sequence of bytes using
 // UTF-8 encoding — the same format used on the web. Plain ASCII letters, digits,
 // and punctuation each take exactly one byte. Accented letters, emoji, and many
-// non-Latin scripts take 2–4 bytes. Most operations count bytes rather than
-// visible characters. That makes them fast and simple, but you need to keep
-// multi-byte characters in mind when you slice by position.
+// non-Latin scripts take 2–4 bytes. So there are two different counts, and which
+// one you get depends on the operation: anything that takes a POSITION — indexing,
+// slicing, 'find' — counts bytes, while 'len()' and iterating a text count
+// characters. Positions in bytes are fast and simple; the thing to watch is mixing
+// the two counts, which has its own section below.
 fn main() {
   // ## Joining and measuring text
   // Use '+' to join two pieces of text into one. The result is a new value —
@@ -121,6 +131,18 @@ fn main() {
   assert(len("😃") == 1, "Emoji is one character");
   assert(len("♥") == 1, "Heart is one character");
   assert(len("abc") == 3, "ASCII character count");
+  // ## Do not mix the two counts
+  // 'len()' is a character count and 's[i]' is a byte index, so walking one with
+  // the other goes wrong on any text that is not pure ASCII: the loop runs too few
+  // times AND re-reads the bytes inside a multi-byte character. Over "Hi 😊!",
+  // 'for i in 0..len(s) { s[i] }' yields "Hi 😊😊" — the '!' is silently gone and
+  // the emoji appears twice. Nothing fails; the answer is just wrong.
+  // Iterate the characters with 'for c in text', or, when you really do mean bytes,
+  // walk '0..size(text)'. The compiler reports the mix for you as
+  // warning[text-index-char-bound].
+  mixed = "Hi 😊!";
+  assert(len(mixed) == 5, "five characters, not eight");
+  assert(size(mixed) == 8, "eight bytes, not five");
   // ## Reading individual characters
   // Square brackets with a single byte index give you the character at that
   // position. For plain ASCII text every byte is one character, so indexing
@@ -143,6 +165,12 @@ fn main() {
   // start offset this lets you trim a known suffix without knowing the exact length.
   txt = "12😊🙃45";
   assert(txt[2.. - 1] == "😊🙃4", "UTF-8 sub-string by byte range");
+  // That counts BYTES, and the offset still snaps to a character boundary — so it
+  // trims a one-byte suffix like '5' above, and leaves a multi-byte one whole. Here
+  // both -1 and -2 land inside the trailing emoji and snap back around it, returning
+  // the text unchanged. Trim by bytes only when you know the suffix is ASCII.
+  assert("ab😊"[.. - 1] == "ab😊", "a multi-byte suffix is not trimmed by -1");
+  assert("ab😊"[.. - 2] == "ab😊", "nor by -2");
   // ## Iterating over characters
   // A 'for' loop over a text value visits one character at a time,
   // even when characters span multiple bytes. Two loop helpers give you
@@ -182,8 +210,10 @@ fn main() {
   brace_inner = "cd";
   assert("ab{{cd}}e" == "ab{{{brace_inner}}}e", "Escaping braces");
   // ## Aligning text in a fixed-width field
-  // The ':' specifier controls alignment and width. '&lt;' left-aligns the value,
-  // '&gt;' right-aligns it (the default). The width can be a constant or a small
+  // The ':' specifier controls alignment and width. '&lt;' left-aligns the value and
+  // '&gt;' right-aligns it. The default depends on the TYPE: text is left-aligned (as
+  // '{a:4}' and '{vr:6}' here both show), while numbers are right-aligned, which is
+  // what lines a column of figures up. The width can be a constant or a small
   // arithmetic expression — here '2+3' evaluates to 5, giving a field of width 5.
   vr = "abc";
   assert("1{vr:&lt;2+3}2{vr}3{vr:6}4{vr:&gt;7}" == "1abc  2abc3abc   4    abc", "Text alignment");

@@ -2174,6 +2174,29 @@ pub fn prebuild_installed_natives() -> (usize, usize) {
     (attempted, built)
 }
 
+/// The link flags that make a built cdylib RELOCATABLE — empty on every platform but macOS.
+///
+/// A Mach-O dylib records its own path (`LC_ID_DYLIB`) and a program that links it copies THAT
+/// path in, so the loader follows the build-time location and nothing else.  Cargo's default is
+/// the absolute output path, `…/target/release/deps/lib<stem>.dylib` — and this cdylib is
+/// CACHED and reused from a different directory than the one it was built in, so the recorded
+/// path names a directory that no longer exists.  On the nightly's macOS leg that is
+/// `dyld: Library not loaded: …/.loft_test_tmp_<pid>_0/native/target/release/deps/…`, on a
+/// cache HIT, after a MISS built it under a previous run's temporary directory.
+///
+/// ELF does not have the problem: a `.so` records only its SONAME (the bare file name) and the
+/// consumer's `-rpath` resolves it, which is why the same cache is fine on Linux and why this
+/// is macOS-only rather than a cache bug.  `@rpath/<file>` makes Mach-O behave the same way,
+/// and the consumer already emits both the absolute `-rpath` of the resolved library and
+/// `$ORIGIN` / `@loader_path` (`native_utils::add_native_extern_flags`).
+fn relocatable_dylib_flags(lib_name: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("-Clink-arg=-Wl,-install_name,@rpath/{lib_name}")
+    } else {
+        String::new()
+    }
+}
+
 pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
     use std::path::PathBuf;
     // P244-windows fix #2 (2026-05-12): use PathBuf::join, not
@@ -2312,7 +2335,31 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         // a process stuck behind another's long cold build.
         let lock_t = std::time::Instant::now();
         crate::platform::timing_record("lockwait", stem, false, None);
-        let _ = f.lock();
+        // loft#1238 — and tell the TIMEOUT what we are waiting for.  The ledger already
+        // distinguished "still waiting" (a `lockwait` with no `lockheld`) from "waited and
+        // built", but only to a reader who has the ledger AND knows that convention; the kill
+        // message said `phase=parse`, which is true and useless.  Now the process that dies here
+        // says so in the line that reports its death.
+        let waiting = format!("the global native-build lock (for {stem})");
+        // loft#1238 — bounded by the run's remaining budget.  Waiting past the deadline cannot
+        // succeed: the process is killed mid-queue, builds nothing, stamps nothing, and the next
+        // attempt repeats it.  Failing here instead is the same outcome said out loud.
+        if let Err(waited) = crate::timeout::lock_within_budget(f, &waiting) {
+            crate::platform::timing_record("lockgaveup", stem, false, Some(waited.as_secs_f64()));
+            if crate::timeout::first_giveup_report(stem) {
+                eprintln!(
+                    "loft: TRANSIENT — gave up waiting for {waiting} after {:.1}s.\n  \
+                     Another process is building a native library and this run's timeout \
+                     would expire before the queue cleared, so it stopped rather than be \
+                     killed mid-wait.\n  Nothing here is broken or stale in the way the \
+                     next message will suggest: `{stem}`'s cdylib simply had not been \
+                     rebuilt yet. Build it once up front (`loft cache warm`), raise the \
+                     timeout, or re-run once the other build has finished.",
+                    waited.as_secs_f64()
+                );
+            }
+            return None;
+        }
         crate::platform::timing_record(
             "lockheld",
             stem,
@@ -2371,7 +2418,12 @@ pub fn auto_build_native(pkg_dir: &str, stem: &str) -> Option<String> {
         // machine so loft's rlibs and the package crate agree on `/cargo` and
         // `/rustc`, which is what #274's SVH match actually needs — and which
         // also keeps the consumer's cdylib free of their own home directory.
-        let flags = format!("{} {}", env!("LOFT_BUILD_RUSTFLAGS"), local_remap_flags());
+        let flags = format!(
+            "{} {} {}",
+            env!("LOFT_BUILD_RUSTFLAGS"),
+            local_remap_flags(),
+            relocatable_dylib_flags(&lib_name)
+        );
         cmd.env("RUSTFLAGS", flags.trim())
             .env_remove("CARGO_ENCODED_RUSTFLAGS");
         if use_redirected_target {

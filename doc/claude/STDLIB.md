@@ -16,6 +16,7 @@ This document describes all public functions, constants, and types available in 
 - [Parallel](#parallel)
 - [Reflection](#reflection)
 - [Environment](#environment)
+- [Time](#time)
 - [Random](#random)
 
 ---
@@ -590,7 +591,7 @@ regardless of where it was launched from — "program + assets" is a portable
 bundle.  **Absolute paths are never rewritten.**
 
 This applies uniformly to every path-taking operation — `file()`, `exists()`,
-`read_file`/`write_file`, the `File` methods, `delete`/`move`/`mkdir`/`mkdir_all`,
+`read_file`/`write_file`, the `File` methods, `delete`/`move`/`mkdir`/`mkdir_all`/`rmdir`,
 and image loads — so they all agree on where a relative path points.
 
 **Opting into cwd-relative (CLI tools).** A program that takes a *user-supplied*
@@ -757,7 +758,7 @@ Test harness: `tests/binary_io_matrix.rs` (32 cross-mode cells,
 
 | Function | Description |
 |----------|-------------|
-| `files(self: File) -> vector<File>` | Returns the entries inside a directory. The `File` must have `format == Format.Directory`. Use to iterate over all files in a folder. |
+| `files(self: File) -> vector<File>` | Returns the entries inside a directory, sorted by path — the same order as `list_dir`, so an index means the same entry in either listing. The `File` must have `format == Format.Directory`; anything else lists as `[]` (never null, unlike `list_dir`). |
 
 ### Filesystem Operations
 
@@ -784,10 +785,11 @@ loft-level existence check.
 | `move(from: text, to: text) -> FileResult` | Renames or relocates a file. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |
 | `mkdir_all(path: text) -> FileResult` | Creates a directory and all missing parents. |
+| `rmdir(path: text) -> FileResult` | Removes an EMPTY directory; `NotEmpty` when it still holds entries. A recursive removal is the caller's walk — `list_dir`, `delete`, then `rmdir` deepest-first. |
 | `is_dir(path: text) -> boolean` | Returns `true` if the path exists and is a directory. |
 | `is_file(path: text) -> boolean` | Returns `true` if the path exists and is a regular file. |
-| `list_dir(path: text) -> vector<text>` | Entry names (base names, sorted) of a directory; empty when not a readable directory. |
-| `read_bytes(path: text) -> vector<u8>` | Reads the whole file as raw bytes; empty on missing/unreadable. Binary-exact (round-trips with `write_bytes`). |
+| `list_dir(path: text) -> vector<text>?` | Entry names (base names, sorted) of a directory. **Null** when the path is missing or is not a readable directory; `[]` means the directory really is empty. Discharge with `?? []`. |
+| `read_bytes(path: text) -> vector<u8>?` | Reads the whole file as raw bytes. **Null** when the file is missing or unreadable; `[]` means the file really is empty. Binary-exact (round-trips with `write_bytes`). Discharge with `?? []`. |
 | `write_bytes(path: text, bytes: vector<u8>) -> boolean` | Writes raw bytes to a file, truncating existing content; `true` on success. |
 | `set_file_size(self: File, size: integer) -> FileResult` | Truncates or extends a file to exactly `size` bytes. |
 
@@ -1525,6 +1527,25 @@ cycle ends denser, at 0.17 MB / 93% used, but moves **9.5 MB** of grow-and-shrin
 traffic to get there — 55× the store's own size, to save 0.11 MB. Called once
 after a permanent drop it costs one walk; called on a cycle it pays for a re-grow
 every time.
+
+---
+
+## Time
+
+Two clocks, answering two different questions. Both return loft's 64-bit `integer`, which a
+millisecond epoch stamp needs. See [tests/docs/22-time.loft](../22-time.loft) for the
+chapter and `tests/scripts/the-reference-clock-units-are-the-ones-it-names.loft` for the
+guard that pins the units against each other.
+
+| Function | Description |
+|----------|-------------|
+| `now() -> integer` | Wall-clock time as **milliseconds** since the Unix epoch (1970-01-01T00:00:00 UTC). For timestamps and anything compared against a calendar. It reads the SYSTEM clock, so an NTP correction or a manual change can step it in either direction — never subtract two `now()` values to time something. |
+| `ticks() -> integer` | **Microseconds** elapsed since program start, from a monotonic clock. Never steps backward whatever happens to the system clock, which is the guarantee `now()` does not carry. For benchmarks and frame timing. |
+
+There is no calendar in the standard library — no year/month/weekday, no formatting. That
+is the **`time` package**'s subject (`loft install time`, then `use time;`), and it works on
+the same millisecond-since-epoch integer `now()` returns, so nothing is converted:
+`format_iso(now())`, `weekday_name(now())`, `add_days(now(), 30)`.
 
 ---
 

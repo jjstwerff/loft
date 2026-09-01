@@ -161,12 +161,22 @@ let exitCode = 0;
       });
     }
     await send('Page.navigate', { url: URL_ARG });
-    await new Promise(r => setTimeout(r, waitMs));
-    const out = await send('Runtime.evaluate', {
+    // POLL for the expected text rather than sleeping the whole budget and looking once.
+    // `--wait-ms` is a CEILING on how long the resume may take, not a measurement of how long
+    // it does take, and a fixed sleep confuses the two: on a loaded runner the page reaching
+    // `done` at 5100ms is reported exactly as a page that never resumed, which is the failure
+    // the nightly's ubuntu leg shows as TRY 1 red / TRY 2 green.  Polling also makes the green
+    // path finish as soon as the answer exists, which is most of this test's wall-clock.
+    const deadline = Date.now() + waitMs;
+    const read = async () => (await send('Runtime.evaluate', {
       expression: "document.getElementById('out') ? document.getElementById('out').textContent : '<no #out>'",
       returnByValue: true,
-    });
-    const text = out.result.value;
+    })).result.value;
+    let text = await read();
+    while (!(typeof text === 'string' && text.includes(expect)) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 100));
+      text = await read();
+    }
     if (typeof text === 'string' && text.includes(expect)) {
       console.log(JSON.stringify({ ok: true, hidden, expect }));
     } else {

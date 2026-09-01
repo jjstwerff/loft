@@ -854,7 +854,7 @@ examples-preflight:  ## Would a PR report anything on worked-example tags? (REPO
 # REPO defaults to this repo; point it at a library checkout to drive that repo's
 # rollout: make examples-progress REPO=../loft-libs-graphics
 REPO ?= .
-.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review
+.PHONY: test-fast examples-index examples-preflight examples-progress features-review libraries-review bug-review release-checklist reference-review
 examples-progress:  ## Worked-example rollout REPORT: which packages still owe a verdict (never a gate)
 	@EXAMPLES_REPO_ROOT=$(REPO) bash scripts/check_doc_drift.sh examples-progress
 
@@ -890,6 +890,34 @@ libraries-review:  ## Library review aid: which libraries owe a review + which o
 #   make bug-review ARGS="--bands 6"      # finer slicing on a busy cycle
 bug-review:  ## Monthly bug-review aid: which mechanism classes are still producing bugs
 	@python3 scripts/bug-review.py $(ARGS)
+
+# The per-release checklist: what a HUMAN still has to do, with everything the machine
+# can decide already decided.  RELEASE.md holds the prose and three partial lists; this
+# is the single worked-through list, generated so it cannot drift from the repo.
+# Automatic items are MEASURED on every run and cannot be ticked (a gate you can tick is
+# a gate that gets ticked); manual items carry the exact command and what counts as a
+# pass, and are the only ones `--done` accepts.  Items for work this release did not
+# touch (the VS Code pass, the native-debug gate) stay hidden.
+# A REPORT plus local state — never a gate, and it never tags or publishes anything.
+#   make release-checklist                            # the list for Cargo.toml's version
+#   make release-checklist ARGS="--fetch"             # refresh origin/main + tags first
+#   make release-checklist ARGS="--done M-install-sh --note 'ran on the NUC'"
+# `|| true`: the script exits 1 while an automatic check is FAILING, which is the
+# answer a caller wants ("is this release ready?") and the wrong thing for make to
+# render as a broken target.  A report says what it found; it does not stop the build.
+release-checklist:  ## Per-release checklist: what CI proved, and what is left for a human
+	@python3 scripts/release-checklist.py $(ARGS) || true
+
+# The pass that validates what the reference PROMISES — the half `A-pdf*` cannot reach.
+# Those checks establish the document is whole, current and correctly versioned; all
+# three stay green on a chapter describing behaviour the language dropped two releases
+# ago.  Continuous by design (watermark per chapter, like `libraries-review`): read a
+# chapter the week its source moves, and the tag-day list is short by construction.
+#   make reference-review                                   # what owes a read
+#   make reference-review ARGS=--verbose                    # + the commits behind each
+#   make reference-review ARGS="--done tests/docs/07-vector.loft"
+reference-review:  ## Which reference chapters owe a human read (and which have MOVED)
+	@python3 scripts/reference-review.py $(ARGS)
 
 # `doc/claude/plans/**/probes/` holds ~860 executable `.loft` files that no suite
 # reaches — the residue of finished investigations, still compiling and running
@@ -1889,6 +1917,21 @@ ci: ci-guard
 	#                       2026-05-18 — promoted from non-blocking after
 	#                       repeated PR-212 cycles where ignored drift
 	#                       surfaced as downstream test failures)
+	#   3b. cache warm     → loft#1238: build the native artifacts this run is
+	#                       about to need, ONCE, before the parallel section.
+	#                       `native_artifact_cache_key` folds in a content hash
+	#                       of the loft build, so the rebuild above invalidates
+	#                       every cached cdylib and loft's own wasm runtime
+	#                       rlib — and the FIRST test to want each pays the
+	#                       full rebuild while the rest queue on the global
+	#                       build lock.  Measured: 25.6s for the wasm rlib,
+	#                       63s for the `random` cdylib on a loaded box,
+	#                       against a 60s per-test budget that blew twice.
+	#                       Run with the RELEASE binary on purpose: the cdylib
+	#                       key is profile-independent, but the wasm-rlib
+	#                       fingerprint is a content hash of the binary, and
+	#                       `html_asyncify` drives `target/release/loft`.
+	#                       0.3-0.5s once warm; never fails the gate.
 	#   4. Test       job → cargo build --all-targets,
 	#                       cargo build --release --target wasm32-wasip2/
 	#                         wasm32-unknown-unknown --lib (added
@@ -1914,8 +1957,8 @@ ci: ci-guard
 	# touching the wasm bundle.  Other dev-only suites (test-packages,
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	mkdir -p $(TEST_SCRATCH) && export $(TEST_ENV) && \
-	gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); [ $$jobs -lt 2 ] && jobs=2; \
-	export CARGO_BUILD_JOBS=$$jobs NEXTEST_TEST_THREADS=$$jobs; \
+	{ gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); if [ $$jobs -lt 2 ]; then jobs=2; fi; \
+	  export CARGO_BUILD_JOBS=$$jobs NEXTEST_TEST_THREADS=$$jobs; } && \
 	{ [ "$${gates:-1}" -gt 1 ] && echo "make ci: THROTTLED to $$jobs of $$(nproc) threads — $$gates gates live on this box" || echo "make ci: $$jobs of $$(nproc) threads (sole gate)"; } | tee -a result.txt && \
 	$(MAKE) rebuild-native-cdylibs >> result.txt 2>&1 && \
 	cargo fmt -- --check >> result.txt 2>&1 && \
@@ -1931,7 +1974,8 @@ ci: ci-guard
 	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random >> result.txt 2>&1 && \
 	python3 scripts/gen_target_surface.py --check >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
-	gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); [ $$jobs -lt 2 ] && jobs=2; export NEXTEST_TEST_THREADS=$$jobs; \
+	./target/release/loft cache warm --from tests >> result.txt 2>&1 && \
+	{ gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); if [ $$jobs -lt 2 ]; then jobs=2; fi; export NEXTEST_TEST_THREADS=$$jobs; } && \
 	echo "make ci: tests on $$jobs thread(s), $$gates gate(s) live" >> result.txt && \
 	cargo nextest run --profile ci >> result.txt 2>&1 && \
 	echo 'CI-RESULT: ALL GATES PASSED' >> result.txt || \

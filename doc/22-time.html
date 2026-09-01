@@ -23,22 +23,33 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="cur">Time</span> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Time</h1>
 <article>
-<p>Loft provides two time functions:</p>
+<p>Loft's standard library has two time functions, and they answer two different questions:</p>
 <pre><code>now()     — milliseconds since the Unix epoch (wall-clock time).
 ticks()   — microseconds elapsed since program start (monotonic clock).
 </code></pre>
-<p>Both return an <code>integer</code> (loft's 64-bit integer).</p>
-<p>Use <code>now()</code> for timestamps, log entries, and date calculations. Use <code>ticks()</code> for benchmarks and frame timing — it is unaffected by system clock changes or NTP adjustments.</p>
+<p>Both return an <code>integer</code> (loft's 64-bit integer) — which they need, since a millisecond timestamp passed 32 bits in 1970 plus a few weeks.</p>
+<p>Use <code>now()</code> when you want to know WHEN something happened: timestamps, log entries, anything you will compare against a calendar. Use <code>ticks()</code> when you want to know HOW LONG something took: benchmarks and frame timing. It is unaffected by system clock changes or NTP adjustments, which is exactly what <code>now()</code> cannot promise.</p>
+<h2 id="calendars-are-a-library">Calendars are a library</h2>
+<p>These two are the whole clock surface: there is no year, month or weekday in the standard library, and no formatting. That is deliberate — calendar arithmetic is a large, opinionated subject — and it is a package away:</p>
+<pre><code>use time;
+fn main() {
+    ms = now();
+    println(format_iso(ms));                    // 2026-09-01T09:03:58Z
+    println("{year(ms)} {month_name(ms)} {day(ms)}, a {weekday_name(ms)}");
+    println(format_date(add_days(ms, 30)));     // 2026-10-01
+}
+</code></pre>
+<p>The <code>time</code> package works on the same millisecond-since-epoch integer <code>now()</code> returns, so nothing has to be converted. Install it with <code>loft install time</code>.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="wall-clock-time-now">Wall-clock time: now()</h2>
-<p><code>now()</code> returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.</p>
+<p><code>now()</code> returns the current time as milliseconds since 1970-01-01T00:00:00 UTC, so it is well past the range a 32-bit number could hold.</p>
 <pre><code>  t = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">0</span>, <span class="st">"now() must be positive"</span>);</code></pre>
-<p>Two successive calls return non-decreasing values.</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t &gt; <span class="nm">2147483647</span>, <span class="st">"now() is a 64-bit millisecond stamp: {t}"</span>);</code></pre>
+<p>It reads the system clock, so it usually moves forward — but it is the system's clock, not yours: an NTP correction or a manual change can step it in either direction. Never subtract two <code>now()</code> values to time something. That is what <code>ticks()</code> is for.</p>
 <pre><code>  t2 = <span class="fn-call"><a href="stdlib-time.html">now</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t2 &gt;= t, <span class="st">"now() must be non-decreasing"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t2 &gt; <span class="nm">2147483647</span>, <span class="st">"a second reading is a timestamp too: {t2}"</span>);</code></pre>
 <h2 id="elapsed-time-ticks">Elapsed time: ticks()</h2>
-<p><code>ticks()</code> measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.</p>
+<p><code>ticks()</code> measures microseconds since the program started, so it begins near zero and only ever climbs. It uses a monotonic clock, which is the guarantee <code>now()</code> does not have: it never jumps backward, whatever happens to the system clock while your program runs.</p>
 <pre><code>  start = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(start &gt;= <span class="nm">0</span>, <span class="st">"ticks() must be non-negative"</span>);
   end = <span class="fn-call"><a href="stdlib-time.html">ticks</a></span>();
@@ -60,8 +71,8 @@ elapsed_ms  = elapsed_us / 1000
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">499500</span>, <span class="st">"loop produced wrong sum: {sum}"</span>);</code></pre>
 <h2 id="common-patterns">Common patterns</h2>
 <p>Timestamp a log entry (seconds since epoch): seconds = now() / 1000</p>
-<p>Seed the random number generator with the current time (now() already returns an integer, so no cast is needed): rand_seed(now())</p>
-<p>Simple stopwatch: start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000} ms")</p>
+<p>Seed the random number generator with the current time. The generator is in the <code>random</code> package rather than the standard library, so the import is part of the pattern — without it the name does not resolve: use random; rand_seed(now())</p>
+<p>Simple stopwatch (integer division, so this truncates to whole ms): start = ticks() ... do work ... log_info("Done in {(ticks() - start) / 1000} ms")</p>
 <pre><code>}</code></pre>
 <section id="loft-panel" class="loft-panel" hidden>
 <h2>Run it yourself</h2>
@@ -78,28 +89,53 @@ elapsed_ms  = elapsed_us / 1000
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Time
 // @TITLE: Wall-clock time and elapsed time
-// Loft provides two time functions:
+// Loft's standard library has two time functions, and they answer two
+// different questions:
 //
 //   now()     — milliseconds since the Unix epoch (wall-clock time).
 //   ticks()   — microseconds elapsed since program start (monotonic clock).
 //
-// Both return an 'integer' (loft's 64-bit integer).
+// Both return an 'integer' (loft's 64-bit integer) — which they need, since a
+// millisecond timestamp passed 32 bits in 1970 plus a few weeks.
 //
-// Use 'now()' for timestamps, log entries, and date calculations.
-// Use 'ticks()' for benchmarks and frame timing — it is unaffected by
-// system clock changes or NTP adjustments.
+// Use 'now()' when you want to know WHEN something happened: timestamps, log
+// entries, anything you will compare against a calendar.
+// Use 'ticks()' when you want to know HOW LONG something took: benchmarks and
+// frame timing. It is unaffected by system clock changes or NTP adjustments,
+// which is exactly what 'now()' cannot promise.
+//
+// ## Calendars are a library
+// These two are the whole clock surface: there is no year, month or weekday
+// in the standard library, and no formatting. That is deliberate — calendar
+// arithmetic is a large, opinionated subject — and it is a package away:
+//
+//   use time;
+//   fn main() {
+//       ms = now();
+//       println(format_iso(ms));                    // 2026-09-01T09:03:58Z
+//       println("{year(ms)} {month_name(ms)} {day(ms)}, a {weekday_name(ms)}");
+//       println(format_date(add_days(ms, 30)));     // 2026-10-01
+//   }
+//
+// The 'time' package works on the same millisecond-since-epoch integer 'now()'
+// returns, so nothing has to be converted. Install it with 'loft install time'.
 fn main() {
   // ## Wall-clock time: now()
-  // 'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC.
-  // The value is always positive and grows over time.
+  // 'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC,
+  // so it is well past the range a 32-bit number could hold.
   t = now();
-  assert(t &gt; 0, "now() must be positive");
-  // Two successive calls return non-decreasing values.
+  assert(t &gt; 2147483647, "now() is a 64-bit millisecond stamp: {t}");
+  // It reads the system clock, so it usually moves forward — but it is the
+  // system's clock, not yours: an NTP correction or a manual change can step it
+  // in either direction. Never subtract two 'now()' values to time something.
+  // That is what 'ticks()' is for.
   t2 = now();
-  assert(t2 &gt;= t, "now() must be non-decreasing");
+  assert(t2 &gt; 2147483647, "a second reading is a timestamp too: {t2}");
   // ## Elapsed time: ticks()
-  // 'ticks()' measures microseconds since the program started.
-  // It uses a monotonic clock so it never jumps backward.
+  // 'ticks()' measures microseconds since the program started, so it begins
+  // near zero and only ever climbs. It uses a monotonic clock, which is the
+  // guarantee 'now()' does not have: it never jumps backward, whatever happens
+  // to the system clock while your program runs.
   start = ticks();
   assert(start &gt;= 0, "ticks() must be non-negative");
   end = ticks();
@@ -126,11 +162,13 @@ fn main() {
   // Timestamp a log entry (seconds since epoch):
   //   seconds = now() / 1000
   //
-  // Seed the random number generator with the current time
-  // (now() already returns an integer, so no cast is needed):
+  // Seed the random number generator with the current time. The generator is
+  // in the 'random' package rather than the standard library, so the import is
+  // part of the pattern — without it the name does not resolve:
+  //   use random;
   //   rand_seed(now())
   //
-  // Simple stopwatch:
+  // Simple stopwatch (integer division, so this truncates to whole ms):
   //   start = ticks()
   //   ... do work ...
   //   log_info("Done in {(ticks() - start) / 1000} ms")

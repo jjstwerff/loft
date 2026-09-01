@@ -206,7 +206,28 @@ impl Stores {
         // The top-level (`field == u16::MAX`) case is the parent itself; see `sub_record_type`.
         let tp = self.sub_record_type(parent_tp, field);
         let d = self.field_ref(data, parent_tp, field);
-        self.insert_record(&d, rec, tp, false);
+        // loft#1226 — does this field SHARE its records with a sibling?  A member of a linked
+        // group does (@FR-Col-Group: several routes to ONE record set), and a displaced record
+        // is then still held by the other member, so a dedup here must UNLINK ONLY.
+        //
+        // `secondary` already carries exactly that instruction, but it was describing the
+        // collection's ROLE IN THIS CALL rather than who holds the record: the sibling inserts
+        // below pass `true`, and the PRIMARY insert passed `false` unconditionally — including
+        // when the field written is itself a group member.  So `g.ordered += [v]; g.by_nm +=
+        // [v]` freed the record the first append had put in BOTH members, while the vector went
+        // on holding it: every `text` field of that record read `null` and nothing reported.
+        // The `integer` beside it survived, because only the nested heap was released.
+        //
+        // Non-empty `other_indexes` is the membership test — including the leading `u16::MAX`
+        // marker form, which says this field is a VIEW of records another field also holds, and
+        // is the direction that most needs the guard.
+        let shares_records = field != u16::MAX
+            && matches!(
+                &self.types[parent_tp as usize].parts,
+                Parts::Struct(fields) | Parts::EnumValue(_, fields)
+                    if fields.get(field as usize).is_some_and(|f| !f.other_indexes.is_empty())
+            );
+        self.insert_record(&d, rec, tp, shares_records);
         if field != u16::MAX
             && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
                 self.types[parent_tp as usize].parts.clone()

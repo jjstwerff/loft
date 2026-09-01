@@ -618,6 +618,22 @@ pub(crate) fn run_tests(
         }
     }
 
+    /// The declared substrings that no produced error contains.
+    ///
+    /// This is the whole of TESTING.md's **"Every expectation must match"**: an
+    /// `@EXPECT_ERROR` names a diagnostic the file owes, so an empty result is the only
+    /// passing answer.  Both the file-level and the per-function checks ask exactly this
+    /// question, and it lives here once so the two cannot answer it differently — the
+    /// per-function site used to settle it with "does the file have SOME error?", an
+    /// existential standing in for a universal, which credited every annotation in a file
+    /// that produced one error anywhere (loft#1261).
+    fn unmatched_expect<'a>(subs: &'a [String], errors: &[String]) -> Vec<&'a str> {
+        subs.iter()
+            .filter(|sub| !errors.iter().any(|e| e.contains(sub.as_str())))
+            .map(String::as_str)
+            .collect()
+    }
+
     /// Check whether `msg` satisfies the expected-fail substrings for `fn_name`.
     /// Returns true when the panic message contains at least one required
     /// substring (file-level or per-function).
@@ -1021,15 +1037,24 @@ pub(crate) fn run_tests(
             // expected substrings.  Track which functions had their errors satisfied.
             let mut fn_error_pass: Vec<String> = Vec::new();
             let mut fn_error_fail: Vec<String> = Vec::new();
+            // Substrings a function declared that nothing matched, as `fn: substring`.
+            let mut fn_error_unmatched: Vec<String> = Vec::new();
             if has_fn_errors {
-                for fn_name in ann.expect_errors_fn.keys() {
+                for (fn_name, subs) in &ann.expect_errors_fn {
                     if file_result.errors.is_empty() {
                         fn_error_fail.push(fn_name.clone());
-                    } else {
-                        // The file has errors.  Substring validation happens
-                        // via the unexpected_errors filter below — any error
-                        // not matching ANY annotation is rejected there.
+                        continue;
+                    }
+                    // `unexpected_errors` below walks the other direction — it rejects an
+                    // error no annotation claims.  It cannot see an annotation that claims
+                    // no error, which is why that filter is not the validation this needs.
+                    let missing = unmatched_expect(subs, &file_result.errors);
+                    if missing.is_empty() {
                         fn_error_pass.push(fn_name.clone());
+                    } else {
+                        for sub in missing {
+                            fn_error_unmatched.push(format!("{fn_name}: {sub}"));
+                        }
                     }
                 }
             }
@@ -1111,19 +1136,19 @@ pub(crate) fn run_tests(
             // expectation could be reworded out of existence and nothing would say so —
             // the `loft test` side of loft#929, where the same shape left 56 of the
             // harness's 167 annotations inert.
-            let unmatched_expect: Vec<&str> = ann
-                .expect_errors
-                .iter()
-                .filter(|sub| !file_result.errors.iter().any(|e| e.contains(sub.as_str())))
-                .map(String::as_str)
-                .collect();
-            if !unmatched_expect.is_empty() {
+            let mut never_emitted: Vec<String> =
+                unmatched_expect(&ann.expect_errors, &file_result.errors)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
+            never_emitted.extend(fn_error_unmatched);
+            if !never_emitted.is_empty() {
                 for e in &file_result.errors {
                     println!("  {e}");
                 }
                 println!(
                     "  FAIL  {display_name}  (expected error never emitted: {})",
-                    unmatched_expect.join("; ")
+                    never_emitted.join("; ")
                 );
                 dir_fail += 1;
                 total_files += 1;
@@ -1465,9 +1490,17 @@ pub(crate) fn run_tests(
                             // back to passthrough (the process cwd / scratch dir),
                             // so a relative `file("asset")` missed under --native
                             // while passing under the interpreter.
+                            //
+                            // The anchor MODE is the program's own, not a constant:
+                            // a `#cwd` file asks for cwd-relative paths, and baking
+                            // `true` here compiled it as though it had never written
+                            // the directive.  `source_dir` is set either way — it is
+                            // what the `source_dir()` built-in answers, and
+                            // `resolve_path` ignores it when the mode is cwd.
                             writeln!(
                                 buf,
-                                "    {{ let s: &mut Stores = unsafe {{ &mut *cell.get() }}; s.source_dir = Stores::source_dir_native(); s.program_relative = true; }}"
+                                "    {{ let s: &mut Stores = unsafe {{ &mut *cell.get() }}; s.source_dir = Stores::source_dir_native(); s.program_relative = {}; }}",
+                                clean_db.program_relative
                             )
                             .unwrap();
                             writeln!(buf, "    init(&cell);").unwrap();
@@ -1725,10 +1758,14 @@ pub(crate) fn run_tests(
                             }
                             // Run the native test binary with cwd = source_dir so its
                             // raw `std::fs` (e.g. imaging's load_png/save_png) anchors
-                            // where its loft `file()` does — the test codegen always
-                            // sets `program_relative = true`.  Mirrors the in-process
-                            // interpreter guard above + the standalone path in main.rs.
-                            if let Some(dir) = std::path::Path::new(&abs_file).parent() {
+                            // where its loft `file()` does.  Gated on the program's own
+                            // mode, exactly as `enter_source_dir` gates the in-process
+                            // interpreter run: a `#cwd` program anchors loft I/O at the
+                            // cwd, so moving the child would put its raw `std::fs`
+                            // somewhere its `file()` is not.
+                            if clean_db.program_relative
+                                && let Some(dir) = std::path::Path::new(&abs_file).parent()
+                            {
                                 run_cmd.current_dir(dir);
                             }
                             let run_ok = run_cmd.status().map(|s| s.success()).unwrap_or(false);

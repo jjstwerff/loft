@@ -46,7 +46,18 @@ fn test_p85_struct_enum_local() {
 
 // --- P91: moved to 72-parse-error-caveats.loft (now a compile error) ---
 
-// --- P98: Index range query with descending key returns wrong results ---
+// --- P98: a descending key orders every query, and `sorted` is the oracle ---
+//
+// The `-` on a key field is the comparator's business and is applied exactly once, so a
+// range names its bounds in the COLLECTION's own key order.  On `[-cat]` the walk runs
+// "c" -> "a": `["c".."a"]` is the non-empty half and `["a".."c"]` the inverted, empty
+// one.  `index` and `sorted` must answer identically -- that is what makes them two
+// implementations of one ordered contract instead of two behaviours, so the sorted twin
+// below is the oracle rather than a second copy of the same claim.
+//
+// These rows assert WHICH records, in which order.  The guard they replace summed the
+// scores of `["a".."c"]` and read 3, which is `{a,b}` -- the ascending answer, and a
+// value a sum cannot tell apart from `{c}` (loft#1267).
 
 struct P98Item {
   cat: text,
@@ -54,6 +65,9 @@ struct P98Item {
 }
 struct P98Db {
   idx: index<P98Item[-cat]>,
+}
+struct P98SortedDb {
+  srt: sorted<P98Item[-cat]>,
 }
 
 fn test_p98_index_range_descending_key() {
@@ -64,9 +78,28 @@ fn test_p98_index_range_descending_key() {
       P98Item { cat: "c", score: 3 },
     ],
   };
-  p98_sum = 0;
-  for p98_e in p98_db.idx["a".."c"] { p98_sum += p98_e.score; }
-  assert(p98_sum == 3, "P98 descending key range: expected 3 got {p98_sum}");
+  p98_walk = "";
+  for p98_e in p98_db.idx["c".."a"] { p98_walk += p98_e.cat; }
+  assert(p98_walk == "cb", "P98 descending range [c..a]: expected cb got {p98_walk}");
+  p98_back = "";
+  for p98_b in p98_db.idx["a".."c"] { p98_back += p98_b.cat; }
+  assert(p98_back == "", "P98 inverted range [a..c] must be empty: got {p98_back}");
+}
+
+fn test_p98_sorted_answers_the_same() {
+  p98s_db = P98SortedDb {
+    srt: [
+      P98Item { cat: "a", score: 1 },
+      P98Item { cat: "b", score: 2 },
+      P98Item { cat: "c", score: 3 },
+    ],
+  };
+  p98s_walk = "";
+  for p98s_e in p98s_db.srt["c".."a"] { p98s_walk += p98s_e.cat; }
+  assert(p98s_walk == "cb", "P98 sorted oracle [c..a]: expected cb got {p98s_walk}");
+  p98s_back = "";
+  for p98s_b in p98s_db.srt["a".."c"] { p98s_back += p98s_b.cat; }
+  assert(p98s_back == "", "P98 sorted oracle [a..c] must be empty: got {p98s_back}");
 }
 
 fn test_p98_full_iteration_ok() {
@@ -77,7 +110,9 @@ fn test_p98_full_iteration_ok() {
       P98Item { cat: "c", score: 3 },
     ],
   };
+  p98a_walk = "";
   p98a_total = 0;
-  for p98a_e in p98a_db.idx { p98a_total += p98a_e.score; }
+  for p98a_e in p98a_db.idx { p98a_walk += p98a_e.cat; p98a_total += p98a_e.score; }
   assert(p98a_total == 6, "P98 guard: full iteration sum {p98a_total}");
+  assert(p98a_walk == "cba", "P98 guard: full iteration order {p98a_walk}");
 }

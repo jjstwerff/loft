@@ -23,8 +23,8 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="cur">Libraries</span> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <a href="38-call-it-yourself.html">Call it yourself</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>drawing API</h1>
 <article>
-<p><a href="lib-drawing.html">← drawing</a> · version 0.2.0</p>
-<p class="lib-legend">39 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
+<p><a href="lib-drawing.html">← drawing</a> · version 0.3.0</p>
+<p class="lib-legend">49 public items, in source order. Generated from the registry index, which re-derives them from the package source at publish time — so a signature here is the one that version actually ships.</p>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">enum</span> <span class="en">PaintKind</span></code></pre>
 <p>How a mark is filled, if it is filled at all.</p>
@@ -94,6 +94,28 @@
 <p>The command order below is <code>draw.py</code>'s, and it is not alphabetical or tidy — <code>Circle</code> is tried before <code>Poly</code>, <code>Line</code> last of all.  Keep it: a grammar this loose is defined by the order its alternatives are tried in, and re-sorting it silently re-reads lines that sit in two alternatives.</p>
 </div>
 <div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Check</span></code></pre>
+<p>One evaluated <code>check</code> line.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">eval_check</span>(sk: const <span class="en">Sketch</span>, raw: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Check</span></code></pre>
+<p>One <code>check</code> line, measured — <code>draw.py</code>'s <code>eval_check</code>, verdict for verdict.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">eval_checks</span>(sk: const <span class="en">Sketch</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Check</span>&gt;</code></pre>
+<p>Every <code>check</code> the scene states, measured.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">scene_ok</span>(sk: const <span class="en">Sketch</span>, results: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Check</span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span></code></pre>
+<p>Did the scene come out whole — every line understood, every mark drawn, every check passing?  This is what <code>--once</code> exits on.</p>
+<p>A DEFERRED mark counts as a failure, where <code>draw.py</code> has no such notion: a mark this build recognises and does not draw means the picture is short of something the scene asked for, and a renderer that answers &quot;fine&quot; to that is the one thing this channel exists to prevent.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">metric_report</span>(sk: const <span class="en">Sketch</span>, results: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Check</span>&gt;) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span></code></pre>
+<p>The metric report: what did not parse, where every named element sits, and how each check came out.</p>
+<p><code>draw.py</code>'s <code>stats.txt</code> blocks, in its spelling, minus the two that are pictures of the render (the density map and the composition notes) — this channel measures the SCENE, and a picture already has a diff.</p>
+</div>
+<div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render</span>(sc: const <span class="en">Sketch</span>) -&gt; graphics::<span class="en">Canvas</span></code></pre>
 <p>Draw a parsed scene: at <code>SUPERSAMPLE</code>x, then resampled down with Lanczos.</p>
 <p>A transparent background renders on transparent pixels so the resample anti-aliases edges against ALPHA rather than against white — which is what makes the result a sprite that can be composited over anything, with no colour-key hack.</p>
@@ -101,6 +123,33 @@
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">render_file</span>(src: <span class="ty"><a href="stdlib-types.html">text</a></span>, out: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="en">Sketch</span></code></pre>
 <p>Render a <code>.draw</code> file to a PNG, answering the parsed scene so the caller can report what it could not accept.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">hash01</span>(hseed: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hidx: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hsalt: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>A reproducible pseudo-random float in [-1, 1) from three small non-negative integers.</p>
+<p>⚠ NOT a PRNG, and deliberately not the <code>random</code> package. <code>draw.py</code> says so in its own docstring — *&quot;never random()/hash() (those break reproducible renders)&quot;* — and the corpus is defined by THIS hash: swap in PCG-64 and every jittered frond moves, so the substitution fails the gate it was meant to help pass.</p>
+<p>Three details are load-bearing. The masking is 32-bit throughout, and the widest product it forms (<code>0xFFFFFFFF * 1274126177</code>) is 5.47e18 — inside i64 by a hair, so this needs no widening but has none to spare. And the final divide is a REAL division: <code>x / 0xFFFFFFFF</code> in integer arithmetic is 0 for every input and would give a perfectly smooth, entirely wrong field.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">lowfreq</span>(lseed: <span class="ty"><a href="stdlib-types.html">integer</a></span>, lu: <span class="ty"><a href="stdlib-types.html">float</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">float</a></span></code></pre>
+<p>A smooth low-frequency wave over [0,1], two harmonics with seed-derived phases.</p>
+<p>Smooth in <code>u</code> is the point: neighbouring fronds see nearby values, so they CLUMP and leave gaps. White noise would scatter them evenly, which reads as man-made — the opposite of what this is for.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Frond</span></code></pre>
+<p>One frond: a centreline in paper fractions and a width per point.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">FrondSpec</span></code></pre>
+<p>Everything a <code>Fronds</code> line says about the array, past its two endpoints.</p>
+<p>A struct rather than twenty parameters, because the fractal recursion builds a MODIFIED copy of it — a parameter list that long is one a caller gets wrong in order, and the recursion is the caller.</p>
+</div>
+<div class="item">
+<pre><code><span class="kw">pub</span> <span class="kw">fn</span> <span class="fn-call">fronds</span>(x1: <span class="ty"><a href="stdlib-types.html">float</a></span>, y1: <span class="ty"><a href="stdlib-types.html">float</a></span>, x2: <span class="ty"><a href="stdlib-types.html">float</a></span>, y2: <span class="ty"><a href="stdlib-types.html">float</a></span>, sp: const <span class="en">FrondSpec</span>,</code></pre>
+<p>A linear array of tapered strokes rooted along the spine <code>(x1,y1)-(x2,y2)</code>.</p>
+<p>Every frond is the same template placed at <code>u</code> along the spine and tilted off the normal, then made NON-UNIFORM three ways at once: placement clumps on the seeded low-frequency field, length / width / angle ramp along the run and are then jittered per frond, and the ends FRAY. Zero all three and it is a comb.</p>
+<p>⚠ <code>mirror</code> reuses the SAME sample on both sides — length, angle and width are drawn once, outside the side loop, and reflected. Drawing them per side would consume the hash twice as fast and desynchronise every frond after the first.</p>
+<p>Built in PIXEL space and handed back in fractions, so the array stays correct on non-square paper.</p>
 </div>
 <div class="item">
 <pre><code><span class="kw">pub</span> <span class="kw">struct</span> <span class="en">Pt</span></code></pre>

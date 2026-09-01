@@ -652,6 +652,9 @@ impl Parser {
                     );
                     let state_var = self.create_var(&iter_state_name, &crate::data::I64);
                     self.vars.defined(state_var);
+                    // Tell the loop which local its cursor is, so `#remove` reads it instead
+                    // of rebuilding the name (loft#1272).
+                    self.vars.set_loop_state_var(state_var);
                     let mut ls = Vec::new();
                     self.fill_iter(&mut ls, code, is_type, true, true);
                     ls.push(Value::Int(0));
@@ -1369,15 +1372,7 @@ impl Parser {
         }
         if crate::parser::vectors::is_collection(f_type) {
             if let Value::Var(nr) = to.unspan() {
-                if self.const_write_blocked(*nr, op) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                        self.vars.const_kind(*nr),
-                        self.vars.name(*nr)
-                    );
-                }
+                // The const guard is `parse_assign_op_inner`'s, asked before it routed here.
                 return v_set(*nr, val.clone());
             }
             // @P308 — a KEYED-collection FIELD whole-assignment `s.h = expr`
@@ -1488,22 +1483,30 @@ impl Parser {
         // it is already in range — clamping is idempotent, and `set_byte`'s out-of-range
         // return is discarded, so nothing is judged or reported twice.
         if op != "=" && !self.first_pass {
-            self.guard_compound_range(&mut code, f_type);
+            let holds_null = crate::parser::expressions::target_holds_null(f_type, parent_tp);
+            self.guard_compound_range(&mut code, f_type, holds_null);
         }
         if let Value::Call(d_nr, args) = to.unspan() {
             let name = self.data.def(*d_nr).name().to_string();
             let args = args.clone();
             self.call_to_set_op(&name, &args, code, op)
+        } else if let Some(tuple_lhs) = crate::parser::expressions::extract_nested_tuple_lhs(to) {
+            // loft#1228 — a TUPLE ELEMENT is a place, and this is the seam where a place
+            // becomes a write.  A `Call` gets its `OpGetX` -> `OpSetX` twin above and a `Var`
+            // gets a `Set`; a tuple slot had neither, so every compound assignment to one fell
+            // to the diagnostic below — *"Not implemented operation + for type integer"*, a
+            // message about the OPERATOR when `+` on an integer is plainly implemented and the
+            // target is what had no route.
+            //
+            // `code` is already the COMPOSED value here (the comment on the range guard above
+            // says so), so the write is the only missing half.  Both IR spellings of a tuple
+            // place are handled, through the one home that knows them — a bare `TupleGet` at
+            // depth 1 and a `Block[Set(w, …), TupleGet(w, idx)]` chain deeper — because
+            // matching only the first is the half-fix QUALITY.md's `spellings` screen exists
+            // to catch.
+            crate::parser::expressions::build_nested_tuple_assign(to, &tuple_lhs, code)
         } else if let Value::Var(nr) = to.unspan() {
-            if self.const_write_blocked(*nr, op) {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                    self.vars.const_kind(*nr),
-                    self.vars.name(*nr)
-                );
-            }
+            // The const guard is `parse_assign_op_inner`'s, asked before it routed here.
             // This variable was created here and thus not yet used.
             self.var_usages(*nr, false);
             v_set(*nr, code)
@@ -1744,21 +1747,34 @@ use #count instead"
                 }
             }
             let on = self.vars.loop_on(index_var);
-            let state_name = if on & 63 >= 1 && on & 63 <= 3 {
-                let state_key = format!("{base}#iter_state");
-                if self.vars.name_exists(&state_key) {
-                    state_key
+            // The loop records its own cursor, because the two keyed lowerings name it
+            // differently — `{base}#iter_state` for an unbounded walk, `_iter_N` for a
+            // bounded range — and reconstructing the first spelling here silently missed the
+            // second. The fallback then named `{base}#index`, which a range ELIDES, so the
+            // operand was measured against a slot that does not exist (loft#1272).
+            let recorded = self.vars.loop_state_var(index_var);
+            let state_var = if recorded == u16::MAX {
+                // No cursor was recorded: a vector walk, a range, a custom iterator. Fall
+                // back to the historical name-based lookup, which those shapes still satisfy.
+                let state_name = if on & 63 >= 1 && on & 63 <= 3 {
+                    let state_key = format!("{base}#iter_state");
+                    if self.vars.name_exists(&state_key) {
+                        state_key
+                    } else {
+                        format!("{base}#index")
+                    }
                 } else {
                     format!("{base}#index")
-                }
+                };
+                self.vars.var(&state_name)
             } else {
-                format!("{base}#index")
+                recorded
             };
             let coll = self.vars.loop_value(index_var).clone();
             let remove = self.cl(
                 "OpRemove",
                 &[
-                    Value::Var(self.vars.var(&state_name)),
+                    Value::Var(state_var),
                     coll.clone(),
                     Value::Int(i32::from(on)),
                     Value::Int(i32::from(self.vars.loop_db_tp(index_var))),

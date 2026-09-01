@@ -1,0 +1,135 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib lib
+//
+// `parser::parse` accepts every construct Loft itself accepts (loft#1259).
+//
+// The library is the only public entry point for parsing Loft source at runtime, and its
+// answer is a COUNT — so a caller cannot tell "your snippet is broken" from "the parser
+// cannot read this construct". It rejected index expressions, nullable types, `??` and
+// format literals: all ordinary Loft, all named by the chapter that documents the library.
+//
+// The oracle for every cell below is LOFT ITSELF: each snippet was run as a real program
+// first, and only snippets Loft accepts are asserted to parse cleanly. Agreement between
+// the library and a hand-written expectation would prove nothing; agreement with the
+// language is the property that matters.
+//
+// The two `bad_*` cells are the control. A harness that answers 0 for everything passes
+// every cell above them and is worthless, so an INVALID snippet must still be refused —
+// and must be refused a bounded number of times: `struct S { n: limit(0, 10) }` reported
+// one malformed field 256 times, once per turn of a loop that consumed nothing.
+//
+// Rules the fixes are pinned to, from doc/claude/formal/grammar.md:
+//   @FR-G-Prec         `??` is the LOOSEST binary operator — the table IS the precedence.
+//   @FR-G-Post-Default postfix `?` is a suffix on a PRIMARY, chaining with `.` and `[]`.
+//   @FR-G-Lex-Coal     `??` is lexed by maximal munch, so it is never two `?` tokens.
+//
+// @falsified-at: 7b7a8774 — interpret exit 1 -> 0, interpret 1 assertion failures -> 0,
+// native exit 1 -> 0, native 1 assertion failures -> 0.  The pre-fix counts behind that
+// first failing cell were index 2, nullable-type 1, `??` 1, format-literal 1,
+// `vector<vector<T>>` 3 and `true` 1, against the 0 each asserts here.
+//
+// Scoring it needed a fix to the instrument: `use <lib>` resolves `lib/` relative to the
+// process CWD, and `falsify.sh` ran both sides from the checkout, so the control read
+// THIS tree's libraries and reported INERT.  Each side now runs in the tree it scores.
+
+use parser;
+
+// A snippet Loft accepts must parse with no errors at all.
+fn ok(name: text, src: text) {
+  n = parser::parse(name, src);
+  assert(n == 0, "{name}: expected a clean parse, got {n} error(s) — {src}");
+}
+
+// A snippet Loft refuses must be refused, and refused a BOUNDED number of times: an
+// unbounded count is a parser that lost sync, not a source with that many faults.
+fn bad(name: text, src: text) {
+  n = parser::parse(name, src);
+  assert(n > 0, "{name}: expected a refusal, got a clean parse — {src}");
+  assert(n < 10, "{name}: refused {n} times; the parser is repeating one fault — {src}");
+}
+
+fn main() {
+  // --- index expressions -------------------------------------------------------------
+  // `index_def` closed on `}` instead of `]`, so EVERY `[...]` after a primary failed.
+  ok("i-read", "fn f(v: vector<integer>) {{ v[0]; }}");
+  ok("i-write", "fn f(v: vector<integer>) {{ v[0] = 1; }}");
+  ok("i-nested", "fn f(v: vector<vector<integer>>) {{ v[0][1]; }}");
+  ok("i-multikey", "struct P {{ a: integer, b: integer }} fn f(h: hash<P[a,b]>) {{ h[1, 2]; }}");
+  ok("i-in-arg", "fn g(x: integer) {{}} fn f(v: vector<integer>) {{ g(v[0]); }}");
+  ok("i-in-list", "fn f(v: vector<integer>) {{ w = [v[0]]; }}");
+  ok("i-text-key", "struct Q {{ k: text }} fn f(h: hash<Q[k]>) {{ h[\"k\"]; }}");
+  ok("i-after-field", "struct S {{ v: vector<integer> }} fn f(s: S) {{ s.v[0]; }}");
+  ok("i-after-call", "fn h() -> vector<integer> {{ [1] }} fn f() {{ h()[0]; }}");
+  ok("i-then-field", "struct P {{ a: integer }} fn f(v: vector<P>) {{ v[0].a; }}");
+
+  // --- nullable types ------------------------------------------------------------------
+  // The `??` failures were reported at the parameter, not the operator: a `τ?` type was
+  // unreadable, so the C-cells never reached their coalesce. A nullable RETURN type was
+  // worse than an error — the body went unparsed and the count still said 0.
+  ok("t-param", "fn f(a: integer?) {{ }}");
+  ok("t-return", "fn f() -> integer? {{ null }}");
+  ok("t-field", "struct N {{ a: integer? }}");
+  ok("t-in-generic", "fn f(v: vector<integer?>) {{ }}");
+  ok("t-generic-nullable", "fn f(v: vector<integer>?) -> integer {{ 1 }}");
+
+  // --- `??` and postfix `?` (@FR-G-Prec, @FR-G-Post-Default, @FR-G-Lex-Coal) -----------
+  ok("c-coalesce", "fn f(a: integer?) -> integer {{ a ?? 0 }}");
+  ok("c-chain", "fn f(a: integer?, b: integer?) -> integer {{ a ?? b ?? 0 }}");
+  ok("c-discharge", "fn f(a: integer?) -> integer {{ a? }}");
+  ok("c-vs-plus", "fn f(a: integer?) -> integer {{ a ?? 0 + 1 }}");
+  ok("c-in-arg", "fn g(x: integer) {{}} fn f(a: integer?) {{ g(a ?? 0); }}");
+  ok("c-on-index", "fn f(v: vector<integer>) -> integer {{ v[0] ?? 0 }}");
+  ok("c-discharge-index", "fn f(v: vector<integer>) -> integer {{ v[0]? }}");
+  ok("c-discharge-field", "struct S {{ a: integer }} fn f(s: S) -> integer {{ s.a? }}");
+  ok("c-discharge-paren", "fn f(a: integer, b: integer) -> integer {{ (a / b)? }}");
+  // No nullable type anywhere: this is the `??` operator on its own, which the type
+  // failures above were masking.
+  ok("c-operator-alone", "fn f(a: integer) -> integer {{ a ?? 0 }}");
+  ok("c-after-binary", "fn f(a: integer, b: integer) -> integer {{ a + b ?? 0 }}");
+
+  // --- format literals -----------------------------------------------------------------
+  // A continuation after a hole starts at its first content character, and the scanner
+  // skipped it untested. A hole ending the text lost the closing quote and ran off the
+  // end; a hole followed by another hole swallowed the second as literal text and still
+  // answered 0 — a false pass, which is why `f-two-holes` is here.
+  ok("f-hole-at-end", "fn f(n: integer) -> text {{ \"v={{n}}\" }}");
+  ok("f-two-holes", "fn f(a: integer, b: integer) -> text {{ \"{{a}}{{b}}\" }}");
+  ok("f-adjacent", "fn f(a: integer) -> text {{ \"{{a}}{{a}}\" }}");
+  ok("f-with-flags", "fn f(n: integer) -> text {{ \"{{n:5}}\" }}");
+  ok("f-escaped-braces", "fn f() -> text {{ \"{{{{}}}}\" }}");
+  ok("f-hole-mid-text", "fn f(n: integer) -> text {{ \"x{{n}}y\" }}");
+  ok("f-whole-text", "fn f(n: integer) -> text {{ \"{{n}}\" }}");
+  ok("f-escape-after-hole", "fn f(n: integer) -> text {{ \"{{n}}\\\"\" }}");
+  ok("f-for-loop", "fn f() -> text {{ \"{{for x in 1..7 {{x*2}}:02}}\" }}");
+
+  // --- nested generics -------------------------------------------------------------
+  // `vector<vector<integer>>` ends in a `>>`, which maximal munch scans as the SHIFT
+  // token. Splitting it must not cost the shift operator its own reading.
+  ok("g-nested", "fn f(v: vector<vector<integer>>) {{ }}");
+  ok("g-triple", "fn f(v: vector<vector<vector<integer>>>) {{ }}");
+  ok("g-shift-still-works", "fn f(a: integer, b: integer) -> integer {{ a >> b }}");
+
+  // --- keyword literals ------------------------------------------------------------
+  // `true`, `false` and `null` are keywords, so `identifier()` refuses them and only
+  // `value()` can claim one — it recognised them without consuming them.
+  ok("v-true", "fn f() -> boolean {{ true }}");
+  ok("v-false", "fn f() -> boolean {{ false }}");
+  ok("v-null", "fn f() -> integer? {{ null }}");
+
+  // --- suffixes attach to every primary ---------------------------------------------
+  ok("p-paren-field", "struct S {{ a: integer }} fn f(s: S) -> integer {{ (s).a }}");
+  ok("p-paren-index", "fn f(v: vector<integer>) -> integer {{ (v)[0] }}");
+  ok("p-literal-method", "fn f() -> integer {{ \"abc\".len() }}");
+
+  // --- baselines: constructs that already worked, so a regression here is visible ----
+  ok("b-assign", "fn f() {{ t = 0; t += 1; }}");
+  ok("b-field", "struct S {{ a: integer }} fn f(s: S) {{ s.a; }}");
+  ok("b-call", "fn g(x: integer) {{}} fn f() {{ g(1); }}");
+
+  // --- controls: the harness can fail, and it fails a bounded number of times --------
+  bad("x-garbage", "fn f( {{");
+  bad("x-bad-field", "struct S {{ n: limit(0, 10) }}");
+  bad("x-unterminated-text", "fn f(n: integer) -> text {{ \"v={{n}}");
+}

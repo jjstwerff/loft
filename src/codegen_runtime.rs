@@ -2399,36 +2399,14 @@ pub fn OpRemove<S: IterState>(
                 return;
             }
             let tp = arg as u16;
-            let fields = stores.fields(tp);
-            let cur_ref = iter_ref(&data, cur_u, fields);
-            // Compute successor BEFORE removing so tree pointers are still intact.
-            let n_after = {
-                let store = crate::keys::store(&data, &stores.allocations);
-                if reverse {
-                    tree::previous(store, &cur_ref)
-                } else {
-                    tree::next(store, &cur_ref)
-                }
-            };
-            stores.remove_owned(&data, &cur_ref, tp);
-            if n_after == 0 {
-                // Removed the last element: signal end-of-iteration.
-                state.set_finish(u32::MAX);
-            } else {
-                // Set cur to predecessor of n_after so the next OpStep visits n_after.
-                let pred = {
-                    let store = crate::keys::store(&data, &stores.allocations);
-                    if reverse {
-                        tree::next(store, &iter_ref(&data, n_after, fields))
-                    } else {
-                        tree::previous(store, &iter_ref(&data, n_after, fields))
-                    }
-                };
-                state.set_cur(pred.cast_signed());
-                // If n_after equals the finish boundary, signal end-of-iteration.
-                if n_after == state.get_finish() {
-                    state.set_finish(u32::MAX);
-                }
+            // The removal and the cursor it leaves behind are one decision, shared with the
+            // interpreter (loft#1272).
+            match stores.remove_during_tree_iteration(&data, tp, cur_u, state.get_finish(), reverse)
+            {
+                // Nothing follows in range: signal end-of-iteration.
+                None => state.set_finish(u32::MAX),
+                // Park at the predecessor so the next OpStep visits what followed.
+                Some(pred) => state.set_cur(pred.cast_signed()),
             }
         }
         2 => {
@@ -4819,6 +4797,12 @@ const FS_NOT_FOUND: i64 = 1;
 const FS_PERMISSION_DENIED: i64 = 2;
 #[cfg(not(host_fs))]
 const FS_IS_DIRECTORY: i64 = 3;
+// loft#1256 — `rmdir` refused because the directory still holds entries.  Its own code
+// because it is the one failure a caller can ACT on: empty the directory and retry.  Folding
+// it into `FS_OTHER` would leave the only recoverable case indistinguishable from the
+// unrecoverable ones.
+#[cfg(not(host_fs))]
+const FS_NOT_EMPTY: i64 = 4;
 
 /// Classify a filesystem mutation's result into an `FS_*` code.  `dir_is_err`
 /// asks for the "target is a directory" failure to be reported as
@@ -4845,6 +4829,45 @@ fn fs_classify(r: std::io::Result<()>, path: &str, dir_is_err: bool) -> i64 {
                 std::io::ErrorKind::PermissionDenied => FS_PERMISSION_DENIED,
                 _ => FS_OTHER,
             }
+        }
+    }
+}
+
+/// Remove the EMPTY directory `path`.  Returns an `FS_*` code (mapped to `FileResult` by the
+/// `rmdir` wrapper).
+///
+/// Empty directories only, deliberately: a recursive removal is the sharpest tool a
+/// filesystem API has, and it deserves its own decision rather than arriving inside the
+/// primitive that closes the create/remove asymmetry.  A caller that wants one writes the
+/// walk with `list_dir` and this.
+///
+/// "Not empty" is detected by STATTING rather than by `ErrorKind::DirectoryNotEmpty`, for the
+/// reason the `IsADirectory` comment above gives: that variant stabilised in Rust 1.83, and
+/// this file is recompiled by the USER's rustc for `--native`.  The kind is consulted first
+/// so a genuine permission error on a non-empty directory keeps its own answer.
+pub fn fs_rmdir(path: &str) -> i64 {
+    #[cfg(host_fs)]
+    {
+        // The browser host bridges `mkdir` but has no `rmdir` counterpart, so this refuses
+        // rather than reporting a removal that did not happen — `FileResult.Other`, which the
+        // enum's own doc already names as the wasm host's catch-all.
+        let _ = path;
+        FS_OTHER
+    }
+    #[cfg(not(host_fs))]
+    {
+        match std::fs::remove_dir(path) {
+            Ok(()) => FS_OK,
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => FS_NOT_FOUND,
+                std::io::ErrorKind::PermissionDenied => FS_PERMISSION_DENIED,
+                _ if fs_is_dir(path)
+                    && std::fs::read_dir(path).is_ok_and(|mut d| d.next().is_some()) =>
+                {
+                    FS_NOT_EMPTY
+                }
+                _ => FS_OTHER,
+            },
         }
     }
 }

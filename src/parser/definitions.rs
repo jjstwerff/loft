@@ -3204,6 +3204,32 @@ impl Parser {
                 }
             }
             self.lexer.token(",");
+            // An upper bound below zero is not representable: `IntegerSpec::max` is a
+            // `u32`, so a range lying entirely below zero has no encoding.  Say that,
+            // because the `-` otherwise reaches no branch below and the parser desyncs
+            // into *"Expect token )"* — an error about punctuation for a bound the type
+            // system simply cannot carry, which is the same shape the lower bound's
+            // too-wide case was fixed for above.
+            if self.lexer.has_token("-") {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`limit(...)`'s upper bound cannot be negative, so a range lying \
+                         entirely below zero cannot be declared; widen it to zero \
+                         (`limit({min}, 0)`) and check the upper edge in code, or declare \
+                         it plain `integer`"
+                    );
+                }
+                // Consume the digits so the `)` below still lines up and the file's other
+                // errors are reported rather than buried under a cascade.
+                let _ = self
+                    .lexer
+                    .has_integer()
+                    .or_else(|| self.lexer.has_long().and_then(|n| u32::try_from(n).ok()));
+                self.lexer.token(")");
+                return true;
+            }
             // C54.A incremental 2a — accept both Integer and Long literals.
             // Values > i32::MAX tokenise as Long, so u32-range bounds like
             // `limit(0, 4_294_967_294)` work.
@@ -3641,11 +3667,12 @@ impl Parser {
     /// The line points at the member that JOINED — the later one, which is the field the
     /// author most likely added without knowing what it would join.
     fn advise_group_apart(&mut self, d_nr: u32, field_at: &[(String, crate::lexer::Position)]) {
-        if self.default
-            || self.first_pass
-            || !crate::keys::group_apart_lint_enabled()
-            || !self.data.source_is_owned(self.data.def(d_nr).source)
-        {
+        // No ownership test here: `Diagnostics::reaches_author` is the one home for who a
+        // lint is addressed to (loft#1260).  This site used to ask `source_is_owned`, which
+        // is `source == MAIN_SOURCE` — the ENTRY file, not the project — so the lint was
+        // silent in a package's own `loft test`, where the entry is `tests/*.loft` and the
+        // struct under review is in `src/*.loft`.  That is the one run it exists for.
+        if self.default || self.first_pass || !crate::keys::group_apart_lint_enabled() {
             return;
         }
         for (_, members) in self.collection_groups(d_nr) {
