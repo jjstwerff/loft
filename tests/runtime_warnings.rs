@@ -1383,3 +1383,86 @@ fn main() { x = 0; f(&x); print(\"{x}\\n\"); }
         "scalar & is always needed — W4 must NOT fire; got stderr={diag:?}"
     );
 }
+
+// ── loft#1286 — a FORWARDED `&` is not redundant ────────────────────────────
+//
+// `slow-reference-parameter` asks whether the whole binding is ever reassigned, and a
+// FORWARDER never reassigns — its callee does.  So the one shape where the `&` is carrying
+// someone else's write-back was exactly the shape a body-local walk read as redundant, and
+// taking the advice there SILENTLY LOSES the write-back: the lint fired only on the correct
+// spelling and said nothing about the broken one.
+//
+// `callee_param_reassigns` is the interprocedural half.  It asks about REASSIGNMENT rather
+// than about writes on purpose — its sibling `callee_param_writes` also answers yes to a
+// FIELD write, which is precisely the case this advice exists to flag, so using it would have
+// silenced the lint everywhere instead of at the forwarders.
+//
+// Falsified by counting: on released `loft 2026.8.0` the program below draws the advice on
+// FIVE of its five `&` parameters; here it draws TWO, the field-writing pair.  The count is
+// the assertion for that reason — a bare `contains` would have passed on both builds.
+
+const FWD_1286: &str = "\
+struct B { items: vector<integer> }
+fn reassign(b: &B) { b = B { items: [9] }; }
+fn fieldonly(b: &B) { b.items = [7]; }
+fn fwd1(b: &B) { reassign(b); }
+fn fwd2(b: &B) { fwd1(b); }
+fn fwd3(b: &B) { fwd2(b); }
+fn fwd_field(b: &B) { fieldonly(b); }
+fn main() {
+  a = B { items: [0] };  fwd3(a);       print(\"fwd3={a.items}\\n\");
+  b = B { items: [0] };  fwd1(b);       print(\"fwd1={b.items}\\n\");
+  c = B { items: [0] };  fwd_field(c);  print(\"fwdfield={c.items}\\n\");
+  d = B { items: [0] };  reassign(d);   print(\"direct={d.items}\\n\");
+}
+";
+
+#[test]
+fn forwarded_ref_parameter_is_not_advised_away_1286() {
+    let (stdout, diag, _code) = run_with_warnings("fwd_ref_1286", FWD_1286);
+    // The advice must name ONLY the two field-writing forms.  Counting is what makes this a
+    // real assertion: a bare `contains` would pass while the forwarders were still flagged.
+    let hits = diag.matches("only slows it down").count();
+    assert_eq!(
+        hits, 2,
+        "expected the advice on `fieldonly` and `fwd_field` and on nothing else; \
+         got {hits} occurrences in {diag:?}"
+    );
+    for quiet in ["fwd1", "fwd2", "fwd3", "reassign"] {
+        assert!(
+            !diag.contains(&format!("parameter `{quiet}`")),
+            "`{quiet}` forwards or performs a reassignment, so its & is load-bearing; \
+             got {diag:?}"
+        );
+    }
+    // And the write-back the `&` carries actually arrives — through three levels of
+    // forwarding, which is what says the interprocedural walk follows the chain rather than
+    // looking one call deep.
+    for expect in ["fwd3=[9]", "fwd1=[9]", "fwdfield=[7]", "direct=[9]"] {
+        assert!(
+            stdout.contains(expect),
+            "expected {expect:?} in the output; got {stdout:?}"
+        );
+    }
+}
+
+#[test]
+fn a_field_only_ref_parameter_is_still_advised_1286() {
+    // The control that keeps the fix honest: widening the predicate must not silence the
+    // case the advice exists for.  A `&` whose body only writes a FIELD is redundant, and
+    // dropping it keeps the same answer.
+    let source = "\
+struct S { a: integer }
+fn f(s: &S) { s.a = 1; }
+fn main() { v = S { a: 0 }; f(v); print(\"a={v.a}\\n\"); }
+";
+    let (stdout, diag, _code) = run_with_warnings("field_only_1286", source);
+    assert!(
+        diag.contains("only slows it down"),
+        "a field-only & is still redundant and must still be advised; got {diag:?}"
+    );
+    assert!(
+        stdout.contains("a=1"),
+        "the field write lands; got {stdout:?}"
+    );
+}

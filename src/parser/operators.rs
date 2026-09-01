@@ -4132,12 +4132,45 @@ impl Parser {
             {
                 continue;
             }
+            // A reassignment of the whole binding is what `&` is FOR, and it need not be
+            // written here: a FORWARDER (`fn forward(b: &B) { replace_ref(b); }`) never
+            // reassigns — its callee does — so the one shape where the `&` is carrying
+            // someone else's write-back is exactly the shape a body-local walk reads as
+            // redundant.  Taking the advice there silently LOSES the write-back, which makes
+            // it the worst kind of false positive: it fired only on the correct spelling and
+            // said nothing about the broken one (loft#1286).
+            //
+            // `callee_param_reassigns` is the interprocedural half, and it asks about
+            // REASSIGNMENT rather than about writes — its sibling `callee_param_writes` would
+            // also answer yes to a FIELD write, which is precisely the case this advice
+            // exists to flag.
             let mut reassigned = false;
+            let mut cache: std::collections::HashMap<u32, Vec<bool>> =
+                std::collections::HashMap::new();
             body.walk(&mut |node| {
                 if matches!(node, Value::Set(v, _) if *v == var) {
                     reassigned = true;
                 }
             });
+            if !reassigned {
+                let data = &self.data;
+                body.walk(&mut |node| {
+                    if let Value::Call(fn_nr, args) = node.unspan()
+                        && *data.def(*fn_nr).code() != Value::Null
+                    {
+                        let callee =
+                            crate::parser::callee_param_reassigns(*fn_nr, data, &mut cache);
+                        for (i, arg) in args.iter().enumerate() {
+                            if i < callee.len()
+                                && callee[i]
+                                && matches!(arg.unspan(), Value::Var(v) if *v == var)
+                            {
+                                reassigned = true;
+                            }
+                        }
+                    }
+                });
+            }
             if reassigned {
                 continue;
             }

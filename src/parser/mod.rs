@@ -16034,6 +16034,74 @@ fn callee_param_writes(fn_nr: u32, data: &Data, cache: &mut HashMap<u32, Vec<boo
     merged
 }
 
+/// For each parameter of `fn_nr`, does the body REASSIGN the whole binding (`p = …`)?
+///
+/// The narrower sibling of [`callee_param_writes`], and the difference is the whole point:
+/// that one answers *"is this parameter written at all"*, which a FIELD write satisfies, and a
+/// field write is exactly the case the `slow-reference-parameter` advice exists to flag.  Only
+/// a whole-binding reassignment is what `&` is for, so only that may silence it.
+///
+/// Interprocedural for the same reason the write query is: a FORWARDER never reassigns —
+/// its callee does — so the one shape where a `&` is carrying someone else's write-back is
+/// exactly the shape a body-local walk reads as redundant (loft#1286).
+///
+/// The recursion is broken by the same placeholder-then-merge the write query uses, and the
+/// `cache` is shared with it deliberately: both are keyed by definition and neither writes an
+/// entry the other reads, because this one never calls `find_written_vars`.
+pub(crate) fn callee_param_reassigns(
+    fn_nr: u32,
+    data: &Data,
+    cache: &mut HashMap<u32, Vec<bool>>,
+) -> Vec<bool> {
+    if let Some(v) = cache.get(&fn_nr) {
+        return v.clone();
+    }
+    let def = data.def(fn_nr);
+    let n = def.attributes().len();
+    cache.insert(fn_nr, vec![false; n]);
+    if *def.code() == Value::Null || n == 0 {
+        return vec![false; n];
+    }
+    let body = def.code().clone();
+    let mut out = vec![false; n];
+    collect_param_reassigns(&body, data, n, &mut out, cache);
+    let prev = cache.get(&fn_nr).cloned().unwrap_or_else(|| vec![false; n]);
+    let merged: Vec<bool> = prev.iter().zip(out.iter()).map(|(a, b)| *a || *b).collect();
+    cache.insert(fn_nr, merged.clone());
+    merged
+}
+
+/// Walk `code` marking every parameter slot that is reassigned — directly by a `Value::Set`,
+/// or by being handed on to a callee that reassigns the parameter it lands in.
+fn collect_param_reassigns(
+    code: &Value,
+    data: &Data,
+    n_params: usize,
+    out: &mut [bool],
+    cache: &mut HashMap<u32, Vec<bool>>,
+) {
+    if let Value::Set(v, _) = code.unspan()
+        && (*v as usize) < n_params
+    {
+        out[*v as usize] = true;
+    }
+    if let Value::Call(fn_nr, args) = code.unspan()
+        && *data.def(*fn_nr).code() != Value::Null
+    {
+        let callee = callee_param_reassigns(*fn_nr, data, cache);
+        for (i, arg) in args.iter().enumerate() {
+            if i < callee.len()
+                && callee[i]
+                && let Value::Var(v) = arg.unspan()
+                && (*v as usize) < n_params
+            {
+                out[*v as usize] = true;
+            }
+        }
+    }
+    code.for_each_child(&mut |child| collect_param_reassigns(child, data, n_params, out, cache));
+}
+
 /// Like `find_written_vars` but only collects variables that are FIELD-written
 /// (OpSet*, OpCopyRecord, OpNewRecord first-arg).  Excludes plain `Value::Set`
 /// which includes loop-iterator advance — that's not a user-initiated mutation.
