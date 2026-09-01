@@ -591,6 +591,19 @@ impl Parser {
             // "not a collection", so the body took the attribute's own `Reference(elem)` type
             // and `v += [x]` inside the lambda reported *"No matching operator 'Add' on
             // 'integer'"* — the ELEMENT's type, for an append to the collection (loft#1209).
+            // @FR-L-CapRef — a `&T` capture is the capture of its POINTEE, which is the
+            // reading half of
+            // the fact `closure_attr_type` decides the storage half of — so the peel has to
+            // happen on both sides or they disagree about what the attribute holds.  Asked
+            // unpeeled, a `&vector<τ>` answered "not a collection", the body took the
+            // attribute's own `Reference(elem)` type, and `p += [9]` inside the lambda
+            // reported *"No matching operator 'Add' on 'integer' and 'integer'"* — the
+            // ELEMENT's type, for an append to the collection.  That is loft#1209's shape
+            // exactly, reached through `&` instead of through `?` (loft#1276).
+            let ctype = match ctype {
+                Type::RefVar(inner) => *inner,
+                other => other,
+            };
             let is_collection_capture = Self::is_collection_type(ctype.base())
                 || self.data.nullable_struct_payload(&ctype).is_some();
             // record the capture for closure record synthesis.
