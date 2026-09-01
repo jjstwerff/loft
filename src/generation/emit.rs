@@ -518,9 +518,26 @@ impl Output<'_> {
                 self.tuple_text_to_string = prev;
                 // The same conversion the `Tuple` element loop applies, for the same
                 // reason: this position knows the slot is an owned `String` and the
-                // value emitted into it does not.  A `TupleGet`/`Var` source already
-                // emitted un-borrowed (the flag above), so this only adds the ownership.
-                if elem_is_text && !matches!(node.tupleput_inner().kind(), ValueType::Var) {
+                // value emitted into it does not.  A `TupleGet`/`Var` source naming an
+                // owned text LOCAL already emitted un-borrowed (the flag above), so for
+                // that one this would only add a copy.
+                //
+                // A text ARGUMENT is the exception, and the carve-out did not know it: a
+                // text parameter arrives BORROWED (`&str`), so the same bare spelling is a
+                // type error at an owned slot — `p.1 = s` on
+                // `fn f(p: (integer, text), s: text)` was rustc E0308 *"expected `String`,
+                // found `&str`"* while the literal `p.1 = "x"` beside it compiled
+                // (loft#1278).  The tuple LITERAL arm has always converted a `Var` here;
+                // only this arm carved it out, so the two spellings of the same write
+                // disagreed about the same source.
+                let borrowed_var_src = matches!(node.tupleput_inner().kind(), ValueType::Var) && {
+                    let v = node.tupleput_inner().var_nr();
+                    let vars = self.data.def(self.def_nr).variables();
+                    vars.is_argument(v) && matches!(vars.tp(v).base(), Type::Text(_))
+                };
+                if elem_is_text
+                    && (!matches!(node.tupleput_inner().kind(), ValueType::Var) || borrowed_var_src)
+                {
                     write!(w, ".to_string()")?;
                 }
                 if let Some(cast) = bool_cast {
