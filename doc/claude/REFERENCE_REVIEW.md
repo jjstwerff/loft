@@ -525,7 +525,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
 | `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
 | `tests/docs/33-features.loft` | 2026-09-01 | `0c3d4935` |
-| `tests/docs/34-running.loft` | 2026-09-01 | `ea12352b` |
+| `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 
 ## See also
 
