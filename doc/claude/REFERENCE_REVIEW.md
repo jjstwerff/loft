@@ -115,6 +115,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/13-file.loft` | 2026-09-01 | `088676cb` |
 | `tests/docs/15-lexer.loft` | 2026-09-01 | `23743006` |
 | `tests/docs/16-parser.loft` | 2026-09-01 | `512839a6` |
+| `tests/docs/17-libraries.loft` | 2026-09-01 | `361aded3` |
 
 ## See also
 
