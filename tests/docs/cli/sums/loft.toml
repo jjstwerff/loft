@@ -1,0 +1,6 @@
+[package]
+name    = "sums"
+version = "0.1.0"
+
+[library]
+entry = "src/sums.loft"

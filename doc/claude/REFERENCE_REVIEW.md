@@ -541,6 +541,35 @@ does not, and naming the command that does. A transcript shortened to what the a
 explaining is where a contradiction hides, because the guard only checks that the shown part
 appears.
 
+⚠ **A model corrected in one chapter survives in the next one that restates it.** Chapter
+17's review found that a library name does NOT need its `libname::` prefix and rewrote the
+page around it; chapter 37 still said *"Write `use greeter;` instead and you call it as
+`greeter::greet(...)`"*, twenty chapters later and in the beginner's words. Both spellings of
+`use` and both spellings of the call were measured — all four work. The review doc already
+says to grep the whole reference for a sentence you fix; **the grep has to be for the MODEL,
+not the sentence**, because the second statement of it shares no wording with the first.
+
+⚠ **"Private" is a claim about what CANNOT be reached, so reach for it.** The same chapter
+said *"Without `pub` a function is private to the package"*. It is not: `greeter::shout(...)`
+calls a non-`pub` function from outside, and only the bare `shout(...)` is refused. `pub`
+decides which names arrive, not what exists — chapter 17 had this right too. A negative about
+visibility is one probe, and the probe is the same shape as every other stated "cannot".
+
+⚠ **A rule that names two directories may be a rule about one of them.** *"'src' is where
+your code lives and 'tests' is where your tests live. The names matter — loft looks in
+exactly those places."* Half true: a test file outside `tests/` is not found, and an entry
+moved to `lib/` with the manifest updated works fine — `src/<name>.loft` is the default when
+nothing says otherwise, which chapter 17 states. **When a sentence asserts a rule about a
+list, check each member**; the two halves of this one had different answers.
+
+⚠ **A feature demonstrated in its EMPTY state teaches nothing, and the page usually says so
+itself.** The coverage section promised *"It is a list"* and showed
+`coverage: all 1 functions were entered by these tests` — one sentence, no list, because the
+fixture had nothing uncovered. The list form exists and names file, line and function. This
+is the `--explain`-on-a-clean-program defect (chapter 34) and the logging-with-no-config
+defect (chapter 20) a third time, so it is worth stating as a rule: **for any reporting
+feature, ask what it prints when it has something to report, and show that.**
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -612,6 +641,7 @@ whose entry list changed has.
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
+| `tests/docs/37-projects.loft` | 2026-09-02 | `72e19cbf` |
 
 ## See also
 

@@ -1,0 +1,3 @@
+pub fn add(a: integer, b: integer) -> integer { a + b }
+
+pub fn subtract(a: integer, b: integer) -> integer { a - b }

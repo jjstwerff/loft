@@ -3526,7 +3526,7 @@ Printable  fn to_text(self: T) -&gt; text
     src/greeter.loft   the code
     tests/greet.loft   the tests
 </code></pre>
-<p><code>src</code> is where your code lives and <code>tests</code> is where your tests live. The names matter — loft looks in exactly those places.</p>
+<p><code>tests</code> is where your tests live and the name matters — <code>loft test</code> looks in exactly that folder, and a test file anywhere else is not found. <code>src</code> is a habit rather than a rule: the manifest below names the entry file, and <code>src/&lt;name&gt;.loft</code> is only what loft assumes when nothing says otherwise.</p>
 <h2 id="the-manifest">The manifest</h2>
 <p><code>loft.toml</code> names the package and says which file is its front door:</p>
 <pre><code>  [package]
@@ -3539,7 +3539,7 @@ Printable  fn to_text(self: T) -&gt; text
 <p>The <code>entry</code> file is the one that other code sees. Anything you want to share from it is marked <code>pub</code>:</p>
 <pre><code>  pub fn greet(who: text) -&gt; text { "hello, {who}!" }
 </code></pre>
-<p>Without <code>pub</code> a function is private to the package, which is the default.</p>
+<p>Without <code>pub</code> a function is not private — it is un-imported. <code>pub</code> is what lets a caller write the bare name; everything else in the entry file stays reachable as <code>greeter::name</code>. That is the difference between "you may use this" and "you cannot see this", and loft only offers the first.</p>
 <h2 id="testing-a-package">Testing a package</h2>
 <p>Inside the package folder, <code>loft test</code> finds and runs everything in <code>tests</code>:</p>
 <pre><code>  $ cd greeter &amp;&amp; loft test
@@ -3551,7 +3551,8 @@ Printable  fn to_text(self: T) -&gt; text
     assert(greet("Ada") == "hello, Ada!", "greet builds the sentence");
   }
 </code></pre>
-<p><code>use greeter::*;</code> brings in everything public. Write <code>use greeter;</code> instead and you call it as <code>greeter::greet(...)</code>, which is longer but says where each name came from — useful once you import several packages.</p>
+<p>A bare <code>use greeter;</code> already brings in every <code>pub</code> name, and <code>use greeter::*;</code> says the same thing out loud — either way <code>greet("Ada")</code> works. What the other forms buy you is a say in WHICH names arrive: <code>use sums::add</code> takes one name from a package, and <code>use sums::(add, subtract)</code> takes a group. Taking only what you name is the stronger position, because a package that later GROWS a name cannot then collide with one of yours.</p>
+<p>The <code>greeter::</code> prefix is available whichever form you wrote, and it is the spelling that says where a name came from — useful once you import several packages, and the only way to reach something the package did not mark <code>pub</code>.</p>
 <h2 id="running-one-test-while-you-work">Running one test while you work</h2>
 <p>Give <code>loft test</code> the file, or the file and one function:</p>
 <pre><code>  $ cd greeter &amp;&amp; loft test greet
@@ -3560,11 +3561,18 @@ Printable  fn to_text(self: T) -&gt; text
 <h2 id="check-it-compiles-without-running-anything">Check it compiles, without running anything</h2>
 <p>Inside the package, <code>loft check</code> compiles everything and reports problems:</p>
 <pre><code>  $ cd greeter &amp;&amp; loft check
+  loft build: building `native` (Native) …
+  ok
   loft build: `native` ✓
 </code></pre>
 <p>A package that is only a library has no program to start, so there is nothing to run — <code>check</code> still tells you the code compiles, which is what you wanted to know.</p>
 <h2 id="coverage-what-the-tests-did-not-reach">Coverage — what the tests did not reach</h2>
-<p>After the result, <code>loft test</code> tells you which of your functions no test ever entered:</p>
+<p>After the result, <code>loft test</code> tells you which of your functions no test ever entered. The <code>sums</code> package next door has two functions and a test for one of them, so it names the other:</p>
+<pre><code>  $ cd sums &amp;&amp; loft test
+  coverage: 1 of 2 functions were never entered by these tests
+    src/sums.loft:3  subtract
+</code></pre>
+<p>When nothing is missing it says so in one line instead:</p>
 <pre><code>  $ cd greeter &amp;&amp; loft test
   coverage: all 1 functions were entered by these tests
 </code></pre>

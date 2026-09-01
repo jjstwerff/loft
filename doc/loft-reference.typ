@@ -7277,7 +7277,7 @@ A package is a folder with a 'loft.toml' file in it and two sub-folders:
     tests/greet.loft   the tests
 ```
 
-'src' is where your code lives and 'tests' is where your tests live. The names matter — loft looks in exactly those places.
+'tests' is where your tests live and the name matters — 'loft test' looks in exactly that folder, and a test file anywhere else is not found. 'src' is a habit rather than a rule: the manifest below names the entry file, and 'src/\<name\>.loft' is only what loft assumes when nothing says otherwise.
 
 === The manifest
 
@@ -7300,7 +7300,7 @@ The 'entry' file is the one that other code sees. Anything you want to share fro
   pub fn greet(who: text) -> text { "hello, {who}!" }
 ```
 
-Without 'pub' a function is private to the package, which is the default.
+Without 'pub' a function is not private — it is un-imported. 'pub' is what lets a caller write the bare name; everything else in the entry file stays reachable as 'greeter::name'. That is the difference between "you may use this" and "you cannot see this", and loft only offers the first.
 
 === Testing a package
 
@@ -7320,7 +7320,9 @@ The tests reach your code by importing the package by name:
   }
 ```
 
-'use greeter::\*;' brings in everything public. Write 'use greeter;' instead and you call it as 'greeter::greet(...)', which is longer but says where each name came from — useful once you import several packages.
+A bare 'use greeter;' already brings in every 'pub' name, and 'use greeter::\*;' says the same thing out loud — either way 'greet("Ada")' works. What the other forms buy you is a say in WHICH names arrive: 'use sums::add' takes one name from a package, and 'use sums::(add, subtract)' takes a group. Taking only what you name is the stronger position, because a package that later GROWS a name cannot then collide with one of yours.
+
+The 'greeter::' prefix is available whichever form you wrote, and it is the spelling that says where a name came from — useful once you import several packages, and the only way to reach something the package did not mark 'pub'.
 
 === Running one test while you work
 
@@ -7337,6 +7339,8 @@ Inside the package, 'loft check' compiles everything and reports problems:
 
 ```
   $ cd greeter && loft check
+  loft build: building `native` (Native) …
+  ok
   loft build: `native` ✓
 ```
 
@@ -7344,7 +7348,15 @@ A package that is only a library has no program to start, so there is nothing to
 
 === Coverage — what the tests did not reach
 
-After the result, 'loft test' tells you which of your functions no test ever entered:
+After the result, 'loft test' tells you which of your functions no test ever entered. The 'sums' package next door has two functions and a test for one of them, so it names the other:
+
+```
+  $ cd sums && loft test
+  coverage: 1 of 2 functions were never entered by these tests
+    src/sums.loft:3  subtract
+```
+
+When nothing is missing it says so in one line instead:
 
 ```
   $ cd greeter && loft test
