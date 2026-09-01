@@ -570,6 +570,30 @@ is the `--explain`-on-a-clean-program defect (chapter 34) and the logging-with-n
 defect (chapter 20) a third time, so it is worth stating as a rule: **for any reporting
 feature, ask what it prints when it has something to report, and show that.**
 
+⚠ **A caveat that names an ISSUE has a state you can look up in one command, and it may
+have shaped the whole page.** Chapter 38 closed with *"What the panel cannot do yet"* — a
+text- or vector-valued expression answers `<unavailable>` (loft#1187) — and then drew the
+consequence: *"which is why every function on this page hands back one of the shapes that
+works"*. `gh issue view 1187` says CLOSED, and `src/wasm_debug.rs`'s own test now asserts
+`shout("hi")` → `"HI"` and `evens(4)` → `[0,2,4,6]`. So the section was wrong, and the page
+had been BUILT around it: an interactive page about calling functions had no function that
+answers text. **When a caveat cites an issue, check the issue before reading further, and
+then ask what the page gave up because of it.**
+
+⚠ **A stale caveat leaves copies in the code it described.** The same `<unavailable>` story
+was written twice more inside `src/wasm_debug.rs` — the `eval_expr` doc comment still named
+"a `text` local" as the unavailable case, sixty lines above the comment explaining how
+loft#1187 fixed exactly that, and a test comment still said the issue "tracks making it
+evaluate". Both are the fix's own file. **A closed gap is a grep for its DESCRIPTION, not
+only for its issue number**; the number was already updated in one place and not the others.
+
+⚠ **Check the premise of a page that claims to be different.** Chapter 38 opened *"Every
+other page here shows you loft. This one hands it to you."* Every numbered chapter carries
+the same `<section id="loft-panel">`, and `doc/loft-panel.js`'s `boot()` unhides it wherever
+a source is present — so every other page hands it to you too. What is actually special is
+the CONTENT: functions chosen to be worth calling. The distinction was real and the sentence
+named the wrong half of it.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -642,6 +666,7 @@ whose entry list changed has.
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
 | `tests/docs/37-projects.loft` | 2026-09-02 | `7488943a` |
+| `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `b63abea6` |
 
 ## See also
 

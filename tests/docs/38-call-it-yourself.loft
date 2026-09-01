@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Call it yourself
 // @TITLE: A page you drive, not one you read
-// Every other page here shows you loft.  This one hands it to you.
-// The functions below are compiled and live in the panel at the bottom of the
-// page: type a call, press enter, and loft answers.  Nothing is a transcript —
-// the number you see is the one your browser just computed.
+// Every page here has a panel at the bottom that runs its code; this is the page
+// whose code was chosen for you to call.  The functions below are compiled and
+// live in that panel: type a call, press enter, and loft answers.  Nothing is a
+// transcript — the answer you see is the one your browser just computed.
 // ## What to try first
 // `fib(10)` is the shortest way to be sure the panel is real.  Change the 10 and
 // the answer changes; ask for `fib(30)` and you will wait a moment, because this
@@ -46,10 +46,15 @@ fn nth_prime(n: integer) -> integer {
   candidate
 }
 
-// ## Text goes in
-// `vowels("your name here")` counts the vowels in whatever you type.  The
-// argument is a text and the answer is a number, which is the shape the panel
-// renders today — see the note at the end of the page.
+// ## Text goes in, and text comes back
+// `vowels("your name here")` counts the vowels in whatever you type, and
+// `shout("your name here")` hands the text back changed.  A text answer arrives
+// quoted — `shout("hi")` shows `"HI"` — which is how you can tell an empty text
+// from nothing at all.
+fn shout(s: text) -> text {
+  "{s.to_uppercase()}!"
+}
+
 fn vowels(s: text) -> integer {
   n = 0;
   for c in s {
@@ -91,18 +96,19 @@ fn walk_to(limit: integer) -> integer {
   total
 }
 
-// ## What the panel cannot do yet
-// An expression whose value is a text or a vector answers `<unavailable>` rather
-// than a value: the browser evaluator reads a result off the paused frame, and
-// only a number, a character, a boolean or a struct survives that trip
-// (loft#1187).  So `vowels("hello")` answers 2 and `stats(1, 9)` answers a
-// record, while a function returning a text does not — which is why every
-// function on this page hands back one of the shapes that works.
+// ## When the panel says `<unavailable>`
+// Every value shape answers now — a number, a character, a boolean, a text, a
+// vector, a struct.  `<unavailable>` is what you get when the expression itself
+// cannot be compiled where the program is paused: a typo, a name that is not in
+// scope there, an unfinished expression.  It is the panel declining to guess
+// rather than a value it could not carry, so read it as "say that again" and not
+// as "this shape is not supported".  One `<unavailable>` does not end the
+// session; the next expression is evaluated normally.
 fn main() {
   // The demonstration comes first and the checks follow it, so a reader who presses
   // Run sees an answer straight away — the panel stops on main's LAST line, and a
   // program whose only print IS that line would pause with nothing shown yet.
-  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"hello\")={vowels(\"hello\")}\n");
+  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} shout(\"hi\")={shout(\"hi\")}\n");
   // The page is a real program, so these run on both backends like every other page
   // here, and an example that stops being true stops compiling.
   assert(fib(10) == 55, "fib(10)");
@@ -112,6 +118,7 @@ fn main() {
   assert(!is_prime(1) && is_prime(2) && !is_prime(9), "is_prime edges");
   assert(vowels("hello") == 2, "hello has two vowels");
   assert(vowels("") == 0, "no text, no vowels");
+  assert(shout("hi") == "HI!", "shout answers a text, which the panel renders");
   s = stats(17, 3);
   assert(s.lo == 3 && s.hi == 17 && s.span == 14, "stats orders its arguments");
   // fib(1..4) is 1 + 1 + 2 + 3.

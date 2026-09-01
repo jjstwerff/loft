@@ -23,7 +23,7 @@
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="libraries.html">Libraries</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="33-features.html">Feature catalogue</a> · <a href="34-running.html">Running your program</a> · <a href="35-testing.html">Testing your code</a> · <a href="36-debugging.html">Debugging</a> · <a href="37-projects.html">Projects and libraries</a> · <span class="cur">Call it yourself</span> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-assertions-that-report-both-sides.html">Assertions that report both sides</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-optional-c-libraries-pln24-arc-g.html">Optional C libraries (@PLN24 arc G)</a> · <a href="stdlib-system-directories-635.html">System directories (#635)</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Call it yourself</h1>
 <article>
-<p>Every other page here shows you loft.  This one hands it to you. The functions below are compiled and live in the panel at the bottom of the page: type a call, press enter, and loft answers.  Nothing is a transcript — the number you see is the one your browser just computed.</p>
+<p>Every page here has a panel at the bottom that runs its code; this is the page whose code was chosen for you to call.  The functions below are compiled and live in that panel: type a call, press enter, and loft answers.  Nothing is a transcript — the answer you see is the one your browser just computed.</p>
 <h2 id="what-to-try-first">What to try first</h2>
 <p><code>fib(10)</code> is the shortest way to be sure the panel is real.  Change the 10 and the answer changes; ask for <code>fib(30)</code> and you will wait a moment, because this is the naive recursion and it really does make that many calls.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">fib</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
@@ -58,8 +58,11 @@
   }
   candidate
 }</code></pre>
-<h2 id="text-goes-in">Text goes in</h2>
-<p><code>vowels("your name here")</code> counts the vowels in whatever you type.  The argument is a text and the answer is a number, which is the shape the panel renders today — see the note at the end of the page.</p>
+<h2 id="text-goes-in-and-text-comes-back">Text goes in, and text comes back</h2>
+<p><code>vowels("your name here")</code> counts the vowels in whatever you type, and <code>shout("your name here")</code> hands the text back changed.  A text answer arrives quoted — <code>shout("hi")</code> shows <code>"HI"</code> — which is how you can tell an empty text from nothing at all.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">shout</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"{s.to_uppercase()}!"</span>
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">vowels</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   n = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> s {
@@ -92,11 +95,11 @@
   }
   total
 }</code></pre>
-<h2 id="what-the-panel-cannot-do-yet">What the panel cannot do yet</h2>
-<p>An expression whose value is a text or a vector answers <code>&lt;unavailable&gt;</code> rather than a value: the browser evaluator reads a result off the paused frame, and only a number, a character, a boolean or a struct survives that trip (loft#1187).  So <code>vowels("hello")</code> answers 2 and <code>stats(1, 9)</code> answers a record, while a function returning a text does not — which is why every function on this page hands back one of the shapes that works.</p>
+<h2 id="when-the-panel-says-unavailable">When the panel says <code>&lt;unavailable&gt;</code></h2>
+<p>Every value shape answers now — a number, a character, a boolean, a text, a vector, a struct.  <code>&lt;unavailable&gt;</code> is what you get when the expression itself cannot be compiled where the program is paused: a typo, a name that is not in scope there, an unfinished expression.  It is the panel declining to guess rather than a value it could not carry, so read it as "say that again" and not as "this shape is not supported".  One <code>&lt;unavailable&gt;</code> does not end the session; the next expression is evaluated normally.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>The demonstration comes first and the checks follow it, so a reader who presses Run sees an answer straight away — the panel stops on main's LAST line, and a program whose only print IS that line would pause with nothing shown yet.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"</span>hello\<span class="st">")={vowels(\"</span>hello\<span class="st">")}\n"</span>);</code></pre>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} shout(\"</span>hi\<span class="st">")={shout(\"</span>hi\<span class="st">")}\n"</span>);</code></pre>
 <p>The page is a real program, so these run on both backends like every other page here, and an example that stops being true stops compiling.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">10</span>) == <span class="nm">55</span>, <span class="st">"fib(10)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">1</span>) == <span class="nm">1</span> &amp;&amp; <span class="fn-call">fib</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"fib base cases"</span>);
@@ -105,6 +108,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">is_prime</span>(<span class="nm">1</span>) &amp;&amp; <span class="fn-call">is_prime</span>(<span class="nm">2</span>) &amp;&amp; !<span class="fn-call">is_prime</span>(<span class="nm">9</span>), <span class="st">"is_prime edges"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">"hello"</span>) == <span class="nm">2</span>, <span class="st">"hello has two vowels"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">""</span>) == <span class="nm">0</span>, <span class="st">"no text, no vowels"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">shout</span>(<span class="st">"hi"</span>) == <span class="st">"HI!"</span>, <span class="st">"shout answers a text, which the panel renders"</span>);
   s = <span class="fn-call">stats</span>(<span class="nm">17</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s.lo == <span class="nm">3</span> &amp;&amp; s.hi == <span class="nm">17</span> &amp;&amp; s.span == <span class="nm">14</span>, <span class="st">"stats orders its arguments"</span>);</code></pre>
 <p>fib(1..4) is 1 + 1 + 2 + 3.</p>
@@ -125,10 +129,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // @NAME: Call it yourself
 // @TITLE: A page you drive, not one you read
-// Every other page here shows you loft.  This one hands it to you.
-// The functions below are compiled and live in the panel at the bottom of the
-// page: type a call, press enter, and loft answers.  Nothing is a transcript —
-// the number you see is the one your browser just computed.
+// Every page here has a panel at the bottom that runs its code; this is the page
+// whose code was chosen for you to call.  The functions below are compiled and
+// live in that panel: type a call, press enter, and loft answers.  Nothing is a
+// transcript — the answer you see is the one your browser just computed.
 // ## What to try first
 // `fib(10)` is the shortest way to be sure the panel is real.  Change the 10 and
 // the answer changes; ask for `fib(30)` and you will wait a moment, because this
@@ -169,10 +173,15 @@ fn nth_prime(n: integer) -&gt; integer {
   candidate
 }
 
-// ## Text goes in
-// `vowels("your name here")` counts the vowels in whatever you type.  The
-// argument is a text and the answer is a number, which is the shape the panel
-// renders today — see the note at the end of the page.
+// ## Text goes in, and text comes back
+// `vowels("your name here")` counts the vowels in whatever you type, and
+// `shout("your name here")` hands the text back changed.  A text answer arrives
+// quoted — `shout("hi")` shows `"HI"` — which is how you can tell an empty text
+// from nothing at all.
+fn shout(s: text) -&gt; text {
+  "{s.to_uppercase()}!"
+}
+
 fn vowels(s: text) -&gt; integer {
   n = 0;
   for c in s {
@@ -214,18 +223,19 @@ fn walk_to(limit: integer) -&gt; integer {
   total
 }
 
-// ## What the panel cannot do yet
-// An expression whose value is a text or a vector answers `&lt;unavailable&gt;` rather
-// than a value: the browser evaluator reads a result off the paused frame, and
-// only a number, a character, a boolean or a struct survives that trip
-// (loft#1187).  So `vowels("hello")` answers 2 and `stats(1, 9)` answers a
-// record, while a function returning a text does not — which is why every
-// function on this page hands back one of the shapes that works.
+// ## When the panel says `&lt;unavailable&gt;`
+// Every value shape answers now — a number, a character, a boolean, a text, a
+// vector, a struct.  `&lt;unavailable&gt;` is what you get when the expression itself
+// cannot be compiled where the program is paused: a typo, a name that is not in
+// scope there, an unfinished expression.  It is the panel declining to guess
+// rather than a value it could not carry, so read it as "say that again" and not
+// as "this shape is not supported".  One `&lt;unavailable&gt;` does not end the
+// session; the next expression is evaluated normally.
 fn main() {
   // The demonstration comes first and the checks follow it, so a reader who presses
   // Run sees an answer straight away — the panel stops on main's LAST line, and a
   // program whose only print IS that line would pause with nothing shown yet.
-  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"hello\")={vowels(\"hello\")}\n");
+  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} shout(\"hi\")={shout(\"hi\")}\n");
   // The page is a real program, so these run on both backends like every other page
   // here, and an example that stops being true stops compiling.
   assert(fib(10) == 55, "fib(10)");
@@ -235,6 +245,7 @@ fn main() {
   assert(!is_prime(1) &amp;&amp; is_prime(2) &amp;&amp; !is_prime(9), "is_prime edges");
   assert(vowels("hello") == 2, "hello has two vowels");
   assert(vowels("") == 0, "no text, no vowels");
+  assert(shout("hi") == "HI!", "shout answers a text, which the panel renders");
   s = stats(17, 3);
   assert(s.lo == 3 &amp;&amp; s.hi == 17 &amp;&amp; s.span == 14, "stats orders its arguments");
   // fib(1..4) is 1 + 1 + 2 + 3.

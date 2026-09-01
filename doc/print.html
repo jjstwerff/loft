@@ -3594,7 +3594,7 @@ Printable  fn to_text(self: T) -&gt; text
 </section>
 <section class="print-section" id="38-call-it-yourself">
 <h1>Call it yourself</h1>
-<p>Every other page here shows you loft.  This one hands it to you. The functions below are compiled and live in the panel at the bottom of the page: type a call, press enter, and loft answers.  Nothing is a transcript — the number you see is the one your browser just computed.</p>
+<p>Every page here has a panel at the bottom that runs its code; this is the page whose code was chosen for you to call.  The functions below are compiled and live in that panel: type a call, press enter, and loft answers.  Nothing is a transcript — the answer you see is the one your browser just computed.</p>
 <h2 id="what-to-try-first">What to try first</h2>
 <p><code>fib(10)</code> is the shortest way to be sure the panel is real.  Change the 10 and the answer changes; ask for <code>fib(30)</code> and you will wait a moment, because this is the naive recursion and it really does make that many calls.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">fib</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
@@ -3629,8 +3629,11 @@ Printable  fn to_text(self: T) -&gt; text
   }
   candidate
 }</code></pre>
-<h2 id="text-goes-in">Text goes in</h2>
-<p><code>vowels("your name here")</code> counts the vowels in whatever you type.  The argument is a text and the answer is a number, which is the shape the panel renders today — see the note at the end of the page.</p>
+<h2 id="text-goes-in-and-text-comes-back">Text goes in, and text comes back</h2>
+<p><code>vowels("your name here")</code> counts the vowels in whatever you type, and <code>shout("your name here")</code> hands the text back changed.  A text answer arrives quoted — <code>shout("hi")</code> shows <code>"HI"</code> — which is how you can tell an empty text from nothing at all.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">shout</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"{s.to_uppercase()}!"</span>
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">vowels</span>(s: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   n = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> s {
@@ -3663,11 +3666,11 @@ Printable  fn to_text(self: T) -&gt; text
   }
   total
 }</code></pre>
-<h2 id="what-the-panel-cannot-do-yet">What the panel cannot do yet</h2>
-<p>An expression whose value is a text or a vector answers <code>&lt;unavailable&gt;</code> rather than a value: the browser evaluator reads a result off the paused frame, and only a number, a character, a boolean or a struct survives that trip (loft#1187).  So <code>vowels("hello")</code> answers 2 and <code>stats(1, 9)</code> answers a record, while a function returning a text does not — which is why every function on this page hands back one of the shapes that works.</p>
+<h2 id="when-the-panel-says-unavailable">When the panel says <code>&lt;unavailable&gt;</code></h2>
+<p>Every value shape answers now — a number, a character, a boolean, a text, a vector, a struct.  <code>&lt;unavailable&gt;</code> is what you get when the expression itself cannot be compiled where the program is paused: a typo, a name that is not in scope there, an unfinished expression.  It is the panel declining to guess rather than a value it could not carry, so read it as "say that again" and not as "this shape is not supported".  One <code>&lt;unavailable&gt;</code> does not end the session; the next expression is evaluated normally.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>The demonstration comes first and the checks follow it, so a reader who presses Run sees an answer straight away — the panel stops on main's LAST line, and a program whose only print IS that line would pause with nothing shown yet.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"</span>hello\<span class="st">")={vowels(\"</span>hello\<span class="st">")}\n"</span>);</code></pre>
+<pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} shout(\"</span>hi\<span class="st">")={shout(\"</span>hi\<span class="st">")}\n"</span>);</code></pre>
 <p>The page is a real program, so these run on both backends like every other page here, and an example that stops being true stops compiling.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">10</span>) == <span class="nm">55</span>, <span class="st">"fib(10)"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">fib</span>(<span class="nm">1</span>) == <span class="nm">1</span> &amp;&amp; <span class="fn-call">fib</span>(<span class="nm">0</span>) == <span class="nm">0</span>, <span class="st">"fib base cases"</span>);
@@ -3676,6 +3679,7 @@ Printable  fn to_text(self: T) -&gt; text
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">is_prime</span>(<span class="nm">1</span>) &amp;&amp; <span class="fn-call">is_prime</span>(<span class="nm">2</span>) &amp;&amp; !<span class="fn-call">is_prime</span>(<span class="nm">9</span>), <span class="st">"is_prime edges"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">"hello"</span>) == <span class="nm">2</span>, <span class="st">"hello has two vowels"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">vowels</span>(<span class="st">""</span>) == <span class="nm">0</span>, <span class="st">"no text, no vowels"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">shout</span>(<span class="st">"hi"</span>) == <span class="st">"HI!"</span>, <span class="st">"shout answers a text, which the panel renders"</span>);
   s = <span class="fn-call">stats</span>(<span class="nm">17</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s.lo == <span class="nm">3</span> &amp;&amp; s.hi == <span class="nm">17</span> &amp;&amp; s.span == <span class="nm">14</span>, <span class="st">"stats orders its arguments"</span>);</code></pre>
 <p>fib(1..4) is 1 + 1 + 2 + 3.</p>
