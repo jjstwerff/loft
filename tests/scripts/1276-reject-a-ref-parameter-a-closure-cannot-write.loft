@@ -9,7 +9,7 @@
 //    value — `(L-CapScalar)` — so there is no shared record for the write to land in, and
 //    before this refusal existed the program compiled and answered quietly wrong: `bump(n)`
 //    on `n = 5` gave 15 where 16 is correct, the closure's increment dropped through a
-//    parameter whose whole purpose is the write-back.  Refusing is the point; `D-clo-15` in
+//    parameter whose whole purpose is the write-back.  Refusing is the point; `D-clo-18` in
 //    formal/closures.md records that it is a deviation and not a decision.
 //
 // 2. A `&` parameter that is genuinely only READ.  Widening the write-walk to credit a

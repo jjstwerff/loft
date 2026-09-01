@@ -30,7 +30,7 @@
 // it, so there is no shared record for the write to land in.  Before the refusal existed
 // the program compiled and answered quietly wrong — `bump(n)` on `n = 5` gave 15 where 16
 // is correct, the closure's increment dropped through a parameter whose whole purpose is
-// the write-back.  `D-clo-15` in formal/closures.md carries it.
+// the write-back.  `D-clo-18` in formal/closures.md carries it.
 //
 // The two REFUSALS this fix keeps — a `&` that is genuinely only read, and the scalar
 // write — are asserted in the reject twin

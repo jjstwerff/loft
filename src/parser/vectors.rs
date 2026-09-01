@@ -2005,7 +2005,7 @@ impl Parser {
             // the pairing `finalize_capture_storage` keeps in step (#687).
             // A DECLARED `&` SCALAR parameter written from inside a closure is the one
             // capture shape that cannot be made to mean what it says, and it is refused HERE
-            // rather than allowed to compute quietly (loft#1276, `D-clo-15`).
+            // rather than allowed to compute quietly (loft#1276, `D-clo-18`).
             //
             // Everything else about a `&` capture works, because `closure_attr_type` captures
             // the POINTEE: a `&S` / `&vector<τ>` shares its DbRef, so a field write, an
@@ -2416,7 +2416,7 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // ⚠ What this does NOT give back is the `&` itself.  A write THROUGH the capture
         // to the caller's slot — a scalar write, or a whole-value rebind of a heap
         // capture — needs the ref in the record and a write-back, which is
-        // `D-clo-15`; `reject_ref_capture_write` refuses those at the capture site
+        // `D-clo-18`; `reject_ref_capture_write` refuses those at the capture site
         // rather than letting them land in a copy.
         let tp = match tp {
             Type::RefVar(inner) => inner.as_ref(),

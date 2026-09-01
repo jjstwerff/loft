@@ -70,7 +70,7 @@ available). A bare `f` (a function's name used as a value) is a first-class func
                  the same DbRef either way, so a field write, an element write and an append
                  from inside the closure all reach the caller — and a `&integer` / `&text` is
                  COPIED at creation by (L-CapScalar).  The `&` itself does NOT survive into
-                 the closure: a write that would replace what it points AT is D-clo-15.
+                 the closure: a write that would replace what it points AT is D-clo-18.
 ```
 
 **In words.** A closure that captures an `integer x` freezes `x`'s value at the moment the closure
@@ -100,7 +100,7 @@ with the closure's environment in scope.
 ## Deviations
 
 **OPEN: 4.**
-- **D-clo-15** — a `&` SCALAR parameter written from inside a closure is REFUSED, where
+- **D-clo-18** — a `&` SCALAR parameter written from inside a closure is REFUSED, where
   `(L-CapRef)` + `(F-ParamRef)` together say the write should reach the caller. The value
   lives in the caller's slot and `(L-CapScalar)` gives the closure a copy of it, so there is
   no shared record for the write to land in; making it work needs the REF itself in the
@@ -112,14 +112,17 @@ with the closure's environment in scope.
   answered 15 where 16 is correct — the closure's increment dropped through a parameter whose
   whole purpose is the write-back). Every other `&` capture shape is closed. Reject twin
   `tests/scripts/1276-reject-a-ref-parameter-a-closure-cannot-write.loft`
-- **D-clo-16** — `(L-CapHeap)` decides WHERE a write to a captured heap value lands, and for a
-  COLLECTION it is not yet exact about WHAT the write is: a whole-value rebind inside the
-  closure APPENDS rather than replaces (`v = [1,2]; g = fn() { v = [7,7]; }; g()` leaves
-  `[1,2,7,7]`), on both backends and with no diagnostic. The same rebind of a captured STRUCT
-  overwrites the record correctly, and of a captured SCALAR assigns correctly, so the two
-  other arms of the same rule pair do the opposite. Sharing is why the write is visible at
-  all — that half is right; what is wrong is that `=` on a shared collection handle lowers to
-  an append. Not a `&` question: a plain captured LOCAL shows it (loft#1279)
+- **D-clo-20** — `(F-ParamHeap)` makes a whole-value rebind of a heap PARAMETER local to the
+  callee, and a rebind written inside a CLOSURE that captures that parameter reaches the
+  CALLER instead: `fn repl(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` leaves the
+  caller's `[1,2]` as `[7,7]`, while the identical rebind written without the closure
+  correctly leaves it alone. The two rules meet here and the code follows only one:
+  `(L-CapHeap)` is right that the closure and the callee body see one collection, and what
+  does not follow is that the caller does — a capture has no route back to the parameter
+  SLOT, which is the binding `(F-ParamHeap)` rebinds. Untouched by loft#1279, which made the
+  VALUE correct everywhere and left the question of WHICH BINDING a captured rebind names;
+  before it the same leak was there in the append spelling. A captured LOCAL is unaffected —
+  there is no caller to leak to (loft#1281)
 - **D-clo-7** — a lambda's `??`-default store leaks one store per call where the borrow arm's witness cannot be NAMED and the call has nothing to witness either: TWO store-bearing captures, whose return dep names `__closure` and not which slot; that entry's value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness and its literal-`null` argument are all closed (loft#1248, loft#1245)
 - **D-clo-14** — a closure's `??` at a COLLECTION return leaks its mint arm; the over-free half (the lift emptied the caller's own vector) is closed, and declining the unguarded lift was the only cure correct on both backends (loft#1257)
 
