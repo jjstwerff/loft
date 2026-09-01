@@ -152,16 +152,33 @@ fn scan(self: Lexer) {
   negative = false;
   l = self.data[self.index];
   if l == null {
+    // No token here at all, so leave none behind: `skip_whitespace` is what normally
+    // moves `start` up to `index`, and it is skipped while a format literal is being
+    // continued.  Without this the token just consumed stayed current at end of data, so
+    // the `}` closing a formatting hole answered `test("}")` a second time and an
+    // unterminated literal parsed as a complete function.
     self.scanned = Finished;
+    self.start = self.index;
     return;
   }
   if l == '"' || self.formatting {
-    // Constant string
-    if self.formatting { self.formatting = false; }
-    self.index += 1;
+    // Constant string.  A fresh literal starts at its opening quote, which is skipped; a
+    // CONTINUATION after a formatting hole starts at the first content character, which
+    // must still be tested below.  Skipping it too stepped over the terminator of a hole
+    // that ends the text (`"v={n}"`), so the scan ran off the end of the data and the
+    // reported column came from the loop bound rather than the source (loft#1259).
+    if self.formatting { self.formatting = false; } else { self.index += 1; }
     self.scanned = Text;
     for t in 0..60000 {
       l = self.data[self.index];
+      if l == null {
+        // The data ran out before the closing quote: this text is `Partial`, not `Text`,
+        // so `constant_text` refuses it and the caller reports an unterminated literal.
+        // Walking on instead leaves `index` far beyond `start`, and `skip_whitespace` adds
+        // that span to `pos` — which is how a 37-character source reported column 60035.
+        self.scanned = Partial;
+        return;
+      }
       if l == '"' {
         // The end of the text
         self.index += 1;
@@ -318,6 +335,20 @@ pub fn get_single(self: Lexer) -> single? {
 pub fn is_finished(self: Lexer) -> boolean {
   self.scanned == Finished
 }
+// Keep only the FIRST character of the current multi-character token and leave the rest to
+// be scanned again; answer whether there was anything to split.
+//
+// Maximal munch is the right rule for expressions and the wrong one for nested generics:
+// the `>>` that closes `vector<vector<integer>>` is one token to the scanner and two
+// closers to the grammar.  Only the lexer owns the cursor, so only the lexer can offer the
+// other reading — see `parser::close_generic`, which asks for it at the one place the
+// grammar means a single `>`.
+
+pub fn split_token(self: Lexer) -> boolean {
+  if self.scanned != Token || self.index - self.start < 2 { return false; }
+  self.index = self.start + 1;
+  true
+}
 
 fn escaped(self: Lexer, i: integer) -> character {
   c = self.data[i + 1];
@@ -405,4 +436,13 @@ pub fn revert(self: Lexer, to: Anchor) {
 
 pub fn get_line(self: Lexer) -> integer {
   self.line
+}
+// How far the cursor has advanced through the source, in characters.
+//
+// A parser loop that repeats a construct uses this to tell "one more item" from "the same
+// token again": if an iteration ends on the offset it started at, nothing was consumed and
+// repeating can only repeat the same error.  See `parser::stalled`.
+
+pub fn offset(self: Lexer) -> integer {
+  self.index
 }

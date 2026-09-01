@@ -53,11 +53,17 @@ pub fn parse(name: text, s: text) -> integer {
  {op: "<", prio: 7 }, {op: "<=", prio: 7 }, {op: ">", prio: 7 }, {op: ">=", prio: 7 },
  {op: "&&", prio: 8 }, {op: "and", prio: 8 },
  {op: "||", prio: 9 }, {op: "or", prio: 9 },
- {op: "..", prio: 10 }, {op: "..=", prio: 10 },
- {op: "=", prio: 11 }, {op: "+=", prio: 11 }, {op: "-=", prio: 11 },
- {op: "*=", prio: 11 }, {op: "/=", prio: 11 }, {op: "%=", prio: 11 }
+ {op: "??", prio: 10 },
+ {op: "..", prio: 11 }, {op: "..=", prio: 11 },
+ {op: "=", prio: 12 }, {op: "+=", prio: 12 }, {op: "-=", prio: 12 },
+ {op: "*=", prio: 12 }, {op: "/=", prio: 12 }, {op: "%=", prio: 12 }
   ];
-  p.lexer.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||"]);
+  // `??` is the LOOSEST binary operator in Loft (@FR-G-Prec, @FR-G-Post-Default): a
+  // default-fallback binds after everything it might supply a default for, so it sits
+  // one step looser than `||`.  Listing it as a TOKEN is what makes @FR-G-Lex-Coal hold
+  // — the scanner prefers the longest token starting with `?`, so a `??` never arrives
+  // as two `?`, and the postfix `?` in `suffixes` cannot claim half of one.
+  p.lexer.set_tokens(["+=", "*=", "-=", "<=", ">=", "!=", "==", ">>", "<<", "->", "=>", ">>>", "..", "..=", "&&", "||", "??"]);
   p.lexer.set_keywords([
   "for", "in", "if", "else", "fn", "pub", "use", "struct", "enum", "match", "and", "or", "true", "false", "null"
   ]);
@@ -72,16 +78,18 @@ pub fn parse(name: text, s: text) -> integer {
 // <file> ::= { 'use' <identifier> ';' } { 'pub' ( <structure> | <def_enumerate> | <def_type> | <function> | <constant> ) }
 
 fn parse_file(self: Parser) {
-  for _u in 0..100 {
-    if self.lexer.matches("use") {
-      self.lexer.identifier();
-      self.expect(";");
+  for u in 0..100 {
+    if !self.lexer.matches("use") {
+      u# break;
     }
+    self.lexer.identifier();
+    self.expect(";");
   }
   for x in 0..1000 {
     if self.log.level == Fatal {
       x# break;
     }
+    at = self.lexer.offset();
     public = self.lexer.matches("pub");
     if self.structure(public) {
       x# continue;
@@ -98,6 +106,11 @@ fn parse_file(self: Parser) {
     if self.constant(public) {
       x# continue;
     }
+    // Nothing here is a definition.  Without this the loop turned a thousand times over
+    // the same token and answered `0` errors for a file it never read.
+    if self.stalled(at) {
+      x# break;
+    }
   }
 }
 // <structure> :: 'struct' <identifier> '{' { <identifier> ':' <type> [ '=' <value> ] [ ',' ] } '}'
@@ -113,6 +126,7 @@ fn structure(self: Parser, public: boolean) -> boolean {
     if self.lexer.test("}}") {
       parameter# break;
     }
+    at = self.lexer.offset();
     arg = self.lexer.identifier();
     self.expect(":");
     self.type_def(true);
@@ -122,6 +136,9 @@ fn structure(self: Parser, public: boolean) -> boolean {
       self.value();
     }
     self.lexer.matches(",");
+    if self.stalled(at) {
+      parameter# break;
+    }
   }
   self.expect("}}");
   true
@@ -135,9 +152,11 @@ fn def_enumerate(self: Parser, _public: boolean) -> boolean {
   self.lexer.identifier();
   self.expect("{{");
   for parameter in 0..256 {
+    at_variant = self.lexer.offset();
     self.lexer.identifier();
     if self.lexer.matches("{{") {
       for field in 0..256 {
+        at = self.lexer.offset();
         self.lexer.identifier();
         self.expect(":");
         self.type_def(true);
@@ -155,6 +174,9 @@ fn def_enumerate(self: Parser, _public: boolean) -> boolean {
         if self.lexer.test("}}") {
           field# break;
         }
+        if self.stalled(at) {
+          field# break;
+        }
       }
       self.expect("}}");
     }
@@ -162,6 +184,9 @@ fn def_enumerate(self: Parser, _public: boolean) -> boolean {
       parameter# break;
     }
     if self.lexer.test("}}") {
+      parameter# break;
+    }
+    if self.stalled(at_variant) {
       parameter# break;
     }
   }
@@ -231,6 +256,7 @@ fn block(self: Parser) -> boolean {
     if self.log.level == Fatal {
       statement# break;
     }
+    at = self.lexer.offset();
     // A statement that ends in its own BLOCK carries no trailing `;` — `for i in xs {{
     // … }}` is complete at its closing brace.  Demanding one broke the enclosing block
     // out of its loop, so the tail expression after a `for` was never read and the body
@@ -252,6 +278,9 @@ fn block(self: Parser) -> boolean {
       statement# break;
     }
     if self.lexer.test("}}") {
+      statement# break;
+    }
+    if self.stalled(at) {
       statement# break;
     }
   }
@@ -315,9 +344,13 @@ fn list(self: Parser) -> boolean {
     if self.lexer.test("]") || self.lexer.test(";") {
       element# break;
     }
+    at = self.lexer.offset();
     l = self.expression();
     if self.lexer.matches(",") {
       element# continue;
+    }
+    if self.stalled(at) {
+      element# break;
     }
   }
   if self.lexer.matches(";") {
@@ -409,7 +442,7 @@ fn do_operators(self: Parser) -> boolean {
   }
   true
 }
-// <single_part> ::= [ '-' | '!' ] ('(' <expression> ')' | <id> { <fn_call> | <field> | <index> } | <value>)
+// <single_part> ::= [ '-' | '!' ] ('(' <expression> ')' | <id> | <value>) <suffixes>
 
 fn single_part(self: Parser) -> boolean {
   if self.lexer.matches("-") {
@@ -418,28 +451,38 @@ fn single_part(self: Parser) -> boolean {
   if self.lexer.matches("(") {
     self.expression();
     self.expect(")");
-  } else {
-    t = self.id();
-    if t {
-      for part in 0..255 {
-        t = self.fn_call();
-        if t {
-          part# continue;
-        }
-        t = self.field();
-        if t {
-          part# continue;
-        }
-        t = self.index_def();
-        if t {
-          part# continue;
-        }
-      }
-    } else {
-      self.value();
-    }
+  } else if !self.id() {
+    self.value();
   }
+  self.suffixes();
   true
+}
+// <suffixes> ::= { <fn_call> | <field> | <index> | '?' }
+
+// The postfix chain a PRIMARY carries: a call, a field, an index, and the
+// default-discharge `?`.  @FR-G-Post-Default puts `?` here rather than on the operator
+// ladder — it binds tighter than every binary operator, alongside `.` and `[]`, and the
+// four chain left to right, so `points[i]?.x` reads as `((points[i])?).x`.
+//
+// One home for all four, because the chain is the same whichever primary it follows:
+// `(a + b).x`, `name[0]` and `"abc".len()` are all Loft.
+
+fn suffixes(self: Parser) {
+  for part in 0..255 {
+    if self.fn_call() {
+      part# continue;
+    }
+    if self.field() {
+      part# continue;
+    }
+    if self.index_def() {
+      part# continue;
+    }
+    if self.lexer.matches("?") {
+      part# continue;
+    }
+    part# break;
+  }
 }
 // <id> ::= <identifier> [ '#' ( 'break' | 'continue' | 'count' | 'index' ) | <object> ]
 
@@ -476,8 +519,12 @@ fn fn_call(self: Parser) -> boolean {
     if self.lexer.test(")") {
       argument# break;
     }
+    at = self.lexer.offset();
     self.expression();
     if !self.lexer.matches(",") {
+      argument# break;
+    }
+    if self.stalled(at) {
       argument# break;
     }
   }
@@ -500,15 +547,19 @@ fn index_def(self: Parser) -> boolean {
     return false;
   }
   for key in 0..255 {
+    at = self.lexer.offset();
     self.expression();
     if !self.lexer.matches(",") {
       key# break;
     }
-    if self.lexer.test("}}") {
+    if self.lexer.test("]") {
+      key# break;
+    }
+    if self.stalled(at) {
       key# break;
     }
   }
-  self.expect("}}");
+  self.expect("]");
   true
 }
 // <constant> :: <identifier> '=' <expression> ';'
@@ -538,44 +589,63 @@ fn parameter(self: Parser) {
 }
 // <type_def> ::= <identifier> [ '<' { <type_def> [ '[' { [ '-' ] <identifier> [ ',' ] } ']'] [ ',' ] } '>' ] [ 'limit' '(' { <integer> [ ',' ] } ')' ]
 
+// The `[a, -b]` key list a keyed collection's element type carries: `hash<P[a,b]>`,
+// `sorted<P[-a]>`.  It contributes two things at once — a fragment of the type id, which it
+// answers, and the field names the definition is built from, which it appends to `flds`.
+// Absent, it answers the empty fragment and leaves `flds` alone.
+
+fn key_fields(self: Parser, flds: &vector<text>) -> text {
+  if !self.lexer.matches("[") {
+    return "";
+  }
+  id = "[";
+  for field in 0..256 {
+    at = self.lexer.offset();
+    desc = self.lexer.matches("-");
+    f = "";
+    if desc {
+      f = "-";
+    }
+    f += self.lexer.identifier() ?? "";
+    id += f;
+    flds +=[f];
+    if !self.lexer.matches(",") {
+      field# break;
+    }
+    id += ",";
+    if self.stalled(at) {
+      field# break;
+    }
+  }
+  self.expect("]");
+  id += "]";
+  id
+}
+
 fn type_def(self: Parser, define: boolean) -> u16 {
   id = self.lexer.identifier() ?? "";
   parameters =[];
-  flds =[];
+  flds: vector<text> = [];
   if self.lexer.matches("<") {
     id += "<";
     for parameter in 0..256 {
+      at = self.lexer.offset();
       p = self.type_def(false);
       parameters +=[p];
       id += self.code.type_name(p) ?? "";
-      if self.lexer.matches("[") {
-        id += "[";
-        for field in 0..256 {
-          desc = self.lexer.matches("-");
-          f = "";
-          if desc {
-            f = "-";
-          }
-          f += self.lexer.identifier() ?? "";
-          id += f;
-          flds +=[f];
-          if !self.lexer.matches(",") {
-            field# break;
-          }
-          id += ",";
-        }
-        self.expect("]");
-        id += "]";
-      }
+      id += self.key_fields(flds);
       if !self.lexer.matches(",") {
         parameter# break;
       }
       id += ",";
-      if self.lexer.test(">") {
+      if self.at_generic_close() {
+        parameter# break;
+      }
+      if self.stalled(at) {
         parameter# break;
       }
     }
-    self.expect(">");
+    self.close_generic();
     id += ">";
   }
   if self.lexer.matches("limit") {
@@ -585,6 +655,13 @@ fn type_def(self: Parser, define: boolean) -> u16 {
     till = self.lexer.int() ?? 0;
     self.expect(")");
     id += "{from}..{till}";
+  }
+  // A trailing `?` makes the type NULLABLE, and `integer` and `integer?` are two
+  // different types — so the `?` belongs in the id the code table is keyed by.  It
+  // suffixes the whole type expression, which is why it is read after the generic
+  // arguments and after the `limit` range rather than between them.
+  if self.lexer.matches("?") {
+    id += "?";
   }
   t = self.code.get_type(id);
   if !t && define {
@@ -602,15 +679,33 @@ fn type_def(self: Parser, define: boolean) -> u16 {
 }
 // <value> ::= 'true' | 'false' | 'null' | <integer> | <float> | <single> | <constant_text> [ <formatting> ] | <character>
 
+// Is the cursor at the `>` that closes a generic argument list?
+//
+// Maximal munch scans the `>>` ending `vector<vector<integer>>` as the SHIFT token, so the
+// closer is not always a token of its own.  This asks the question the grammar means, and
+// `close_generic` consumes exactly one `>` whichever way the scanner read it.
+
+fn at_generic_close(self: Parser) -> boolean {
+  self.lexer.test(">") || self.lexer.test(">>") || self.lexer.test(">>>")
+}
+// Consume the single `>` that closes a generic argument list, splitting a `>>` or `>>>`
+// token when maximal munch merged this closer with the next.  Reports through `expect` when
+// there is no `>` here at all, so a genuinely malformed type still says so.
+
+fn close_generic(self: Parser) {
+  if !self.lexer.test(">") && self.at_generic_close() {
+    self.lexer.split_token();
+  }
+  self.expect(">");
+}
+
 fn value(self: Parser) -> boolean {
   v = self.lexer.peek();
-  if v == "true" {
-    return true;
-  }
-  if v == "false" {
-    return true;
-  }
-  if v == "null" {
+  // `true`, `false` and `null` are KEYWORDS, so `identifier()` refuses them and only this
+  // arm can claim one.  Recognising is not enough — an unconsumed token leaves the
+  // enclosing block re-reading it until the loop bound.
+  if v == "true" || v == "false" || v == "null" {
+    self.lexer.matches(v);
     return true;
   }
   if self.lexer.int() {
@@ -637,10 +732,11 @@ fn value(self: Parser) -> boolean {
 // <formatting> :: { [ 'for' <id> 'in' <expression> [ 'if' <expression> ] | <expression> ] [ <flags> ] <constant_text> }
 
 fn formatting(self: Parser) {
-  for _part in 0..256 {
+  for part in 0..256 {
     if !self.lexer.is_formatting() {
       return;
     }
+    at = self.lexer.offset();
     self.lexer.set_formatting(false);
     if self.lexer.matches("for") {
       self.lexer.identifier();
@@ -660,6 +756,9 @@ fn formatting(self: Parser) {
     c = self.lexer.constant_text();
     if !c {
       return;
+    }
+    if self.stalled(at) {
+      part# break;
     }
   }
 }
@@ -711,6 +810,19 @@ fn flags(self: Parser) {
   }
 }
 // TODO <text_value> ::= <text_part>  { ( <for_list> | <expression> ) <text_part> }
+
+// Did a round of a repetition consume anything?  `at` is the cursor offset the round
+// started at.
+//
+// A loop that repeats a construct has to tell "one more item" from "the same token again".
+// When a round ends where it began, the grammar could not claim what is there and going
+// round again can only repeat the diagnostic it just wrote: `struct S {{ n: limit(0, 10) }}`
+// reported one bad field 256 times, once per turn of the loop bound.  Stopping keeps the
+// error count meaning what a caller reads it as — how many distinct things went wrong.
+
+fn stalled(self: Parser, at: integer) -> boolean {
+  self.lexer.offset() == at
+}
 
 fn expect(self: Parser, value: text) {
   if !self.lexer.matches(value) {
