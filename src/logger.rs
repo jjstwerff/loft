@@ -495,7 +495,13 @@ fn parse_config_str(content: &str, conf_dir: &Path) -> RuntimeLogConfig {
             continue;
         }
         if let Some(eq) = line.find('=') {
-            let key = line[..eq].trim();
+            // Both halves shed surrounding quotes.  Only the value used to, and a `[levels]`
+            // key is the one place a key is a STRING rather than a fixed word — so
+            // `"app.loft" = info`, the spelling this file's own generated template
+            // documents, was stored with its quote characters and never matched the bare
+            // basename it is looked up by.  Silently: an override that does nothing looks
+            // exactly like one that is not needed.
+            let key = line[..eq].trim().trim_matches('"');
             let value = line[eq + 1..].trim().trim_matches('"');
             match (section.as_str(), key) {
                 ("log", "file") => {

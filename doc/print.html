@@ -1784,12 +1784,13 @@ entry = "src/mylib.loft"   override the default entry path
 <li><code>log_fatal</code> — a condition so serious that normal operation is impossible. Example: "cannot open database", "required config file not found".</li>
 </ul>
 <h2 id="configuring-the-log-destination">Configuring the log destination</h2>
-<p>By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a <code>log.conf</code> file in the same directory as your <code>.loft</code> file, or pass <code>--log-conf path/to/log.conf</code> on the command line.</p>
-<p>Generate a documented template with all defaults by running: loft --generate-log-config</p>
+<p>By default, log calls do nothing — no file is written, no console output is produced. To switch logging on, place a <code>log.conf</code> file in the same directory as your <code>.loft</code> file, or pass <code>--log-conf path/to/log.conf</code> on the command line. The directory is exact: a <code>log.conf</code> one level up is not found, and a program with no config logs nothing and says nothing.</p>
+<p>To see every setting with its default, print a documented template: loft --generate-log-config              # writes it to the terminal loft --generate-log-config log.conf     # writes it to that file</p>
 <p>A minimal <code>log.conf</code> looks like this:</p>
 <pre><code>[log]
 file  = log.txt    # write messages here (relative to the .loft file)
 level = info       # minimum level to record; choices: info warn error fatal
+                   # (the default, when you leave this out, is 'warn')
 </code></pre>
 <pre><code>[rotation]
 max_size_mb = 500  # start a new log file after this many megabytes
@@ -1800,19 +1801,21 @@ max_files   = 10   # keep at most this many log files (older ones are deleted)
 per_site = 5       # suppress messages from the same source line after 5/minute
 </code></pre>
 <pre><code>[levels]
-# Override the global level for a specific file:
-# "debug_tool.loft" = info
-# "src/"            = error
+# Override the global level for one file, by its name alone:
+"debug_tool.loft" = info
+"src/"            = error   # a path prefix — see loft#1264 before relying on it
 </code></pre>
 <h2 id="production-mode">Production mode</h2>
-<p>When <code>production = true</code> is set in log.conf:</p>
+<p>With <code>production = true</code> in the <code>[log]</code> section of log.conf, or <code>--production</code> on the command line:</p>
 <ul>
 <li><code>panic()</code> becomes a fatal log entry instead of aborting the process.</li>
 <li>A failing <code>assert()</code> becomes an error log entry instead of aborting.</li>
 </ul>
-<p>The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down.</p>
+<p>The program keeps running and the problem is captured in the log — useful for long-running services where a single error should not bring everything down. It still exits non-zero at the end, so a supervisor watching the exit status learns that something went wrong.</p>
+<p>⚠ This works on the interpreter only. On the <code>--native</code> backend — which is what you get by default — <code>panic()</code> still aborts and writes nothing to the log (loft#1263). Until that is closed, run a service that relies on production mode with <code>--interpret</code>.</p>
 <h2 id="using-format-strings-in-log-messages">Using format strings in log messages</h2>
-<p>Log messages are plain text, but you can embed any expression using the same <code>{...}</code> format syntax as everywhere else in Loft. The interpolation happens only when the message is actually going to be written; if the configured level is higher than the call, the string is never evaluated (no performance cost for suppressed messages).</p>
+<p>Log messages are plain text, but you can embed any expression using the same <code>{...}</code> format syntax as everywhere else in Loft.</p>
+<p>The message is built BEFORE the call decides whether to write it — the argument is an ordinary expression, evaluated like any other. So a message that is discarded still costs what it costs, and that is true whether it was filtered out by the level, suppressed by the rate limit, or dropped because there is no log.conf at all. Keep an expensive call out of a message on a hot path, or guard the whole log line with an <code>if</code>.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>Without a log.conf these calls do nothing — the tests below pass even though no output is produced.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_info</a></span>(<span class="st">"starting up"</span>);
@@ -1821,12 +1824,12 @@ per_site = 5       # suppress messages from the same source line after 5/minute
   <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">log_fatal</a></span>(<span class="st">"critical failure"</span>);</code></pre>
 <h2 id="example-log-txt-output">Example log.txt output</h2>
 <p>When a <code>log.conf</code> is present with <code>level = info</code>, the four calls above produce entries like this in <code>log.txt</code>:</p>
-<pre><code>2026-03-24 09:15:00 INFO   app.loft:3  starting up
-2026-03-24 09:15:00 WARN   app.loft:4  this is a warning
-2026-03-24 09:15:00 ERROR  app.loft:5  something went wrong
-2026-03-24 09:15:00 FATAL  app.loft:6  critical failure
+<pre><code>2026-09-01T08:35:38.971Z INFO   /home/you/app/app.loft:3  starting up
+2026-09-01T08:35:38.971Z WARN   /home/you/app/app.loft:4  this is a warning
+2026-09-01T08:35:38.971Z ERROR  /home/you/app/app.loft:5  something went wrong
+2026-09-01T08:35:38.971Z FATAL  /home/you/app/app.loft:6  critical failure
 </code></pre>
-<p>Each line contains: timestamp, severity level, source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. A true assert never logs anything — it is only the false case that logs.</p>
+<p>Each line contains: a UTC timestamp to the millisecond, the severity level, the source file and line number, then the message. This makes it easy to search the file for errors or trace back to the exact line that produced a message. The file path is the one the program was invoked by, so it is usually absolute (loft#1264). A true assert never logs anything — it is only the false case that logs.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span>, <span class="st">"this should never fail"</span>);</code></pre>
 <h2 id="typical-usage-pattern">Typical usage pattern</h2>
 <p>In a real program you would write something like:</p>

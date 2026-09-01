@@ -86,6 +86,17 @@ others, and the page only comes apart against the compiler. **One measurement di
 bare call answering.** So before the sentence-level read, take the chapter's central
 rule, write the smallest program that would violate it, and run that.
 
+⚠ **A chapter whose subject is CONFIGURED needs a configured run, and that cannot live on
+the page.** Chapter 20 documented a log file format, four config sections, per-file level
+overrides, rate limiting and a production mode — and its executable cells called the four
+log functions with NO config present, where the documented behaviour is to do nothing. So
+the chapter asserted that logging is off, and every claim about what logging DOES ran under
+nothing. Three were wrong, including the config spelling that `loft --generate-log-config`
+prints into its own template. A `log.conf` cannot be added beside the chapter either — it
+would switch logging on for every other chapter in the suite. **The home for a configured
+chapter's proof is a Rust test that writes a private directory per case and runs the binary
+in it**; `tests/logging_config_is_what_the_chapter_says.rs` is the shape.
+
 ⚠ **A chapter that states a rule does not say who KEEPS it, and the reader assumes the
 compiler does.** Chapter 19 listed three worker rules in one bulleted list: two the compiler
 enforces with precise refusals, and *"must not use global state or I/O (no println, no file
@@ -155,6 +166,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/17-libraries.loft` | 2026-09-01 | `361aded3` |
 | `tests/docs/18-locks.loft` | 2026-09-01 | `d50be135` |
 | `tests/docs/19-threading.loft` | 2026-09-01 | `8af9f8e1` |
+| `tests/docs/20-logging.loft` | 2026-09-01 | `ed4c3f49` |
 
 ## See also
 
