@@ -44,6 +44,12 @@ pub(crate) struct FieldSinks {
     /// actually handed records can surprise the author about which set they landed in,
     /// so this, not `found_fields`, is what the advice counts.
     filled_collections: HashSet<String>,
+    /// loft#1266 — the VECTOR members this literal filled in bulk, each owing its linked
+    /// group's other members an `OpIndexGroup`.  Deferred to the end of `parse_object`
+    /// rather than emitted at the field, because the answer depends on which OTHER members
+    /// the literal fills — and a member later in the same literal is not known yet when an
+    /// earlier one is handled.
+    group_fills: Vec<Value>,
 }
 
 impl Parser {
@@ -3440,7 +3446,7 @@ impl Parser {
                 let prev = std::mem::replace(&mut value, Value::Var(tmp));
                 sinks.hoists.push(v_set(tmp, prev));
             }
-            self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp);
+            self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp, sinks);
         }
         true
     }
@@ -3734,6 +3740,25 @@ impl Parser {
             self.advise_linked_group_fill(td_nr, &sinks.filled_collections, &literal_pos);
             let primed = std::mem::take(&mut sinks.group_primed);
             self.object_init(&mut list, td_nr, 0, code, &found_fields, &primed);
+            // loft#1266 — the linked-group maintenance a bulk vector fill skips, emitted
+            // once the whole body is read and AFTER `object_init`, which is the last thing
+            // that can write a member's header.  A member this literal filled itself is
+            // skipped: it owns its records, and indexing the group's into it releases them
+            // out from under the member that holds them (measured on the loft#889 shape,
+            // where only `LOFT_POISON=1` shows the read landing on freed bytes).
+            let fills = std::mem::take(&mut sinks.group_fills);
+            if !fills.is_empty() {
+                let skip: std::collections::HashSet<u16> = sinks
+                    .filled_collections
+                    .iter()
+                    .map(|f| self.field_position(td_nr, f))
+                    .collect();
+                let parent_ty = Type::Reference(td_nr, crate::data::Deps::none());
+                for to in &fills {
+                    let ops = self.keyed_sibling_view_fills(to, &parent_ty, &skip);
+                    list.extend(ops);
+                }
+            }
             // emit all field constraint checks after construction completes.
             let assert_dnr = self.data.def_nr("n_assert");
             for a_nr in 0..self.data.def(td_nr).attributes().len() {
@@ -4425,6 +4450,7 @@ impl Parser {
         field: &str,
         value: &mut Value,
         exp_tp: &Type,
+        sinks: &mut FieldSinks,
     ) {
         let nr = self.data.attr(td_nr, field);
         let td = self.data.attr_type(td_nr, nr);
@@ -4578,8 +4604,22 @@ impl Parser {
                     );
                     list.push(self.cl(
                         "OpAppendVector",
-                        &[field_ref, value.clone(), Value::Int(i32::from(elem_tp))],
+                        &[field_ref.clone(), value.clone(), Value::Int(i32::from(elem_tp))],
                     ));
+                    // loft#1266 — this bulk write owes its linked group the maintenance it
+                    // skips.  A record joining a group one at a time reaches
+                    // `Stores::record_finish`, which walks `other_indexes` and puts it in
+                    // every member; `OpAppendVector` moves them in bulk and reaches none of
+                    // it, so the keyed views stayed empty while the vector held everything —
+                    // `len` answering `0` and a lookup answering `null`, both legal readings
+                    // of a group that is simply empty.  The assignment and append spellings
+                    // gained this in loft#1152; the constructor is their sibling.
+                    //
+                    // Recorded rather than emitted, because which siblings are owed it is not
+                    // decidable here: a member the SAME literal fills owns its own records and
+                    // must be left alone, and a member later in the literal has not been seen
+                    // yet.  `parse_object` knows both once the body is read.
+                    sinks.group_fills.push(field_ref.clone());
                 } else {
                     list.push(value.clone());
                 }
@@ -4617,10 +4657,42 @@ impl Parser {
                 } else {
                     i32::from(kt)
                 };
-                list.push(self.cl(
-                    "OpReplaceKeyed",
-                    &[value.clone(), field_ref, Value::Int(tp_val)],
-                ));
+                // loft#1266 — ask what the SOURCE is, the same question the field
+                // ASSIGNMENT and the two append sites ask (`is_keyed` in
+                // `parse_assign_op_inner` / `parse_assign_op`).  This one did not, so a
+                // plain `vector<E>` reached `OpReplaceKeyed`, which hands the source to
+                // `copy_claims` under the DESTINATION's type and walks a vector's storage
+                // as if it were a hash / index / trie: `hash` found nothing, `index` and
+                // `trie` found one node, and only `sorted` came out right — because a
+                // sorted's own storage IS a sequential vector.  `H { a: rows() }` and
+                // `h.a = rows()` name the same records, so the constructor owes the same
+                // answer the assignment gives, and `OpFillKeyed` is that answer: every
+                // record placed by its own key through `record_finish`.
+                //
+                // No clear precedes it here, unlike the assignment site: the field's
+                // header prime in `parse_object_field` has already zeroed the slot (and
+                // `group_primed` zeroed the whole linked group's), so there is nothing in
+                // the destination to replace.
+                if crate::parser::vectors::is_keyed(exp_tp) {
+                    list.push(self.cl(
+                        "OpReplaceKeyed",
+                        &[value.clone(), field_ref, Value::Int(tp_val)],
+                    ));
+                } else {
+                    let parent_ty = Type::Reference(td_nr, crate::data::Deps::none());
+                    let (parent, parent_tp_id, field_nr) =
+                        self.fill_keyed_site(&field_ref, &parent_ty, kt);
+                    list.push(self.cl(
+                        "OpFillKeyed",
+                        &[
+                            parent,
+                            value.clone(),
+                            Value::Int(tp_val),
+                            Value::Int(i32::from(parent_tp_id)),
+                            Value::Int(i32::from(field_nr)),
+                        ],
+                    ));
+                }
             } else {
                 list.push(value.clone());
             }
