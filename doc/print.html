@@ -2515,19 +2515,24 @@ Printable  fn to_text(self: T) -&gt; text
 </section>
 <section class="print-section" id="27-coroutines">
 <h1>Coroutines</h1>
-<p>#warn Variable d is never read @TITLE: Lazy sequences with generators and yield A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
-<h2 id="declaring-a-generator-function">Declaring a generator function</h2>
-<p>A function whose return type is <code>iterator&lt;T&gt;</code> is a generator. <code>yield value</code> emits one item and pauses; the next call resumes from there.</p>
+<p>A generator function produces values one at a time. Declare the return type as <code>iterator&lt;T&gt;</code> and use <code>yield</code> to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with <code>break</code>, or chain sequences without building intermediate collections.</p>
 <h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
 <p>A <code>for</code> loop drives the generator forward automatically. The body runs once per yielded value. Use <code>break</code> to stop early without consuming the rest.</p>
+<h2 id="the-body-really-is-suspended">The body really is suspended</h2>
+<p>Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next <code>yield</code>.</p>
 <h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
-<p>Call <code>next(gen)</code> yourself when you need fine-grained control. <code>exhausted(gen)</code> returns true once there are no more values.</p>
+<p>Call <code>next(gen)</code> yourself when you need fine-grained control.</p>
 <h2 id="generators-with-parameters">Generators with parameters</h2>
 <p>A generator function may take any parameters, including text. Parameter values are preserved across yields so the generator can use them throughout its lifetime.</p>
 <h2 id="delegation-with-yield-from">Delegation with yield from</h2>
 <p><code>yield from sub_gen()</code> forwards all values from another generator inline, as if each of its yields appeared at this point directly.</p>
 <h2 id="early-termination-with-break">Early termination with break</h2>
 <p>Stopping a <code>for</code> loop before the generator is exhausted is safe. The abandoned generator frame is freed automatically.</p>
+<h2 id="a-generator-runs-once-and-has-no-return">A generator runs once, and has no return</h2>
+<p>Two rules a reader coming from another language will look for.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Trace</span> {
+  steps: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">count_up</span>(start: <span class="ty"><a href="stdlib-types.html">integer</a></span>, stop: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
   <span class="kw">for</span> i <span class="kw">in</span> start..stop {
     yield i;
@@ -2536,6 +2541,13 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code><span class="kw">fn</span> <span class="fn-call">squares</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
   <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=n {
     yield i * i;
+  }
+}</code></pre>
+<p>Records one step per value produced, so the consumer can see how much of the body actually ran.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">counted</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>, t: <span class="en">Trace</span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=<span class="kw">limit</span> {
+    t.steps += <span class="nm">1</span>;
+    yield i;
   }
 }</code></pre>
 <p>Yields the length of <code>s</code> twice — shows that a text parameter survives yields.</p>
@@ -2552,9 +2564,25 @@ Printable  fn to_text(self: T) -&gt; text
   yield from <span class="fn-call">inner_vals</span>();
   yield <span class="nm">2</span>;
 }</code></pre>
+<p>Delegating to a generator that takes an ARGUMENT is written as a plain forwarding loop rather than <code>yield from</code> — see the note in that section.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">scaled_by</span>(factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  yield factor;
+  yield factor * <span class="nm">10</span>;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">forwards_with_argument</span>() -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> v <span class="kw">in</span> <span class="fn-call">scaled_by</span>(<span class="nm">4</span>) {
+    yield v;
+  }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">large_range</span>(<span class="kw">limit</span>: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
   <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..</span>=<span class="kw">limit</span> {
     yield i;
+  }
+}</code></pre>
+<p>Ends early with <code>break</code>.  A generator has no <code>return</code>, so <code>break</code> is how a body stops before its loop would.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">first_positive</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -&gt; iterator&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; {
+  <span class="kw">for</span> x <span class="kw">in</span> v {
+    <span class="kw">if</span> x &gt; <span class="nm">0</span> { yield x; <span class="kw">break</span>; }
   }
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
@@ -2574,16 +2602,27 @@ Printable  fn to_text(self: T) -&gt; text
     <span class="kw">if</span> idx == <span class="nm">4</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s == <span class="nm">16</span>, <span class="st">"sq4: {s}"</span>); }
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(idx == <span class="nm">4</span>, <span class="st">"squares count: {idx}"</span>);</code></pre>
+<h2 id="the-body-really-is-suspended">The body really is suspended</h2>
+<p><code>counted</code> is asked for a thousand values and the loop breaks after six. Its step counter shows the body ran six times, not a thousand — the work for the values nobody asked for was never done.</p>
+<pre><code>  trace = <span class="en">Trace</span> { steps: <span class="nm">0</span> };
+  seen = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">counted</span>(<span class="nm">1000</span>, trace) {
+    seen += <span class="nm">1</span>;
+    <span class="kw">if</span> seen &gt; <span class="nm">5</span> { <span class="kw">break</span>; }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(trace.steps == <span class="nm">6</span>, <span class="st">"the body ran once per value asked for: {trace.steps}"</span>);</code></pre>
 <h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
+<p><code>exhausted</code> is true once an advance has run off the END of the body — not as soon as the last value has been handed out.  After the third value here there are no more values, and <code>exhausted</code> is still false; it takes one more <code>next</code> to discover the end, and that call answers null.</p>
+<p>So <code>while !exhausted(g)</code> runs one iteration too many.  Drive the generator with <code>for</code>, or stop on the null that <code>next</code> answers.</p>
 <pre><code>  gen = <span class="fn-call">count_up</span>(<span class="nm">10</span>, <span class="nm">13</span>);
   a = <span class="fn-call">next</span>(gen);
   b = <span class="fn-call">next</span>(gen);
   c = <span class="fn-call">next</span>(gen);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">10</span> &amp;&amp; b == <span class="nm">11</span> &amp;&amp; c == <span class="nm">12</span>, <span class="st">"manual next: {a},{b},{c}"</span>);</code></pre>
-<p>One extra advance past the last element; exhausted() is true after that.</p>
-<pre><code>  d = <span class="fn-call">next</span>(gen);
-  done = <span class="fn-call">exhausted</span>(gen);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(done, <span class="st">"exhausted after last value"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(a == <span class="nm">10</span> &amp;&amp; b == <span class="nm">11</span> &amp;&amp; c == <span class="nm">12</span>, <span class="st">"manual next: {a},{b},{c}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">exhausted</span>(gen), <span class="st">"not yet exhausted, though no values remain"</span>);
+  past_end = <span class="fn-call">next</span>(gen);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(past_end == <span class="kw">null</span>, <span class="st">"next past the last value answers null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">exhausted</span>(gen), <span class="st">"and now it is exhausted"</span>);</code></pre>
 <h2 id="generators-with-parameters">Generators with parameters</h2>
 <p><code>len_twice</code> takes a text parameter and yields its length twice. The text value is preserved across the yield.</p>
 <pre><code>  lt_total = <span class="nm">0</span>;
@@ -2597,6 +2636,12 @@ Printable  fn to_text(self: T) -&gt; text
     yf_total += n;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(yf_total == <span class="nm">33</span>, <span class="st">"yield from: 1+10+20+2={yf_total}"</span>);</code></pre>
+<p>⚠ <code>yield from</code> works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it (loft#1277).  Until that closes, forward such a generator with a plain loop — <code>for v in sub(arg) { yield v; }</code>, which means the same thing and works on both backends.</p>
+<pre><code>  fwd_total = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">forwards_with_argument</span>() {
+    fwd_total += n;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fwd_total == <span class="nm">44</span>, <span class="st">"forwarded with an argument: 4+40={fwd_total}"</span>);</code></pre>
 <h2 id="early-termination-with-break">Early termination with break</h2>
 <p>Stop after the first 5 values from a 1000-element generator.</p>
 <pre><code>  limit_total = <span class="nm">0</span>;
@@ -2604,7 +2649,20 @@ Printable  fn to_text(self: T) -&gt; text
     <span class="kw">if</span> n &gt; <span class="nm">5</span> { <span class="kw">break</span>; }
     limit_total += n;
   }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(limit_total == <span class="nm">15</span>, <span class="st">"early break sum 1..5: {limit_total}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(limit_total == <span class="nm">15</span>, <span class="st">"early break sum 1..5: {limit_total}"</span>);</code></pre>
+<h2 id="a-generator-runs-once-and-has-no-return">A generator runs once, and has no return</h2>
+<p>A generator is single-pass.  Once it is exhausted it stays exhausted, so a second <code>for</code> over the same generator value runs its body zero times — quietly, because an exhausted iterator is empty rather than an error.  Call the generator function again when you need the sequence again.</p>
+<pre><code>  once = <span class="fn-call">count_up</span>(<span class="nm">1</span>, <span class="nm">4</span>);
+  first_pass = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> once { first_pass += n; }
+  second_pass = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> once { second_pass += n; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_pass == <span class="nm">6</span>, <span class="st">"first pass: {first_pass}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(second_pass == <span class="nm">0</span>, <span class="st">"the same generator a second time is empty: {second_pass}"</span>);</code></pre>
+<p>And a generator has no <code>return</code>: values leave it only through <code>yield</code>, so <code>return</code>, <code>return value</code> and a body ending in a value are all refused at compile time.  <code>break</code> is how a body ends early — <code>first_positive</code> yields the first positive element and stops there.</p>
+<pre><code>  fp_seq = <span class="nm">0</span>;
+  <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">first_positive</span>([-<span class="nm">1</span>, <span class="nm">5</span>, <span class="nm">9</span>]) { fp_seq = fp_seq * <span class="nm">10</span> + n; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(fp_seq == <span class="nm">5</span>, <span class="st">"first_positive stops after its one value: {fp_seq}"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="28-tuples">

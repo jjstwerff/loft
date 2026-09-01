@@ -5554,19 +5554,19 @@ A capturing closure cannot be stored in a COLLECTION either: 'vector\<fn(…)\>'
 
 = Coroutines
 
-\#warn Variable d is never read \@TITLE: Lazy sequences with generators and yield A generator function produces values one at a time. Declare the return type as 'iterator\<T\>' and use 'yield' to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with 'break', or chain sequences without building intermediate collections.
-
-=== Declaring a generator function
-
-A function whose return type is 'iterator\<T\>' is a generator. 'yield value' emits one item and pauses; the next call resumes from there.
+A generator function produces values one at a time. Declare the return type as 'iterator\<T\>' and use 'yield' to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with 'break', or chain sequences without building intermediate collections.
 
 === Iterating with a for loop
 
 A 'for' loop drives the generator forward automatically. The body runs once per yielded value. Use 'break' to stop early without consuming the rest.
 
+=== The body really is suspended
+
+Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next 'yield'.
+
 === Manual advance with next() and exhausted()
 
-Call 'next(gen)' yourself when you need fine-grained control. 'exhausted(gen)' returns true once there are no more values.
+Call 'next(gen)' yourself when you need fine-grained control.
 
 === Generators with parameters
 
@@ -5580,6 +5580,16 @@ A generator function may take any parameters, including text. Parameter values a
 
 Stopping a 'for' loop before the generator is exhausted is safe. The abandoned generator frame is freed automatically.
 
+=== A generator runs once, and has no return
+
+Two rules a reader coming from another language will look for.
+
+```rust
+struct Trace {
+  steps: integer,
+}
+```
+
 ```rust
 fn count_up(start: integer, stop: integer) -> iterator<integer> {
   for i in start..stop {
@@ -5592,6 +5602,17 @@ fn count_up(start: integer, stop: integer) -> iterator<integer> {
 fn squares(n: integer) -> iterator<integer> {
   for i in 1..=n {
     yield i * i;
+  }
+}
+```
+
+Records one step per value produced, so the consumer can see how much of the body actually ran.
+
+```rust
+fn counted(limit: integer, t: Trace) -> iterator<integer> {
+  for i in 1..=limit {
+    t.steps += 1;
+    yield i;
   }
 }
 ```
@@ -5620,10 +5641,37 @@ fn outer_combined() -> iterator<integer> {
 }
 ```
 
+Delegating to a generator that takes an ARGUMENT is written as a plain forwarding loop rather than 'yield from' — see the note in that section.
+
+```rust
+fn scaled_by(factor: integer) -> iterator<integer> {
+  yield factor;
+  yield factor * 10;
+}
+```
+
+```rust
+fn forwards_with_argument() -> iterator<integer> {
+  for v in scaled_by(4) {
+    yield v;
+  }
+}
+```
+
 ```rust
 fn large_range(limit: integer) -> iterator<integer> {
   for i in 1..=limit {
     yield i;
+  }
+}
+```
+
+Ends early with 'break'.  A generator has no 'return', so 'break' is how a body stops before its loop would.
+
+```rust
+fn first_positive(v: vector<integer>) -> iterator<integer> {
+  for x in v {
+    if x > 0 { yield x; break; }
   }
 }
 ```
@@ -5656,7 +5704,25 @@ Squares via for loop with index tracking.
   assert(idx == 4, "squares count: {idx}");
 ```
 
+=== The body really is suspended
+
+'counted' is asked for a thousand values and the loop breaks after six. Its step counter shows the body ran six times, not a thousand — the work for the values nobody asked for was never done.
+
+```rust
+  trace = Trace { steps: 0 };
+  seen = 0;
+  for n in counted(1000, trace) {
+    seen += 1;
+    if seen > 5 { break; }
+  }
+  assert(trace.steps == 6, "the body ran once per value asked for: {trace.steps}");
+```
+
 === Manual advance with next() and exhausted()
+
+'exhausted' is true once an advance has run off the END of the body — not as soon as the last value has been handed out.  After the third value here there are no more values, and 'exhausted' is still false; it takes one more 'next' to discover the end, and that call answers null.
+
+So 'while !exhausted(g)' runs one iteration too many.  Drive the generator with 'for', or stop on the null that 'next' answers.
 
 ```rust
   gen = count_up(10, 13);
@@ -5664,14 +5730,10 @@ Squares via for loop with index tracking.
   b = next(gen);
   c = next(gen);
   assert(a == 10 && b == 11 && c == 12, "manual next: {a},{b},{c}");
-```
-
-One extra advance past the last element; exhausted() is true after that.
-
-```rust
-  d = next(gen);
-  done = exhausted(gen);
-  assert(done, "exhausted after last value");
+  assert(!exhausted(gen), "not yet exhausted, though no values remain");
+  past_end = next(gen);
+  assert(past_end == null, "next past the last value answers null");
+  assert(exhausted(gen), "and now it is exhausted");
 ```
 
 === Generators with parameters
@@ -5696,6 +5758,16 @@ One extra advance past the last element; exhausted() is true after that.
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 ```
 
+⚠ 'yield from' works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it (loft\#1277).  Until that closes, forward such a generator with a plain loop — 'for v in sub(arg) { yield v; }', which means the same thing and works on both backends.
+
+```rust
+  fwd_total = 0;
+  for n in forwards_with_argument() {
+    fwd_total += n;
+  }
+  assert(fwd_total == 44, "forwarded with an argument: 4+40={fwd_total}");
+```
+
 === Early termination with break
 
 Stop after the first 5 values from a 1000-element generator.
@@ -5707,6 +5779,28 @@ Stop after the first 5 values from a 1000-element generator.
     limit_total += n;
   }
   assert(limit_total == 15, "early break sum 1..5: {limit_total}");
+```
+
+=== A generator runs once, and has no return
+
+A generator is single-pass.  Once it is exhausted it stays exhausted, so a second 'for' over the same generator value runs its body zero times — quietly, because an exhausted iterator is empty rather than an error.  Call the generator function again when you need the sequence again.
+
+```rust
+  once = count_up(1, 4);
+  first_pass = 0;
+  for n in once { first_pass += n; }
+  second_pass = 0;
+  for n in once { second_pass += n; }
+  assert(first_pass == 6, "first pass: {first_pass}");
+  assert(second_pass == 0, "the same generator a second time is empty: {second_pass}");
+```
+
+And a generator has no 'return': values leave it only through 'yield', so 'return', 'return value' and a body ending in a value are all refused at compile time.  'break' is how a body ends early — 'first\_positive' yields the first positive element and stops there.
+
+```rust
+  fp_seq = 0;
+  for n in first_positive([-1, 5, 9]) { fp_seq = fp_seq * 10 + n; }
+  assert(fp_seq == 5, "first_positive stops after its one value: {fp_seq}");
 }
 ```
 

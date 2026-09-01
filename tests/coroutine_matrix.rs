@@ -598,3 +598,96 @@ cross_mode!(
     }
     "#
 );
+
+/// The Coroutines chapter promises that "the abandoned generator frame is freed
+/// automatically", and until this test nothing could witness it. Coroutine frames live in a
+/// side-table on `State` (`coroutines: Vec<Option<Box<CoroutineFrame>>>`), deliberately
+/// outside the store system — so `check_store_leaks` is structurally blind to a leaked frame
+/// and its silence proves nothing about this claim.
+///
+/// The witness is indirect and exact: give the generator a store-backed local, then abandon
+/// the generator N times and read `LOFT_ALLOC_REPORT`. A frame that is not reclaimed keeps
+/// that local's store alive, so the property is not a threshold but an INVARIANCE — `peak`
+/// (maximum concurrently-live stores) must not move with N, while `allocs` (alloc/free cycles)
+/// must scale with it. Those two together are what separate "every frame gave its store back"
+/// from "the program happened to allocate a lot": a threshold on `peak` alone would pass on a
+/// leak whose stores were pooled, and an exit-time leak count cannot see growth at all.
+///
+/// Measured: `peak=3` at 50, 200 and 800 rounds, with `allocs` at 52, 202 and 802.
+///
+/// And the channel is known to move, which is what keeps the invariance from being vacuous:
+/// the same generator nested three deep, so three frames are live at once, reads `peak=5`
+/// against the `peak=3` of the create-and-abandon loop. Each concurrently-live frame is worth
+/// one live store here, so a frame retained per round would track the round count exactly.
+#[test]
+fn an_abandoned_generator_frame_does_not_accumulate() {
+    // One store-backed local (`buf`) inside the generator, abandoned after three values.
+    let source = |rounds: usize| {
+        format!(
+            "\
+fn gen_with_vec(limit: integer) -> iterator<integer> {{
+  buf = [1, 2, 3];
+  for i in 1..=limit {{ yield i + len(buf); }}
+}}
+fn main() {{
+  total = 0;
+  for round in 0..{rounds} {{
+    seen = 0;
+    for n in gen_with_vec(1000) {{ seen += 1; total += n; if seen >= 3 {{ break; }} }}
+  }}
+  print(\"{{total}}\\n\");
+}}
+"
+        )
+    };
+
+    // (peak, allocs) for one round count.
+    let measure = |rounds: usize| -> (usize, usize) {
+        let script = std::env::temp_dir().join(format!("loft_coro_frame_reclaim_{rounds}.loft"));
+        std::fs::write(&script, source(rounds)).expect("write temp script");
+        let out = std::process::Command::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")))
+            .arg("--interpret")
+            .arg(&script)
+            .env("LOFT_ALLOC_REPORT", "1")
+            .output()
+            .expect("failed to invoke loft binary");
+        let _ = std::fs::remove_file(&script);
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+
+        // Each round takes the same three values (4 + 5 + 6 = 15). Checking the total keeps a
+        // run that produced nothing from making every assertion below vacuous.
+        assert_eq!(
+            stdout.trim(),
+            (rounds * 15).to_string(),
+            "each of the {rounds} rounds must take three values; stderr={stderr:?}"
+        );
+
+        let line = stderr
+            .lines()
+            .find(|l| l.starts_with("loft-alloc:"))
+            .unwrap_or_else(|| panic!("LOFT_ALLOC_REPORT produced no report; stderr={stderr:?}"));
+        let field = |name: &str| -> usize {
+            line.split_whitespace()
+                .find_map(|t| t.strip_prefix(name)?.parse().ok())
+                .unwrap_or_else(|| panic!("no `{name}` in {line:?}"))
+        };
+        (field("peak="), field("allocs="))
+    };
+
+    let (peak_small, allocs_small) = measure(50);
+    let (peak_large, allocs_large) = measure(800);
+
+    // The generator really is built and torn down once per round — otherwise the invariance
+    // below would be about a loop that never allocated.
+    assert!(
+        allocs_large >= allocs_small + 700,
+        "each round must allocate: allocs went {allocs_small} -> {allocs_large} for 50 -> 800          rounds"
+    );
+    // The claim itself. Sixteen times the abandoned generators must not raise the live-store
+    // watermark by even one: a frame retained per round would put `peak_large` in the hundreds.
+    assert_eq!(
+        peak_small, peak_large,
+        "an abandoned frame must give its store back, so the live-store peak cannot move with          the number of abandoned generators: peak {peak_small} at 50 rounds, {peak_large} at 800"
+    );
+}

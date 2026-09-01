@@ -159,16 +159,21 @@ fn range(from: integer, to: integer) -> iterator<integer> {
 
 ### Exhausting a generator early
 
-A `return` statement inside a generator marks it as exhausted immediately.
-The `for` loop exits normally; subsequent `next()` calls return null.
+A generator has **no `return`** — values leave it only through `yield`, so `return e`,
+a bare `return;`, and a body whose tail is a value are all static errors
+(`formal/coroutines.md` (G-Return), enforced at all three spellings). End early with
+`break`: the loop stops, the body reaches its end, and the generator is exhausted.
 
 ```loft
 fn first_positive(v: vector<integer>) -> iterator<integer> {
     for x in v {
-        if x > 0 { yield x; return; }
+        if x > 0 { yield x; break; }
     }
 }
 ```
+
+Consuming it yields the one value and then stops: `next` answers `5`, the next `next`
+answers null, and `exhausted` is true.
 
 ---
 
@@ -254,7 +259,7 @@ caller's stack depth.
     Created ──────────────────────────► Running
                                             │
                ┌────────────────────────────┤
-               │ yield                      │ return / end of body
+               │ yield                      │ end of body
                ▼                            ▼
            Suspended ──── next() ────► Running    Exhausted
            (frame saved)                (frame          │
@@ -325,7 +330,7 @@ at the time of the advance.
 9. Set `code_pos = frame.caller_return_pos`; execution returns to the
    `next()` call site.
 
-### Exhaustion (`return` / end of body → `Exhausted`)
+### Exhaustion (end of body → `Exhausted`)
 
 `OpCoroutineReturn` fires with `value_size` as operand:
 
@@ -466,7 +471,7 @@ both the outer and the inner generator are simultaneously active (SC-CO-9).
 | `OpCoroutineNext` | `value_size: u16` | `next(gen)`, for-loop advance | Resume frame; push yielded value or null |
 | `OpYield` | `value_size: u16` | `yield expr` | Suspend; serialise frame; slide value to base; return to consumer |
 | `OpYieldFrom` | (none) | `yield from expr` | Drive sub-generator loop; forward each value via OpYield |
-| `OpCoroutineReturn` | `value_size: u16` | `return` or end of generator body | Exhaust frame; push null; return to consumer |
+| `OpCoroutineReturn` | `value_size: u16` | end of generator body (a source `return` is refused — (G-Return)) | Exhaust frame; push null; return to consumer |
 | `OpExhausted` | (none) | `exhausted(gen)` | Push true if frame status == Exhausted or DbRef is null |
 
 All coroutine opcodes require direct `&mut self` access (same pattern as

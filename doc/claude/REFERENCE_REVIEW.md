@@ -222,6 +222,36 @@ a capturing closure and called it directly. The capability is real (`map(nums, s
 not showing its own subject. Read the titles as a list, on their own, and ask of each one
 what cell would falsify it.
 
+⚠ **A chapter demonstrating a feature ONCE pins the shape that works, and the suite then
+guards the gap.** Chapter 27 shows `yield from` with a single sub-generator, `inner_vals()`,
+which takes no arguments. Give the sub-generator an argument and `--native` emits Rust that
+does not compile (loft#1277) while the interpreter runs it — so the chapter, the doc suite and
+the native gate were all green on a feature broken for every parameterised delegation. The
+single cell was not wrong; it was unrepresentative, and being executable made that invisible.
+**For a feature the chapter demonstrates once, list the argument it varies and run the other
+values** — here: does the sub-generator take arguments, is it nested, does it yield nothing.
+
+⚠ **When the claim is about a NEGATIVE resource fact, first ask which instrument could see
+it.** Chapter 27 promised "the abandoned generator frame is freed automatically", and the
+store-leak gate is structurally blind to it: coroutine frames live in a side-table on `State`,
+outside the store system on purpose, so a clean run proves nothing about the claim. The witness
+had to be built — give the generator a store-backed local, so a retained frame retains a store
+— and the property is an INVARIANCE, not a threshold: `peak` must not move with the number of
+abandoned generators while `allocs` scales with it. A threshold alone passes on a pooled leak,
+and an exit-time leak count cannot see growth at all. `tests/coroutine_matrix.rs
+::an_abandoned_generator_frame_does_not_accumulate` is the shape, including the measurement
+that proves the channel moves (three frames live at once reads `peak=5` against `3`).
+
+⚠ **An internals doc can carry an example that does not COMPILE, and nothing will say so.**
+COROUTINE.md § "Exhausting a generator early" documented ending a generator with `return;`,
+with a worked example — while `formal/coroutines.md` (G-Return) says a generator has no
+`return` and the compiler refuses all three spellings (`return;`, `return e`, and a body whose
+tail is a value) with precise messages. The formal rule and the code agreed; the design doc had
+simply not been re-read since the rule landed. Reference chapters are gated because they RUN;
+`doc/claude/*.md` snippets are not, so **when a chapter's subject has a companion internals doc,
+paste its examples into a file and run them** — and when the two docs disagree, the formal rules
+settle it.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -277,6 +307,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/24-json.loft` | 2026-09-01 | `f21577f2` |
 | `tests/docs/25-generics.loft` | 2026-09-01 | `9764a37c` |
 | `tests/docs/26-closures.loft` | 2026-09-01 | `64808d31` |
+| `tests/docs/27-coroutines.loft` | 2026-09-01 | `0fd440b5` |
 
 ## See also
 
