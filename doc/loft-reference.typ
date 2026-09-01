@@ -3473,7 +3473,7 @@ A registered keyword is reported exactly as written, so a parser can tell it fro
 
 === String Literals and Comments
 
-`constant\_text()` reads a double-quoted string and decodes the escapes inside it: `\\n` becomes one newline, `\\t` one tab, `\\r` one return, and `\\\\` and `\\"` stand for a single backslash and quote. An escape the lexer does not recognise stands for its own character, so `\\q` is just `q`.
+`constant\_text()` reads a double-quoted string and decodes the escapes inside it: `\\n` becomes one newline, `\\t` one tab, `\\r` one return, and `\\\\` and `\\"` stand for a single backslash and quote, and `\\xNN` is the character with that two-digit hex code — `\\x41` is `A`. An escape the lexer does not recognise stands for its own character, so `\\q` is just `q`, and an `\\x` without two hex digits after it is treated the same way rather than eating what follows.
 
 ```rust
   l.parse_string("Texts", "\"123\" + '4'");

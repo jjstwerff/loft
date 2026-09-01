@@ -343,18 +343,56 @@ pub fn split_token(self: Lexer) -> boolean {
   true
 }
 
+// The value of one hex digit, or -1 when the character is not one.
+fn hex_digit(c: character) -> integer {
+  v = c as integer;
+  if v >= 48 and v <= 57 { v - 48 } else if v >= 97 and v <= 102 {
+    v - 87
+  } else if v >= 65 and v <= 70 { v - 55 } else { -1 }
+}
+#pure
+// The code point of a well-formed `\xNN` whose backslash is at `i`, or -1.
+//
+// One home for the question, because `escaped` and `escape_width` must give the same
+// answer about the SAME escape: if the decoder treats `\xZZ` as a plain unrecognised
+// escape while the width still claims four characters, the two digits after it are
+// swallowed and the text silently loses them.  Both ask this.
+//
+// `as integer` cannot be used to read the digits — loft's text-to-integer parses base
+// ten only, so the previous "0" + "xNN" route answered null for every input and the
+// branch decoded nothing at all (loft#1258).
+fn hex_escape(self: Lexer, i: integer) -> integer {
+  if self.data[i + 1] != 'x' { return -1; }
+  // Both digits have to be inside this token; `self.index - 2` is its last content
+  // character, so a truncated `"\x4"` at the end reads as an ordinary escape rather
+  // than off the end of the literal.
+  if i + 3 > self.index - 2 { return -1; }
+  hi = hex_digit(self.data[i + 2]);
+  lo = hex_digit(self.data[i + 3]);
+  if hi < 0 or lo < 0 { return -1; }
+  hi * 16 + lo
+}
+// How many characters AFTER the backslash this escape consumes.
+fn escape_width(self: Lexer, i: integer) -> integer {
+  if self.hex_escape(i) >= 0 { 3 } else { 1 }
+}
+
 fn escaped(self: Lexer, i: integer) -> character {
   c = self.data[i + 1];
   if c == '"' or c == '\'' or c == '\\' or c == '\n' or c == '{' or c == '}' { c } else if c == 't' {
     '\t'
   } else if c == 'r' { '\r' } else if c == 'n' { '\n' } else if c == 'x' {
-    // ascii token
-    total = "0" + self.data[i + 1..i + 4];
-    nr = total as integer ?? 0;
-    nr as character
+    nr = self.hex_escape(i);
+    // An ill-formed `\xZZ` is an unrecognised escape like any other and stands for
+    // its own character; `escape_width` reads the same answer, so the digits after
+    // it stay in the text instead of being eaten.
+    if nr < 0 { c } else { nr as character }
   } else if c == 'u' {
-    // not implemented yet unicode token
-    0 as character
+    // Unicode escapes are not implemented.  Until they are, `\u` is an unrecognised
+    // escape like any other and stands for its own character — it must not answer NUL,
+    // for the reason spelled out below: the escaped character is stepped over now, so a
+    // NUL would DELETE the `u` and leave its digits as text (`\u0041` read as `0041`).
+    c
   } else {
     // An unrecognised escape stands for the character itself — `\q` is `q`.  It
     // must not answer NUL: the escaped character is skipped now, so a NUL here
@@ -378,7 +416,10 @@ pub fn constant_text(self: Lexer) -> text? {
     if self.data[i..i + 2] == "{{" { result += '{'; skip = 1; } else if self.data[i..i + 2] == "}}" {
       result += '}';
       skip = 1;
-    } else if self.data[i] == '\\' { result += self.escaped(i); skip = 1; } else { result += self.data[i]; }
+    } else if self.data[i] == '\\' {
+      result += self.escaped(i);
+      skip = self.escape_width(i);
+    } else { result += self.data[i]; }
   }
   if self.formatting {
     self.formatting = false;

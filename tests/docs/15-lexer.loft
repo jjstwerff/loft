@@ -54,8 +54,11 @@ fn main() {
   // ## String Literals and Comments
   // `constant_text()` reads a double-quoted string and decodes the escapes
   // inside it: `\n` becomes one newline, `\t` one tab, `\r` one return, and
-  // `\\` and `\"` stand for a single backslash and quote. An escape the lexer
-  // does not recognise stands for its own character, so `\q` is just `q`.
+  // `\\` and `\"` stand for a single backslash and quote, and `\xNN` is the
+  // character with that two-digit hex code — `\x41` is `A`. An escape the lexer
+  // does not recognise stands for its own character, so `\q` is just `q`, and an
+  // `\x` without two hex digits after it is treated the same way rather than
+  // eating what follows.
   l.parse_string("Texts", "\"123\" + '4'");
   assert(l.constant_text() == "123", "Incorrect text literal");
   assert(l.matches("+"), "Incorrect add");
