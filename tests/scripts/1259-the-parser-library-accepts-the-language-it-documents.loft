@@ -25,9 +25,14 @@
 //   @FR-G-Post-Default postfix `?` is a suffix on a PRIMARY, chaining with `.` and `[]`.
 //   @FR-G-Lex-Coal     `??` is lexed by maximal munch, so it is never two `?` tokens.
 //
-// @falsified-at: 7b7a8774 — every `ok_*` cell below fails on that build; the counted
-// answers were index 2, nullable-type 1, `??` 1, format-literal 1, `vector<vector<T>>` 3
-// and `true` 1, against the 0 each asserts here.
+// @falsified-at: 7b7a8774 — interpret exit 1 -> 0, interpret 1 assertion failures -> 0,
+// native exit 1 -> 0, native 1 assertion failures -> 0.  The pre-fix counts behind that
+// first failing cell were index 2, nullable-type 1, `??` 1, format-literal 1,
+// `vector<vector<T>>` 3 and `true` 1, against the 0 each asserts here.
+//
+// Scoring it needed a fix to the instrument: `use <lib>` resolves `lib/` relative to the
+// process CWD, and `falsify.sh` ran both sides from the checkout, so the control read
+// THIS tree's libraries and reported INERT.  Each side now runs in the tree it scores.
 
 use parser;
 

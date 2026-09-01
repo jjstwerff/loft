@@ -156,8 +156,8 @@ is_clean() { # <signature> -> 0 when the run passed
   esac
 }
 
-signature() { # <binary> <guard-path> <extra-args…> ; "exit|asserts|leak|panic|refusals|expect"
-  local bin="$1" file="$2"; shift 2
+signature() { # <binary> <tree> <guard-path> <extra-args…> ; "exit|asserts|leak|panic|refusals|expect"
+  local bin="$1" tree="$2" file="$3"; shift 3
   local out rc
   # `timeout` as well as `LOFT_TIMEOUT`, and the outer one is not redundant: an OLD control
   # running a NEW guard can hang somewhere loft's own watchdog does not reach, and a bulk
@@ -165,7 +165,13 @@ signature() { # <binary> <guard-path> <extra-args…> ; "exit|asserts|leak|panic
   # against a 180 s `LOFT_TIMEOUT`.  A run the outer bound kills scores `exit 124`, which is
   # a difference like any other and says plainly which side could not finish.
   local lim="${LOFT_FALSIFY_TIMEOUT:-180}"
-  out=$(timeout -k 5 "$((lim + 20))" env LOFT_NATIVE_LEAK_CHECK=1 LOFT_TIMEOUT="$lim" \
+  # Run IN the tree being scored, not merely with `--path` pointing at it.  A `use <lib>`
+  # resolves `lib/` relative to the process CWD, so with both sides run from the checkout
+  # the control read THIS tree's libraries and every guard whose subject is a `.loft`
+  # library scored INERT — measured on the loft#1259 parser guard, which fails outright
+  # against the pre-fix `lib/parser.loft` and reported "the control and this tree answer
+  # the same".  A guard is scored against a tree by running it there.
+  out=$(cd "$tree" && timeout -k 5 "$((lim + 20))" env LOFT_NATIVE_LEAK_CHECK=1 LOFT_TIMEOUT="$lim" \
         "$bin" "$@" "$file" 2>&1); rc=$?
   local asserts leak panic refusals
   asserts=$(echo "$out" | grep -c "assertion failed")
@@ -207,8 +213,8 @@ if [ -n "$BULK" ]; then
       # declaration exits 1 — so it is scoreable like any other and the sweep no longer has a
       # blind category.
       entry_modes "$ROOT/$g"
-      c=$(signature "$SHARED/debug/loft" "$ROOT/$g" --path "$wt/" "${MODE_I[@]}")
-      h=$(signature "$HERE" "$ROOT/$g" --path "$ROOT/" "${MODE_I[@]}")
+      c=$(signature "$SHARED/debug/loft" "$wt" "$ROOT/$g" --path "$wt/" "${MODE_I[@]}")
+      h=$(signature "$HERE" "$ROOT" "$ROOT/$g" --path "$ROOT/" "${MODE_I[@]}")
       if ! is_clean "$h"; then
         printf '%s\t%s\there-not-clean\t%s\n' "$g" "$ref" "$h"
       elif [ "$c" = "$h" ]; then
@@ -262,12 +268,12 @@ printf '%-12s %-10s %-46s %s\n' backend tree "exit|asserts|leak|panic|refusals|e
 for pair in "interpret ${MODE_I[*]}" "native ${MODE_N[*]}"; do
   name=${pair%% *}; args=${pair#* }
   # shellcheck disable=SC2086
-  c=$(signature "$CONTROL" "$ROOT/$GUARD" --path "$WT/" $args)
+  c=$(signature "$CONTROL" "$WT" "$ROOT/$GUARD" --path "$WT/" $args)
   # `--path` for BOTH sides: the binary is built into its own target dir and has no
   # `default/` beside it, so without this it cannot load the stdlib and exits 1 — which
   # reads as a difference and would score every guard as falsified for the wrong reason.
   # shellcheck disable=SC2086
-  h=$(signature "$HERE" "$ROOT/$GUARD" --path "$ROOT/" $args)
+  h=$(signature "$HERE" "$ROOT" "$ROOT/$GUARD" --path "$ROOT/" $args)
   # loft#1224 — "clean" means the guard PASSES, and for an annotation-scored file passing is a
   # refusal: it exits 1 and prints the message it declared.  Judging it by exit code alone
   # reported THIS TREE IS NOT CLEAN for a guard that was working exactly as written.  So a file
