@@ -65,9 +65,7 @@ static OVERFLOW_SURFACED: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// `--dev-soft-halt` / `LOFT_DEV_SOFT_HALT=1`, read once per process.
 fn dev_soft_halt() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true")
-    })
+    *FLAG.get_or_init(|| std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true"))
 }
 
 /// Whether a `--dev-soft-halt` run has surfaced an integer overflow, so the run can end
