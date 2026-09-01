@@ -3543,11 +3543,11 @@ Together the 'lexer' and 'parser' libraries are designed as a reusable foundatio
 
 'parse(name, source)' is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.
 
-If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.
+parse() answers how many errors the source contained — '0' for a snippet that parsed cleanly. The diagnostics themselves go to the log as it reads; the count is what a caller can branch on.
 
 === What the parser understands
 
-The parser handles all Loft syntax:
+The parser handles most of Loft's syntax:
 
 - 'struct Name { field: type \[= default\] }' — data containers with named fields
 - 'enum Name { Variant \[{ field: type }\] }' — named choices, each with optional data
@@ -3557,14 +3557,17 @@ The parser handles all Loft syntax:
 - Expressions: binary operators with precedence, function calls, field access,
 
 ```
-index expressions, if/else, for loops, blocks, and formatted string literals
+if/else, for loops, and blocks
 ```
 
 - Type expressions: plain names, generic types like 'vector\<T\>', keyed
 
 ```
-collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
+collections (sorted/hash/index), and integer ranges with
+'integer limit(min, max)' — in parameter, field, and return position
 ```
+
+Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression ('v\[0\]'), the null-coalescing operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept. Tracked as loft\#1259.
 
 ```rust
 use parser;
@@ -3609,7 +3612,7 @@ A body is a sequence of statements; each call below is one.
 
 === Parsing assignments and operators
 
-Every binary operator in the table above is accepted, including assignment.
+Binary operators parse with their normal precedence, and so does assignment.
 
 ```rust
   assert(parser::parse("assign", "fn f() {{ t = 0; t += 1; }}") == 0,

@@ -31,18 +31,19 @@
 </ul>
 <p>Together the <code>lexer</code> and <code>parser</code> libraries are designed as a reusable foundation. You can use them to build entirely new languages: feed the lexer your own token rules, then layer a custom parser on top. This keeps the tokeniser and grammar logic separate from the language runtime so you only bring in what you need.</p>
 <p><code>parse(name, source)</code> is the single entry point. It takes a display name (used in error messages) and a Loft source string. The name does not need to correspond to a real file — it is only used when reporting parse errors.</p>
-<p>If the source is invalid, parse() emits a diagnostic error and the call returns without producing a value.</p>
+<p>parse() answers how many errors the source contained — <code>0</code> for a snippet that parsed cleanly. The diagnostics themselves go to the log as it reads; the count is what a caller can branch on.</p>
 <h2 id="what-the-parser-understands">What the parser understands</h2>
-<p>The parser handles all Loft syntax:</p>
+<p>The parser handles most of Loft's syntax:</p>
 <ul>
 <li><code>struct Name { field: type [= default] }</code> — data containers with named fields</li>
 <li><code>enum Name { Variant [{ field: type }] }</code> — named choices, each with optional data</li>
 <li><code>fn name(params) [-&gt; type] { body }</code> — functions with a block body</li>
 <li><code>fn name(params) [-&gt; type]; #rust "template"</code> — operator templates backed by Rust</li>
 <li><code>use module;</code> — module imports</li>
-<li>Expressions: binary operators with precedence, function calls, field access, index expressions, if/else, for loops, blocks, and formatted string literals</li>
-<li>Type expressions: plain names, generic types like <code>vector&lt;T&gt;</code>, keyed collections (sorted/hash/index), and integer ranges with <code>limit(min, max)</code></li>
+<li>Expressions: binary operators with precedence, function calls, field access, if/else, for loops, and blocks</li>
+<li>Type expressions: plain names, generic types like <code>vector&lt;T&gt;</code>, keyed collections (sorted/hash/index), and integer ranges with <code>integer limit(min, max)</code> — in parameter, field, and return position</li>
 </ul>
+<p>Three constructs it does NOT accept yet, all of them ordinary Loft that the language itself compiles: an index expression (<code>v[0]</code>), the null-coalescing operator (<code>a ?? 0</code>), and a formatted string literal (<code>"v={n}"</code>). A snippet containing one answers a non-zero count even though it is valid, so a validator built on this today will reject input it should accept. Tracked as loft#1259.</p>
 <pre><code><span class="kw">use</span> parser;
 <span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="parsing-a-minimal-function">Parsing a minimal function</h2>
@@ -62,7 +63,7 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"body"</span>, <span class="st">"fn m() {{ println(\"</span>a\<span class="st">"); println(\"</span>b\<span class="st">"); }}"</span>) == <span class="nm">0</span>,
          <span class="st">"a body of several statements parses cleanly"</span>);</code></pre>
 <h2 id="parsing-assignments-and-operators">Parsing assignments and operators</h2>
-<p>Every binary operator in the table above is accepted, including assignment.</p>
+<p>Binary operators parse with their normal precedence, and so does assignment.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(parser::<span class="fn-call">parse</span>(<span class="st">"assign"</span>, <span class="st">"fn f() {{ t = 0; t += 1; }}"</span>) == <span class="nm">0</span>,
          <span class="st">"assignment and compound assignment parse cleanly"</span>);</code></pre>
 <h2 id="parsing-a-for-loop-and-arithmetic">Parsing a for loop and arithmetic</h2>
@@ -113,20 +114,28 @@ if parser::parse("user_code", snippet) &gt; 0 {
 // (used in error messages) and a Loft source string. The name does not need to
 // correspond to a real file — it is only used when reporting parse errors.
 //
-// If the source is invalid, parse() emits a diagnostic error and the call
-// returns without producing a value.
+// parse() answers how many errors the source contained — '0' for a snippet that
+// parsed cleanly. The diagnostics themselves go to the log as it reads; the count
+// is what a caller can branch on.
 // ## What the parser understands
 //
-// The parser handles all Loft syntax:
+// The parser handles most of Loft's syntax:
 // * 'struct Name { field: type [= default] }' — data containers with named fields
 // * 'enum Name { Variant [{ field: type }] }' — named choices, each with optional data
 // * 'fn name(params) [-&gt; type] { body }' — functions with a block body
 // * 'fn name(params) [-&gt; type]; #rust "template"' — operator templates backed by Rust
 // * 'use module;' — module imports
 // * Expressions: binary operators with precedence, function calls, field access,
-//   index expressions, if/else, for loops, blocks, and formatted string literals
+//   if/else, for loops, and blocks
 // * Type expressions: plain names, generic types like 'vector&lt;T&gt;', keyed
-//   collections (sorted/hash/index), and integer ranges with 'limit(min, max)'
+//   collections (sorted/hash/index), and integer ranges with
+//   'integer limit(min, max)' — in parameter, field, and return position
+//
+// Three constructs it does NOT accept yet, all of them ordinary Loft that the
+// language itself compiles: an index expression ('v[0]'), the null-coalescing
+// operator ('a ?? 0'), and a formatted string literal ('"v={n}"'). A snippet
+// containing one answers a non-zero count even though it is valid, so a validator
+// built on this today will reject input it should accept. Tracked as loft#1259.
 use parser;
 fn main() {
   // ## Parsing a minimal function
@@ -148,7 +157,7 @@ fn main() {
   assert(parser::parse("body", "fn m() {{ println(\"a\"); println(\"b\"); }}") == 0,
          "a body of several statements parses cleanly");
   // ## Parsing assignments and operators
-  // Every binary operator in the table above is accepted, including assignment.
+  // Binary operators parse with their normal precedence, and so does assignment.
   assert(parser::parse("assign", "fn f() {{ t = 0; t += 1; }}") == 0,
          "assignment and compound assignment parse cleanly");
   // ## Parsing a for loop and arithmetic
