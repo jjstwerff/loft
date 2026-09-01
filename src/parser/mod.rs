@@ -15274,22 +15274,28 @@ impl Parser {
         }
         written.extend(propagated);
         // A write from inside a CLOSURE lives in the lambda's own definition, so walking this
-        // function's code cannot see it.  The mutated-capture set is already recorded on this
-        // definition (`accumulate_scalars_to_box`, filled as each lambda is parsed), and it is
-        // the same fact under another name: a parameter listed there IS modified.  Without
-        // this the `const` half below contradicted the refusal one line above it —
-        // `fn f(p: const integer) { g = fn() { p += 1; }; }` reported both "Cannot modify
-        // const parameter 'p' from a closure" and "'p' is const but is never modified".
+        // function's code cannot see it.  Two routes reach the same fact and both feed the
+        // `&`-parameter test below, so both are kept: this one reads the mutated-capture set
+        // already recorded on this definition (`accumulate_scalars_to_box`, filled as each
+        // lambda is parsed) and answers by variable INDEX.  Without it the `const` half
+        // contradicted the refusal one line above it — `fn f(p: const integer) { g = fn() {
+        // p += 1; }; }` reported both "Cannot modify const parameter 'p' from a closure" and
+        // "'p' is const but is never modified".
         for name in self.data.def(self.context).scalars_to_box() {
             let v = self.vars.var(name);
             if v != u16::MAX {
                 written.insert(v);
             }
         }
+        // The second route walks the lambda's own code and answers by parameter NAME, which
+        // is what a `&` parameter needs — the lambda is its own definition (loft#1276).
+        let mut lambda_written: HashSet<String> = HashSet::new();
+        lambda_mutated_captures(&code, &self.data, &mut lambda_written);
         for (a_nr, a) in arguments.iter().enumerate() {
             if matches!(a.typedef, Type::RefVar(_))
                 && !a.constant
                 && !written.contains(&(a_nr as u16))
+                && !lambda_written.contains(&a.name)
             {
                 // loft#1003 — point at the `&` itself when the declaration captured it.
                 // The fallback is the variable's source, which for a parameter is a position
@@ -15786,6 +15792,55 @@ fn collect_vars_in(val: &Value, result: &mut HashSet<u16>) {
     }
 }
 
+/// Does this operator WRITE THROUGH its first argument?
+///
+/// One home for a question two walkers used to answer from lists of their own, and the
+/// lists had drifted apart in both directions: `find_written_vars` (which decides whether a
+/// `&` parameter is ever modified) knew `OpNewRecord` and the keyed writes but not the text
+/// ones, while `walk_for_mutations` (which decides which captures a lambda mutates) knew the
+/// text ones and not `OpNewRecord` — so an append to a captured collection, which lowers to
+/// `OpNewRecord` + `OpFinishRecord` through the closure record, was invisible to it.  A `&`
+/// parameter whose only write was that append then read as never modified, and
+/// `fn add(p: &vector<integer>) { g = fn() { p += [9]; }; g(); }` was refused with
+/// *"has & but is never modified"* while the append it makes reaches the caller correctly
+/// (loft#1276).
+///
+/// The list is the UNION, because each side's extras are genuine first-argument writes; the
+/// name is the RAW one (`OpSetInt`, not `SetInt`) so a user function cannot collide with the
+/// `Op` prefix.
+///
+/// ⚠ `OpCopyRecord` is NOT here — it writes through its SECOND argument, and its callers
+/// handle that separately.
+pub(crate) fn op_writes_first_arg(name: &str) -> bool {
+    name.starts_with("OpSet")
+        || name.starts_with("OpAppendStack")
+        || name.starts_with("OpClearStack")
+        || name == "OpNewRecord"
+        || name == "OpAppendCopy"
+        || name == "OpAppendVector"
+        || name == "OpAppendText"
+        || name == "OpAppendCharacter"
+        || name == "OpClearVector"
+        || name == "OpClearText"
+        || name == "OpClearKeyed"
+        // @P320: keyed-remove `coll[key] = null` lowers to `OpHashRemove(coll, …)`
+        // (collections.rs::towards_set_hash_remove), so it mutates its first arg just like
+        // OpSetKeyed / OpClearKeyed.  Without this a `&` param whose only mutation is a
+        // keyed remove was wrongly rejected as "never modified".
+        || name == "OpHashRemove"
+        || name == "OpInsertVector"
+        || name == "OpRemoveVector"
+        // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO return
+        // buffer. Today every emit site also writes that slot another way (a
+        // `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so the
+        // omission is masked INCIDENTALLY rather than by design.
+        || name == "OpReplaceVector"
+        // The second half of an append through a collection the caller owns; it names the
+        // same collection `OpNewRecord` did, and a walker that sees only one of the pair
+        // reads a completed append as half of one.
+        || name == "OpFinishRecord"
+}
+
 /// Recursively walk a Value IR tree and collect all variable indices that are written.
 /// A variable is considered written if:
 /// - It appears as the target of `Value::Set(v, ...)`,
@@ -15814,28 +15869,7 @@ pub(crate) fn find_written_vars(
             // is `OpGetField(Var(c), …)`) correctly marks `c` as written via
             // collect_vars_in.  Previously the OpAppend*/OpClear* family only checked for
             // a bare `Value::Var` arg, missing the field-access shape.
-            let first_arg_write = def.name().starts_with("OpSet")
-                || def.name().starts_with("OpAppendStack")
-                || def.name().starts_with("OpClearStack")
-                || def.name() == "OpNewRecord"
-                || def.name() == "OpAppendCopy"
-                || def.name() == "OpAppendVector"
-                || def.name() == "OpClearVector"
-                || def.name() == "OpClearKeyed"
-                || def.name() == "OpSetKeyed"
-                // @P320: keyed-remove `coll[key] = null` lowers to
-                // `OpHashRemove(coll, …)` (collections.rs::towards_set_hash_remove),
-                // so it mutates its first arg just like OpSetKeyed/OpClearKeyed.
-                // Without this a `&` param whose only mutation is a keyed remove
-                // was wrongly rejected as "never modified".
-                || def.name() == "OpHashRemove"
-                || def.name() == "OpInsertVector"
-                || def.name() == "OpRemoveVector"
-                // Delivers into its FIRST arg (`vector_replace(&r, &other, tp)`) — the NRVO
-                // return buffer. Today every emit site also writes that slot another way
-                // (a `__retbuf = call(…)` Set, or the BlockTail path's `OpClearVector`), so
-                // the omission is masked INCIDENTALLY rather than by design.
-                || def.name() == "OpReplaceVector";
+            let first_arg_write = op_writes_first_arg(def.name());
             // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
             // Used by struct field whole-replacement (`s.i = fresh`) where the
             // destination is `OpGetField(s, …)`.
@@ -15903,6 +15937,61 @@ pub(crate) fn find_written_vars(
             find_written_vars(extra, data, written, callee_cache);
         }
         Value::Span(b) => find_written_vars(&b.1, data, written, callee_cache),
+        _ => {}
+    }
+}
+
+/// The capture NAMES that lambdas defined inside `code` write to.
+///
+/// `find_written_vars` walks one function's own body, and a lambda is a separate
+/// definition — so a parameter whose only write happens inside a closure reads as never
+/// written there.  For a `&` parameter that turns into an assertion that is not merely
+/// unhelpful but false: `fn bump(p: &integer) { g = fn() { p += 1; }; g(); }` was refused
+/// with *"Parameter 'p' has & but is never modified; remove the &"*, and following that
+/// cure turns an out-parameter into a by-value one — so the reader loses the write-back
+/// the signature exists for (loft#1276).
+///
+/// The lambda records what it writes as `Definition::mutated_captures`, by NAME, which is
+/// why this answers in names: the caller matches them against its own parameter names.
+/// Same class as @P320, where a keyed remove was the write `find_written_vars` could not
+/// see; here it is the whole lambda body.
+fn lambda_mutated_captures(code: &Value, data: &Data, names: &mut HashSet<String>) {
+    match code.unspan() {
+        Value::FnRef(d_nr, _, _) if *d_nr >= 0 && (*d_nr as usize) < data.definitions.len() => {
+            for n in data.def(*d_nr as u32).mutated_captures() {
+                names.insert(n.clone());
+            }
+        }
+        Value::Call(_, args) => {
+            for a in args {
+                lambda_mutated_captures(a, data, names);
+            }
+        }
+        Value::Block(block) | Value::Loop(block) => {
+            for item in &block.operators {
+                lambda_mutated_captures(item, data, names);
+            }
+        }
+        Value::Insert(list) | Value::Tuple(list) | Value::Parallel(list) => {
+            for item in list {
+                lambda_mutated_captures(item, data, names);
+            }
+        }
+        Value::If(cond, then, els) => {
+            lambda_mutated_captures(cond, data, names);
+            lambda_mutated_captures(then, data, names);
+            lambda_mutated_captures(els, data, names);
+        }
+        Value::Set(_, v)
+        | Value::Return(v)
+        | Value::Drop(v)
+        | Value::Yield(v)
+        | Value::TuplePut(_, _, v) => lambda_mutated_captures(v, data, names),
+        Value::Iter(_, create, next, extra) => {
+            lambda_mutated_captures(create, data, names);
+            lambda_mutated_captures(next, data, names);
+            lambda_mutated_captures(extra, data, names);
+        }
         _ => {}
     }
 }
