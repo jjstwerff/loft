@@ -178,7 +178,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/18-locks.loft` | 2026-09-01 | `d50be135` |
 | `tests/docs/19-threading.loft` | 2026-09-01 | `8af9f8e1` |
 | `tests/docs/20-logging.loft` | 2026-09-01 | `a61fde12` |
-| `tests/docs/22-time.loft` | 2026-09-01 | `2bf8f3eb` |
+| `tests/docs/22-time.loft` | 2026-09-01 | `ded1a65b` |
 
 ## See also
 
