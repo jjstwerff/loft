@@ -4996,6 +4996,22 @@ use a separate collection or add after the loop"
     ///
     /// Restoring on the way out confines each nesting level to its own answer: the inner
     /// parse cannot leak one outward, and cannot destroy the one already standing.
+    /// Does this type carry a `text` anywhere inside a tuple — at the top level or through
+    /// a NESTED tuple member?
+    ///
+    /// The question is about TRANSPORT, not about the top-level shape: a tuple argument is
+    /// passed with borrowed text elements however deeply they sit, so `((integer, text), …)`
+    /// needs the owning promotion exactly as `(integer, text)` does (loft#1278, and the same
+    /// one-level-in fact loft#1005 had to learn on the read side).
+    fn tuple_carries_text(tp: &Type) -> bool {
+        match tp.base() {
+            Type::Tuple(members) => members
+                .iter()
+                .any(|m| matches!(m.base(), Type::Text(_)) || Self::tuple_carries_text(m)),
+            _ => false,
+        }
+    }
+
     /// Does `hay` WRITE INTO `needle` — is there a mutating call in its tree whose target
     /// (first argument) is that exact place?
     ///
@@ -5373,6 +5389,45 @@ use a separate collection or add after the loop"
             self.expression(&mut rhs);
             if let Some(prev) = saved_expected {
                 self.expected = prev;
+            }
+            // loft#1278 — a by-value tuple PARAMETER carrying text is promoted to an owned
+            // shadow local the first time an element is written, which is the same move a
+            // plain `text` argument already makes (`__tp_<name>`, seeded at function entry).
+            //
+            // A tuple ARGUMENT is passed BORROWED — `--native` lowers it with `&str`
+            // elements, the argument-passing representation TUPLES.md describes — and
+            // nothing gave the callee an owned element when it wrote to one.  A literal
+            // write tried to store a `String` into that `&str` slot (E0308) and a variable
+            // write was refused by borrowck for the same reason, while `--interpret` gave
+            // the copy semantics the reference promises.  Reading was fine, the integer
+            // element was fine, and a tuple LOCAL was fine: the write to a text element
+            // THROUGH the parameter is the whole of it.
+            //
+            // The promotion is what makes the two backends agree, and it agrees with the
+            // documented meaning rather than papering over it: `(F-ParamScalar)` gives a
+            // value parameter its own copy, so writing the callee's copy is exactly right
+            // and the caller's tuple is untouched either way.
+            let mut lhs = lhs;
+            if self.first_pass
+                && self.vars.is_argument(lhs.root)
+                && Self::tuple_carries_text(self.vars.tp(lhs.root))
+            {
+                let name = self.vars.name(lhs.root).to_string();
+                let tp = self.vars.tp(lhs.root).clone();
+                let shadow = self
+                    .vars
+                    .add_variable(&format!("__tp_{name}"), &tp, &mut self.lexer);
+                self.vars.set_promoted_from(shadow, lhs.root);
+                // The promoted local inherits the const axis, so the const guard still
+                // fires on it — the same pairing the text promotion keeps (@PLN40).
+                if self.vars.is_value_const(lhs.root) {
+                    self.vars.set_value_const(shadow);
+                }
+                if self.vars.is_const_binding(lhs.root) {
+                    self.vars.set_const_binding(shadow);
+                }
+                self.vars.remap_name(&name, shadow);
+                lhs.root = shadow;
             }
             *code = build_nested_tuple_assign(code, &lhs, rhs);
             return Type::Void;
