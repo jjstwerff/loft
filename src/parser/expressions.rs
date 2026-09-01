@@ -1915,13 +1915,25 @@ use a separate collection or add after the loop"
     /// known at emit time, so the parser names them exactly as the clear does, while the
     /// per-RECORD loop lives inside the op, where the records exist. Naming the members here
     /// and looping there is the split loft#898 already made for the clear.
-    fn keyed_sibling_view_fills(&mut self, to: &Value, parent_tp: &Type) -> Vec<Value> {
+    /// `skip` names byte offsets that must NOT be indexed: members a struct LITERAL fills
+    /// itself, which own their records and re-index nothing (loft#1266).  A statement-level
+    /// caller writes ONE member and passes an empty set — the question cannot arise there,
+    /// because only a constructor writes several members of one group at once.
+    pub(crate) fn keyed_sibling_view_fills(
+        &mut self,
+        to: &Value,
+        parent_tp: &Type,
+        skip: &std::collections::HashSet<u16>,
+    ) -> Vec<Value> {
         let Some((struct_tp, byte_off)) = self.field_site(to, parent_tp) else {
             return Vec::new();
         };
         let members = self.database.keyed_group_members(struct_tp, byte_off);
         let mut ops = Vec::new();
         for (off, coll_tp, _is_view) in members {
+            if skip.contains(&off) {
+                continue;
+            }
             // ⚠ Every OTHER member, not only the views — the filter the RESET beside this
             // one uses answers a different question. A reset may touch only views, because
             // a view owns nothing and the primary's records are released once, by the
@@ -1973,7 +1985,8 @@ use a separate collection or add after the loop"
         if !wrote {
             return;
         }
-        let fills = self.keyed_sibling_view_fills(to, parent_tp);
+        let fills =
+            self.keyed_sibling_view_fills(to, parent_tp, &std::collections::HashSet::new());
         if fills.is_empty() {
             return;
         }
