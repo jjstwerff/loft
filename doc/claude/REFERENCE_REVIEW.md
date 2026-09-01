@@ -389,7 +389,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/27-coroutines.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
-| `tests/docs/30-formatting.loft` | 2026-09-01 | `5792ff53` |
+| `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
 
 ## See also
 
