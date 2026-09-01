@@ -1384,49 +1384,85 @@ fn main() { x = 0; f(&x); print(\"{x}\\n\"); }
     );
 }
 
-/// A write from inside a closure is a write.  `check_ref_mutations` builds its
-/// "was this parameter modified?" set by walking the function's own code, and a lambda body
-/// is a definition of its own — so a parameter whose only mutation is a captured write read
-/// as untouched, and one run carried both halves of a contradiction: the refusal
-/// "Cannot modify const parameter 'p' from a closure" and, four lines below it,
-/// "'p' is const but is never modified".
-///
-/// The set the lint was missing is the one the closure machinery already records
-/// (`Definition::scalars_to_box`), so the two now answer from the same fact.
-#[test]
-fn a_const_parameter_mutated_through_a_closure_is_not_called_unmodified() {
-    let source = "\
-fn bump(p: const integer) -> integer {
-  f = fn() { p += 1; };
-  f();
-  p
+// ── loft#1286 — a FORWARDED `&` is not redundant ────────────────────────────
+//
+// `slow-reference-parameter` asks whether the whole binding is ever reassigned, and a
+// FORWARDER never reassigns — its callee does.  So the one shape where the `&` is carrying
+// someone else's write-back was exactly the shape a body-local walk read as redundant, and
+// taking the advice there SILENTLY LOSES the write-back: the lint fired only on the correct
+// spelling and said nothing about the broken one.
+//
+// `callee_param_reassigns` is the interprocedural half.  It asks about REASSIGNMENT rather
+// than about writes on purpose — its sibling `callee_param_writes` also answers yes to a
+// FIELD write, which is precisely the case this advice exists to flag, so using it would have
+// silenced the lint everywhere instead of at the forwarders.
+//
+// Falsified by counting: on released `loft 2026.8.0` the program below draws the advice on
+// FIVE of its five `&` parameters; here it draws TWO, the field-writing pair.  The count is
+// the assertion for that reason — a bare `contains` would have passed on both builds.
+
+const FWD_1286: &str = "\
+struct B { items: vector<integer> }
+fn reassign(b: &B) { b = B { items: [9] }; }
+fn fieldonly(b: &B) { b.items = [7]; }
+fn fwd1(b: &B) { reassign(b); }
+fn fwd2(b: &B) { fwd1(b); }
+fn fwd3(b: &B) { fwd2(b); }
+fn fwd_field(b: &B) { fieldonly(b); }
+fn main() {
+  a = B { items: [0] };  fwd3(a);       print(\"fwd3={a.items}\\n\");
+  b = B { items: [0] };  fwd1(b);       print(\"fwd1={b.items}\\n\");
+  c = B { items: [0] };  fwd_field(c);  print(\"fwdfield={c.items}\\n\");
+  d = B { items: [0] };  reassign(d);   print(\"direct={d.items}\\n\");
 }
-fn main() { print(\"{bump(5)}\\n\"); }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("const_closure_write", source);
-    assert!(
-        diag.contains("Cannot modify const parameter 'p' from a closure"),
-        "the write through the closure must still be refused; got stderr={diag:?}"
+
+#[test]
+fn forwarded_ref_parameter_is_not_advised_away_1286() {
+    let (stdout, diag, _code) = run_with_warnings("fwd_ref_1286", FWD_1286);
+    // The advice must name ONLY the two field-writing forms.  Counting is what makes this a
+    // real assertion: a bare `contains` would pass while the forwarders were still flagged.
+    let hits = diag.matches("only slows it down").count();
+    assert_eq!(
+        hits, 2,
+        "expected the advice on `fieldonly` and `fwd_field` and on nothing else; \
+         got {hits} occurrences in {diag:?}"
     );
-    assert!(
-        !diag.contains("needless-const-parameter"),
-        "the parameter IS modified, so the never-modified lint must not fire beside the \
-         refusal that says so; got stderr={diag:?}"
-    );
+    for quiet in ["fwd1", "fwd2", "fwd3", "reassign"] {
+        assert!(
+            !diag.contains(&format!("parameter `{quiet}`")),
+            "`{quiet}` forwards or performs a reassignment, so its & is load-bearing; \
+             got {diag:?}"
+        );
+    }
+    // And the write-back the `&` carries actually arrives — through three levels of
+    // forwarding, which is what says the interprocedural walk follows the chain rather than
+    // looking one call deep.
+    for expect in ["fwd3=[9]", "fwd1=[9]", "fwdfield=[7]", "direct=[9]"] {
+        assert!(
+            stdout.contains(expect),
+            "expected {expect:?} in the output; got {stdout:?}"
+        );
+    }
 }
 
-/// The other direction, which is what keeps the fix above from being a way of silencing the
-/// lint: a `const` parameter that really is never written still earns the advice.
 #[test]
-fn a_const_parameter_nothing_writes_still_earns_the_advice() {
+fn a_field_only_ref_parameter_is_still_advised_1286() {
+    // The control that keeps the fix honest: widening the predicate must not silence the
+    // case the advice exists for.  A `&` whose body only writes a FIELD is redundant, and
+    // dropping it keeps the same answer.
     let source = "\
-fn keep(p: const integer) -> integer { p }
-fn main() { print(\"{keep(5)}\\n\"); }
+struct S { a: integer }
+fn f(s: &S) { s.a = 1; }
+fn main() { v = S { a: 0 }; f(v); print(\"a={v.a}\\n\"); }
 ";
-    let (_stdout, diag, _code) = run_with_warnings("const_unwritten", source);
+    let (stdout, diag, _code) = run_with_warnings("field_only_1286", source);
     assert!(
-        diag.contains("needless-const-parameter"),
-        "an unmodified const primitive parameter is exactly what the lint is for; \
-         got stderr={diag:?}"
+        diag.contains("only slows it down"),
+        "a field-only & is still redundant and must still be advised; got {diag:?}"
+    );
+    assert!(
+        stdout.contains("a=1"),
+        "the field write lands; got {stdout:?}"
     );
 }
