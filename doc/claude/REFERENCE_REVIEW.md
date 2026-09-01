@@ -641,7 +641,7 @@ whose entry list changed has.
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
-| `tests/docs/37-projects.loft` | 2026-09-02 | `72e19cbf` |
+| `tests/docs/37-projects.loft` | 2026-09-02 | `7488943a` |
 
 ## See also
 
