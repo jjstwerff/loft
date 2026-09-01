@@ -182,10 +182,30 @@ The rule wants splitting rather than weakening, and the split is decidable from 
                size(S?) > size(S).  Absence is discriminant 0.  Every writer and reader of such
                a slot goes through the tag; the pair that holds this is
                `Parser::emit_nullable_slot_write` / `emit_nullable_slot_read`.
+  (L-Null-Text) `text` reserves TWO spellings of absence and they are ONE value: an UNSET
+               handle (str_rec 0 — the `nullref` above) and an ALLOCATED record holding the
+               `STRING_NULL` (`"\0"`) bytes.  A reader tests the CONTENT, never the handle
+               alone: `get_str` maps an unset or out-of-range handle onto `STRING_NULL` too,
+               so the content test is TOTAL and subsumes the handle test.  An allocated `""`
+               is a present value, not an absence (@P375).  One home: `Store::text_is_null`.
 ```
 
-Neither half is a new decision — both are what the code has shipped since @PLN25 — so this
-records the boundary rather than moving it. The falsifier below covers `(L-Null)`; `(L-Null-Tag)`
+`(L-Null-Text)` is the same kind of record for the one scalar whose sentinel is not a bit
+pattern in its own slot.  A text slot holds a HANDLE, and absence is spelled twice because the
+two writers spell it differently: a never-written slot keeps the zero handle a fresh record
+starts with, while writing `null` — from a literal, an assignment, a call, or any native text
+path — allocates a record holding the sentinel bytes.  Neither writer is wrong; what is wrong is
+a reader that knows only one.  Measured (loft#1270): `Stores::is_null` tested the handle alone
+and is the predicate deciding whether a struct field is OMITTED, so `NT { a: 1, t: null }`
+serialised `{"a":1,"t":null}` while the same value parsed back serialised `{"a":1}` — one value,
+two documents, and a document that is hashed, signed or diffed changed for a value that did not.
+The render arm applied the content test only under `json`/`loft`, so the plain form put the
+sentinel on the wire AS TEXT: `"{x}"` answered `{a:1,t:"\0"}`, a present one-character string
+where the program meant nothing.  `native.rs` had carried the total test for its own reader since
+loft#769 — the rule was discoverable in the code and simply not written down here.
+
+Neither half of the tag split is a new decision — both are what the code has shipped since
+@PLN25 — so this records the boundary rather than moving it. The falsifier below covers `(L-Null)`; `(L-Null-Tag)`
 is covered behaviourally by
 `tests/scripts/1134-a-nullable-tuple-element-is-stored-behind-its-tag.loft`, whose zero-valued
 first field is the cell that a size-and-offset golden cannot see — the same blind spot the ⚠
@@ -239,6 +259,12 @@ falsifier ([@PLN97](../plans/97-layout-contract/README.md)):
   backend. (D-op-1's differential falsifier applies here as elsewhere.)
 - **`L-Null`** — the golden renders a nullable and a not-null field identically (same size, same
   offsets); nullability lives in the schema, not the hash.
+- **`L-Null-Text`** — `tests/scripts/1270-an-absent-text-is-one-absence.loft`, on both backends:
+  every way of SAYING absent (literal `null`, an omitted field, an assignment, a call, a parse)
+  writes ONE document and round-trips to itself, while an allocated `""` stays a present value.
+  The `""` cells are the control — a fix reading "no characters" as absence passes every null
+  cell and fails those.  A layout golden cannot see this rule at all: both spellings occupy the
+  same four bytes, so what differs is the VALUE in them.
 
   ⚠ **That falsifier covers the first half of the rule only, and the second half broke under
   it (2026-08-22).** `L-Null` says two things: a nullable field has the same BYTES as its

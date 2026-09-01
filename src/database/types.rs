@@ -2428,11 +2428,12 @@ impl Stores {
                 3 => store.get_float(rec, pos).is_nan(),
                 4 => store.get_byte(rec, pos, 0) > 1,
                 5 => {
-                    // @P375: only an UNSET text (str_rec 0) is null; an allocated
-                    // empty string "" is a present value and must serialise as ""
-                    // (was: `|| is_empty()`, which dropped "" from `{x:j}` output
-                    // and broke the save→load round-trip).
-                    store.get_u32_raw(rec, pos) == 0
+                    // @FR-L-Null-Text — text nullity is CONTENT-based, and `Store::text_is_null`
+                    // is its one home: an unset handle and an allocated `STRING_NULL` record are
+                    // one absence, so a field written `t: null` is omitted exactly where a parsed
+                    // absent one is.  @P375 still holds inside it — an allocated `""` is a present
+                    // value and must serialise as `""`.
+                    store.text_is_null(rec, pos)
                 }
                 _ => false,
             }

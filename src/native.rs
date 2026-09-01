@@ -2987,13 +2987,12 @@ fn reflect_field_at(
                 (i64::from(v), 0.0, 0, v == 0)
             }
             Some(LayoutNode::Base(BaseKind::Text)) => {
-                // **text-null is CONTENT-based**: a null `text` is a string
-                // record holding the `STRING_NULL` ("\0") bytes, not a 0
-                // pointer. Testing the pointer alone reads a null as the empty
-                // string — and telling `null` from `""` is the distinction this
-                // whole reading exists for, so the content is what decides.
+                // @FR-L-Null-Text — text-null is CONTENT-based, and `Store::text_is_null`
+                // is its one home (an unset handle and an allocated `STRING_NULL` record are
+                // one absence).  Testing the pointer alone reads a null as the empty string,
+                // and telling `null` from `""` is the distinction this reading exists for.
                 let r = store.get_u32_raw(value.rec, at);
-                let null = r == 0 || store.get_str(r) == crate::state::STRING_NULL;
+                let null = store.text_is_null(value.rec, at);
                 (0, 0.0, if null { 0 } else { r }, null)
             }
             // A narrow integer reports `IntegerKind`, so its width and its null
