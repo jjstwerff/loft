@@ -666,7 +666,7 @@ whose entry list changed has.
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
 | `tests/docs/37-projects.loft` | 2026-09-02 | `7488943a` |
-| `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `b63abea6` |
+| `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `57853cbc` |
 
 ## See also
 
