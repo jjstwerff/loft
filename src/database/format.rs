@@ -1160,27 +1160,26 @@ impl ShowDb<'_> {
             });
         } else if self.known_type == 5 {
             let text_nr = self.store().get_u32_raw(self.rec, self.pos);
-            if text_nr == 0 || text_nr >= self.store().capacity_words() {
+            if text_nr != 0 && text_nr >= self.store().capacity_words() {
+                // A handle pointing OUTSIDE the store is corruption, not absence — the two
+                // must not render alike, or a broken store reads as an empty field.  JSON and
+                // loft have no spelling for "corrupt", so they still say `null`.
                 if self.json || self.loft {
-                    // Null text renders as `null` in JSON and in loft (loft has a
-                    // `null` literal) — a re-parseable absence, not the `<bad-text>`
-                    // debug tag.
                     s.push_str("null");
                 } else {
                     write!(s, "<bad-text:{text_nr}>").unwrap();
                 }
+            } else if self.store().text_is_null(self.rec, self.pos) {
+                // @FR-F-Render — a null text renders as the word `null` in EVERY mode, and
+                // @FR-L-Null-Text says which slots are null: an unset handle and an allocated
+                // `STRING_NULL` record alike.  Rendering the sentinel raw put a NUL byte on
+                // the wire (`{a:1,t:"\0"}`), a present, corrupt value where the program meant
+                // nothing; in JSON and loft it also keeps SQL NULL distinct from `''` across a
+                // round trip rather than collapsing both to a string.
+                s.push_str("null");
             } else {
                 let text_val = self.store().get_str(text_nr);
-                if text_val == crate::state::STRING_NULL && (self.json || self.loft) {
-                    // loft#769 — an ABSENT `text?` is stored as the sentinel string
-                    // `"\0"`, not as a null pointer, so it reached the escaper and
-                    // came back as the one-character string holding a NUL: a present,
-                    // corrupt value where the program meant nothing. It is the same
-                    // absence the null-pointer branch above renders, so it renders
-                    // the same way — which is what keeps SQL NULL distinct from `''`
-                    // across a round trip rather than collapsing both to a string.
-                    s.push_str("null");
-                } else if self.json || self.loft {
+                if self.json || self.loft {
                     // loft string literals accept the same escapes as JSON
                     // (`\"`, `\n`, `\\`, …), so the JSON escaper produces a
                     // re-parseable loft text literal too.

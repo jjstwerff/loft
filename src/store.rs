@@ -3209,6 +3209,30 @@ impl Store {
         }
     }
 
+    /// True when the `text` slot at `(rec, pos)` holds NULL.
+    ///
+    /// @FR-L-Null-Text — an absent text has TWO byte-level spellings and they are one
+    /// absence: an **unset handle** (str_rec 0, the `nullref` sentinel `(L-Null)` names)
+    /// and an **allocated record holding the `STRING_NULL` (`"\0"`) bytes**, which is what
+    /// a written `null` and every native text-null produce.  Testing the handle alone reads
+    /// the second spelling as a present, one-character string — and telling `null` from `""`
+    /// is the distinction the whole reading exists for.
+    ///
+    /// The CONTENT test is the total one: [`Store::get_str`] maps an unset or out-of-range
+    /// handle onto `STRING_NULL` too, so it subsumes the pointer test rather than sitting
+    /// beside it.  This is the one home every reader asks — `Stores::is_null` (which decides
+    /// whether a struct field is omitted), the format walk (which decides how it renders) and
+    /// the native reader — so a render and an omission cannot disagree about whether a value
+    /// is there.
+    ///
+    /// An empty string is NOT null: `""` is an allocated record whose content is `""`, a
+    /// present value that must survive a save→load round trip (@P375).
+    #[inline]
+    #[must_use]
+    pub fn text_is_null(&self, rec: u32, pos: u32) -> bool {
+        self.get_str(self.get_u32_raw(rec, pos)) == crate::state::STRING_NULL
+    }
+
     #[inline]
     pub fn get_str<'a>(&self, rec: u32) -> &'a str {
         if rec == 0 || rec > i32::MAX as u32 {
