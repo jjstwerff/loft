@@ -1069,8 +1069,7 @@
 </section>
 <section class="print-section" id="11-index">
 <h1>Index</h1>
-<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending.</p>
-<p>Two keyed collections over the SAME element type are two ROUTES to one set of records, not two collections. Give records to either one and both see them; write through one and the other reads the change; remove through one and it is gone from both. That is the point of declaring a second one — a second way in, by a different key — and loft says so if a literal fills both (<code>linked-group-double-fill</code>), because then one record set ends up holding everything they were given.</p>
+<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending. Note: each record can only belong to one index at a time.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
   nr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
@@ -1095,12 +1094,6 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"Key lookup"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">12</span>, <span class="st">""</span>], <span class="st">"Missing key returns null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">83</span>, <span class="st">"One"</span>], <span class="st">"Wrong secondary key returns null"</span>);</code></pre>
-<p>Fewer fields than the key has: every record sharing that prefix.</p>
-<pre><code>  prefix_sum = <span class="nm">0</span>;
-  <span class="kw">for</span> r <span class="kw">in</span> db.map[<span class="nm">83</span>] {
-    prefix_sum += r.value
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(prefix_sum == <span class="nm">12</span>, <span class="st">"the three nr=83 records: {prefix_sum}"</span>);</code></pre>
 <h2 id="iterating-in-order">Iterating in Order</h2>
 <p>A <code>for</code> loop visits all elements in key order.</p>
 <pre><code>  total = <span class="nm">0</span>;
@@ -3895,9 +3888,10 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   NotFound,
   PermissionDenied,
   IsDirectory,
+  NotEmpty,
   Other,
 }</code></pre>
-<p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
+<p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), NotEmpty when rmdir() is given a directory that still holds entries, and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
@@ -3955,6 +3949,10 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn mkdir_all(path: text) -&gt; FileResult fs#update</code></pre>
+</div>
+<div class="item">
+<pre><code>pub fn rmdir(path: text) -&gt; FileResult fs#update</code></pre>
+<p>Remove the EMPTY directory `path`.  Returns FileResult.NotEmpty when it still holds entries, NotFound when it does not exist, and Other when `path` is a file rather than a directory. Empty directories only: a recursive removal is a separate decision, and the walk is writable here — list_dir() the children, delete() the files, rmdir() the directory, deepest first. Use to undo a mkdir(), or to clean up a scratch directory a program made.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_dir(path: text) -&gt; boolean fs#read</code></pre>

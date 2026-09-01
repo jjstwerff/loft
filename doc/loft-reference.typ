@@ -2935,9 +2935,7 @@ filling and finding values
 
 = Index
 
-An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
-
-Two keyed collections over the SAME element type are two ROUTES to one set of records, not two collections. Give records to either one and both see them; write through one and the other reads the change; remove through one and it is gone from both. That is the point of declaring a second one — a second way in, by a different key — and loft says so if a literal fills both ('linked-group-double-fill'), because then one record set ends up holding everything they were given.
+An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending. Note: each record can only belong to one index at a time.
 
 ```rust
 struct Elm {
@@ -2980,16 +2978,6 @@ Provide all key fields together inside brackets to find a record. Supply fewer f
   assert(db.map[101, "One"].value == 1, "Key lookup");
   assert(!db.map[12, ""], "Missing key returns null");
   assert(!db.map[83, "One"], "Wrong secondary key returns null");
-```
-
-Fewer fields than the key has: every record sharing that prefix.
-
-```rust
-  prefix_sum = 0;
-  for r in db.map[83] {
-    prefix_sum += r.value
-  }
-  assert(prefix_sum == 12, "the three nr=83 records: {prefix_sum}");
 ```
 
 === Iterating in Order
@@ -7426,11 +7414,12 @@ pub enum FileResult {
   NotFound,
   PermissionDenied,
   IsDirectory,
+  NotEmpty,
   Other,
 }
 ```
 
-Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)
+Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), NotEmpty when rmdir() is given a directory that still holds entries, and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)
 
 ```rust
 pub fn ok(self: FileResult) -> boolean
@@ -7505,6 +7494,12 @@ pub fn mkdir(path: text) -> FileResult fs#update
 ```rust
 pub fn mkdir_all(path: text) -> FileResult fs#update
 ```
+
+```rust
+pub fn rmdir(path: text) -> FileResult fs#update
+```
+
+Remove the EMPTY directory `path`.  Returns FileResult.NotEmpty when it still holds entries, NotFound when it does not exist, and Other when `path` is a file rather than a directory. Empty directories only: a recursive removal is a separate decision, and the walk is writable here — list\_dir() the children, delete() the files, rmdir() the directory, deepest first. Use to undo a mkdir(), or to clean up a scratch directory a program made.
 
 ```rust
 pub fn is_dir(path: text) -> boolean fs#read

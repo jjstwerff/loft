@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 356 | 332 | **24** |
+| 358 | 334 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 668 | 316 | 5 | **347** |
+| 670 | 318 | 5 | **347** |
 
 loft#1245 added `use_analysis::callref_captures` on the seeing-through side (the opaque
 column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function` through

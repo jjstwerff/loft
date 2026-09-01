@@ -168,6 +168,7 @@ const SEARCH_INDEX=[
 {name:"move",kind:"fn",url:"stdlib-file-system.html"},
 {name:"mkdir",kind:"fn",url:"stdlib-file-system.html"},
 {name:"mkdir_all",kind:"fn",url:"stdlib-file-system.html"},
+{name:"rmdir",kind:"fn",url:"stdlib-file-system.html"},
 {name:"is_dir",kind:"fn",url:"stdlib-file-system.html"},
 {name:"is_file",kind:"fn",url:"stdlib-file-system.html"},
 {name:"list_dir",kind:"fn",url:"stdlib-file-system.html"},
