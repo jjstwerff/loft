@@ -2878,6 +2878,13 @@ fails. `clippy::doc_lazy_continuation` catches only the sub-case where the stole
 list item. **When inserting a function, put it after the previous item's `}` and before the next
 item's doc — not before the doc you happen to be reading.**
 
+⚠ **`FAIL/1` on a guard the suite runs green was the READER of that column, not the guard.** The
+suite pluralises its own noun — "1 expected error", "6 expected errors" — and the pattern that
+scraped the count matched only the plural, so every guard declaring exactly ONE expectation
+scored `FAIL/1` on both trees while passing. Twenty-four of the corpus's guards declare exactly
+one. Fixed 2026-09-01; the lesson generalises past the regex, because the column a reviewer
+consults to find out whether a guard is live is the last place an unread failure can hide.
+
 **A boolean prints `false` for every byte that is not `1`.** So a garbage `u8` in a boolean
 slot renders exactly like the right answer, `!b` reads `true` for it, and only `b == false`
 separates them — the two spellings a reader reaches for first are the two that hide it.

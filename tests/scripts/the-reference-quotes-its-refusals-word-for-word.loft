@@ -28,12 +28,11 @@
 //   Breaking the assertion in the one RUNNING cell fails it too, so the file is not passing on
 //   its refusals alone.  Restoring each returns the suite to green.
 //
-// ⚠ `make falsify` reports `expect 1/6` on this file, and that is the TOOL's view rather than
-//   a hole in the guard.  It runs `loft` directly, and a direct run stops at the first error;
-//   the suite peels the refusing cell and re-parses to collect the union of every round
-//   (loft#1242).  So the column counts one round, not the file.  Read `1/6` here as "falsify
-//   saw the first of six", never as "four are unmatched" — the six-way control above is what
-//   answers that question.
+// `make falsify` reads `expect 6/6` and INERT on both backends, which is the right answer for
+//   a lock: every cell matched, and a file that refuses on every build cannot move against a
+//   control.  It used to read `1/6` — the tool ran `loft` directly, and a direct run stops at
+//   the first error while the suite peels the refusing cell and re-parses for the union of
+//   every round (loft#1242).  Since loft#1253 it asks the suite instead.
 
 struct RQ { n: integer }
 

@@ -138,7 +138,12 @@ expect_channel() { # <guard-path> <output> -> "<matched>/<declared>" | "FAIL/<de
   local file="$1" out="$2" declared matched
   declared=$(sed -n 's/.*@EXPECT_\(ERROR\|FAIL\)://p' "$file" | grep -c .)
   [ "$declared" -eq 0 ] && { echo "-"; return; }
-  matched=$(echo "$out" | sed -n 's/.*(\([0-9]\{1,\}\) expected errors:.*/\1/p' | head -1)
+  # `error` / `errors` — the suite pluralises the noun, so a guard declaring exactly ONE
+  # expectation prints "1 expected error:" and a plural-only pattern never matched it.  Every
+  # single-cell guard therefore scored `FAIL/1` on both trees while the suite ran it green: a
+  # column that reads as an unmatched declaration, in the one place a reviewer looks to find
+  # out whether the guard is live.  24 of the corpus's guards declare exactly one.
+  matched=$(echo "$out" | sed -n 's/.*(\([0-9]\{1,\}\) expected errors\{0,1\}:.*/\1/p' | head -1)
   if [ -n "$matched" ]; then echo "$matched/$declared"; else echo "FAIL/$declared"; fi
 }
 
