@@ -156,6 +156,21 @@ whole-value assignment, the parameter must be declared `&T` ([binding.md](bindin
 the one explicit channel. (Verified: `e.h=99` in a callee ⇒ caller sees `99`; `n=n+1` on a scalar
 ⇒ caller unchanged; `v=[9,9]` on a plain vector param ⇒ caller unchanged.)
 
+**A rebind need not be WRITTEN in the body it is local to.** `(F-ParamRebind)` is about the
+binding, not about the spelling: a plain heap parameter handed to a `&` parameter is rebound by
+the CALLEE's write-back, and the rule reads the same — the caller two frames up keeps its value,
+and the frame the write-back landed in sees the fresh one for the rest of its body.
+
+    fn replace(b: &B)      { b = B { items: [9, 9] }; }
+    fn forward(b: B)       { replace(b); }              // b rebinds LOCALLY
+    fn main() { a = B { items: [1,2,3] }; forward(a); }  // a is still [1,2,3]
+
+That is also where the fresh store's owner is: `ownership.md` `(O-Latest)` puts ownership on the
+LATEST assignment to a binding, and the write-back IS one. Both halves were missing — the store
+the binding stopped naming was released by the callee, which cannot see that a plain heap
+parameter's store belongs to a frame below it, and the fresh one was owned by nobody (loft#1287,
+`heap.md` H-Free's `free_protected` side condition).
+
 **A PARAMETER is not a BIND, and reading one as the other is what put the opposite claim into two
 shipped documents.** `binding.md` `(B-Copy)` says a plain bind COPIES — `c = b; c += [4]` leaves
 `b` at its old length — and a SLICE is a fresh vector for the same reason, so `w = a[1..4];

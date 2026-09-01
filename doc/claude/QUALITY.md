@@ -479,7 +479,7 @@ rely on the unwrapped shape."* That turns a vague worry into a checkable predica
 
 | sites discriminating on 2+ specific `Value` variants | peel `Span` | neither |
 |---:|---:|---:|
-| 362 | 338 | **24** |
+| 363 | 339 | **24** |
 
 `scripts/ir_walker_audit.py unspan` re-measures it, and
 `doc_hygiene::quality_unspan_table_matches_the_audit` fails if this row and the tool disagree.
@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 673 | 321 | 5 | **347** |
+| 674 | 321 | 5 | **348** |
 
 loft#1286 added `parser::operators::passes_to_ref_parameter` on the OPAQUE side: it asks
 whether a callee's parameter `i` is a `&` by matching `Type::RefVar(Type::Reference(..))`

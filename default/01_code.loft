@@ -859,7 +859,7 @@ fn OpFreeRefTag(v1: reference, tag: const u16);
 // release it; fresh-store (callee allocated its own and ignored the
 // placeholder) frees the orphan.
 fn OpFreeRefIfDistinct(placeholder: reference, witness: reference);
-#rust"if @placeholder.store_nr != @witness.store_nr {{ s.database.free(&@placeholder); }}"
+#rust"s.database.free_displaced(&@placeholder, &@witness);"
 // `OpFreeRefIfDistinct` for a return whose CALLER reads it as a borrow.
 //
 // Same fresh-store leg: the callee allocated its own store, ignored the placeholder, so the

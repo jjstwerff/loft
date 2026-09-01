@@ -861,6 +861,30 @@ impl Stores {
         self.free_named(db, "");
     }
 
+    /// Release the store a binding STOPPED pointing at — the ownership-transition free.
+    ///
+    /// `displaced` is the store the binding held before a write installed `witness`.  When the
+    /// two name one store the write kept it, and there is nothing to release.
+    ///
+    /// The second guard is @FR-H-Free's other side condition: a store a CALLER marked
+    /// protected-from-free for the duration of a call is not this frame's to release.  A `&`
+    /// parameter's write-back displaces whatever the caller's binding named, and the callee
+    /// cannot see whether the caller OWNS that store — a plain heap parameter forwarded into a
+    /// `&` one aliases a store owned two frames up, and freeing it there is a use-after-free
+    /// plus a double free with the real owner's own release (loft#1287).  The call site marks
+    /// the store it does not own; this is where the mark is honoured.
+    pub fn free_displaced(&mut self, displaced: &DbRef, witness: &DbRef) {
+        if displaced.store_nr == witness.store_nr {
+            return;
+        }
+        if (displaced.store_nr as usize) < self.allocations.len()
+            && self.allocations[displaced.store_nr as usize].is_free_protected()
+        {
+            return;
+        }
+        self.free_named(displaced, "");
+    }
+
     /**
     Like [`free`], but includes the loft variable name in `LOFT_STORE_LOG` output.
     Generated native code calls this variant via `OpFreeRef(stores, var, "var_name")`.
