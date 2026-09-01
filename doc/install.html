@@ -13,7 +13,7 @@
 <p>Loft is a lightweight scripting language with null safety, built-in parallel execution, and a fast interpreter called <strong>loft</strong>. This page shows how to install loft and write your first program.</p>
 
 <h2 id="prerequisites">Prerequisites</h2>
-<p>Building from source requires the Rust toolchain (Rust 1.82 or later). Install it from <a href="https://rustup.rs">rustup.rs</a> if you do not already have it:</p>
+<p>Building from source requires the Rust toolchain. loft is an edition-2024 crate, so that means <strong>Rust 1.85 or later</strong> — the same version <code>--native</code> needs to compile your programs. Install it from <a href="https://rustup.rs">rustup.rs</a> if you do not already have it:</p>
 <pre><code>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
 
 <h2 id="install-from-source">Install from source</h2>
@@ -67,6 +67,9 @@ cargo build --release</code></pre>
 <tr><td><code>--help</code></td><td>Show all available options</td></tr>
 <tr><td><code>--version</code></td><td>Print the loft version</td></tr>
 <tr><td><code>--path &lt;dir&gt;</code></td><td>Look for the <code>default/</code> standard library in <em>dir</em> instead of next to the binary</td></tr>
+<tr><td><code>--interpret</code></td><td>Interpret the program instead of compiling it — the other half of the choice loft makes for you</td></tr>
+<tr><td><code>--timeout N</code></td><td>Stop the program after N seconds; worth using the first time you run something</td></tr>
+<tr><td><code>--explain</code></td><td>Print the suggested fix under each diagnostic. It only shows the fix, so it is always safe to run</td></tr>
 <tr><td><code>--native [out]</code></td><td>Compile to a native binary via <code>rustc</code> and run it (requires Rust on PATH)</td></tr>
 <tr><td><code>--native-release [out]</code></td><td>Same as <code>--native</code> with full optimisations (slower to compile, fastest to run)</td></tr>
 <tr><td><code>--native-emit [out.rs]</code></td><td>Write the generated Rust source to a file without compiling it</td></tr>
@@ -74,12 +77,12 @@ cargo build --release</code></pre>
 </table>
 
 <h2 id="running-native">Running your program as a native binary</h2>
-<p>The interpreter runs programs immediately, but for compute-heavy work you can compile to a native binary instead. This takes a few seconds the first time (it calls <code>rustc</code> in the background) but runs 10–50× faster:</p>
+<p><code>loft myprogram.loft</code> already compiles through <code>rustc</code> when it can find it, and interprets when it cannot — you do not have to choose, and the answer is the same either way. Compiling takes a few seconds the first time and then runs 20–50× faster than interpreting (see <a href="00-performance.html">Performance</a> for the measured table). Ask for one on purpose when you want to:</p>
 <pre><code>loft --native myprogram.loft</code></pre>
 <p>To see the generated Rust code without running it:</p>
 <pre><code>loft --native-emit myprogram.rs
 cat myprogram.rs</code></pre>
-<p>Native compilation requires Rust 1.85 or later on your PATH. If <code>rustc</code> is not found, loft prints a clear error message telling you how to install it.</p>
+<p>This needs <code>rustc</code> on your PATH — the same Rust 1.85 or later you built loft with. If it is not found, loft says so and interprets instead, which is why a downloaded release always interprets.</p>
 
 <h2 id="standard-library">Standard library</h2>
 <p>The standard library is a set of <code>.loft</code> files bundled alongside the loft binary. They are loaded automatically before your program runs — you do not need any <code>import</code> or <code>use</code> statement to call <code>println</code>, <code>assert</code>, or any other built-in function.</p>
@@ -96,10 +99,11 @@ fn main() {
 <p>See <a href="17-libraries.html">Libraries</a> for the full search path and naming rules.</p>
 
 <h2 id="editor-setup">Editor setup</h2>
-<p>Loft syntax highlighting extensions are planned. In the meantime:</p>
+<p>loft ships its own editor support, so you do not need to pretend <code>.loft</code> is Rust:</p>
 <ul>
-<li><strong>VS Code</strong> — use Rust syntax highlighting as a close approximation.</li>
-<li><strong>Vim / Neovim</strong> — associate <code>*.loft</code> with Rust via <code>autocmd BufRead *.loft set filetype=rust</code> in your <code>vimrc</code>.</li>
+<li><strong>VS Code</strong> — the extension in <code>editors/vscode/</code> of the repository gives syntax highlighting, snippets, and Run buttons for the interpreted (<kbd>F5</kbd>) and native (<kbd>Ctrl+F5</kbd>) paths. Build and install it with <code>cd editors/vscode &amp;&amp; npm install &amp;&amp; vsce package &amp;&amp; code --install-extension loft-0.1.0.vsix</code>. It is not on the marketplace yet.</li>
+<li><strong>Any LSP editor</strong> — <code>loft-lsp</code> is a language server built from this repository (<code>cargo build --release --bin loft-lsp</code>). It answers diagnostics, completion, go-to-definition, references, hover, document symbols, semantic tokens, inlay hints, rename and formatting over stdio. <code>loft-dap</code> is the matching debug adapter.</li>
+<li><strong>Vim / Neovim</strong> — point your LSP client at the <code>loft-lsp</code> binary for <code>*.loft</code> files.</li>
 <li><strong>Any editor</strong> — the <a href="roadmap.html">Web IDE</a> (in progress) provides syntax highlighting and navigation in the browser.</li>
 </ul>
 

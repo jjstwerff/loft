@@ -41,7 +41,7 @@ Loft is a lightweight scripting language with null safety, built-in parallel exe
 
 === Prerequisites
 
-Building from source requires the Rust toolchain (Rust 1.82 or later). Install it from rustup.rs if you do not already have it:
+Building from source requires the Rust toolchain. loft is an edition-2024 crate, so that means *Rust 1.85 or later* — the same version `--native` needs to compile your programs. Install it from rustup.rs if you do not already have it:
 
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -127,7 +127,7 @@ Run `loft --help` for the full list. The most commonly used flags are:
 
 === Running your program as a native binary
 
-The interpreter runs programs immediately, but for compute-heavy work you can compile to a native binary instead. This takes a few seconds the first time (it calls `rustc` in the background) but runs 10–50× faster:
+`loft myprogram.loft` already compiles through `rustc` when it can find it, and interprets when it cannot — you do not have to choose, and the answer is the same either way. Compiling takes a few seconds the first time and then runs 20–50× faster than interpreting (see Performance for the measured table). Ask for one on purpose when you want to:
 
 ```
 loft --native myprogram.loft
@@ -140,7 +140,7 @@ loft --native-emit myprogram.rs
 cat myprogram.rs
 ```
 
-Native compilation requires Rust 1.85 or later on your PATH. If `rustc` is not found, loft prints a clear error message telling you how to install it.
+This needs `rustc` on your PATH — the same Rust 1.85 or later you built loft with. If it is not found, loft says so and interprets instead, which is why a downloaded release always interprets.
 
 === Standard library
 
@@ -165,10 +165,11 @@ See Libraries for the full search path and naming rules.
 
 === Editor setup
 
-Loft syntax highlighting extensions are planned. In the meantime:
+loft ships its own editor support, so you do not need to pretend `.loft` is Rust:
 
-- *VS Code* — use Rust syntax highlighting as a close approximation.
-- *Vim / Neovim* — associate `*.loft` with Rust via `autocmd BufRead *.loft set filetype=rust` in your `vimrc`.
+- *VS Code* — the extension in `editors/vscode/` of the repository gives syntax highlighting, snippets, and Run buttons for the interpreted (F5) and native (Ctrl+F5) paths. Build and install it with `cd editors/vscode && npm install && vsce package && code --install-extension loft-0.1.0.vsix`. It is not on the marketplace yet.
+- *Any LSP editor* — `loft-lsp` is a language server built from this repository (`cargo build --release --bin loft-lsp`). It answers diagnostics, completion, go-to-definition, references, hover, document symbols, semantic tokens, inlay hints, rename and formatting over stdio. `loft-dap` is the matching debug adapter.
+- *Vim / Neovim* — point your LSP client at the `loft-lsp` binary for `*.loft` files.
 - *Any editor* — the Web IDE (in progress) provides syntax highlighting and navigation in the browser.
 
 === Next steps

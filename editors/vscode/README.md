@@ -23,9 +23,14 @@ language](https://github.com/loft-lang/loft) in Visual Studio Code.
   `enum`, `for`, `while`, `match`, `if`, `ife`, `assert`,
   `println`
 
-A full-featured Language Server (diagnostics, completion,
-go-to-definition, hover) is planned for a future release —
-see [`lib_plans/63-lsp/`](../../doc/claude/lib_plans/63-lsp/README.md).
+A Language Server ships in this repository — build it with
+`cargo build --release --bin loft-lsp`.  It answers diagnostics,
+completion, go-to-definition, references, hover, document symbols,
+semantic tokens, inlay hints, rename and formatting over stdio, and
+`loft-dap` is the matching debug adapter.  What is still to do is
+wiring it into THIS extension, which today provides highlighting,
+snippets and the Run buttons — see
+[`lib_plans/63-lsp/`](../../doc/claude/lib_plans/63-lsp/README.md).
 
 ## Configuration
 

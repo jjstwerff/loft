@@ -640,6 +640,30 @@ lands, and `u.age` then reads `null` out of a field typed `integer`. A reader wh
 promised a refusal writes no check at all, so this is the direction that costs — the same
 shape as chapter 23's five stated negatives the language does not have.
 
+⚠ **The install page is where a stale "planned" costs the most, because the reader has no
+way to know.** `install.html` said *"Loft syntax highlighting extensions are planned. In the
+meantime: VS Code — use Rust syntax highlighting as a close approximation"*, and told Vim
+users to `set filetype=rust`. The repository ships `editors/vscode/` — a language id, a
+TextMate grammar, snippets, Run buttons on F5 and Ctrl+F5 — and two binaries, `loft-lsp` and
+`loft-dap`. Driven over stdio, `loft-lsp` advertises diagnostics, completion, definition,
+references, hover, document symbols, semantic tokens, inlay hints, rename and formatting.
+The extension's OWN README repeated the stale sentence one level down. **A first-run page's
+"planned" is a claim with a date on it; check it against `src/bin/` and `Cargo.toml` before
+believing it**, and when you fix it, fix the copy the tool ships with.
+
+⚠ **A version number in a prerequisite is checkable from the manifest.** The page asked for
+"Rust 1.82 or later" to build, while `Cargo.toml` says `edition = "2024"`, which needs 1.85 —
+so a reader who follows the instruction gets an edition error on their first command. The
+page's own later line, "Native compilation requires Rust 1.85 or later", had the right number
+attached to the wrong step. **Two version numbers on one page that disagree is a lead, and
+the manifest settles it.**
+
+⚠ **A page written before a default changed keeps teaching the old one.** *"The interpreter
+runs programs immediately, but for compute-heavy work you can compile to a native binary
+instead"* — `loft prog.loft` already compiles through `rustc` when it can find it, which is
+what `--help` says and what chapter 34 teaches. The flag table listed `--native` and never
+`--interpret`, so the page had no name for the thing it said you were already getting.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -715,6 +739,7 @@ whose entry list changed has.
 | `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `57853cbc` |
 | `doc/00-vs-rust.html` | 2026-09-02 | `a41ee548` |
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
+| `doc/install.html` | 2026-09-02 | `66da3c33` |
 
 ## See also
 
