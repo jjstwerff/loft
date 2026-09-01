@@ -202,7 +202,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/19-threading.loft` | 2026-09-01 | `8af9f8e1` |
 | `tests/docs/20-logging.loft` | 2026-09-01 | `a61fde12` |
 | `tests/docs/22-time.loft` | 2026-09-01 | `ded1a65b` |
-| `tests/docs/23-safety.loft` | 2026-09-01 | `0b1c65c3` |
+| `tests/docs/23-safety.loft` | 2026-09-01 | `bba86d7f` |
 
 ## See also
 
