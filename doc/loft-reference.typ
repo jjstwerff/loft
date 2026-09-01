@@ -3455,9 +3455,25 @@ fn main() {
   assert(l.position() == "Tokens:1:17", "Incorrect position {l.position()}");
 ```
 
+`long\_int()` reads an integer written with an `l` suffix. The suffix is part of the token, not part of the value.
+
+```rust
+  l.parse_string("Long", "9000000000l");
+  assert(l.long_int() == 9000000000, "Long integer");
+```
+
+A registered keyword is reported exactly as written, so a parser can tell it from an ordinary name without keeping a second list of its own.
+
+```rust
+  l.parse_string("Keywords", "for name");
+  assert(l.peek() == "for", "A keyword reads back as itself");
+  assert(l.matches("for"), "and matches by that spelling");
+  assert(l.peek() == "name", "while an ordinary name is just a name");
+```
+
 === String Literals and Comments
 
-`constant\_text()` reads a double-quoted string and handles special codes like \\n (newline) and \\\\ (backslash). `constant\_character()` reads a single-quoted character literal and returns it as text.
+`constant\_text()` reads a double-quoted string and decodes the escapes inside it: `\\n` becomes one newline, `\\t` one tab, `\\r` one return, and `\\\\` and `\\"` stand for a single backslash and quote. An escape the lexer does not recognise stands for its own character, so `\\q` is just `q`.
 
 ```rust
   l.parse_string("Texts", "\"123\" + '4'");
@@ -3465,7 +3481,22 @@ fn main() {
   assert(l.matches("+"), "Incorrect add");
 ```
 
-`constant\_character()` returns a `character`, so compare it as one (`l.constant\_character() == '4'`), not against the text "123". The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last\_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment\_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is\_finished()` returns true once every token has been consumed.
+`constant\_character()` reads a single-quoted literal and returns a `character`, not text — so compare it against a character.
+
+```rust
+  assert(l.constant_character() == '4', "Incorrect character literal");
+```
+
+An escape counts as ONE character, in a text and in a character literal alike. `size()` is what shows it: two source characters, one value.
+
+```rust
+  l.parse_string("Escapes", "\"a\\nb\" '\\t'");
+  nl = l.constant_text() ?? "";
+  assert(size(nl) == 3, "'a\\nb' is three characters, not four: {size(nl)}");
+  assert(l.constant_character() == '\t', "An escaped character literal decodes too");
+```
+
+The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last\_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment\_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is\_finished()` returns true once every token has been consumed.
 
 ```rust
   l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
@@ -3482,7 +3513,7 @@ fn main() {
 
 === Embedded Format Expressions
 
-Loft string literals can embed expressions with `{expr}`. The lexer exposes a protocol that lets you parse these yourself. When `constant\_text()` reaches a `{`, it returns the literal text before it and sets `is\_formatting()` to true. At that point call `set\_formatting(false)` and parse the embedded expression normally using the usual token readers. When the expression is done, call `set\_formatting(true)` and consume the closing `}}`. Then `constant\_text()` continues with the next segment of the string.
+Loft string literals can embed expressions with `{expr}`. The lexer exposes a protocol that lets you parse these yourself. When `constant\_text()` reaches a `{`, it returns the literal text before it and sets `is\_formatting()` to true. At that point call `set\_formatting(false)` and parse the embedded expression normally using the usual token readers. When the expression is done, call `set\_formatting(true)` and consume the closing `}`. Then `constant\_text()` continues with the next segment of the string. The example below writes that brace as "}}" because a literal brace inside a loft string is doubled — the TOKEN the lexer matches is the single `}`.
 
 ```rust
   l.parse_string("Formatting", "\"abc{{12 + 34}}def\"");
