@@ -913,6 +913,22 @@ program never calls. A confident wrong location is worse than none: silence make
 you look, an answer sends you away. So treat any non-zero `pc+` as "the nearest
 thing recorded", and `fn:`/`op:` as the reliable pair.
 
+**The `  at file:line:col` line of an internal PANIC is a different half of the
+same table, and it is exact.** A panic — the store-lock write guard, a broken
+runtime invariant — goes through the Rust panic hook rather than the signal
+handler, and prints no `pc+` suffix, so a reader has nothing to discount. It
+therefore prints only when a recorded span COVERS the crashing pc, and stays
+silent otherwise; the span table carries each entry's pc RANGE so that question
+can be answered rather than guessed. Before that it inherited like the signal
+path but read like an answer, putting a `#lock` write on the line of the
+arithmetic above it and — with nothing preceding it in the user's file — in
+`default/05_coroutine.loft` (loft#1262). A wrapped construct still resolves: a
+call is wrapped, which is why a failing `assert` and a `panic` still name their
+own line.
+
+So the two halves differ on purpose. The signal report keeps the nearest span
+because it can label it (`pc+280`); the panic hook drops it because it cannot.
+
 **`last op:` names the opcode**, resolved through a table the interpreter
 publishes once per process (`crash_report::set_op_names`) — a signal handler
 cannot borrow the definitions table, so the names are made `'static` up front.

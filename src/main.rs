@@ -6929,9 +6929,16 @@ fn main() {
     // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
     // that surfaces the loft source position of the offending pc
     // before the default panic message.  Reads the per-thread snapshot
-    // published by `State::execute_argv` via `crash_report`.  Falls
-    // through to the default hook if no source-span snapshot is
-    // active or no entry precedes the offending pc.
+    // published by `State::execute_argv` via `crash_report`.
+    //
+    // It prints a position only when a recorded span COVERS the pc, and
+    // otherwise says nothing.  The line renders exactly like a position the
+    // reader can act on, so there is nothing to mark it a guess — and the span
+    // table is sparse, so an inherited answer names whatever statement happened
+    // to be wrapped last.  It sent a `#lock` write on line 8 to line 7, and,
+    // with nothing preceding it in the user's file, to a stdlib file the program
+    // never mentions (loft#1262).  A wrapped construct — a call, an arithmetic
+    // fault site — still resolves, which is the case this exists for.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let (pc, _op, _fn_d_nr) = loft::crash_report::last_context();

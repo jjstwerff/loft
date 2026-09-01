@@ -285,16 +285,21 @@ pub struct State {
     /// pc alone and a *read* at the same pc as an assignment's start overwrites the
     /// assignment's entry, which is why it is read-dominated.
     pub(crate) store_spans: Vec<(u32, u32, u16)>,
-    /// Plan-07 phase 1 step 1.20 / phase 3 — pc → source-position table
+    /// Plan-07 phase 1 step 1.20 / phase 3 — pc → (source position, end pc) table
     /// populated by codegen on every `Value::Span` it walks.  Runtime
     /// fault printers (div-by-zero, OOB, null deref, panic call) look up
     /// the offending pc here to print `at file:line:col` alongside the
     /// existing op-name + bytecode-pos context.  Sparse — only fault-prone
     /// IR constructs (the wrapped ones in steps 1.B.1, 1.11, 1.12, 1.13)
-    /// produce entries.  Lookup is `range(..=pc).next_back()` so an
-    /// unwrapped pc inherits the nearest preceding span (mirrors the
-    /// `line_numbers` map's behaviour).
-    pub(crate) source_spans: BTreeMap<u32, Position>,
+    /// produce entries.
+    ///
+    /// The end pc is what makes the table answerable.  A start alone cannot
+    /// distinguish "this pc is inside the construct that owns the nearest
+    /// preceding span" from "this pc is past that construct entirely", and the
+    /// two want opposite answers: the first is the position to report, the
+    /// second is an unrelated earlier statement (loft#1262).  Entries nest but
+    /// never partially overlap, since they come from the IR tree.
+    pub(crate) source_spans: BTreeMap<u32, (Position, u32)>,
     /// The shared snapshot of `source_spans` handed to the crash hook, built
     /// once and then handed out as a refcount bump.
     ///
@@ -304,7 +309,7 @@ pub struct State {
     /// travels the same path — cost **4.7 µs, of which 4.4 µs was this clone**.
     /// Cleared by the one place that writes `source_spans`, so a stale snapshot
     /// cannot be published.
-    published_spans: Option<Arc<BTreeMap<u32, Position>>>,
+    published_spans: Option<Arc<BTreeMap<u32, (Position, u32)>>>,
     /// Function coverage — `Some(bitmap)` records which definitions this run actually
     /// entered, indexed by `d_nr`.  `None` on a normal run, so the hook in
     /// [`State::fn_call`] costs one branch and nothing else.  The test runner turns it
@@ -2751,15 +2756,29 @@ impl State {
         self.execute_argv(name, data, &[]);
     }
 
-    /// Plan-07 phase 1 step 1.20 / phase 3 — look up the source position
-    /// for a bytecode `pc`.  Returns the most recent `Position` recorded
-    /// at or before `pc` (sparse map; mid-instruction lookups inherit
-    /// the surrounding Span).  Used by runtime fault printers (panic
-    /// builtin, future div-by-zero / OOB / null-deref kinds) to surface
-    /// `at file:line:col` alongside the bytecode-level context.
+    /// Plan-07 phase 1 step 1.20 / phase 3 — the source position of the construct
+    /// that CONTAINS bytecode `pc`, or `None` when no recorded span does.
+    ///
+    /// Used by runtime fault printers (the `panic` builtin, div-by-zero, OOB,
+    /// null deref) to surface `at file:line:col` beside the bytecode-level
+    /// context.  A pc inside a wrapped construct still resolves — that is the
+    /// inheritance these printers rely on, since a fault lands on some op within
+    /// the statement, not on its first.  A pc no span covers now answers `None`
+    /// rather than the nearest preceding entry, which belonged to whatever
+    /// unrelated statement happened to be wrapped last (loft#1262).
+    ///
+    /// The walk is backwards because spans nest: the first covering entry found
+    /// is the innermost, which is the most precise answer.  It cannot stop early
+    /// on a miss — an outer span may still cover a pc the inner ones do not — so
+    /// an uncovered pc costs a scan of the preceding entries.  That is a
+    /// fault-reporting path, taken once.
     #[must_use]
     pub fn source_loc_for(&self, pc: u32) -> Option<&Position> {
-        self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
+        self.source_spans
+            .range(..=pc)
+            .rev()
+            .find(|(_, (_, end))| *end > pc)
+            .map(|(_, (p, _))| p)
     }
 
     /// Hand the fault-site span table to the crash hook, so a Rust panic inside

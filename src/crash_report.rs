@@ -54,7 +54,7 @@ thread_local! {
     /// pc to `file:line:col` when a Rust panic fires inside a loft
     /// runtime fault (panic builtin, arithmetic overflow, future
     /// div-by-zero kinds).  `None` outside the execute window.
-    static SOURCE_SPANS: std::cell::RefCell<Option<std::sync::Arc<std::collections::BTreeMap<u32, crate::lexer::Position>>>> = const { std::cell::RefCell::new(None) };
+    static SOURCE_SPANS: std::cell::RefCell<Option<std::sync::Arc<std::collections::BTreeMap<u32, (crate::lexer::Position, u32)>>>> = const { std::cell::RefCell::new(None) };
 }
 
 // On non-Unix platforms the signal-handler consumer is compiled
@@ -276,24 +276,53 @@ pub fn last_context() -> (u32, u8, u32) {
 /// current `State::source_spans` so the panic hook can look up
 /// `at file:line:col` for the offending pc.  Pass `None` to clear.
 pub fn set_source_spans(
-    spans: Option<std::sync::Arc<std::collections::BTreeMap<u32, crate::lexer::Position>>>,
+    spans: Option<std::sync::Arc<std::collections::BTreeMap<u32, (crate::lexer::Position, u32)>>>,
 ) {
     SOURCE_SPANS.with(|s| {
         *s.borrow_mut() = spans;
     });
 }
 
-/// Plan-07 phase 1 step 1.20 / phase 3 — look up the source position
-/// for `pc` in the current thread's published source-span snapshot.
-/// Returns the most recent `Position` recorded at or before `pc`, or
-/// `None` if no snapshot is active or no entry precedes `pc`.
+/// Plan-07 phase 1 step 1.20 / phase 3 — the source position of the construct
+/// that CONTAINS `pc`, from the current thread's published span snapshot.
+///
+/// `None` when no snapshot is active or no recorded span covers `pc`.  Answering
+/// `None` is the point: the table is sparse, so most pcs have a nearest preceding
+/// entry that belongs to an unrelated earlier statement, and rendering that as
+/// `at file:line:col` sends a reader to a line the fault is not on with nothing to
+/// mark it a guess (loft#1262).  A caller that wants the approximate answer, and
+/// can present it as one, calls [`nearest_source_loc_for_pc`].
+///
+/// Spans nest, so the walk is backwards and the first covering entry is the
+/// innermost — the most precise position available.
 #[must_use]
 pub fn source_loc_for_pc(pc: u32) -> Option<crate::lexer::Position> {
     SOURCE_SPANS.with(|s| {
         let borrow = s.borrow();
-        borrow
-            .as_ref()
-            .and_then(|m| m.range(..=pc).next_back().map(|(_, p)| p.clone()))
+        borrow.as_ref().and_then(|m| {
+            m.range(..=pc)
+                .rev()
+                .find(|(_, (_, end))| *end > pc)
+                .map(|(_, (p, _))| p.clone())
+        })
+    })
+}
+
+/// The nearest span recorded at or before `pc`, with the pc it was recorded at.
+///
+/// This is the approximate reading, and a caller must present it as one — the
+/// distance between the two pcs is how much to trust it.  Use it only where a
+/// rough location beats none; where the output looks like an exact position,
+/// [`source_loc_for_pc`] is the one that can be trusted.
+#[must_use]
+pub fn nearest_source_loc_for_pc(pc: u32) -> Option<(u32, crate::lexer::Position)> {
+    SOURCE_SPANS.with(|s| {
+        let borrow = s.borrow();
+        borrow.as_ref().and_then(|m| {
+            m.range(..=pc)
+                .next_back()
+                .map(|(at, (p, _))| (*at, p.clone()))
+        })
     })
 }
 
@@ -464,7 +493,7 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
             borrow
                 .as_ref()
                 .and_then(|m| m.range(..=ctx.pc).next_back())
-                .map(|(at, p)| (*at, p.clone()))
+                .map(|(at, (p, _))| (*at, p.clone()))
         })
     });
     let sig_name = match sig {
@@ -722,53 +751,63 @@ mod tests {
         );
     }
 
-    /// Plan-07 phase 3 — source-position lookup for the panic hook +
-    /// signal handler.  Verifies the snapshot-based lookup returns the
-    /// most-recent entry at-or-before a given pc, matching the
-    /// `range(..=pc).next_back()` semantics.
+    /// Plan-07 phase 3 — source-position lookup for the panic hook + signal
+    /// handler.  A span answers for the pcs it COVERS and for no others.
+    ///
+    /// The rows past each construct's end are the point.  They used to answer the
+    /// nearest preceding entry, so a fault in an unwrapped statement was rendered
+    /// as an exact position on an unrelated earlier line — or, with nothing
+    /// preceding it in the user's file, on a stdlib line the program never
+    /// mentions (loft#1262).
     #[test]
-    fn source_loc_lookup_returns_most_recent_at_or_before() {
+    fn a_span_answers_only_for_the_pcs_it_covers() {
         use crate::lexer::Position;
         use std::collections::BTreeMap;
         use std::sync::Arc;
-        let mut spans = BTreeMap::new();
-        spans.insert(
-            5,
-            Position {
-                file: "a.loft".to_string(),
-                line: 10,
-                pos: 1,
-            },
-        );
-        spans.insert(
-            20,
-            Position {
-                file: "a.loft".to_string(),
-                line: 20,
-                pos: 1,
-            },
-        );
-        spans.insert(
-            50,
-            Position {
-                file: "a.loft".to_string(),
-                line: 30,
-                pos: 1,
-            },
-        );
+        let at = |line: u32| Position {
+            file: "a.loft".to_string(),
+            line,
+            pos: 1,
+        };
+        let mut spans: BTreeMap<u32, (Position, u32)> = BTreeMap::new();
+        spans.insert(5, (at(10), 15));
+        spans.insert(20, (at(20), 30));
+        // A nested pair: the inner construct sits inside the outer one.
+        spans.insert(100, (at(40), 200));
+        spans.insert(120, (at(50), 130));
         set_source_spans(Some(Arc::new(spans)));
 
-        // Exact hit returns the entry's position.
+        // Inside a span — its first pc, its middle, its last — is the position.
         assert_eq!(source_loc_for_pc(5).unwrap().line, 10);
-        assert_eq!(source_loc_for_pc(20).unwrap().line, 20);
-        // Between entries returns the floor (most recent at-or-before).
         assert_eq!(source_loc_for_pc(7).unwrap().line, 10);
-        assert_eq!(source_loc_for_pc(45).unwrap().line, 20);
-        // Past the last entry returns the last entry.
-        assert_eq!(source_loc_for_pc(100).unwrap().line, 30);
-        // Before the first entry returns None.
+        assert_eq!(source_loc_for_pc(14).unwrap().line, 10);
+
+        // One past the end is outside it.  This is the defect in miniature: the
+        // construct is over, and its position no longer describes the pc.
+        assert!(source_loc_for_pc(15).is_none());
+        // A gap between two constructs used to answer the earlier one.
+        assert!(source_loc_for_pc(45).is_none());
+        // Past every span used to answer the last entry.
+        assert!(source_loc_for_pc(250).is_none());
+        // Before the first entry there was never anything to inherit.
         assert!(source_loc_for_pc(0).is_none());
         assert!(source_loc_for_pc(4).is_none());
+
+        // Nesting: the innermost covering span wins, being the most precise.
+        assert_eq!(source_loc_for_pc(125).unwrap().line, 50);
+        // …and past the inner one the OUTER still covers.  This is why the walk
+        // cannot stop at the first entry that fails to cover: the nearest
+        // preceding span here is the inner one, which has ended, while the
+        // enclosing construct is still the right answer.
+        assert_eq!(source_loc_for_pc(150).unwrap().line, 40);
+        assert_eq!(source_loc_for_pc(100).unwrap().line, 40);
+
+        // The approximate reading stays available for the callers that present
+        // it as approximate, and reports the pc it was recorded at so the
+        // distance can be shown.
+        let (recorded_at, pos) = nearest_source_loc_for_pc(45).expect("nearest");
+        assert_eq!((recorded_at, pos.line), (20, 20));
+        assert!(nearest_source_loc_for_pc(4).is_none());
 
         // Cleanup so other tests don't see this snapshot.
         set_source_spans(None);

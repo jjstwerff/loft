@@ -924,14 +924,28 @@ impl Stores {
             // included, and `introspect` prints only the user file's, so nothing
             // a reader has in hand can resolve it.  Resolve it here through the
             // same published span table the crash report uses.
-            let at = crate::crash_report::source_loc_for_pc(self.alloc_pc).map_or_else(
+            // The NEAREST span is wanted here rather than a covering one: a rough
+            // location beats none when the alternative is a bare pc.  It is labelled
+            // with the distance back to the entry, because unlabelled it reads as an
+            // exact position and the map is sparse enough to be several statements
+            // out — inside the stdlib, a different file entirely (loft#1262).
+            let at = crate::crash_report::nearest_source_loc_for_pc(self.alloc_pc).map_or_else(
                 || format!("pc={}", self.alloc_pc),
-                |p| format!("{}:{}:{} (pc={})", p.file, p.line, p.pos, self.alloc_pc),
+                |(recorded_at, p)| {
+                    let back = self.alloc_pc.saturating_sub(recorded_at);
+                    let how_near = if back == 0 {
+                        String::new()
+                    } else {
+                        format!(", nearest span pc-{back}")
+                    };
+                    format!(
+                        "{}:{}:{} (pc={}{how_near})",
+                        p.file, p.line, p.pos, self.alloc_pc
+                    )
+                },
             );
-            // The source position is the NEAREST recorded span at or before the pc, and
-            // the span map is sparse — inside the stdlib it can name a line several
-            // statements away.  The opcode is exact, so print both: the line orients the
-            // reader, the op says what actually ran.
+            // The opcode is exact, so print both: the line orients the reader, the op
+            // says what actually ran.
             let op = crate::crash_report::last_op_name();
             let op = if op.is_empty() {
                 String::new()

@@ -664,13 +664,22 @@ impl State {
             // @PLN11 G2/M3.4 — Span passthrough + the two never-reachable
             // rewrite placeholders.
             ValueType::Span => {
-                // Plan-07 phase 1 step 1.20 — record the entry pc → source
-                // position so phase 3's runtime-error printer can surface
-                // `at file:line:col`, then lower the wrapped inner node.
-                self.source_spans.insert(self.code_pos, node.span_pos());
+                // Plan-07 phase 1 step 1.20 — record the pc RANGE this construct
+                // occupies against its source position, so phase 3's runtime-error
+                // printer can surface `at file:line:col` for a fault inside it.
+                //
+                // The end is only knowable here, on the far side of lowering the
+                // inner node, and it is what lets the lookup tell a pc inside this
+                // construct from one past it.  Without it every pc inherited the
+                // nearest preceding span, so a fault in an unwrapped statement was
+                // reported at an unrelated earlier one (loft#1262).
+                let start = self.code_pos;
                 // The published snapshot is now behind the table it snapshots.
                 self.published_spans = None;
-                self.generate_inner(node.span_inner(), stack, top)
+                let inner = self.generate_inner(node.span_inner(), stack, top);
+                self.source_spans
+                    .insert(start, (node.span_pos(), self.code_pos));
+                inner
             }
             ValueType::Iter => {
                 panic!("Iter node should have been rewritten before codegen")
