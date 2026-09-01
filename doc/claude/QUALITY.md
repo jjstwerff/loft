@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 674 | 321 | 5 | **348** |
+| 675 | 321 | 5 | **349** |
 
 loft#1286 added `parser::operators::passes_to_ref_parameter` on the OPAQUE side: it asks
 whether a callee's parameter `i` is a `&` by matching `Type::RefVar(Type::Reference(..))`

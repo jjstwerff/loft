@@ -251,7 +251,17 @@ is the companion [calls-history.md](calls-history.md).
 - **Heap mutate-through (`F-ParamHeap`)** — `fn mut(e: E){ e.h=99 }` makes the caller's `o.h==99`;
   `fn f(v){ v[0]=99 }` makes the caller's `orig[0]==99`.
 - **Heap reassign is local (`F-ParamRebind`)** — `fn re(v){ v=[9,9] }` leaves the caller's
-  `o[0]==1`; only a `&`-param would write back.
+  `o[0]==1`; only a `&`-param would write back. The rule names two spellings, so the oracle
+  crosses the RIGHT-HAND SIDE with the type: {struct, struct-enum} × {literal, call, another
+  local}, both backends, in
+  `tests/scripts/1290-a-heap-parameter-rebind-is-local-in-every-spelling.loft`, with a FIELD
+  write (`F-ParamHeap`), a `&` parameter (`F-ParamRef`) and a plain LOCAL as the controls.
+  ⚠ **That cross is what this line was missing, and `OPEN: 0` read green over it for a year.**
+  The one-cell oracle above asked only `p = [<literal>]`, which was the one spelling with a
+  lowering: `p = other` — named in the rule's own text — wrote back to the caller on BOTH
+  backends, `p = call()` on the interpreter, and three of the six cells DISAGREED between the
+  backends against `(O-NoDiverge)` (loft#1290). A register is only as strong as the oracle
+  under it; re-measure before trusting a zero.
 - **Return independence (`F-Ret`)** — `a = mk(); a[0]=99; b = mk()` leaves `b[0]==1`.
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on argument
