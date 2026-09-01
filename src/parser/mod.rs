@@ -333,6 +333,16 @@ pub struct Parser {
     /// Whether [`Parser::assign_target`] is being REPLACED (`=`) rather than appended to.
     /// Meaningless while `assign_target` is `u16::MAX`.
     pub(crate) assign_replaces: bool,
+    /// The user-visible heap PARAMETER whose whole-binding reassignment already carried its
+    /// own `(F-ParamRebind)` lowering; `u16::MAX` otherwise.  Read and cleared by
+    /// [`Parser::parse_assign_op`], which supplies that lowering for every OTHER right-hand
+    /// side (loft#1290).
+    ///
+    /// A struct LITERAL builds IN PLACE, so its detach-and-mint has to sit inside
+    /// `parse_object` between the construction's own ops; every other spelling produces a
+    /// finished value the statement can be wrapped around.  Two sites, one rule, and this
+    /// says which of them ran.
+    pub(crate) rebind_lowered: u16,
     /// @PLN86 step 0.1 — true while parsing the BODY of a sandboxed def.  Gates
     /// the parser nesting guard so it never touches trusted code (zero cost
     /// there); set per-def in `parse_function`, cleared at its end.
@@ -1150,6 +1160,7 @@ impl Parser {
             amp_head: false,
             assign_target: u16::MAX,
             assign_replaces: false,
+            rebind_lowered: u16::MAX,
             in_sandbox: false,
             parse_depth: 0,
             depth_overflowed: false,

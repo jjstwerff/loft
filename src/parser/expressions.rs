@@ -2241,9 +2241,63 @@ use a separate collection or add after the loop"
     ) -> Type {
         let group_parent = parent_tp.clone();
         let group_to = to.clone();
+        let already = std::mem::replace(&mut self.rebind_lowered, u16::MAX);
         let tp = self.parse_assign_op_inner(code, op, f_type, to, parent_tp, var_nr, skip_validate);
+        self.rebind_local_heap_param(code, op, to, var_nr);
+        self.rebind_lowered = already;
         self.group_reindex_after_vector_write(code, &group_to, &group_parent);
         tp
+    }
+
+    /// `(F-ParamRebind)` — a WHOLE-VALUE reassignment of a user-visible heap PARAMETER
+    /// rebinds LOCALLY, and the rule is about the BINDING, not about the right-hand side's
+    /// spelling: `p = other` is named in the rule's own text beside `p = [..]`.
+    ///
+    /// Only the struct-literal spelling had a lowering (@PLN87 P2.1, inside `parse_object`,
+    /// where a literal that builds IN PLACE needs its detach between the construction's own
+    /// ops).  Every other right-hand side reached codegen as a bare `Set`, which the
+    /// interpreter lowers to a deep copy INTO the record the parameter's slot names — the
+    /// caller's store — while `--native` reassigns its own by-value `DbRef` local.  So five
+    /// of six spellings wrote back to the caller on at least one backend, and three of them
+    /// disagreed between the two, against `ownership.md` `(O-NoDiverge)` (loft#1290).
+    ///
+    /// The lowering is P2.1's, wrapped around the finished statement: free a PRIOR rebind
+    /// store (never the caller's original — that is what the entry witness is for), detach
+    /// the slot WITHOUT freeing, and let the assignment mint into the emptied slot.
+    ///
+    /// A `&`/`RefVar` parameter is the opposite rule (`F-ParamRef` — write-back is what it
+    /// is FOR), a compiler-generated or hidden parameter is a return buffer whose in-place
+    /// write IS its purpose, and a field or element write is not a whole-binding
+    /// reassignment.  Vectors and keyed collections keep their own P2.4 route.
+    ///
+    /// The shape test is deliberately BARE rather than peeled through `Optional`: it must name
+    /// the same set the P2.1 literal site names, or one spelling of one statement would take
+    /// this lowering and another would take that one.  A nullable struct parameter is
+    /// @PLN25's `__nullable<S>` delivery and already keeps its rebind local.
+    fn rebind_local_heap_param(&mut self, code: &mut Value, op: &str, to: &Value, var_nr: u16) {
+        if self.first_pass
+            || op != "="
+            || var_nr == u16::MAX
+            || self.rebind_lowered == var_nr
+            || !matches!(to.unspan(), Value::Var(v) if *v == var_nr)
+            || !matches!(
+                self.vars.tp(var_nr),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+            || !self.vars.is_argument(var_nr)
+            || self.vars.is_compiler_generated(var_nr)
+            || self.is_hidden_param(var_nr)
+        {
+            return;
+        }
+        let orig = self.ensure_rebind_witness(var_nr);
+        let free = self.cl(
+            "OpFreeRefIfDistinct",
+            &[Value::Var(var_nr), Value::Var(orig)],
+        );
+        let detach = self.cl("OpInitRefSentinel", &[Value::Var(var_nr)]);
+        let assign = std::mem::replace(code, Value::Null);
+        *code = Value::Insert(vec![free, detach, assign]);
     }
 
     #[allow(clippy::too_many_arguments)] // the wrapper's list, unchanged from before the split

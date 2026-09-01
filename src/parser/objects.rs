@@ -3592,6 +3592,11 @@ impl Parser {
                         &[Value::Var(*v_nr), Value::Var(orig)],
                     ));
                     list.push(self.cl("OpInitRefSentinel", &[Value::Var(*v_nr)]));
+                    // The literal builds IN PLACE, so the detach has to sit here, between
+                    // the construction's own ops.  Tell `parse_assign_op` — which carries
+                    // the same lowering for every OTHER right-hand side — that this
+                    // statement already has one (loft#1290).
+                    self.rebind_lowered = *v_nr;
                 } else if !self.vars.is_argument(*v_nr) {
                     // A non-arg local OWNS its store; the `Set(Null)` lets the
                     // allocator reuse-or-fresh it in place (pre-existing).  A
