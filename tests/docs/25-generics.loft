@@ -67,24 +67,22 @@ fn test_vector_generics() {
 // on T, add an interface bound.
 //
 // Each bound guarantees EXACTLY the operations in this table, and no more —
-// a `+` under `Numeric` is refused as surely as one under no bound at all:
+// a `+` under `Numeric` is refused as surely as one under no bound at all.
+// Each names the FEWEST operators it needs, because the rest are derived:
+// `>`, `<=` and `>=` all come from `<`, and `!=` comes from `==`.
 //
-//   Ordered    — `<`, and `>`, `<=`, `>=` derived from it
-//   Equatable  — `==`, and `!=` derived from it
+//   Ordered    — declares `<`; gives you `<`, `<=`, `>`, `>=`
+//   Equatable  — declares `==`; gives you `==` and `!=`
 //   Addable    — `+` only.  NOT `-`
-//   Numeric    — `*` and the UNARY `-`.  NOT `+`, NOT `/`
-//   Scalable   — the method `scale(factor: integer) -> integer`.  Not an operator,
-//                and no built-in type satisfies it — it is for your own types
+//   Numeric    — `*` and the UNARY `-a`.  NOT `+`, NOT `/`
+//   Scalable   — the method `scale(self, factor: integer) -> integer`.  Not an
+//                operator, and no built-in type satisfies it — it is for your own types
 //   Printable  — the method `to_text() -> text`, and `"{x}"` interpolation
 //
-// Reach for `Ordered + Addable` when you want `+` and a comparison; there is no
-// single bound that gives all four arithmetic operators, and no bound at all
-// gives SUBTRACTION today.
-//
-// ⚠ Do not write a binary `a - b` under `Numeric`. It compiles, and it answers
-// `-a` — the second operand is discarded, because the bound's `-` is the unary
-// negation and the binary spelling binds to it anyway (loft#1274). Subtract at a
-// concrete type until that is closed.
+// Reach for `Ordered + Addable` when you want `+` and a comparison. No built-in
+// interface offers binary SUBTRACTION: `Numeric`'s `-` is the unary negation, and
+// `-` desugars to the same `OpMin` name at both arities, so `a - b` under a bound
+// is refused and you write the subtraction against a concrete type.
 fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
   if gen_x > gen_y { gen_x } else { gen_y }
 }

@@ -1926,7 +1926,9 @@ use #count instead"
         //
         // A CONCRETE struct keeps @PLN99 Arc B's widened behaviour untouched — its `to_text`
         // is its own and there is no bound to consult.
-        if self.data.is_type_var_placeholder(d_nr) && !self.has_bound_for_method("to_text", d_nr) {
+        if self.data.is_type_var_placeholder(d_nr)
+            && !self.has_bound_for_method("to_text", d_nr, None)
+        {
             return None;
         }
         let tv_name = self.data.def(d_nr).name().to_string();

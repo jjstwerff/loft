@@ -3401,3 +3401,28 @@ fn a_user_type_missing_the_operator_is_refused_at_the_call() {
         "Variable r is never read at a_user_type_missing_the_operator_is_refused_at_the_call:3:16",
     );
 }
+/// A bound is satisfied by a SIGNATURE, not by a name (loft#1274).
+///
+/// `formal/interfaces.md` (G-Sat) says a type satisfies an interface when a function with the
+/// interface's signature is visible — and `Numeric` declares `op - (self: Self) -> Self`, the
+/// UNARY negation. A binary `a - b` in a `<T: Numeric>` body desugars to the same `OpMin`, so
+/// a name-only test said the bound covered it: the call bound one operand too many, dropped
+/// `b`, and computed `-a` on both backends with no diagnostic. The float case answered an
+/// integer, so the result type was wrong too.
+///
+/// It now takes the refusal `Addable` already gave the same expression. No built-in bound
+/// offers binary subtraction; whether one SHOULD is a separate question about letting the two
+/// arities of `OpMin` coexist in one interface.
+///
+/// The reading half — that the operators the bound DOES declare still work, and that the
+/// `!=` / `<=` / `>=` derivations are untouched — is
+/// `tests/scripts/1274-a-bound-is-satisfied-by-signature-not-name.loft`, which cannot hold
+/// this cell because the fixed compiler refuses to parse it.
+#[test]
+fn binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op() {
+    code!("fn gsub<T: Numeric>(a: T, b: T) -> T { a - b }\nfn run() -> integer { gsub(9, 4) }")
+        .error(
+            "generic type T: operator '-' requires a concrete type at \
+             binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op:1:46",
+        );
+}
