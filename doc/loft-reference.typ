@@ -3846,8 +3846,8 @@ Loft gives you two separate ways to protect a value from accidental changes:
 1. \*\*Compile-time const\*\*: mark a variable or parameter with 'const' and the
 
 ```
- compiler refuses to compile any code that tries to reassign it. The check
- happens before the program even runs — zero runtime cost.
+ compiler refuses to compile the writes that word forbids. The check happens
+ before the program even runs — zero runtime cost.
 ```
 
 2. \*\*Runtime lock\*\*: the '\#lock' attribute on a reference lets you lock a
@@ -3864,9 +3864,31 @@ struct Counter {
 }
 ```
 
-=== const parameters
+=== The two places 'const' can go
 
-'const' on a parameter is a compile-time promise: "this function will not modify this value." The compiler enforces it — any assignment to a const parameter is a compile error, caught before you run anything.
+A name has a slot, and the slot holds a value. Those are two different things to freeze, so 'const' has two positions and they mean opposite halves:
+
+- \*\*'const' before the NAME\*\* — `const x = …` — freezes the \*\*slot\*\*. You can
+
+```
+never point `x` at something else, but the value it holds stays mutable:
+you may still append to it and write its elements and fields. This is the
+builder shape — set it up once, fill it in place.
+```
+
+- \*\*'const' before the TYPE\*\* — `x: const T` — freezes the \*\*value\*\*. You may
+
+```
+swap in a whole new value, but you can never reach into the one that is
+there. This is the read-only shape — a shared table, a parameter a function
+promises not to touch.
+```
+
+Write both — `const x: const T` — and the name is fully immutable.
+
+A plain number or boolean has no interior separate from its slot, so for those the two positions mean the same thing: both freeze it completely.
+
+'const' before the TYPE is what a function uses to promise "I will not modify this". Every write through the parameter is a compile error: appending to it, writing an element, writing a field, or writing a field of a field.
 
 ```rust
 fn read_value(self: const Counter) -> integer {
@@ -3874,7 +3896,7 @@ fn read_value(self: const Counter) -> integer {
 }
 ```
 
-A non-const parameter leaves the store unlocked so the function can write.
+A parameter without 'const' can write, and the write reaches the caller.
 
 ```rust
 fn increment(self: Counter) {
@@ -3888,41 +3910,48 @@ fn main() {
 
 === const local variables
 
-Declare a local variable with 'const' to signal that it will not change after its first assignment. The compiler rejects any later assignment to it — reassigning or appending to a const variable is a compile error.
-
-This is handy for configuration values or lookup tables that should never be overwritten by accident deep inside a long function.
+`const` before the name is the common case for a local: a configuration value or a lookup table that should never be pointed somewhere else deep inside a long function.
 
 ```rust
   const limit = 100;
   assert(limit == 100, "const integer is readable");
 ```
 
-const also works for struct references.
+For a whole number the two positions agree, so this one is frozen outright: `limit = 200` and `limit += 1` are both compile errors.
+
+A const local holding a collection is the builder shape — the slot is write-once, the contents keep growing.
+
+```rust
+  const totals = [1, 2, 3];
+  totals += [4];
+  totals[0] = 9;
+  assert(len(totals) == 4, "a const local still appends: {len(totals)}");
+  assert(totals[0] == 9, "a const local still takes an element write");
+```
+
+The other position freezes the contents instead, and leaves the slot free.
+
+```rust
+  frozen: const vector<integer> = [1, 2, 3];
+  frozen = [7, 8];
+  assert(len(frozen) == 2, "a value-const local still re-points: {len(frozen)}");
+```
+
+`frozen += \[9\]` would not compile: the value is read-only.
+
+The same split applies to a struct.
 
 ```rust
   const cfg = Counter {value: 42 };
   assert(cfg.value == 42, "const reference is readable");
-```
-
-Passing a const reference to a const parameter is always allowed.
-
-```rust
   assert(read_value(cfg) == 42, "const passed to const param");
-```
-
-=== Calling methods on const references
-
-A non-const method can still be called on a non-const variable even after you have manually locked the store; the lock is a runtime check.
-
-```rust
-  c = Counter {value: 10 };
-  increment(c);
-  assert(c.value == 11, "increment modified c");
 ```
 
 === Runtime store locks with \#lock
 
-'\#lock' is an attribute on any reference variable. Setting it to true turns on a runtime guard: any write to that store will panic immediately, wherever it happens. A freshly created reference starts unlocked.
+`const` is checked once, when the program is compiled. A lock is checked on every write, while the program runs — so it catches a write the compiler cannot see coming, wherever in the program it happens.
+
+`\#lock` is an attribute on any reference variable: a struct, a vector, any value that lives in a store. A freshly created one starts unlocked.
 
 ```rust
   d = Counter {value: 5 };
@@ -3931,10 +3960,20 @@ A non-const method can still be called on a non-const variable even after you ha
   assert(d#lock, "store is locked after assignment");
 ```
 
-You can still read from a locked store — only writes are blocked.
+Reading a locked store is still fine — only writes are blocked.
 
 ```rust
   assert(read_value(d) == 5, "locked store is still readable");
+```
+
+A write is not. `d.value = 6` panics here, and so does `increment(d)` — the guard is on the store, so it fires wherever the write is written. That is the point of the lock: the program stops at the write instead of carrying a value someone changed behind your back.
+
+Set it back to false to lift the guard.
+
+```rust
+  d#lock = false;
+  increment(d);
+  assert(d.value == 6, "unlocking lets the write through again");
 ```
 
 === When to use each approach
@@ -3949,7 +3988,7 @@ and get compile-time safety at zero cost.
 
 ```
 code path is mutating a value it should not touch, and you want the
-program to panic with a precise location rather than corrupt silently.
+program to stop at that write rather than corrupt silently.
 ```
 
 get\_store\_lock() is the function form of the \#lock attribute. Both return the same boolean.

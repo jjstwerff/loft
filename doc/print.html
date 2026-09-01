@@ -1580,48 +1580,66 @@ entry = "src/mylib.loft"   override the default entry path
 <section class="print-section" id="18-locks">
 <h1>Store Locks</h1>
 <p>Loft gives you two separate ways to protect a value from accidental changes:</p>
-<p>1. <strong>Compile-time const</strong>: mark a variable or parameter with <code>const</code> and the compiler refuses to compile any code that tries to reassign it. The check happens before the program even runs — zero runtime cost.</p>
+<p>1. <strong>Compile-time const</strong>: mark a variable or parameter with <code>const</code> and the compiler refuses to compile the writes that word forbids. The check happens before the program even runs — zero runtime cost.</p>
 <p>2. <strong>Runtime lock</strong>: the <code>#lock</code> attribute on a reference lets you lock a store at runtime so that any write attempt panics immediately, even across function boundaries. This is useful for debugging: turn it on when you suspect an unexpected mutation.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Counter</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
-<h2 id="const-parameters">const parameters</h2>
-<p><code>const</code> on a parameter is a compile-time promise: "this function will not modify this value." The compiler enforces it — any assignment to a const parameter is a compile error, caught before you run anything.</p>
+<h2 id="the-two-places-const-can-go">The two places <code>const</code> can go</h2>
+<p>A name has a slot, and the slot holds a value. Those are two different things to freeze, so <code>const</code> has two positions and they mean opposite halves:</p>
+<ul>
+<li><strong>'const' before the NAME</strong> — <code>const x = …</code> — freezes the <strong>slot</strong>. You can never point <code>x</code> at something else, but the value it holds stays mutable: you may still append to it and write its elements and fields. This is the builder shape — set it up once, fill it in place.</li>
+<li><strong>'const' before the TYPE</strong> — <code>x: const T</code> — freezes the <strong>value</strong>. You may swap in a whole new value, but you can never reach into the one that is there. This is the read-only shape — a shared table, a parameter a function promises not to touch.</li>
+</ul>
+<p>Write both — <code>const x: const T</code> — and the name is fully immutable.</p>
+<p>A plain number or boolean has no interior separate from its slot, so for those the two positions mean the same thing: both freeze it completely.</p>
+<p><code>const</code> before the TYPE is what a function uses to promise "I will not modify this". Every write through the parameter is a compile error: appending to it, writing an element, writing a field, or writing a field of a field.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">read_value</span>(self: const <span class="en">Counter</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
   self.value
 }</code></pre>
-<p>A non-const parameter leaves the store unlocked so the function can write.</p>
+<p>A parameter without <code>const</code> can write, and the write reaches the caller.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">increment</span>(self: <span class="en">Counter</span>) {
   self.value += <span class="nm">1</span>
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="const-local-variables">const local variables</h2>
-<p>Declare a local variable with <code>const</code> to signal that it will not change after its first assignment. The compiler rejects any later assignment to it — reassigning or appending to a const variable is a compile error.</p>
-<p>This is handy for configuration values or lookup tables that should never be overwritten by accident deep inside a long function.</p>
+<p><code>const</code> before the name is the common case for a local: a configuration value or a lookup table that should never be pointed somewhere else deep inside a long function.</p>
 <pre><code>  const <span class="kw">limit</span> = <span class="nm">100</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">limit</span> == <span class="nm">100</span>, <span class="st">"const integer is readable"</span>);</code></pre>
-<p>const also works for struct references.</p>
+<p>For a whole number the two positions agree, so this one is frozen outright: <code>limit = 200</code> and <code>limit += 1</code> are both compile errors.</p>
+<p>A const local holding a collection is the builder shape — the slot is write-once, the contents keep growing.</p>
+<pre><code>  const totals = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  totals += [<span class="nm">4</span>];
+  totals[<span class="nm">0</span>] = <span class="nm">9</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(totals) == <span class="nm">4</span>, <span class="st">"a const local still appends: {len(totals)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(totals[<span class="nm">0</span>] == <span class="nm">9</span>, <span class="st">"a const local still takes an element write"</span>);</code></pre>
+<p>The other position freezes the contents instead, and leaves the slot free.</p>
+<pre><code>  frozen: const <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  frozen = [<span class="nm">7</span>, <span class="nm">8</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(frozen) == <span class="nm">2</span>, <span class="st">"a value-const local still re-points: {len(frozen)}"</span>);</code></pre>
+<p><code>frozen += [9]</code> would not compile: the value is read-only.</p>
+<p>The same split applies to a struct.</p>
 <pre><code>  const cfg = <span class="en">Counter</span> {value: <span class="nm">42</span> };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cfg.value == <span class="nm">42</span>, <span class="st">"const reference is readable"</span>);</code></pre>
-<p>Passing a const reference to a const parameter is always allowed.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(cfg) == <span class="nm">42</span>, <span class="st">"const passed to const param"</span>);</code></pre>
-<h2 id="calling-methods-on-const-references">Calling methods on const references</h2>
-<p>A non-const method can still be called on a non-const variable even after you have manually locked the store; the lock is a runtime check.</p>
-<pre><code>  c = <span class="en">Counter</span> {value: <span class="nm">10</span> };
-  <span class="fn-call">increment</span>(c);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.value == <span class="nm">11</span>, <span class="st">"increment modified c"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cfg.value == <span class="nm">42</span>, <span class="st">"const reference is readable"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(cfg) == <span class="nm">42</span>, <span class="st">"const passed to const param"</span>);</code></pre>
 <h2 id="runtime-store-locks-with-lock">Runtime store locks with #lock</h2>
-<p><code>#lock</code> is an attribute on any reference variable. Setting it to true turns on a runtime guard: any write to that store will panic immediately, wherever it happens. A freshly created reference starts unlocked.</p>
+<p><code>const</code> is checked once, when the program is compiled. A lock is checked on every write, while the program runs — so it catches a write the compiler cannot see coming, wherever in the program it happens.</p>
+<p><code>#lock</code> is an attribute on any reference variable: a struct, a vector, any value that lives in a store. A freshly created one starts unlocked.</p>
 <pre><code>  d = <span class="en">Counter</span> {value: <span class="nm">5</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!d#lock, <span class="st">"new store starts unlocked"</span>);
   d#lock = <span class="kw">true</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d#lock, <span class="st">"store is locked after assignment"</span>);</code></pre>
-<p>You can still read from a locked store — only writes are blocked.</p>
+<p>Reading a locked store is still fine — only writes are blocked.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(d) == <span class="nm">5</span>, <span class="st">"locked store is still readable"</span>);</code></pre>
+<p>A write is not. <code>d.value = 6</code> panics here, and so does <code>increment(d)</code> — the guard is on the store, so it fires wherever the write is written. That is the point of the lock: the program stops at the write instead of carrying a value someone changed behind your back.</p>
+<p>Set it back to false to lift the guard.</p>
+<pre><code>  d#lock = <span class="kw">false</span>;
+  <span class="fn-call">increment</span>(d);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.value == <span class="nm">6</span>, <span class="st">"unlocking lets the write through again"</span>);</code></pre>
 <h2 id="when-to-use-each-approach">When to use each approach</h2>
 <ul>
 <li>Use <code>const</code> on parameters and locals to express your design intent and get compile-time safety at zero cost.</li>
-<li>Use <code>#lock = true</code> when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to panic with a precise location rather than corrupt silently.</li>
+<li>Use <code>#lock = true</code> when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to stop at that write rather than corrupt silently.</li>
 </ul>
 <p>get_store_lock() is the function form of the #lock attribute. Both return the same boolean.</p>
 <pre><code>  e = <span class="en">Counter</span> {value: <span class="nm">99</span> };

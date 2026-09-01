@@ -69,6 +69,14 @@ LOCK rather than a regression test: it has no build on which it fails, so it rec
 `@falsified-at: none` and must be checked by hand in both directions, because a guard made
 of expected failures passes most easily when it is proving nothing.
 
+⚠ **Check a multi-cell `@EXPECT_ERROR` guard ONE CELL AT A TIME, in its own file.** Every
+declaration after the first firing one is credited without matching (loft#1261), so the
+whole-file run and `make falsify` both report `n/n` on a build that produces one of them —
+measured on a guard whose four interesting cells all failed correctly when run alone.
+Until that is closed, the by-hand check is: split the cells out, run each against the
+build the guard was written for AND against this one, and record the two answers per cell
+in `@falsified-at`. `const-binds-through-every-append-route.loft` carries that table.
+
 ⚠ **Read the chapter's MODEL before its claims.** Chapter 17 said a library name needs
 its `libname::` prefix, and every section after that inherited it: the struct section
 called the bare form a parse error, the free-function section called the prefix required,
@@ -77,6 +85,15 @@ not exist. Reading claim by claim catches none of that — each sentence agrees 
 others, and the page only comes apart against the compiler. **One measurement did it: a
 bare call answering.** So before the sentence-level read, take the chapter's central
 rule, write the smallest program that would violate it, and run that.
+
+⚠ **And run the violating program even when you expect it to confirm the chapter** — the
+chapter is not the only thing it can falsify. Chapter 18 taught a single-axis `const`
+(the language has had two axes since @PLN40), which is a page defect like chapter 17's.
+But the same little programs, run across the shapes the chapter does NOT mention, found
+that `p: & const vector<T>` and `p: const hash<R[k]>` both accepted an append that reached
+the CALLER — a `const` promise silently not holding, on both backends, which no amount of
+reading could have produced. **The reference pass is a language probe that happens to
+start from the prose**; the chapter's own subject is the axis nobody has swept.
 
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
@@ -125,6 +142,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/15-lexer.loft` | 2026-09-01 | `23743006` |
 | `tests/docs/16-parser.loft` | 2026-09-01 | `512839a6` |
 | `tests/docs/17-libraries.loft` | 2026-09-01 | `361aded3` |
+| `tests/docs/18-locks.loft` | 2026-09-01 | `3477a51f` |
 
 ## See also
 
