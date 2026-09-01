@@ -1903,6 +1903,14 @@ impl Parser {
         // *first* (main) file winning over later directory/import re-parses.
         // (main.rs additionally sets it for the startup-cache path, which loads a
         // pre-parsed snapshot and never calls `parse()`.)
+        // loft#1260 — say who this compilation's lints are addressed to.  Both instances:
+        // the lexer's is what the parse writes into, and `p.diagnostics` is what the
+        // post-scope lints are handed.  Same place and same entry file as `source_dir`
+        // just below, which answers the same shape of question.
+        if !default {
+            self.lexer.set_lint_scope_for(filename);
+            self.diagnostics.set_lint_scope_for(filename);
+        }
         if !default && self.database.source_dir.is_empty() {
             self.database.source_dir = std::path::Path::new(filename)
                 .parent()
@@ -2892,6 +2900,14 @@ impl Parser {
     pub fn parse_source(&mut self, content: &str, filename: &str, default: bool) -> bool {
         // @PLN13 — establish `source_dir` from `filename` (like `parse`) so a `--script`
         // run resolves `use` imports + relative I/O against the script's own directory.
+        // loft#1260 — say who this compilation's lints are addressed to.  Both instances:
+        // the lexer's is what the parse writes into, and `p.diagnostics` is what the
+        // post-scope lints are handed.  Same place and same entry file as `source_dir`
+        // just below, which answers the same shape of question.
+        if !default {
+            self.lexer.set_lint_scope_for(filename);
+            self.diagnostics.set_lint_scope_for(filename);
+        }
         if !default && self.database.source_dir.is_empty() {
             self.database.source_dir = std::path::Path::new(filename)
                 .parent()

@@ -37,6 +37,16 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// The scratch path for `name` WITHOUT wiping it — for a second look at a layout
+/// `both_placements` has already built.
+fn scratch_path(name: &str) -> PathBuf {
+    std::env::var_os("TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("loft-placement-parity")
+        .join(name)
+}
+
 /// Write the library with `placement` set to `mode`, leaving its source alone.
 fn write_library(root: &Path, mode: &str, source: &str) {
     let pkg = root.join("libs").join("parity");
@@ -330,11 +340,28 @@ fn a_warning_in_the_library_does_not_decide_whether_it_can_be_placed() {
         "the in-process run must succeed: {}",
         inproc.stderr
     );
-    // The warning has to be REAL, or this test would pass on a library that
-    // never had one — the same blindness `the_gate_can_fail` guards against.
+    // The warning has to be REAL, or this test would pass on a library that never had one
+    // — the same blindness `the_gate_can_fail` guards against.  It is not read off the
+    // CONSUMER's run: `parity` is a dependency here, with its own manifest in its own
+    // directory, and loft#1260 addresses a lint to whoever can act on its cure, so the
+    // consumer is correctly not told about a `never-read` inside it.  Ask where it IS
+    // addressed — the library compiled as its own entry.
+    let alone = run(
+        &scratch_path("warned"),
+        &scratch_path("warned")
+            .join("libs")
+            .join("parity")
+            .join("src")
+            .join("parity.loft"),
+    );
     assert!(
-        inproc.stderr.contains("never read"),
+        alone.stderr.contains("never read"),
         "the probe library no longer warns, so it proves nothing: {:?}",
+        alone.stderr
+    );
+    assert!(
+        !inproc.stderr.contains("never read"),
+        "a dependency's warning must not reach its consumer (loft#1260): {:?}",
         inproc.stderr
     );
     assert_indistinguishable("a library that warns", &inproc, &placed);

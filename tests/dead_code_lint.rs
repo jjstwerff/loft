@@ -493,6 +493,14 @@ fn len_guard_does_not_silence_dead_store_native() {
 ///
 /// The entry file carries a `const` at exactly the library's dead-store line, so a
 /// regression reproduces the original symptom rather than merely failing.
+///
+/// loft#1260 put a `loft.toml` at the probe root, which is what makes the warning ADDRESSED
+/// here: a lint reaches only whoever can act on its cure, and with the entry and the library
+/// in one project that is this author. The attribution rule being pinned is unchanged and
+/// still needs two files to reproduce — what changed is that the same shape without a
+/// manifest is a consumer reading someone else's library, and
+/// [`a_dependency_dead_store_does_not_reach_a_consumer`] pins that it stays quiet. The two
+/// together say the whole rule: report it to the author, against the author's own file.
 #[test]
 fn a_dependency_dead_store_is_reported_against_the_dependency_file() {
     static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -500,6 +508,13 @@ fn a_dependency_dead_store_is_reported_against_the_dependency_file() {
     let root = std::env::temp_dir().join(format!("loft_781ds_{}_{n}", std::process::id()));
     let lib = root.join("lib");
     std::fs::create_dir_all(&lib).expect("probe dirs");
+    // One project, so the library is the author's own code and its lints are addressed to
+    // this build (loft#1260).
+    std::fs::write(
+        root.join("loft.toml"),
+        "[package]\nname = \"probe781ds\"\nversion = \"0.1.0\"\ncategories = [\"testing\"]\n",
+    )
+    .expect("write manifest");
 
     // The dead store is line 5 of the library: the whole-value bind `d = s.items` COPIES
     // (C86), `d` is mutated, and `d` is never read — so the write is lost.
@@ -551,6 +566,69 @@ fn a_dependency_dead_store_is_reported_against_the_dependency_file() {
     assert!(
         !all.contains("const UNRELATED781"),
         "the echoed line must be the dead store, not a `const`; output:\n{all}"
+    );
+}
+
+/// loft#1260 — the same dead store, read by a CONSUMER, does not reach them.
+///
+/// The twin of [`a_dependency_dead_store_is_reported_against_the_dependency_file`], and the
+/// pair is the point: identical sources, differing only in whether a `loft.toml` puts the
+/// library inside the project being built. Without one it is someone else's library, the
+/// cure is an edit the reader cannot make, and `dead-store` is a `warning` — so under
+/// `LOFT_DENY_WARNINGS` it would fail a consumer's build over a line in a file they do not
+/// own. Correct attribution (loft#781) made that failure name the right file; it did not
+/// make it theirs to fix.
+///
+/// Scored against the twin rather than against silence: a build that prints nothing passes
+/// this on its own.
+#[test]
+fn a_dependency_dead_store_does_not_reach_a_consumer() {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("loft_1260ds_{}_{n}", std::process::id()));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).expect("probe dirs");
+    // Deliberately NO manifest at the root: the entry is a bare script, so the library is a
+    // dependency rather than part of what is being built.
+    std::fs::write(
+        lib.join("dstore1260.loft"),
+        "// 1\npub struct Data1260 { items: vector<integer> }\n// 3\n\
+         pub fn lose_it(s: Data1260) -> integer {\n  d = s.items;\n  d[0] = 99;\n  \
+         return len(s.items);\n}\n",
+    )
+    .expect("write lib");
+    let entry = root.join("main1260ds.loft");
+    std::fs::write(
+        &entry,
+        "use dstore1260;\n// 2\n// 3\n// 4\nconst UNRELATED1260 = 1;\n// 6\n\
+         fn main() {\n  s = Data1260 { items: [1, 2, 3] };\n  println(\"{lose_it(s)}\");\n}\n",
+    )
+    .expect("write entry");
+
+    let out = Command::new(loft_bin())
+        .args(["--interpret", "--check"])
+        .arg("--lib")
+        .arg(&lib)
+        .arg(&entry)
+        .env("LOFT_NO_CACHE", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        !all.contains("is mutated but its value is never read"),
+        "a consumer cannot edit the dependency this points at; output:\n{all}"
+    );
+    assert!(
+        !all.contains("dstore1260.loft"),
+        "nothing about the dependency's internals belongs in a consumer's build; \
+         output:\n{all}"
     );
 }
 

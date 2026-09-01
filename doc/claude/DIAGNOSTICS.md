@@ -340,6 +340,61 @@ edited the file and left it broken. It is also why the family reached the LSP ye
 it could be applied — a quickfix a human clicks is a different risk from one a
 fix-on-save applies.
 
+## Who a diagnostic is addressed to
+
+There are **two independent axes**, and a new diagnostic answers both.
+
+| axis | question | decides | mechanism |
+|---|---|---|---|
+| **tier** | can ignoring it produce a WRONG RESULT? | does it gate CI | `Level::Warning` vs `Level::Advice` |
+| **reach** | who can act on the cure? | who sees it at all | `Diagnostics::reaches_author` |
+
+> **A diagnostic reaches only whoever can act on its cure.**
+
+Every `warning` and `advice` loft emits names a cure that is an edit to the code it points
+at — rename the field, declare the default, split the function. Pointing one at a reader who
+cannot make that edit is noise by construction, and noise that reads as *their* defect: the
+Parser chapter of the reference, whose whole content is four `parser::parse` calls, printed
+**eleven** notes about the internals of two libraries the reader did not write (loft#1260).
+
+**Nothing to do per lint.** The gate sits in `Diagnostics::add_at_coded`, the one place every
+route reaches — the `diagnostic!` / `diagnostic_at!` macros, and the post-scope lints that
+call `add_at_coded` directly with a `&mut Diagnostics`. A new lint is covered by existing.
+Errors are never dropped: a program that will not run has to say so whoever is reading.
+
+**The scope is the PROJECT, not the entry file**, and that distinction is the whole
+correctness of it. `Data::source_is_owned` answers `source == MAIN_SOURCE`, which is the
+entry — so under `loft test` a package's entry is `tests/*.loft` while the code under review
+is `src/*.loft`, and an entry-file rule silences a library's lints in exactly the run that
+exists to catch them. Measured, and it had already happened: `linked-group-apart` gated
+itself that way, fired for a struct in an owned program, and was silent for the same struct
+in its own package's test run. The scope is therefore the nearest `loft.toml` above the
+entry (`resolution_scope::project_root`); with no manifest it is the entry's own
+DIRECTORY — `main.loft` plus the modules beside it is an ordinary program, and scoping to
+the single entry file repeats the same mistake one level down. Not its subdirectories: a
+vendored dependency goes in a `lib/` below, which is not beside anything.
+
+**`warning` gets the same answer as `advice` here**, which is a decision rather than a
+consequence. A consumer who cannot edit a dependency is not helped by learning it has a
+lint, only told that something they cannot fix is wrong — and loft is meant to be boring
+([GOALS.md](GOALS.md)). Its own author still sees it and `LOFT_DENY_WARNINGS=1` still gates
+on it there, because when the author builds the library the library IS the project. The two
+alternatives were considered and rejected: *attribute it but keep printing it* makes the
+noise polite rather than actionable, and *keep it for a local path dependency* confuses
+"can write the bytes" with "owns the code" — the dogfood doctrine forbids editing a
+dependency's tree either way.
+
+So: **do not add an ownership test at a lint site.** One home, or the argument gets
+re-litigated per lint and the next author guesses.
+
+**The consequence for this repo, stated plainly.** `lib/*.loft` are libraries with no
+`loft.toml` of their own, and the repo root has none either — so when a doc chapter or a
+guard `use`s one, its lints are now addressed to nobody and are dropped. That is the right
+answer for a consumer and a loss for us, who can edit them. The channel that replaces it is
+to make the library the ENTRY: `loft --interpret lib/parser.loft` prints its own four, and
+the LSP does the same for the file being edited. The durable fix is for these to become
+packages with a manifest and their own CI, at which point their `loft test` sees everything.
+
 ## Adding a code
 
 1. Emit through `Diagnostics::add_at_coded` (or `diagnostic!(… code = "…", …)`), never the

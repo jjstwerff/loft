@@ -3667,11 +3667,12 @@ impl Parser {
     /// The line points at the member that JOINED — the later one, which is the field the
     /// author most likely added without knowing what it would join.
     fn advise_group_apart(&mut self, d_nr: u32, field_at: &[(String, crate::lexer::Position)]) {
-        if self.default
-            || self.first_pass
-            || !crate::keys::group_apart_lint_enabled()
-            || !self.data.source_is_owned(self.data.def(d_nr).source)
-        {
+        // No ownership test here: `Diagnostics::reaches_author` is the one home for who a
+        // lint is addressed to (loft#1260).  This site used to ask `source_is_owned`, which
+        // is `source == MAIN_SOURCE` — the ENTRY file, not the project — so the lint was
+        // silent in a package's own `loft test`, where the entry is `tests/*.loft` and the
+        // struct under review is in `src/*.loft`.  That is the one run it exists for.
+        if self.default || self.first_pass || !crate::keys::group_apart_lint_enabled() {
             return;
         }
         for (_, members) in self.collection_groups(d_nr) {

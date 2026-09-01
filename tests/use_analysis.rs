@@ -1668,6 +1668,13 @@ fn warn_copies_is_default_on_advice() {
 /// echoed source line TOGETHER — asserting the line alone passes on the bug. The entry
 /// file carries a `const` at exactly the library's copy line, so a regression does not
 /// merely fail, it reproduces the original symptom.
+///
+/// loft#1260 put a `loft.toml` at the probe root, which is what makes the notice ADDRESSED
+/// here: a lint reaches only whoever can act on its cure, and with the entry and the library
+/// in one project that is this author. The attribution rule is unchanged and still needs two
+/// files to reproduce — what changed is that the same shape WITHOUT a manifest is a consumer
+/// reading someone else's library, and the notice correctly does not reach them at all. The
+/// twin that pins that half is `dead_code_lint::a_dependency_dead_store_does_not_reach_a_consumer`.
 #[test]
 fn a_dependency_copy_is_reported_against_the_dependency_file() {
     static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -1675,6 +1682,13 @@ fn a_dependency_copy_is_reported_against_the_dependency_file() {
     let root = std::env::temp_dir().join(format!("loft_781_{}_{n}", std::process::id()));
     let lib = root.join("lib");
     std::fs::create_dir_all(&lib).expect("probe dirs");
+    // One project, so the library is the author's own code and its lints are addressed to
+    // this build (loft#1260).
+    std::fs::write(
+        root.join("loft.toml"),
+        "[package]\nname = \"probe781\"\nversion = \"0.1.0\"\ncategories = [\"testing\"]\n",
+    )
+    .expect("write manifest");
 
     // The copy is line 6 of the library: `xs` is named into the struct and used again
     // on the next line, so it survives and cannot be moved.

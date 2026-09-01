@@ -448,6 +448,20 @@ because one tier made the compat doctrine self-contradictory: `not null` is a de
 no-op kept parseable so unrepublished libs load, yet it hard-failed those libs' own CI.
 Renders as `advice:`, LSP severity Hint; `@EXPECT_WARNING` and `Test::advice()` match it.
 
+**And a second, orthogonal axis — REACH (loft#1260): a diagnostic reaches only whoever can
+act on its cure.** The tier decides whether it gates; reach decides who sees it. Every
+warning and advice names a cure that is an edit at the site it points at, so one pointing
+into a dependency is noise that reads as the reader's defect — the Parser chapter printed 11
+notes about two libraries the reader did not write. Enforced ONCE, in
+`Diagnostics::add_at_coded`, so a new lint is covered by existing and **a lint site must not
+add its own ownership test**. The scope is the PROJECT (nearest `loft.toml` above the entry),
+never the entry FILE: `source_is_owned` is `source == MAIN_SOURCE`, which under `loft test`
+is `tests/*.loft` and would silence `src/*.loft` in the one run that exists to catch it —
+measured on `linked-group-apart`, which had exactly that hole. With no manifest the scope
+is the entry's DIRECTORY (the modules beside `main.loft` are the author's; a vendored `lib/`
+below is not). Errors are never dropped.
+[DIAGNOSTICS.md § Who a diagnostic is addressed to](doc/claude/DIAGNOSTICS.md).
+
 **Error rendering (@PLN28):** `LOFT_ERRORS=pretty|compact` (or `--errors=…`) picks the
 user renderer — `pretty` (default: `file:line:col` + source line + caret) vs `compact`
 (single line; the test harness pins this). Diagnostic toggles (default-on opt-outs, except
