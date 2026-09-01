@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The one admission loft#1280 deliberately did NOT open, held in place until the dispatch
+// under it works.  Its passing twin is `1280-a-fn-ref-call-site-seeds-its-argument-types.loft`.
+//
+// Seeding a `fn(…)` parameter at a fn-ref call site makes a SHORT-form lambda argument PARSE,
+// and the fn-ref dispatch cannot carry a fn-ref argument at all.  Measured before deciding:
+//
+//     lf = fn(f: fn(integer) -> integer) -> integer { f(5) };
+//     lf(dbl)                                      NO OUTPUT, exit 0   /  --native E0308
+//     lf(fn(x: integer) -> integer { x * 2 })      NO OUTPUT, exit 0   /  --native E0308
+//     lf(bound())   where bound() returns a fn-ref  works — 10          /  works
+//
+// "No output" is literal: the whole of `main` prints nothing and the process reports success.
+// The LONG form needs no expected-type hint, which is what says the gap is the DISPATCH and
+// not the channel loft#1280 widened — so opening the admission would only move the short form
+// from this clean refusal into that silence.  loft#1285.
+//
+// ⚠ When loft#1285 is fixed, this file is the thing to delete, and the admission to open is
+// the `Self::seeds_lambda_hint(&expected)` arm named in the comment at the push site.
+//
+// @falsified-at: none — this file asserts a refusal that is UNCHANGED by loft#1280's commit,
+//   so there is no before/after for `make falsify` to score.  It is a ratchet against
+//   re-opening the admission, not a guard against a fixed defect: the negative control is
+//   opening that arm, which was run by hand and turns `lf(|x| { x * 2 })` into the silent
+//   exit-0 above.
+
+struct Anchor1280 { unused: integer }
+
+// Two expectations, because the refusal arrives as a pair and only the SECOND is what the
+// `--tests` harness surfaces first.  Pinning both is what keeps the cell about the real
+// diagnosis (`Cannot infer …`) rather than about its follow-on.
+// @EXPECT_ERROR: Cannot infer type for lambda parameter
+// @EXPECT_ERROR: Unknown variable 'x'
+fn pe_1280_short_lambda_to_a_fn_ref_callee() -> integer {
+  lf = fn(f: fn(integer) -> integer) -> integer { f(5) };
+  lf(|x| { x * 2 })
+}

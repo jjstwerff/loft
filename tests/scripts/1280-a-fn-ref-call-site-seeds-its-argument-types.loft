@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A fn-ref call site seeds its arguments from the callee's DECLARED parameter types, the way
+// a named call does.
+//
+//     fn axis(d: D) -> text { … }
+//     axis(North)                                     // resolved the bare variant
+//     lam = fn(d: D) -> text { … };  lam(North)        // refused
+//
+//     error: bare variant 'North' has no type here — qualify it as 'D.North', or give the
+//            target an enum type
+//
+// The declared parameter type is identical in both rows and the message's own cure — *give
+// the target an enum type* — is one the target already satisfied.  The `⇐` expected-type
+// channel's argument push reads a NAMED function's attribute (`n_<name>`), and a lambda has
+// no such definition; its parameter list says exactly the same thing.  `fnref_param_hint` is
+// the second spelling of the one question.  This is the fn-ref call-site position of
+// loft#1122's family (that one was the tuple-member position of the same channel).
+//
+// FIVE admissions ride that push and FOUR of them were unreachable through a lambda, so each
+// gets a cell rather than trusting the enum one:
+//
+//     bare enum variant     lam(North)
+//     collection literal    lam([1,2]) and the EMPTY lam([]), whose element width has no
+//                           other source
+//     tuple member          lam((North, 1)) — the enum question one level in
+//     format-string target  covered by the collection/enum pair mechanically; no cell
+//
+// ⚠ The FIFTH admission, a `fn(…)` parameter, is deliberately still CLOSED, and that is
+// measured rather than an oversight.  The fn-ref dispatch cannot carry a fn-ref ARGUMENT at
+// all: `lf(dbl)` and `lf(fn(x: integer) -> integer { … })` produce NO OUTPUT and exit 0 on
+// `--interpret` — the whole of `main` prints nothing and the process reports success — and
+// E0308 on `--native`.  The LONG form needs no hint, which is what says the gap is the
+// dispatch rather than this channel.  Opening the admission would move the short form from a
+// clean refusal into that silence, so `1280-reject-…` holds the refusal in place until
+// loft#1285 is closed.
+//
+// @falsified-at: 85973337 — interpret exit 1 -> 0, native exit 1 -> 0.
+//
+//   Both assertion columns read 0 -> 0 because the control REFUSES this file at parse time —
+//   no cell runs to fail one.  `exit` is the column that sees it, and it is the same on both
+//   backends because the refusal is the parser's, which both share.
+
+enum D1280 { North, South }
+
+fn axis1280(d: D1280) -> text { match d { North => "v", South => "h", } }
+fn sum1280(v: vector<integer>) -> integer { t = 0; for x in v { t = t + x; } t }
+fn tup1280(t: (D1280, integer)) -> text { match t.0 { North => "N", South => "S", } }
+
+// The filed shape: a bare variant against a lambda's declared enum parameter.
+fn a_bare_variant_resolves_against_a_lambda_parameter() {
+  lam = fn(d: D1280) -> text { match d { North => "v", South => "h", } };
+  assert(lam(North) == "v", "bare variant through a lambda: {lam(North)}");
+  assert(lam(South) == "h", "the other variant: {lam(South)}");
+  // the named callee is the control it had to be made to agree with
+  assert(axis1280(North) == "v", "bare variant through a named fn: {axis1280(North)}");
+  // and the qualified spelling, which always worked, still does
+  assert(lam(D1280.North) == "v", "qualified variant: {lam(D1280.North)}");
+}
+
+// The collection admission.  The EMPTY literal is the one that cannot be typed from itself —
+// its element width has no source other than the parameter.
+fn a_collection_literal_takes_the_lambda_parameter_type() {
+  lv = fn(v: vector<integer>) -> integer { t = 0; for x in v { t = t + x; } t };
+  assert(lv([1, 2]) == 3, "vector literal through a lambda: {lv([1,2])}");
+  assert(lv([]) == 0, "EMPTY vector literal through a lambda: {lv([])}");
+  assert(sum1280([1, 2]) == 3, "vector literal through a named fn: {sum1280([1,2])}");
+}
+
+// The tuple admission — the enum question one level in, which is loft#1122's shape reached
+// through a fn-ref callee.
+fn a_tuple_member_resolves_against_a_lambda_parameter() {
+  lt = fn(t: (D1280, integer)) -> text { match t.0 { North => "N", South => "S", } };
+  assert(lt((North, 1)) == "N", "tuple member through a lambda: {lt((North, 1))}");
+  assert(tup1280((North, 1)) == "N", "tuple member through a named fn: {tup1280((North, 1))}");
+}
+
+// The hint has to reach every SPELLING of a fn-ref callee, not only a lambda bound to a
+// local: a fn-ref holding a NAMED function, and a fn-ref PARAMETER whose type is declared by
+// the enclosing function rather than by an assignment here.
+fn every_spelling_of_a_fn_ref_callee_seeds_its_arguments() {
+  from_named = axis1280;
+  assert(from_named(North) == "v", "fn-ref holding a named fn: {from_named(North)}");
+
+  lam = fn(d: D1280) -> text { match d { North => "v", South => "h", } };
+  assert(through_param1280(lam) == "h", "fn-ref parameter: {through_param1280(lam)}");
+}
+
+fn through_param1280(f: fn(D1280) -> text) -> text { f(South) }

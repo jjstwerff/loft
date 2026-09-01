@@ -13789,9 +13789,33 @@ impl Parser {
             // there would let a bare variant become a stray placeholder var that
             // shadows the real variant on pass 2.
             if !in_named {
+                // The parameter type this argument is checked against, from whichever
+                // spelling of the callee is in scope: a NAMED function's attribute, or a
+                // fn-ref VARIABLE's parameter list.  Both answer "the callee's parameter at
+                // this position", and reading only the named one is why the whole chain
+                // below was unreachable through a lambda — `axis(North)` resolved the bare
+                // variant against `fn axis(d: D)` while `lam(North)` was refused for the
+                // IDENTICAL declared parameter type, with a message whose cure ("give the
+                // target an enum type") the target already satisfied (loft#1280).  It is
+                // the fn-ref call-site position of loft#1122's family.
                 let hint_d_nr = self.data.def_nr(&format!("n_{name}"));
-                if hint_d_nr != u32::MAX && arg_idx < self.data.attributes(hint_d_nr) {
-                    let expected = self.data.attr_type(hint_d_nr, arg_idx);
+                let hinted = if hint_d_nr != u32::MAX && arg_idx < self.data.attributes(hint_d_nr) {
+                    Some(self.data.attr_type(hint_d_nr, arg_idx))
+                } else {
+                    self.fnref_param_hint(name, arg_idx)
+                };
+                if let Some(expected) = hinted {
+                    // ⚠ A `fn(…)` parameter is deliberately NOT admitted here, and the
+                    // omission is MEASURED rather than an oversight.  The fn-ref dispatch
+                    // cannot carry a fn-ref ARGUMENT at all: `lf(dbl)` and
+                    // `lf(fn(x: integer) -> integer { … })` already produce NO OUTPUT and
+                    // exit 0 on `--interpret` — the whole of `main` prints nothing and the
+                    // process reports success — and E0308 on `--native`, where an `i64` is
+                    // passed for the `(u32, DbRef)` fn-ref pair.  The long form needs no hint,
+                    // which is what says the gap is the dispatch and not this channel.
+                    // Seeding `fn(…)` here would only move the SHORT form from a clean
+                    // refusal into that silence, so it stays closed until the dispatch can
+                    // take the argument — loft#1285.
                     if self.enum_context(&expected) {
                         self.expected = expected;
                     } else if Self::seeds_collection_hint(&expected) {
@@ -14251,6 +14275,31 @@ impl Parser {
         self.call(
             val, source, name, list, types, named_args, arg_pos, name_pos,
         )
+    }
+
+    /// The parameter type at `arg_idx` when `name` is a fn-ref in scope — a local of
+    /// `Type::Function`, or one this lambda can capture from the enclosing scope.
+    ///
+    /// The `⇐` expected-type channel's argument push reads a NAMED function's attribute, and
+    /// a lambda has no `n_<name>` definition to read.  Its declared parameter list says the
+    /// same thing, so this is the second spelling of one question rather than a second
+    /// question (loft#1280).
+    fn fnref_param_hint(&self, name: &str, arg_idx: usize) -> Option<Type> {
+        let v_nr = self.vars.var(name);
+        let tp = if v_nr == u16::MAX {
+            // A fn-ref reached only through the capture context — the same lookup
+            // `try_fn_ref_call` makes before the variable exists in this scope.
+            self.capture_context
+                .iter()
+                .find(|(n, t)| n == name && matches!(t, Type::Function(_, _, _)))
+                .map(|(_, t)| t.clone())?
+        } else {
+            self.vars.tp(v_nr).clone()
+        };
+        match tp.base() {
+            Type::Function(params, _, _) => params.get(arg_idx).cloned(),
+            _ => None,
+        }
     }
 
     /// Try to dispatch as a call through a function-reference variable.
