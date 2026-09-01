@@ -1466,3 +1466,86 @@ fn main() { v = S { a: 0 }; f(v); print(\"a={v.a}\\n\"); }
         "the field write lands; got {stdout:?}"
     );
 }
+
+// ── loft#1284 — (N-Store) reaches a TUPLE ELEMENT destination ───────────────
+//
+// `(N-Store)` covers the direct store, the field, the call-argument site and the branch join
+// (`D-Null-Join`), and a tuple ELEMENT reached none of them: the tuple-element assign branch
+// returns before the general assign path that asks.  So `s.i = null` on a non-null FIELD
+// warned while `c.1 = null` on a non-null ELEMENT said nothing, for the same store into the
+// same kind of slot.
+//
+// Both halves are asserted here rather than in a `.loft` guard, because half the claim is an
+// ABSENCE — the nullable spellings must stay QUIET — and a script guard can pin a
+// diagnostic's presence but not its absence.
+//
+// Falsified by counting: released `loft 2026.8.0` emits ZERO warnings for the program below —
+// not three of five, none — and here it emits three, on exactly the non-null destinations.
+
+const NSTORE_TUPLE_1284: &str = "\
+fn maybe(k: integer) -> integer? { if k > 0 { k } else { null } }
+fn main() {
+  a = (1, 5);                       a.1 = null;      print(\"1={a.1}\\n\");
+  b: (integer, integer?) = (1, 5);  b.1 = null;      print(\"2={b.1}\\n\");
+  c = (1, 5);                       c.1 = maybe(0);  print(\"3={c.1}\\n\");
+  d: (integer, integer?) = (1, 5);  d.1 = maybe(0);  print(\"4={d.1}\\n\");
+  e = (1, \"s\");                     e.1 = null;      print(\"5={e.1}\\n\");
+}
+";
+
+#[test]
+fn n_store_warns_on_a_non_null_tuple_element_1284() {
+    let (stdout, diag, _code) = run_with_warnings("nstore_tuple_1284", NSTORE_TUPLE_1284);
+    // THREE non-null destinations and two nullable ones.  The count is the assertion: a bare
+    // `contains` would pass while the nullable rows were also being flagged.
+    let hits = diag.matches("the tuple element").count();
+    assert_eq!(
+        hits, 3,
+        "expected (N-Store) on the three NON-NULL element destinations and on neither \
+         nullable one; got {hits} in {diag:?}"
+    );
+    // The bare-`null` form and the `τ?`-value form are different branches of the check, so
+    // each is named rather than trusting the count alone.
+    assert!(
+        diag.contains(
+            "`null` is stored into the tuple element of the non-null scalar type `integer`"
+        ),
+        "the bare-null branch did not fire; got {diag:?}"
+    );
+    assert!(
+        diag.contains("a nullable `integer?` is stored into the tuple element"),
+        "the nullable-value branch did not fire; got {diag:?}"
+    );
+    assert!(
+        diag.contains("non-null scalar type `text`"),
+        "the text element was not covered; got {diag:?}"
+    );
+    // The store PROCEEDS in every row — the warning is a nudge, not a refusal, and the slot
+    // holds the sentinel (loft#1282).
+    for expect in ["1=null", "2=null", "3=null", "4=null", "5=null"] {
+        assert!(
+            stdout.contains(expect),
+            "expected {expect:?} — the store proceeds and the slot reads back null; \
+             got {stdout:?}"
+        );
+    }
+}
+
+#[test]
+fn n_store_keeps_its_hard_error_for_a_narrow_tuple_element_1284() {
+    // The warn/error split is `(N-Store)`'s, not the destination's: a NARROW width spends its
+    // whole range on real values, so a null there would silently corrupt and stays a hard
+    // ERROR — for a tuple element exactly as for a field.
+    let source = "\
+fn main() {
+  n: (integer, u8) = (1, 5);
+  n.1 = null;
+  print(\"v={n.1}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("nstore_narrow_1284", source);
+    assert!(
+        diag.contains("cannot be stored into the tuple element"),
+        "a narrow element must keep the hard error, not soften to a warning; got {diag:?}"
+    );
+}
