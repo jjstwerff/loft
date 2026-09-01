@@ -2231,6 +2231,12 @@ use a separate collection or add after the loop"
         skip_validate: bool,
     ) -> Type {
         self.check_iter_safety(to, f_type, op);
+        // @FR-Const-Value / @FR-Const-Bind — ask the const question ONCE, here, ahead of
+        // every route below.  Whether a write is allowed is a property of the BINDING, not
+        // of the route that lowers it, so a guard held inside a route is only as complete
+        // as that route's target-shape test and every shape it declines falls through
+        // unchecked.  Two did.
+        self.guard_const_write(var_nr, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         // …and, for the same reason, the attribute a `fn(…)` field read on the LEFT came
@@ -4562,25 +4568,9 @@ use a separate collection or add after the loop"
         if self.validate_lock_assign(code, to) {
             return Type::Void;
         }
-        // For const variables the Insert path (e.g. struct constructor) bypasses
-        // towards_set, so check const here before that path can be taken.
-        if matches!(code, Value::Insert(_))
-            && !self.first_pass
-            && var_nr != u16::MAX
-            && self.vars.is_const_binding(var_nr)
-        {
-            // `const_report_var` — a mutated text argument is promoted to a `__tp_` local
-            // that inherits the const axis, so the guard fires on a name the author never
-            // wrote (loft#1250).  Ask the one home rather than the raw var here too.
-            let report = self.vars.const_report_var(var_nr);
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.const_noun(report),
-                self.vars.name(report)
-            );
-        }
+        // The const guard for `var_nr` is the one `guard_const_write` call above, asked
+        // before any of these routes: the `Value::Insert` path (a struct constructor)
+        // bypasses `towards_set` and used to need its own copy here.
         if !matches!(code, Value::Insert(_)) {
             let lhs = crate::parser::collections::AssignPlace {
                 parent_tp: &lhs_parent_tp,
@@ -5660,21 +5650,7 @@ use a separate collection or add after the loop"
         var_nr: u16,
         s_type: &Type,
     ) {
-        // A direct text write `s = …` / `s += …`: reject a binding-const rebind and a
-        // value-const append via the shared guard.  The `Insert` re-init form is a
-        // rebind handled by the `towards_set` check, so skip it here.
-        if !matches!(code, Value::Insert(_)) && self.const_write_blocked(var_nr, op) {
-            // `const_report_var` — see loft#1250.  This is the site a `const text`
-            // parameter's `s += "!"` reaches, so it is the one that was naming `__tp_s`.
-            let report = self.vars.const_report_var(var_nr);
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.const_noun(report),
-                self.vars.name(report)
-            );
-        }
+        // The const guard is `parse_assign_op_inner`'s, asked before it routed here.
         if let Value::Insert(ls) = code {
             // P217: same self-append handling as `Parser::assign_text`
             // (operators.rs).  When the RHS expression was `var + parts`,

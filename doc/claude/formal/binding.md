@@ -354,3 +354,16 @@ plus the `pln40_const_*` / `pln40_vc_*` / `pln40_enum_variant_*` negatives in
 falsifier — the enum-variant write `s.radius = 9` after a `Circle` match — is now a pinned
 regression (`pln40_enum_variant_const_reassign_rejected`), so a further regression fails
 the suite.
+
+⚠ **That oracle crosses `const` with the four quadrants and with struct-vs-enum, and with
+nothing else** — in particular it contains no `&` cell and no keyed collection, so it read
+green while `Const-Value` went unenforced on two whole append routes. The check used to sit
+INSIDE each lowering route, one copy per route, which makes it exactly as complete as each
+route's own target-shape test: `p: & const vector<T>` failed the vector route's
+`Type::Vector` destructure (`Type::base()` peels `Optional`, not `RefVar`) and
+`p: const hash<R[k]>` / `sorted` / `index` reached keyed append routes that carried no
+check at all. Both appended into the CALLER on both backends while the parameter said
+`const`. It is asked once now, ahead of the route dispatch, because whether a write is
+allowed is a property of the BINDING and never of the route that lowers it —
+`Parser::guard_const_write`, called from `parse_assign_op_inner`. The crossing the oracle
+was missing is `tests/scripts/const-binds-through-every-append-route.loft`.

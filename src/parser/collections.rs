@@ -1369,15 +1369,7 @@ impl Parser {
         }
         if crate::parser::vectors::is_collection(f_type) {
             if let Value::Var(nr) = to.unspan() {
-                if self.const_write_blocked(*nr, op) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                        self.const_noun(*nr),
-                        self.vars.name(*nr)
-                    );
-                }
+                // The const guard is `parse_assign_op_inner`'s, asked before it routed here.
                 return v_set(*nr, val.clone());
             }
             // @P308 — a KEYED-collection FIELD whole-assignment `s.h = expr`
@@ -1511,15 +1503,7 @@ impl Parser {
             // to catch.
             crate::parser::expressions::build_nested_tuple_assign(to, &tuple_lhs, code)
         } else if let Value::Var(nr) = to.unspan() {
-            if self.const_write_blocked(*nr, op) {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                    self.const_noun(*nr),
-                    self.vars.name(*nr)
-                );
-            }
+            // The const guard is `parse_assign_op_inner`'s, asked before it routed here.
             // This variable was created here and thus not yet used.
             self.var_usages(*nr, false);
             v_set(*nr, code)

@@ -7,9 +7,44 @@
 > state (how many are open, and which); everything below is the record behind it.
 
 OPEN: **1** (D-bind-11); D-bind-12 and D-bind-13 each opened and CLOSED the same day.
+D-const-2 opened and CLOSED the same day (2026-09-01), found by the Store Locks
+reference review.
 B-Ref-Reshape is enforced for all three of B-Disturb's events (D-bind-9,
 opened and closed 2026-08-05); B-Ref-AnnotationOnly is enforced in every position, not
 only the ones a leading `&` reaches (D-bind-10, 2026-08-09).
+
+> **D-const-2 — CLOSED (2026-09-01) — `(Const-Value)` went unenforced on two
+> append routes, and both mutated the CALLER while the parameter said `const`.**
+>
+> `fn f(p: & const vector<integer>) { p += [9]; }` compiled, and the caller's vector grew.
+> So did `fn add(p: const hash<R[k]>) { p += R { … } }`, and its `sorted` and `index`
+> twins. Both backends, exit 0, no diagnostic. `(Const-Value)` says the value behind a
+> value-const name is read-only and **every** through-write is rejected, so both are
+> deviations and neither was a design question.
+>
+> **One cause: the guard was attached to the lowering ROUTE rather than to the write.**
+> `parse_assign_op_inner` picks among a dozen routes by target shape, and each route that
+> could reach a const binding carried its own copy of the check — the vector builder, the
+> keyed builder, the two text paths, and a `Value::Insert` bypass added when the struct
+> constructor was found to miss the others. A per-route guard is exactly as complete as
+> that route's target-shape test, so every shape a route declines falls through unchecked,
+> silently. The vector route destructured `f_type.base()` against `Type::Vector`, and
+> `base()` peels `Optional` but not `RefVar` — so the `&` spelling of a vector parameter
+> was never asked. The keyed routes had no check at all.
+>
+> **The cure is that the question is not the route's to ask.** Whether a write is allowed
+> is a property of the BINDING; the route only decides how it is lowered. One
+> `guard_const_write(var_nr, op)` ahead of the dispatch replaces all five copies, which is
+> also why the fix DELETES code. Every diagnostic keeps its wording; the one observable
+> change is that a `;`-terminated statement now reports the same COLUMN as the same
+> statement without one, because the guard no longer runs after the terminator has been
+> consumed (`a_diagnostic_names_its_own_line_*` pins all three layouts).
+>
+> **Why it stayed unfound.** The rules' own oracle — `40-const-fields.loft` plus the
+> `pln40_*` negatives — crosses `const` with the four quadrants and with struct-vs-enum,
+> and with nothing else: no `&` cell, no keyed collection. An OPEN count is only as strong
+> as the crossings under it. `tests/scripts/const-binds-through-every-append-route.loft`
+> is that crossing, measured cell by cell against the pre-fix build.
 
 > **D-bind-13 — CLOSED (2026-08-26, loft#1106) — `(B-Copy)` did not reach a bind whose
 > destination was NULLABLE, and the same blindness left the callee's minted store

@@ -1996,16 +1996,21 @@ fn l1_missing_semicolon_in_body_single_diagnostic() {
 // source stops instead, so the three layouts below agree.
 //
 // The assertion is LAYOUT-INDEPENDENCE, not a hand-picked line: all three write the
-// offending statement on line 2, so all three must report line 2.  A hand-guessed
+// offending statement on line 2, so all three must report line 2 — and, since the const
+// question became ONE check ahead of the lowering routes rather than one inside each of
+// them, the same COLUMN too.  The write is `a = 42`, which ends at column 8, so the caret
+// is column 9 whatever terminates the statement.  A hand-guessed
 // expectation would only pin the layout it was written for.
 #[test]
 fn a_diagnostic_names_its_own_line_whatever_follows_it() {
     // Terminated on its own line — the `;` kept the cursor on line 2 by luck, which
-    // is why this cell always passed and the two below did not exist.
+    // is why this cell always passed and the two below did not exist.  It read 2:10 while
+    // the per-route checks ran after the `;` had been consumed; asked before the routes,
+    // the guard sees the same consumed source as the two unterminated layouts below.
     code!("fn f(a: const integer) {\n  a = 42;\n}\nfn test() { f(1); }")
         .error(
             "Cannot modify const parameter 'a'; remove 'const' or use a local copy \
-             at a_diagnostic_names_its_own_line_whatever_follows_it:2:10",
+             at a_diagnostic_names_its_own_line_whatever_follows_it:2:9",
         )
         .warning(
             "Parameter a is never read at a_diagnostic_names_its_own_line_whatever_follows_it:1:25",
