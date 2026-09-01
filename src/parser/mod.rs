@@ -970,13 +970,16 @@ static SKIP_WIDTH: [&str; 2] = ["}", "."];
 /// instead of the JSON the author asked for.
 ///
 /// `-1` is the JSON pseudo-radix (`OutputState::db_format` reads its sign); `1` is
-/// scientific notation.
+/// scientific notation; [`ops::HEX_UPPER`](crate::ops::HEX_UPPER) is hexadecimal in upper
+/// case, which needs a value of its own because `16` renders lower case.
 pub(crate) fn radix_for(id: &str) -> Option<i32> {
     let lower = id.to_lowercase();
     if lower == "j" || lower == "json" {
         Some(-1)
-    } else if id == "x" || id == "X" {
+    } else if id == "x" {
         Some(16)
+    } else if id == "X" {
+        Some(i32::from(crate::ops::HEX_UPPER))
     } else if id == "b" {
         Some(2)
     } else if id == "o" {

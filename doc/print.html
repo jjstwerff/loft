@@ -2953,8 +2953,14 @@ Printable  fn to_text(self: T) -&gt; text
   name = <span class="st">"world"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"hello {name}"</span> == <span class="st">"hello world"</span>, <span class="st">"basic interpolation"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1 + 2 = {1 + 2}"</span> == <span class="st">"1 + 2 = 3"</span>, <span class="st">"expression in braces"</span>);</code></pre>
+<p>The braces hold any expression, not just a name — a field, an index, a call, arithmetic.  Each is evaluated left to right as the text is built.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{len(name)}"</span> == <span class="st">"5"</span>, <span class="st">"a call inside a hole"</span>);</code></pre>
+<h2 id="writing-a-real-brace">Writing a real brace</h2>
+<p>A single <code>{</code> opens a hole, so double it to mean the character itself. <code>{{</code> is <code>{</code> and <code>}}</code> is <code>}</code>.  This is why the struct examples further down compare against <code>"{{x:1,y:2}}"</code> — that is the six-character text <code>{x:1,y:2}</code>.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{{literal}}"</span> == <span class="st">"{{literal}}"</span>, <span class="st">"doubled braces are one brace each"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"{{}}"</span>) == <span class="nm">2</span>, <span class="st">"`{{}}` is two characters, not four"</span>);</code></pre>
 <h2 id="width-and-alignment">Width and alignment</h2>
-<p>A number after <code>:</code> sets the minimum width.  The value is padded with spaces to fill the width. {val:6}   — right-aligned (default for numbers) {val:&gt;6}  — right-aligned (explicit) {val:&lt;6}  — left-aligned {val:^6}  — centered For text, the default alignment is left.  For numbers, right.</p>
+<p>A number after <code>:</code> sets the minimum width.  The value is padded with spaces to fill the width. {val:6}   — right-aligned (default for numbers) {val:&gt;6}  — right-aligned (explicit) {val:&lt;6}  — left-aligned {val:^6}  — centered Numbers are right-aligned by default; everything else — text, booleans, characters, vectors, structs — is left-aligned.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:6}"</span> == <span class="st">"    42"</span>, <span class="st">"default number align is right"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:&gt;6}"</span> == <span class="st">"    42"</span>, <span class="st">"explicit right-align"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:&lt;6}"</span> == <span class="st">"42    "</span>, <span class="st">"left-align number"</span>);
@@ -2963,24 +2969,48 @@ Printable  fn to_text(self: T) -&gt; text
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:6}"</span> == <span class="st">"hi    "</span>, <span class="st">"default text align is left"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:&gt;6}"</span> == <span class="st">"    hi"</span>, <span class="st">"right-align text"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:^6}"</span> == <span class="st">"  hi  "</span>, <span class="st">"center-align text"</span>);</code></pre>
+<p>A width shapes the field whatever the value is, so it pads a boolean or a vector exactly as it pads a number.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{true:6}"</span> == <span class="st">"true  "</span>, <span class="st">"a boolean is padded too"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{[1,2]:8}"</span> == <span class="st">"[1,2]   "</span>, <span class="st">"a vector is padded too"</span>);</code></pre>
+<h2 id="a-fill-character">A fill character</h2>
+<p>Put any single non-digit character before the alignment to pad with that character instead of a space.  It comes first, before the other flags.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:*&gt;6}"</span> == <span class="st">"****hi"</span>, <span class="st">"fill with `*`"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:*^11}"</span> == <span class="st">"****42*****"</span>, <span class="st">"fill and centre"</span>);</code></pre>
+<p>A digit cannot be a fill character, because a digit is how a width starts: <code>{n:0&gt;5}</code> is the comparison <code>0 &gt; 5</code>, not "pad with 0, right-align, width 5". Loft refuses that spec rather than guessing; to zero-pad, write <code>05</code>.</p>
+<h2 id="the-flags-may-be-written-in-any-order">The flags may be written in any order</h2>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0.5:+&lt;8.3}"</span> == <span class="st">"+0.500  "</span>, <span class="st">"sign before alignment"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0.5:&lt;+8.3}"</span> == <span class="st">"+0.500  "</span>, <span class="st">"alignment before sign"</span>);</code></pre>
 <h2 id="zero-padding">Zero padding</h2>
 <p>Prefix the width with <code>0</code> to pad with zeros instead of spaces.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{7:03}"</span> == <span class="st">"007"</span>, <span class="st">"zero-padded 3 digits"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:05}"</span> == <span class="st">"00042"</span>, <span class="st">"zero-padded 5 digits"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-1:04}"</span> == <span class="st">"-001"</span>, <span class="st">"zero-padded negative: sign before zeros"</span>);</code></pre>
+<p>A zero pad fills the number, so the sign — and a <code>0x</code> marker — stays in front of the zeros it adds.  This holds for floats and singles too.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:08.2}"</span> == <span class="st">"00003.12"</span>, <span class="st">"zero-padded float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-3.5:08.2}"</span> == <span class="st">"-0003.50"</span>, <span class="st">"zero-padded negative float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{1.5f:08.2}"</span> == <span class="st">"00001.50"</span>, <span class="st">"zero-padded single"</span>);</code></pre>
 <h2 id="signed-format">Signed format</h2>
 <p><code>+</code> forces a sign on positive numbers.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:+}"</span> == <span class="st">"+42"</span>, <span class="st">"explicit positive sign"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-42:+}"</span> == <span class="st">"-42"</span>, <span class="st">"negative sign always shown"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0:+}"</span> == <span class="st">"+0"</span>, <span class="st">"sign on zero"</span>);</code></pre>
+<p><code>+</code> is about numbers, not about integers — a float and a single take it too.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.5:+}"</span> == <span class="st">"+3.5"</span>, <span class="st">"sign on a float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0.5:+.3}"</span> == <span class="st">"+0.500"</span>, <span class="st">"sign beside a precision"</span>);</code></pre>
 <h2 id="hexadecimal-binary-octal">Hexadecimal, binary, octal</h2>
-<p><code>:x</code> for lowercase hex, <code>:#x</code> for hex with <code>0x</code> prefix. <code>:b</code> for binary, <code>:o</code> for octal.</p>
+<p><code>:x</code> for lowercase hex, <code>:X</code> for uppercase, <code>:#</code> adds the <code>0x</code> / <code>0b</code> / <code>0o</code> marker.  <code>:b</code> for binary, <code>:o</code> for octal, <code>:d</code> for the decimal default.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:x}"</span> == <span class="st">"ff"</span>, <span class="st">"hex lowercase"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:X}"</span> == <span class="st">"FF"</span>, <span class="st">"hex uppercase"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:#x}"</span> == <span class="st">"0xff"</span>, <span class="st">"hex with prefix"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{10:b}"</span> == <span class="st">"1010"</span>, <span class="st">"binary"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{8:o}"</span> == <span class="st">"10"</span>, <span class="st">"octal"</span>);</code></pre>
+<p>A width goes before the base letter, and the marker keeps its place in front of a zero pad — the result is something you can paste back into a program.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:6x}"</span> == <span class="st">"    ff"</span>, <span class="st">"hex in a 6-wide field"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:#06x}"</span> == <span class="st">"0x00ff"</span>, <span class="st">"the `0x` marker precedes the zeros"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{10:#06b}"</span> == <span class="st">"0b1010"</span>, <span class="st">"the `0b` marker precedes the zeros"</span>);</code></pre>
+<p>A base is a property of an integer, so asking for one anywhere else is a compile error rather than a spec that quietly does nothing.  <code>{2.5:x}</code> says "<code>x</code> has no effect on float".</p>
 <h2 id="float-precision">Float precision</h2>
-<p><code>.N</code> after the colon limits decimal places.</p>
+<p><code>.N</code> after the colon fixes the number of decimal places.  Only <code>float</code> and <code>single</code> have decimal places, so <code>.N</code> on any other type is a compile error: <code>{7:.2}</code> says "a precision has no effect on integer".  That matters because the mistake is easy to make and used to be silent — a <code>price</code> you thought was a float is an integer, and <code>{price:.2}</code> rendered no decimals at all.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.1}"</span> == <span class="st">"3.1"</span>, <span class="st">"1 decimal place"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.2}"</span> == <span class="st">"3.12"</span>, <span class="st">"2 decimal places"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.0}"</span> == <span class="st">"3"</span>, <span class="st">"0 decimal places"</span>);
@@ -2990,27 +3020,53 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:8.2}"</span> == <span class="st">"    3.12"</span>, <span class="st">"width 8 precision 2"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-3.125:8.2}"</span> == <span class="st">"   -3.12"</span>, <span class="st">"negative width+precision"</span>);</code></pre>
 <h2 id="json-format">JSON format</h2>
-<p><code>:j</code> serialises a struct or value as JSON. <code>:j</code> serialises a struct as JSON.  Use it on struct values, not primitives. See the JSON documentation page for full details.</p>
+<p><code>:j</code> (also spelled <code>:json</code> or <code>:J</code>) renders a struct, a vector or an enum as JSON instead of loft's own compact form: quoted keys, and nothing else changed.  See the JSON documentation page for full details.</p>
+<pre><code>  jp = <span class="en">Point</span> { x: <span class="nm">1</span>, y: <span class="nm">2</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{jp}"</span> == <span class="st">"{{x:1,y:2}}"</span>, <span class="st">"the default form is loft's own"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{jp:j}"</span> == <span class="st">"{{\"</span>x\<span class="st">":1,\"</span>y\<span class="st">":2}}"</span>, <span class="st">"`:j` quotes the keys"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{jp:json}"</span> == <span class="st">"{{\"</span>x\<span class="st">":1,\"</span>y\<span class="st">":2}}"</span>, <span class="st">"`:json` is the same spec"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{[jp]:j}"</span> == <span class="st">"[{{\"</span>x\<span class="st">":1,\"</span>y\<span class="st">":2}}]"</span>, <span class="st">"a vector of structs"</span>);</code></pre>
+<p><code>:j</code> is a choice between two renderings of a composite value, so it is not available on a scalar: <code>{7:j}</code> and <code>{"a":j}</code> are compile errors.  A scalar has one rendering, and inside a struct it is already the JSON one.</p>
 <h2 id="vector-format">Vector format</h2>
 <p>Vectors are formatted as <code>[a,b,c]</code> by default. A format specifier inside a <code>for</code> loop applies to each element.</p>
 <pre><code>  v = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"[1,2,3]"</span>, <span class="st">"default vector format"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v:&gt;10}"</span> == <span class="st">"   [1,2,3]"</span>, <span class="st">"a vector takes a field like anything else"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v:#}"</span> == <span class="st">"[ 1, 2, 3 ]"</span>, <span class="st">"`:#` spaces a vector out too"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{for fmt_n in 1..4 {fmt_n * 10}:04}"</span> == <span class="st">"[0010,0020,0030]"</span>, <span class="st">"formatted vector elements"</span>);</code></pre>
 <h2 id="large-integers-and-single-precision-floats">Large integers and single-precision floats</h2>
-<p><code>integer</code> is a 64-bit type, so even large values format like any other number; single-precision floats use the same specifiers too.</p>
+<p><code>integer</code> is a 64-bit type, so a value near its limit formats like any other number rather than losing digits.</p>
 <pre><code>  n = <span class="nm">1000000</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n}"</span> == <span class="st">"1000000"</span>, <span class="st">"integer default"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n:&gt;10}"</span> == <span class="st">"   1000000"</span>, <span class="st">"integer right-aligned"</span>);
-  f = <span class="nm">1.5f</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{f}"</span> == <span class="st">"1.5"</span>, <span class="st">"single default"</span>);</code></pre>
+  big = <span class="nm">9223372036854775807</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{big}"</span> == <span class="st">"9223372036854775807"</span>, <span class="st">"the largest integer keeps every digit"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{big:x}"</span> == <span class="st">"7fffffffffffffff"</span>, <span class="st">"and renders in any base"</span>);</code></pre>
+<p>A <code>single</code> is a float of half the width; every specifier above applies to it unchanged.</p>
+<pre><code>  f = <span class="nm">1.5f</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{f}"</span> == <span class="st">"1.5"</span>, <span class="st">"single default"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{f:8.2}"</span> == <span class="st">"    1.50"</span>, <span class="st">"single width and precision"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{f:+}"</span> == <span class="st">"+1.5"</span>, <span class="st">"single with a forced sign"</span>);</code></pre>
 <h2 id="pretty-printing-a-struct">Pretty-printing a struct</h2>
 <p>The <code>:#</code> specifier expands a struct across a spaced, readable layout instead of the compact default form.</p>
 <pre><code>  p = <span class="en">Point</span> { x: <span class="nm">1</span>, y: <span class="nm">2</span> };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{p}"</span> == <span class="st">"{{x:1,y:2}}"</span>, <span class="st">"default struct format is compact"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{p:#}"</span> == <span class="st">"{{ x: 1, y: 2 }}"</span>, <span class="st">"`:#` pretty-prints with spaces"</span>);</code></pre>
+<h2 id="null-and-why-formatting-never-fails">Null, and why formatting never fails</h2>
+<p>Every type has a null, and a null renders as the word <code>null</code>.  It is a value, not an error, so it pads like any other rendering.</p>
+<pre><code>  absent: <span class="ty"><a href="stdlib-types.html">integer</a></span>? = <span class="kw">null</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{absent}"</span> == <span class="st">"null"</span>, <span class="st">"a null integer renders as `null`"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{absent:&gt;8}"</span> == <span class="st">"    null"</span>, <span class="st">"and takes the field it was given"</span>);</code></pre>
+<p>A zero pad is for numbers, and <code>null</code> is not one, so it pads with spaces.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{absent:08}"</span> == <span class="st">"    null"</span>, <span class="st">"`null` is never zero-padded"</span>);</code></pre>
+<p>An operation inside a hole that cannot produce a value yields null rather than stopping the program, and the text says which fault it was.  Building a message — a log line, an error report — can therefore never itself fail.</p>
+<pre><code>  top = <span class="nm">5</span>;
+  bottom = <span class="nm">0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{top / bottom}"</span> == <span class="st">"null(/0)"</span>, <span class="st">"a division by zero names its cause"</span>);</code></pre>
 <h2 id="character-format">Character format</h2>
 <pre><code>  c = <span class="ch">'A'</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{c}"</span> == <span class="st">"A"</span>, <span class="st">"character default"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{c}"</span> == <span class="st">"A"</span>, <span class="st">"character default"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{c:&gt;5}"</span> == <span class="st">"    A"</span>, <span class="st">"a character takes a field like anything else"</span>);</code></pre>
 <h2 id="boolean-format">Boolean format</h2>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{true}"</span> == <span class="st">"true"</span>, <span class="st">"boolean true"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"boolean false"</span>);</code></pre>
@@ -3030,7 +3086,7 @@ Printable  fn to_text(self: T) -&gt; text
 <p>Each kind goes to its own method, so the type sees the real type.</p>
 <pre><code>  q3: <span class="en">Query</span> = <span class="st">"id={7} name={who}"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(q3.<span class="fn-call">shape</span>() == <span class="st">"&lt;id=&gt;&lt; name=&gt;[7][ada]"</span>, <span class="st">"an integer hole calls hole_int"</span>);</code></pre>
-<p>The database clients use this, so a query needs no placeholders to count: q: SqlText = "SELECT id FROM users WHERE name = {name}"; db.db_rows(q)</p>
+<p>The type is taken from an annotated binding or a struct-literal field.  A call argument and a return position do NOT target — <code>db.db_rows("… {name}")</code> is an ordinary text and reports <code>expected Query, got text</code> — so route through a local: q: SqlText = "SELECT id FROM users WHERE name = {name}"; db.db_rows(q) A format spec on a target's hole is a compile error, because the value is handed to the type rather than rendered: there is nothing for a width to pad.</p>
 <pre><code>}</code></pre>
 </section>
 <section class="print-section" id="31-ref-forward">

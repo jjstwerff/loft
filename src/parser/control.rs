@@ -5422,7 +5422,7 @@ impl Parser {
             self.lexer.peek().has,
             LexItem::Integer(..)
                 | LexItem::Long(_)
-                | LexItem::Float(_)
+                | LexItem::Float(..)
                 | LexItem::Single(_)
                 | LexItem::CString(_)
                 | LexItem::Character(_)

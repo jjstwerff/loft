@@ -2505,13 +2505,26 @@ impl Parser {
                             let s: &str = &st;
                             !SKIP_WIDTH.contains(&s) && crate::parser::radix_for(s).is_none()
                         }
-                        LexItem::Integer(_, _) | LexItem::Float(_) => true,
+                        LexItem::Integer(_, _) | LexItem::Float(..) => true,
                         _ => false,
                     } {
-                        if let LexResult {
-                            has: LexItem::Integer(_, true),
-                            position: _pos,
-                        } = self.lexer.peek()
+                        // @FR-F-Spec — a leading zero on the WIDTH is the zero-pad flag.
+                        // Both literal spellings carry it: `{n:08}` lexes as an Integer and
+                        // the dotted `{f:08.2}` — the only spelling that gives a width and a
+                        // precision at once — lexes as a Float, whose parsed value cannot
+                        // answer the question because `08.2` and `8.2` are the same number.
+                        //
+                        // A bare `.P` is the one spelling where the literal ahead is the
+                        // PRECISION and not the width, and a precision has no padding to
+                        // flag.  `state.float` is set by the `.` that `string_states` just
+                        // consumed, so it is what tells the two apart: without it `{f:.0}`
+                        // read its own precision digit as a leading zero and zero-padded a
+                        // field it never asked for.
+                        if !state.float
+                            && matches!(
+                                self.lexer.peek().has,
+                                LexItem::Integer(_, true) | LexItem::Float(_, true)
+                            )
                         {
                             state.token = "0";
                         }

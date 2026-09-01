@@ -6,15 +6,26 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **2** — `D-fmt-2` and `D-fmt-3` below, both opened 2026-08-29. `D-fmt-4` was opened and
-closed the same day by the `@FR-E-NullArg` walk.
+OPEN: **0**. `D-fmt-2` and `D-fmt-3` were closed on 2026-08-29 by the composition fix that
+`formatting.md` now states as a rule; this file carried them as open until 2026-09-01 because
+the commit that split it out of the rules doc replayed the list from before that fix.
+`D-fmt-4` was opened and closed the same day by the `@FR-E-NullArg` walk, and `D-fmt-5` on
+2026-09-01 by the reference review of the Formatting chapter.
 
 ⚠ **This doc read `OPEN: 0` for its whole life, and the walk that first asked found four
 defects.** The line was never a measurement: it said *"a rules doc adds no code deviation"*,
 which is a claim about the doc's GENRE rather than about the code, so no oracle stood under it.
-The four are `D-fmt-1` (closed) and the two open entries; what they have in common is that a
+The four are `D-fmt-1`, `D-fmt-2`, `D-fmt-3` and `D-fmt-4`; what they have in common is that a
 neighbouring spelling of each was already correct, which is what a differential oracle is
 blindest to — both backends agreed, and agreed on the wrong answer.
+
+⚠ **And the walk after it found eight more (`D-fmt-5`), in the same subject, three days
+later.** Both walks started from `@FR-F-Spec`; what the second one added was a CHAPTER to
+read against, and every one of the eight lives in a sentence the chapter states and no cell
+ran — the pad on a float, the case of `X`, a width before `b`. The lesson is not that the
+first walk was careless: a rule walk asks *does the code do what the rule says*, and a
+reference walk asks *does the code do what we PROMISED*, which is a larger set because the
+prose promises more than the rules state.
 
 ### D-fmt-1 — OPENED AND CLOSED (2026-08-29): four ways a spec did not reach its renderer
 
@@ -67,15 +78,72 @@ Found by walking `@FR-F-Spec`; all four fixed in the same pass, guards in
 - **Reversing this is a change to `(F-Render)`, not to the op.** If a character hole should
   carry its fault cause, the rule's character row says so and BOTH backends implement it.
 
-### D-fmt-2 — OPEN (2026-08-29, loft#1165): a `character` hole drops its whole spec
+### D-fmt-5 — OPENED AND CLOSED (2026-09-01): the spec halves that were only asked of an integer
+
+Found by the reference review of chapter 30 (Formatting), which is the first time the
+chapter's own subject was swept rather than read. Every entry has the same shape as
+`D-fmt-1`: a neighbouring spelling was already correct, both backends agreed, and the
+agreement was on the wrong answer. Guards in
+`tests/scripts/a-format-pad-reaches-the-float-renderers.loft`,
+`a-width-may-precede-any-base-letter.loft`, the eight new cells in
+`a-format-spec-the-renderer-cannot-execute-is-refused.loft`, and — for the one property an
+assertion cannot carry — `tests/format_width_is_bounded.rs`.
+
+1. **A width at or below zero allocated without bound.** `format_text` counted its pad
+   characters into a `usize`, so `-1` became 18_446_744_073_709_551_615 of them.
+   `println("{-1:0}")` — a one-line program with nothing unusual in it — asked the allocator
+   for the whole field in one call and the process was OOM-killed. No renderer spells a
+   negative width; they reach one by subtracting a sign or a `0x` marker they emitted first,
+   from a width that may be zero. **A time bound does not bound memory**: under
+   `LOFT_TIMEOUT` this reads as a hang, and the 2 GiB test ceiling is a STORE budget that a
+   Rust `String` is outside of. Fixed at the one place that pads (`width.max(0)`), which
+   covers every caller that subtracts.
+2. **A precision reached renderers that have no fractional digits.** Only the `float` and
+   `single` arms call `append_data_fp`, which is what splits a dotted `W.P`; everywhere else
+   the `f64` stayed in a slot the opcode reads as an i64 width — ~4.6e18 pad characters, so
+   `{n:8.2}` was (1) above, and `--native` handed rustc `E0308 expected i64, found f64` about
+   loft's internals. The bare `{n:.4}` was quieter and worse: it left the precision in the
+   width slot and rendered a four-wide field. Refused now, per type.
+3. **A radix reached renderers with no arm for it.** `x`, `b`, `o` and `e` were dropped in
+   silence on a float, a single, a character and a vector. The L9 escalation had always
+   stated the rule — *"a specifier that can never have any effect on the value type is always
+   a bug"* — and asked it of `text` and `boolean` only. The refusal is now stated as *which
+   radixes does this renderer have an arm for*, which every type answers.
+4. **`X` rendered lower-case hex.** `x` and `X` both mapped to radix 16 and the renderer
+   wrote `{val:x}` — so the spelling the compiler's own *"use `x`, `X`, `b`, `o` or `d`"*
+   diagnostic advertises answered `ff`, and nothing said the case had been ignored. The spec's
+   radix field is already a render MODE wearing a radix's name (`-1` is JSON, `1` is
+   scientific), so upper-case hex took a value of its own rather than a second argument on
+   four opcodes.
+5. **A float and a single dropped the pad token and the fill character.** The four float
+   opcodes had no slot for the token, so `ops::format_float` filled with a hard-coded space:
+   `{f:08.2}` padded with spaces and `{f:*^11}` ignored its fill, both silently, while the
+   same specs worked one type over.
+6. **A zero pad was inserted INTO a radix marker.** `{255:#06x}` rendered `000xff`, which is
+   not a spelling of 255 in any base and cannot be pasted back into a program. The decimal arm
+   carried the sign half of this alone; `format_prefixed` is now the one home for both.
+7. **A width could not precede `b` or `o`.** The lexer took `x` into a numeric literal only
+   directly after a leading `0` but took `b` and `o` anywhere in a digit run, so `{10:6b}`
+   scanned `6b`, failed to parse it, and reported *"Problem parsing number"* — a diagnostic
+   about a literal, pointing at a format spec, for a program with no literal wrong in it.
+   Every width-and-binary and width-and-octal spec was unspellable while the hex twin one
+   character away worked.
+8. **A null integer took a zero pad and a null float did not.** `{n:08}` rendered `0000null`
+   on the integer path, which reads as a numeric value and is a rendering of nothing. F-Spec
+   already draws the line for the sign (*"`null` … takes none"*); the pad is the same
+   question, and the two numeric renderers answered it differently. One home now, cited from
+   all three.
+
+### D-fmt-2 — CLOSED (2026-08-29, loft#1165): a `character` hole drops its whole spec
 
 `{c:>5}` renders `x`. `Type::Character` emits `OpAppendCharacter`, which takes the accumulator
 and the value and has nowhere to put width, alignment or fill. Violates F-Spec-Exec: it neither
-honours the spec nor refuses it. Needs a cast-to-text op or a scratch-buffer lowering, plus the
-decision F-Render forces — a null character renders as nothing, and a width would pad that to a
-full field.
+honours the spec nor refuses it. Closed by rendering into a scratch text with the padding removed and then formatting THAT
+text with it, which reaches every such type at once instead of widening one op signature per
+family. The decision F-Render forces is written into the rules: a null character renders as
+nothing, so `{nc:>3}` is a full field of pad characters.
 
-### D-fmt-3 — OPEN (2026-08-29, loft#1166): a vector/struct hole drops width and alignment
+### D-fmt-3 — CLOSED (2026-08-29, loft#1166): a vector/struct hole drops width and alignment
 
 `{v:>12}` renders `[1,2]`. The record arms pass `OutputState::db_format()`, which is two bits
 (`#` and the JSON radix); width, alignment and fill are not passed at all. Violates F-Spec-Exec

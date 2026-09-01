@@ -1812,6 +1812,21 @@ use #count instead"
         }
     }
 
+    /// The letter a reader wrote for this radix, for a diagnostic that names the part.
+    ///
+    /// The inverse of [`crate::parser::radix_for`]; `10` is the decimal default, which no
+    /// refusal reports, so it has no letter here.
+    fn radix_letter(radix: i32) -> &'static str {
+        match radix {
+            -1 => "j",
+            1 => "e",
+            2 => "b",
+            8 => "o",
+            16 => "x",
+            _ => "X",
+        }
+    }
+
     pub(crate) fn append_data_fp(state: OutputState, fmt: Value) -> (Value, Value, Value) {
         let mut a_width = state.width;
         let mut p_rec = Value::Int(-1); // -1 = no precision specified; 0 = :.0
@@ -2070,26 +2085,44 @@ use #count instead"
         // A specifier that can never have any effect on the value type is always a bug.
         if !self.first_pass {
             let is_text = matches!(tp, Type::Text(_));
-            let is_bool = matches!(tp, Type::Boolean);
+            // @FR-F-Spec — a precision reaches here in two spellings: a bare `.P` sets
+            // `float` and leaves `P` in the width slot, and the dotted `W.P` — the only
+            // spelling that gives both at once — arrives as one `Value::Float`.
+            let has_precision = state.float || matches!(state.width, Value::Float(_));
             // @FR-F-Spec — an integer renders through `ops::format_long`, which implements
-            // the four radixes the rule lists (`b` 2, `o` 8, decimal 10, `x`/`X` 16) and
+            // the radixes the rule lists (`b` 2, `o` 8, decimal 10, `x` 16, `X` upper) and
             // ends in `panic!("Unknown radix")` for anything else.  `get_radix` answers two
             // more: `e` (scientific, 1) and `j` (JSON, -1).  Neither means anything for an
             // integer and both reached that panic, so `println("{n:e}")` — a plain source
             // program — aborted the interpreter.  Refuse them here, where the value's type
             // is known, instead of at a renderer that has only the radix number left.
-            if matches!(tp, Type::Integer(_)) && !matches!(state.radix, 2 | 8 | 10 | 16) {
+            let hex_upper = i32::from(crate::ops::HEX_UPPER);
+            // @FR-F-Spec-Radix — which radixes the renderer for this type has an arm for.  An
+            // integer has the four bases plus upper-case hex; a heap value renders
+            // through the store walker, whose one switch is JSON; every other type has a
+            // single rendering, so only the decimal default reaches it.
+            let radix_ok = match tp {
+                Type::Integer(_) => {
+                    matches!(state.radix, 2 | 8 | 10 | 16) || state.radix == hex_upper
+                }
+                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, _, _) => {
+                    matches!(state.radix, 10 | -1)
+                }
+                _ => state.radix == 10,
+            };
+            if matches!(tp, Type::Integer(_)) && !radix_ok {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
                     "`{}` is not an integer format — use `x`, `X`, `b`, `o` or `d`",
-                    if state.radix == -1 { "j" } else { "e" }
+                    Self::radix_letter(state.radix)
                 );
-            } else if state.radix != 10 && (is_text || is_bool) {
+            } else if !radix_ok {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "Format specifier has no effect on {}",
+                    "`{}` has no effect on {}",
+                    Self::radix_letter(state.radix),
                     tp.name(&self.data)
                 );
             } else if is_text && state.token == "0" && state.width != Value::Int(0) {
@@ -2097,6 +2130,24 @@ use #count instead"
                     self.lexer,
                     Level::Error,
                     "Zero-padding has no effect on text"
+                );
+            } else if has_precision && !matches!(tp, Type::Float | Type::Single) {
+                // @FR-F-Spec — `.P` asks for fractional digits, and only `float` and
+                // `single` have them.  Their two arms are also the only ones that call
+                // `append_data_fp`, which is what splits a dotted `W.P` into a width and a
+                // precision; every other renderer takes `state.width` as written, so the
+                // `f64` of a dotted spec lands in a slot the opcode reads as an i64 WIDTH.
+                // Reinterpreted, `8.2` is a pad count of ~4.6e18: `--interpret` asks for
+                // the whole field in one allocation and is OOM-killed, and `--native`
+                // hands rustc `E0308 expected i64, found f64` about loft's internals.  The
+                // bare `.P` spelling is quieter and worse — it leaves the precision in the
+                // width slot, so `{n:.4}` renders a four-wide field in silence.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a precision has no effect on {} — `.N` sets fractional digits, \
+                     which only `float` and `single` have",
+                    tp.name(&self.data)
                 );
             }
         }
@@ -2150,19 +2201,29 @@ use #count instead"
             Type::Float => {
                 let dir = Value::Int(state.dir);
                 let plus = Value::Boolean(state.plus);
+                // @FR-F-Spec — the pad TOKEN travels with the rest of the spec.  The four
+                // float opcodes had no slot for it, so `ops::format_float` filled with a
+                // hard-coded space: `{f:06}` padded with spaces and `{f:*^11}` ignored its
+                // fill, both silently, while the same specs worked on an integer.
+                let token = Value::Int(i32::from(state.token.as_bytes()[0]));
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
                 list.push(self.cl(
                     &(start.to_owned() + "Float"),
-                    &[var, fmt, a_width, p_rec, plus, dir],
+                    &[var, fmt, a_width, p_rec, token, plus, dir],
                 ));
             }
             Type::Single => {
                 let dir = Value::Int(state.dir);
                 let plus = Value::Boolean(state.plus);
+                // @FR-F-Spec — the pad TOKEN travels with the rest of the spec.  The four
+                // float opcodes had no slot for it, so `ops::format_float` filled with a
+                // hard-coded space: `{f:06}` padded with spaces and `{f:*^11}` ignored its
+                // fill, both silently, while the same specs worked on an integer.
+                let token = Value::Int(i32::from(state.token.as_bytes()[0]));
                 let (fmt, a_width, p_rec) = Self::append_data_fp(state, format.clone());
                 list.push(self.cl(
                     &(start.to_owned() + "Single"),
-                    &[var, fmt, a_width, p_rec, plus, dir],
+                    &[var, fmt, a_width, p_rec, token, plus, dir],
                 ));
             }
             Type::Vector(cont, _) => {

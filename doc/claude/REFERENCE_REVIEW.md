@@ -295,6 +295,42 @@ chapter is where a reader learns the rule; the diagnostic is where they meet it 
 wrong, so the pass owns both** — and a refusal's message is a claim the suite does not check
 unless someone writes the cell.
 
+⚠ **A probe bounded by TIME reads an unbounded ALLOCATION as a hang — and the difference is
+one `ulimit` away.** The Formatting pass met `println("{1:8.2}")`, which `LOFT_TIMEOUT` cut off
+after sixty seconds, and it went into the notes as a hang with a guess about the instruction
+stream. It is an allocator: the dotted spec leaves an `f64` in a slot the opcode reads as an
+i64 width, which is a pad count of ~4.6e18, and the process grows until the kernel OOM killer
+takes it — along with every other process in the session's cgroup, which is how three sessions
+died before anyone read the journal. CLAUDE.md already says a time bound does not bound memory;
+what this pass adds is that **the review's own probes are where you meet it first**, because a
+review deliberately runs the spellings nobody has run. Run them under `ulimit -v`, and read
+`anon-rss` in the OOM record before reaching for the page-cache explanation. The 2 GiB test
+ceiling does not cover this — it is a STORE budget, and a Rust `String` is outside it.
+
+⚠ **A refusal spelled as a LIST OF TYPES cannot say what it left out.** The compiler had one
+line — *"a specifier that can never have any effect on the value type is always a bug"* — and
+asked it of `text` and `boolean`. Every other type dropped a radix in silence, and a precision
+was dropped or, on the dotted spelling, fatal. Nothing in the code looked incomplete, because a
+list of two types reads as a decision rather than as a sample. The cure is to state the
+question the renderer can answer — *which radixes does THIS type have an arm for* — which every
+type must then answer, including the ones added later. **When a chapter documents a set (bases,
+flags, precisions), check the code's refusal against the set, not against the examples**: the
+examples are drawn from the same two types that already worked.
+
+⚠ **Split a guard by the CHANNEL its control fails through.** The first draft of the pad guard
+put assertion cells beside two cells that are a *compile error* on the control. Run against the
+build it was written to catch, the file stopped at the parse error and not one assertion ran —
+so it scored as caught while proving nothing about the four defects it was written for. The
+existing sibling guard had already recorded this exact hazard, one file over. **`make falsify`
+is what says so**, and only because it reports which channel moved: exit, asserts and refusals
+are separate columns for this reason.
+
+⚠ **A chapter can USE a construct it never explains.** Three cells in the Formatting chapter
+compared against `"{{x:1,y:2}}"` — the doubled braces that mean one literal brace — and no
+sentence anywhere on the page said what `{{` is. It is invisible to every check the suite has,
+because the cells pass: the escape works. Read the chapter's own EXPECTED VALUES as a list and
+ask which of them a first-time reader could not have written.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -353,6 +389,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/27-coroutines.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
+| `tests/docs/30-formatting.loft` | 2026-09-01 | `5792ff53` |
 
 ## See also
 
