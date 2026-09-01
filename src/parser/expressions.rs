@@ -3710,11 +3710,23 @@ use a separate collection or add after the loop"
         // An `Optional(τ)` field lays out exactly like `τ` (@PLN25 slice (b)), so the
         // replace it needs is the same one — the `?` is about what the field may hold,
         // not about how it is stored.
+        //
+        // loft#1279 — and a CAPTURED collection is the same lvalue wearing a different op.
+        // @PLN93 taught the APPEND path that a capture resolves to `OpGetDbRef` of the
+        // closure-record field rather than to `OpGetField` (`is_captured_dbref` exists for
+        // exactly that), and the REPLACE path was never told.  Both of this site's symptoms
+        // followed from the one omission: a LITERAL right-hand side still had @PLN93's
+        // build-into-the-target path to run, so it appended to what was already there
+        // (`v = [7,7]` over `[1,2]` read back `[1,2,7,7]`), while every other right-hand
+        // side had nothing to run at all and the statement collapsed to a bare read of its
+        // RHS — the emitted lambda for `c = src` is one `OpGetDbRef` and no store, a write
+        // dropped in silence.  This is P261's case and loft#917's case a third time: the
+        // selector, not the lowering, is what keeps being too narrow.
         if !self.first_pass
             && op == "="
             && var_nr == u16::MAX
             && matches!(f_type.base(), Type::Vector(_, _))
-            && self.is_field(to)
+            && (self.is_field(to) || self.is_captured_dbref(to))
         {
             // Read the `?` BEFORE `.base()` peels it away — it is the whole difference
             // between a field that may record absence and one that may not (loft#917).
@@ -3747,6 +3759,15 @@ use a separate collection or add after the loop"
             }
             let is_empty_literal = matches!(code, Value::Insert(ls) if ls.is_empty());
             let is_nonempty_literal = matches!(code, Value::Insert(ls) if !ls.is_empty());
+            // A vector LITERAL assigned to a CAPTURED collection arrives as a `Block` that
+            // builds its elements STRAIGHT INTO the destination — @PLN93's build-into-target,
+            // which is what makes `coll += [x]` work through a capture — where a struct field
+            // gets a `Value::Insert` of the same ops.  Different wrapper, same situation, and
+            // the cure is P261's either way: run the clear FIRST and let the construction
+            // fill an emptied collection.  Treating it as an ordinary value RHS instead is
+            // what read back EMPTY — the clear ran after the build and erased it.
+            let literal_builds_into_dest =
+                matches!(code, Value::Block(_)) && self.value_writes_into(code, to);
             let rhs_is_vector = matches!(s_type.base(), Type::Vector(_, _));
             if is_empty_literal {
                 *code = Value::Insert(self.clear_vector_field(to, &lhs_parent_tp));
@@ -3759,6 +3780,12 @@ use a separate collection or add after the loop"
                         ls.insert(i, op);
                     }
                 }
+                return Type::Void;
+            }
+            if literal_builds_into_dest {
+                let mut ops = self.clear_vector_field(to, &lhs_parent_tp);
+                ops.push(code.clone());
+                *code = Value::Insert(ops);
                 return Type::Void;
             }
             if !is_nonempty_literal
@@ -4954,6 +4981,61 @@ use a separate collection or add after the loop"
     ///
     /// Restoring on the way out confines each nesting level to its own answer: the inner
     /// parse cannot leak one outward, and cannot destroy the one already standing.
+    /// Does `hay` WRITE INTO `needle` — is there a mutating call in its tree whose target
+    /// (first argument) is that exact place?
+    ///
+    /// Asked of a right-hand side and its destination, this is *"does this expression
+    /// construct in place?"* — the shape a vector literal takes when the destination is a
+    /// collection it can build straight into.  Such an RHS needs the clear BEFORE it and no
+    /// append after it (loft#1279).
+    ///
+    /// ⚠ *Writes into*, not *mentions*.  Asked as "does the RHS name the destination
+    /// anywhere?", this also answers yes for a comprehension that READS its own destination
+    /// (`s.v = [… for x in s.v]`, loft#1195) — which builds a fresh vector and needs the
+    /// ordinary clear-then-append.  Treating that as build-in-place clears the source before
+    /// the comprehension reads it and assigns nothing back: seven cells of loft#1195's guard
+    /// answered `[]`.  The mutating-op test is what separates reading the destination from
+    /// filling it, and it shares [`crate::parser::op_writes_first_arg`] with the two mutation
+    /// walkers so the three cannot drift.
+    fn value_writes_into(&self, hay: &Value, needle: &Value) -> bool {
+        let hay = hay.unspan();
+        if let Value::Call(d, args) = hay
+            && (*d as usize) < self.data.definitions.len()
+            && crate::parser::op_writes_first_arg(self.data.def(*d).name())
+            && let Some(first) = args.first()
+            && *first.unspan() == *needle.unspan()
+        {
+            return true;
+        }
+        match hay {
+            Value::Call(_, args)
+            | Value::Insert(args)
+            | Value::Tuple(args)
+            | Value::Parallel(args)
+            | Value::CallRef(_, args) => args.iter().any(|a| self.value_writes_into(a, needle)),
+            Value::Block(b) | Value::Loop(b) => b
+                .operators
+                .iter()
+                .any(|o| self.value_writes_into(o, needle)),
+            Value::If(c, t, e) => {
+                self.value_writes_into(c, needle)
+                    || self.value_writes_into(t, needle)
+                    || self.value_writes_into(e, needle)
+            }
+            Value::Set(_, v)
+            | Value::Return(v)
+            | Value::Drop(v)
+            | Value::Yield(v)
+            | Value::TuplePut(_, _, v) => self.value_writes_into(v, needle),
+            Value::Iter(_, a, b, c) => {
+                self.value_writes_into(a, needle)
+                    || self.value_writes_into(b, needle)
+                    || self.value_writes_into(c, needle)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let outer_discharge = self.last_place_discharge;
         let tp = self.parse_assign_inner(code);

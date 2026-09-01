@@ -88,6 +88,37 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > `parse_map` alone, but the diagnostic fires at the LAMBDA, so it was never the
 > single-site risk it looked like).
 
+> **D-clo-19 — OPENED AND CLOSED (2026-09-01, loft#1279): `=` on a captured collection was two
+> other operations, decided by the SOURCE of the right-hand side.**
+>
+> A literal APPENDED (`b = [7,7]` over `[1,2]` read back `[1,2,7,7]`); a variable, a call and
+> an empty literal were DROPPED entirely, the statement collapsing to a bare read of its own
+> right-hand side — the emitted lambda for `c = src` is one `OpGetDbRef` and no store at all.
+> Both backends, no diagnostic.
+>
+> One cause under both. A captured collection is reached through the closure record's shared
+> DbRef, which resolves to `OpGetDbRef` and not to the `OpGetField` a struct field gives.
+> @PLN93 taught the APPEND path that difference — `is_captured_dbref` exists for exactly it —
+> and the whole-value REPLACE path was never told. So a LITERAL right-hand side still had
+> @PLN93's build-into-the-target lowering to run and appended, because nothing had cleared
+> first; every other right-hand side had nothing to run at all.
+>
+> That selector has now been too narrow three times, and the lowering was right each time:
+> P261 (a literal into a struct field appended), loft#917 (a `vector<τ>?` field, whose
+> `Optional` wrapper it did not match), and this. The cure is the same clear-then-fill in all
+> three; only the shape of the destination kept changing.
+>
+> ⚠ The literal needs the clear BEFORE it and no append after it, because it builds INTO the
+> destination — the first version of this fix appended and answered `[]`, having cleared away
+> what it had just built. `value_mentions` is what asks that question: an RHS that names its
+> own destination is one that constructs in place.
+>
+> Guard `tests/scripts/1279-a-captured-collection-rebind-replaces.loft`. Its sharp cell is
+> `bx.items = [7,7]`: the same rebind reaching the same kind of collection through a captured
+> STRUCT was correct throughout, which is what said this was a missing lowering rather than a
+> limit of capture. The remaining question — which BINDING a captured rebind names, where a
+> captured PARAMETER's rebind still reaches the caller — is D-clo-20 (loft#1281).
+
 > **D-clo-17 — OPENED AND CLOSED (2026-08-30, loft#1202): a captured record ENUM was TAKEN by
 > the caller's bind, because no delivery was ever classified for it.** `@FR-L-CapHeap` says a
 > captured heap value is SHARED — the caller may read it, never take it — and D-clo-11 made
