@@ -2519,7 +2519,7 @@ Printable  fn to_text(self: T) -&gt; text
 <h2 id="iterating-with-a-for-loop">Iterating with a for loop</h2>
 <p>A <code>for</code> loop drives the generator forward automatically. The body runs once per yielded value. Use <code>break</code> to stop early without consuming the rest.</p>
 <h2 id="the-body-really-is-suspended">The body really is suspended</h2>
-<p>Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next <code>yield</code>.</p>
+<p>Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next <code>yield</code>.  Write the loop so its body ENDS in a single <code>yield</code> and this holds on both backends.</p>
 <h2 id="manual-advance-with-next-and-exhausted">Manual advance with next() and exhausted()</h2>
 <p>Call <code>next(gen)</code> yourself when you need fine-grained control.</p>
 <h2 id="generators-with-parameters">Generators with parameters</h2>
@@ -2604,6 +2604,7 @@ Printable  fn to_text(self: T) -&gt; text
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(idx == <span class="nm">4</span>, <span class="st">"squares count: {idx}"</span>);</code></pre>
 <h2 id="the-body-really-is-suspended">The body really is suspended</h2>
 <p><code>counted</code> is asked for a thousand values and the loop breaks after six. Its step counter shows the body ran six times, not a thousand — the work for the values nobody asked for was never done.</p>
+<p>⚠ That holds on BOTH backends for the shape written here: a loop whose body ends in one unconditional <code>yield</code>.  Other shapes — a statement after the yield, a yield inside an <code>if</code> or <code>match</code>, a nested loop, a <code>continue</code> — still run the whole loop eagerly on --native, so their side effects happen for values the consumer never asks for (measured: 1000 steps where the interpreter does 5).  The VALUES are the same either way; it is the side effects that differ.  Keep the yield last, or do not put observable work in a generator body.  COROUTINE.md tracks this as CL-9.</p>
 <pre><code>  trace = <span class="en">Trace</span> { steps: <span class="nm">0</span> };
   seen = <span class="nm">0</span>;
   <span class="kw">for</span> n <span class="kw">in</span> <span class="fn-call">counted</span>(<span class="nm">1000</span>, trace) {
@@ -2670,16 +2671,20 @@ Printable  fn to_text(self: T) -&gt; text
 <p>A tuple groups a fixed number of values of possibly different types. You do not need to give a tuple a name — use it directly where you need to pass or return multiple values together. Access individual elements with <code>.0</code>, <code>.1</code>, etc.</p>
 <h2 id="creating-tuples">Creating tuples</h2>
 <p>Write the elements in parentheses, separated by commas. The compiler infers the element types from what you put in. You can add an explicit type annotation when needed.</p>
+<h2 id="elements-of-different-types">Elements of different types</h2>
+<p>The elements do not have to share a type — this is the usual reason to reach for a tuple instead of a vector.</p>
 <h2 id="accessing-elements">Accessing elements</h2>
-<p>Use <code>.0</code>, <code>.1</code>, <code>.2</code>, ... to read individual elements.</p>
+<p>Use <code>.0</code>, <code>.1</code>, <code>.2</code>, ... to read individual elements. The index is part of the program text, so it is checked when you compile: naming an element the tuple does not have is an error, never a null.</p>
 <h2 id="modifying-elements">Modifying elements</h2>
 <p>Tuple elements can be reassigned like ordinary variables.</p>
 <h2 id="tuples-as-function-parameters">Tuples as function parameters</h2>
-<p>Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter (<code>&amp;</code>) gives the function a direct link to the caller's tuple so it can modify individual elements in place.</p>
+<p>Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter (<code>&amp;</code>) gives the function a direct link to the caller's tuple so it can modify individual elements in place. A <code>&amp;</code> tuple holds scalar elements only.</p>
 <h2 id="returning-tuples">Returning tuples</h2>
 <p>A function can return a tuple to give back more than one value at once.</p>
 <h2 id="destructuring">Destructuring</h2>
 <p>Assign a tuple to multiple names in one step using the <code>(a, b) = expr</code> form. This is concise when a function returns a tuple and you need both values.</p>
+<h2 id="comparing-tuples">Comparing tuples</h2>
+<p>Two tuples of the same shape compare element by element, left to right.</p>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <p>Tuples can have any number of elements.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">min_max</span>(lo: <span class="ty"><a href="stdlib-types.html">integer</a></span>, hi: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
@@ -2694,6 +2699,15 @@ Printable  fn to_text(self: T) -&gt; text
   pair.<span class="nm">0</span> = pair.<span class="nm">1</span>;
   pair.<span class="nm">1</span> = tmp;
 }</code></pre>
+<p>Writes to its own copy.  The caller's tuple is a different tuple, so the write below is invisible outside this function.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">doubled_first</span>(p: (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>)) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  p.<span class="nm">0</span> = p.<span class="nm">0</span> * <span class="nm">2</span>;
+  p.<span class="nm">0</span> + p.<span class="nm">1</span>
+}</code></pre>
+<p>A tuple is the natural return type when the two values have different types.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">label_and_score</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; (<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
+  <span class="kw">if</span> n &gt;= <span class="nm">50</span> { (<span class="st">"pass"</span>, n) } <span class="kw">else</span> { (<span class="st">"fail"</span>, n) }
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="creating-tuples">Creating tuples</h2>
 <pre><code>  t = (<span class="nm">10</span>, <span class="nm">20</span>);
@@ -2702,15 +2716,31 @@ Printable  fn to_text(self: T) -&gt; text
 <p>Type annotation</p>
 <pre><code>  w: (<span class="ty"><a href="stdlib-types.html">integer</a></span>, <span class="ty"><a href="stdlib-types.html">integer</a></span>) = (<span class="nm">3</span>, <span class="nm">4</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(w.<span class="nm">0</span> + w.<span class="nm">1</span> == <span class="nm">7</span>, <span class="st">"annotated sum: {w.0+w.1}"</span>);</code></pre>
+<h2 id="elements-of-different-types">Elements of different types</h2>
+<p>Each element keeps its own type, and <code>.0</code> / <code>.1</code> read them as that type.</p>
+<pre><code>  entry = (<span class="nm">1</span>, <span class="st">"one"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(entry.<span class="nm">0</span> == <span class="nm">1</span>, <span class="st">"entry.0: {entry.0}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(entry.<span class="nm">1</span> == <span class="st">"one"</span>, <span class="st">"entry.1: {entry.1}"</span>);</code></pre>
+<pre><code>  mixed: (<span class="ty"><a href="stdlib-types.html">text</a></span>, <span class="ty"><a href="stdlib-types.html">float</a></span>, <span class="ty"><a href="stdlib-types.html">boolean</a></span>) = (<span class="st">"pi"</span>, <span class="nm">3.5</span>, <span class="kw">true</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mixed.<span class="nm">0</span> == <span class="st">"pi"</span>, <span class="st">"mixed.0: {mixed.0}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mixed.<span class="nm">1</span> == <span class="nm">3.5</span>, <span class="st">"mixed.1: {mixed.1}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(mixed.<span class="nm">2</span>, <span class="st">"mixed.2: {mixed.2}"</span>);</code></pre>
+<p>A tuple element may itself be a tuple.</p>
+<pre><code>  nested = (<span class="nm">1</span>, (<span class="nm">2</span>, <span class="nm">3</span>));
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(nested.<span class="nm">1.0</span> == <span class="nm">2</span> &amp;&amp; nested.<span class="nm">1.1</span> == <span class="nm">3</span>, <span class="st">"nested: {nested.1.0},{nested.1.1}"</span>);</code></pre>
 <h2 id="modifying-elements">Modifying elements</h2>
 <pre><code>  v = (<span class="nm">1</span>, <span class="nm">2</span>);
   v.<span class="nm">0</span> = <span class="nm">10</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v.<span class="nm">0</span> + v.<span class="nm">1</span> == <span class="nm">12</span>, <span class="st">"after assign: {v.0}+{v.1}"</span>);</code></pre>
-<h2 id="tuples-as-value-parameters">Tuples as value parameters</h2>
+<h2 id="tuples-as-function-parameters">Tuples as function parameters</h2>
+<p><code>doubled_first</code> writes to its parameter and returns what it computed. The caller's tuple still reads 10 — the parameter was a copy of it.</p>
 <pre><code>  p = (<span class="nm">10</span>, <span class="nm">20</span>);
-  sum = p.<span class="nm">0</span> + p.<span class="nm">1</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">30</span>, <span class="st">"sum: {sum}"</span>);</code></pre>
+  inner = <span class="fn-call">doubled_first</span>(p);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(inner == <span class="nm">40</span>, <span class="st">"the function saw its own doubled copy: {inner}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(p.<span class="nm">0</span> == <span class="nm">10</span>, <span class="st">"and the caller's tuple is untouched: {p.0}"</span>);</code></pre>
+<p>⚠ Writing to a TEXT element of a value parameter — <code>p.1 = "…"</code> where the parameter is <code>(integer, text)</code> — will not compile on --native today, though the interpreter runs it (loft#1278).  Until that closes, copy the parameter into a local first and write there: <code>q = p; q.1 = "…";</code>.</p>
 <h2 id="tuples-as-reference-parameters-swap-in-place">Tuples as reference parameters (swap in place)</h2>
+<p>A <code>&amp;</code> tuple holds scalar elements only.  <code>&amp;(text, …)</code> is refused when you compile, naming the element type — text lives on the heap, and a reference tuple has nowhere to put it.</p>
 <pre><code>  pair = (<span class="nm">3</span>, <span class="nm">7</span>);
   <span class="fn-call">swap_ints</span>(pair);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(pair.<span class="nm">0</span> == <span class="nm">7</span> &amp;&amp; pair.<span class="nm">1</span> == <span class="nm">3</span>, <span class="st">"after swap: ({pair.0},{pair.1})"</span>);</code></pre>
@@ -2722,17 +2752,33 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>  bounds2 = <span class="fn-call">min_max</span>(<span class="nm">1</span>, <span class="nm">9</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds2.<span class="nm">0</span> == <span class="nm">1</span>, <span class="st">"min2: {bounds2.0}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bounds2.<span class="nm">1</span> == <span class="nm">9</span>, <span class="st">"max2: {bounds2.1}"</span>);</code></pre>
+<p>A returned tuple with elements of different types works the same way.</p>
+<pre><code>  graded = <span class="fn-call">label_and_score</span>(<span class="nm">72</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(graded.<span class="nm">0</span> == <span class="st">"pass"</span> &amp;&amp; graded.<span class="nm">1</span> == <span class="nm">72</span>, <span class="st">"graded: {graded.0},{graded.1}"</span>);</code></pre>
 <h2 id="destructuring">Destructuring</h2>
 <pre><code>  (lo, hi) = <span class="fn-call">min_max</span>(<span class="nm">8</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(lo == <span class="nm">3</span>, <span class="st">"destructured lo: {lo}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(hi == <span class="nm">8</span>, <span class="st">"destructured hi: {hi}"</span>);</code></pre>
+<p>Destructuring works for mixed types too, and for more than two names.</p>
+<pre><code>  (name, score) = <span class="fn-call">label_and_score</span>(<span class="nm">20</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(name == <span class="st">"fail"</span> &amp;&amp; score == <span class="nm">20</span>, <span class="st">"destructured mixed: {name},{score}"</span>);</code></pre>
+<h2 id="comparing-tuples">Comparing tuples</h2>
+<p>The first element decides; later elements are consulted only while the earlier ones are equal.  Text elements compare by value.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="nm">9</span>) &lt; (<span class="nm">2</span>, <span class="nm">0</span>), <span class="st">"the first element decides"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="nm">9</span>) &lt; (<span class="nm">1</span>, <span class="nm">10</span>), <span class="st">"it ties, so the second decides"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!((<span class="nm">1</span>, <span class="nm">9</span>) &lt; (<span class="nm">1</span>, <span class="nm">9</span>)), <span class="st">"identical is not strictly less"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="nm">9</span>) &lt;= (<span class="nm">1</span>, <span class="nm">9</span>), <span class="st">"but it is less-or-equal"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="st">"abc"</span>) == (<span class="nm">1</span>, <span class="st">"abc"</span>), <span class="st">"text compares by value, not identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">1</span>, <span class="st">"abc"</span>) != (<span class="nm">1</span>, <span class="st">"abd"</span>), <span class="st">"and differing text is not equal"</span>);</code></pre>
 <h2 id="three-or-more-elements">Three or more elements</h2>
 <pre><code>  u = (<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u.<span class="nm">0</span> + u.<span class="nm">1</span> + u.<span class="nm">2</span> == <span class="nm">6</span>, <span class="st">"triple sum: {u.0}+{u.1}+{u.2}"</span>);</code></pre>
 <pre><code>  triple = (<span class="nm">10</span>, <span class="nm">20</span>, <span class="nm">30</span>);
   triple.<span class="nm">1</span> = <span class="nm">99</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(triple.<span class="nm">0</span> == <span class="nm">10</span> &amp;&amp; triple.<span class="nm">1</span> == <span class="nm">99</span> &amp;&amp; triple.<span class="nm">2</span> == <span class="nm">30</span>,
-    <span class="st">"triple modified: ({triple.0},{triple.1},{triple.2})"</span>);
+    <span class="st">"triple modified: ({triple.0},{triple.1},{triple.2})"</span>);</code></pre>
+<pre><code>  wide = (<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>, <span class="nm">6</span>, <span class="nm">7</span>, <span class="nm">8</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(wide.<span class="nm">7</span> == <span class="nm">8</span>, <span class="st">"eight elements, last one reachable: {wide.7}"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="29-match">

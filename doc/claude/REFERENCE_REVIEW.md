@@ -252,6 +252,27 @@ simply not been re-read since the rule landed. Reference chapters are gated beca
 paste its examples into a file and run them** — and when the two docs disagree, the formal rules
 settle it.
 
+⚠ **The blind spot repeats one chapter later in a different variable, so name the variable
+each time.** Chapter 26's general sentence was only tested at the TYPES its examples used;
+chapter 28's "possibly different types" was the same defect with every cell all-`integer`, and
+its "a value parameter gets its own copy" section called no function at all. Writing the missing
+cell found loft#1278 — assigning to a `text` element of a by-value tuple parameter does not
+compile on `--native`, while the interpreter gives the documented answer. `formal/tuples.md`
+had already written the lesson down about ITSELF: its `OPEN: 0` read clean while loft#1004 and
+loft#1005 were live because its oracle is all-`(integer, integer)` and carries no `text`, and
+its deviations section says *"a conformance entry that names one member of a family is a claim
+about that member, not the family."* **So: for each general sentence, name the variable it
+quantifies over — type, arity, shape, position — and run one cell per value.**
+
+⚠ **And that applies to the reviewer's own new cells.** Chapter 27 gained a section proving a
+generator body is suspended, with a step counter — written with the loop shape that is lazy on
+both backends. COROUTINE.md's CL-9 table says four other shapes still run the whole loop eagerly
+on `--native`; measured, a generator with a statement AFTER the yield does 1000 body steps where
+the interpreter does 5, values agreeing throughout. The new section was over-general in exactly
+the way the chapter-26 entry above warns about, one chapter later, and had to be corrected after
+it was committed. **A cell written to fix an over-general sentence is itself one example of one
+shape** — check the caveat table for the subject before claiming the general case.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -308,6 +329,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/25-generics.loft` | 2026-09-01 | `9764a37c` |
 | `tests/docs/26-closures.loft` | 2026-09-01 | `64808d31` |
 | `tests/docs/27-coroutines.loft` | 2026-09-01 | `1a31649d` |
+| `tests/docs/28-tuples.loft` | 2026-09-01 | `54f96817` |
 
 ## See also
 

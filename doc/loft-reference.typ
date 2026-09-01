@@ -5562,7 +5562,7 @@ A 'for' loop drives the generator forward automatically. The body runs once per 
 
 === The body really is suspended
 
-Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next 'yield'.
+Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next 'yield'.  Write the loop so its body ENDS in a single 'yield' and this holds on both backends.
 
 === Manual advance with next() and exhausted()
 
@@ -5708,6 +5708,8 @@ Squares via for loop with index tracking.
 
 'counted' is asked for a thousand values and the loop breaks after six. Its step counter shows the body ran six times, not a thousand — the work for the values nobody asked for was never done.
 
+⚠ That holds on BOTH backends for the shape written here: a loop whose body ends in one unconditional 'yield'.  Other shapes — a statement after the yield, a yield inside an 'if' or 'match', a nested loop, a 'continue' — still run the whole loop eagerly on --native, so their side effects happen for values the consumer never asks for (measured: 1000 steps where the interpreter does 5).  The VALUES are the same either way; it is the side effects that differ.  Keep the yield last, or do not put observable work in a generator body.  COROUTINE.md tracks this as CL-9.
+
 ```rust
   trace = Trace { steps: 0 };
   seen = 0;
@@ -5813,9 +5815,13 @@ A tuple groups a fixed number of values of possibly different types. You do not 
 
 Write the elements in parentheses, separated by commas. The compiler infers the element types from what you put in. You can add an explicit type annotation when needed.
 
+=== Elements of different types
+
+The elements do not have to share a type — this is the usual reason to reach for a tuple instead of a vector.
+
 === Accessing elements
 
-Use '.0', '.1', '.2', ... to read individual elements.
+Use '.0', '.1', '.2', ... to read individual elements. The index is part of the program text, so it is checked when you compile: naming an element the tuple does not have is an error, never a null.
 
 === Modifying elements
 
@@ -5823,7 +5829,7 @@ Tuple elements can be reassigned like ordinary variables.
 
 === Tuples as function parameters
 
-Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter ('&') gives the function a direct link to the caller's tuple so it can modify individual elements in place.
+Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter ('&') gives the function a direct link to the caller's tuple so it can modify individual elements in place. A '&' tuple holds scalar elements only.
 
 === Returning tuples
 
@@ -5832,6 +5838,10 @@ A function can return a tuple to give back more than one value at once.
 === Destructuring
 
 Assign a tuple to multiple names in one step using the '(a, b) = expr' form. This is concise when a function returns a tuple and you need both values.
+
+=== Comparing tuples
+
+Two tuples of the same shape compare element by element, left to right.
 
 === Three or more elements
 
@@ -5855,6 +5865,23 @@ fn swap_ints(pair: &(integer, integer)) {
 }
 ```
 
+Writes to its own copy.  The caller's tuple is a different tuple, so the write below is invisible outside this function.
+
+```rust
+fn doubled_first(p: (integer, integer)) -> integer {
+  p.0 = p.0 * 2;
+  p.0 + p.1
+}
+```
+
+A tuple is the natural return type when the two values have different types.
+
+```rust
+fn label_and_score(n: integer) -> (text, integer) {
+  if n >= 50 { ("pass", n) } else { ("fail", n) }
+}
+```
+
 ```rust
 fn main() {
 ```
@@ -5874,6 +5901,30 @@ Type annotation
   assert(w.0 + w.1 == 7, "annotated sum: {w.0+w.1}");
 ```
 
+=== Elements of different types
+
+Each element keeps its own type, and '.0' / '.1' read them as that type.
+
+```rust
+  entry = (1, "one");
+  assert(entry.0 == 1, "entry.0: {entry.0}");
+  assert(entry.1 == "one", "entry.1: {entry.1}");
+```
+
+```rust
+  mixed: (text, float, boolean) = ("pi", 3.5, true);
+  assert(mixed.0 == "pi", "mixed.0: {mixed.0}");
+  assert(mixed.1 == 3.5, "mixed.1: {mixed.1}");
+  assert(mixed.2, "mixed.2: {mixed.2}");
+```
+
+A tuple element may itself be a tuple.
+
+```rust
+  nested = (1, (2, 3));
+  assert(nested.1.0 == 2 && nested.1.1 == 3, "nested: {nested.1.0},{nested.1.1}");
+```
+
 === Modifying elements
 
 ```rust
@@ -5882,15 +5933,22 @@ Type annotation
   assert(v.0 + v.1 == 12, "after assign: {v.0}+{v.1}");
 ```
 
-=== Tuples as value parameters
+=== Tuples as function parameters
+
+'doubled\_first' writes to its parameter and returns what it computed. The caller's tuple still reads 10 — the parameter was a copy of it.
 
 ```rust
   p = (10, 20);
-  sum = p.0 + p.1;
-  assert(sum == 30, "sum: {sum}");
+  inner = doubled_first(p);
+  assert(inner == 40, "the function saw its own doubled copy: {inner}");
+  assert(p.0 == 10, "and the caller's tuple is untouched: {p.0}");
 ```
 
+⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the parameter is '(integer, text)' — will not compile on --native today, though the interpreter runs it (loft\#1278).  Until that closes, copy the parameter into a local first and write there: 'q = p; q.1 = "…";'.
+
 === Tuples as reference parameters (swap in place)
+
+A '&' tuple holds scalar elements only.  '&(text, …)' is refused when you compile, naming the element type — text lives on the heap, and a reference tuple has nowhere to put it.
 
 ```rust
   pair = (3, 7);
@@ -5914,12 +5972,39 @@ Already in order
   assert(bounds2.1 == 9, "max2: {bounds2.1}");
 ```
 
+A returned tuple with elements of different types works the same way.
+
+```rust
+  graded = label_and_score(72);
+  assert(graded.0 == "pass" && graded.1 == 72, "graded: {graded.0},{graded.1}");
+```
+
 === Destructuring
 
 ```rust
   (lo, hi) = min_max(8, 3);
   assert(lo == 3, "destructured lo: {lo}");
   assert(hi == 8, "destructured hi: {hi}");
+```
+
+Destructuring works for mixed types too, and for more than two names.
+
+```rust
+  (name, score) = label_and_score(20);
+  assert(name == "fail" && score == 20, "destructured mixed: {name},{score}");
+```
+
+=== Comparing tuples
+
+The first element decides; later elements are consulted only while the earlier ones are equal.  Text elements compare by value.
+
+```rust
+  assert((1, 9) < (2, 0), "the first element decides");
+  assert((1, 9) < (1, 10), "it ties, so the second decides");
+  assert(!((1, 9) < (1, 9)), "identical is not strictly less");
+  assert((1, 9) <= (1, 9), "but it is less-or-equal");
+  assert((1, "abc") == (1, "abc"), "text compares by value, not identity");
+  assert((1, "abc") != (1, "abd"), "and differing text is not equal");
 ```
 
 === Three or more elements
@@ -5934,6 +6019,11 @@ Already in order
   triple.1 = 99;
   assert(triple.0 == 10 && triple.1 == 99 && triple.2 == 30,
     "triple modified: ({triple.0},{triple.1},{triple.2})");
+```
+
+```rust
+  wide = (1, 2, 3, 4, 5, 6, 7, 8);
+  assert(wide.7 == 8, "eight elements, last one reachable: {wide.7}");
 }
 ```
 
