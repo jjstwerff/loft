@@ -276,7 +276,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/23-safety.loft` | 2026-09-01 | `b6dc9a61` |
 | `tests/docs/24-json.loft` | 2026-09-01 | `f21577f2` |
 | `tests/docs/25-generics.loft` | 2026-09-01 | `9764a37c` |
-| `tests/docs/26-closures.loft` | 2026-09-01 | `3cf097e0` |
+| `tests/docs/26-closures.loft` | 2026-09-01 | `64808d31` |
 
 ## See also
 
