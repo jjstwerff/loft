@@ -669,9 +669,11 @@ The decided fix is live: `default/06_json.loft` defines the
 `JBool` / `JNull`) and `json_parse(text) -> JsonValue` is the one
 entry point, working on both backends.  The old text-based surface
 (`json_items` etc.) is gone — calling it is an "Unknown function"
-error.  The residual JSON gap is diagnostics on the one-stage
-auto-wrap `Struct.parse(text)` (Q1 — see
-[QUALITY.md § Open work](QUALITY.md#open-work--actionable-summary)).
+error.  The Q1 residual — diagnostics on the one-stage auto-wrap
+`Struct.parse(text)` — CLOSED 2026-08-20: both spellings report, and
+they differ in which half of the answer they give (the one-stage form
+names the position, `line 1:33 path:addr.zip`; the staged form names
+the types, `Addr.zip: expected JNumber, got JString`).
 
 ### ~~C7 / P22~~ — `spatial<T>` diagnostic — DONE
 `spatial<T[x,y]>` / `spatial<T[x,y,z]>` (@PLN48) shipped as a working keyed

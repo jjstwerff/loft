@@ -4853,11 +4853,21 @@ Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. For e
 
 = JSON
 
-Loft has built-in JSON support: any struct can be serialised to JSON with a format flag, and parsed back from JSON text.  No annotations or code generation needed — it works on every struct automatically.
+Loft has built-in JSON support, and there are two ways in. Reach for the one that matches what you know about the document:
+
+```
+* you know its SHAPE — it maps onto a struct you have declared. Serialise
+  with the ':j' format flag and parse with 'Type.parse(text)'. No
+  annotations and no code generation: it works from the declaration.
+* you do NOT know its shape, or you have to report precisely what was wrong
+  with it. Parse to a 'JsonValue' with 'json_parse(text)' and walk it.
+```
+
+Both are built in and neither is going away. The struct form is shorter and is what most programs want; the 'JsonValue' form is the one that can answer "what is in here?" and "what exactly was wrong?".
 
 === Serialisation — struct to JSON
 
-Use the ':j' format flag inside a format string to produce JSON output. Field names become quoted keys; strings are escaped; numbers and booleans are written as JSON literals.
+Use the ':j' format flag inside a format string to produce JSON output. Field names become quoted keys; strings are escaped (quotes, backslashes, control characters); numbers and booleans are written as JSON literals.
 
 ```
 "{my_struct:j}"
@@ -4880,29 +4890,23 @@ struct MaybeUser {
 
 === Parsing — JSON to struct
 
-Call 'Type.parse(text)' to create a struct from JSON text. Text arguments are auto-wrapped through 'json\_parse' internally.
+Call 'Type.parse(text)' to create a struct from JSON text. A text argument is wrapped through 'json\_parse' internally, so the one-step form is the whole story for a document you expect to be well-formed.
 
-A field the JSON does not mention — and a field written 'null' — gets the DECLARED type's absent value.  For a plain field that is its zero, because a plain field cannot hold null; write the field 'integer?' / 'float?' if you need to tell "absent" from "zero" apart:
+A field the JSON does not mention — and a field written 'null' — gets the DECLARED type's absent value. For a plain field that is its zero, because a plain field cannot hold null; write the field 'integer?' / 'float?' if you need to tell "absent" from "zero" apart:
 
 ```
 struct Reading { id: integer, drift: float? }
-r = Reading.parse("{}")     // r.id == 0, r.drift == null
+r = Reading.parse(`{{}}`)     // r.id == 0, r.drift == null
 ```
 
-Caveat (Q1): the auto-wrap form DROPS diagnostics — malformed input and schema mismatches leave the struct at its defaults with 'json\_errors()' empty.  For error reporting, stage explicitly: 'User.parse(json\_parse(text))' — that form pushes both parse and schema errors to 'json\_errors()'.
-
-```
-user = User.parse(json_text)
-```
-
-to inspect 'json\_errors()' between the two steps.
+Note the backticks and the doubled braces: every loft string is a format string, so a JSON literal written in source needs '{{' and '}}' for its own braces (see the Safety page).
 
 === Vectors
 
 Parse a JSON array into a vector of structs with 'vector\<T\>.parse(text)'.
 
 ```
-scores = vector<Score>.parse("[{\"v\":1},{\"v\":2}]")
+scores = vector<Score>.parse(`[{{"value":1}},{{"value":2}}]`)
 ```
 
 ```rust
@@ -4911,14 +4915,34 @@ struct Score {
 }
 ```
 
-=== Parse Errors
+```rust
+struct Item { key: text, count: integer }
+struct Catalogue { all: vector<Item>, by_key: hash<Item[key]> }
+```
 
-Call 'json\_errors()' to see what went wrong with a malformed input.  Schema-level mismatches (e.g. a field declared integer but receiving a JSON string) currently land as the loft null sentinel in the struct; Q1 schema-side diagnostics will add path-qualified reports in a follow-up.
+=== What went wrong — 'json\_errors()' and '\#errors'
+
+Both parse forms report. 'json\_errors()' holds the LAST parse's diagnostics and is replaced by the next parse, so a successful parse leaves it empty. It is a TEXT, not a collection — several diagnostics are joined with '|' — so ask 'json\_errors() != ""', not 'len(...) \> 0', and never loop over it.
 
 ```
-data = MyType.parse(bad_json);
-if len(json_errors()) > 0 { log_warn(json_errors()); }
+if json_errors() != "" { log_warn(json_errors()); }
 ```
+
+'record\#errors' is the same answer scoped to one parsed value, and the READ clears it:
+
+```
+errs = user#errors;
+if errs != "" { log_warn(errs); }
+```
+
+The two parse spellings differ in WHICH HALF of the answer they give, and that is the reason to choose between them:
+
+```
+User.parse(text)               ->  line 1:33 path:addr.zip
+User.parse(json_parse(text))   ->  Addr.zip: expected JNumber, got JString
+```
+
+The one-step form says WHERE in the document, by line, column and field path. The staged form says WHAT was wrong, by declared type against found type — and on malformed input it renders the offending line with a caret. Take the first when a human will look at the document, the second when your program has to explain the mismatch.
 
 === Nested Structs
 
@@ -4936,6 +4960,23 @@ struct Contact {
   name: text,
   address: Address
 }
+```
+
+=== Reading a document whose shape you do not know
+
+'json\_parse(text)' answers a 'JsonValue' — a tree you can ask about instead of a struct you had to declare first. 'kind()' names the variant, 'field(name)' and 'item(i)' step into objects and arrays, 'keys()' lists an object's field names, and the 'as\_\*' extractors answer null on a kind mismatch rather than faulting. Every miss answers 'JNull', so a walk over an unexpected document degrades instead of stopping.
+
+```rust
+struct Tagged { tag: text, n: integer }
+```
+
+Used by the wire-shape section at the end.
+
+```rust
+enum Shade { Red, Green }
+struct Flag   { on: Shade }
+struct Pair   { p: (integer, text) }
+struct Holder { n: integer, rows: vector<Item>? }
 ```
 
 ```rust
@@ -4959,11 +5000,28 @@ fn main() {
   assert(u2.name == u.name, "round-trip name");
 ```
 
-Type-mismatched fields (id: string, name: number) parse as JSON fine, but the struct unwrap abandons the record at its defaults; path-qualified diagnostics on the mismatch are collected in `json\_errors`. `id` is declared plain, so its default is 0 — the mismatch is reported through `json\_errors`, never by putting a null in a slot the declared type says cannot hold one. Here we verify the unwrap does not crash on mismatched shapes.
+Escaping is not optional and not yours to do: a quote, a backslash and a control character all come back as JSON requires.
+
+```rust
+  quoted = User { id: 1, name: "a\"b\\c", email: "x\ny" };
+  assert("{quoted:j}" == `{{"id":1,"name":"a\\"b\\\\c","email":"x\\ny"}}`,
+         "text is escaped: {quoted:j}");
+```
+
+A type-mismatched field leaves the record at its DECLARED default — `id` is plain, so that is 0, never a null in a slot the declaration says cannot hold one — and the mismatch is reported through `json\_errors()`.
 
 ```rust
   bad = User.parse(`{{"id":"not_a_number","name":42}}`);
   assert(bad.id == 0, "type-mismatched id keeps its default: {bad.id}");
+  assert(json_errors() != "", "the mismatch was reported: [{json_errors()}]");
+```
+
+…and the next parse replaces it, so a good parse reads clean.
+
+```rust
+  fine = User.parse(`{{"id":2,"name":"n","email":"e"}}`);
+  assert(fine.id == 2, "the good parse landed");
+  assert(json_errors() == "", "a successful parse clears the errors: [{json_errors()}]");
 ```
 
 ```rust
@@ -4973,6 +5031,13 @@ Type-mismatched fields (id: string, name: number) parse as JSON fine, but the st
     total += s.value;
   }
   assert(total == 60, "vector sum: {total}");
+```
+
+An array is all-or-nothing: one element the declaration cannot take abandons the whole vector, where a struct keeps its other fields.
+
+```rust
+  spoiled = vector<Score>.parse(`[{{"value":"x"}},{{"value":2}}]`);
+  assert(len(spoiled) == 0, "one bad element empties the vector: {len(spoiled)}");
 ```
 
 ```rust
@@ -4992,6 +5057,84 @@ When a field is absent from the JSON, it gets the absent value its DECLARATION a
   assert(partial.name == "", "a missing `text` field is empty: [{partial.name}]");
   maybe = MaybeUser.parse(`{{"id":1}}`);
   assert(!maybe.name, "a missing `text?` field is null");
+```
+
+Walking a document by shape rather than by declaration.
+
+```rust
+  doc = json_parse(`{{"tag":"reading","n":3,"items":["a","b"]}}`);
+  assert(doc.kind() == "JObject", "the document is an object: {doc.kind()}");
+  assert(doc.has_field("tag"), "it carries `tag`");
+  assert((doc.field("n").as_long() ?? -1) == 3, "n is 3");
+  assert((doc.field("tag").as_text() ?? "") == "reading", "tag is `reading`");
+  assert(len(doc.keys()) == 3, "three keys: {len(doc.keys())}");
+  items = doc.field("items");
+  assert(items.kind() == "JArray", "items is an array");
+  assert((items.item(1).as_text() ?? "") == "b", "second item is `b`");
+```
+
+A field that is not there is `JNull`, not a fault — so a walk keeps going.
+
+```rust
+  assert(doc.field("absent").kind() == "JNull", "a missing field answers JNull");
+  assert(!doc.field("n").as_text(), "an `as_` on the wrong kind answers null");
+```
+
+Once you know the shape, hand the same tree to the struct form.
+
+```rust
+  t = Tagged.parse(doc);
+  assert(t.tag == "reading", "the tree parses into a struct too: {t.tag}");
+```
+
+Building a document without a struct to describe it.
+
+```rust
+  reply = json_object([
+    JsonField { name: "ok", value: json_bool(true) },
+    JsonField { name: "n",  value: json_number(42.0) },
+  ]);
+  assert(reply.to_json() == `{{"ok":true,"n":42}}`, "built: {reply.to_json()}");
+```
+
+=== The shapes on the wire
+
+Four encodings a reader interoperating with another system needs, none of which the field declaration makes obvious:
+
+```
+* a plain enum variant is an OBJECT keyed by the variant name — `Green`
+  is `{{"Green":{{}}}}`, not the string `"Green"`;
+* a tuple is an object with `_0`, `_1` … keys, not a JSON array;
+* an absent field is normally LEFT OUT rather than written `null`, and an
+  absent `vector<T>?` is left out too — it is not `[]`, which is the
+  present-but-empty collection and a different value;
+* a keyed member of a linked collection group is left out as well, because
+  it is an INDEX on the same rows rather than data of its own — and parsing
+  the document back rebuilds it from them.
+```
+
+```rust
+  colour = Flag { on: Shade.Green };
+  assert("{colour:j}" == `{{"on":{{"Green":{{}}}}}}`, "an enum variant: {colour:j}");
+  pair = Pair { p: (7, "seven") };
+  assert("{pair:j}" == `{{"p":{{"_0":7,"_1":"seven"}}}}`, "a tuple: {pair:j}");
+  nothing = Holder { n: 1, rows: null };
+  assert("{nothing:j}" == `{{"n":1}}`, "an absent collection is left out: {nothing:j}");
+  something = Holder { n: 1, rows: [] };
+  assert("{something:j}" == `{{"n":1,"rows":[]}}`, "an empty one is not: {something:j}");
+  assert(Holder.parse("{nothing:j}").rows == null, "absent comes back absent");
+  assert(!(Holder.parse("{something:j}").rows == null), "empty comes back empty");
+```
+
+The index is derived, so it costs nothing on the wire and is rebuilt on the way back in.
+
+```rust
+  cat2 = Catalogue { all: [Item{key:"a", count:1}], by_key: [] };
+  assert("{cat2:j}" == `{{"all":[{{"key":"a","count":1}}]}}`,
+         "the index is not written: {cat2:j}");
+  back = Catalogue.parse("{cat2:j}");
+  assert(len(back.by_key) == 1, "…and is rebuilt on the way in: {len(back.by_key)}");
+  assert(back.by_key["a"].count == 1, "the rebuilt index answers a lookup");
 }
 ```
 

@@ -1113,7 +1113,7 @@ response = json_object([
 return response.to_json_pretty();
 ```
 
-### Legacy text-based API (transitional)
+### The struct-shaped API
 
 | Expression | Description |
 |---|---|
@@ -1132,7 +1132,13 @@ errs = user#errors;              // TEXT, not a collection — and the read clea
 if errs != "" { log_warn(errs); } // `for e in user#errors` iterates nothing
 ```
 
-New code should prefer the `JsonValue` surface; the text-based `Struct.parse(text)` form is slated for withdrawal in the 0.9.0 milestone (see [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum)).
+Reach for this form when you KNOW the document's shape and it maps onto a struct you have
+declared, and for the `JsonValue` surface above when you do not, or when your program has
+to report precisely what was wrong.  Both are supported.  (This section was headed
+"Legacy text-based API (transitional)" and announced a withdrawal in 0.9.0 — that was
+written on 2026-04-14 for the 0.8.4 RC and no roadmap row, decision record or
+`#superseded` marker ever scheduled it.  What P54 actually withdrew was `json_items` and
+its peers, which are gone.)
 
 ---
 

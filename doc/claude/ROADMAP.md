@@ -190,7 +190,7 @@ Features that "appear to work" but don't, or that lose data without indication. 
 
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| Q* | **JSON parse-error diagnostics (Q1) — the auto-wrap `Struct.parse(text)` path silently drops diagnostics.**  Verified on **both backends** 2026-07-10: on malformed input it leaves fields null with `json_errors()` **empty**; and after a *successful* parse `json_errors()` still returns the **previous** call's error, so a program that checks it reports failure on correct data.  The two-stage `Struct.parse(json_parse(text))` reports both classes correctly. | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
+| ~~Q*~~ | **JSON parse-error diagnostics (Q1) — CLOSED 2026-08-20.**  Both halves of the old row are now false, re-measured on both backends: the auto-wrap `Struct.parse(text)` path DOES report (`line 1:33 path:addr.zip`), and a successful parse leaves `json_errors()` empty rather than carrying the previous call's error.  The two spellings differ in which half of the answer they give — one-stage names the position, `Struct.parse(json_parse(text))` names the types (`Addr.zip: expected JNumber, got JString`).  Pinned by the JSON chapter's own cells. | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
 | ~~(cross)~~ | ~~Match validation~~ — **✅ CLOSED** (@PLN29 `status:finished`) | M | ✓ | plans/29-match-validation/README.md |
 | ~~(cross)~~ | ~~Struct-enum validation~~ — **✅ CLOSED 2026-07-09** (@PLN30, delivered) | M | ✓ | plans/30-struct-enum-validation/README.md |
 | ~~(cross)~~ | ~~Keyed collection validation~~ — **✅ CLOSED 2026-07-09** (@PLN31, superseded) | M | ✓ | plans/31-collection-validation/README.md |
