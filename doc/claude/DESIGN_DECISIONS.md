@@ -2482,6 +2482,22 @@ So absolute compat holds both ways — bare-`use` programs qualify (no collision
 - **Open edges (not ruled here):** an explicitly-imported name vs the program's own top-level def — resolve when specced.
 - Owner ruling 2026-07-15. Companion: [C97](#c97--). **Already shipped (@PLN22 P1–P4):** the whole `use` surface — bare `use lib;` = prefix-required namespace bind, `use lib::*;` = wildcard, `use lib::(a, b, c)` = selective, `use lib::(a as x, b)` / `use lib as el` / `use lib::T as St` = aliasing. So C98 needs **no new syntax**; the only residual is the C97 internal change (a library's `pub` symbol must stop registering as global `n_<name>` — the dual registration that still collides with the stdlib during the library's own compile, per C95 — and be module-scoped only, which the shipped `use` machinery already brings into scope). Import-wins precedence for an explicit `::*` / `::(…)` binding is the one resolution rule to confirm against that change.
 
+⚠ **The shipped `use lib;` is NOT the bind this ruling describes — re-measured 2026-09-01.** A
+bare `use lib;` wildcard-imports every `pub` name into the unqualified namespace, which is what
+the parser says it does (*"Plain `use foo` (no spec) wildcard-imports all pub defs"*) and what
+[LOFT.md § Library imports](LOFT.md) documents as deliberate under loft#1094 — the clash rule
+there (declaring a name a bare import brought in is refused, naming both sites) only exists
+*because* the bare form imports. So the "Already shipped" line above is a status claim that does
+not hold, and the two documents have been describing opposite languages: the reference chapter
+followed this ruling and told readers for as long as the corpus records that omitting the prefix
+is a parse error, while `add(3, 4)` had always answered 7.
+
+What that costs is exactly what the Evaluation section priced: a bare-`use` program is NOT immune
+to stdlib growth, because its library names are unqualified. Whether to close the gap by making
+the bare form bind only the namespace (this ruling, and a break for every program relying on the
+current behaviour) or by superseding the ruling (loft#1094's position) is an owner call, and it is
+the one thing here that is still open. The reference now describes the language that runs.
+
 ## C99 — A keyed collection's subscript is uniformly KEY-addressed (lookup / range / removal), never positional
 
 **Catalogue:** @F8 (sorted) / @PLN102 arc-E lib-audit **H8** (INC#2). The freeze-time resolution of "the sorted key-range slice shares vector's positional-slice syntax."

@@ -433,6 +433,15 @@ When the compiler encounters `use math;` it searches:
 The first match wins.  If the dependency has its own `loft.toml`, its
 version is checked against the requirement.
 
+⚠ **Step 3's project half needs a project.** The directory form `lib/math/` is read
+through `lib_path_manifest`, which runs over the directories a program NAMED — a
+`--lib` argument, a `LOFT_LIB` entry, `~/.loft/lib/`, a path dependency, a sibling
+package.  A bare script's own `lib/` is not one of those: it is probed flat, so
+`lib/math.loft` resolves there and `lib/math/src/math.loft` answers *"Library 'math'
+not found"*.  Put a `loft.toml` above the script — make it a package — and the same
+`lib/math/` resolves.  Measured across (root manifest × script in `src/` × package
+manifest); the root manifest is the only axis that decides it.
+
 ### A `use` carries names ONE way
 
 Step 1 above means a sibling file in your own `src/` is loaded exactly like any

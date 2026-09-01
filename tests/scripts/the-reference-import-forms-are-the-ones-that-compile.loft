@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The Libraries chapter's model of `use`: `pub` decides the BARE spelling, the prefix reaches
+// everything.
+//
+// The chapter used to teach the opposite — that a library name needs the `libname::` prefix
+// and that omitting it is a parse error — and every sentence saying so lived in a comment, so
+// the suite ran none of them while the bare call compiled and answered.  What made the mistake
+// survivable is that both spellings work for a `pub` name: a chapter can teach the long one
+// exclusively and every example in it still passes.
+//
+// So the chapter now shows both spellings on one constant and one function, and the boundary
+// they sit on is pinned here: the bare form is available for a `pub` name and refused for a
+// name the library did not mark, which is the whole of what `pub` decides.  A reader who takes
+// the chapter at its word and drops the prefix is relying on this.
+//
+// @ARGS: --lib tests/lib
+//
+// @falsified-at: none — a LOCK.  It records where a boundary IS rather than catching a
+//   regression, so there is no build on which it fails and no `make falsify` reference to
+//   compare against.
+//
+//   Measured by hand in both directions instead, because a guard whose point is a REFUSAL
+//   passes most easily when it is proving nothing:
+//     - marking `pubvis_hidden` as `pub` in the fixture makes the @EXPECT_ERROR cell compile,
+//       and the file fails;
+//     - dropping `pub` from `pubvis_shown` makes the bare call in the running cell unknown,
+//       and the file fails;
+//     - breaking either assertion in the running cell fails it too, so the file is not
+//       passing on its refusal alone.
+//   Restoring each returns the suite to green.
+//
+//   `make falsify` reads `expect 1/1` and INERT on both backends, which is the right answer
+//   for a lock: the declared refusal matched, and a file that refuses on every build cannot
+//   move against a control.
+
+use pubvis;
+
+// A `pub` name is in this file's namespace, so both spellings reach it.  The prefixed form is
+// what the chapter used to teach exclusively; the bare form is what it now says also works.
+fn a_pub_name_answers_to_both_spellings() {
+  pv_bare = pubvis_shown(3, 4);
+  pv_qualified = pubvis::pubvis_shown(3, 4);
+  assert(pv_bare == 7, "a pub library fn called bare: {pv_bare}");
+  assert(pv_qualified == 7, "the same fn through the prefix: {pv_qualified}");
+  assert(pubvis::PUBVIS_SHOWN_LIMIT == 100, "a pub constant through the prefix");
+  assert(PUBVIS_SHOWN_LIMIT == 100, "the same constant written bare");
+}
+
+// The other half of the same boundary: a definition without `pub` never entered the namespace,
+// so the prefix is the only way in.  Nothing is hidden — the value is right here — but the
+// short spelling is not on offer.
+fn a_non_pub_name_is_reachable_only_through_the_prefix() {
+  pv_hidden = pubvis::pubvis_hidden(3, 4);
+  assert(pv_hidden == 7, "a non-pub library fn through the prefix: {pv_hidden}");
+  assert(pubvis::PUBVIS_HIDDEN_LIMIT == 42, "a non-pub constant through the prefix");
+}
+
+// And the bare spelling of that same name is refused.  This is the cell the chapter cannot
+// carry: an `assert` can never reach a program that does not compile.
+// @EXPECT_ERROR: Unknown function pubvis_hidden
+fn the_bare_spelling_of_a_non_pub_name_is_refused() {
+  pv_no = pubvis_hidden(3, 4);
+  assert(pv_no == 7, "unreachable: the call above is refused");
+}

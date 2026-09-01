@@ -1,0 +1,16 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Fixture for the-reference-import-forms-are-the-ones-that-compile.loft: one `pub` pair and
+// one non-`pub` pair of the SAME shape, so the only difference between the two cells is the
+// keyword the guard is about.
+pub PUBVIS_SHOWN_LIMIT = 100;
+PUBVIS_HIDDEN_LIMIT = 42;
+
+pub fn pubvis_shown(a: integer, b: integer) -> integer {
+  a + b
+}
+
+fn pubvis_hidden(a: integer, b: integer) -> integer {
+  a + b
+}
