@@ -222,29 +222,29 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 
 | chapter source | reviewed through | commit |
 |---|---|---|
-| `tests/docs/01-keywords.loft` | 2026-08-31 | `8f851965` |
-| `tests/docs/02-text.loft` | 2026-08-31 | `3e2555fc` |
-| `tests/docs/03-integer.loft` | 2026-08-31 | `0c842212` |
-| `tests/docs/04-boolean.loft` | 2026-08-31 | `16c7eb77` |
-| `tests/docs/05-float.loft` | 2026-08-31 | `6e08b7d0` |
-| `tests/docs/06-function.loft` | 2026-08-31 | `1b8c8fa7` |
-| `tests/docs/07-vector.loft` | 2026-08-31 | `9fc947a5` |
-| `tests/docs/08-struct.loft` | 2026-09-01 | `088676cb` |
-| `tests/docs/09-enum.loft` | 2026-09-01 | `48c808b7` |
-| `tests/docs/10-sorted.loft` | 2026-08-31 | `bb334f95` |
-| `tests/docs/11-index.loft` | 2026-08-31 | `270267b2` |
-| `tests/docs/12-hash.loft` | 2026-09-01 | `7a8a6322` |
-| `tests/docs/13-file.loft` | 2026-09-01 | `088676cb` |
-| `tests/docs/15-lexer.loft` | 2026-09-01 | `23743006` |
-| `tests/docs/16-parser.loft` | 2026-09-01 | `512839a6` |
-| `tests/docs/17-libraries.loft` | 2026-09-01 | `361aded3` |
-| `tests/docs/18-locks.loft` | 2026-09-01 | `d50be135` |
-| `tests/docs/19-threading.loft` | 2026-09-01 | `8af9f8e1` |
-| `tests/docs/20-logging.loft` | 2026-09-01 | `a61fde12` |
-| `tests/docs/22-time.loft` | 2026-09-01 | `ded1a65b` |
-| `tests/docs/23-safety.loft` | 2026-09-01 | `56e176b4` |
-| `tests/docs/24-json.loft` | 2026-09-01 | `aa90d2c3` |
-| `tests/docs/25-generics.loft` | 2026-09-01 | `550d9914` |
+| `tests/docs/01-keywords.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/02-text.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/03-integer.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/04-boolean.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/05-float.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/06-function.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/07-vector.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/08-struct.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/09-enum.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/10-sorted.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/11-index.loft` | 2026-08-31 | `e9643ff6` |
+| `tests/docs/12-hash.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/13-file.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/15-lexer.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/16-parser.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/17-libraries.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/18-locks.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/19-threading.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/20-logging.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/22-time.loft` | 2026-09-01 | `e9643ff6` |
+| `tests/docs/23-safety.loft` | 2026-09-01 | `b6dc9a61` |
+| `tests/docs/24-json.loft` | 2026-09-01 | `f21577f2` |
+| `tests/docs/25-generics.loft` | 2026-09-01 | `9764a37c` |
 
 ## See also
 

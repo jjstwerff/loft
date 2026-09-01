@@ -198,9 +198,10 @@ fn a_loop_may_remove_without_a_filter() {
 // `sorted`, which a hash refuses.  The page carries the ascending case; these are the
 // spellings a reader reaches for next.
 //
-// ⚠ `index` is deliberately absent, and its absence is not coverage: it ACCEPTS a `-` on
-// its first key field, iterates ascending anyway, and inverts the second field into the
-// bargain (loft#1267, both backends).  Pinning that here would pin the defect.
+// `index` is not repeated here because it has its own file:
+// `1267-a-descending-key-orders-the-index-once.loft`, written when a descending key was
+// found to reverse a total order TWICE and so answer the exact opposite of its declaration.
+// That is settled; this cell is about the two kinds a hash key comes in.
 fn a_hash_walks_the_order_its_key_declares() {
   sf_up = SafetyBag { rows: [], by_name: [
     SafetyRow{name:"zebra", score:1, team:"b"},

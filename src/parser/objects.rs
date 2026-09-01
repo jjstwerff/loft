@@ -3446,7 +3446,9 @@ impl Parser {
                 let prev = std::mem::replace(&mut value, Value::Var(tmp));
                 sinks.hoists.push(v_set(tmp, prev));
             }
-            self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp, sinks);
+            if let Some(bulk) = self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp) {
+                sinks.group_fills.push(bulk);
+            }
         }
         true
     }
@@ -4450,8 +4452,7 @@ impl Parser {
         field: &str,
         value: &mut Value,
         exp_tp: &Type,
-        sinks: &mut FieldSinks,
-    ) {
+    ) -> Option<Value> {
         let nr = self.data.attr(td_nr, field);
         let td = self.data.attr_type(td_nr, nr);
         // @PLN25 — how a value REACHES the field (a deep copy for a collection, a plain
@@ -4490,7 +4491,7 @@ impl Parser {
             );
             let clear = self.build_nullable_set_null(syn, field_ref);
             list.push(clear);
-            return;
+            return None;
         }
         // loft#1071 — a literal `null` into a USER struct-enum field (`Box { s: null }`
         // where `s: Shape?`).  The sibling arm above answers it for the synthetic
@@ -4517,7 +4518,7 @@ impl Parser {
                 "OpSetInt4",
                 &[code.clone(), Value::Int(item_pos), Value::Int(0)],
             ));
-            return;
+            return None;
         }
         // The source's own spelling decides nothing here: `S?`, a bare `S` and a bare `null`
         // all name the same dense payload, and `needs_nullable_wrap` is the one place that
@@ -4541,7 +4542,7 @@ impl Parser {
             );
             let write = self.emit_nullable_slot_write(syn, &field_ref, value.clone());
             list.extend(write);
-            return;
+            return None;
         }
         if crate::parser::vectors::is_collection(&td_base) {
             // loft#917 — `H { xs: null }` on a field declared `?`.  The header prime in
@@ -4560,7 +4561,7 @@ impl Parser {
                 );
                 let mark = self.mark_collection_absent(code, item_pos);
                 list.push(mark);
-                return;
+                return None;
             }
             // Issue #120: for vector fields assigned from a bare variable
             // (e.g. `BigBox { data: d }`), parse_operators overwrites the
@@ -4604,7 +4605,11 @@ impl Parser {
                     );
                     list.push(self.cl(
                         "OpAppendVector",
-                        &[field_ref.clone(), value.clone(), Value::Int(i32::from(elem_tp))],
+                        &[
+                            field_ref.clone(),
+                            value.clone(),
+                            Value::Int(i32::from(elem_tp)),
+                        ],
                     ));
                     // loft#1266 — this bulk write owes its linked group the maintenance it
                     // skips.  A record joining a group one at a time reaches
@@ -4619,10 +4624,9 @@ impl Parser {
                     // decidable here: a member the SAME literal fills owns its own records and
                     // must be left alone, and a member later in the literal has not been seen
                     // yet.  `parse_object` knows both once the body is read.
-                    sinks.group_fills.push(field_ref.clone());
-                } else {
-                    list.push(value.clone());
+                    return Some(field_ref);
                 }
+                list.push(value.clone());
             } else if let Some(kt) = self.keyed_field_kt(&td_base)
                 && !self.first_pass
                 && !matches!(value, Value::Insert(_) | Value::Null)
@@ -4761,6 +4765,7 @@ impl Parser {
             }
             list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));
         }
+        None
     }
 
     pub(crate) fn parse_enum_field(

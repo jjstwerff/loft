@@ -3331,11 +3331,14 @@ fn a_generic_refuses_field_access() {
 /// call site infers it from.
 #[test]
 fn a_type_variable_must_reach_the_first_parameter() {
-    code!("fn probe<T>(tag: text, x: T) -> T { x }\nfn test() { }").error(
-        "Type variable T must appear in the first parameter — move T to the first parameter \
+    code!("fn probe<T>(tag: text, x: T) -> T { x }\nfn test() { }")
+        .error(
+            "Type variable T must appear in the first parameter — move T to the first parameter \
          position at a_type_variable_must_reach_the_first_parameter:1:32",
-    )
-    .warning("Parameter tag is never read at a_type_variable_must_reach_the_first_parameter:1:36");
+        )
+        .warning(
+            "Parameter tag is never read at a_type_variable_must_reach_the_first_parameter:1:36",
+        );
 }
 
 /// A user type that has not defined the bound's operator is refused at the CALL, which is
