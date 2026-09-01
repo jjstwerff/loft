@@ -651,7 +651,7 @@ call; the stdlib does not, and did not meaningfully do so before.
 | Function | Description |
 |----------|-------------|
 | `content(self: File) -> text?` | Reads the entire file as a UTF-8 text value. **Null** when there is no text to read: the file is missing, the path is a directory, or the bytes are not valid UTF-8. `""` means the file really is empty. |
-| `lines(self: File) -> vector<text>` | Reads the file and splits it into lines. |
+| `lines(self: File) -> vector<text>` | Reads the file and splits it into lines. **Empty** wherever `content()` is null — a missing file, a directory, or bytes that are not UTF-8 — so a loop over it runs zero times and reads exactly like a loop over an empty file. `lines()` has no null of its own to carry the distinction; ask `content()` when it matters. |
 
 `content()` is nullable because `""` cannot carry three different meanings.  A
 non-UTF-8 file used to answer `""`, indistinguishable from an empty one, so a

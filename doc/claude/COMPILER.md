@@ -729,7 +729,7 @@ Cannot add elements to 'v' while it is being iterated — use a separate collect
 ```
 
 The check only fires for `Value::Var` LHS, not field access (`Value::Field`), so `db.items += x`
-is not blocked. `v#remove` in a filtered loop is explicitly allowed — it is implemented via
+is not blocked. `v#remove` is explicitly allowed, filtered loop or not — it is implemented via
 `OpRemove` which adjusts the iterator position before removing.
 
 **Empty-body stubs (`parse_function`, `def_code` in `state.rs`):**

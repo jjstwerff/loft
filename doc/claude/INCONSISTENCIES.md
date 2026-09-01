@@ -34,7 +34,7 @@ All four collection types use the same `+=` and `for` syntax.  The iteration too
 | `for` iteration | ✓ | ✓ | ✓ | ✓ (over the backing field, e.g. `for e in h.dat`) |
 | `#first`, `#count` in loop | ✓ | ✓ | ✓ | ✓ |
 | `#index` in loop | ✓ (0-based) | ✓ (0-based array pos) | ✗ compile error | ✗ |
-| `e#remove` in filtered loop | ✓ | ✓ | ✓ | use `h[key] = null` |
+| `e#remove` in a loop (filtered or not) | ✓ | ✓ | ✓ | use `h[key] = null` |
 | `rev()` reverse iteration | ✓ (via range) | ✓ | ✓ | ✗ |
 | Slicing `[a..b]` | ✓ (positional; negative bounds count from the end, @P384) | ⚠ accepted but it is a **key-range** query, not positional — `srt[1..3]` selects keys 1..3, so a positional-slice port silently reads the wrong elements | ✗ | ✗ |
 | Comprehension `[for x in ...]` | ✓ | ✗ | ✗ | ✗ |
