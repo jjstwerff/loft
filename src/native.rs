@@ -879,26 +879,15 @@ fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
     if v_test {
         return;
     }
-    if let Some(ref logger) = stores.logger {
-        let production = logger.lock().is_ok_and(|l| l.config.production);
-        if production {
-            // Plan-07 phase 4 — route through Logger::log_runtime_kind
-            // so the captured-log shape matches the rest of the
-            // production-mode runtime events (`[assertion_failed] …`).
-            // Also produces the same severity (Error) per the C66
-            // kind table.
-            let kind = crate::runtime_error::RuntimeErrorKind::AssertionFailed {
-                message: v_message.str().to_string(),
-            };
-            let pos = crate::lexer::Position {
-                file: v_file.str().to_string(),
-                line: v_line as u32,
-                pos: 1,
-            };
-            if let Ok(mut lg) = logger.lock() {
-                lg.log_runtime_kind(&kind, Some(&pos));
-            }
-            stores.had_fatal = true;
+    // Production mode logs and continues (C66).  The decision is
+    // `runtime_error::logged_in_production`, shared with the body the
+    // native generator emits, because the two backends have to answer
+    // this identically and once did not (loft#1263).
+    {
+        let kind = crate::runtime_error::RuntimeErrorKind::AssertionFailed {
+            message: v_message.str().to_string(),
+        };
+        if crate::runtime_error::logged_in_production(stores, &kind, v_file.str(), v_line as u32) {
             return;
         }
     }
@@ -923,24 +912,12 @@ fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
     let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
-    if let Some(ref logger) = stores.logger {
-        let production = logger.lock().is_ok_and(|l| l.config.production);
-        if production {
-            // Plan-07 phase 4 — same routing as n_assert; ensures the
-            // `[user_panic]` log entry matches the rest of the
-            // production-mode runtime events.
-            let kind = crate::runtime_error::RuntimeErrorKind::UserPanic {
-                message: v_message.str().to_string(),
-            };
-            let pos = crate::lexer::Position {
-                file: v_file.str().to_string(),
-                line: v_line as u32,
-                pos: 1,
-            };
-            if let Ok(mut lg) = logger.lock() {
-                lg.log_runtime_kind(&kind, Some(&pos));
-            }
-            stores.had_fatal = true;
+    // Same shared decision as `n_assert` above.
+    {
+        let kind = crate::runtime_error::RuntimeErrorKind::UserPanic {
+            message: v_message.str().to_string(),
+        };
+        if crate::runtime_error::logged_in_production(stores, &kind, v_file.str(), v_line as u32) {
             return;
         }
     }

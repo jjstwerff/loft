@@ -4666,7 +4666,7 @@ extern crate loft;"
         if def.name() == "n_assert" && *def.code() == Value::Null {
             writeln!(
                 w,
-                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: u8, msg: M, file: F, line: i64) {{"
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, test: u8, msg: M, file: F, line: i64) {{"
             )?;
             // @PLN17: `test` is a boolean in storage form (u8); the assert fails
             // when it is not the true byte (1) — i.e. false (0) OR null (255).
@@ -4681,9 +4681,14 @@ extern crate loft;"
             // target and `report_and_exit` printed none; the frames now come from the
             // shadow call stack inside `report_and_exit` itself, so nothing is traded away
             // — and `--interpret`, which had no frames here either, gains them too.
+            // Production mode logs and continues (C66), through the same
+            // `logged_in_production` the interpreter's `native.rs::n_assert` calls — the
+            // two backends implement one documented behaviour and only the interpreter
+            // used to honour it, so `loft app.loft` aborted where `loft --interpret`
+            // carried on (loft#1263).
             writeln!(
                 w,
-                "  if test != 1 {{ loft::runtime_error::RuntimeError::assertion_failed(msg.to_string(), file.to_string(), line as u32).report_and_exit(); }}"
+                "  if test != 1 {{\n    let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n    let kind = loft::runtime_error::RuntimeErrorKind::AssertionFailed {{ message: msg.to_string() }};\n    if loft::runtime_error::logged_in_production(stores, &kind, &file.to_string(), line as u32) {{ return; }}\n    loft::runtime_error::RuntimeError::assertion_failed(msg.to_string(), file.to_string(), line as u32).report_and_exit();\n  }}"
             )?;
             writeln!(w, "}}\n")?;
             return Ok(());
@@ -4739,11 +4744,12 @@ extern crate loft;"
         if def.name() == "n_panic" && *def.code() == Value::Null {
             writeln!(
                 w,
-                "fn n_panic<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {{"
+                "fn n_panic<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {{"
             )?;
+            // Same shared decision as `n_assert` above (loft#1263).
             writeln!(
                 w,
-                "  loft::runtime_error::RuntimeError::user_panic(msg.to_string(), file.to_string(), line as u32).report_and_exit();"
+                "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  let kind = loft::runtime_error::RuntimeErrorKind::UserPanic {{ message: msg.to_string() }};\n  if loft::runtime_error::logged_in_production(stores, &kind, &file.to_string(), line as u32) {{ return; }}\n  loft::runtime_error::RuntimeError::user_panic(msg.to_string(), file.to_string(), line as u32).report_and_exit();"
             )?;
             writeln!(w, "}}\n")?;
             return Ok(());

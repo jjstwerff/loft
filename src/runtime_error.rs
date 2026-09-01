@@ -445,6 +445,52 @@ impl RuntimeError {
     }
 }
 
+/// In production mode, record a halting fault and let the program carry on.
+///
+/// `true` means the fault has been logged and the caller must RETURN rather than halt;
+/// `false` means production mode is off and the caller halts as it otherwise would.
+///
+/// This is the whole of `DESIGN_DECISIONS.md § C66` — *"a single error should not bring
+/// everything down"* — and it lives here because BOTH backends have to reach the same
+/// answer.  The interpreter's `native.rs::n_panic` / `n_assert` and the bodies the native
+/// generator emits for those two are separate code that implements one documented
+/// behaviour, and while each decided it for itself only one of them did: `--native`, the
+/// DEFAULT backend, aborted and wrote nothing, so `loft app.loft` got the opposite of the
+/// contract that `loft --interpret app.loft` honoured (loft#1263).
+///
+/// `had_fatal` is still set, so the run exits non-zero.  Production mode changes WHEN the
+/// program stops, not whether the fault counted.
+///
+/// Takes the position in pieces because the generated Rust must be able to call this and
+/// `crate::lexer` is not part of the public surface — and because building the `Position`
+/// here is one fewer thing for three call sites to spell the same way.
+pub fn logged_in_production(
+    stores: &mut crate::database::Stores,
+    kind: &RuntimeErrorKind,
+    file: &str,
+    line: u32,
+) -> bool {
+    let Some(logger) = stores.logger.clone() else {
+        return false;
+    };
+    if !logger.lock().is_ok_and(|l| l.config.production) {
+        return false;
+    }
+    // Routed through `log_runtime_kind` rather than `log` so the entry carries the same
+    // `[user_panic]` / `[assertion_failed]` label and the same C66 severity as every other
+    // production-mode runtime event, on whichever backend produced it.
+    let position = Position {
+        file: file.to_string(),
+        line,
+        pos: 1,
+    };
+    if let Ok(mut lg) = logger.lock() {
+        lg.log_runtime_kind(kind, Some(&position));
+    }
+    stores.had_fatal = true;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

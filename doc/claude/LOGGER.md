@@ -456,7 +456,14 @@ After parsing:
 
 The following pieces from the Architecture section are **implemented**:
 - `--production` CLI flag (main.rs)
-- `n_panic` / `n_assert` with production-mode branching (native.rs)
+- `n_panic` / `n_assert` with production-mode branching, on **both backends** —
+  the decision is `runtime_error::logged_in_production`, called by the
+  interpreter's builtins (native.rs) and by the bodies the native generator
+  emits for those two (generation/mod.rs).  One home on purpose: while each
+  backend decided it separately only the interpreter honoured it, so
+  `loft app.loft` aborted and logged nothing where `loft --interpret app.loft`
+  logged and carried on (loft#1263).  Guarded by
+  `tests/panic_halts_both_backends.rs`
 - `n_log_info/warn/error/fatal` (native.rs)
 - Source-location injection for all six functions (parser/control.rs)
 - `check_reload()` defined in logger.rs (but not yet called — see A2.1 below)
