@@ -12160,7 +12160,19 @@ impl Parser {
                         }
                         continue;
                     }
+                    // A manifest check inside `lib_path` can REFUSE a package it found —
+                    // the wrong loft version, an unreadable version constraint, a contract
+                    // this loft is too old for.  Each of those raises its own Fatal and then
+                    // resolves to nothing, which used to fall through to the "not found"
+                    // arm below: the author of a package that needs a newer loft was told
+                    // both that it needs a newer loft AND that it does not exist, and the
+                    // second sentence is the one that reads like the answer.  So the level
+                    // is snapshotted across the search and the specific refusal is left to
+                    // speak alone.
+                    let level_before = self.lexer.diagnostics().level();
                     let f = self.lib_path(&id);
+                    let refused = self.lexer.diagnostics().level() == Level::Fatal
+                        && level_before != Level::Fatal;
                     let f_exists = std::path::Path::new(&f).exists() || {
                         #[cfg(feature = "wasm")]
                         {
@@ -12186,11 +12198,13 @@ impl Parser {
                         drop(spec);
                         self.switch_to_dep(&f);
                     } else {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "Library '{id}' not found — searched lib/, lib_dirs, and sibling packages"
-                        );
+                        if !refused {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Library '{id}' not found — searched lib/, lib_dirs, and sibling packages"
+                            );
+                        }
                         self.lexer.has_token(";");
                     }
                 }
