@@ -9,6 +9,26 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A format hole holding an escaped quote ended a top-level item early (2026-09-01)
+
+`"got: {shout("a\"b")}"` compiled inside `fn main` and was refused in every other function,
+with `fatal: String not correctly terminated` pointing at the closing quote of a string the
+compiler accepts one function up (loft#1271).
+
+**The lexer was never the defect**, though the message came from it —
+`Lexer::hole_closes_on_this_line` already keeps the right stack. `split_top_level`'s item
+scanner read the string FLAT, stopping at the first unescaped `"`, which is the one before
+`a`. The item then ended inside the literal, the `fn main` that FOLLOWED no longer STARTED an
+item, `is_script` stopped seeing it, and an ordinary program was desugared as a beginner
+script; the lexer was reporting the mangled source. That is why ORDER decided it: with
+`fn main` first, the misplaced boundary lands after it and the same bytes compile.
+
+`scan_string_end` now keeps the lexer's rule — inside a string `{` opens a hole (`{{`/`}}`
+are literal braces), inside a hole `"` opens a nested string, and the literal ends only at a
+`"` at hole depth 0 — which also clears the corpus sweep
+`script::tests::no_corpus_file_classifies_as_script` was failing on.
+
+
 ### A bound is satisfied by a signature, not by a name (2026-09-01)
 
 `a - b` inside a `<T: Numeric>` body compiled and computed `-a`, dropping the second operand,
