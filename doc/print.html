@@ -3451,14 +3451,17 @@ Printable  fn to_text(self: T) -&gt; text
 <h2 id="stop-on-a-line">Stop on a line</h2>
 <p>Say <code>debug</code>, then your file, then a colon and a line number:</p>
 <pre><code>  $ printf ':continue\n' | loft debug count.loft:4
-  paused in main | total = 0, i = 1
+  ⏸ paused in main | total = 0, i = 1   (+2 compiler temp(s) — `:vars all`)
 </code></pre>
-<p>The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what every local variable holds right now.</p>
+<p>The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what your locals hold right now. The note at the end counts the variables the compiler made for itself — the loop's hidden index and a scratch slot — and <code>:vars all</code> shows those too:</p>
+<pre><code>  $ printf ':vars all\n:quit\n' | loft debug count.loft:4
+  ⏸ paused in main | total = 0, i#index = 1, i = 1, __work_1 = ""
+</code></pre>
 <p>Line 4 is inside a loop that goes round three times, so the program stops there three times. <code>:continue</code> means "carry on until you reach this line again", not "run to the end" — which is why the examples below say <code>:continue</code> more than once when they want the program to finish.</p>
 <h2 id="look-at-a-value">Look at a value</h2>
-<p>Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused:</p>
-<pre><code>  $ printf 'total\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
-  0
+<p>Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused, so it can combine the locals you are looking at:</p>
+<pre><code>  $ printf 'total + i * 111\n:quit\n' | loft debug count.loft:4
+  111
 </code></pre>
 <p>This is the part that replaces printing. You do not have to guess in advance which values you will want; ask for them when you are there.</p>
 <h2 id="move-one-step-at-a-time">Move one step at a time</h2>
@@ -3469,10 +3472,25 @@ Printable  fn to_text(self: T) -&gt; text
 <li><code>:finish</code> runs until the current function returns</li>
 <li><code>:continue</code> carries on to the next time this line is reached</li>
 </ul>
-<pre><code>  $ printf ':step\ntotal\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
-  1
+<p>The first three only differ when there IS a call, so the program here is <code>steps.loft</code>, whose loop calls <code>add_up(i * 2)</code> on line 9. Stopping on line 9 and stepping goes into it, and the paused line changes function:</p>
+<pre><code>  $ printf ':step\n:quit\n' | loft debug steps.loft:9
+  ⏸ paused in add_up | n = 2
 </code></pre>
-<p>After that single <code>:step</code> the total is 1, because the loop has now added its first number. Each stop prints the same "paused" line, so you can watch a value change as the loop goes round.</p>
+<p><code>:next</code> at the same place runs the whole call and stays where you are:</p>
+<pre><code>  $ printf ':next\n:quit\n' | loft debug steps.loft:9
+  ⏸ paused in main | total = 2, i = &lt;unset&gt;
+</code></pre>
+<p><code>&lt;unset&gt;</code> is not an error. The loop variable has been consumed for this turn and the next one has not begun, so there is nothing to show.</p>
+<p>And from inside <code>add_up</code>, <code>:finish</code> runs it out and lands back in the caller:</p>
+<pre><code>  $ printf ':finish\n:quit\n' | loft debug steps.loft:2
+  ⏸ paused in main | total = 0, i = 1
+</code></pre>
+<h2 id="watch-a-value-instead-of-watching-for-it">Watch a value instead of watching for it</h2>
+<p>Re-reading the paused line every time round the loop works, and <code>:watch</code> does it for you: carry on, and the program stops when that value changes, saying what it changed from and to:</p>
+<pre><code>  $ printf ':watch total\n:continue\n:quit\n' | loft debug count.loft:4
+  watching total — :continue and the run stops when it changes
+  ⏯ watchpoint: total changed 0 → 1
+</code></pre>
 <h2 id="change-a-value-while-it-is-running">Change a value while it is running</h2>
 <p>You can write to a local, not only read it. This answers "would it work if this were right?" without editing the file and starting again:</p>
 <pre><code>  $ printf 'total = 100\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
@@ -3480,8 +3498,12 @@ Printable  fn to_text(self: T) -&gt; text
   run finished
 </code></pre>
 <p>The program carries on with the value you gave it. It finished with 106 instead of 6, because the loop still had 2 and 3 to add after the change.</p>
+<p><code>:undo</code> takes an edit back, and <code>:redo</code> puts it on again:</p>
+<pre><code>  $ printf 'total = 100\n:undo\ntotal + 55\n:quit\n' | loft debug count.loft:4
+  55
+</code></pre>
 <h2 id="getting-out">Getting out</h2>
-<p><code>:continue</code> carries on. <code>:quit</code> stops right away. <code>:help</code> lists every command if you forget one.</p>
+<p><code>:continue</code> carries on. <code>:quit</code> stops right away. <code>:help</code> lists every command if you forget one — including the short forms <code>:s</code>, <code>:n</code>, <code>:o</code> and <code>:c</code>.</p>
 <h2 id="typing-or-feeding-it-a-script">Typing, or feeding it a script</h2>
 <p>Every example here pipes its commands in, which is how they are checked automatically — the output you see above is compared against what the command really prints. Run <code>loft debug count.loft:4</code> on its own and you get the <code>(dbg)</code> prompt to type at instead. The commands are the same either way.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>

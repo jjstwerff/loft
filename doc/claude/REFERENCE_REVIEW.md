@@ -506,6 +506,41 @@ which is the whole argument for writing one. **A claim that "no runner executes 
 census, and a census is a measurement** — the cheapest way to take it is to assert the
 opposite and let the suite answer.
 
+⚠ **A checked transcript can still be a cell that cannot fail — delete the command and run
+it again.** Chapter 36's transcripts all carry `$ `, so `tests/doc_commands.rs` runs every
+one; two of them proved nothing. "Look at a value" typed `total` and expected `0`, and the
+debugger's own paused line reads `⏸ paused in main | total = 0, i = 1` — so the substring
+`0` is there whether or not the expression is ever evaluated. The `:step` cell expected `1`,
+which `i = 1` supplies. Measured by deleting the command from the pipe: both cells still
+pass. They now ask for `total + i * 111` and get `111`, a value nothing else on the line can
+produce — which also demonstrates *"any expression works, not just a name"*, a claim the
+page made and never showed. **The control for a transcript is the same command with the
+interesting part removed**, and it is one line of shell.
+
+⚠ **A command whose meaning is a DISTINCTION needs a program where the distinction exists.**
+The chapter listed four movement commands — `:step` goes INTO a call, `:next` goes OVER one,
+`:finish` runs until the current function returns — and demonstrated them on `count.loft`,
+which contains no function call at all. All three descriptions are correct (measured), and
+not one of them was reachable from the program the page used, so `:next` and `:finish` ran
+under nothing and the single `:step` cell showed no stepping-into. A second fixture with a
+call now carries three cells whose paused lines differ by function name. **When a section's
+subject is the difference between two commands, check that the example can tell them apart.**
+
+⚠ **`:help` is the chapter's own completeness check, and it is one command away.** The page
+said `:help` "lists every command"; running it lists `:watch <expr>`, `:undo`, `:redo`,
+`:vars` and the short forms `:s :n :o :c`, none of which the chapter mentioned. `:watch` is
+the sharpest omission: the page tells the reader to watch a value change by re-reading the
+paused line each time round the loop, and `:watch total` stops the run when it changes and
+says `0 → 1`. **Where a tool can enumerate its own surface, diff that list against the
+chapter** — the same move as diffing a table against the artefact it copies.
+
+⚠ **Read the part of the output the chapter TRIMMED.** The paused line ends
+`(+2 compiler temp(s) — \`:vars all\`)`, and the page quoted everything before it while
+claiming the line shows "what every local variable holds". The suffix is the tool saying it
+does not, and naming the command that does. A transcript shortened to what the author was
+explaining is where a contradiction hides, because the guard only checks that the shown part
+appears.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -576,6 +611,7 @@ whose entry list changed has.
 | `tests/docs/33-features.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
+| `tests/docs/36-debugging.loft` | 2026-09-02 | `27dc74ad` |
 
 ## See also
 

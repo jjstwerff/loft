@@ -7153,20 +7153,25 @@ Say 'debug', then your file, then a colon and a line number:
 
 ```
   $ printf ':continue\n' | loft debug count.loft:4
-  paused in main | total = 0, i = 1
+  ⏸ paused in main | total = 0, i = 1   (+2 compiler temp(s) — `:vars all`)
 ```
 
-The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what every local variable holds right now.
+The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what your locals hold right now. The note at the end counts the variables the compiler made for itself — the loop's hidden index and a scratch slot — and ':vars all' shows those too:
+
+```
+  $ printf ':vars all\n:quit\n' | loft debug count.loft:4
+  ⏸ paused in main | total = 0, i#index = 1, i = 1, __work_1 = ""
+```
 
 Line 4 is inside a loop that goes round three times, so the program stops there three times. ':continue' means "carry on until you reach this line again", not "run to the end" — which is why the examples below say ':continue' more than once when they want the program to finish.
 
 === Look at a value
 
-Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused:
+Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused, so it can combine the locals you are looking at:
 
 ```
-  $ printf 'total\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
-  0
+  $ printf 'total + i * 111\n:quit\n' | loft debug count.loft:4
+  111
 ```
 
 This is the part that replaces printing. You do not have to guess in advance which values you will want; ask for them when you are there.
@@ -7180,12 +7185,38 @@ Four commands move the program forward:
 - ':finish' runs until the current function returns
 - ':continue' carries on to the next time this line is reached
 
+The first three only differ when there IS a call, so the program here is 'steps.loft', whose loop calls 'add\_up(i \* 2)' on line 9. Stopping on line 9 and stepping goes into it, and the paused line changes function:
+
 ```
-  $ printf ':step\ntotal\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
-  1
+  $ printf ':step\n:quit\n' | loft debug steps.loft:9
+  ⏸ paused in add_up | n = 2
 ```
 
-After that single ':step' the total is 1, because the loop has now added its first number. Each stop prints the same "paused" line, so you can watch a value change as the loop goes round.
+':next' at the same place runs the whole call and stays where you are:
+
+```
+  $ printf ':next\n:quit\n' | loft debug steps.loft:9
+  ⏸ paused in main | total = 2, i = <unset>
+```
+
+'\<unset\>' is not an error. The loop variable has been consumed for this turn and the next one has not begun, so there is nothing to show.
+
+And from inside 'add\_up', ':finish' runs it out and lands back in the caller:
+
+```
+  $ printf ':finish\n:quit\n' | loft debug steps.loft:2
+  ⏸ paused in main | total = 0, i = 1
+```
+
+=== Watch a value instead of watching for it
+
+Re-reading the paused line every time round the loop works, and ':watch' does it for you: carry on, and the program stops when that value changes, saying what it changed from and to:
+
+```
+  $ printf ':watch total\n:continue\n:quit\n' | loft debug count.loft:4
+  watching total — :continue and the run stops when it changes
+  ⏯ watchpoint: total changed 0 → 1
+```
 
 === Change a value while it is running
 
@@ -7199,9 +7230,16 @@ You can write to a local, not only read it. This answers "would it work if this 
 
 The program carries on with the value you gave it. It finished with 106 instead of 6, because the loop still had 2 and 3 to add after the change.
 
+':undo' takes an edit back, and ':redo' puts it on again:
+
+```
+  $ printf 'total = 100\n:undo\ntotal + 55\n:quit\n' | loft debug count.loft:4
+  55
+```
+
 === Getting out
 
-':continue' carries on. ':quit' stops right away. ':help' lists every command if you forget one.
+':continue' carries on. ':quit' stops right away. ':help' lists every command if you forget one — including the short forms ':s', ':n', ':o' and ':c'.
 
 === Typing, or feeding it a script
 
