@@ -1,0 +1,48 @@
+// loft#1273 — a bounded generic whose body DELEGATES (`{ a + b }` lowers to
+// `Call(n_OpAdd, …)`) retained one record per call when its result was consumed inline,
+// unbounded in a loop, while `r = add(…); r.v` was clean all along.
+//
+// `monomorph_return_is_fresh` reads the body's own return sites and cannot see a CALLEE's
+// ownership, so the caller's lift had no proof the return was fresh and left it unowned.
+// The caller now resolves the tail's target and asks it the same question.
+//
+// The `idg` rows are the ones that must NOT be lifted: a generic handing back its ARGUMENT
+// gives the caller a record it already owns, and freeing a lift of that is a double free.
+struct M1273 { v: integer }
+fn OpAdd(self: M1273, other: M1273) -> M1273 { M1273 { v: self.v + other.v } }
+fn OpMul(self: M1273, other: M1273) -> M1273 { M1273 { v: self.v * other.v } }
+fn OpMin(self: M1273) -> M1273 { M1273 { v: -self.v } }
+
+fn g_add<T: Addable>(a: T, b: T) -> T { a + b }
+fn g_mul<T: Numeric>(a: T, b: T) -> T { a * b }
+fn g_id<T>(a: T) -> T { a }
+fn c_add(a: M1273, b: M1273) -> M1273 { a + b }
+
+pub fn test() {
+  s = 0;
+  for i in 0..20 { s += g_add(M1273{v:i}, M1273{v:1}).v; }
+  assert(s == 210, "delegating generic inline: {s}");
+
+  w = 0;
+  for i in 0..20 { w += g_mul(M1273{v:i}, M1273{v:2}).v; }
+  assert(w == 380, "Numeric inline: {w}");
+
+  // already clean, and must stay clean
+  t = 0;
+  for i in 0..20 { r = g_add(M1273{v:i}, M1273{v:1}); t += r.v; }
+  assert(t == 210, "bound to a local: {t}");
+  u = 0;
+  for i in 0..20 { u += c_add(M1273{v:i}, M1273{v:1}).v; }
+  assert(u == 210, "non-generic: {u}");
+
+  // must NOT lift — the record belongs to the caller
+  x = 0;
+  for i in 0..20 { m = M1273{v:i}; x += g_id(m).v; }
+  assert(x == 190, "identity on a named record: {x}");
+  y = 0;
+  for i in 0..20 { y += g_id(M1273{v:i}).v; }
+  assert(y == 190, "identity inline: {y}");
+  keep = M1273{v:7};
+  got = g_id(keep);
+  assert(got.v == 7 && keep.v == 7, "the caller's record survives the call");
+}

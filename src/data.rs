@@ -4285,6 +4285,52 @@ impl Definition {
         if slots.is_empty() { None } else { Some(slots) }
     }
 
+    /// The definitions every return site DELEGATES to, when each site is a direct call —
+    /// loft#1273.
+    ///
+    /// [`Self::monomorph_return_is_fresh`] answers `false` for a tail like `a + b`, whose
+    /// lowering is `Call(n_OpAdd, …)`: the ownership of what comes back is the CALLEE's
+    /// fact, and this body cannot read another definition. It is not unreachable, only
+    /// unreachable from here — `Data` has every definition, so the caller's lift can ask the
+    /// same body-shaped question of each target. This reports which ones to ask.
+    ///
+    /// The fn-ref twin above resolves through the CALLER's closure because the target is a
+    /// runtime value; here the target is written in the IR, so no argument has to be
+    /// resolved and only the callee's own body is consulted.
+    ///
+    /// `None` where a site is neither already fresh nor exactly such a call, which keeps the
+    /// under-approximation composing the way [`Self::site_is_fresh`]'s own arms do: one
+    /// unreadable site refuses the whole body, costing the leak that was already there
+    /// rather than licensing a free this cannot justify.
+    ///
+    /// It reports the TARGETS only. Whether each delivers something the caller may adopt is
+    /// the caller's question, because answering it needs `returns_borrowed_view` on the
+    /// target — a body that hands back its own argument must NOT be lifted, or the free
+    /// releases the caller's record while the variable holding it is still live.
+    #[must_use]
+    pub fn monomorph_direct_call_return_targets(&self) -> Option<Vec<u32>> {
+        let vars = &self.variables;
+        let sites = self.return_sites();
+        if sites.is_empty() {
+            return None;
+        }
+        let mut targets: Vec<u32> = Vec::new();
+        for site in &sites {
+            if Self::site_is_fresh(site.unspan(), vars) {
+                continue;
+            }
+            match site.unspan() {
+                Value::Call(d_nr, _) => targets.push(*d_nr),
+                _ => return None,
+            }
+        }
+        if targets.is_empty() {
+            None
+        } else {
+            Some(targets)
+        }
+    }
+
     /// Does ANY return site hand back what a fn-ref PARAMETER answered — loft#1176?
     ///
     /// That makes the ownership of this body's result the CALLER's closure's fact, which
