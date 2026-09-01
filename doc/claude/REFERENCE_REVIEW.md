@@ -128,6 +128,29 @@ the CALLER — a `const` promise silently not holding, on both backends, which n
 reading could have produced. **The reference pass is a language probe that happens to
 start from the prose**; the chapter's own subject is the axis nobody has swept.
 
+⚠ **For every "cannot", "is an error" and "does not" in a chapter, write the program that
+does it anyway.** Chapter 23 is a catalogue of traps, and its wrong claims CLUSTER: **five
+of them are a stated NEGATIVE the language does not have**. Hashes "cannot be iterated"
+(`for e in h` has walked one in ascending key order since C60, four and a half months
+before the read), slicing inside a multi-byte character "is an error" (it rounds outward to
+whole characters), `lines()` "crashes" on invalid UTF-8 (it warns, answers null, and hands
+back an empty vector — the dangerous direction, because a reader defending against a crash
+writes no defence at all against a silently empty read), a non-`&` vector parameter's
+append "is local" (it reaches the caller — the exact claim loft#1251 corrected in LOFT.md
+and the Vector chapter, still standing here because nobody had read this page), and
+`e#remove` "inside a filtered loop" (it works in a plain one too). That is not a
+coincidence about this chapter: **a negative is the one claim an example cannot carry**, so
+the sentences a chapter's own cells hold up are exactly the positive ones, and everything a
+page says the language will NOT do runs under nothing at all. The reference names the same
+feature in more than one chapter, so this is also where a corrected claim goes to survive:
+grep the whole reference for a sentence you fix, not just the chapter that owns the subject.
+
+⚠ **A trap catalogue must say what it does not cover.** Chapter 23 opened by claiming it
+"catalogues every known trap", which the shipped lints falsify by themselves — nothing on
+the page about `omitted-field-zero`, `variant-field-unchecked` or the copy-on-bind lost
+write, all of which the compiler now diagnoses. A closed-list promise ages into a wrong one
+the first time the language grows a corner, and a reader who believes it stops looking.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -179,6 +202,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/19-threading.loft` | 2026-09-01 | `8af9f8e1` |
 | `tests/docs/20-logging.loft` | 2026-09-01 | `a61fde12` |
 | `tests/docs/22-time.loft` | 2026-09-01 | `ded1a65b` |
+| `tests/docs/23-safety.loft` | 2026-09-01 | `0b1c65c3` |
 
 ## See also
 

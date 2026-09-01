@@ -403,10 +403,18 @@ drift apart; verified both backends —
 
 ## Deviations
 
-**OPEN: 3.**
+**OPEN: 4.**
 - **D-op-1** — there is no shared operational semantics — the interpreter is the spec
 - **D-op-2** — interpreter/native divergences are test-caught, not definition-caught
 - **D-op-5** — two spellings of a following null-check still report differently
+- **D-op-9** — (E-Report)'s soft-halt clause reaches div0 and OOB but not OVERFLOW
+  (loft#1265, both backends).  Overflow is the one recoverable fault the rule ALSO
+  denies a log record, so the triage flag is its only channel and it is silent there
+  too.  It never reaches `raise`: `ops::op_add_long` folds it into
+  `checked_add(..).unwrap_or(i64::MIN)`, a pure function with no `State`.  Closing it
+  puts a null-result test on the hottest op in the language, so whether the checking
+  form is emitted always or only under the flag (the `LOFT_HOIST_VERIFY` shape) is a
+  measurement, not a judgement.
 
 D-op-7 and D-op-8, both loft#1246 and both CLOSED 2026-08-31, are in the history: the
 (E-Uncomp-NN) default was the range's lower bound rather than the type's, and (E-Uncomp)

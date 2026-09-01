@@ -1492,7 +1492,7 @@ Inside a loop, the iteration variable supports several attributes using `#`:
 | `v#next`     | For **text** loops only: byte offset immediately **after** the current character.    |
 | `v#count`    | Number of iterations completed so far (works on all collection types).               |
 | `v#first`    | `true` for the first element only (works on all collection types).                   |
-| `v#remove`   | Remove the current element (filtered loops only; see below).                         |
+| `v#remove`   | Remove the current element — in a filtered loop or a plain one (see below).          |
 
 **Collection type support matrix:**
 
@@ -1549,7 +1549,9 @@ This protects against infinite loops (vectors re-read their length each step) an
 corruption (sorted/index insertions invalidate stored iterator positions).
 
 Exceptions:
-- `e#remove` in a filtered loop is safe and allowed — it adjusts the iterator position after removal.
+- `e#remove` is safe and allowed — it adjusts the iterator position after removal, so every
+  element is still visited. A filter chooses WHICH elements to drop; it is not what makes
+  removal legal, and `for e in v { e#remove; }` empties the vector visiting each element once.
 - Field accesses are not blocked: `db.items += x` is allowed even if `db.items` is iterated via a local variable.
 
 ### While loops

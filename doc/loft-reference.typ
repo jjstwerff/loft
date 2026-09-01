@@ -4499,7 +4499,7 @@ log_info("Done in {(ticks() - start) / 1000} ms")
 
 = Safety
 
-Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior. Helper used in the '??' double-evaluation example below. Increments the call counter and returns the given value unchanged.
+Loft catches most mistakes at compile time. The ones that get through are surprises rather than crashes: a value that reads as null, a count in the wrong unit, a write that lands somewhere else than you meant. This page collects the ones that catch people out, and most sections prove themselves with a live example you can run. Helper used in the '??' double-evaluation example below. Increments the call counter and returns the given value unchanged.
 
 ```rust
 fn counted_call(calls: &integer, value: integer) -> integer {
@@ -4522,23 +4522,60 @@ struct OptTextHolder {
 }
 ```
 
+A `boolean?` holds all three states; a plain `boolean` holds two.
+
+```rust
+struct OptBoolHolder {
+  b: boolean?,
+}
+```
+
+Used by the parameter section below: what a callee does to a collection it is GIVEN, versus what it does to a collection it BOUND.
+
+```rust
+fn appended_by_callee(v: vector<integer>)     { v += [4]; }
+fn replaced_by_callee(v: vector<integer>)     { v = [7, 7]; }
+fn replaced_through_ref(v: &vector<integer>)  { v = [7, 7]; }
+```
+
+Two doors into one record set — see the hash section.
+
+```rust
+struct Item { key: text, count: integer }
+struct Catalogue {
+  all:    vector<Item>,
+  by_key: hash<Item[key]>,
+}
+```
+
+A field with a declared default, beside one without.
+
+```rust
+struct Tile      { name: text, palette_pick: integer = -1 }
+struct PlainTile { name: text, palette_pick: integer }
+```
+
 ```rust
 fn main() {
 ```
 
 === Null values — hidden reserved values
 
-Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:
+Every type reserves one special value to mean "nothing here" (null). Be aware of what it is for each type:
 
-- `boolean`         — `false` is the null value
 - `integer`         — the most negative 64-bit integer (-9 223 372 036 854 775 808) is null
 - `float`/`single`  — `NaN` (Not a Number) is null
 - `character`       — the NUL character (code point 0) is null
 - `text`            — a single NUL character (`'\\0'`) is null; the empty string `""` is NOT null
 - `reference`       — record 0 is null
-- plain `enum`      — byte value 255 is null (limits enums to 255 variants)
+- `boolean`         — a third byte state, which is neither `false` nor `true`
+- plain `enum`      — both the 0 byte and the 255 byte are reserved, so an
 
-This means there is one value per type that you cannot distinguish from null. For integers, that is -9 223 372 036 854 775 808.  When defended with `?? null` (or a following null-check), division by zero produces this same value, so both paths look the same to your code:
+```
+                    enum holds at most 254 variants
+```
+
+For the first four, the reserved value is a value you can write, so there is one value per type that you cannot tell apart from null. For integers, that is -9 223 372 036 854 775 808. When defended with `?? null` (or a following null-check), division by zero produces this same value, so both paths look the same to your code:
 
 ```rust
   zero = 0;
@@ -4565,6 +4602,18 @@ Text null is the NUL character ('\\0'), not the empty string. A `text?` local or
   assert(empty, "empty string is NOT null — this surprises most newcomers");
 ```
 
+`boolean` is the exception, and the useful one: its null is a third byte state that no boolean expression can produce, so `false` is a value like any other and a `boolean?` tells all three apart.
+
+```rust
+  assert(!(false == null), "`false` is a value, not the boolean null");
+  maybe = OptBoolHolder.parse(`{{}}`);
+  assert(maybe.b == null, "a missing `boolean?` field IS null");
+  assert(maybe.b ?? true, "…so `??` reaches its default");
+  stored = OptBoolHolder { b: false };
+  assert(!(stored.b == null), "…while a stored `false` is not null");
+  assert(!(stored.b ?? true), "…and `??` keeps it");
+```
+
 === Parsing text to a number needs a fallback
 
 An unchecked `text as integer` is a COMPILE error: parsing can fail, and loft refuses to let that failure slip through as a silent null. Ask for a checked cast with `integer?` (yields the number or null), or supply a default with `?? \<value\>`. The same rule applies to `float`.
@@ -4584,7 +4633,7 @@ A calculation that overflows the integer range is uncomputable, so loft yields n
 huge = 9223372036854775807; huge + 1  →  null (not a wrapped negative)
 ```
 
-To trace where overflows arise, opt into the debug log level. Mitigation: check the result for null, or keep intermediate values within range.
+Unlike a divide by zero, an overflow writes no log entry and prints no warning at any setting: the null IS the report, and there is nothing to switch on to get a second one. So check the result for null, or keep intermediate values within range.
 
 ```rust
   huge = 9223372036854775807;
@@ -4626,15 +4675,21 @@ Use `f == null`, `!f`, or `f ?? default` to check for null floats.
   emoji = "Hi 😊!";
   assert(len(emoji) == 5, "5 characters (H, i, space, 😊, !)");
   assert(size(emoji) == 8, "8 UTF-8 bytes (the emoji is 4): {size(emoji)}");
-```
-
-Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use `for c in text` to iterate by character. Use `c\#index` and `c\#next` to get the byte boundaries of each character.
-
-```rust
   count = 0;
-  for c in emoji { count += 1; }
+  for _ in emoji { count += 1; }
   assert(count == 5, "for-loop iterates by character, not byte");
 ```
+
+Indexing and slicing take BYTE offsets, and an offset landing inside a multi-byte character is not an error: it rounds OUTWARD to whole characters. So a slice can be longer than the byte range you asked for, and two different ranges can hand back the same text.
+
+```rust
+  mixed = "aébc";                 // bytes: a, then 'é' across two, then b, c
+  assert(mixed[2] == 'é', "byte 2 is the second half of 'é', and reads as 'é'");
+  assert(mixed[0..2] == "aé", "the end rounds forward: three bytes come back, not two");
+  assert(mixed[1..2] == mixed[1..3], "two byte ranges, one character, one answer");
+```
+
+Mitigation: Use `for c in text` to iterate by character. Use `c\#index` and `c\#next` to get the byte boundaries of each character.
 
 === `\#index` means different things on text and vectors
 
@@ -4701,13 +4756,32 @@ Every string literal in loft is a format string. Literal braces must be escaped 
 
 Forgetting to escape braces in expected output is a common mistake in assertions and comparisons.
 
-=== Hash collections cannot be iterated
+=== A hash iterates; two keyed views share one record set
 
-Hashes are lookup structures, not ordered collections. You cannot write `for item in my\_hash { }`. If you need both fast lookup and ordered iteration, keep a vector and a hash pointing at the same record type. See the Hash documentation page for the recommended pattern.
+`for e in my\_hash { }` works and visits the records in ascending key order — the same loop shape as `sorted` and `index`, which yield records too. A hash key runs one way only: the `-` prefix that reverses a `sorted` key is refused on a hash, so reach for `sorted` when the order has to run the other way. The one loop attribute a hash does not carry is `e\#remove`, because the walk is over a sorted snapshot — remove through the key instead, with `my\_hash\[key\] = null`.
+
+The trap is the other way round. Two collections over the SAME record type in one struct are not two collections: they are two doors into one record set. Construct with records in one member and `\[\]` in the other, and the second sees them all. Give records to BOTH and each collection ends up holding everything either one was handed — loft advises on that literal (`advice\[linked-group-double-fill\]`).
+
+```rust
+  cat = Catalogue { all: [Item{key:"zebra", count:1}, Item{key:"apple", count:5}], by_key: [] };
+  insertion = "";
+  for e in cat.all { insertion += "{e.key} "; }
+  assert(insertion == "zebra apple ", "the vector keeps insertion order: {insertion}");
+  ordered = "";
+  for e in cat.by_key { ordered += "{e.key} "; }
+  assert(ordered == "apple zebra ", "the hash walks ascending key order: {ordered}");
+  assert(len(cat.by_key) == 2, "…over the records the vector was given: {len(cat.by_key)}");
+```
 
 === Mutation guard blocks appending during iteration
 
-The compiler prevents `v += \[x\]` inside `for e in v`. This protects against infinite loops. The guard also catches field access: `for e in db.items { db.items += \[x\]; }` is blocked too. The only allowed mutation is `e\#remove` inside a filtered loop.
+The compiler prevents `v += \[x\]` inside `for e in v`. This protects against infinite loops. The guard also catches field access: `for e in db.items { db.items += \[x\]; }` is blocked too. Removing is the one mutation a loop may make: `e\#remove` drops the current element, in a plain loop or in a filtered one.
+
+```rust
+  shrinking = [1, 2, 3];
+  for e in shrinking if e > 1 { e#remove; }
+  assert(len(shrinking) == 1, "`e#remove` drops the elements the filter selected");
+```
 
 === If-expression requires else when used as a value
 
@@ -4717,22 +4791,60 @@ Using `if` as a value expression without an `else` clause is a compile error. Th
 
 A guarded arm like `Red if cond =\> ...` does not count as handling the `Red` variant because the guard can fail at runtime. Even if every variant has a guarded arm, you still need a wildcard `\_` or an unguarded arm so the compiler knows every case is covered.
 
-=== Ref-parameter semantics
+=== A parameter shares; a bind copies
 
-Without `&`, appending to a vector parameter is local — the caller's vector does not grow. With `&`, the caller sees the new elements. Field-level mutations (e.g. `v\[i\].field = x`) are always visible to the caller because both sides share the same underlying database reference. Rule of thumb: Use `&vector\<T\>` when the function needs to grow the vector. Use plain `vector\<T\>` when the function only reads or modifies existing elements.
+A struct or collection PARAMETER is a shared view of the caller's value — nothing is copied when you call. So everything the function does to the contents is visible to the caller once it returns: writing an element, appending, removing, clearing. None of that needs `&`.
+
+`&` buys exactly one thing: replacing the WHOLE value. `v = \[7, 7\]` inside a plain parameter gives that function a different vector and leaves the caller's alone; through a `&vector\<T\>` the caller sees the new vector. So `&` means "I may replace this", not "I may add to it".
+
+A plain BIND is the opposite, and the pair is what catches people: `d = self.data` COPIES, so `d += \[x\]` leaves `self.data` at its old length. Identical-looking lines, opposite outcomes, decided by whether the name came from a parameter or from an assignment.
+
+```rust
+  shared = [1, 2, 3];
+  appended_by_callee(shared);
+  assert(len(shared) == 4, "a plain parameter grew the CALLER's vector: {len(shared)}");
+  kept = [1, 2, 3];
+  replaced_by_callee(kept);
+  assert(len(kept) == 3, "…while replacing the whole value stayed local: {len(kept)}");
+  swapped = [1, 2, 3];
+  replaced_through_ref(swapped);
+  assert(swapped[0] == 7, "…and `&` is what makes a replacement reach back");
+  bound = [1, 2, 3];
+  alias = bound;
+  alias += [4];
+  assert(len(bound) == 3, "a BIND copies — this append reached nothing: {len(bound)}");
+```
 
 === Text file reading assumes UTF-8
 
-`lines()` and `content()` read a file as UTF-8 text and crash on invalid UTF-8 (a binary file, or a different encoding such as Latin-1). For binary data, set a binary format on the file — `f\#format = LittleEndian` (or `BigEndian`) — and read raw bytes / integers directly (see 13-file.loft). So: read UTF-8 text in text mode, everything else in a binary format.
+`lines()` and `content()` decode the file as UTF-8. A file that is not valid UTF-8 — a binary file, or text in another encoding such as Latin-1 — neither crashes nor stops the program: the read warns, answers null, and `lines()` therefore hands back an EMPTY vector. A loop over it runs zero times and the program carries on, so a text read of the wrong file looks exactly like a read of an empty one. Read such a file as bytes instead: `read\_bytes(path)` for the whole file, or set a binary format on the handle — `f\#format = LittleEndian` (or `BigEndian`) — and read fields one at a time (see the File page).
+
+=== A struct literal zeroes the fields it leaves out
+
+Naming some fields and omitting others is legal, and each omitted field takes its type's zero — 0, `""`, `false`. Nothing in the declaration chose that value, and where zero is a meaningful member of the field's domain (a palette index whose 0 is a real colour) it is a wrong value rather than an absent one. loft advises on the partial literal (`advice\[omitted-field-zero\]`). The cure is a declared default on the field, after which the omission has an answer the declaration chose:
+
+```rust
+  plain_tile = PlainTile { name: "grass" };
+  assert(plain_tile.palette_pick == 0, "an omitted field takes the type's zero");
+  tile = Tile { name: "grass" };
+  assert(tile.palette_pick == -1, "a declared default answers instead: {tile.palette_pick}");
+```
+
+=== A field only some variants declare reads another variant's bytes
+
+Enum payloads are named fields you read straight — `shape.radius`. Where several variants declare the same name and type it is ONE slot and each variant reads its own value. Where only SOME declare it, the access resolves at compile time to the first variant that has it, and a value of any other variant reads that slot anyway: the tag is never consulted, so the read answers another variant's bytes typed as this one's. loft warns (`warning\[variant-field-unchecked\]`); bind the field in a `match` arm, which is per-variant and cannot reach the wrong one.
 
 === XOR is `^`, not exponentiation
 
-Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. For exponentiation use the `\*\*` operator (`2 \*\* 10 == 1024`, `2.0 \*\* 3.0 == 8.0`) or the `pow()` function. Watch one precedence footgun: `-x \*\* y` parses as `-(x \*\* y)`, so loft warns on it — write `(-x) \*\* y` when you mean to raise a negated base.
+Unlike some languages where `^` means "power", in loft `^` is bitwise XOR. For exponentiation use the `\*\*` operator (`2 \*\* 10 == 1024`, `2.0 \*\* 3.0 == 8.0`) or the `pow()` function. Watch one precedence footgun: a leading `-` binds TIGHTER than `\*\*`, so `-x \*\* y` raises the NEGATED BASE. loft warns on the bare spelling; write the parentheses for whichever of the two you mean.
 
 ```rust
   assert((0b1010^0b1100) == 0b0110, "^ is XOR");
   assert(2**10 == 1024, "** is the power operator");
   assert(pow(2.0, 3.0) == 8.0, "pow() also computes powers");
+  base = 2;
+  assert((-base) ** 2 == 4, "`-x ** y` is this one: the sign binds to the base");
+  assert(-(base ** 2) == -4, "…and this one needs the parentheses");
 }
 ```
 
