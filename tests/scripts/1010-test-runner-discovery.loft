@@ -1,32 +1,44 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// What `loft --tests` actually runs (loft#1010).
+// What runs, and which runner is asking (loft#1010, @F89).
 //
-// The catalogue says "any function named `test_*` is a test"; TESTING.md says the harness
-// discovers every zero-parameter function and calls only `main` when one exists.  Measured,
-// the shipped runner matches neither: it runs EVERY function of arity zero, `main` included,
-// counts each in the total, and a failing `assert` in any of them fails the file.  A function
-// that takes an argument is the only thing it skips.
+// THREE runners, and they do not use one rule:
 //
-// This file is itself the instrument.  It has no `fn main`, so every function below is an
-// entry point — and `not_a_test_by_arity` proves the rule by being the one that is NOT run:
-// it takes a parameter, and its body asserts something false.  If the runner's rule ever
-// becomes name-based, this file keeps passing; if arity stops being the filter, the parameter
-// cell fires.  The counterpart — a zero-argument non-`test_` function that IS run — is
-// `records_that_it_ran`, whose own assertion only holds when it has been called.
+//   `loft --tests` / `loft test` (src/test_runner.rs), and the native entry-point
+//   generator (src/main.rs) which is kept in step with it deliberately: a file that
+//   names any `test_*` has said which functions are tests, so those are the whole set.
+//   A file that names none keeps arity — every zero-parameter function runs, `main`
+//   and value-returning ones included, and a parameter is the only way out.
 //
-// The counted total is the other half and cannot be asserted from inside: the runner prints
-// `(3 fns: …)` for the three zero-parameter functions here, and a name-based rule would print
-// one.  That number is the cheapest check of the rule and it lives in the run's output.
+//   The wrap harness that runs THIS file: `main` if there is one, otherwise every
+//   zero-parameter function that returns Void, with no name filter at all
+//   (`entry_point_names`, the P147 return filter).
+//
+// This file has no `main` and does name a `test_*`, so the two runners disagree about
+// it on purpose: `--tests` reports `(1 fn: test_the_ordinary_shape)`, and the wrap
+// harness runs that one AND `records_that_it_ran`.
+//
+// The counted total is the half a loft file cannot check about itself. An earlier
+// version of this header said so and predicted its own failure: "if the runner's rule
+// ever becomes name-based, this file keeps passing". It did, and it did. The count now
+// lives in `tests/test_discovery_rule.rs`, which asserts both cases and that the native
+// generator picks the same set.
+//
+// `not_a_test_by_arity` is a NEGATIVE control: its assertion is deliberately false, so the
+// file goes red by name if arity stops being a filter.  `returns_something` cannot be one,
+// because the four runners disagree about whether it is an entry point at all — see its
+// comment.
 
-// @FTR-056 — every zero-parameter function is an entry point, and a parameter is what opts out
+// @FTR-056 — which functions a run picks up: the `test_*` a file names are the whole set, and where a file names none, a parameter is what opts out
 fn test_the_ordinary_shape() {
   assert(1 + 1 == 2, "a test named test_* runs, which is the undisputed half");
 }
 
-// No `test_` prefix, no parameters — run all the same.  A helper that asserts a precondition
-// is an ordinary thing to write and it becomes a test here.
+// No `test_` prefix, no parameters, returns nothing — an entry point under the WRAP harness,
+// which applies no name filter, and not one under `--tests`, which sees the `test_*` above.
+// A helper that asserts a precondition is an ordinary thing to write, and which runner is
+// asking decides whether it becomes a test.
 fn records_that_it_ran() {
   // Nothing to compare against a previous run — each entry point gets a fresh program — so
   // this asserts only that it can execute, which is what being CALLED means.
@@ -41,10 +53,18 @@ fn not_a_test_by_arity(unused: integer) {
   assert(unused == unused + 1, "loft#1010: a function WITH a parameter must not be run");
 }
 
-// Returns a value and takes none — still an entry point, so the value is discarded and only
-// its assertions matter.
+// Returns a value and takes none, and the four runners do NOT agree about it:
+//
+//   `--tests` and the shipped native generator skip it, because this file names a `test_*`.
+//   `tests/wrap.rs` skips it, because its P147 filter excludes value-returning entry points
+//   — calling one discards the store it answers, which leaks.
+//   `tests/native.rs` RUNS it: the native corpus harness has neither filter.
+//
+// So its assertion is executed on the native pass of the corpus and on no other, which is
+// why it is written to hold rather than to fail (loft#1293 — 165 such functions across 66
+// main-less corpus files run on one half of the differential only).
 fn returns_something() -> integer {
   v = 21 * 2;
-  assert(v == 42, "a value-returning zero-parameter function runs, got {v}");
+  assert(v == 42, "a value-returning zero-parameter function is an entry point for the NATIVE corpus harness alone, got {v}");
   v
 }

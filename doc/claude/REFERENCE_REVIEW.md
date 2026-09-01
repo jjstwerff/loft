@@ -464,6 +464,48 @@ interpreter aborts. Nothing in the chapter, the doc suite or `make ci` runs a pi
 the whole class is invisible to them. **Run at least one of a chapter's commands into a
 pager or a `head`.**
 
+⚠ **Read the chapter's MODEL first, and the model of a testing chapter is which functions
+RUN.** Chapter 35 said it three times — in its `@TITLE`, in "Write a test", and in "Run your
+tests" — that a test is *"a function whose name starts with test"*. The runner asks for
+`test_`. `testify`, and a function called exactly `test`, are not tests, the run reports
+`ok` having never called them, and nothing anywhere says so. TESTING.md stated the same
+rule twice, and the @F89 catalogue entry stated its OPPOSITE — *"Not the `test_` prefix —
+**arity**"* — with a transcript (`(2 fns: setup, test_one)`) that no longer reproduces. One
+`if` in `src/test_runner.rs`, four documents, three different answers. The real rule has two
+cases and the second is what makes the reference itself runnable: **a file naming no
+`test_*` keeps arity**, so every zero-parameter function is an entry point.
+
+⚠ **A guard that names its own blind spot has told you when to come back.**
+`tests/scripts/1010-test-runner-discovery.loft` is @F89's worked example, and its header
+said: *"If the runner's rule ever becomes name-based, this file keeps passing … the runner
+prints `(3 fns: …)` … and a name-based rule would print one."* The rule became name-based.
+The file kept passing, and `loft --tests` on it prints `(1 fn: …)`. A carve-out comment is
+a dated prediction, so **when a chapter's subject has a guard, read the guard's own caveat
+before its assertions** — it names the measurement to re-take. The count it said could not
+be asserted from inside now lives in `tests/test_discovery_rule.rs`, out where the runner's
+output can be read.
+
+⚠ **When one rule is written down in several places, collect all of them before fixing
+one.** Grepping the corrected sentence found chapter 35, TESTING.md (twice) and the @F89
+page, and the four had drifted in different directions rather than all lagging together —
+so fixing the chapter alone would have left the catalogue page contradicting it, and that
+page is the one chapter 33 sends readers to. The catalogue entry is an ISSUE, so the fix
+goes there and `make features-fetch && make features-gen` brings the shadow along; expect
+the fetch to carry other people's edits too, and say which in the commit.
+
+⚠ **A negative control is what to do with a cell that has stopped running — and writing one
+is how you find the runner you did not count.** Two cells of the witness above had gone dead:
+one to the name rule, one to the wrap harness's P147 filter, which excludes value-returning
+entry points and which the file claimed it did not have. Deleting them loses the coverage;
+leaving them is an assertion nobody runs. So both became deliberately-FALSE assertions — and
+one of them **fired in CI**. `tests/native.rs::prepare_native_test` has neither filter, so it
+runs a set the interpreter half of the same corpus does not: 165 zero-parameter
+value-returning functions across 66 main-less files, executed on the native pass alone
+(loft#1293). Three runners had been checked by hand and the fourth was found by the control,
+which is the whole argument for writing one. **A claim that "no runner executes this" is a
+census, and a census is a measurement** — the cheapest way to take it is to assert the
+opposite and let the suite answer.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -526,6 +568,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
 | `tests/docs/33-features.loft` | 2026-09-01 | `0c3d4935` |
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
+| `tests/docs/35-testing.loft` | 2026-09-01 | `ecf73f76` |
 
 ## See also
 

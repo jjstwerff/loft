@@ -6753,7 +6753,7 @@ Calling the inner function directly does the same thing, and calling it twice is
 
 Every language surface and every part of the toolchain the catalogue tracks, in one list.  Each entry has a page of its own in `doc/features/` in the repository, where `\@F2` is `F2.md`.
 
-The two halves read differently.  An `\@F` page says what the feature is and how it aids you, and 67 of the 82 carry a runnable example; the rest name what demonstrates them instead, because a loft program cannot run the compiler that runs it.  An `\@I` page says what the part does and where it lives in the source — it describes how loft is built, not something you write.
+The two halves read differently.  An `\@F` page says what the feature is and how it aids you, and 66 of the 82 carry a runnable example; the rest name what demonstrates them instead, because a loft program cannot run the compiler that runs it.  An `\@I` page says what the part does and where it lives in the source — it describes how loft is built, not something you write.
 
 The catalogue is generated from the `loft-lang/features` issue tracker, which is the single source of truth: every entry is an issue, and `make features-check` regenerates this page and fails on any difference.  A feature you can name and cannot find below is missing from the TRACKER — that is a gap in the catalogue rather than a gap in loft, and the chapters of this reference are the wider list.
 
@@ -7029,7 +7029,7 @@ A test is a function that checks your code still does what you meant. You do not
 
 === Write a test
 
-Give a function a name starting with 'test' and put an 'assert' in it. That is all a test is:
+Give a function a name starting with 'test\_' and put an 'assert' in it. That is all a test is:
 
 ```
   fn double(n: integer) -> integer { n * 2 }
@@ -7049,17 +7049,26 @@ Point loft at the file:
 
 ```
   $ loft --tests calc.loft
+    ok    calc.loft  (2 fns: test_double_doubles, test_double_of_zero)
   test result: ok. 2 passed; 1 file
 ```
 
-and it finds every 'test' function and runs it, naming the file and the functions it found.
+It finds every function whose name starts with 'test\_', runs it, and names the file and the functions it found. That result line does not end where it does above — there is a bracket after it, which the last section on this page is about.
+
+The underscore is part of the rule. 'test\_double' is a test; 'testify', or a function called exactly 'test', is not — and nothing will tell you, because the run says ok having never called it. (A camel-case 'testDouble' cannot catch you out: loft refuses that as a function name.)
+
+There is one exception, and it is what makes a plain script runnable. If a file names NO 'test\_' function at all, loft treats every function in it that takes no parameters as something to run. That is how the pages of this reference are checked: they have a 'main' and no tests. As soon as one 'test\_' appears in a file, it and its siblings are the whole set, and the helpers beside them go back to being helpers.
 
 Give it a directory instead of a file and it looks in every '.loft' file underneath. Give it nothing and it starts from where you are:
 
 ```
-  $ loft --tests calc.loft::test_double_doubles
+  $ loft --tests greeter
+    ok    greeter/tests/greet.loft  (1 fn: test_greet_names_the_person)
+  coverage: all 1 functions were entered by these tests
   test result: ok. 1 passed; 1 file
 ```
+
+Over a whole directory it also reports coverage — how many of your functions any of the tests actually entered. One file on its own gets no such line, because a file is not the set of functions you were trying to cover.
 
 === Run just one test
 
@@ -7067,30 +7076,41 @@ While you are fixing one thing, run only that one. Put '::' and the test's name 
 
 ```
   $ loft --tests calc.loft::test_double_of_zero
+    ok    calc.loft  (1 fn: test_double_of_zero)
   test result: ok. 1 passed; 1 file
 ```
 
 === When a test fails
 
-A failure names the test and shows your message:
+A failure names the test and shows your message, once per test and once per file, and the run's exit status stops being zero — which is how a build script finds out:
 
 ```
-  FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+  $ loft --tests broken/failing.loft ; echo "exit $?"
+    FAIL  broken/failing.loft::test_double_of_two  —  assertion failed: double(2) should be 5
+    FAIL  broken/failing.loft  (1 failed, 0 passed)
   test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+  exit 1
 ```
 
 The message is the part you wrote, which is why a vague message like "it works" costs you time and a specific one saves it.
 
 === Read the line after the result
 
-The end of the report says what the run did NOT do, in square brackets — for example that it ran on the interpreter and did not try the compiled build. That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all.
+The result line ends with a bracket saying what the run did NOT do:
 
-To also run your tests the compiled way:
+```
+  $ loft --tests calc.loft
+  test result: ok. 2 passed; 1 file  [ran on the interpreter only — native not exercised: loft test --native; no [sandbox] policy — admission not exercised]
+```
+
+That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all. Run them the compiled way and the bracket says the opposite:
 
 ```
   $ loft --tests --native calc.loft
-  test result: ok. 2 passed; 1 file
+  test result: ok. 2 passed; 1 file  [ran on native only — the interpreter not exercised: loft test; no [sandbox] policy — admission not exercised]
 ```
+
+Both halves matter, because the two ways of running your program are meant to give the same answer and a test only checks the one it ran.
 
 === Once you have a project
 

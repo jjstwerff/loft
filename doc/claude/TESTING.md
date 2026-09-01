@@ -2210,7 +2210,9 @@ or `cargo test`.
 
 ### Writing tests
 
-Any zero-parameter function whose name starts with `test` is a test function:
+Any zero-parameter function whose name starts with `test_` is a test function —
+the underscore is part of the rule, so `testDouble` and a function called exactly
+`test` are not tests and nothing says so:
 
 ```loft
 fn test_addition() {
@@ -2228,7 +2230,16 @@ failing assertion marks the test as failed; the runner continues with the
 remaining tests in the file.
 
 Helper functions, structs, and other definitions can coexist in the same file —
-only `fn test*()` functions (no parameters) are executed as tests.
+once the file names at least one `test_*`, those are the whole set and everything
+beside them is a helper.
+
+**A file that names NO `test_*` is the other case, and it is the one that lets
+`--tests` be pointed at a plain program at all**: there, every zero-parameter
+function is run and counted, `main` included, and a parameter — even an unused
+one — is the only way to say "not an entry point" (loft#1010). That is how the
+reference chapters are checked. The rule is one `if` in
+`src/test_runner.rs`: a file that declares a `test_*` has said which functions
+are tests.
 
 ### Running tests
 
