@@ -331,6 +331,35 @@ sentence anywhere on the page said what `{{` is. It is invisible to every check 
 because the cells pass: the escape works. Read the chapter's own EXPECTED VALUES as a list and
 ask which of them a first-time reader could not have written.
 
+⚠ **A chapter can be a REGRESSION TEST that was published as documentation.** Chapter 31 was
+33 lines: a `use p144_entry` against a `--lib tests/lib` fixture the reader cannot see, prose
+whose middle sentence was *"This is P144"*, and assert messages carrying that tracker id into
+all four release bundles. It never said what `&` means, when a parameter needs one, or what a
+plain parameter already does — while `formal/calls.md` holds the one sentence a reader most
+needs (`&` buys exactly one observable thing, whole-value REPLACEMENT; a plain parameter
+already shares, appends and clears). Nothing was WRONG on the page, which is why no check
+caught it: every assertion passed. **The tell is a chapter whose examples are named after an
+issue** — and the fix is not to delete the regression but to notice it already lives in
+`tests/issues.rs`, so the chapter is free to become a chapter.
+
+⚠ **Run the chapter and READ ITS STDERR — a chapter that teaches an idiom the compiler
+advises against is telling the reader two things.** The rewritten chapter emitted three
+`advice[slow-reference-parameter]` notices on its own teaching examples. Two were the
+compiler's bug (loft#1286: the lint could not see that a `&` passed ON to another `&`
+parameter is load-bearing, so it advised dropping the one thing carrying the write-back —
+and fired only on the CORRECT spelling). The third was right, and the chapter was wrong to
+use `&` on a function that only appends: the page was demonstrating the opposite of the rule
+it teaches, one section below teaching it. **Both directions come from the same read**, and
+neither shows up in a chapter's exit status.
+
+⚠ **When you suppress a diagnostic, count how many it still fires.** The fix for loft#1286
+could have silenced the lint everywhere and every test would still have passed — the
+chapter, the suites, `make ci`. The measurement that says otherwise costs one loop: 31
+firings across `tests/scripts` + `tests/docs` before, 23 after, and each of the eight
+suppressed is a function its own fixture calls a forwarder. A guard for a diagnostic that
+must NOT fire also needs the true-positive control in the same file, because
+`make falsify` has no channel for an absence.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -390,6 +419,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
 | `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
+| `tests/docs/31-ref-forward.loft` | 2026-09-01 | `bf8b298d` |
 
 ## See also
 

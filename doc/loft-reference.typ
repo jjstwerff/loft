@@ -6608,49 +6608,143 @@ A format spec on a target's hole is a compile error, because the value is handed
 
 = Reference parameter forwarding
 
-\@ARGS: --lib tests/lib When a function receives a `&Struct` (mutable reference) parameter and passes it to another function that also takes `&Struct`, the reference must be forwarded without dereferencing. This is P144.
+When you pass a value to a function, what can that function change about it?  The answer depends on the value's type and on one annotation, `&`. This chapter is about the whole of that rule, because the half of it people usually assume is the wrong half.
 
 ```rust
-use p144_entry;
+struct Item { val: integer }
+struct Box { items: vector<Item> }
+```
+
+=== A scalar argument is copied
+
+The callee gets its own number.  Nothing it does can reach the caller.
+
+```rust
+fn bump(n: integer) { n = n + 1; }
+```
+
+=== A struct or collection argument is SHARED
+
+No annotation needed.  Writing a field, writing an element, appending, removing and clearing are all done to the caller's value.
+
+```rust
+fn set_first(b: Box) { b.items[0].val = 7; }
+fn add_one(b: Box) { b.items += [Item { val: 1 }]; }
+fn empty_it(b: Box) { b.items.clear(); }
+```
+
+=== What `&` adds: REPLACEMENT
+
+Assigning the whole binding — `b = ...` — is the one operation that does NOT reach the caller through a plain parameter.  It rebinds the callee's own name and the caller keeps what it had.  Declaring the parameter `&` turns that assignment into a write-back, and that is all `&` does.
+
+```rust
+fn replace_plain(b: Box) { b = Box { items: [Item { val: 99 }] }; }
+fn replace_ref(b: &Box) { b = Box { items: [Item { val: 99 }] }; }
+```
+
+=== Forwarding
+
+A `&` parameter can be handed to another function that also takes `&`. The reference is forwarded rather than dereferenced, so the innermost function's replacement still reaches the outermost caller, at any depth.
+
+```rust
+fn forward_replace(b: &Box) { replace_ref(b); }
+```
+
+These two only append and write elements, so neither needs `&` — a plain parameter already does both to the caller's value.  The compiler says so if you add one: `advice\[slow-reference-parameter\]`.
+
+```rust
+fn ensure(b: Box) {
+  if len(b.items) == 0 { b.items += [Item { val: 0 }]; }
+}
+```
+
+```rust
+fn set_val(b: Box, val: integer) {
+  ensure(b);
+  for sv_item in b.items {
+    if sv_item.val == 0 { sv_item.val = val; return; }
+  }
+}
 ```
 
 ```rust
 fn main() {
 ```
 
-box\_set\_val calls box\_ensure(b) internally — forwarding the & param.
+=== A scalar is copied
+
+```rust
+  n = 1;
+  bump(n);
+  assert(n == 1, "a scalar argument is copied");
+```
+
+=== A struct or collection is shared — no `&` required
+
+```rust
+  shared = Box { items: [Item { val: 0 }] };
+  set_first(shared);
+  assert(shared.items[0].val == 7, "an element write reaches the caller");
+  add_one(shared);
+  assert(len(shared.items) == 2, "an append reaches the caller");
+  empty_it(shared);
+  assert(len(shared.items) == 0, "a clear reaches the caller");
+```
+
+This is the half people assume is the other way round.  `&` is NOT the permission you need in order to append to a vector parameter — a plain parameter already grows the caller's vector.
+
+=== Replacement is the one thing that needs `&`
+
+```rust
+  keep = Box { items: [Item { val: 1 }] };
+  replace_plain(keep);
+  assert(keep.items[0].val == 1, "a plain parameter cannot replace the whole value");
+  swap = Box { items: [Item { val: 1 }] };
+  replace_ref(swap);
+  assert(swap.items[0].val == 99, "a `&` parameter can");
+```
+
+So read `&` on a signature as "this function may hand you back a different value", not as "this function may modify what you give it".
+
+=== Forwarding carries it through
+
+The forwarder needs the `&` as much as the function it calls.  Its own body never assigns to the parameter, so the `&` can look unnecessary — but it is what carries the inner replacement out.  Written `fn forward\_replace(b: Box)` the assertion below fails, and nothing reports it.
+
+```rust
+  deep = Box { items: [Item { val: 1 }] };
+  forward_replace(deep);
+  assert(deep.items[0].val == 99, "the replacement survives one forward");
+```
+
+A chain of plain parameters carries the shared value just as far, which is why `set\_val` below needs no annotation at any level.
 
 ```rust
   b = Box { items: [] };
-  box_set_val(b, 42);
-  assert(b.items[0].val == 42, "P144: & forwarded — item set to 42");
+  set_val(b, 42);
+  assert(b.items[0].val == 42, "a plain parameter forwards its sharing too");
 ```
 
-Calling the inner function directly also works.
+Calling the inner function directly does the same thing, and calling it twice is harmless: it only fills an empty box.
 
 ```rust
   b2 = Box { items: [] };
-  box_ensure(b2);
+  ensure(b2);
   assert(len(b2.items) == 1, "ensure added one item");
-  assert(b2.items[0].val == 0, "default val is 0");
+  ensure(b2);
+  assert(len(b2.items) == 1, "ensure is idempotent");
 ```
 
-Multiple forwards: ensure is idempotent.
+=== A worked example
 
-```rust
-  box_ensure(b2);
-  assert(len(b2.items) == 1, "ensure idempotent");
-```
-
-Set a second value via box\_set\_val on a pre-populated box.
+`set\_val` fills the first zero slot, leaving anything already set alone.
 
 ```rust
   b3 = Box { items: [] };
-  b3.items += [Inner { val: 10 }];
-  b3.items += [Inner { val: 0 }];
-  box_set_val(b3, 99);
-  assert(b3.items[0].val == 10, "existing item preserved");
-  assert(b3.items[1].val == 99, "zero item replaced");
+  b3.items += [Item { val: 10 }];
+  b3.items += [Item { val: 0 }];
+  set_val(b3, 99);
+  assert(b3.items[0].val == 10, "an existing value is left alone");
+  assert(b3.items[1].val == 99, "the empty slot is filled");
 }
 ```
 

@@ -139,6 +139,10 @@ heap-returning tail discarded 800 000 times holds a flat resident size).
                    (F-ParamRef), and it is the only local one.
   (F-ParamRef)     a `&`-typed parameter (binding.md) is the EXPLICIT write-back channel: a
                    whole-value `p = e` on a `&T` parameter DOES write through to the caller.
+                   It is TRANSITIVE: passing a `&T` parameter on to another `&T` parameter
+                   forwards the reference rather than dereferencing it, so the innermost
+                   reassignment reaches the outermost caller at any depth.  A forwarder
+                   therefore needs the `&` even though its own body never assigns.
 ```
 
 **In words.** What a call can do to its arguments depends on the type. A **scalar** argument is
@@ -201,8 +205,13 @@ can get back is an explicit `&T` return, which binding.md governs.
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
-the companion [calls-history.md](calls-history.md).
+**OPEN: 1.**
+- **D-call-7** (loft#1287) — a plain heap parameter forwarded into a reassigning `&`
+  parameter leaks the replaced store, one per call. The ANSWER is `(F-ParamRebind)`
+  working as written; the missing half is the free.
+
+The full register — this entry plus every closed one with its dates and issue numbers —
+is the companion [calls-history.md](calls-history.md).
 
 ## Conformance
 

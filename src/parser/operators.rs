@@ -4105,6 +4105,29 @@ impl Parser {
     /// by default.  Scalar `&` (always load-bearing) and never-read params (already
     /// covered by `test_used`) are not flagged.  Stdlib exempt; silenceable via
     /// `LOFT_NO_WARN_RUNTIME`.
+    /// Does this call hand `var` to a `&` parameter of `callee`?
+    ///
+    /// Arguments are lowered in ATTRIBUTE order, so argument `i` is attribute `i`.
+    ///
+    /// An unresolved callee answers `true` — suppress rather than advise.  The two
+    /// errors are not symmetric: a missed advice costs a reader nothing, while a wrong
+    /// "drop the `&`" costs them a write-back with no diagnostic.  Measured across
+    /// `tests/scripts` and `tests/docs`, that arm is never reached; it is the fail-safe
+    /// direction for a case the corpus does not currently produce, not a tested path.
+    fn passes_to_ref_parameter(&self, callee: u32, args: &[Value], var: u16) -> bool {
+        if callee == u32::MAX || callee as usize >= self.data.definitions.len() {
+            return true;
+        }
+        let attrs = self.data.def(callee).attributes();
+        args.iter().enumerate().any(|(i, a)| {
+            a.reads_var(var)
+                && attrs.get(i).is_some_and(|at| {
+                    matches!(&at.typedef, Type::RefVar(inner)
+                        if matches!(**inner, Type::Reference(_, _)))
+                })
+        })
+    }
+
     pub(crate) fn warn_redundant_amp(&mut self, body: &Value) {
         if self.default || self.context == u32::MAX {
             return;
@@ -4132,13 +4155,20 @@ impl Parser {
             {
                 continue;
             }
-            let mut reassigned = false;
-            body.walk(&mut |node| {
-                if matches!(node, Value::Set(v, _) if *v == var) {
-                    reassigned = true;
+            // @FR-F-ParamRef — the `&` earns its place if the body reassigns the
+            // parameter, or if it hands it to someone who does.  A FORWARDER never
+            // assigns: `fn f(b: &B) { g(b); }` carries `g`'s write-back out to `f`'s
+            // caller, and dropping the `&` loses it in silence (loft#1286).  The rule is
+            // transitive through a call, so the question the lint asks has to be too.
+            let mut load_bearing = false;
+            body.walk(&mut |node| match node {
+                Value::Set(v, _) if *v == var => load_bearing = true,
+                Value::Call(callee, args) if self.passes_to_ref_parameter(*callee, args, var) => {
+                    load_bearing = true;
                 }
+                _ => {}
             });
-            if reassigned {
+            if load_bearing {
                 continue;
             }
             self.lexer.to(self.vars.var_source(var));
