@@ -74,7 +74,7 @@ Fields (tab-separated internally, displayed as aligned columns):
 |---|---|---|
 | UTC timestamp | `2026-03-13T14:05:32.417Z` | ISO 8601, millisecond precision |
 | Severity | `INFO` / `WARN` / `ERROR` / `FATAL` | 5-char padded |
-| Source location | `/home/you/app/compute.loft:142` | the path the program was invoked by — usually ABSOLUTE, not project-relative (loft#1264) + line |
+| Source location | `src/compute.loft:142` | relative to the project root (the nearest `loft.toml` above the entry), or to the entry's own directory when there is no manifest, + line |
 | Message | `division result may overflow` | fully-interpolated user string |
 
 Rate-suppression notice (emitted when a window resets after suppression):
@@ -98,6 +98,20 @@ sheds surrounding quotes the way a value does — `"app.loft" = info` and `app.l
 are the same key. Until 2026-09-01 only the value was unquoted, so the quoted spelling this
 file's own generated template prints was stored WITH its quote characters and silently
 matched nothing.
+
+**A key is matched against the RELATIVE path**, which is the same string the record shows:
+the basename form (`app.loft`) against the file name, the prefix form (`src/`) against the
+path from the project root. The prefix form had no working spelling at all until then,
+because the path it was matched against was absolute and no key ending in `/` could be a
+prefix of one (loft#1264). A prefix therefore only means something inside a project — for a
+bare script the base is the script's own directory, so there is no prefix left to match, and
+the basename form is the one that addresses it.
+
+The relativising happens in `Logger::log`, the single point where a loft path enters the
+logger, so the override match, the rate-limit key and the written record cannot disagree
+about what a file is called. **Diagnostics are deliberately NOT relativised**: they are read
+by the author on the machine that produced them, where the full path is what makes the
+message actionable, while a log is read by someone else somewhere else.
 
 ### Format
 
@@ -159,6 +173,9 @@ per_site = 5
 
 # Per-file severity overrides.  The key is the loft source file name
 # (basename only, e.g. "score.loft") or a path prefix ending in "/".
+# Both are matched against the path as the log record shows it: relative
+# to the project root, or to the main file's directory if there is no
+# loft.toml.  A prefix therefore only addresses files inside a project.
 # The value overrides the global [log] level for that file.
 #
 # Examples:
@@ -206,11 +223,16 @@ When `production = true` (or `--production` CLI flag):
 | `panic(msg)` | Rust `panic!`, program aborts | `fatal` log entry, execution continues |
 | `assert(false, msg)` | Rust `assert!`, program aborts | `error` log entry, execution continues |
 
-⚠ **Interpreter only.** `--native` emits its own `n_panic` / `n_assert` bodies
-(`src/generation/mod.rs`) that go straight to `report_and_exit()` with no production branch,
-so on the DEFAULT backend a `panic()` under `production = true` aborts and writes nothing —
-the outcome the feature exists to prevent (loft#1263). The process exits non-zero on either
-backend even when execution continues, so an exit-code check cannot tell the two apart.
+Both backends, through one decision — `runtime_error::logged_in_production`, called by the
+interpreter's builtins (`src/native.rs`) and by the `n_panic` / `n_assert` bodies the native
+generator writes (`src/generation/mod.rs`), which have no `#rust` template and so are hand-
+written. It was interpreter-only until 2026-09-01: `--native`, the DEFAULT backend, went
+straight to `report_and_exit()`, so a `panic()` under `production = true` aborted and wrote
+nothing — the outcome the feature exists to prevent (loft#1263).
+
+⚠ The process exits non-zero on either backend even when execution continues, so an
+exit-code check cannot tell production mode from a halt. What separates them is whether the
+statements AFTER the fault ran, and whether a record reached the log.
 
 In production mode the hidden return value from the fatal/error log call is `Value::Null` so that the IR position after the call is reachable.  The existing `OpPanic`-based inline implementation of `assert` (in `parse_call`) must be replaced with a native function call that checks the production flag at runtime.
 

@@ -101,6 +101,15 @@ pub struct Logger {
     /// (year, month, day) in UTC — used for daily rotation detection.
     current_ymd: (u32, u32, u32),
     rate_map: HashMap<(String, u32), RateEntry>,
+    /// What a record's source path is shown RELATIVE to: the project root when the program
+    /// is in one, else the main file's own directory.  `None` leaves paths as they arrive.
+    ///
+    /// A log record is not a diagnostic.  A diagnostic is read by the author on the machine
+    /// that produced it, where an absolute path is the useful thing; a log is shipped off
+    /// that machine and read by someone else, for whom `/home/<user>/…` on every line is
+    /// noise, is long enough to bury the message, and discloses the build account
+    /// (loft#1264).  So the relativising happens HERE and diagnostics are left alone.
+    source_base: Option<PathBuf>,
 }
 
 impl Logger {
@@ -116,6 +125,7 @@ impl Logger {
             current_size: 0,
             current_ymd: (0, 0, 0),
             rate_map: HashMap::new(),
+            source_base: None,
         };
         // Record mtime of config file if we have one.
         if let Some(ref p) = logger.config_path.clone() {
@@ -142,6 +152,7 @@ impl Logger {
             current_size: 0,
             current_ymd: (0, 0, 0),
             rate_map: HashMap::new(),
+            source_base: None,
         }
     }
 
@@ -206,7 +217,26 @@ impl Logger {
         } else {
             None
         };
-        Logger::new(config, config_path)
+        let mut logger = Logger::new(config, config_path);
+        logger.source_base = source_base_for(main_loft_file);
+        logger
+    }
+
+    /// Render a loft source path the way a log record shows it: relative to the project
+    /// root, or to the main file's directory when there is no manifest.
+    ///
+    /// Unchanged when nothing to strip applies — a stdlib file, a library from elsewhere,
+    /// or a path already relative. An absolute path is still better than a wrong one.
+    fn display_path<'a>(&self, loft_file: &'a str) -> &'a str {
+        let Some(ref base) = self.source_base else {
+            return loft_file;
+        };
+        let Some(base) = base.to_str() else {
+            return loft_file;
+        };
+        loft_file
+            .strip_prefix(base)
+            .map_or(loft_file, |rest| rest.trim_start_matches(['/', '\\']))
     }
 
     /// Write a log record.  Applies rate limiting and level filtering.
@@ -215,6 +245,13 @@ impl Logger {
     ///
     /// Panics if the internal rate-limit map entry is missing after insertion (indicates a bug).
     pub fn log(&mut self, sev: Severity, loft_file: &str, line: u32, msg: &str) {
+        // Relativised ONCE, here, because three things downstream have to agree about what
+        // this file is called: the `[levels]` override match, the rate-limit key, and the
+        // record itself.  While the record carried an absolute path, a `[levels]` prefix
+        // key such as `src/` could not match ANY file and the feature the generated config
+        // documents had no working spelling (loft#1264).
+        let loft_file = self.display_path(loft_file);
+
         // Level filter
         if sev < self.effective_level(loft_file) {
             return;
@@ -480,6 +517,29 @@ impl Logger {
 // Config parsing
 // ---------------------------------------------------------------------------
 
+/// What log records show a source path relative to, for a program whose entry is
+/// `main_loft_file`.
+///
+/// The project root when there is a manifest above the entry — which is what
+/// LOGGER.md's "relative to project root" has always claimed — and otherwise the entry's
+/// own directory, which is the only meaningful answer for a bare script.  `None` when
+/// neither can be determined, and then paths are left exactly as they arrive.
+fn source_base_for(main_loft_file: &str) -> Option<PathBuf> {
+    if main_loft_file.is_empty() {
+        return None;
+    }
+    if let Some(root) = crate::resolution_scope::project_root(main_loft_file) {
+        return Some(root);
+    }
+    let dir = Path::new(main_loft_file).parent()?;
+    if dir.as_os_str().is_empty() {
+        return None;
+    }
+    // Canonicalised so the strip works against the absolute form a record carries; a path
+    // that cannot be canonicalised is used as-is rather than dropped.
+    Some(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()))
+}
+
 fn parse_config_str(content: &str, conf_dir: &Path) -> RuntimeLogConfig {
     let mut config = RuntimeLogConfig::default();
     let mut section = String::new();
@@ -617,6 +677,9 @@ per_site = 5
 
 # Per-file severity overrides.  The key is the loft source file name
 # (basename only, e.g. "score.loft") or a path prefix ending in "/".
+# Both are matched against the path as the log record shows it: relative
+# to the project root, or to the main file's directory if there is no
+# loft.toml.  A prefix therefore only addresses files inside a project.
 # The value overrides the global [log] level for that file.
 #
 # Examples:

@@ -146,8 +146,14 @@ fn the_level_discards_everything_below_it() {
         Some("[log]\nfile = log.txt\nlevel = error\n"),
     );
     let (_, log) = case.run("--interpret");
-    assert!(!log.contains("an info line"), "info survived a floor of error\n{log}");
-    assert!(!log.contains("a warn line"), "warn survived a floor of error\n{log}");
+    assert!(
+        !log.contains("an info line"),
+        "info survived a floor of error\n{log}"
+    );
+    assert!(
+        !log.contains("a warn line"),
+        "warn survived a floor of error\n{log}"
+    );
     assert!(log.contains("an error line"), "error was dropped\n{log}");
     assert!(log.contains("a fatal line"), "fatal was dropped\n{log}");
 }
@@ -183,7 +189,10 @@ fn a_per_file_override_can_also_raise_the_floor() {
         !log.contains("an info line"),
         "the override did not raise the floor\n{log}"
     );
-    assert!(log.contains("an error line"), "error was dropped too\n{log}");
+    assert!(
+        log.contains("an error line"),
+        "error was dropped too\n{log}"
+    );
 }
 
 /// `per_site` caps how many records one source LINE may write in a window.
@@ -196,7 +205,10 @@ fn the_rate_limit_caps_one_source_line() {
     let case = Case::new("rate", program, Some(conf));
     let (_, log) = case.run("--interpret");
     let written = log.lines().filter(|l| l.contains("from one site")).count();
-    assert_eq!(written, 5, "twelve calls, per_site = 5, got {written}\n{log}");
+    assert_eq!(
+        written, 5,
+        "twelve calls, per_site = 5, got {written}\n{log}"
+    );
 }
 
 /// A log message is an ordinary expression, evaluated before the call decides anything.
