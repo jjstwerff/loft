@@ -16,6 +16,7 @@ This document describes all public functions, constants, and types available in 
 - [Parallel](#parallel)
 - [Reflection](#reflection)
 - [Environment](#environment)
+- [Time](#time)
 - [Random](#random)
 
 ---
@@ -1526,6 +1527,25 @@ cycle ends denser, at 0.17 MB / 93% used, but moves **9.5 MB** of grow-and-shrin
 traffic to get there — 55× the store's own size, to save 0.11 MB. Called once
 after a permanent drop it costs one walk; called on a cycle it pays for a re-grow
 every time.
+
+---
+
+## Time
+
+Two clocks, answering two different questions. Both return loft's 64-bit `integer`, which a
+millisecond epoch stamp needs. See [tests/docs/22-time.loft](../22-time.loft) for the
+chapter and `tests/scripts/the-reference-clock-units-are-the-ones-it-names.loft` for the
+guard that pins the units against each other.
+
+| Function | Description |
+|----------|-------------|
+| `now() -> integer` | Wall-clock time as **milliseconds** since the Unix epoch (1970-01-01T00:00:00 UTC). For timestamps and anything compared against a calendar. It reads the SYSTEM clock, so an NTP correction or a manual change can step it in either direction — never subtract two `now()` values to time something. |
+| `ticks() -> integer` | **Microseconds** elapsed since program start, from a monotonic clock. Never steps backward whatever happens to the system clock, which is the guarantee `now()` does not carry. For benchmarks and frame timing. |
+
+There is no calendar in the standard library — no year/month/weekday, no formatting. That
+is the **`time` package**'s subject (`loft install time`, then `use time;`), and it works on
+the same millisecond-since-epoch integer `now()` returns, so nothing is converted:
+`format_iso(now())`, `weekday_name(now())`, `add_days(now(), 30)`.
 
 ---
 

@@ -86,6 +86,17 @@ others, and the page only comes apart against the compiler. **One measurement di
 bare call answering.** So before the sentence-level read, take the chapter's central
 rule, write the smallest program that would violate it, and run that.
 
+⚠ **Check the LIBRARY CATALOGUE for the chapter's own subject.** Chapter 22 opened "Loft
+provides two time functions" and told the reader to use `now()` for "date calculations" —
+while a published `time` package does proleptic-Gregorian arithmetic on exactly the
+millisecond integer `now()` returns (`format_iso(now())`, `weekday_name(now())`,
+`add_days(now(), 30)`). The sentence is true about the standard library and reads as true
+about loft, and the reader it fails is the one who believes it and writes calendar maths by
+hand. CLAUDE.md already says to check `make libcatalogue` before building something; a
+chapter is where that check is owed to somebody else. **Run it for every chapter whose
+subject a package could plausibly cover**, and say plainly which side of the line the
+chapter is on.
+
 ⚠ **A chapter whose subject is CONFIGURED needs a configured run, and that cannot live on
 the page.** Chapter 20 documented a log file format, four config sections, per-file level
 overrides, rate limiting and a production mode — and its executable cells called the four
@@ -167,6 +178,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/18-locks.loft` | 2026-09-01 | `d50be135` |
 | `tests/docs/19-threading.loft` | 2026-09-01 | `8af9f8e1` |
 | `tests/docs/20-logging.loft` | 2026-09-01 | `a61fde12` |
+| `tests/docs/22-time.loft` | 2026-09-01 | `2bf8f3eb` |
 
 ## See also
 

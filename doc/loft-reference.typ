@@ -4375,16 +4375,32 @@ The log messages give you a record of exactly what the program did and where it 
 
 = Time
 
-Loft provides two time functions:
+Loft's standard library has two time functions, and they answer two different questions:
 
 ```
 now()     — milliseconds since the Unix epoch (wall-clock time).
 ticks()   — microseconds elapsed since program start (monotonic clock).
 ```
 
-Both return an 'integer' (loft's 64-bit integer).
+Both return an 'integer' (loft's 64-bit integer) — which they need, since a millisecond timestamp passed 32 bits in 1970 plus a few weeks.
 
-Use 'now()' for timestamps, log entries, and date calculations. Use 'ticks()' for benchmarks and frame timing — it is unaffected by system clock changes or NTP adjustments.
+Use 'now()' when you want to know WHEN something happened: timestamps, log entries, anything you will compare against a calendar. Use 'ticks()' when you want to know HOW LONG something took: benchmarks and frame timing. It is unaffected by system clock changes or NTP adjustments, which is exactly what 'now()' cannot promise.
+
+=== Calendars are a library
+
+These two are the whole clock surface: there is no year, month or weekday in the standard library, and no formatting. That is deliberate — calendar arithmetic is a large, opinionated subject — and it is a package away:
+
+```
+use time;
+fn main() {
+    ms = now();
+    println(format_iso(ms));                    // 2026-09-01T09:03:58Z
+    println("{year(ms)} {month_name(ms)} {day(ms)}, a {weekday_name(ms)}");
+    println(format_date(add_days(ms, 30)));     // 2026-10-01
+}
+```
+
+The 'time' package works on the same millisecond-since-epoch integer 'now()' returns, so nothing has to be converted. Install it with 'loft install time'.
 
 ```rust
 fn main() {
@@ -4392,23 +4408,23 @@ fn main() {
 
 === Wall-clock time: now()
 
-'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC. The value is always positive and grows over time.
+'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC, so it is well past the range a 32-bit number could hold.
 
 ```rust
   t = now();
-  assert(t > 0, "now() must be positive");
+  assert(t > 2147483647, "now() is a 64-bit millisecond stamp: {t}");
 ```
 
-Two successive calls return non-decreasing values.
+It reads the system clock, so it usually moves forward — but it is the system's clock, not yours: an NTP correction or a manual change can step it in either direction. Never subtract two 'now()' values to time something. That is what 'ticks()' is for.
 
 ```rust
   t2 = now();
-  assert(t2 >= t, "now() must be non-decreasing");
+  assert(t2 > 2147483647, "a second reading is a timestamp too: {t2}");
 ```
 
 === Elapsed time: ticks()
 
-'ticks()' measures microseconds since the program started. It uses a monotonic clock so it never jumps backward.
+'ticks()' measures microseconds since the program started, so it begins near zero and only ever climbs. It uses a monotonic clock, which is the guarantee 'now()' does not have: it never jumps backward, whatever happens to the system clock while your program runs.
 
 ```rust
   start = ticks();
@@ -4448,13 +4464,14 @@ Timestamp a log entry (seconds since epoch):
 seconds = now() / 1000
 ```
 
-Seed the random number generator with the current time (now() already returns an integer, so no cast is needed):
+Seed the random number generator with the current time. The generator is in the 'random' package rather than the standard library, so the import is part of the pattern — without it the name does not resolve:
 
 ```
+use random;
 rand_seed(now())
 ```
 
-Simple stopwatch:
+Simple stopwatch (integer division, so this truncates to whole ms):
 
 ```
 start = ticks()
