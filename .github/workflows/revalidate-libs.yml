@@ -62,6 +62,20 @@ jobs:
           }
           legs = []
           for name, pkg in idx.items():
+              # `loft` is published, and it is the COMPILER rather than a library — the
+              # question this workflow asks ("does a language change retro-break a shipped
+              # lib?") is not one the compiler can answer about itself.  Its `tests/` is the
+              # repo's own suite, which `make ci` and the CI workflow already run, and it
+              # holds FIXTURES that are deliberately not standalone programs:
+              # `tests/data/script_hello.loft` says so in its own header — "runs only under
+              # `--script` … it is NOT accepted by the plain compiler".  The re-classifying
+              # `loft --dump` loop compiles every `tests/**/*.loft`, so it read those
+              # fixtures as COMPILE-BREAKs and reported the compiler as retro-breaking
+              # itself.  (Not a regression this leg caught late: until the `subpath` fix it
+              # died on a missing directory and never ran at all.)
+              if name == "loft":
+                  print("::notice::revalidate-libs SKIP 'loft': the compiler is not a library; its suite is CI's job", file=sys.stderr)
+                  continue
               if name in KNOWN_BROKEN:
                   print(f"::warning::revalidate-libs SKIP known-broken '{name}': {KNOWN_BROKEN[name]}", file=sys.stderr)
                   continue
