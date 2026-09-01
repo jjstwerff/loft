@@ -154,7 +154,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/16-parser.loft` | 2026-09-01 | `512839a6` |
 | `tests/docs/17-libraries.loft` | 2026-09-01 | `361aded3` |
 | `tests/docs/18-locks.loft` | 2026-09-01 | `d50be135` |
-| `tests/docs/19-threading.loft` | 2026-09-01 | `72ffb31a` |
+| `tests/docs/19-threading.loft` | 2026-09-01 | `8af9f8e1` |
 
 ## See also
 
