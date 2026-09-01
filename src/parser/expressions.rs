@@ -5376,6 +5376,7 @@ use a separate collection or add after the loop"
                 Type::Tuple(ms) => ms.get(lhs.leaf_idx as usize).cloned(),
                 _ => None,
             };
+            let member_for_null = member_tp.clone();
             let seeding = member_tp.as_ref().is_some_and(Self::seeds_lambda_hint);
             let saved_expected = if seeding {
                 let m = member_tp
@@ -5386,9 +5387,27 @@ use a separate collection or add after the loop"
             } else {
                 None
             };
-            self.expression(&mut rhs);
+            let rhs_tp = self.expression(&mut rhs);
             if let Some(prev) = saved_expected {
                 self.expected = prev;
+            }
+            // loft#1282 — `t.1 = null` has to become the ELEMENT TYPE's null sentinel, the
+            // same `OpConv<T>FromNull()` a struct field write emits.  Left as a bare
+            // `Value::Null`, the value generator pushed NOTHING and the `OpPut<T>` below it
+            // popped whatever sat beneath on the eval stack: `b: (integer, integer?)` read
+            // back an address-shaped number, a `text?` element came back holding part of the
+            // format template, and neighbouring shapes reached `Incorrect var` / `var_pos
+            // underflow` / `attempt to subtract with overflow` in codegen.  Corruption, not a
+            // wrong answer.
+            //
+            // Unconditional, exactly as the struct-field path is: whether the member is
+            // DECLARED nullable is a separate question that `(N-Store)` already answers with
+            // its own warning, and storing the sentinel is right either way.
+            if let Some(member) = member_for_null.as_ref()
+                && matches!(rhs_tp, Type::Null)
+                && !matches!(member.base(), Type::Null)
+            {
+                self.convert(&mut rhs, &Type::Null, member);
             }
             // loft#1278 — a by-value tuple PARAMETER carrying text is promoted to an owned
             // shadow local the first time an element is written, which is the same move a
