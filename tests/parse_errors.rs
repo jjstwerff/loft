@@ -3246,3 +3246,27 @@ fn every_keyed_kind_is_refused_as_a_vector_element() {
              every_keyed_kind_is_refused_as_a_vector_element:2:39",
         );
 }
+
+/// loft#1266's sibling from the Safety-chapter review — the enum variant limit.
+///
+/// A plain enum is one byte and both ends of it are reserved: `0` is the undefined value
+/// the variants are numbered away from, and `255` is the null sentinel every scalar type
+/// has (`OpConvBoolFromEnum` is `@v1 != 255 && @v1 != 0`).  So 254 variants is the whole
+/// domain, and the guard used to fire one variant too late in a way that had no upper
+/// bound on the damage: 255 variants COMPILED and the last one answered `null` while
+/// `match` sent it to the wildcard; 256 variants overflowed the `u8` — an internal
+/// compiler error under debug assertions, a wrap to the reserved `0` without them, and the
+/// ICE named a position inside `default/05_coroutine.loft` rather than the enum.
+///
+/// The reading half — that 254 variants still WORK and the last one is an ordinary value —
+/// is `tests/scripts/the-reference-safety-traps-are-what-it-catalogues.loft`, which cannot
+/// hold this cell because the fixed compiler refuses to parse it.
+#[test]
+fn enum_variant_limit_refuses_the_255th() {
+    let variants: Vec<String> = (0..255).map(|i| format!("  V{i},")).collect();
+    let src = format!("enum Wide {{\n{}\n}}\n", variants.join("\n"));
+    code!(&src).error(
+        "Too many enum variants — an enum holds at most 254, because a variant is one byte \
+         and 0 and 255 are reserved at enum_variant_limit_refuses_the_255th:255:8",
+    );
+}
