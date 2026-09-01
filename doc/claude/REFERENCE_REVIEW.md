@@ -69,6 +69,15 @@ LOCK rather than a regression test: it has no build on which it fails, so it rec
 `@falsified-at: none` and must be checked by hand in both directions, because a guard made
 of expected failures passes most easily when it is proving nothing.
 
+⚠ **Read the chapter's MODEL before its claims.** Chapter 17 said a library name needs
+its `libname::` prefix, and every section after that inherited it: the struct section
+called the bare form a parse error, the free-function section called the prefix required,
+and the import section built a distinction between `use lib;` and `use lib::*` that does
+not exist. Reading claim by claim catches none of that — each sentence agrees with the
+others, and the page only comes apart against the compiler. **One measurement did it: a
+bare call answering.** So before the sentence-level read, take the chapter's central
+rule, write the smallest program that would violate it, and run that.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
