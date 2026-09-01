@@ -2816,6 +2816,35 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**The HARNESS does not run the program the way a user does, so a `tests/scripts/*.loft`
+guard can be vacuous for a whole CLASS of defect.** `loft --tests` discovers and calls the
+`test_*` functions; it is not `loft prog.loft`, and two things a plain run does are simply
+absent from it. Measured 2026-09-01, both against the released binary, both giving a guard
+that passed on the very build it was written to catch:
+
+* **the script classifier never runs.** loft#1271's defect was `split_top_level` ending a
+  top-level item early, which hid the following `fn main` and got an ordinary program
+  desugared as a beginner script. The corpus guard file passes `--tests` on the pre-fix
+  binary and FAILS as a plain `loft --interpret` run of the same file.
+* **a store leak is not reported.** loft#1273 retained one record per inline call; the
+  `tests/scripts` guard passes `--tests` on the pre-fix binary while the same shapes as a
+  plain program print `Warning: 1 stores not freed at program exit`.
+
+`make falsify` says INERT for both, and **INERT is the correct answer there** — the harness
+cannot see the channel, so neither tree can differ. Do not widen the guard until you have
+asked which run reports the thing you are guarding. The homes that DO see them:
+
+| what you are guarding | where it can fail |
+|---|---|
+| a leak | a `.loft` file in `tests/leak_cases/clean/` — `tests/leak_cases.rs` runs it as a plain program on BOTH backends |
+| script classification | `src/script.rs`'s unit tests (`is_script` / `split_top_level` directly), plus a CLI test in `tests/script_mode.rs` |
+| anything else the CLI decides before parsing | a Rust test that spawns the binary, as `tests/panic_halts_both_backends.rs` does |
+
+A `tests/scripts` file can still be worth keeping beside those — loft#1271's is, because
+`script::tests::no_corpus_file_classifies_as_script` sweeps `tests/` and names it with the
+pre-fix scanner restored. But then the file's falsifying power is that it SITS THERE, not
+that its rows run, and its header has to say so.
+
 **An ad-hoc `--native` run LINKS `libloft.rlib`, and `cargo build --bin loft` does not
 rebuild it.** So the loop *edit → `cargo build --bin loft` → `loft --native probe.loft`*
 compiles the probe with the NEW compiler and links the OLD library, and the answer reads as a
