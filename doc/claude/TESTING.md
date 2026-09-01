@@ -577,6 +577,23 @@ requires one on every file added under `tests/scripts/`, against the ratchet in
 `tests/falsified.baseline`; `// @falsified-at: none — <reason>` is the honest opt-out for a
 file that genuinely cannot fail on any earlier build.
 
+⚠ **Two shapes it cannot score, and both report INERT — which reads as "your guard measures
+the wrong thing" when the truth is "this tool cannot see this kind of fix".**
+
+*A guard with no `main`.*  `falsify` runs the file as a PROGRAM, so a file whose cells are
+each their own entry point (the `tests/scripts/` convention) runs NOTHING there and reports
+`0|0` on both sides.  The tell is **zero assertion failures on the CONTROL** — a real control
+almost always has some.  Give such a guard a `main()` that calls its cells; the suite runner
+is happy either way.
+
+*A fix in a `lib/*.loft` library.*  `falsify` swaps the BINARY and passes `--path <worktree>/`
+for the stdlib, but `use <name>` resolves to the repo-relative `lib/<name>.loft` — strace shows
+the process opening that literal path — so the control run loads the CURRENT, fixed library and
+both sides agree.  `--lib` does not redirect it either: a deliberately corrupted copy behind
+`--lib` changed nothing.  Verify by hand instead — restore the library from the ref in place,
+run the guard, restore it byte-identically — and record THAT in `@falsified-at` rather than the
+line the tool prints.  `the-lexer-decodes-an-escape-once.loft` is the worked example.
+
 **Why a record and not just a habit.** Four distinct channels reported success while
 measuring nothing in a single afternoon (QUALITY.md § B6m), and two defects passed a full
 green gate the same day:
