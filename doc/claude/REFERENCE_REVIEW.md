@@ -419,7 +419,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
 | `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
-| `tests/docs/31-ref-forward.loft` | 2026-09-01 | `bf8b298d` |
+| `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
 
 ## See also
 
