@@ -191,6 +191,37 @@ compiles, so a compile check feels like the whole of it; it is half. **Assert th
 every operation a bound is said to permit**, because an operator that binds to the wrong
 overload compiles perfectly.
 
+⚠ **A chapter's general sentence is only tested at the types its examples use.** Chapter
+26 said closures capture "at the moment the lambda is written … if a variable changes after
+the lambda is written, the lambda still sees the original value", with no type on it. That
+is true of every cell on the page — all of them scalars and text — and false of every other
+type the sentence covers: a captured vector, hash, sorted, index or struct is SHARED, so a
+later append reaches the closure and a write inside it reaches the enclosing scope. Nothing
+on the page was wrong; the sentence generalising from it was. The chapter also said nothing
+about the third regime, a scalar the closure WRITES to, which is shared rather than copied
+and is how an accumulator is written. **So for any claim of the form "a variable …", list
+the types the language offers in that slot and run one cell per type** — the claim's truth
+is a function of the type, and a chapter's examples reliably pick one of them.
+
+⚠ **And re-check the two COMPARISON pages, where the same claim is stated more strongly.**
+`00-vs-rust.html` and `00-vs-python.html` exist to draw a contrast, so they restate the
+reference's claims in their sharpest form — and they had the same wrong generalisation with
+the hedges removed: *"Capture is always by value"*, and *"later mutations to the original
+variable do not affect the lambda **(and vice versa)**. Python's `lambda` … closes over
+variables by reference, so mutations are shared."* That draws the loft/Python line on exactly
+the axis where the two agree, and it is aimed at the reader most likely to write an
+accumulator closure. The vs-Rust page also listed "closures can be stored in structs" as a
+Rust advantage, which loft has (a struct FIELD holds a capturing closure; only a COLLECTION
+refuses one). These pages are their own review rows, but a claim corrected in a chapter is
+owed a grep across them the same day.
+
+⚠ **A section TITLE is a claim, and it is not held up by the cells under it.** Chapter 26's
+"Closures with higher-order functions" contained no higher-order function — its cell defined
+a capturing closure and called it directly. The capability is real (`map(nums, scale)` with
+`scale` capturing works on both backends), so nothing failed and nothing said the section was
+not showing its own subject. Read the titles as a list, on their own, and ask of each one
+what cell would falsify it.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -245,6 +276,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/23-safety.loft` | 2026-09-01 | `b6dc9a61` |
 | `tests/docs/24-json.loft` | 2026-09-01 | `f21577f2` |
 | `tests/docs/25-generics.loft` | 2026-09-01 | `9764a37c` |
+| `tests/docs/26-closures.loft` | 2026-09-01 | `3cf097e0` |
 
 ## See also
 

@@ -1383,3 +1383,50 @@ fn main() { x = 0; f(&x); print(\"{x}\\n\"); }
         "scalar & is always needed — W4 must NOT fire; got stderr={diag:?}"
     );
 }
+
+/// A write from inside a closure is a write.  `check_ref_mutations` builds its
+/// "was this parameter modified?" set by walking the function's own code, and a lambda body
+/// is a definition of its own — so a parameter whose only mutation is a captured write read
+/// as untouched, and one run carried both halves of a contradiction: the refusal
+/// "Cannot modify const parameter 'p' from a closure" and, four lines below it,
+/// "'p' is const but is never modified".
+///
+/// The set the lint was missing is the one the closure machinery already records
+/// (`Definition::scalars_to_box`), so the two now answer from the same fact.
+#[test]
+fn a_const_parameter_mutated_through_a_closure_is_not_called_unmodified() {
+    let source = "\
+fn bump(p: const integer) -> integer {
+  f = fn() { p += 1; };
+  f();
+  p
+}
+fn main() { print(\"{bump(5)}\\n\"); }
+";
+    let (_stdout, diag, _code) = run_with_warnings("const_closure_write", source);
+    assert!(
+        diag.contains("Cannot modify const parameter 'p' from a closure"),
+        "the write through the closure must still be refused; got stderr={diag:?}"
+    );
+    assert!(
+        !diag.contains("needless-const-parameter"),
+        "the parameter IS modified, so the never-modified lint must not fire beside the \
+         refusal that says so; got stderr={diag:?}"
+    );
+}
+
+/// The other direction, which is what keeps the fix above from being a way of silencing the
+/// lint: a `const` parameter that really is never written still earns the advice.
+#[test]
+fn a_const_parameter_nothing_writes_still_earns_the_advice() {
+    let source = "\
+fn keep(p: const integer) -> integer { p }
+fn main() { print(\"{keep(5)}\\n\"); }
+";
+    let (_stdout, diag, _code) = run_with_warnings("const_unwritten", source);
+    assert!(
+        diag.contains("needless-const-parameter"),
+        "an unmodified const primitive parameter is exactly what the lint is for; \
+         got stderr={diag:?}"
+    );
+}

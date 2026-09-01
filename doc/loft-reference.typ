@@ -433,8 +433,8 @@ offset = 10;
 shift = fn(x: integer) - integer { x + offset };
 assert(shift(5) == 15, "shift");
 
-// Non-capturing lambdas work with map/filter/reduce:
-doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
+// Capturing and non-capturing lambdas both work with map/filter/reduce:
+shifted = map([1, 2, 3], shift);   // carries `offset` with it
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
 // Cross-scope: returning a capturing lambda works:
@@ -460,9 +460,9 @@ fn make_adder(n: i32) -> impl Fn(i32) -> i32 {
 }
 ```
 
-Upside Same-scope capture works for integers, text, and mutable variables — no capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, no lifetime annotations. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked.
+Upside Capture works for every type — scalars, text, structs and every collection kind — with no capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, and no lifetime annotations. The compiler picks the mode from the type: a scalar or text is copied at definition time, a struct or collection is shared with the enclosing scope, and a scalar the closure writes to is shared as well, so an accumulator needs no declaration. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked.
 
-Downside Capture is always by value (like Rust move). Rust's Fn/FnMut/FnOnce traits give more flexibility: closures can borrow by reference, be stored in structs, and passed freely across scopes. Loft captures at definition time only — no borrow-based captures.
+Downside You do not choose the capture mode, so a case Rust expresses by picking one has no spelling here. Three limits have no Rust counterpart: a capturing closure cannot be stored in a collection (a struct field holds one fine), a & parameter cannot be captured at all, and a scalar the closure writes to may be captured by only one closure — the cure for the last two is to hold the state in a struct and capture that.
 
 === Generic functions — pass-through only, no trait bounds
 
@@ -768,7 +768,7 @@ offset = 10;
 shift = fn(x: integer) - integer { x + offset };
 assert(shift(5) == 15, "shift");
 
-// Non-capturing lambdas work with map/filter/reduce:
+// Lambdas work with map/filter/reduce, capturing or not:
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
@@ -790,9 +790,9 @@ evens   = <span class="bi">list</span>(<span class="bi">filter</span>(<span clas
 shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> nums]
 ```
 
-Upside Same-scope capture works for integers, text, and mutable variables — no capture modes, no scope surprises. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
+Upside Capture works for every type — scalars, text, structs and every collection kind — with no capture modes and no scope surprises. The compiler picks the mode from the type, so an accumulator needs no declaration the way Python's nonlocal does. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
 
-Downside Capture is by value at definition time — later mutations to the original variable do not affect the lambda (and vice versa). Python's lambda and nested def close over variables by reference, so mutations are shared. Python's list comprehensions (\[x + offset for x in v\]) are shorter than map(v, fn(x) { x + offset }).
+Downside You do not choose the capture mode, and it is not the same for every type. A scalar or text the lambda only READS is copied at definition time, so a later mutation of the original does not reach it — where Python closes over the name and would see the new value. Structs and collections share the way Python does, and so does a scalar the lambda writes to. Three limits have no Python counterpart: a capturing closure cannot be stored in a collection (a struct field holds one fine), a & parameter cannot be captured at all, and a scalar the lambda writes to may be captured by only one lambda. Python's list comprehensions (\[x + offset for x in v\]) are shorter than map(v, fn(x) { x + offset }).
 
 === No exception handling — file errors use FileResult
 
@@ -5339,7 +5339,7 @@ fn main() {
 
 = Closures
 
-A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.
+A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. How a variable travels into the closure depends on what it is: a scalar or a text is COPIED, and a collection or struct is SHARED.  Both rules are below, and the difference between them is the thing to remember on this page.
 
 === Integer capture
 
@@ -5355,7 +5355,15 @@ Text values are captured by deep-copy, so they are independent of the original v
 
 === Capture timing
 
-Loft captures variables at the moment the lambda is written (definition time), not when it is called.  If a variable changes after the lambda is written, the lambda still sees the original value.
+Scalars and text are copied at the moment the lambda is written (definition time), not when it is called.  Changing such a variable afterwards does not change what the lambda sees.
+
+=== Collections and structs are shared
+
+Every collection — vector, hash, sorted, index, spatial — and every struct is captured by reference: the closure and the enclosing scope work on the same value, so changes travel BOTH ways.
+
+=== Writing to a captured variable
+
+A closure may assign to a captured scalar, and those writes are visible in the enclosing scope.
 
 === Cross-scope closures
 
@@ -5363,11 +5371,27 @@ A function can return a capturing lambda to the caller. The captured values trav
 
 === Closures with higher-order functions
 
-A capturing closure stored in a variable can be called directly.
+A capturing closure can be called directly, and it can also be handed to map or filter — the captures travel with it.
 
 === Non-capturing lambdas with higher-order functions
 
 Lambdas that use only their own parameters (no capture) also work fine.
+
+=== What a closure cannot capture
+
+Two shapes the compiler refuses, and the one that replaces them.
+
+```rust
+struct Counter {
+  hits: integer,
+}
+```
+
+```rust
+struct Stepper {
+  advance: fn(integer) -> integer,
+}
+```
 
 ```rust
 fn make_adder(base_val: integer) -> fn(integer) -> integer {
@@ -5403,22 +5427,62 @@ fn main() {
 
 === Text capture
 
+The closure holds its own copy of the text, so reassigning 'greeting' afterwards leaves the message it builds unchanged.
+
 ```rust
   greeting = "Hello";
   make_msg = fn(name: text) -> text { "{greeting}, {name}!" };
+  greeting = "Goodbye";
   assert(make_msg("World") == "Hello, World!", "greeting capture");
   assert(make_msg("Loft") == "Hello, Loft!", "greeting capture 2");
 ```
 
 === Capture timing
 
-Closures capture at definition time. 'base' is 10 when the lambda is written; reassigning 'base' to 20 afterwards does not affect the captured value.
+'base' is 10 when the lambda is written; reassigning it to 20 afterwards does not affect the captured value.
 
 ```rust
   base = 10;
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
   assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
+```
+
+=== Collections and structs are shared
+
+A collection is NOT copied the way the scalar above is: the closure works on the caller's vector.  Appending to 'items' after the lambda is written changes what the lambda counts, and a write made inside the lambda is visible outside it.  That sharing is what lets a closure gather results into a vector the enclosing function keeps.
+
+```rust
+  items = [1, 2, 3];
+  total = fn() -> integer {
+    sum = 0;
+    for e in items { sum += e; }
+    sum
+  };
+  assert(total() == 6, "before the append: {total()}");
+  items += [10];
+  assert(total() == 16, "the append reaches the closure: {total()}");
+```
+
+A struct behaves the same way, in the other direction: the closure writes through to the record the enclosing scope holds.
+
+```rust
+  tally = Counter { hits: 0 };
+  record_hit = fn() { tally.hits += 5; };
+  record_hit();
+  assert(tally.hits == 5, "the closure's write is visible outside: {tally.hits}");
+```
+
+=== Writing to a captured variable
+
+Assigning to a captured scalar shares it instead of copying it, so the closure's writes are visible for the rest of the function.  This is how an accumulator is written.  One restriction: a scalar a closure WRITES to may be captured by only one closure — two of them is refused, and the cure is to hold the shared state in a struct and capture that, as 'tally' does above.
+
+```rust
+  count = 0;
+  bump = fn() { count += 1; };
+  bump();
+  bump();
+  assert(count == 2, "the closure's writes reach the enclosing scope: {count}");
 ```
 
 === Cross-scope closures
@@ -5438,7 +5502,23 @@ make\_adder returns a lambda that captured base\_val from its parameter.
   factor = 3;
   scale = fn(x: integer) -> integer { x * factor };
   assert(scale(5) == 15, "scale(5): {scale(5)}");
-  assert(scale(10) == 30, "scale(10): {scale(10)}");
+```
+
+The same closure passed to map — 'factor' travels with it.
+
+```rust
+  scaled = map([1, 2, 3], scale);
+  assert(scaled[0] == 3, "scaled[0]: {scaled[0]}");
+  assert(scaled[2] == 9, "scaled[2]: {scaled[2]}");
+```
+
+A capturing lambda written inline works too, in filter as well as map.
+
+```rust
+  limit = 2;
+  big = filter([1, 2, 3, 4], |x| { x > limit });
+  assert(len(big) == 2, "len(big): {len(big)}");
+  assert(big[0] == 3, "big[0]: {big[0]}");
 ```
 
 === Non-capturing lambdas with higher-order functions
@@ -5456,6 +5536,18 @@ No capture needed here — the lambda uses only its own parameter.
   evens = filter(nums, |x| { x % 2 == 0 });
   assert(evens[0] == 2, "evens[0]: {evens[0]}");
   assert(evens[1] == 4, "evens[1]: {evens[1]}");
+```
+
+=== What a closure cannot capture
+
+A '&' parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning (loft\#1276).
+
+A capturing closure cannot be stored in a COLLECTION either: 'vector\<fn(…)\>' and the keyed collections take non-capturing lambdas only.  A struct FIELD holds one without trouble, which is the shape to reach for.
+
+```rust
+  step = 7;
+  stepper = Stepper { advance: fn(x: integer) -> integer { x + step } };
+  assert(stepper.advance(10) == 17, "a struct field holds a capturing closure: {stepper.advance(10)}");
 }
 ```
 

@@ -15270,6 +15270,19 @@ impl Parser {
             }
         }
         written.extend(propagated);
+        // A write from inside a CLOSURE lives in the lambda's own definition, so walking this
+        // function's code cannot see it.  The mutated-capture set is already recorded on this
+        // definition (`accumulate_scalars_to_box`, filled as each lambda is parsed), and it is
+        // the same fact under another name: a parameter listed there IS modified.  Without
+        // this the `const` half below contradicted the refusal one line above it —
+        // `fn f(p: const integer) { g = fn() { p += 1; }; }` reported both "Cannot modify
+        // const parameter 'p' from a closure" and "'p' is const but is never modified".
+        for name in self.data.def(self.context).scalars_to_box() {
+            let v = self.vars.var(name);
+            if v != u16::MAX {
+                written.insert(v);
+            }
+        }
         for (a_nr, a) in arguments.iter().enumerate() {
             if matches!(a.typedef, Type::RefVar(_))
                 && !a.constant

@@ -1213,8 +1213,18 @@ the closure record died, and the caller's value went dangling, typically surfaci
 as a crash much later in an unrelated function that touched the same value.
 
 **Limitations:**
-- Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
-- `spatial<T>` collections cannot store closures.
+- A **collection cannot hold a capturing closure** — `vector<fn(…)>` and the keyed
+  collections take non-capturing lambdas only, whatever their types (@P213/@P214: the
+  closure record has no co-located layout yet).  One capturing element is enough to
+  refuse the literal, and so is a collection of a STRUCT whose field holds one.
+  A struct field on its own is fine: `Holder { f: fn(x: integer) -> integer { x + a } }`
+  captures and calls normally — which is what makes the compiler's advice work, namely
+  keep the captured state in a struct and store a non-capturing `fn` that reads it.
+- A `&` parameter cannot be captured at all, in any shape (loft#1276).
+
+`spatial` is not an exception to any of this: it stores a non-capturing `fn` field and calls
+it (`for e in sp { e.f(21) }` answers), and it refuses a capturing one with the same message
+every other collection gives.
 
 See [THREADING.md](THREADING.md) § fn Expression for how function references are used with `par(...)`.
 
