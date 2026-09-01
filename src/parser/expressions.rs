@@ -1198,7 +1198,24 @@ impl Parser {
             }
             if self.lexer.has_keyword("from") {
                 // CO1.4: yield from sub_gen — desugar to:
-                //   __sub = sub; loop { __item = next(__sub); if !__item break; yield __item; }
+                //   __sub = sub;
+                //   loop { __item = next(__sub); if exhausted(__sub) break; yield __item; }
+                //
+                // The break asks the SUB-GENERATOR whether it is exhausted.  It used to ask
+                // whether the yielded VALUE is truthy (`if !__item break`), which is a
+                // different question that only coincides with exhaustion for the types whose
+                // falsy value happens to be their null sentinel.  Where it did not coincide,
+                // the interpreter got it wrong twice over and `--native` — which compares
+                // against a per-channel exhaust sentinel — stayed right:
+                //
+                //   iterator<boolean>  a delegation TRUNCATED at the first `false`
+                //                      (`true,false,true` delivered `true`), silently
+                //   iterator<float>    / `single`: NaN is not falsy, so the break never
+                //                      fired and the loop ran forever
+                //
+                // `OpCoroutineExhausted` is the question actually being asked, and it is the
+                // same pair the streaming for-loop uses (`parser/control.rs`), so the two
+                // consumers of a generator cannot disagree about when one has ended.
                 let mut sub = Value::Null;
                 let sub_type = self.expression(&mut sub);
                 if let Type::Iterator(inner, _) = &sub_type {
@@ -1214,9 +1231,7 @@ impl Parser {
                         op,
                         vec![Value::Var(sub_var), Value::Int(i32::from(value_size))],
                     );
-                    let mut test = Value::Var(item_var);
-                    self.convert(&mut test, &elem_tp, &Type::Boolean);
-                    test = self.cl("OpNot", &[test]);
+                    let test = self.cl("OpCoroutineExhausted", &[Value::Var(sub_var)]);
                     let lp = vec![
                         crate::data::v_set(item_var, next_call),
                         crate::data::v_if(

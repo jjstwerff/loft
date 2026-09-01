@@ -895,7 +895,16 @@ impl Output<'_> {
     /// generator function; we call the Rust factory directly to get a
     /// `Box<dyn LoftCoroutine>` that we can store inline in the outer struct.
     fn gen_inner_factory(&mut self, init: &Value) -> std::io::Result<String> {
-        if let Value::Call(d_nr, args) = init {
+        // `unspan()` — the parser wraps the factory call in a `Span` as soon as it has an
+        // ARGUMENT to record a position for, so `yield from inner(4)` arrives as
+        // `Span(_, Call(inner, [4]))` while `yield from inner()` arrives as a bare `Call`.
+        // Matched unwrapped, only the argument-free spelling was recognised; every
+        // parameterised sub-generator fell to the fallback below, which routes through the
+        // ordinary expression path and wraps the call in `alloc_coroutine(…)`.  That answers
+        // a `DbRef`, and the slot is an `Option<Box<dyn LoftCoroutine>>` — so the emitted
+        // Rust did not compile at all (E0308) while `--interpret` ran the same program
+        // correctly (loft#1277).
+        if let Value::Call(d_nr, args) = init.unspan() {
             let fn_name = self.data.def(*d_nr).name().to_string();
             // P199 — the factory now takes `&UnsafeCell<Stores>`; pass the
             // caller's `cell` binding instead of `stores`.
