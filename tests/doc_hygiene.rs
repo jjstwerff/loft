@@ -254,6 +254,68 @@ fn ci_target_runs_no_default_features_clippy() {
     );
 }
 
+/// The `ci:` verdict must hang off ONE `&&` chain, so that `CI-RESULT: ALL GATES PASSED`
+/// is a statement about every phase and not just the last one.
+///
+/// It was not.  Two bookkeeping lines inside the chain were `;`-separated
+/// (`gates=…; jobs=…; export …;`), and a `;` TERMINATES the `&&` list before it — so the
+/// shell saw two independent lists: everything from `fmt` through `cache warm`, whose exit
+/// status was discarded, and then the nextest phase, which was the only thing the verdict
+/// ever reported.  A failing `fmt` did not merely fail to fail the gate; it skipped clippy,
+/// the doc-drift check, the label guards, all five builds and the target-surface check, and
+/// the run went straight to the tests and printed ALL GATES PASSED (loft#1267 session,
+/// CI_BUDGET.md § `CI-RESULT` measured only the TEST phase).
+///
+/// The shape to keep is a brace group joined with `&&`: `{ gates=…; …; } && \`.  This guard
+/// reads the recipe and refuses a bare `;`-terminated continuation line, which is the only
+/// spelling that can silently re-split the chain.
+#[test]
+fn ci_target_verdict_covers_every_phase_not_just_the_tests() {
+    let makefile = fs::read_to_string("Makefile").expect("cannot read Makefile");
+    let start = makefile
+        .find("\nci: ci-guard\n")
+        .expect("Makefile must define the `ci:` target");
+    // The recipe ends at the first line that is neither a comment nor tab-indented.
+    let body: String = makefile[start + 1..]
+        .lines()
+        .skip(1)
+        .take_while(|l| l.starts_with('\t') || l.trim_start().starts_with('#') || l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        body.contains("cargo nextest run --profile ci"),
+        "the `ci:` recipe was not captured — the extractor above needs updating"
+    );
+    // Only continuation lines matter: a line ending in `\` is spliced into the chain, so a
+    // `;` at its end terminates the `&&` list the verdict hangs off.  A line that does NOT
+    // continue is its own recipe line and cannot split anything.
+    //
+    // A `;` INSIDE a brace group is the cure, not the disease, so track group depth and
+    // judge only lines that end at depth 0.  Counting raw braces is sound here because the
+    // other brace users in this recipe — `$${gates:-1}` and friends — are balanced within
+    // their own line.
+    let mut depth: i32 = 0;
+    let mut offenders: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim_end();
+        let continues = trimmed.ends_with('\\');
+        let code = trimmed.trim_end_matches('\\').trim_end();
+        depth += i32::try_from(code.matches('{').count()).unwrap_or(0)
+            - i32::try_from(code.matches('}').count()).unwrap_or(0);
+        if continues && depth == 0 && code.ends_with(';') {
+            offenders.push(line);
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a continuation line in the `ci:` chain ends in `;`, which terminates the `&&` list \
+         the verdict hangs off — every phase before it becomes unreported.  Wrap the \
+         bookkeeping in a brace group joined with `&&`: `{{ gates=…; …; }} && \\`.\n\
+         Offending line(s):\n{}",
+        offenders.join("\n")
+    );
+}
+
 /// QUALITY Tier 1 #3 — `p122_long_running_struct_loop` was ignored
 /// only because it takes ~10 min in debug and ~0.05 s in release,
 /// not because the test itself was broken.  Closed 2026-04-14 by

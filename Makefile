@@ -1957,8 +1957,8 @@ ci: ci-guard
 	# touching the wasm bundle.  Other dev-only suites (test-packages,
 	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	mkdir -p $(TEST_SCRATCH) && export $(TEST_ENV) && \
-	gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); [ $$jobs -lt 2 ] && jobs=2; \
-	export CARGO_BUILD_JOBS=$$jobs NEXTEST_TEST_THREADS=$$jobs; \
+	{ gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); if [ $$jobs -lt 2 ]; then jobs=2; fi; \
+	  export CARGO_BUILD_JOBS=$$jobs NEXTEST_TEST_THREADS=$$jobs; } && \
 	{ [ "$${gates:-1}" -gt 1 ] && echo "make ci: THROTTLED to $$jobs of $$(nproc) threads — $$gates gates live on this box" || echo "make ci: $$jobs of $$(nproc) threads (sole gate)"; } | tee -a result.txt && \
 	$(MAKE) rebuild-native-cdylibs >> result.txt 2>&1 && \
 	cargo fmt -- --check >> result.txt 2>&1 && \
@@ -1975,7 +1975,7 @@ ci: ci-guard
 	python3 scripts/gen_target_surface.py --check >> result.txt 2>&1 && \
 	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
 	./target/release/loft cache warm --from tests >> result.txt 2>&1 && \
-	gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); [ $$jobs -lt 2 ] && jobs=2; export NEXTEST_TEST_THREADS=$$jobs; \
+	{ gates=$(CI_LIVE_GATES); jobs=$$(( $$(nproc) / $${gates:-1} )); if [ $$jobs -lt 2 ]; then jobs=2; fi; export NEXTEST_TEST_THREADS=$$jobs; } && \
 	echo "make ci: tests on $$jobs thread(s), $$gates gate(s) live" >> result.txt && \
 	cargo nextest run --profile ci >> result.txt 2>&1 && \
 	echo 'CI-RESULT: ALL GATES PASSED' >> result.txt || \

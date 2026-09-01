@@ -33,7 +33,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > "parallelise or move to a slower cadence until we are consistently back under"
 > half of the rule is still owed work.
 
-## ⚠ `CI-RESULT: ALL GATES PASSED` can be printed while an EARLIER PHASE FAILED (2026-09-01)
+## `CI-RESULT` measured only the TEST phase — cause found and FIXED (2026-09-01)
 
 **Measured, on two checkouts, after a full day of reading it as the verdict.** `result.txt`
 held all of these at once:
@@ -50,13 +50,41 @@ The clippy phase failed, the run continued into the tests, and the success line 
 anyway. Every "4537/4537, ALL GATES PASSED" reported that day was measuring the TEST phase
 alone, on both checkouts independently.
 
-**So the success line is not sufficient, and neither is the test count.** The check that
-actually holds is:
+### The cause: one `;` split the chain in two
 
-```bash
-grep -c "^error" result.txt        # must be 0
-grep -c "CI-RESULT: ALL GATES PASSED" result.txt   # must be 1
+The recipe is a single `&&` chain from `rebuild-native-cdylibs` to `nextest`, and the verdict
+hangs off its tail. Two bookkeeping lines inside it were `;`-separated:
+
+```make
+./target/release/loft cache warm --from tests >> result.txt 2>&1 && \
+gates=$(CI_LIVE_GATES); jobs=$$(( ... )); [ $$jobs -lt 2 ] && jobs=2; export NEXTEST_TEST_THREADS=$$jobs; \
+echo "make ci: tests on ..." >> result.txt && \
+cargo nextest run --profile ci >> result.txt 2>&1 && \
+echo 'CI-RESULT: ALL GATES PASSED' >> result.txt || \
+{ echo 'CI-RESULT: FAILED ...' >> result.txt; ...; exit 1; }
 ```
+
+A `;` **terminates** the `&&` list before it. So the shell saw two independent lists: everything
+from `fmt` through `cache warm`, whose exit status was discarded, and then the nextest phase,
+which is the only thing `CI-RESULT` ever reported. A red `fmt` or `clippy` did not merely fail
+to fail the gate — it SKIPPED every phase after it in the first list (clippy, doc-drift,
+label-guard, the five builds, the target-surface check) and the run went straight to the tests.
+
+That also explains the tell: between the failing phase's output and the nextest banner,
+`result.txt` contains nothing at all — no `Finished` lines from the five builds that were
+supposed to run in between.
+
+Both bookkeeping lines are now brace groups joined with `&&`, so the chain is one chain
+(`{ gates=…; jobs=…; export …; } && \`). Verified both ways on the same tree, with one
+formatting violation present: before, `CI-RESULT: ALL GATES PASSED` after a full 4581-test run;
+after, `CI-RESULT: FAILED` in seconds, at the `fmt` phase. And the control — a clean tree still
+reaches `ALL GATES PASSED`.
+
+**The old workaround was also incomplete, which is how this was found.** `grep -c "^error"` was
+the documented compensating check, and a `rustfmt` diff does not print `error` — it prints
+`Diff in <path>`. A formatting violation therefore passed the local gate under BOTH documented
+checks and was caught by GitHub's `Format` job instead. Reading a verdict through a grep only
+covers the failure spellings you thought of; the fix is that the verdict means something again.
 
 **And a bare `cargo clippy` will not show you what `make ci` denies.** `make ci` passes
 `-D warnings`, so lints that print as *warnings* in an ad-hoc `cargo clippy --release
@@ -66,9 +94,9 @@ Run `cargo clippy --release --all-targets -- -D warnings` when you want the answ
 will give.
 
 This is the gate-level twin of TESTING.md § How a guard reads green: a channel that reports
-success while measuring nothing. It cost nothing here because the two lints were cosmetic — but
-nothing about the mechanism is limited to cosmetic lints, and a red `fmt` or a red `clippy`
-hiding behind a green verdict line is the same shape as a red test would be.
+success while measuring nothing. It cost nothing on the day it was noticed because the two lints
+were cosmetic — but nothing about the mechanism was limited to cosmetic lints, and for as long as
+it stood, a green `make ci` was evidence about the test suite and about nothing else.
 
 ## A LOCAL `make ci` is ~10 min, and it is two tests (2026-08-21)
 
@@ -105,9 +133,9 @@ Two specific traps behind that list, both worth knowing before they cost a cycle
   `libloft.rlib` — which reads exactly like a real link failure and is not. A clean tree with
   nothing else building is the only valid run, and
   the wrapper's own exit code is not the verdict — it has been observed as 0 on a run whose
-  `result.txt` said FAILED. Neither is the success LINE on its own: read it together with
-  `grep -c "^error" result.txt` — see § `CI-RESULT: ALL GATES PASSED` can be printed while an
-  EARLIER PHASE FAILED.
+  `result.txt` said FAILED, so read `CI-RESULT` in `result.txt` rather than `$?` of whatever
+  invoked it (a pipe into `tail`, for instance, reports `tail`'s status). `CI-RESULT` itself
+  is trustworthy again — see § `CI-RESULT` measured only the TEST phase.
 
 ⚠⚠ **The "slowest tests" list is a trap, and reading it is how this went wrong the first
 time.** JUnit `time` is WALL clock, so on a saturated machine it counts *waiting*:
