@@ -7,10 +7,11 @@
 > state (how many are open, and which); everything below is the record behind it.
 
 OPEN: **2** — a lambda's `??`-default store leaks one store per call where the borrow arm's
-witness is a CAPTURE or a literal `null` (D-clo-7, below; that entry's value half, its
-BOUND-return leak half and its ARGUMENT-witness half are all closed), and the same `??` at a
-COLLECTION return leaks its mint arm because declining the unguarded lift was the only cure
-correct on both backends (D-clo-14).
+witness cannot be NAMED: a literal `null` argument, or two store-bearing captures, whose
+return dep names `__closure` and not which slot (D-clo-7, below; that entry's value half, its
+BOUND-return leak half, its ARGUMENT-witness half and its single-CAPTURE witness are all
+closed), and the same `??` at a COLLECTION return leaks its mint arm because declining the
+unguarded lift was the only cure correct on both backends (D-clo-14).
 
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
@@ -646,13 +647,27 @@ capturing lambda passed INLINE to `map` and returning text faulted on `--interpr
 > freed store still holds plausible bytes. `LOFT_STRICT_STORES=1` plus a read of the SOURCE
 > after the loop is what separates them, and both are cells now.
 >
-> **STILL OPEN: the witness reached through a CAPTURE** (`c: P? = null; fn(k) -> P { c ?? P{} }`),
-> and a LITERAL `null` argument. Neither is an argument the @P290 bracket can NAME — a capture
-> arrives through the hidden `__closure` attribute, and a literal is a value with no slot — so
-> `caller_arg_base` answers `u16::MAX` and the conservative no-lift stands. That costs the
-> leak they already had, which is this gate's standing direction when it cannot name what it
-> would be freeing. Closing it needs the captured caller variable mapped to the closure
-> attribute the return dep names.
+> **The CAPTURE witness closed the same day, and the mapping was already in the IR.** A
+> capture arrives through the hidden `__closure` attribute, so `caller_arg_base` answered
+> `u16::MAX` and the conservative no-lift stood — `c: P? = null; fn(k) -> P { c ?? P{} }` held
+> one store per call to frame exit. But the closure BUILD emits `OpSetDbRef(___clos_N, <slot>,
+> <caller var>)` for every capture, so *"which caller variable is capture slot k"* is written
+> down where the closure is made; `collect_fnref_captures` reads it, beside the target
+> resolution and shared with it. 404 → 5, both backends.
+>
+> ⚠ **Ask the callee's VARIABLE space, not its attribute space.** `callee_base` is a variable
+> number, and the two are not the same numbering: in the closure this fix is about `__closure`
+> is variable 3 and attribute 2, so an attr-indexed test reads OUT OF RANGE and answers "not
+> the closure" for the single case it exists to catch. `caller_arg_base` beside it indexes
+> attributes and is right to; they answer different questions about the same value.
+>
+> **STILL OPEN, and both are the same missing fact.** A LITERAL `null` argument has no slot to
+> compare against, and a closure with TWO store-bearing captures is ambiguous — the return's
+> dep names `__closure` and never which SLOT, so the borrow arm may be either and comparing
+> against the wrong one would adopt a store the caller still holds. One capture is decidable
+> and is taken; two decline and keep the leak, which is this gate's standing direction when it
+> cannot name what it would be freeing. Closing it needs the dep to name the CAPTURE rather
+> than the record.
 >
 > Guarded by `tests/scripts/1248-a-closure-join-return-owns-its-minted-arm.loft` (falsified at
 > `212bf82c`: both backends abort in the first cell) and

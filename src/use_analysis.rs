@@ -1782,6 +1782,9 @@ pub(crate) struct Defs {
     /// recovered from the assignment that put the closure in the variable.  Shared with
     /// the scope pass rather than re-derived (`scopes::collect_fnref_targets`).
     fnref_targets: HashMap<u16, u32>,
+    /// The CALLER variables each fn-ref's closure record holds, in capture-slot order — what
+    /// lets a return that borrows the hidden `__closure` attribute name a witness at all.
+    fnref_captures: HashMap<u16, Vec<u16>>,
 }
 
 /// The ops that establish a var's CONTENTS without re-binding it — see [`Defs::filled`].
@@ -2058,12 +2061,25 @@ impl<'a> Ownership<'a> {
             // make; `Own::Unknown` — forcing each caller to decide rather than defaulting to
             // the permissive value — is what would make that attempt safe.
             Value::CallRef(fn_var, args) => {
-                let resolved = match defs.fnref_targets.get(fn_var).copied() {
-                    Some(d) if d != u32::MAX => self.call_ownership(d, args),
-                    _ => Own::Owned,
+                let Some(d) = defs
+                    .fnref_targets
+                    .get(fn_var)
+                    .copied()
+                    .filter(|d| *d != u32::MAX)
+                else {
+                    return Own::Owned;
                 };
-                match resolved {
-                    Own::Join { base } if base != u16::MAX => Own::Join { base },
+                let callee_own = self.return_ownership(d);
+                let callee_base = match callee_own {
+                    Own::Owned => return Own::Owned,
+                    Own::Borrowed { base } | Own::Join { base } => base,
+                };
+                let mut base = self.caller_arg_base(d, callee_base, args);
+                if base == u16::MAX {
+                    base = self.closure_capture_base(d, callee_base, *fn_var, defs);
+                }
+                match callee_own {
+                    Own::Join { .. } if base != u16::MAX => Own::Join { base },
                     _ => Own::Owned,
                 }
             }
@@ -2127,6 +2143,43 @@ impl<'a> Ownership<'a> {
         // never-free answer rather than guessing one of them.
         match view_root_slots(self.data, arg).as_deref() {
             Some([root]) => *root,
+            _ => u16::MAX,
+        }
+    }
+
+    /// loft#1248 — the caller variable a return that borrows the closure may be handing back.
+    ///
+    /// `caller_arg_base` maps a callee's borrowed VISIBLE parameter to the argument at the
+    /// same position and answers `u16::MAX` for a hidden one.  `__closure` is hidden, so a
+    /// closure returning something it CAPTURED had no witness and the conservative no-lift
+    /// stood — correct, and it cost the mint arm of every such `??` its owner.
+    ///
+    /// The mapping is in the IR: the closure build writes each captured value into the record
+    /// with `OpSetDbRef(___clos_N, <slot>, <caller var>)`, which `fnref_captures` collects.
+    /// What the IR does NOT carry is which SLOT the return borrows — the dep names `__closure`
+    /// and stops there.
+    ///
+    /// So this answers only where that ambiguity cannot arise: EXACTLY ONE store-bearing
+    /// capture.  With two, the return may be either, and comparing against the wrong one would
+    /// adopt a store the caller still holds — the over-free this gate exists to refuse.  A
+    /// closure with two heap captures keeps the leak it has; closing that needs the dep to
+    /// name the capture rather than the record.
+    fn closure_capture_base(
+        &self,
+        callee_d: u32,
+        callee_base: u16,
+        fn_var: u16,
+        defs: &Defs,
+    ) -> u16 {
+        // Asked of the callee's VARIABLE space, which is what `callee_base` names.  It is not
+        // the attribute space `caller_arg_base` indexes into: measured on the closure this
+        // fix is about, `__closure` is variable 3 and attribute 2, so an attr-indexed test
+        // reads out of range and answers "not the closure" for the one case it exists for.
+        if self.data.def(callee_d).variables().name(callee_base) != "__closure" {
+            return u16::MAX;
+        }
+        match defs.fnref_captures.get(&fn_var).map(Vec::as_slice) {
+            Some([only]) => *only,
             _ => u16::MAX,
         }
     }
@@ -2846,6 +2899,7 @@ pub(crate) fn function_defs(data: &Data, d_nr: u32) -> Defs {
     let def = data.def(d_nr);
     collect_defs(&def.code, &FillOps::of(data), &mut defs);
     defs.fnref_targets = crate::scopes::collect_fnref_targets(&def.code, &def.variables);
+    defs.fnref_captures = crate::scopes::collect_fnref_captures(&def.code, &def.variables, data);
     defs
 }
 

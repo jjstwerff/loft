@@ -1352,6 +1352,64 @@ pub(crate) fn collect_fnref_targets(code: &Value, function: &Function) -> HashMa
     out
 }
 
+/// The CALLER variables written into each fn-ref's closure record, in capture-slot order.
+///
+/// A capturing lambda's assignment is a BLOCK that mints the record, writes each captured
+/// value into it and then yields the `FnRef` — so `OpSetDbRef(___clos_N, <slot>, <var>)`
+/// already says which caller variable a capture slot holds, and nothing else has to be
+/// derived to know it.
+///
+/// Only the `DbRef` writes are collected, and that is the question rather than a shortcut:
+/// this exists to answer *"which caller store might the closure hand back?"*, and a capture
+/// that is not a store cannot be handed back as one.  A scalar capture is written with
+/// `OpSetInt` and correctly contributes nothing.
+///
+/// `pub(crate)` for the same reason as [`collect_fnref_targets`] beside it: the ownership
+/// oracle needs the same answer, and a second spelling of it could only agree by accident.
+pub(crate) fn collect_fnref_captures(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+) -> HashMap<u16, Vec<u16>> {
+    let set_dbref = data.def_nr("OpSetDbRef");
+    let mut out: HashMap<u16, Vec<u16>> = HashMap::new();
+    code.walk(&mut |v| {
+        let Value::Set(var, rhs) = v else { return };
+        if !matches!(function.tp(*var).base(), Type::Function(_, _, _)) {
+            return;
+        }
+        // The closure variable this assignment builds — named by the `FnRef` it yields, so a
+        // block that happens to touch another record contributes nothing.
+        let mut clos: Option<u16> = None;
+        rhs.walk(&mut |inner| {
+            if let Value::FnRef(_, c, _) = inner {
+                clos = Some(*c);
+            }
+        });
+        let Some(clos) = clos else { return };
+        let mut slots: Vec<(i32, u16)> = Vec::new();
+        rhs.walk(&mut |inner| {
+            let Value::Call(d, args) = inner else { return };
+            if *d != set_dbref || args.len() < 3 {
+                return;
+            }
+            let (Some(Value::Var(target)), Some(Value::Int(slot)), Some(Value::Var(src))) = (
+                args.first().map(Value::unspan),
+                args.get(1).map(Value::unspan),
+                args.get(2).map(Value::unspan),
+            ) else {
+                return;
+            };
+            if *target == clos {
+                slots.push((*slot, *src));
+            }
+        });
+        slots.sort_by_key(|(slot, _)| *slot);
+        out.insert(*var, slots.into_iter().map(|(_, v)| v).collect());
+    });
+    out
+}
+
 /// The scope-exit / pre-reassignment frees for a TUPLE local's OWNED elements, in
 /// reverse index order.
 ///
