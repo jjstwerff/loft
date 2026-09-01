@@ -151,6 +151,26 @@ the page about `omitted-field-zero`, `variant-field-unchecked` or the copy-on-bi
 write, all of which the compiler now diagnoses. A closed-list promise ages into a wrong one
 the first time the language grows a corner, and a reader who believes it stops looking.
 
+⚠ **A CAVEAT outlives the gap it describes, and it costs more than a stale feature
+claim.** Chapter 24 told the reader that `Type.parse(text)` "DROPS diagnostics — malformed
+input and schema mismatches leave the struct at its defaults with `json_errors()` empty",
+and sent them to a two-step spelling for error reporting. That gap (Q1) closed on
+2026-08-20; the warning outlived it in THREE documents — the chapter, CAVEATS.md and a
+ROADMAP row still asserting both halves — while QUALITY.md recorded the close. A stale
+caveat steers a reader away from the correct, shorter spelling permanently, and nothing they
+can run contradicts it: a caveat is a claim about what does NOT happen. So when a gap is
+closed, grep for the WARNING as well as for the behaviour, and when you review a chapter,
+treat each of its caveats as a claim to re-measure rather than as context.
+
+⚠ **When two sentences in one chapter disagree, run BOTH — never pick the plausible one.**
+Chapter 24 said schema mismatches "land as the loft null sentinel in the struct" and, forty
+lines later, "never by putting a null in a slot the declared type says cannot hold one". It
+also carried the caveat above beside a cell comment saying that same form reports. Both
+disagreements were the tell that behaviour had moved and one half of the page had been
+updated — the later, more specific sentence was right each time, but that is a pattern and
+not a rule, and the only way to know is to run them. A chapter that contradicts itself is
+the cheapest review lead there is: it has already told you where to look.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -203,6 +223,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/20-logging.loft` | 2026-09-01 | `a61fde12` |
 | `tests/docs/22-time.loft` | 2026-09-01 | `ded1a65b` |
 | `tests/docs/23-safety.loft` | 2026-09-01 | `bba86d7f` |
+| `tests/docs/24-json.loft` | 2026-09-01 | `56e176b4` |
 
 ## See also
 
