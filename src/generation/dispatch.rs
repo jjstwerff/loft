@@ -311,13 +311,14 @@ impl Output<'_> {
                 // twin of the interp stash + `OpFreeRefIfDistinct` at the RefVar-set
                 // site (codegen.rs).  Heap inner type only; a `RefVar(Text)` buffer
                 // has no such displaced store.
-                let amp_owned_writeback = matches!(
+                let amp_owned_writeback = (matches!(
                     **inner,
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) && matches!(
-                    crate::use_analysis::ownership_of(self.data, self.def_nr, to),
-                    crate::use_analysis::Own::Owned
-                );
+                ) || crate::parser::vectors::is_keyed(inner))
+                    && matches!(
+                        crate::use_analysis::ownership_of(self.data, self.def_nr, to),
+                        crate::use_analysis::Own::Owned
+                    );
                 let needs_text_coerce = matches!(**inner, Type::Text(_));
                 // A `&boolean` slot holds the tri-state STORAGE byte (`u8`: 0/1/255,
                 // null-capable) while an expression like `!b` produces a two-state
