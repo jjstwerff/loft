@@ -43,7 +43,7 @@
 <pre><code><span class="kw">fn</span> <span class="fn-call">appended_by_callee</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;)     { v += [<span class="nm">4</span>]; }
 <span class="kw">fn</span> <span class="fn-call">replaced_by_callee</span>(v: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;)     { v = [<span class="nm">7</span>, <span class="nm">7</span>]; }
 <span class="kw">fn</span> <span class="fn-call">replaced_through_ref</span>(v: &amp;<span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;)  { v = [<span class="nm">7</span>, <span class="nm">7</span>]; }</code></pre>
-<p>Two doors into one record set — see the hash section.</p>
+<p>One table, two indexes on it — see the hash section.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Item</span> { key: <span class="ty"><a href="stdlib-types.html">text</a></span>, count: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
 <span class="kw">struct</span> <span class="en">Catalogue</span> {
   all:    <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Item</span>&gt;,
@@ -162,9 +162,10 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n}"</span> == <span class="st">"42"</span>, <span class="st">"single braces: format expression"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"{{}}"</span>) == <span class="nm">2</span>, <span class="st">"double braces produce literal brace chars"</span>);</code></pre>
 <p>Forgetting to escape braces in expected output is a common mistake in assertions and comparisons.</p>
-<h2 id="a-hash-iterates-two-keyed-views-share-one-record-set">A hash iterates; two keyed views share one record set</h2>
+<h2 id="a-hash-iterates-and-collections-over-one-record-type-index-one-table">A hash iterates, and collections over one record type index one table</h2>
 <p><code>for e in my_hash { }</code> works and visits the records in ascending key order — the same loop shape as <code>sorted</code> and <code>index</code>, which yield records too. A hash key runs one way only: the <code>-</code> prefix that reverses a <code>sorted</code> key is refused on a hash, so reach for <code>sorted</code> when the order has to run the other way. The one loop attribute a hash does not carry is <code>e#remove</code>, because the walk is over a sorted snapshot — remove through the key instead, with <code>my_hash[key] = null</code>.</p>
-<p>The trap is the other way round. Two collections over the SAME record type in one struct are not two collections: they are two doors into one record set. Construct with records in one member and <code>[]</code> in the other, and the second sees them all. Give records to BOTH and each collection ends up holding everything either one was handed — loft advises on that literal (<code>advice[linked-group-double-fill]</code>).</p>
+<p>loft's store is an in-memory database, and collections over the same record type in one struct are INDEXES ON ONE TABLE — as ordinary here as several indexes on a table are in any database, and declared for the same reason. A vector beside a hash gives you insertion order and keyed lookup over the same rows; add a <code>sorted</code> and you have a third way in. The rows live in the table, so filling any one index fills them all, a write through one is visible through the others, and a removal through one removes the row itself.</p>
+<p>What that asks of you is only at construction: hand the rows to ONE member and write <code>[]</code> for the others. That <code>[]</code> declares an index; it does not declare an empty collection to be filled separately. Hand rows to two members and the table gets both sets, so a vector you wrote two rows into holds four. loft advises on that literal (<code>advice[linked-group-double-fill]</code>).</p>
 <pre><code>  cat = <span class="en">Catalogue</span> { all: [<span class="en">Item</span>{key:<span class="st">"zebra"</span>, count:<span class="nm">1</span>}, <span class="en">Item</span>{key:<span class="st">"apple"</span>, count:<span class="nm">5</span>}], by_key: [] };
   insertion = <span class="st">""</span>;
   <span class="kw">for</span> e <span class="kw">in</span> cat.all { insertion += <span class="st">"{e.key} "</span>; }
@@ -265,7 +266,7 @@ fn appended_by_callee(v: vector&lt;integer&gt;)     { v += [4]; }
 fn replaced_by_callee(v: vector&lt;integer&gt;)     { v = [7, 7]; }
 fn replaced_through_ref(v: &amp;vector&lt;integer&gt;)  { v = [7, 7]; }
 
-// Two doors into one record set — see the hash section.
+// One table, two indexes on it — see the hash section.
 struct Item { key: text, count: integer }
 struct Catalogue {
   all:    vector&lt;Item&gt;,
@@ -438,7 +439,7 @@ fn main() {
   // Forgetting to escape braces in expected output is a common mistake in
   // assertions and comparisons.
 
-  // ## A hash iterates; two keyed views share one record set
+  // ## A hash iterates, and collections over one record type index one table
   // `for e in my_hash { }` works and visits the records in ascending key order —
   // the same loop shape as `sorted` and `index`, which yield records too. A hash
   // key runs one way only: the `-` prefix that reverses a `sorted` key is refused
@@ -447,12 +448,19 @@ fn main() {
   // is over a sorted snapshot — remove through the key instead, with
   // `my_hash[key] = null`.
   //
-  // The trap is the other way round. Two collections over the SAME record type
-  // in one struct are not two collections: they are two doors into one record
-  // set. Construct with records in one member and `[]` in the other, and the
-  // second sees them all. Give records to BOTH and each collection ends up
-  // holding everything either one was handed — loft advises on that literal
-  // (`advice[linked-group-double-fill]`).
+  // loft's store is an in-memory database, and collections over the same record
+  // type in one struct are INDEXES ON ONE TABLE — as ordinary here as several
+  // indexes on a table are in any database, and declared for the same reason. A
+  // vector beside a hash gives you insertion order and keyed lookup over the same
+  // rows; add a `sorted` and you have a third way in. The rows live in the table,
+  // so filling any one index fills them all, a write through one is visible
+  // through the others, and a removal through one removes the row itself.
+  //
+  // What that asks of you is only at construction: hand the rows to ONE member
+  // and write `[]` for the others. That `[]` declares an index; it does not
+  // declare an empty collection to be filled separately. Hand rows to two members
+  // and the table gets both sets, so a vector you wrote two rows into holds four.
+  // loft advises on that literal (`advice[linked-group-double-fill]`).
   cat = Catalogue { all: [Item{key:"zebra", count:1}, Item{key:"apple", count:5}], by_key: [] };
   insertion = "";
   for e in cat.all { insertion += "{e.key} "; }

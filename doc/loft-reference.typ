@@ -4538,7 +4538,7 @@ fn replaced_by_callee(v: vector<integer>)     { v = [7, 7]; }
 fn replaced_through_ref(v: &vector<integer>)  { v = [7, 7]; }
 ```
 
-Two doors into one record set — see the hash section.
+One table, two indexes on it — see the hash section.
 
 ```rust
 struct Item { key: text, count: integer }
@@ -4756,11 +4756,13 @@ Every string literal in loft is a format string. Literal braces must be escaped 
 
 Forgetting to escape braces in expected output is a common mistake in assertions and comparisons.
 
-=== A hash iterates; two keyed views share one record set
+=== A hash iterates, and collections over one record type index one table
 
 `for e in my\_hash { }` works and visits the records in ascending key order — the same loop shape as `sorted` and `index`, which yield records too. A hash key runs one way only: the `-` prefix that reverses a `sorted` key is refused on a hash, so reach for `sorted` when the order has to run the other way. The one loop attribute a hash does not carry is `e\#remove`, because the walk is over a sorted snapshot — remove through the key instead, with `my\_hash\[key\] = null`.
 
-The trap is the other way round. Two collections over the SAME record type in one struct are not two collections: they are two doors into one record set. Construct with records in one member and `\[\]` in the other, and the second sees them all. Give records to BOTH and each collection ends up holding everything either one was handed — loft advises on that literal (`advice\[linked-group-double-fill\]`).
+loft's store is an in-memory database, and collections over the same record type in one struct are INDEXES ON ONE TABLE — as ordinary here as several indexes on a table are in any database, and declared for the same reason. A vector beside a hash gives you insertion order and keyed lookup over the same rows; add a `sorted` and you have a third way in. The rows live in the table, so filling any one index fills them all, a write through one is visible through the others, and a removal through one removes the row itself.
+
+What that asks of you is only at construction: hand the rows to ONE member and write `\[\]` for the others. That `\[\]` declares an index; it does not declare an empty collection to be filled separately. Hand rows to two members and the table gets both sets, so a vector you wrote two rows into holds four. loft advises on that literal (`advice\[linked-group-double-fill\]`).
 
 ```rust
   cat = Catalogue { all: [Item{key:"zebra", count:1}, Item{key:"apple", count:5}], by_key: [] };
