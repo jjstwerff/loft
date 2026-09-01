@@ -262,7 +262,11 @@ is the companion [calls-history.md](calls-history.md).
   same right-hand sides plus the empty literal, a CONDITIONAL rebind and a double one, with
   the vector kind and an append (`F-ParamGrow`) as its controls. Its whole row wrote back to
   the caller: a keyed `=` lowers to `OpReplaceKeyed`, which deep-copies into the store the
-  target's slot names, and for a parameter that is the CALLER's (loft#1294).
+  target's slot names, and for a parameter that is the CALLER's (loft#1294).  The NULLABLE
+  row is `tests/scripts/1295-a-nullable-parameter-rebind-has-an-owner.loft`, and it moves a
+  different channel: the caller's VALUE was right there all along and the store the callee
+  minted had no owner, one orphaned record per call (loft#1295).  `τ?` and `τ` share sentinel
+  storage, so a nullable parameter is still a parameter.
   ⚠ **That cross is what this line was missing, and `OPEN: 0` read green over it for a year.**
   The one-cell oracle above asked only `p = [<literal>]`, which was the one spelling with a
   lowering: `p = other` — named in the rule's own text — wrote back to the caller on BOTH

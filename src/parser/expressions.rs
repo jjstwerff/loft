@@ -2270,10 +2270,11 @@ use a separate collection or add after the loop"
     /// write IS its purpose, and a field or element write is not a whole-binding
     /// reassignment.  Vectors and keyed collections keep their own P2.4 route.
     ///
-    /// The shape test is deliberately BARE rather than peeled through `Optional`: it must name
-    /// the same set the P2.1 literal site names, or one spelling of one statement would take
-    /// this lowering and another would take that one.  A nullable struct parameter is
-    /// @PLN25's `__nullable<S>` delivery and already keeps its rebind local.
+    /// The shape test reads through `Optional`, because `τ?` and `τ` share sentinel storage
+    /// and a rebind of `p: St?` displaces a store exactly as `p: St` does.  It kept the
+    /// caller's VALUE either way — which is what made the gap easy to read as covered — while
+    /// the store the callee minted had no owner: forty calls, forty leaked records.  A
+    /// nullable parameter is still a parameter (loft#1295).
     fn rebind_local_heap_param(&mut self, code: &mut Value, op: &str, to: &Value, var_nr: u16) {
         if self.first_pass
             || op != "="
@@ -2281,7 +2282,7 @@ use a separate collection or add after the loop"
             || self.rebind_lowered == var_nr
             || !matches!(to.unspan(), Value::Var(v) if *v == var_nr)
             || !(matches!(
-                self.vars.tp(var_nr),
+                self.vars.tp(var_nr).base(),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
             ) || crate::parser::vectors::is_keyed(self.vars.tp(var_nr)))
             || !self.vars.is_argument(var_nr)
