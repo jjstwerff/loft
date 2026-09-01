@@ -172,12 +172,15 @@ fn main() {
   // which is what makes it safe to call on the way into a run.
   assert(mkdir_all("tests/example").ok(), "mkdir_all on an existing directory is Ok");
   assert(!mkdir("tests/example").ok(), "mkdir on an existing directory is not Ok");
-  // There is no way to remove a directory: `delete` is a file operation and
-  // answers FileResult.IsDirectory when you point it at one.
+  // `delete` is a file operation and answers FileResult.IsDirectory when you
+  // point it at a directory. `rmdir` is the one that removes a directory, and
+  // only an EMPTY one — it answers NotEmpty while entries remain. A recursive
+  // removal is yours to write: list_dir() the children, delete() the files,
+  // rmdir() the directory, deepest first.
 
   // ## Error handling
   // Filesystem operations that can fail return a `FileResult`, and it is an enum
-  // with five variants, not a boolean. `.ok()` is the shorthand for the Ok one;
+  // with six variants, not a boolean. `.ok()` is the shorthand for the Ok one;
   // match when you need to tell the failures apart. The program does not crash
   // on failure — you decide what to do.
   result = delete("this_file_does_not_exist.txt");
@@ -187,6 +190,7 @@ fn main() {
     NotFound => "there was nothing there",
     PermissionDenied => "the OS refused",
     IsDirectory => "that is a directory",
+    NotEmpty => "the directory still has entries in it",
     Other => "it failed for another reason"
   };
   assert(why == "there was nothing there", "delete on a missing file is NotFound");
