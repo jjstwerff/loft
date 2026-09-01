@@ -1119,7 +1119,21 @@ impl Output<'_> {
             write!(w, "let __vc_seq = codegen_runtime::cr_alloc_serial(cell); ")?;
         }
         for (i, arg) in args.iter().enumerate() {
+            // A `fn(…)` PARAMETER takes the whole `(u32, DbRef)` fn-ref pair, and a bare
+            // fn-ref name emits the lone d_nr as an `i64`.  Bound raw, every match arm below
+            // then passed that `i64` where the callee wants the pair — rustc E0308, so the
+            // crate did not build at all (loft#1285).  `fn_ref_context` is the same channel
+            // the tuple-element write opens for exactly this reason, and going through the
+            // flag rather than wrapping the emitted text is what keeps an if-VALUED source
+            // right: the pair is then built inside EACH branch.
+            let is_fn_arg =
+                i < param_types.len() && matches!(param_types[i].base(), Type::Function(_, _, _));
+            let prev_fn_ref_ctx = self.fn_ref_context;
+            if is_fn_arg {
+                self.fn_ref_context = true;
+            }
             let expr = self.generate_expr_buf(arg)?;
+            self.fn_ref_context = prev_fn_ref_ctx;
             // P265: when the fn-ref's parameter at this index is text,
             // coerce the binding to `&str` at the bind site so every
             // match arm can pass `_farg_{i}` to a `&str` parameter

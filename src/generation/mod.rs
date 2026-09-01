@@ -338,6 +338,30 @@ fn collect_fn_ref_literals(
                 }
             }
         }
+        // The fn-ref CALLEE half of the `Value::Call` arm above, and the last shape in this
+        // list to be given one.  A call THROUGH a fn-ref is `Value::CallRef(v_nr, args)`, so
+        // the arm that reads a NAMED callee's declared parameter types never saw it, and a
+        // lambda passed as an argument to a fn-ref callee — `lf(fn(x: integer) -> integer
+        // { x * 2 })` — was pruned as unreachable.  It then had no arm in the native fn-ref
+        // dispatch and the call panicked `invalid fn-ref: <d_nr>` (loft#1285).
+        //
+        // The parameter types come from the fn-ref VARIABLE's own type, which is the only
+        // place a lambda callee declares them.  Over-approximation is correctness-safe here
+        // exactly as it is for @P299 and loft#1069 — it can only emit an unused candidate.
+        Value::CallRef(v_nr, args) => {
+            if let Type::Function(param_types, _, _) = variables.tp(*v_nr) {
+                for (idx, a) in args.iter().enumerate() {
+                    if idx < param_types.len()
+                        && matches!(
+                            param_types[idx].base(),
+                            Type::Function(_, _, _) | Type::Routine(_)
+                        )
+                    {
+                        collect_int_fn_refs(IrNode::Native(a), calls);
+                    }
+                }
+            }
+        }
         Value::Return(v) => {
             // #263: a fn-ref-returning fn whose return value is a bare d_nr
             // (`return dbl` → `Int(d_nr)`) — pick the Int up as a reachable

@@ -13769,18 +13769,20 @@ impl Parser {
                     self.fnref_param_hint(name, arg_idx)
                 };
                 if let Some(expected) = hinted {
-                    // ⚠ A `fn(…)` parameter is deliberately NOT admitted here, and the
-                    // omission is MEASURED rather than an oversight.  The fn-ref dispatch
-                    // cannot carry a fn-ref ARGUMENT at all: `lf(dbl)` and
-                    // `lf(fn(x: integer) -> integer { … })` already produce NO OUTPUT and
-                    // exit 0 on `--interpret` — the whole of `main` prints nothing and the
-                    // process reports success — and E0308 on `--native`, where an `i64` is
-                    // passed for the `(u32, DbRef)` fn-ref pair.  The long form needs no hint,
-                    // which is what says the gap is the dispatch and not this channel.
-                    // Seeding `fn(…)` here would only move the SHORT form from a clean
-                    // refusal into that silence, so it stays closed until the dispatch can
-                    // take the argument — loft#1285.
-                    if self.enum_context(&expected) {
+                    if Self::seeds_lambda_hint(&expected) {
+                        // A `fn(…)` parameter, so a SHORT-form lambda argument can infer its
+                        // parameter types — the fn-ref position of the push the `fn_def_nr`
+                        // block above makes for a named callee.
+                        //
+                        // This arm was held CLOSED when loft#1280 landed, because seeding it
+                        // made the short form parse and land in a dispatch that could not
+                        // carry a fn-ref argument at all (loft#1285: no output and exit 0 on
+                        // `--interpret`, E0308 on `--native`).  With that dispatch fixed —
+                        // the 20-byte pair at the interpreter's call site, the `fn_ref_context`
+                        // binding in the native emitter, and the `CallRef` arm in the
+                        // reachability walk — the refusal has nothing left to protect.
+                        self.expected = expected;
+                    } else if self.enum_context(&expected) {
                         self.expected = expected;
                     } else if Self::seeds_collection_hint(&expected) {
                         // #432 — seed a bare vector-literal argument's element width
