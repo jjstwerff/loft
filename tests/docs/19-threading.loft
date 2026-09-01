@@ -3,36 +3,66 @@
 // @NAME: Parallel execution
 // @TITLE: Parallel processing with the par(...) for-loop clause
 // The `par(b=worker_call, threads)` clause on a `for` loop runs a function
-// on every element of a vector in parallel and gives you the results one by
-// one in the loop body.
+// on every element of a collection in parallel and gives you the results one
+// by one in the loop body.
 //
 // ## Why parallel loops?
 // When you have a large collection and each element can be processed
 // independently — image filters, score calculations, data transforms —
-// `par()` splits the work across CPU cores automatically.  You write a
-// normal for loop; adding `par(...)` makes it parallel with no other changes.
+// `par()` splits the work across CPU cores automatically.  You move the
+// per-element work into a function and name it in the clause; the loop body
+// then reads that function's result instead of computing it.
 //
 // ## Syntax
-//   `for a in vec par(b=func(a), N) { body }`
+//   `for a in src par(b = func(a), N) { body }`
 //
-// - `a` — loop variable, read-only reference to the current element
+// - `a` — loop variable, bound to the current element, exactly as in a loop
+//   without `par`.  The body may still read it alongside the result.
 // - `b` — result variable, holds the return value of `func(a)`
 // - `func(a)` — worker function called on each element
 // - `N` — number of threads (1 = sequential, 4 = typical)
 //
+// `src` is any source a `for` loop accepts: a vector, a range, a text, or a
+// keyed collection.  See "Order" below for what a `hash` source changes.
+//
 // ## Two call forms
-// - **Form 1** — global function: `par(b=my_func(a), 4)`
-// - **Form 2** — method on element: `par(b=a.my_method(), 4)`
+// - **Form 1** — a free function: `par(b=my_func(a), 4)`
+// - **Form 2** — a method on the element: `par(b=a.my_method(), 4)`
 //
-// ## Worker function rules
-// The worker function:
-// - Takes a `const` reference to the element (read-only, no mutation)
-// - Returns a value (integer, float, boolean, text, or a struct)
-// - Must not use global state or I/O (no println, no file access)
-// - Can accept extra arguments forwarded from the calling scope
+// These are two spellings for two kinds of declaration, not two ways to write
+// the same call: a function whose first parameter is `self` is reachable only
+// by Form 2, and a free function only by Form 1.  Reach for the wrong one and
+// the compiler says the name is unknown.
 //
-// Results are delivered in the original order regardless of which
-// thread finishes first.
+// ## What a worker may do
+// The compiler holds two of these for you, and you hold the third:
+//
+// * **The loop element may be a reference** — a struct, say.  Marking it
+//   `const` documents that the worker only reads it.  For a plain number the
+//   `const` has nothing to freeze and the compiler says so, so leave it off.
+// * **Every OTHER argument must be a scalar.** A worker runs on its own copy
+//   of the heap, so it cannot reach a struct or vector from the calling
+//   scope.  Read what you need into a number before the loop and forward that.
+// * **The worker must not touch anything shared** — no global state, no
+//   `println`, no file access.  This one is yours to keep: a worker that
+//   writes shared state is a program loft does not define, and it will not
+//   stop you.  Three workers appending to one file leave one line, and which
+//   line survives changes from run to run.
+//
+// The compiler does refuse the case it can see: a worker that writes to state
+// captured from around the loop.
+//
+// ## Order
+// The body sees results in the order the source produced them, whatever order
+// the threads finished in — so for a vector, a range, a text or a `sorted`,
+// `par` gives exactly what the sequential loop gives, and `N` is a speed knob
+// that never changes the answer.
+//
+// A `hash` is the one exception, and it is worth knowing before you rely on
+// it: `par` walks it in storage order rather than key order, so the results
+// arrive in a different order from the plain `for` loop over the same hash —
+// and in a different order on each run.  Iterate a `sorted` instead when the
+// order matters.
 struct Score {
   value: integer
 }
@@ -71,7 +101,7 @@ fn make_scores() -> ScoreList {
 // @FTR-070 — a `par` loop across threads: the worker runs on every element and the results
 // come back in order, whatever the thread count
 fn main() {
-  // ## Global Function (Form 1)
+  // ## Free function (Form 1)
   // Each Score's value is doubled by `double_score` across 4 threads.
   // The loop body sees `b` with the doubled value, in original order.
   q = make_scores();
@@ -83,8 +113,9 @@ fn main() {
   assert(sum == 120, "parallel double: sum == 120");
 
   // ## Extra Arguments
-  // The worker function can take extra arguments from the calling scope.
-  // Here `scale_score(a, factor)` passes `factor=3` to every worker.
+  // The worker function can take extra arguments from the calling scope, as
+  // long as each is a number, a boolean or a character.  Here
+  // `scale_score(a, factor)` passes `factor=3` to every worker.
   q1b = make_scores();
   factor = 3;
   scaled_sum = 0;
@@ -95,8 +126,9 @@ fn main() {
   assert(scaled_sum == 180, "extra arg: scaled sum == 180");
 
   // ## Struct Return
-  // Workers can return a struct.  Text fields are deep-copied so they
-  // remain valid after the worker thread exits.
+  // A worker returns whatever its own type says: a number, a boolean, a
+  // character, a text, a struct, or a vector.  Text and struct results are
+  // deep-copied, so they stay valid after the worker thread exits.
   q2 = make_scores();
   labels = "";
   for thr_sa in q2.items par(thr_ds = make_doubled(thr_sa), 1) {
@@ -104,15 +136,25 @@ fn main() {
   }
   assert(labels == "v10,v20,v30,", "struct return: {labels}");
 
-  // ## Method Call (Form 2)
-  // `b=a.get_value()` dispatches the method on each element in parallel.
-  // This is syntactic sugar — equivalent to `b=get_value(a)`.
+  // ## Method call (Form 2)
+  // `get_value` takes `self`, so it is a method and `b=a.get_value()` is the
+  // spelling that reaches it.
   q3 = make_scores();
   total = 0;
   for thr_a in q3.items par(thr_b = thr_a.get_value(), 4) {
     total += thr_b;
   }
   assert(total == 60, "method call: total == 60");
+
+  // ## Any for-source
+  // A range is a source like any other, and a worker over plain numbers wants
+  // no `const`.
+  thr_range_sum = 0;
+  for thr_i in 0..5 par(thr_d = thr_double(thr_i), 4) {
+    thr_range_sum += thr_d;
+  }
+  // (0+1+2+3+4) * 2
+  assert(thr_range_sum == 20, "range source: {thr_range_sum}");
 
   // ## Empty Vector
   // An empty vector is safe — the loop body never executes,
@@ -126,11 +168,16 @@ fn main() {
 
   // ## Sequential fallback
   // Using `par(..., 1)` runs the worker on a single thread — useful
-  // for debugging.  The behaviour is identical; only the parallelism changes.
+  // for debugging.  The answer is the same one every thread count gives;
+  // only the parallelism changes.
   q4 = make_scores();
   seq_sum = 0;
   for thr_a in q4.items par(thr_b = double_score(thr_a), 1) {
     seq_sum += thr_b;
   }
   assert(seq_sum == 120, "sequential par(1): same result");
+}
+
+fn thr_double(thr_n: integer) -> integer {
+  thr_n * 2
 }

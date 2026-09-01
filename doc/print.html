@@ -1650,32 +1650,36 @@ entry = "src/mylib.loft"   override the default entry path
 </section>
 <section class="print-section" id="19-threading">
 <h1>Parallel execution</h1>
-<p>The <code>par(b=worker_call, threads)</code> clause on a <code>for</code> loop runs a function on every element of a vector in parallel and gives you the results one by one in the loop body.</p>
+<p>The <code>par(b=worker_call, threads)</code> clause on a <code>for</code> loop runs a function on every element of a collection in parallel and gives you the results one by one in the loop body.</p>
 <h2 id="why-parallel-loops">Why parallel loops?</h2>
-<p>When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — <code>par()</code> splits the work across CPU cores automatically.  You write a normal for loop; adding <code>par(...)</code> makes it parallel with no other changes.</p>
+<p>When you have a large collection and each element can be processed independently — image filters, score calculations, data transforms — <code>par()</code> splits the work across CPU cores automatically.  You move the per-element work into a function and name it in the clause; the loop body then reads that function's result instead of computing it.</p>
 <h2 id="syntax">Syntax</h2>
-<pre><code>`for a in vec par(b=func(a), N) { body }`
+<pre><code>`for a in src par(b = func(a), N) { body }`
 </code></pre>
 <ul>
-<li><code>a</code> — loop variable, read-only reference to the current element</li>
+<li><code>a</code> — loop variable, bound to the current element, exactly as in a loop without <code>par</code>.  The body may still read it alongside the result.</li>
 <li><code>b</code> — result variable, holds the return value of <code>func(a)</code></li>
 <li><code>func(a)</code> — worker function called on each element</li>
 <li><code>N</code> — number of threads (1 = sequential, 4 = typical)</li>
 </ul>
+<p><code>src</code> is any source a <code>for</code> loop accepts: a vector, a range, a text, or a keyed collection.  See "Order" below for what a <code>hash</code> source changes.</p>
 <h2 id="two-call-forms">Two call forms</h2>
 <ul>
-<li><strong>Form 1</strong> — global function: <code>par(b=my_func(a), 4)</code></li>
-<li><strong>Form 2</strong> — method on element: <code>par(b=a.my_method(), 4)</code></li>
+<li><strong>Form 1</strong> — a free function: <code>par(b=my_func(a), 4)</code></li>
+<li><strong>Form 2</strong> — a method on the element: <code>par(b=a.my_method(), 4)</code></li>
 </ul>
-<h2 id="worker-function-rules">Worker function rules</h2>
-<p>The worker function:</p>
+<p>These are two spellings for two kinds of declaration, not two ways to write the same call: a function whose first parameter is <code>self</code> is reachable only by Form 2, and a free function only by Form 1.  Reach for the wrong one and the compiler says the name is unknown.</p>
+<h2 id="what-a-worker-may-do">What a worker may do</h2>
+<p>The compiler holds two of these for you, and you hold the third:</p>
 <ul>
-<li>Takes a <code>const</code> reference to the element (read-only, no mutation)</li>
-<li>Returns a value (integer, float, boolean, text, or a struct)</li>
-<li>Must not use global state or I/O (no println, no file access)</li>
-<li>Can accept extra arguments forwarded from the calling scope</li>
+<li><strong>The loop element may be a reference</strong> — a struct, say.  Marking it <code>const</code> documents that the worker only reads it.  For a plain number the <code>const</code> has nothing to freeze and the compiler says so, so leave it off.</li>
+<li><strong>Every OTHER argument must be a scalar.</strong> A worker runs on its own copy of the heap, so it cannot reach a struct or vector from the calling scope.  Read what you need into a number before the loop and forward that.</li>
+<li><strong>The worker must not touch anything shared</strong> — no global state, no <code>println</code>, no file access.  This one is yours to keep: a worker that writes shared state is a program loft does not define, and it will not stop you.  Three workers appending to one file leave one line, and which line survives changes from run to run.</li>
 </ul>
-<p>Results are delivered in the original order regardless of which thread finishes first.</p>
+<p>The compiler does refuse the case it can see: a worker that writes to state captured from around the loop.</p>
+<h2 id="order">Order</h2>
+<p>The body sees results in the order the source produced them, whatever order the threads finished in — so for a vector, a range, a text or a <code>sorted</code>, <code>par</code> gives exactly what the sequential loop gives, and <code>N</code> is a speed knob that never changes the answer.</p>
+<p>A <code>hash</code> is the one exception, and it is worth knowing before you rely on it: <code>par</code> walks it in storage order rather than key order, so the results arrive in a different order from the plain <code>for</code> loop over the same hash — and in a different order on each run.  Iterate a <code>sorted</code> instead when the order matters.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Score</span> {
   value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
 }</code></pre>
@@ -1705,7 +1709,7 @@ entry = "src/mylib.loft"   override the default entry path
 }</code></pre>
 <p>@FTR-070 — a <code>par</code> loop across threads: the worker runs on every element and the results come back in order, whatever the thread count</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="global-function-form-1">Global Function (Form 1)</h2>
+<h2 id="free-function-form-1">Free function (Form 1)</h2>
 <p>Each Score's value is doubled by <code>double_score</code> across 4 threads. The loop body sees <code>b</code> with the doubled value, in original order.</p>
 <pre><code>  q = <span class="fn-call">make_scores</span>();
   sum = <span class="nm">0</span>;
@@ -1715,7 +1719,7 @@ entry = "src/mylib.loft"   override the default entry path
 <p>10*2 + 20*2 + 30*2 = 120</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">120</span>, <span class="st">"parallel double: sum == 120"</span>);</code></pre>
 <h2 id="extra-arguments">Extra Arguments</h2>
-<p>The worker function can take extra arguments from the calling scope. Here <code>scale_score(a, factor)</code> passes <code>factor=3</code> to every worker.</p>
+<p>The worker function can take extra arguments from the calling scope, as long as each is a number, a boolean or a character.  Here <code>scale_score(a, factor)</code> passes <code>factor=3</code> to every worker.</p>
 <pre><code>  q1b = <span class="fn-call">make_scores</span>();
   factor = <span class="nm">3</span>;
   scaled_sum = <span class="nm">0</span>;
@@ -1725,21 +1729,29 @@ entry = "src/mylib.loft"   override the default entry path
 <p>10*3 + 20*3 + 30*3 = 180</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(scaled_sum == <span class="nm">180</span>, <span class="st">"extra arg: scaled sum == 180"</span>);</code></pre>
 <h2 id="struct-return">Struct Return</h2>
-<p>Workers can return a struct.  Text fields are deep-copied so they remain valid after the worker thread exits.</p>
+<p>A worker returns whatever its own type says: a number, a boolean, a character, a text, a struct, or a vector.  Text and struct results are deep-copied, so they stay valid after the worker thread exits.</p>
 <pre><code>  q2 = <span class="fn-call">make_scores</span>();
   labels = <span class="st">""</span>;
   <span class="kw">for</span> thr_sa <span class="kw">in</span> q2.items <span class="fn-call">par</span>(thr_ds = <span class="fn-call">make_doubled</span>(thr_sa), <span class="nm">1</span>) {
     labels += <span class="st">"{thr_ds.label},"</span>;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(labels == <span class="st">"v10,v20,v30,"</span>, <span class="st">"struct return: {labels}"</span>);</code></pre>
-<h2 id="method-call-form-2">Method Call (Form 2)</h2>
-<p><code>b=a.get_value()</code> dispatches the method on each element in parallel. This is syntactic sugar — equivalent to <code>b=get_value(a)</code>.</p>
+<h2 id="method-call-form-2">Method call (Form 2)</h2>
+<p><code>get_value</code> takes <code>self</code>, so it is a method and <code>b=a.get_value()</code> is the spelling that reaches it.</p>
 <pre><code>  q3 = <span class="fn-call">make_scores</span>();
   total = <span class="nm">0</span>;
   <span class="kw">for</span> thr_a <span class="kw">in</span> q3.items <span class="fn-call">par</span>(thr_b = thr_a.<span class="fn-call">get_value</span>(), <span class="nm">4</span>) {
     total += thr_b;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"method call: total == 60"</span>);</code></pre>
+<h2 id="any-for-source">Any for-source</h2>
+<p>A range is a source like any other, and a worker over plain numbers wants no <code>const</code>.</p>
+<pre><code>  thr_range_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> thr_i <span class="kw">in</span> <span class="nm">0..5</span> <span class="fn-call">par</span>(thr_d = <span class="fn-call">thr_double</span>(thr_i), <span class="nm">4</span>) {
+    thr_range_sum += thr_d;
+  }</code></pre>
+<p>(0+1+2+3+4) * 2</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(thr_range_sum == <span class="nm">20</span>, <span class="st">"range source: {thr_range_sum}"</span>);</code></pre>
 <h2 id="empty-vector">Empty Vector</h2>
 <p>An empty vector is safe — the loop body never executes, no threads are spawned.</p>
 <pre><code>  empty = <span class="en">ScoreList</span> { };
@@ -1749,13 +1761,16 @@ entry = "src/mylib.loft"   override the default entry path
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(thr_n == <span class="nm">0</span>, <span class="st">"empty: 0 iterations"</span>);</code></pre>
 <h2 id="sequential-fallback">Sequential fallback</h2>
-<p>Using <code>par(..., 1)</code> runs the worker on a single thread — useful for debugging.  The behaviour is identical; only the parallelism changes.</p>
+<p>Using <code>par(..., 1)</code> runs the worker on a single thread — useful for debugging.  The answer is the same one every thread count gives; only the parallelism changes.</p>
 <pre><code>  q4 = <span class="fn-call">make_scores</span>();
   seq_sum = <span class="nm">0</span>;
   <span class="kw">for</span> thr_a <span class="kw">in</span> q4.items <span class="fn-call">par</span>(thr_b = <span class="fn-call">double_score</span>(thr_a), <span class="nm">1</span>) {
     seq_sum += thr_b;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(seq_sum == <span class="nm">120</span>, <span class="st">"sequential par(1): same result"</span>);
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">thr_double</span>(thr_n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  thr_n * <span class="nm">2</span>
 }</code></pre>
 </section>
 <section class="print-section" id="20-logging">

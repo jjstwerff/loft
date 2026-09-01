@@ -1414,7 +1414,17 @@ continue.  Full closure record at
    annotations.  Unexpected errors fail the test; unexpected warnings are logged
    but tolerated.
 3. If the file has `@EXPECT_ERROR` annotations, execution is skipped (the compiler
-   can't produce valid bytecode for a file with intentional parse errors).
+   can't produce valid bytecode for a file with intentional parse errors).  Since
+   loft#1242 the RUST suite does better than skipping: it attributes each error to its
+   enclosing function, blanks that cell and re-parses, so a refusing cell and a running
+   cell share a file and both are checked.
+
+   ⚠ **The CLI does not do that peel.** `loft --tests <file>` on a mixed file runs the
+   refusal cells and SKIPS every running one, silently — a deliberately broken assertion
+   in such a file still reports `ok`.  So a guard verified with the documented CLI command
+   has had only half of itself checked.  Either verify a mixed guard through
+   `cargo nextest --test wrap loft_suite`, or **keep the two kinds in separate files**,
+   which is what the two `the-reference-par-…` guards do and why they are a pair.
 4. Runs `scopes::check` and `byte_code` inside `catch_unwind`.  If the compiler
    panics and the file has `@EXPECT_FAIL` annotations, the panic is tolerated.
 5. Discovers all zero-parameter user functions as entry points.  If `main` exists,

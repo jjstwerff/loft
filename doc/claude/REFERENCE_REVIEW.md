@@ -86,6 +86,17 @@ others, and the page only comes apart against the compiler. **One measurement di
 bare call answering.** So before the sentence-level read, take the chapter's central
 rule, write the smallest program that would violate it, and run that.
 
+⚠ **A chapter that states a rule does not say who KEEPS it, and the reader assumes the
+compiler does.** Chapter 19 listed three worker rules in one bulleted list: two the compiler
+enforces with precise refusals, and *"must not use global state or I/O (no println, no file
+access)"*, which it does not enforce at all. `(C-Impure)` makes that one the author's
+contract by design, so the language is right and the page was wrong to shelve it beside the
+other two. Reading alone cannot separate them — running the violating program can, and the
+cost of not knowing is a worker that appends three lines to a file and leaves one, a
+different one per run. **For every "must" in a chapter, write the program that disobeys it
+and find out which of the three answers you get: a refusal, a defined behaviour, or
+silence.**
+
 ⚠ **And run the violating program even when you expect it to confirm the chapter** — the
 chapter is not the only thing it can falsify. Chapter 18 taught a single-axis `const`
 (the language has had two axes since @PLN40), which is a page defect like chapter 17's.
@@ -142,7 +153,8 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/15-lexer.loft` | 2026-09-01 | `23743006` |
 | `tests/docs/16-parser.loft` | 2026-09-01 | `512839a6` |
 | `tests/docs/17-libraries.loft` | 2026-09-01 | `361aded3` |
-| `tests/docs/18-locks.loft` | 2026-09-01 | `3477a51f` |
+| `tests/docs/18-locks.loft` | 2026-09-01 | `d50be135` |
+| `tests/docs/19-threading.loft` | 2026-09-01 | `72ffb31a` |
 
 ## See also
 
