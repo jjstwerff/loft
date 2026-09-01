@@ -761,7 +761,7 @@ whose entry list changed has.
 | `doc/00-vs-rust.html` | 2026-09-02 | `a41ee548` |
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
 | `doc/install.html` | 2026-09-02 | `80568550` |
-| `doc/roadmap.html` | 2026-09-02 | `fd271e20` |
+| `doc/roadmap.html` | 2026-09-02 | `462d42ee` |
 
 ## See also
 
