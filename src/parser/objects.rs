@@ -4604,7 +4604,11 @@ impl Parser {
                     );
                     list.push(self.cl(
                         "OpAppendVector",
-                        &[field_ref.clone(), value.clone(), Value::Int(i32::from(elem_tp))],
+                        &[
+                            field_ref.clone(),
+                            value.clone(),
+                            Value::Int(i32::from(elem_tp)),
+                        ],
                     ));
                     // loft#1266 — this bulk write owes its linked group the maintenance it
                     // skips.  A record joining a group one at a time reaches

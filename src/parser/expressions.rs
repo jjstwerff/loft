@@ -1985,8 +1985,7 @@ use a separate collection or add after the loop"
         if !wrote {
             return;
         }
-        let fills =
-            self.keyed_sibling_view_fills(to, parent_tp, &std::collections::HashSet::new());
+        let fills = self.keyed_sibling_view_fills(to, parent_tp, &std::collections::HashSet::new());
         if fills.is_empty() {
             return;
         }
