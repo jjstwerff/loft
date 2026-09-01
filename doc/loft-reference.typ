@@ -2935,7 +2935,9 @@ filling and finding values
 
 = Index
 
-An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending. Note: each record can only belong to one index at a time.
+An 'index' lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: 'field' sorts ascending, '-field' descending.
+
+Two keyed collections over the SAME element type are two ROUTES to one set of records, not two collections. Give records to either one and both see them; write through one and the other reads the change; remove through one and it is gone from both. That is the point of declaring a second one — a second way in, by a different key — and loft says so if a literal fills both ('linked-group-double-fill'), because then one record set ends up holding everything they were given.
 
 ```rust
 struct Elm {
@@ -2978,6 +2980,16 @@ Provide all key fields together inside brackets to find a record. Supply fewer f
   assert(db.map[101, "One"].value == 1, "Key lookup");
   assert(!db.map[12, ""], "Missing key returns null");
   assert(!db.map[83, "One"], "Wrong secondary key returns null");
+```
+
+Fewer fields than the key has: every record sharing that prefix.
+
+```rust
+  prefix_sum = 0;
+  for r in db.map[83] {
+    prefix_sum += r.value
+  }
+  assert(prefix_sum == 12, "the three nr=83 records: {prefix_sum}");
 ```
 
 === Iterating in Order
@@ -3366,11 +3378,11 @@ Read the count, then use it to read exactly that many floats directly into a str
   assert(!mkdir("tests/example").ok(), "mkdir on an existing directory is not Ok");
 ```
 
-There is no way to remove a directory: `delete` is a file operation and answers FileResult.IsDirectory when you point it at one.
+`delete` is a file operation and answers FileResult.IsDirectory when you point it at a directory. `rmdir` is the one that removes a directory, and only an EMPTY one — it answers NotEmpty while entries remain. A recursive removal is yours to write: list\_dir() the children, delete() the files, rmdir() the directory, deepest first.
 
 === Error handling
 
-Filesystem operations that can fail return a `FileResult`, and it is an enum with five variants, not a boolean. `.ok()` is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.
+Filesystem operations that can fail return a `FileResult`, and it is an enum with six variants, not a boolean. `.ok()` is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.
 
 ```rust
   result = delete("this_file_does_not_exist.txt");
@@ -3380,6 +3392,7 @@ Filesystem operations that can fail return a `FileResult`, and it is an enum wit
     NotFound => "there was nothing there",
     PermissionDenied => "the OS refused",
     IsDirectory => "that is a directory",
+    NotEmpty => "the directory still has entries in it",
     Other => "it failed for another reason"
   };
   assert(why == "there was nothing there", "delete on a missing file is NotFound");

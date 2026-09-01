@@ -137,9 +137,9 @@
 <p><code>mkdir(path)</code> creates one level and <code>mkdir_all(path)</code> creates every missing level. <code>mkdir_all</code> is idempotent — a directory that already exists is Ok, which is what makes it safe to call on the way into a run.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">mkdir_all</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir_all on an existing directory is Ok"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">mkdir</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir on an existing directory is not Ok"</span>);</code></pre>
-<p>There is no way to remove a directory: <code>delete</code> is a file operation and answers FileResult.IsDirectory when you point it at one.</p>
+<p><code>delete</code> is a file operation and answers FileResult.IsDirectory when you point it at a directory. <code>rmdir</code> is the one that removes a directory, and only an EMPTY one — it answers NotEmpty while entries remain. A recursive removal is yours to write: list_dir() the children, delete() the files, rmdir() the directory, deepest first.</p>
 <h2 id="error-handling">Error handling</h2>
-<p>Filesystem operations that can fail return a <code>FileResult</code>, and it is an enum with five variants, not a boolean. <code>.ok()</code> is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.</p>
+<p>Filesystem operations that can fail return a <code>FileResult</code>, and it is an enum with six variants, not a boolean. <code>.ok()</code> is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.</p>
 <pre><code>  result = <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"this_file_does_not_exist.txt"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!result.<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete missing file returns not-ok"</span>);
   why = match result {
@@ -147,6 +147,7 @@
     <span class="en">NotFound</span> =&gt; <span class="st">"there was nothing there"</span>,
     <span class="en">PermissionDenied</span> =&gt; <span class="st">"the OS refused"</span>,
     <span class="en">IsDirectory</span> =&gt; <span class="st">"that is a directory"</span>,
+    <span class="en">NotEmpty</span> =&gt; <span class="st">"the directory still has entries in it"</span>,
     <span class="en">Other</span> =&gt; <span class="st">"it failed for another reason"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(why == <span class="st">"there was nothing there"</span>, <span class="st">"delete on a missing file is NotFound"</span>);</code></pre>
@@ -343,12 +344,15 @@ fn main() {
   // which is what makes it safe to call on the way into a run.
   assert(mkdir_all("tests/example").ok(), "mkdir_all on an existing directory is Ok");
   assert(!mkdir("tests/example").ok(), "mkdir on an existing directory is not Ok");
-  // There is no way to remove a directory: `delete` is a file operation and
-  // answers FileResult.IsDirectory when you point it at one.
+  // `delete` is a file operation and answers FileResult.IsDirectory when you
+  // point it at a directory. `rmdir` is the one that removes a directory, and
+  // only an EMPTY one — it answers NotEmpty while entries remain. A recursive
+  // removal is yours to write: list_dir() the children, delete() the files,
+  // rmdir() the directory, deepest first.
 
   // ## Error handling
   // Filesystem operations that can fail return a `FileResult`, and it is an enum
-  // with five variants, not a boolean. `.ok()` is the shorthand for the Ok one;
+  // with six variants, not a boolean. `.ok()` is the shorthand for the Ok one;
   // match when you need to tell the failures apart. The program does not crash
   // on failure — you decide what to do.
   result = delete("this_file_does_not_exist.txt");
@@ -358,6 +362,7 @@ fn main() {
     NotFound =&gt; "there was nothing there",
     PermissionDenied =&gt; "the OS refused",
     IsDirectory =&gt; "that is a directory",
+    NotEmpty =&gt; "the directory still has entries in it",
     Other =&gt; "it failed for another reason"
   };
   assert(why == "there was nothing there", "delete on a missing file is NotFound");

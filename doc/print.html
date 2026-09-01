@@ -1069,7 +1069,8 @@
 </section>
 <section class="print-section" id="11-index">
 <h1>Index</h1>
-<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending. Note: each record can only belong to one index at a time.</p>
+<p>An <code>index</code> lets you find records instantly by key and iterate over ranges of keys in order. It supports multi-part keys: you can sort by a primary key and break ties with a secondary key. Declare the key fields inside angle brackets: <code>field</code> sorts ascending, <code>-field</code> descending.</p>
+<p>Two keyed collections over the SAME element type are two ROUTES to one set of records, not two collections. Give records to either one and both see them; write through one and the other reads the change; remove through one and it is gone from both. That is the point of declaring a second one — a second way in, by a different key — and loft says so if a literal fills both (<code>linked-group-double-fill</code>), because then one record set ends up holding everything they were given.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
   nr: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
   key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
@@ -1094,6 +1095,12 @@
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="nm">101</span>, <span class="st">"One"</span>].value == <span class="nm">1</span>, <span class="st">"Key lookup"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">12</span>, <span class="st">""</span>], <span class="st">"Missing key returns null"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="nm">83</span>, <span class="st">"One"</span>], <span class="st">"Wrong secondary key returns null"</span>);</code></pre>
+<p>Fewer fields than the key has: every record sharing that prefix.</p>
+<pre><code>  prefix_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> r <span class="kw">in</span> db.map[<span class="nm">83</span>] {
+    prefix_sum += r.value
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(prefix_sum == <span class="nm">12</span>, <span class="st">"the three nr=83 records: {prefix_sum}"</span>);</code></pre>
 <h2 id="iterating-in-order">Iterating in Order</h2>
 <p>A <code>for</code> loop visits all elements in key order.</p>
 <pre><code>  total = <span class="nm">0</span>;
@@ -1317,9 +1324,9 @@
 <p><code>mkdir(path)</code> creates one level and <code>mkdir_all(path)</code> creates every missing level. <code>mkdir_all</code> is idempotent — a directory that already exists is Ok, which is what makes it safe to call on the way into a run.</p>
 <pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-file-system.html">mkdir_all</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir_all on an existing directory is Ok"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-file-system.html">mkdir</a></span>(<span class="st">"tests/example"</span>).<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"mkdir on an existing directory is not Ok"</span>);</code></pre>
-<p>There is no way to remove a directory: <code>delete</code> is a file operation and answers FileResult.IsDirectory when you point it at one.</p>
+<p><code>delete</code> is a file operation and answers FileResult.IsDirectory when you point it at a directory. <code>rmdir</code> is the one that removes a directory, and only an EMPTY one — it answers NotEmpty while entries remain. A recursive removal is yours to write: list_dir() the children, delete() the files, rmdir() the directory, deepest first.</p>
 <h2 id="error-handling">Error handling</h2>
-<p>Filesystem operations that can fail return a <code>FileResult</code>, and it is an enum with five variants, not a boolean. <code>.ok()</code> is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.</p>
+<p>Filesystem operations that can fail return a <code>FileResult</code>, and it is an enum with six variants, not a boolean. <code>.ok()</code> is the shorthand for the Ok one; match when you need to tell the failures apart. The program does not crash on failure — you decide what to do.</p>
 <pre><code>  result = <span class="fn-call"><a href="stdlib-file-system.html">delete</a></span>(<span class="st">"this_file_does_not_exist.txt"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!result.<span class="fn-call"><a href="stdlib-file-system.html">ok</a></span>(), <span class="st">"delete missing file returns not-ok"</span>);
   why = match result {
@@ -1327,6 +1334,7 @@
     <span class="en">NotFound</span> =&gt; <span class="st">"there was nothing there"</span>,
     <span class="en">PermissionDenied</span> =&gt; <span class="st">"the OS refused"</span>,
     <span class="en">IsDirectory</span> =&gt; <span class="st">"that is a directory"</span>,
+    <span class="en">NotEmpty</span> =&gt; <span class="st">"the directory still has entries in it"</span>,
     <span class="en">Other</span> =&gt; <span class="st">"it failed for another reason"</span>
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(why == <span class="st">"there was nothing there"</span>, <span class="st">"delete on a missing file is NotFound"</span>);</code></pre>
