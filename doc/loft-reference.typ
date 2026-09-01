@@ -205,8 +205,8 @@ Downside Immutability is opt-in, not the default. Rust makes variables immutable
 
 ```rust
 struct Point {
-    label: text,          // nullable
-    x: integer not null,  // never null
+    label: text?,         // `?`: may be absent
+    x: integer,           // never null — the default
 }
 p = Point { x: 1 };
 assert(p.label == null, "absent");
@@ -223,18 +223,18 @@ assert!(p.label.is_none());
 
 Upside Natural for database records where fields are often absent. No Some(x)/None wrapping. Conditionals on null are concise: if v == null.
 
-Downside Null is opt-out, not opt-in. A field is nullable unless explicitly marked not null, so forgetting the annotation leaves a potential null silently. In Rust, Option is visible in the type and forces handling at every call site.
+Downside The absence is in the type, as in Rust, but nothing forces you to discharge it: label can be read straight and answers null, where Rust's Option makes every call site say what it does about None. What loft gives you instead is ?? and ? at the point of use, plus a warning when a nullable value flows into a slot that cannot hold one. (Older code may carry not null on a field; it is deprecated and has no effect, because a type is non-null by default now.)
 
 === Parameter mutability — const and & instead of ownership
 
 ```rust
-// &: vector growth (append) is visible to caller
+// a plain collection parameter is already shared — the append reaches the caller
 fn push_two(v: &vector<integer>) {
     v += [1, 2];  // caller sees the change
 }
 // const: read-only (locked in debug builds)
 fn count(v: const vector<integer>) - integer {
-    length(v)
+    len(v)
 }
 // &: explicit write-back for primitives
 fn add_to(n: &integer, delta: integer) {
@@ -255,7 +255,7 @@ fn add_to(n: &mut i32, delta: i32) {
 }
 ```
 
-Upside No borrow-checker errors. No lifetime annotations. No ownership transfer to reason about. Struct field mutations through a parameter are always visible to the caller. Use & on a collection parameter to allow vector growth (append) to propagate back. const parameters signal read-only intent, and in debug builds the runtime locks the store for the duration of the call — enough to catch most accidents during development.
+Upside No borrow-checker errors. No lifetime annotations. No ownership transfer to reason about. Struct field mutations through a parameter are always visible to the caller. A collection parameter is SHARED with no annotation at all — field writes, element writes, appends, removes and clears all reach the caller. & adds exactly one thing on top of that: whole-value replacement, v = \[...\], seen by the caller. const parameters signal read-only intent, and in debug builds the runtime locks the store for the duration of the call — enough to catch most accidents during development.
 
 Downside The compile-time guarantees are much weaker. Rust's borrow checker statically proves no aliased mutations, no dangling references, and no data races — before the program ever runs. Loft's const is a debug-only runtime check. Aliasing is unchecked at compile time, and the engine's Rust runtime is what truly enforces memory safety.
 
@@ -373,7 +373,7 @@ fn greet(self: Person) - text {
     "Hello, {self.name}!"
 }
 fn name_len(self: const Person) - integer {
-    length(self.name)  // const: read-only access guaranteed
+    len(self.name)  // const: read-only access guaranteed
 }
 p.greet()     // dot syntax
 greet(p)      // free-function call — identical
@@ -464,7 +464,7 @@ Upside Capture works for every type — scalars, text, structs and every collect
 
 Downside You do not choose the capture mode, so a case Rust expresses by picking one has no spelling here. Three limits have no Rust counterpart: a capturing closure cannot be stored in a collection (a struct field holds one fine), a & parameter cannot be captured at all, and a scalar the closure writes to may be captured by only one closure — the cure for the last two is to hold the state in a struct and capture that.
 
-=== Generic functions — pass-through only, no trait bounds
+=== Generic functions — inferred, with structural interface bounds
 
 ```rust
 // Pass-through generics work:
@@ -472,9 +472,12 @@ fn identity<T>(x: T) - T { x }
 identity(42)        // integer
 identity("hello")  // text
 
-// Trait-bounded generics are not supported:
-// fn max<T: PartialOrd>(a: T, b: T) -> T { ... }  // not valid
-// Must write a version per type:
+// Interface bounds work, and are satisfied structurally:
+fn largest<T: Ordered>(a: T, b: T) -> T { if a > b { a } else { b } }
+largest(3, 9)        // 9
+largest("ada", "bob")  // "bob" — same function
+
+// A per-type version is still what you write when the bound does not fit:
 fn max_int(a: integer, b: integer) - integer {
     if a  b { a } else { b }
 }
@@ -513,7 +516,7 @@ let hex  = format!("{:#x}", n);
 // nested string literals in format args are fine in Rust
 ```
 
-Upside Concise — no format!() call, no separate variable. Full format expressions (arithmetic, slices, for comprehensions) can appear directly inside {}. Specifiers mirror Rust: :width, :.precision, :width.precision, sign (+), radix (\#x, \#o, b), alignment (\<, \>, ^), and zero-padding (0N) all work. Note that the sign (+) and zero-pad (0N) flags apply to integer output only — they are dropped for floats.
+Upside Concise — no format!() call, no separate variable. Full format expressions (arithmetic, slices, for comprehensions) can appear directly inside {}. Specifiers mirror Rust: :width, :.precision, :width.precision, sign (+), radix (\#x, \#o, b), alignment (\<, \>, ^), and zero-padding (0N) all work. The sign (+) and zero-pad (0N) flags apply to floats too: {5.25:+} is +5.25 and {5.25:08} is 00005.25.
 
 Downside Unknown radix letters in specifiers are compile-time errors (e.g. :5z or :5B are both rejected). Radix letters are case-sensitive: valid ones are b, o, x/X, e, and j/json — uppercase B or O produce an error. Applying a numeric specifier to an incompatible type (such as :x on a text value, or zero-padding on a boolean) is a compile-time error.
 
@@ -545,7 +548,7 @@ let sum: i32 = scores.par_iter()
 
 Upside Built into the language — no external crate, no Cargo.toml edit. The compiler validates the worker function signature at the call site. Results are delivered in the original vector order. The thread count is set per call, making it easy to tune for the hardware at hand.
 
-Downside Workers can return primitives (integer, long, float, boolean), text, and inline enums — but not struct references. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use map() / filter() / reduce() sequentially — each stage allocates a new intermediate vector.
+Downside Workers can return primitives (integer, float, single, boolean, character), text, and inline enums — but not struct references. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use map() / filter() / reduce() sequentially — each stage allocates a new intermediate vector.
 
 
 = vs Python
@@ -576,12 +579,12 @@ Downside Types are fixed at first assignment and cannot change. Python's dynamic
 
 ```rust
 struct User {
-    email: text,             // nullable by default
-    age:   integer not null,  // can never be null
+    email: text?,            // `?`: may be absent
+    age:   integer,            // never null — the default
 }
 u = User { age: 30 };
 if u.email == null { print("no email"); }
-u.age = null;  // compile error: age is not null
+u.age = null;  // warns: the slot holds null anyway
 ```
 
 ```python
@@ -599,9 +602,9 @@ u = <span class="fn-call">User</span>(age=<span class="nm">30</span>)
 u.age = <span class="kw">None</span>  <span class="cm"># allowed at runtime; mypy catches this</span>
 ```
 
-Upside Nullability is part of the struct definition — readable at a glance. not null fields are enforced by the compiler and additionally locked at runtime in debug builds, catching accidental null writes early in development. No Optional\[T\] wrapping needed; the comparison v == null is natural.
+Upside Nullability is part of the type and readable at a glance, and the default is the safe one: a field is non-null unless it says ?, so absence is something you opt INTO. No Optional\[T\] wrapping is needed; the comparison v == null is natural, and ?? supplies a fallback at the point of use.
 
-Downside The default is nullable, not non-nullable — the safe default is backwards from what static analysis advocates recommend. Python with mypy and Optional\[T\] annotation gives static guarantees that loft's runtime checks do not. Python's None also participates in truthiness testing (if not email:), pattern matching, and or chaining in ways that loft's null does not support.
+Downside The default is the safe one — a field is non-null unless its type says ? — but nothing forces you to discharge a nullable at the point of use, and writing null into a non-null slot is a warning rather than a refusal. Python with mypy and Optional\[T\] annotation gives static guarantees that loft's runtime checks do not. Python's None also participates in truthiness testing (if not email:), pattern matching, and or chaining in ways that loft's null does not support.
 
 === Structs vs classes and dicts
 
@@ -643,9 +646,9 @@ Downside No inheritance, no \_\_repr\_\_, no operator overloading (\_\_add\_\_, 
 ```rust
 while !ready() { step(); }  // works
 
-while length(queue)  0 {
+while len(queue) > 0 {
     process(queue[0]);
-    queue#remove;
+    queue.remove(0);   // `#remove` is for a loop variable
 }
 
 // No loop keyword — infinite loop needs a large bound:
@@ -726,7 +729,7 @@ lst  = <span class="st">","</span>.<span class="fn-call">join</span>(<span class
 pad  = <span class="st">f"{count:08}"</span>
 ```
 
-Upside All loft strings are implicitly format strings — no f prefix needed. Inline for loops inside {} produce a bracketed list (\[2,4,6\]) without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (\#x, \#o, b) all work — though the sign (+) and zero-pad (0N) flags apply to integer output only, and are dropped for floats.
+Upside All loft strings are implicitly format strings — no f prefix needed. Inline for loops inside {} produce a bracketed list (\[2,4,6\]) without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (\#x, \#o, b) all work on integers and on floats alike: {5.25:+} is +5.25 and {5.25:08} is 00005.25.
 
 Downside Python f-strings accept arbitrary expressions: method calls ({obj.method():.2f}), ternary expressions ({"yes" if ok else "no"}), and join operations inline. Loft restricts what can appear inside {}. Python also supports conversion flags (!r for repr, !s for str, !a for ASCII) and the = debug specifier ({x=} prints x=42); loft has none of these.
 
@@ -894,7 +897,10 @@ fn identity<T>(x: T) - T { x }
 identity(42)        // integer
 identity("hello")  // text
 
-// Algorithms requiring operations on T still need per-type versions:
+// Operations on T need a bound — `<T: Ordered>` compares, `<T: Addable>` adds:
+fn largest<T: Ordered>(a: T, b: T) -> T { if a > b { a } else { b } }
+
+// A per-type version is what you write when no bound fits:
 fn max_int(a: integer, b: integer) - integer {
     if a  b { a } else { b }
 }
@@ -943,9 +949,10 @@ Downside No \*args or \*\*kwargs — variadic dispatch must use a vector paramet
 === Ecosystem — minimal standard library
 
 ```rust
-// import "mylib" loads a .loft file relative to the script.
-// The full standard library ships inside the interpreter binary;
-// there is no package manager or external dependency system.
+// `use mylib;` loads a library — a .loft file beside the script,
+// or a package the manifest declares under [dependencies].
+// The standard library ships inside the interpreter binary, and
+// `loft install` fetches the rest from a signed registry.
 
 // Built-in: text, math, file I/O, collections,
 //           logging, threading, image, lexer/parser

@@ -39,12 +39,12 @@ x = <span class="st">"oops"</span>       <span class="cm"># fine — x is now a 
 <div>
   <p class="lang-label loft-label">Loft</p>
   <pre><code><span class="kw">struct</span> <span class="en">User</span> {
-    email: <span class="ty"><a href="stdlib-types.html">text</a></span>,             <span class="cm">// nullable by default</span>
-    age:   <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">not null</span>,  <span class="cm">// can never be null</span>
+    email: <span class="ty"><a href="stdlib-types.html">text</a></span>?,            <span class="cm">// `?`: may be absent</span>
+    age:   <span class="ty"><a href="stdlib-types.html">integer</a></span>,            <span class="cm">// never null — the default</span>
 }
 u = <span class="en">User</span> { age: <span class="nm">30</span> };
 <span class="kw">if</span> u.email == <span class="kw">null</span> { <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"no email"</span>); }
-u.age = <span class="kw">null</span>;  <span class="cm">// compile error: age is not null</span></code></pre>
+u.age = <span class="kw">null</span>;  <span class="cm">// warns: the slot holds null anyway</span></code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
@@ -63,8 +63,8 @@ u.age = <span class="kw">None</span>  <span class="cm"># allowed at runtime; myp
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Nullability is part of the struct definition — readable at a glance. <code>not null</code> fields are enforced by the compiler and additionally locked at runtime in debug builds, catching accidental null writes early in development. No <code>Optional[T]</code> wrapping needed; the comparison <code>v == null</code> is natural.</p>
-<p class="down"><strong>Downside</strong> The default is nullable, not non-nullable — the safe default is backwards from what static analysis advocates recommend. Python with mypy and <code>Optional[T]</code> annotation gives static guarantees that loft's runtime checks do not. Python's <code>None</code> also participates in truthiness testing (<code>if not email:</code>), pattern matching, and <code>or</code> chaining in ways that loft's null does not support.</p>
+<p class="up"><strong>Upside</strong> Nullability is part of the type and readable at a glance, and the default is the safe one: a field is non-null unless it says <code>?</code>, so absence is something you opt INTO. No <code>Optional[T]</code> wrapping is needed; the comparison <code>v == null</code> is natural, and <code>??</code> supplies a fallback at the point of use.</p>
+<p class="down"><strong>Downside</strong> The default is the safe one — a field is non-null unless its type says <code>?</code> — but nothing forces you to discharge a nullable at the point of use, and writing <code>null</code> into a non-null slot is a warning rather than a refusal. Python with mypy and <code>Optional[T]</code> annotation gives static guarantees that loft's runtime checks do not. Python's <code>None</code> also participates in truthiness testing (<code>if not email:</code>), pattern matching, and <code>or</code> chaining in ways that loft's null does not support.</p>
 </div>
 
 <h2 id="structs">3. Structs vs classes and dicts</h2>
@@ -110,9 +110,9 @@ p.x = <span class="st">"hi"</span> <span class="cm"># allowed at runtime; mypy c
   <p class="lang-label loft-label">Loft</p>
   <pre><code><span class="kw">while</span> !<span class="fn-call">ready</span>() { <span class="fn-call">step</span>(); }  <span class="cm">// works</span>
 
-<span class="kw">while</span> <span class="fn-call">length</span>(queue) > <span class="nm">0</span> {
+<span class="kw">while</span> <span class="fn-call">len</span>(queue) &gt; <span class="nm">0</span> {
     <span class="fn-call">process</span>(queue[<span class="nm">0</span>]);
-    queue#remove;
+    queue.<span class="fn-call">remove</span>(<span class="nm">0</span>);   <span class="cm">// `#remove` is for a loop variable</span>
 }
 
 <span class="cm">// No loop keyword — infinite loop needs a large bound:</span>
@@ -198,7 +198,7 @@ pad  = <span class="st">f"{count:08}"</span></code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> All loft strings are implicitly format strings — no <code>f</code> prefix needed. Inline <code>for</code> loops inside <code>{}</code> produce a bracketed list (<code>[2,4,6]</code>) without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (<code>#x</code>, <code>#o</code>, <code>b</code>) all work — though the sign (<code>+</code>) and zero-pad (<code>0N</code>) flags apply to integer output only, and are dropped for floats.</p>
+<p class="up"><strong>Upside</strong> All loft strings are implicitly format strings — no <code>f</code> prefix needed. Inline <code>for</code> loops inside <code>{}</code> produce a bracketed list (<code>[2,4,6]</code>) without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (<code>#x</code>, <code>#o</code>, <code>b</code>) all work on integers and on floats alike: <code>{5.25:+}</code> is <code>+5.25</code> and <code>{5.25:08}</code> is <code>00005.25</code>.</p>
 <p class="down"><strong>Downside</strong> Python f-strings accept arbitrary expressions: method calls (<code>{obj.method():.2f}</code>), ternary expressions (<code>{"yes" if ok else "no"}</code>), and <code>join</code> operations inline. Loft restricts what can appear inside <code>{}</code>. Python also supports conversion flags (<code>!r</code> for repr, <code>!s</code> for str, <code>!a</code> for ASCII) and the <code>=</code> debug specifier (<code>{x=}</code> prints <code>x=42</code>); loft has none of these.</p>
 </div>
 
@@ -375,7 +375,10 @@ total = <span class="bi">sum</span>(results)
 <span class="fn-call">identity</span>(<span class="nm">42</span>)        <span class="cm">// integer</span>
 <span class="fn-call">identity</span>(<span class="st">"hello"</span>)  <span class="cm">// text</span>
 
-<span class="cm">// Algorithms requiring operations on T still need per-type versions:</span>
+<span class="cm">// Operations on T need a bound — `&lt;T: Ordered&gt;` compares, `&lt;T: Addable&gt;` adds:</span>
+<span class="kw">fn</span> <span class="fn-call">largest</span>&lt;T: <span class="ty">Ordered</span>&gt;(a: T, b: T) -&gt; T { <span class="kw">if</span> a &gt; b { a } <span class="kw">else</span> { b } }
+
+<span class="cm">// A per-type version is what you write when no bound fits:</span>
 <span class="kw">fn</span> <span class="fn-call">max_int</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
     <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
 }</code></pre>
@@ -428,9 +431,10 @@ T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// import "mylib" loads a .loft file relative to the script.</span>
-<span class="cm">// The full standard library ships inside the interpreter binary;</span>
-<span class="cm">// there is no package manager or external dependency system.</span>
+  <pre><code><span class="cm">// `use mylib;` loads a library — a .loft file beside the script,</span>
+<span class="cm">// or a package the manifest declares under [dependencies].</span>
+<span class="cm">// The standard library ships inside the interpreter binary, and</span>
+<span class="cm">// `loft install` fetches the rest from a signed registry.</span>
 
 <span class="cm">// Built-in: text, math, file I/O, collections,</span>
 <span class="cm">//           logging, threading, image, lexer/parser</span></code></pre>

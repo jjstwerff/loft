@@ -37,8 +37,8 @@ let y = 42;     // immutable by default; compiler-enforced</code></pre>
 <div>
   <p class="lang-label loft-label">Loft</p>
   <pre><code><span class="kw">struct</span> <span class="en">Point</span> {
-    label: <span class="ty"><a href="stdlib.html#types">text</a></span>,          <span class="cm">// nullable</span>
-    x: <span class="ty"><a href="stdlib.html#types">integer</a></span> <span class="kw">not null</span>,  <span class="cm">// never null</span>
+    label: <span class="ty"><a href="stdlib.html#types">text</a></span>?,         <span class="cm">// `?`: may be absent</span>
+    x: <span class="ty"><a href="stdlib.html#types">integer</a></span>,           <span class="cm">// never null — the default</span>
 }
 p = <span class="en">Point</span> { x: <span class="nm">1</span> };
 <span class="bi"><a href="stdlib.html#output-and-diagnostics">assert</a></span>(p.label == <span class="kw">null</span>, <span class="st">"absent"</span>);</code></pre>
@@ -55,20 +55,20 @@ assert!(p.label.is_none());</code></pre>
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Natural for database records where fields are often absent. No <code>Some(x)</code>/<code>None</code> wrapping. Conditionals on null are concise: <code>if v == null</code>.</p>
-<p class="down"><strong>Downside</strong> Null is opt-out, not opt-in. A field is nullable unless explicitly marked <code>not null</code>, so forgetting the annotation leaves a potential null silently. In Rust, <code>Option</code> is visible in the type and forces handling at every call site.</p>
+<p class="down"><strong>Downside</strong> The absence is in the type, as in Rust, but nothing forces you to discharge it: <code>label</code> can be read straight and answers <code>null</code>, where Rust's <code>Option</code> makes every call site say what it does about <code>None</code>. What loft gives you instead is <code>??</code> and <code>?</code> at the point of use, plus a warning when a nullable value flows into a slot that cannot hold one. (Older code may carry <code>not null</code> on a field; it is deprecated and has no effect, because a type is non-null by default now.)</p>
 </div>
 
 <h2 id="parameters">3. Parameter mutability — <code>const</code> and <code>&amp;</code> instead of ownership</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code><span class="cm">// &amp;: vector growth (append) is visible to caller</span>
+  <pre><code><span class="cm">// a plain collection parameter is already shared — the append reaches the caller</span>
 <span class="kw">fn</span> <span class="fn-call">push_two</span>(v: &amp;<span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) {
     v += [<span class="nm">1</span>, <span class="nm">2</span>];  <span class="cm">// caller sees the change</span>
 }
 <span class="cm">// const: read-only (locked in debug builds)</span>
 <span class="kw">fn</span> <span class="fn-call">count</span>(v: <span class="kw">const</span> <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt;) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
-    <span class="bi"><a href="stdlib-collections.html">length</a></span>(v)
+    <span class="bi"><a href="stdlib-collections.html">len</a></span>(v)
 }
 <span class="cm">// &amp;: explicit write-back for primitives</span>
 <span class="kw">fn</span> <span class="fn-call">add_to</span>(n: &amp;<span class="ty"><a href="stdlib-types.html">integer</a></span>, delta: <span class="ty"><a href="stdlib-types.html">integer</a></span>) {
@@ -90,7 +90,7 @@ fn add_to(n: &amp;mut i32, delta: i32) {
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> No borrow-checker errors. No lifetime annotations. No ownership transfer to reason about. Struct field mutations through a parameter are always visible to the caller. Use <code>&amp;</code> on a collection parameter to allow vector growth (append) to propagate back. <code>const</code> parameters signal read-only intent, and in debug builds the runtime locks the store for the duration of the call — enough to catch most accidents during development.</p>
+<p class="up"><strong>Upside</strong> No borrow-checker errors. No lifetime annotations. No ownership transfer to reason about. Struct field mutations through a parameter are always visible to the caller. A collection parameter is SHARED with no annotation at all — field writes, element writes, appends, removes and clears all reach the caller. <code>&amp;</code> adds exactly one thing on top of that: whole-value replacement, <code>v = [...]</code>, seen by the caller. <code>const</code> parameters signal read-only intent, and in debug builds the runtime locks the store for the duration of the call — enough to catch most accidents during development.</p>
 <p class="down"><strong>Downside</strong> The compile-time guarantees are much weaker. Rust's borrow checker statically proves no aliased mutations, no dangling references, and no data races — before the program ever runs. Loft's <code>const</code> is a debug-only runtime check. Aliasing is unchecked at compile time, and the engine's Rust runtime is what truly enforces memory safety.</p>
 </div>
 
@@ -219,7 +219,7 @@ loop {           // truly infinite — no bound needed
     <span class="st">"Hello, {self.name}!"</span>
 }
 <span class="kw">fn</span> <span class="fn-call">name_len</span>(self: <span class="kw">const</span> <span class="en">Person</span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
-    <span class="bi"><a href="stdlib-text.html">length</a></span>(self.name)  <span class="cm">// const: read-only access guaranteed</span>
+    <span class="bi"><a href="stdlib-text.html">len</a></span>(self.name)  <span class="cm">// const: read-only access guaranteed</span>
 }
 p.<span class="fn-call">greet</span>()     <span class="cm">// dot syntax</span>
 <span class="fn-call">greet</span>(p)      <span class="cm">// free-function call — identical</span></code></pre>
@@ -315,7 +315,7 @@ fn make_adder(n: i32) -&gt; impl Fn(i32) -&gt; i32 {
 <p class="down"><strong>Downside</strong> You do not choose the capture mode, so a case Rust expresses by picking one has no spelling here. Three limits have no Rust counterpart: a capturing closure cannot be stored in a <em>collection</em> (a struct field holds one fine), a <code>&amp;</code> parameter cannot be captured at all, and a scalar the closure <em>writes</em> to may be captured by only one closure — the cure for the last two is to hold the state in a struct and capture that.</p>
 </div>
 
-<h2 id="generics">12. Generic functions — pass-through only, no trait bounds</h2>
+<h2 id="generics">12. Generic functions — inferred, with structural interface bounds</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
@@ -324,9 +324,12 @@ fn make_adder(n: i32) -&gt; impl Fn(i32) -&gt; i32 {
 <span class="fn-call">identity</span>(<span class="nm">42</span>)        <span class="cm">// integer</span>
 <span class="fn-call">identity</span>(<span class="st">"hello"</span>)  <span class="cm">// text</span>
 
-<span class="cm">// Trait-bounded generics are not supported:</span>
-<span class="cm">// fn max&lt;T: PartialOrd&gt;(a: T, b: T) -&gt; T { ... }  // not valid</span>
-<span class="cm">// Must write a version per type:</span>
+<span class="cm">// Interface bounds work, and are satisfied structurally:</span>
+<span class="kw">fn</span> <span class="fn-call">largest</span>&lt;T: <span class="ty">Ordered</span>&gt;(a: T, b: T) -&gt; T { <span class="kw">if</span> a &gt; b { a } <span class="kw">else</span> { b } }
+<span class="fn-call">largest</span>(<span class="nm">3</span>, <span class="nm">9</span>)        <span class="cm">// 9</span>
+<span class="fn-call">largest</span>(<span class="st">"ada"</span>, <span class="st">"bob"</span>)  <span class="cm">// "bob" — same function</span>
+
+<span class="cm">// A per-type version is still what you write when the bound does not fit:</span>
 <span class="kw">fn</span> <span class="fn-call">max_int</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -> <span class="ty"><a href="stdlib-types.html">integer</a></span> {
     <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b }
 }</code></pre>
@@ -368,7 +371,7 @@ let hex  = format!("{:#x}", n);
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Concise — no <code>format!()</code> call, no separate variable. Full format expressions (arithmetic, slices, <code>for</code> comprehensions) can appear directly inside <code>{}</code>. Specifiers mirror Rust: <code>:width</code>, <code>:.precision</code>, <code>:width.precision</code>, sign (<code>+</code>), radix (<code>#x</code>, <code>#o</code>, <code>b</code>), alignment (<code>&lt;</code>, <code>&gt;</code>, <code>^</code>), and zero-padding (<code>0N</code>) all work. Note that the sign (<code>+</code>) and zero-pad (<code>0N</code>) flags apply to integer output only — they are dropped for floats.</p>
+<p class="up"><strong>Upside</strong> Concise — no <code>format!()</code> call, no separate variable. Full format expressions (arithmetic, slices, <code>for</code> comprehensions) can appear directly inside <code>{}</code>. Specifiers mirror Rust: <code>:width</code>, <code>:.precision</code>, <code>:width.precision</code>, sign (<code>+</code>), radix (<code>#x</code>, <code>#o</code>, <code>b</code>), alignment (<code>&lt;</code>, <code>&gt;</code>, <code>^</code>), and zero-padding (<code>0N</code>) all work. The sign (<code>+</code>) and zero-pad (<code>0N</code>) flags apply to floats too: <code>{5.25:+}</code> is <code>+5.25</code> and <code>{5.25:08}</code> is <code>00005.25</code>.</p>
 <p class="down"><strong>Downside</strong> Unknown radix letters in specifiers are compile-time errors (e.g. <code>:5z</code> or <code>:5B</code> are both rejected). Radix letters are case-sensitive: valid ones are <code>b</code>, <code>o</code>, <code>x</code>/<code>X</code>, <code>e</code>, and <code>j</code>/<code>json</code> — uppercase <code>B</code> or <code>O</code> produce an error. Applying a numeric specifier to an incompatible type (such as <code>:x</code> on a <code>text</code> value, or zero-padding on a <code>boolean</code>) is a compile-time error.</p>
 </div>
 
@@ -401,7 +404,7 @@ let sum: i32 = scores.par_iter()
 </div>
 <div class="verdict">
 <p class="up"><strong>Upside</strong> Built into the language — no external crate, no <code>Cargo.toml</code> edit. The compiler validates the worker function signature at the call site. Results are delivered in the original vector order. The thread count is set per call, making it easy to tune for the hardware at hand.</p>
-<p class="down"><strong>Downside</strong> Workers can return primitives (<code>integer</code>, <code>long</code>, <code>float</code>, <code>boolean</code>), <code>text</code>, and inline enums — but not struct references. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use <code>map()</code> / <code>filter()</code> / <code>reduce()</code> sequentially — each stage allocates a new intermediate vector.</p>
+<p class="down"><strong>Downside</strong> Workers can return primitives (<code>integer</code>, <code>float</code>, <code>single</code>, <code>boolean</code>, <code>character</code>), <code>text</code>, and inline enums — but not struct references. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use <code>map()</code> / <code>filter()</code> / <code>reduce()</code> sequentially — each stage allocates a new intermediate vector.</p>
 </div>
 
 </article>

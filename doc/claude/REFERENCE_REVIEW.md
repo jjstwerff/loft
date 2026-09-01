@@ -594,6 +594,52 @@ a source is present — so every other page hands it to you too. What is actuall
 the CONTENT: functions chosen to be worth calling. The distinction was real and the sentence
 named the wrong half of it.
 
+⚠ **The comparison pages have no cells at all, and it shows.** `00-vs-rust.html` is static
+HTML: its fourteen loft blocks execute nowhere, and six of its statements were wrong, every
+one of them in the direction that flatters Rust. It told a Rust reader that trait-bounded
+generics "are not supported" and to write a version per type (`<T: Ordered>` and
+`<T: Addable>` both compile, and the section's OWN downside paragraph discusses interface
+bounds as existing — the heading and the prose beneath it disagreed); that a field is
+nullable unless marked `not null` (the compiler now reports `not null` as deprecated and
+inert — a type is non-null by default, and the page's own code asserted `p.label == null`
+on a field that is not); that `&` is what makes an append reach the caller (a plain
+collection parameter is already shared); and it called the length builtin `length`, twice,
+which is not a function. **A page with no runnable cell accumulates exactly the defects a
+chapter's cells would have caught, and it is read by the person least able to check it.**
+
+⚠ **A pass that CHANGES behaviour owes the comparison pages a grep the same day — this is
+the measurement of what happens when it does not.** The Formatting review (6686e0d9) made
+zero-padding reach floats and added `{3.125:08.2}` → `00003.12` to its own chapter. Both
+comparison pages still said the flag is "dropped for floats", four chapters later, and the
+vs-Python page said it in Python's own vocabulary. The instruction was already written down
+here; what it lacked was a guard, and
+`tests/scripts/the-comparison-pages-draw-the-line-where-it-is.loft` is now it.
+
+⚠ **Read why a control is RED before believing its verdict.** `make falsify` reported that
+guard as falsified on all four rows — a clean result, and wrong: the control had failed with
+`cannot load default library`, because the harness runs a guard from the checkout it is in
+and an absolute path finds no `default/`. Re-run inside the control tree, exactly ONE cell
+of six fails, which is the honest answer and a far more useful one: five cells are LOCKS on
+a language that never moved, and the sixth dates the change to this branch.
+
+⚠ **The two comparison pages carry the SAME defects, so review them together.** Everything
+found on `00-vs-rust.html` was on `00-vs-python.html` too — the inverted null model, the
+`length` builtin that does not exist, a code block telling the reader that operations on `T`
+need a per-type version while its own downside paragraph names the interface bounds. Only
+the framing differed. Two more were the Python page's own: it drained a queue with
+`queue#remove` inside a `while` loop, where `#remove` is valid on a loop ITERATION variable
+only (so the block does not compile), and it told a Python reader — as loft's defining
+limitation against Python's ecosystem — that *"there is no package manager or external
+dependency system"*, while `loft install` resolves `[dependencies]` from a signed registry
+of 49 packages and `loft new` / `publish` / `yank` are subcommands. **A claim about what a
+language does NOT have is the one to check hardest on a page whose job is to say so.**
+
+⚠ **A promise of a REFUSAL is worse than a promise of a value.** The Python page's null
+block ended `u.age = null;  // compile error: age is not null`. It is a warning; the write
+lands, and `u.age` then reads `null` out of a field typed `integer`. A reader who was
+promised a refusal writes no check at all, so this is the direction that costs — the same
+shape as chapter 23's five stated negatives the language does not have.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -667,6 +713,8 @@ whose entry list changed has.
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
 | `tests/docs/37-projects.loft` | 2026-09-02 | `7488943a` |
 | `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `57853cbc` |
+| `doc/00-vs-rust.html` | 2026-09-02 | `eb77db2f` |
+| `doc/00-vs-python.html` | 2026-09-02 | `eb77db2f` |
 
 ## See also
 
