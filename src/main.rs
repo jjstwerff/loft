@@ -11749,7 +11749,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
         // came to report the same fault two different ways (loft#1056).
         eprint!("{}", err.render());
     }
-    if state.database.had_fatal {
+    if state.database.run_failed() {
         std::process::exit(1);
     }
 }

@@ -42,6 +42,65 @@ thread_local! {
     static FORMAT_FAULT_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+// ── the `--dev-soft-halt` overflow report (loft#1265) ────────────────────────────────────
+//
+// `(E-Report)` promises the flag surfaces the recoverable faults uniformly -- div0, overflow,
+// OOB -- and overflow was the one it missed.  It is also the one with no other signal at all:
+// div0 writes a Warn log at an undefended site and an overrun has its own, while overflow is
+// silent everywhere by design, the null being the signal.  So the flag was the whole of its
+// observability, and it was not answering.
+//
+// Reporting from here rather than from the ops' callers is what makes it free.  Overflow
+// becomes the sentinel in exactly one place -- `checked_long!`'s `None` arm -- so the test
+// that detects it is the branch that was already building `i64::MIN`.  The alternative, a
+// `r == i64::MIN && v1 != i64::MIN && v2 != i64::MIN` test at the call sites, would put a new
+// branch on the hottest ops in the language to learn what this arm already knows.
+//
+// A free function over process-level state, not a method on `Stores`: the native emitter
+// inlines an op's `#rust` body into the surrounding expression, and a body writing through
+// `stores` lands inside another `stores.` call's argument list (E0502) -- the same constraint
+// that put `note_format_fault` above in a thread-local.
+static OVERFLOW_SURFACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `--dev-soft-halt` / `LOFT_DEV_SOFT_HALT=1`, read once per process.
+fn dev_soft_halt() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("LOFT_DEV_SOFT_HALT").is_ok_and(|v| v == "1" || v == "true")
+    })
+}
+
+/// Whether a `--dev-soft-halt` run has surfaced an integer overflow, so the run can end
+/// non-zero the way its div0 and out-of-bounds peers already do.  A triage flag whose only
+/// fault exits 0 reports the run as clean.
+#[must_use]
+pub fn overflow_surfaced() -> bool {
+    OVERFLOW_SURFACED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Surface one integer overflow under `--dev-soft-halt`.  Silent otherwise: `(E-Report)` keeps
+/// overflow logless at every site, and this flag is a debugging tool rather than a mode, so it
+/// prints instead of writing a log record.
+///
+/// `#[cold]` + `#[inline(never)]`: the caller is the arm that already had to exist, and keeping
+/// this out of line is what stops it growing the ops' inlined bodies in generated code.
+///
+/// A `None` from `checked_div` / `checked_rem` is a division by zero as well as an overflow,
+/// and a zero divisor is reported by the div0 path that owns it -- so this declines that case
+/// rather than naming the same fault twice under two different words.
+#[cold]
+#[inline(never)]
+pub fn note_integer_overflow(op: &str, v1: i64, v2: i64) {
+    if !dev_soft_halt() {
+        return;
+    }
+    if (op == "/" || op == "%") && v2 == 0 {
+        return;
+    }
+    OVERFLOW_SURFACED.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::loft_eprintln!("soft-halt: integer overflow: {v1} {op} {v2}");
+}
+
 /// `LOFT_FORMAT_BARE_NULL=1` drops the `(reason)` suffix for deployments that show format
 /// strings to end users. Read once per process so the render path stays branch-light.
 fn format_bare_null() -> bool {
@@ -116,12 +175,32 @@ pub fn take_format_fault() -> Option<&'static str> {
 /// default — the null itself is the visible signal; trace via the opt-in debug
 /// log.  `checked_long_nullable!` is now behaviourally identical; both stay only
 /// until the `??`-context op split (`OpAddIntNullable` / etc.) is retired.
-/// The `$op` / `$v1` / `$v2` metavariables are still matched so every call site
-/// stays unchanged.
+/// The `$op` / `$v1` / `$v2` metavariables name the operands for
+/// [`note_integer_overflow`], the `--dev-soft-halt` report.
+///
+/// That report rides the `None` arm `checked_*` already produces, so an
+/// operation that does NOT overflow pays nothing for it: there is no added
+/// test, only a branch that existed to build the sentinel.  Both backends
+/// call these same functions -- `#rust"ops::op_add_int(@v1, @v2)"` -- so one
+/// site covers the interpreter and `--native` alike.
 macro_rules! checked_long {
-    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{ $checked.unwrap_or(i64::MIN) }};
+    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
+        match $checked {
+            Some(r) => r,
+            None => {
+                $crate::ops::note_integer_overflow($op, $v1, $v2);
+                i64::MIN
+            }
+        }
+    }};
 }
 
+/// The GUARDED peer, and silent on purpose.  `(E-Report)` gives a defended site
+/// -- the operand of `??`, or one a null-check follows -- the `*Nullable` op
+/// precisely so it reports nothing, the guard having said how the null is
+/// handled.  Its divide-by-zero half is already silent here; overflow is
+/// silent for the same reason, so `--dev-soft-halt` surfaces exactly the
+/// undefended faults on both halves rather than one rule per fault kind.
 macro_rules! checked_long_nullable {
     ($checked:expr) => {{ $checked.unwrap_or(i64::MIN) }};
 }

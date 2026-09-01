@@ -1609,6 +1609,20 @@ impl Stores {
         self.had_fatal = true;
     }
 
+    /// Did this run end on a fault?  The exit-code question, asked in one place because
+    /// three exits ask it: the interpreter's `main`, and the two generated `fn main()`
+    /// templates the native emitter writes.
+    ///
+    /// `had_fatal` alone does not answer it. An integer overflow surfaced by
+    /// `--dev-soft-halt` is reported from `ops`, which has no `Stores` to mark (see
+    /// `ops::note_integer_overflow`), so a run whose only fault was an overflow would
+    /// print its `soft-halt:` line and still exit 0 — clean, to anything reading the
+    /// status rather than the output.
+    #[must_use]
+    pub fn run_failed(&self) -> bool {
+        self.had_fatal || crate::ops::overflow_surfaced()
+    }
+
     /// @P356 — Stores-side counterpart of `State::raise_recoverable`.  Logs a
     /// `Warn` and returns WITHOUT halting, so the native backend continues
     /// with the null sentinel — identical to the interpreter.

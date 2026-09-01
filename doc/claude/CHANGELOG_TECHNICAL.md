@@ -34,6 +34,23 @@ scores over `["a".."c"]` on a descending index and read 3, which is `{a, b}` —
 answer, and a number indistinguishable from `{c}`. It asserts which records, in which order, now,
 beside its `sorted` twin.
 
+### `--dev-soft-halt` surfaces integer overflow (2026-09-01)
+
+`(E-Report)` promises the flag surfaces the recoverable faults uniformly — div0, overflow, OOB —
+and overflow was the one it missed. It is also the one with no other channel: its peers write a
+log record and overflow deliberately does not, the null being the signal, so this flag was the
+whole of its observability (loft#1265, deviation D-op-9, now closed).
+
+Reported from `checked_long!`'s `None` arm — the single place an overflow becomes the sentinel,
+and a branch that already existed to build it, so no operation that does not overflow gained a
+test. Both backends call the same `ops::` functions, so one site serves the interpreter and
+`--native` alike. The guarded peer `checked_long_nullable!` stays silent, which is the answer
+`(E-Report)` already gives that site's divide-by-zero half.
+
+The run now also ends non-zero, the way its peers do; `Stores::run_failed` is the one home for
+that question, asked by the interpreter's `main` and by both generated `fn main()` templates.
+
+
 ### A nullable element meets @PLAN52's bracket rule, and the push branch it kept alive is dead (2026-08-31)
 
 @PLAN52's rule is a blanket requirement on the SPELLING — `vector += elem` is refused whatever

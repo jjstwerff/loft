@@ -412,6 +412,15 @@ D-op-7 and D-op-8, both loft#1246 and both CLOSED 2026-08-31, are in the history
 (E-Uncomp-NN) default was the range's lower bound rather than the type's, and (E-Uncomp)
 did not reach a nullable narrow ALIAS at all.
 
+**D-op-9** (loft#1265) is CLOSED 2026-09-01: `--dev-soft-halt` surfaced div0 and OOB but
+not overflow, though (E-Report) names all three in one breath. Overflow was the one with
+no other channel — the other two write a log record and it deliberately does not — so the
+flag was the whole of its observability. It is reported from `checked_long!`'s `None` arm,
+the single place an overflow becomes the sentinel and a branch that already existed, so
+nothing that does not overflow gained a test; and its guarded peer `checked_long_nullable!`
+stays silent, which is the same answer (E-Report) already gives that site's div0 half.
+Guard `tests/dev_soft_halt_surfaces_overflow.rs`.
+
 The full register — these entries in full, plus every closed one with its dates and
 issue numbers — is the companion [operational-history.md](operational-history.md).
 
