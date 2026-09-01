@@ -153,10 +153,28 @@ every read would then pay for the check.
                   index   → key order (its tree side)
                   spatial → Morton / Z-order
                   trie    → key order (lexicographic over the text key)
+
+  (Col-Order-Sign)  a `-` on a key field is applied by the COMPARATOR and by nothing else, so
+                    exactly once.  The stored form (a red-black tree, a sorted vector) is
+                    therefore already in the declared order, and every reader walks it FORWARD:
+                    no consumer of an ordered collection re-reads `keys[i].type_nr` to decide a
+                    direction, and the iterator's reverse bit carries one fact only — did the
+                    caller write `rev(...)`.  It follows that a range names its bounds in the
+                    COLLECTION's key order (`ix[from..till]` starts at `from` and walks toward
+                    `till` whichever way the keys are declared), and that `sorted` and `index`
+                    answer identically for the same declaration.
 ```
 *Anchor:* concurrency.md `C-Order` (hash); STDLIB.md/DATABASE.md (spatial Morton). **This is the
 divergence-prone rule** (interp store-walk vs native emitted loop) — the whole reason the area needs
 pinning. `C-Order` already states the hash edge; `Col-Order` generalises it to every kind.
+
+`Col-Order-Sign` is the half that was violated rather than merely unpinned. `index` applied the
+sign a second time in two places — the iterator bit (`fill_iter`) and the range-cursor bound swap
+(`tree::range_cursors`) — and reversing a total order twice is the identity, so every query on a
+descending `index` answered the exact reverse of its declaration. One key hid it (`[-nr]` reversed
+reads as `[nr]`); two keys did not, because `[-nr, key]` reversed is `[nr, -key]`. `sorted` never
+carried either site, which is why it stayed correct and is the oracle a guard pairs against
+(loft#1267).
 
 ### 1.5 Value slices (vector / text) — `Slice-Value`
 

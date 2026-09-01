@@ -9,6 +9,31 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A descending key orders an `index` twice, so every query answers the reverse (2026-09-01)
+
+`keys::compare` reverses per descending key, so the red-black tree `tree::put` builds is already
+in the declared order and a forward walk of it IS the declared order. Two sites applied the sign
+a SECOND time: `fill_iter` XOR-ed the iterator's reverse bit when `keys[0].type_nr < 0`, and
+`tree::range_cursors` swapped which user bound sat at which end of tree order. Reversing a total
+order twice is the identity, so every query on a descending `index` — plain `for`, `rev(...)`,
+and every range form — answered the exact reverse of its declaration, on both backends, with no
+diagnostic (loft#1267).
+
+One key hid what it was: `[-nr]` reversed reads as plain `[nr]`, so it looked like the `-` was
+being dropped. Two keys showed it, because `[-nr, key]` reversed is `[nr, -key]` — the SECOND
+field came back descending though it is declared ascending.
+
+`sorted` was correct throughout and is the fix's oracle: `vector::ordered_range_cursors` reads no
+sign at all and leaves direction to its comparator. That is now the written rule
+(`formal/collections.md` `Col-Order-Sign`) — a `-` is applied by the comparator and by nothing
+else, from which it follows that a range names its bounds in the COLLECTION's key order and that
+`sorted` and `index` answer identically for the same declaration.
+
+The P98 guard had locked the compensated behaviour, and could not have caught it: it summed the
+scores over `["a".."c"]` on a descending index and read 3, which is `{a, b}` — the ascending
+answer, and a number indistinguishable from `{c}`. It asserts which records, in which order, now,
+beside its `sorted` twin.
+
 ### A nullable element meets @PLAN52's bracket rule, and the push branch it kept alive is dead (2026-08-31)
 
 @PLAN52's rule is a blanket requirement on the SPELLING — `vector += elem` is refused whatever

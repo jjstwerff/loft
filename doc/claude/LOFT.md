@@ -242,9 +242,15 @@ descending instead of ascending.  Reading the query site alone never
 reveals the direction: the `-` lives in the struct declaration, possibly
 hundreds of lines away.  When reviewing a query, cross-check the index
 declaration before reasoning about what "starts at X" means.
+`index` and `sorted` answer identically for the same declaration — the `-` is applied
+by the key comparator and by nothing else, so a range names its bounds in the
+COLLECTION's key order too: on `[-key]` the walk runs high-to-low, which makes
+`c["c".."a"]` the non-empty half and `c["a".."c"]` the inverted, empty one.
 Regression guards in `tests/issues.rs` (`inc12_sorted_ascending_iterates_forward`,
 `inc12_sorted_descending_iterates_backward`) lock the two directions on
-otherwise-identical structs.
+otherwise-identical `sorted` structs, and
+`tests/scripts/1267-a-descending-key-orders-the-index-once.loft` does the same for
+`index`, pairing every row against its `sorted` twin.
 
 ### Enum types
 

@@ -2801,14 +2801,13 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         if inclusive {
             on += 128;
         }
-        // for index collections with a descending primary key, the tree
-        // in-order is reversed from user-logical order.  XOR the reverse bit
-        // so that step() uses previous() instead of next(), matching user order.
-        // When the user also applies rev(), the XOR cancels out.
-        let desc_primary = on & 63 == 1
-            && !self.database.types[known as usize].keys.is_empty()
-            && self.database.types[known as usize].keys[0].type_nr < 0;
-        if self.reverse_iterator ^ desc_primary {
+        // Key DIRECTION is the comparator's business and nothing else's: `keys::compare`
+        // reverses per descending key, so the tree `tree::put` builds is already in the
+        // declared order and a forward walk of it is the declared order.  The reverse bit
+        // therefore carries ONE fact — did the user write `rev(...)` — the same way it
+        // does for `sorted`, whose `ordered_range_cursors` reads no sign at all
+        // (@FR-Col-Order-Sign, loft#1267).
+        if self.reverse_iterator {
             on += 64;
         }
         if self.reverse_iterator {
