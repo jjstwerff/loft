@@ -5403,11 +5403,19 @@ use a separate collection or add after the loop"
             // Unconditional, exactly as the struct-field path is: whether the member is
             // DECLARED nullable is a separate question that `(N-Store)` already answers with
             // its own warning, and storing the sentinel is right either way.
-            if let Some(member) = member_for_null.as_ref()
-                && matches!(rhs_tp, Type::Null)
-                && !matches!(member.base(), Type::Null)
-            {
-                self.convert(&mut rhs, &Type::Null, member);
+            if let Some(member) = member_for_null.as_ref() {
+                // loft#1284 — `(N-Store)` covers the direct store, the field, the
+                // call-argument site and the branch join, and a TUPLE ELEMENT reached none of
+                // them: this branch returns before the general assign path that asks.  So
+                // `s.i = null` on a non-null field warned while `c.1 = null` on a non-null
+                // element said nothing, for the same store into the same kind of slot.
+                self.n_store_violation(&rhs_tp, member, "the tuple element", None);
+                // loft#1282 — and the null itself becomes the ELEMENT TYPE's sentinel.  The
+                // warning above is about whether the slot SHOULD hold null; this is what
+                // makes it hold null rather than whatever the eval stack had.
+                if matches!(rhs_tp, Type::Null) && !matches!(member.base(), Type::Null) {
+                    self.convert(&mut rhs, &Type::Null, member);
+                }
             }
             // loft#1278 — a by-value tuple PARAMETER carrying text is promoted to an owned
             // shadow local the first time an element is written, which is the same move a
