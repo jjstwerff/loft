@@ -79,7 +79,18 @@ jobs:
                   "version": latest,
                   "repo": repo,
                   "tag": tag,
-                  "sub": vers[latest].get("subpath", name),
+                  # A package that declares no `subpath` lives at its repo ROOT, not in a
+                  # directory named after itself.  Defaulting to `name` produced
+                  # `working-directory: lib/loft` for the one package where the repo IS the
+                  # package, and the leg died before running a single test with "No such file
+                  # or directory" — which the roll-up then reported as *"a PUBLISHED library
+                  # FAILS against this loft — a language change is retro-breaking a shipped
+                  # lib"*, naming a language regression that had not happened.
+                  #
+                  # Measured against the live index: 42 of the 43 legs declare `subpath`
+                  # explicitly and are unaffected either way; `loft` was the only leg taking
+                  # this default, so the old one had no correct users at all.
+                  "sub": vers[latest].get("subpath", "."),
               })
           print("matrix=" + json.dumps({"include": legs}))
           print("count=" + str(len(legs)))

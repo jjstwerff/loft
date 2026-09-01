@@ -239,7 +239,14 @@ impl DiagEntry {
     /// Rebuild an entry from [`encode_for_cache`].  `None` on any malformed line, which the
     /// caller treats as a cache MISS rather than as an absent diagnostic — a bundle that
     /// cannot reproduce what the parse said must not be served.
+    ///
+    /// `#[inline(never)]` is load-bearing: this frame is the anchor for the
+    /// `leak:decode_from_cache` line in `.github/lsan_suppressions.txt`, which covers the
+    /// bounded `intern` Box::leak below.  Inlined, the frame the leak reports would be a
+    /// caller's, and suppressing THAT name would blind the leak gate to everything else
+    /// allocated there.  Keep the two in step.
     #[must_use]
+    #[inline(never)]
     pub fn decode_from_cache(line: &str) -> Option<Self> {
         fn unesc(s: &str) -> String {
             let mut out = String::with_capacity(s.len());
