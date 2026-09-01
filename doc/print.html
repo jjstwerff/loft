@@ -2785,7 +2785,7 @@ Printable  fn to_text(self: T) -&gt; text
 <h1>Match</h1>
 <p>The <code>match</code> expression lets you compare a value against a series of patterns and run different code for each case.  It is similar to <code>switch</code> in other languages but more powerful: patterns can destructure structs, bind fields to local variables, and include <code>if</code> guards. Match is an expression — it returns a value, so you can assign the result or use it directly inside a larger expression.</p>
 <h2 id="simple-enum-matching">Simple enum matching</h2>
-<p>The most common use: branch on an enum variant.  Every variant must be covered or a <code>_</code> wildcard must appear — the compiler checks exhaustiveness.</p>
+<p>The most common use: branch on an enum variant.  Every variant must be covered or a <code>_</code> wildcard must appear — for an ENUM the compiler checks exhaustiveness, because it knows the whole set of variants.</p>
 <pre><code><span class="kw">enum</span> <span class="en">Direction</span> { <span class="en">North</span>, <span class="en">South</span>, <span class="en">East</span>, <span class="en">West</span> }</code></pre>
 <p>A struct-enum: its variants carry named fields, which a match arm can destructure.</p>
 <pre><code><span class="kw">enum</span> <span class="en">Shape</span> {
@@ -2798,6 +2798,15 @@ Printable  fn to_text(self: T) -&gt; text
     <span class="en">South</span> =&gt; <span class="st">"south"</span>,
     <span class="en">East</span>  =&gt; <span class="st">"east"</span>,
     <span class="en">West</span>  =&gt; <span class="st">"west"</span>,
+  }
+}</code></pre>
+<p>A guard reading the field its own pattern bound.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">size_of</span>(s: <span class="en">Shape</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  match s {
+    <span class="en">Circle</span> { radius } <span class="kw">if</span> radius &gt; <span class="nm">10</span> =&gt; <span class="st">"big circle"</span>,
+    <span class="en">Circle</span> { radius } =&gt; <span class="st">"small circle"</span>,
+    <span class="en">Rect</span> { w, h } <span class="kw">if</span> w == h =&gt; <span class="st">"square"</span>,
+    <span class="en">Rect</span> { w, h } =&gt; <span class="st">"rect"</span>,
   }
 }</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
@@ -2819,7 +2828,7 @@ Printable  fn to_text(self: T) -&gt; text
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(shape_area == <span class="nm">12</span>, <span class="st">"struct-enum destructure: {shape_area}"</span>);</code></pre>
 <h2 id="guards">Guards</h2>
-<p>Add <code>if condition</code> after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.</p>
+<p>Add <code>if condition</code> after a pattern to restrict when the arm matches. A guard can reject, so a guarded arm never counts towards covering an enum: a match whose arms name every variant but guard them all is still refused.</p>
 <pre><code>  v = <span class="nm">42</span>;
   label = match v {
     <span class="nm">0</span>      =&gt; <span class="st">"zero"</span>,
@@ -2828,8 +2837,14 @@ Printable  fn to_text(self: T) -&gt; text
     _      =&gt; <span class="st">"normal"</span>,
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(label == <span class="st">"normal"</span>, <span class="st">"guard: {label}"</span>);</code></pre>
+<p>A guard can also read what the PATTERN bound, which is where guards earn their keep — the field is in scope inside the condition.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Circle</span> { radius: <span class="nm">20</span> }) == <span class="st">"big circle"</span>, <span class="st">"guard on a binding"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Circle</span> { radius: <span class="nm">2</span> }) == <span class="st">"small circle"</span>, <span class="st">"guard on a binding, false"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Rect</span> { w: <span class="nm">3</span>, h: <span class="nm">3</span> }) == <span class="st">"square"</span>, <span class="st">"guard comparing two bindings"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">size_of</span>(<span class="en">Rect</span> { w: <span class="nm">3</span>, h: <span class="nm">4</span> }) == <span class="st">"rect"</span>, <span class="st">"guard comparing two bindings, false"</span>);</code></pre>
 <h2 id="wildcard">Wildcard <code>_</code></h2>
-<p>The underscore <code>_</code> matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.</p>
+<p>The underscore <code>_</code> matches anything, and it must be the LAST arm: it matches everything, so an arm written after it could never be selected, and the compiler says so.</p>
+<p>Whether you NEED a <code>_</code> depends on the subject.  For an enum the compiler knows every variant, so it requires them all to be covered or a <code>_</code> to be present, and refuses the match otherwise — naming the variants you left out. For an integer, character or text subject there is no finite set to check, so no <code>_</code> is required and none is missed: a value that matches no arm makes the match answer null.  That is the case to watch, because nothing warns you — see "When nothing matches" below.</p>
 <pre><code>  x = <span class="nm">7</span>;
   kind = match x {
     <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
@@ -2880,6 +2895,24 @@ Printable  fn to_text(self: T) -&gt; text
     <span class="en">East</span> | <span class="en">West</span>   =&gt; <span class="st">"horizontal"</span>,
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(axis == <span class="st">"vertical"</span>, <span class="st">"multi-pattern: {axis}"</span>);</code></pre>
+<h2 id="tuple-patterns">Tuple patterns</h2>
+<p>A tuple subject matches element by element.  Write <code>_</code> for an element you do not care about.</p>
+<pre><code>  point = (<span class="nm">2</span>, <span class="st">"b"</span>);
+  where = match point {
+    (<span class="nm">0</span>, _)   =&gt; <span class="st">"origin row"</span>,
+    (<span class="nm">2</span>, <span class="st">"a"</span>) =&gt; <span class="st">"two-a"</span>,
+    (<span class="nm">2</span>, <span class="st">"b"</span>) =&gt; <span class="st">"two-b"</span>,
+    _        =&gt; <span class="st">"elsewhere"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(where == <span class="st">"two-b"</span>, <span class="st">"tuple pattern: {where}"</span>);</code></pre>
+<h2 id="when-nothing-matches">When nothing matches</h2>
+<p>This match names no <code>_</code>, and 7 is none of its arms.  On an enum that would not compile; on a scalar there is no finite set to check, so the match answers null and the null travels on.  Give the result a fallback with <code>??</code>, or add a <code>_</code> arm — the compiler will not remind you.</p>
+<pre><code>  unmatched = match <span class="nm">7</span> {
+    <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
+    <span class="nm">2</span> =&gt; <span class="st">"two"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(unmatched == <span class="kw">null</span>, <span class="st">"a scalar match that selects no arm answers null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((unmatched ?? <span class="st">"none"</span>) == <span class="st">"none"</span>, <span class="st">"so give it a fallback"</span>);</code></pre>
 <h2 id="nested-match">Nested match</h2>
 <p>Match can appear inside other expressions, including other match arms.</p>
 <pre><code>  n = <span class="nm">15</span>;

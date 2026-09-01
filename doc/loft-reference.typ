@@ -6034,7 +6034,7 @@ The `match` expression lets you compare a value against a series of patterns and
 
 === Simple enum matching
 
-The most common use: branch on an enum variant.  Every variant must be covered or a `\_` wildcard must appear — the compiler checks exhaustiveness.
+The most common use: branch on an enum variant.  Every variant must be covered or a `\_` wildcard must appear — for an ENUM the compiler checks exhaustiveness, because it knows the whole set of variants.
 
 ```rust
 enum Direction { North, South, East, West }
@@ -6056,6 +6056,19 @@ fn direction_name(d: Direction) -> text {
     South => "south",
     East  => "east",
     West  => "west",
+  }
+}
+```
+
+A guard reading the field its own pattern bound.
+
+```rust
+fn size_of(s: Shape) -> text {
+  match s {
+    Circle { radius } if radius > 10 => "big circle",
+    Circle { radius } => "small circle",
+    Rect { w, h } if w == h => "square",
+    Rect { w, h } => "rect",
   }
 }
 ```
@@ -6100,7 +6113,7 @@ The variable names must match the field names exactly.
 
 === Guards
 
-Add `if condition` after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.
+Add `if condition` after a pattern to restrict when the arm matches. A guard can reject, so a guarded arm never counts towards covering an enum: a match whose arms name every variant but guard them all is still refused.
 
 ```rust
   v = 42;
@@ -6113,9 +6126,20 @@ Add `if condition` after a pattern to restrict when the arm matches. The guard c
   assert(label == "normal", "guard: {label}");
 ```
 
+A guard can also read what the PATTERN bound, which is where guards earn their keep — the field is in scope inside the condition.
+
+```rust
+  assert(size_of(Circle { radius: 20 }) == "big circle", "guard on a binding");
+  assert(size_of(Circle { radius: 2 }) == "small circle", "guard on a binding, false");
+  assert(size_of(Rect { w: 3, h: 3 }) == "square", "guard comparing two bindings");
+  assert(size_of(Rect { w: 3, h: 4 }) == "rect", "guard comparing two bindings, false");
+```
+
 === Wildcard `\_`
 
-The underscore `\_` matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.
+The underscore `\_` matches anything, and it must be the LAST arm: it matches everything, so an arm written after it could never be selected, and the compiler says so.
+
+Whether you NEED a `\_` depends on the subject.  For an enum the compiler knows every variant, so it requires them all to be covered or a `\_` to be present, and refuses the match otherwise — naming the variants you left out. For an integer, character or text subject there is no finite set to check, so no `\_` is required and none is missed: a value that matches no arm makes the match answer null.  That is the case to watch, because nothing warns you — see "When nothing matches" below.
 
 ```rust
   x = 7;
@@ -6193,6 +6217,34 @@ Combine patterns with `|` to share the same arm body.
     East | West   => "horizontal",
   };
   assert(axis == "vertical", "multi-pattern: {axis}");
+```
+
+=== Tuple patterns
+
+A tuple subject matches element by element.  Write `\_` for an element you do not care about.
+
+```rust
+  point = (2, "b");
+  where = match point {
+    (0, _)   => "origin row",
+    (2, "a") => "two-a",
+    (2, "b") => "two-b",
+    _        => "elsewhere",
+  };
+  assert(where == "two-b", "tuple pattern: {where}");
+```
+
+=== When nothing matches
+
+This match names no `\_`, and 7 is none of its arms.  On an enum that would not compile; on a scalar there is no finite set to check, so the match answers null and the null travels on.  Give the result a fallback with `??`, or add a `\_` arm — the compiler will not remind you.
+
+```rust
+  unmatched = match 7 {
+    1 => "one",
+    2 => "two",
+  };
+  assert(unmatched == null, "a scalar match that selects no arm answers null");
+  assert((unmatched ?? "none") == "none", "so give it a fallback");
 ```
 
 === Nested match

@@ -18477,3 +18477,48 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+// ── An arm after a total `_` names the rule it breaks ────────────────────
+//
+// A total `_` matches everything, so an arm written after it can never be selected. Both match
+// paths — the enum one in `parse_match` and the scalar one in `parse_scalar_match` — used to
+// `break` out of the arm loop at that point and let the next arm meet the closing-brace
+// expectation, which reported `Expect token }`: the right caret with the wrong reason, and on
+// the scalar path it cascaded into four more errors about the rest of the line, none of which
+// mentioned the wildcard. The Match chapter states this rule as "put it last", so the compiler
+// is what a reader meets when they get it wrong.
+#[test]
+fn an_arm_after_a_total_wildcard_says_so_on_the_scalar_path() {
+    code!(
+        "fn test() { r = match 2 { 1 => \"one\", _ => \"other\", 2 => \"two\" }; print(\"{r}\"); }"
+    )
+    .error(
+        "a `_` arm matches everything, so this arm can never be selected — move `_` to the end \
+at an_arm_after_a_total_wildcard_says_so_on_the_scalar_path:1:54",
+    );
+}
+
+#[test]
+fn an_arm_after_a_total_wildcard_says_so_on_the_enum_path() {
+    code!(
+        "enum D { North, South, East }
+fn test() { r = match D.South { North => \"n\", _ => \"other\", South => \"s\" }; print(\"{r}\"); }"
+    )
+    .error(
+        "a `_` arm matches everything, so this arm can never be selected — move `_` to the end \
+at an_arm_after_a_total_wildcard_says_so_on_the_enum_path:2:66",
+    );
+}
+
+/// The carve-out that keeps the check above from being wrong: a GUARDED `_ if cond` is NOT
+/// total — the guard can reject — so arms are expected to follow it and must stay legal. This
+/// is the same distinction `(M-Total)` draws for exhaustiveness, asked at the parse site.
+#[test]
+fn a_guarded_wildcard_still_admits_the_arms_after_it() {
+    code!(
+        "fn test() {
+  r = match 7 { _ if 7 < 0 => \"neg\", _ if 7 > 100 => \"big\", 7 => \"seven\", _ => \"other\" };
+  assert(r == \"seven\", \"a guarded _ does not close the arm list: {r}\");
+}"
+    );
+}

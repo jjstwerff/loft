@@ -273,6 +273,28 @@ the way the chapter-26 entry above warns about, one chapter later, and had to be
 it was committed. **A cell written to fix an over-general sentence is itself one example of one
 shape** — check the caveat table for the subject before claiming the general case.
 
+⚠ **A chapter where every section HAS a cell is not a covered chapter — read the prose that
+sits between them.** Chapter 29 is the best-celled page in the reference: all eleven sections
+run. Every defect was in a sentence no cell touched. Its wildcard section said *"without it,
+the compiler will reject the match if any value could fall through without matching"*, which is
+true of an ENUM subject and false of every scalar one — `formal/matching.md` (M-Total) draws the
+line by DECIDABILITY, so an unmatched integer, character or text answers **null** instead. That
+is the dangerous direction: a reader who trusts the sentence omits the `_` and gets a null
+travelling through the program in place of the compile error they were promised. Its guard
+section claimed *"the guard can reference variables bound by the pattern"* while its cell
+guarded on an OUTER local, so the specific claim ran under nothing (it is true — measured). A
+fully-celled chapter moves the whole budget onto the prose; it does not shrink it.
+
+⚠ **When a chapter states a rule, check what the COMPILER says to someone who breaks it.** The
+Match chapter tells the reader to put `_` last. Doing otherwise reported `Expect token }` — the
+right caret with the wrong reason — and on the scalar path cascaded into four more errors about
+the rest of the line, none naming the wildcard. Both match paths `break` out of the arm loop at
+a total `_`, so the next arm met the closing-brace expectation. Fixed at both sites, with the
+carve-out that a GUARDED `_ if cond` is not total and must still admit the arms after it. **The
+chapter is where a reader learns the rule; the diagnostic is where they meet it when they get it
+wrong, so the pass owns both** — and a refusal's message is a claim the suite does not check
+unless someone writes the cell.
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -330,6 +352,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/26-closures.loft` | 2026-09-01 | `64808d31` |
 | `tests/docs/27-coroutines.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
+| `tests/docs/29-match.loft` | 2026-09-01 | `0b71844d` |
 
 ## See also
 

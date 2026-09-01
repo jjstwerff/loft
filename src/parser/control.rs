@@ -3968,6 +3968,27 @@ impl Parser {
                 if !has_wildcard {
                     continue;
                 }
+                // A total `_` matches everything, so an arm written after it can never be
+                // selected.  Say that here: leaving it to the closing-brace expectation at the
+                // end of the loop reported "Expect token }" — the right caret with the wrong
+                // reason, on the rule the Match chapter states as "put it last".
+                //
+                // `continue` rather than `break`, so the unreachable arms are parsed as the
+                // arms they are and the `}` is consumed normally; breaking here produced a
+                // second, spurious error about the brace.  A GUARDED `_ if cond` never reaches
+                // this point — it is not total, so it took the `continue` above, and arms are
+                // expected to follow it.
+                if !self.lexer.peek_token("}") {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "a `_` arm matches everything, so this arm can never be selected \
+                             — move `_` to the end"
+                        );
+                    }
+                    continue;
+                }
                 break;
             }
 
@@ -7411,6 +7432,21 @@ impl Parser {
             arms.push((pattern_val, arm_code, arm_type, guard_opt));
             if has_wildcard {
                 self.lexer.has_token(","); // optional trailing comma
+                // The enum path's twin — a total `_` matches everything, so an arm after it can
+                // never be selected.  Breaking straight to the closing-brace expectation
+                // reported "Expect token }" and then cascaded into four more errors about the
+                // rest of the line, none of which named the wildcard.
+                if !self.lexer.peek_token("}") {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "a `_` arm matches everything, so this arm can never be selected \
+                             — move `_` to the end"
+                        );
+                    }
+                    continue;
+                }
                 break;
             }
             if self.lexer.peek_token("}") {
