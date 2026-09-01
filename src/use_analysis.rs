@@ -2044,14 +2044,29 @@ impl<'a> Ownership<'a> {
             // return may also be a borrow: the deps PROXY calls the whole thing a borrow,
             // the oracle was never asked, and the minted store got no owner (loft#1248).
             //
-            // An unresolvable or ambiguous target answers `Borrowed { base: MAX }`: a
-            // borrow of nothing nameable, which every reader treats as "do not lift, do not
-            // free".  That keeps the leak an unknown target already had, and a leak is
-            // recoverable where a premature free is not.
-            Value::CallRef(fn_var, args) => match defs.fnref_targets.get(fn_var).copied() {
-                Some(d) if d != u32::MAX => self.call_ownership(d, args),
-                _ => Own::Borrowed { base: u16::MAX },
-            },
+            // ⚠ ONLY the WITNESSED `Join` is delivered; every other verdict keeps the
+            // `Own::Owned` a `CallRef` answered before this arm existed, and that narrowness
+            // is measured rather than cautious.  `scan_set` reads this verdict to decide
+            // whether a reassigned local is tracked as OWNED, so departing on a `Borrowed`
+            // too moved the ownership-transition free for closure calls this fix has nothing
+            // to say about — `--native` then freed a capture the caller still held and
+            // `1114`'s named twin read `7`, an unrelated record in the recycled slot.
+            //
+            // A witnessed `Join` is the one verdict the three `callref_join_first_bind`
+            // readers act on, so it is the whole of what this arm needs to carry.  Widening
+            // it to the honest full answer is a separate change with its own measurement to
+            // make; `Own::Unknown` — forcing each caller to decide rather than defaulting to
+            // the permissive value — is what would make that attempt safe.
+            Value::CallRef(fn_var, args) => {
+                let resolved = match defs.fnref_targets.get(fn_var).copied() {
+                    Some(d) if d != u32::MAX => self.call_ownership(d, args),
+                    _ => Own::Owned,
+                };
+                match resolved {
+                    Own::Join { base } if base != u16::MAX => Own::Join { base },
+                    _ => Own::Owned,
+                }
+            }
             // Everything else is a literal, a scalar/void op, or control carrying no value
             // payload — nothing that can name a store some other binding owns, so calling it
             // `Owned` cannot license a free of someone else's record.  The two shapes that
