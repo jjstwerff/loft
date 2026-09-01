@@ -2257,8 +2257,17 @@ impl Function {
             // a no-payload `Shape::Dot` was accepted either way — because only a variant
             // carrying a RECORD arrives typed as its own `Reference`.  Whether the slot
             // may be absent says nothing about which variants it can hold.
+            // loft#1292 — through `RefVar` for the same reason loft#1065 went through
+            // `base()`: whether the slot is a live LINK to its source says nothing about
+            // which variants it can hold.  `fn f(x: &Shape) { x = Circle { r: 9 }; }` is the
+            // write-back `&` exists for, and it was refused ("cannot change type from &Shape
+            // to Circle") while the emitter already had an arm for it.
+            let lhs_shape = match var_tp {
+                Type::RefVar(inner) => inner.base(),
+                other => other.base(),
+            };
             if let (Type::Enum(parent_d, true, _), Type::Reference(rhs_d, _)) =
-                (var_tp.base(), type_def)
+                (lhs_shape, type_def)
                 && data.def(*rhs_d).parent == *parent_d
             {
                 return self.is_new(var_nr);
