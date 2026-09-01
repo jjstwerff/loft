@@ -30,9 +30,20 @@
 // EMPTY collection and must serialise as `[]`, never be dropped.  A fix that treated every
 // zero handle as absence would break the save→load round trip that rule exists for.
 //
-// @falsified-at: 85ec04f84 — interpret and native both PANIC on the keyed cell there
-//   (`Store access out of bounds: rec=4294967295`), and the vector cells answer
-//   `isnull=false` where they now answer true.
+// @falsified-at: 85ec04f84 — interpret exit 1 -> 0, interpret 2 assertion failures -> 0,
+//   native exit 1 -> 0, native 1 assertion failures -> 0.
+//
+//   ⚠ Those numbers UNDERCOUNT, and the reason is worth knowing before trusting them on any
+//   guard: `make falsify` scores assertion text and process panics, and the worst cell here
+//   is neither.  Run directly against the control, the file answers `3 failed; 3 passed`
+//   and the third is
+//
+//     a_null_keyed_collection_serialises_instead_of_crashing —
+//       Store access out of bounds: rec=4294967295 … the reference is corrupt
+//
+//   which the harness reports as a failing CELL rather than as an `assertion failed:` line
+//   or a process-level panic, so neither channel counts it.  The `exit 1 -> 0` column is the
+//   one that sees all three.
 
 struct R1269 { k: integer, v: text }
 
@@ -41,14 +52,20 @@ struct NH1269 { a: integer, h: hash<R1269[k]>? }
 struct NS1269 { a: integer, s: sorted<R1269[k]>? }
 struct PV1269 { a: integer, v: vector<R1269> }
 
-// A null collection is OMITTED from the document, the way every other nullable field's
-// null is, and comes back null.  The keyed kinds are here because they did not merely
-// render wrong — they crashed.
-fn a_null_collection_survives_a_json_round_trip() {
+// A null VECTOR is OMITTED from the document, the way every other nullable field's null is,
+// and comes back null.
+fn a_null_vector_survives_a_json_round_trip() {
   nv = NV1269 { a: 1, v: null };
   assert("{nv:j}" == `{{"a":1}}`, "a null vector is not omitted: {nv:j}");
   assert(NV1269.parse("{nv:j}").v == null, "the null did not come back");
+}
 
+// The KEYED kinds get their own cell, and that is not tidiness: they did not merely render
+// wrong, they PANICKED — `Store access out of bounds: rec=4294967295`, the absent marker
+// dereferenced as a record number.  Sharing a cell with the vector hid it, because the
+// vector's assertion fails FIRST on the build this guard was written against, so the run
+// stopped before reaching the line that crashes.  A guard has to reach the cell it names.
+fn a_null_keyed_collection_serialises_instead_of_crashing() {
   nh = NH1269 { a: 1, h: null };
   assert("{nh:j}" == `{{"a":1}}`, "a null hash is not omitted: {nh:j}");
   assert(NH1269.parse("{nh:j}").h == null, "the hash null did not come back");
