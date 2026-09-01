@@ -117,7 +117,7 @@ fn index_intro(topic: &Topic) -> std::io::Result<String> {
     for line_result in source.lines() {
         let line = line_result?;
         let trimmed = line.trim();
-        if in_header && skip_header(trimmed) {
+        if is_topic_directive(trimmed) || (in_header && skip_header(trimmed)) {
             continue;
         }
         in_header = false;
@@ -171,11 +171,26 @@ fn index_intro(topic: &Topic) -> std::io::Result<String> {
     Ok(result)
 }
 
+/// Is this line a topic DIRECTIVE — one `gather_topics` consumes to name the page?
+///
+/// It scans the whole file for these, not just the header, so a directive is metadata
+/// wherever it sits. Rendering one as prose would print the page's own title into its
+/// body, so both renderers drop it regardless of position.
+fn is_topic_directive(trimmed: &str) -> bool {
+    trimmed.starts_with("// @NAME: ") || trimmed.starts_with("// @TITLE: ")
+}
+
+/// Is this line part of the header block a topic opens with, rather than its prose?
+///
+/// The block is attribution, provenance and directives. Provenance matters because a
+/// generated topic opens with a "DO NOT EDIT" note addressed to whoever maintains the
+/// generator: the reader of the published page is not that person, and the note would
+/// otherwise be the first paragraph they meet.
 fn skip_header(trimmed: &str) -> bool {
     trimmed.starts_with("// Copyright")
         || trimmed.starts_with("// SPDX")
-        || trimmed.starts_with("// @NAME: ")
-        || trimmed.starts_with("// @TITLE: ")
+        || trimmed.starts_with("// GENERATED")
+        || is_topic_directive(trimmed)
         || trimmed.is_empty()
 }
 
@@ -695,7 +710,7 @@ fn parse_sections(source: &str) -> Vec<DocSection> {
 
     for line in source.lines() {
         let trimmed = line.trim();
-        if in_header && skip_header(trimmed) {
+        if is_topic_directive(trimmed) || (in_header && skip_header(trimmed)) {
             continue;
         }
         in_header = false;

@@ -822,10 +822,15 @@ features-gen:  ## Regenerate the shadow (doc/features/ + tests/docs/features/) f
 	@rm -rf doc/features tests/docs/features
 	@./target/release/loft --interpret tools/features/gen.loft
 
+# The scope must name EVERY file `features-gen` writes.  It listed the two directories
+# and not `tests/docs/33-features.loft` — the published chapter — so a hand-edit to the
+# page that ships in all four release bundles was regenerated away in the checking tree
+# and reported as "in sync", while the committed copy kept whatever it had been given.
+# The chapter's own text promises this guard catches exactly that.
 features-check: features-gen  ## Drift guard: fail if the committed shadow is stale vs the snapshot
-	@out=$$(git status --porcelain -- doc/features tests/docs/features); \
+	@out=$$(git status --porcelain -- doc/features tests/docs/features tests/docs/33-features.loft); \
 	if [ -n "$$out" ]; then \
-	    echo "ERROR: doc/features / tests/docs/features drifted from index/features.json."; \
+	    echo "ERROR: the generated catalogue drifted from index/features.json."; \
 	    echo "Run 'make features-gen' and commit the result. Offending paths:"; \
 	    echo "$$out"; \
 	    exit 1; \
