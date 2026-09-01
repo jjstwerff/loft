@@ -9,6 +9,30 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A bounded generic that DELEGATES still owns the store it hands back (2026-09-01)
+
+`fn add<T: Addable>(a: T, b: T) -> T { a + b }` retained one record per call when its result
+was consumed inline — unbounded in a loop — while `r = add(…); r.v` was clean all along,
+because the `Set` gives the store an owner. The answer was right and nothing reported it
+(loft#1273).
+
+`scopes::inline_struct_return` lifts a call's owned aggregate into a `__lift_N` the caller
+frees, and for a monomorph it needs POSITIVE proof the return is fresh: specialisation loses
+the return dep, so the dep-based guards cannot tell a minted return from one handing back an
+argument, and lifting the latter would double free. `monomorph_return_is_fresh` reads the
+body's return sites for that proof and answered `false` here, because the tail of `{ a + b }`
+is `Call(n_OpAdd, …)` — whether a CALLEE's result is owned is not a fact that body carries.
+
+`Data` holds every definition, so the caller now resolves the tail's target and asks it the
+same three questions the fn-ref twin asks (loft#1176): has a body, does not return a borrowed
+view, and is itself fresh. One level, and one unreadable link refuses the chain — the proof
+stays positive and under-approximating.
+
+⚠ **`loft --tests` does not report a leak**, so the guard lives in
+`tests/leak_cases/clean/`, which runs a plain program on both backends; the `tests/scripts`
+file beside it carries the values, and specifically the rows that must NOT lift.
+
+
 ### A format hole holding an escaped quote ended a top-level item early (2026-09-01)
 
 `"got: {shout("a\"b")}"` compiled inside `fn main` and was refused in every other function,

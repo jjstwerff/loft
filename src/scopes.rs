@@ -7643,6 +7643,40 @@ impl Scopes {
     /// Every unresolved position answers `false`, which leaves the leak that was already
     /// there.  That is the direction this whole gate takes when it cannot name what it
     /// would be freeing: a wrong `true` frees a store the caller still holds.
+    /// A monomorph whose return sites are direct CALLS delivers a fresh store when every
+    /// one of those callees does — loft#1273.
+    ///
+    /// `fn add<T: Addable>(a: T, b: T) -> T { a + b }` lowers its tail to
+    /// `Call(n_OpAdd, …)`, and the user's `OpAdd` mints a record. `monomorph_return_is_fresh`
+    /// cannot see that — a callee's ownership is not a fact this body carries — so the
+    /// result was never lifted and one record was retained per call, unbounded in a loop,
+    /// while the bound spelling (`r = add(…); r.v`) was clean all along.
+    ///
+    /// The three questions are the fn-ref twin's, for the same reasons: the target must have
+    /// a BODY, must not return a borrowed view — a callee handing back its own argument
+    /// would make the lift free the caller's record — and must itself be proven fresh, so
+    /// the proof stays positive and one unreadable link refuses the chain.
+    ///
+    /// One level, deliberately. A delegate that itself delegates answers `false` and keeps
+    /// its leak, which is the direction every gate here takes when it cannot name what it
+    /// would be freeing; recursing would also need a cycle guard for mutual recursion.
+    /// No `self`: unlike the fn-ref twin, which resolves a closure through the caller's
+    /// `fnref_target`, the target here is written in the IR and only `Data` is needed.
+    fn monomorph_delegated_return_is_fresh(data: &Data, def: &crate::data::Definition) -> bool {
+        let Some(targets) = def.monomorph_direct_call_return_targets() else {
+            return false;
+        };
+        targets.iter().all(|&d_nr| {
+            if d_nr as usize >= data.definitions() as usize {
+                return false;
+            }
+            let target = data.def(d_nr);
+            target.code != Value::Null
+                && !target.returns_borrowed_view()
+                && target.monomorph_return_is_fresh()
+        })
+    }
+
     fn monomorph_fnref_return_is_fresh(
         &self,
         val: &Value,
@@ -8140,7 +8174,10 @@ impl Scopes {
                 def.name.starts_with("n_")
                     || (def.name.starts_with("t_")
                         && (def.attr_names.contains_key("__retbuf")
-                            || def.monomorph_return_is_fresh()))
+                            || def.monomorph_return_is_fresh()
+                            // loft#1273 — a tail that DELEGATES (`a + b` is `Call(n_OpAdd)`)
+                            // is a shape the callee's own body settles.
+                            || Self::monomorph_delegated_return_is_fresh(data, def)))
             };
             if lift_owned_return && def.code != Value::Null {
                 // The same `returns_borrowed_view()` question its struct-enum sibling below
