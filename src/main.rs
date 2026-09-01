@@ -9430,7 +9430,7 @@ fn main() {
     // When combined with --native, fall through to the native pipeline
     // which will compile but not run the binary.
     if check_only && !native_mode && native_emit.is_none() {
-        println!("ok {abs_file}");
+        println!("ok");
         return;
     }
 
@@ -11417,7 +11417,16 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
             } else {
                 &binary
             };
-            println!("ok {abs_file} {}", artifact.display());
+            // Two audiences, one line.  The live host asks for the machine form by
+            // setting LOFT_CHECK_ARTIFACT on the child it spawns; a person typing
+            // `loft check prog.loft` gets the answer they asked for and nothing else
+            // — the paths are an absolute source path they just typed and an internal
+            // content-addressed cache entry they cannot act on.
+            if std::env::var_os("LOFT_CHECK_ARTIFACT").is_some() {
+                println!("ok {abs_file} {}", artifact.display());
+            } else {
+                println!("ok");
+            }
             return;
         }
         // @PLN26 phase 4 — Windows has no RPATH, so a C-ABI-linked native-package
@@ -11504,7 +11513,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
     // ok on a clean parse — the same answer the interpret-mode check gives —
     // rather than falling through and running the program.
     if check_only {
-        println!("ok {abs_file}");
+        println!("ok");
         return;
     }
 

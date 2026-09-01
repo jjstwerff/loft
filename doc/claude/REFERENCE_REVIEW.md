@@ -402,6 +402,68 @@ reader looking for the library finds a page with the right name about something 
 from the page, which now says an absent feature is a gap in the TRACKER rather than in
 loft. **When a chapter lists, list the same thing from a second source and diff.**
 
+⚠ **A guard that checks a SUBSTRING cannot see extra output — which is the direction a
+tool drifts.** Chapter 34 is almost entirely shell transcripts, and they are not unchecked:
+`tests/doc_commands.rs` runs every indented `$ ` line in a copy of `tests/docs/cli/` and
+requires each line under it to appear in what the command printed. Three transcripts were
+still wrong, because `contains` passes on a fragment. The page showed `ok`, and
+`loft check hello.loft` printed `ok <absolute source> <absolute cache entry>` — a superset,
+so green. It showed `5` for a piped REPL line, where a terminal shows a banner, a prompt
+and `5` — the shown line is stdout and the chrome is stderr, which the page did not say.
+**Before spending the read, find out what the existing guard's PREDICATE is**: this one
+pins presence, never absence or equality, and the review's job is the half it cannot hold.
+
+⚠ **And read the guard's opt-OUT, because that is where the unchecked blocks are.** The
+same test treats an indented line WITHOUT `$ ` as illustration and never runs it — a
+deliberate escape hatch, so a page can show an interactive session that no script can
+drive. Chapter 34's two hand-typed REPL blocks lived there, which is why nothing noticed
+that one of them claimed a resume the mode above it does not do. Rewriting them as `$ loft`
+made 16 transcripts fail at once, and the failure list is the map: it names exactly which
+lines were being asserted for the first time.
+
+⚠ **When the tool and the chapter disagree, ask WHO the output is addressed to before
+deciding which is wrong.** The two extra fields on the check line are a machine protocol
+(@PLN18 08-S4): `live_dispatch` parses `ok <src> <artifact>` to find the build it just
+asked for. One `println!` served both audiences, so a person typing the reference's own
+command got a path they had just typed plus an internal content-addressed cache entry.
+That is the REACH axis loft#1260 already draws for diagnostics, in a second channel: the
+machine now asks for the machine form (`LOFT_CHECK_ARTIFACT`, set by the host that spawns
+the driver) and the default answers the person. **A drifted output surface is not
+automatically the doc's error** — the chapter had the right answer and the code had left it.
+
+⚠ **A protocol with one consumer and no test is guarded by nothing — run the control
+before trusting a green suite.** Deleting the env var that asks for the artifact form left
+`tests/engine_host_reload.rs` — four live-reload tests, end to end — entirely green, so the
+field's only consumer never exercised it and the change was unguarded in both directions.
+`tests/check_line_audiences.rs` now carries a cell per audience, each falsified against the
+build that breaks it: the person's cell fails on the pre-fix line, the host's cell fails
+when the machine form is dropped.
+
+⚠ **A demonstration in one MODE cannot carry a claim about another.** The chapter taught
+the REPL through a PIPED transcript and then said *"Your session is remembered, so you can
+close it and come back later"*. Auto-resume is interactive-only — REPL.md says so in its
+own words, and measuring both ways confirms it: piped, the binding is gone on the next run;
+on a pty (`script -qec 'loft repl' /dev/null`), `restored 1 statement(s) from last session`
+and `x + 1` answers 42. The sentence was true of a mode the page never showed. **Name the
+mode a transcript is in, then re-read every neighbouring claim against that mode** — and
+when a probe cannot observe a claim, say so instead of scoring it false: the first piped
+run looked like a broken promise and was a blind instrument.
+
+⚠ **A flag demonstrated on input where it does nothing teaches nothing.** `--explain` was
+shown on `hello.loft`, which has no diagnostics, so the whole transcript was `hello,
+world!` and the fix line the section exists to describe never appeared. Chapter 20 was this
+defect with a log config; this is its transcript form, and the tell is the same — the shown
+output does not contain the thing the section is about.
+
+⚠ **A transcript ends at the command; a person adds a pipe.** Running chapter 34's own
+commands the ordinary way — through `head`, to read output that scrolls — aborted the
+interpreter with SIGABRT and wrote `.loft/loft-crash-<pid>.txt` blaming `OpPrint` and a
+stdlib line (loft#1289: `print!` panics on `EPIPE`, and when stderr shares the closed pipe
+the panic printer fails too and the process aborts). Both backends panic; only the
+interpreter aborts. Nothing in the chapter, the doc suite or `make ci` runs a pipeline, so
+the whole class is invisible to them. **Run at least one of a chapter's commands into a
+pager or a `head`.**
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -463,6 +525,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
 | `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
 | `tests/docs/33-features.loft` | 2026-09-01 | `0c3d4935` |
+| `tests/docs/34-running.loft` | 2026-09-01 | `ea12352b` |
 
 ## See also
 

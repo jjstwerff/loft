@@ -3320,15 +3320,22 @@ Printable  fn to_text(self: T) -&gt; text
 <p>That one parameter is the only shape <code>main</code> accepts. Any other — a plain <code>text</code>, two of them — is refused, because nothing would fill it.</p>
 <h2 id="try-something-without-making-a-file">Try something without making a file</h2>
 <p>Type <code>loft</code> on its own and you get a prompt where you can type one line at a time and see the answer straight away:</p>
-<pre><code>  $ printf '2 + 3\n' | loft repl --fresh
-  5
-</code></pre>
-<p>Typed by hand it looks like this — start it, then type at the prompt:</p>
 <pre><code>  loft
+  loft REPL — :help for commands, :quit to exit
   loft&gt; 2 + 3
   5
 </code></pre>
-<p>This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea. Your session is remembered, so you can close it and come back later — <code>--fresh</code> is how you ask for a clean one instead.</p>
+<p>This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea.</p>
+<p>Started by hand like that, the REPL remembers your session: the values you bound and the functions and structs you defined come back next time, and it says so as it starts.</p>
+<pre><code>  loft
+  restored 2 statement(s) from last session
+  loft&gt;
+</code></pre>
+<p><code>--fresh</code> asks for a clean one instead, and <code>:reset</code> clears it mid-session.</p>
+<p>You can also feed it from a pipe, which is handy in a script. That is a different mode: it never reads or writes the saved session, so it always starts empty. The banner and the <code>loft&gt;</code> prompts go to standard error and the answers to standard output, so a script can read just the answers:</p>
+<pre><code>  $ printf '2 + 3\n' | loft repl --fresh 2&gt;/dev/null
+  5
+</code></pre>
 <h2 id="two-ways-to-run-and-why-you-usually-ignore-this">Two ways to run, and why you usually ignore this</h2>
 <p>loft can run your program in two ways. It compiles your program to a fast program first when it can, and otherwise it reads and runs your program directly. The second way is called interpreting.</p>
 <p>You do not have to choose. loft picks for you, and the ANSWER is the same either way — that is a rule the language holds itself to, not a hope. You can ask for one on purpose when you want to:</p>
@@ -3347,13 +3354,20 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>  $ loft check hello.loft
   ok
 </code></pre>
-<p>This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing.</p>
+<p>This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing. It leaves a <code>.loft</code> folder beside your file to remember what it already worked out, which is why the second run is quicker.</p>
 <h2 id="when-loft-tells-you-something-is-wrong">When loft tells you something is wrong</h2>
-<p>A message from loft names the file, the line, and what to do. Some messages can also show you the exact replacement to write:</p>
-<pre><code>  $ loft --explain --interpret hello.loft
+<p>A message from loft names the file, the line, and what to do. Say unused.loft binds a name it never uses:</p>
+<pre><code>  $ loft --interpret unused.loft
+  warning[never-read]: Variable unused is never read
+  note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
   hello, world!
 </code></pre>
-<p>That prints the suggested fix under each message. It only shows you the fix; it changes nothing, so it is always safe to run.</p>
+<p>Between those first two lines it also prints the file and line it means, the source line itself, and a caret under the exact spot.</p>
+<p>That closing note means loft has a replacement in mind. Ask for it:</p>
+<pre><code>  $ loft --explain --interpret unused.loft
+  fix  delete `unused`   needs: computing it has no effect you are relying on   [dead-code lint · @F100]
+</code></pre>
+<p>The <code>fix</code> line is the suggested replacement and <code>needs</code> is the condition under which it applies — loft cannot know whether you meant to keep the name, so it tells you what it is assuming. The bracket names the topic to read up on; the feature catalogue has a page per tag. <code>--explain</code> only SHOWS you the fix. It changes nothing, so it is always safe to run.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <p>A program is just a file with a <code>main</code> function in it, like this one. Everything above is how you would run this file.</p>
 <pre><code>  greeting = <span class="st">"hello"</span>;
