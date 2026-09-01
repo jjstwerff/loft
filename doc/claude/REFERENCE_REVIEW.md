@@ -535,6 +535,13 @@ commit unreachable from this branch, so its OWN review commit read as a change s
 review. Re-point the rows whenever commits are replayed; the tell is a chapter whose only
 "commit since" is the one whose subject names that chapter.
 
+⚠ **A GENERATED chapter moves when its inputs move, so it can owe a re-read after a commit
+that never touched it.** Chapter 33 is written by `tools/features/gen.loft` from the issue
+tracker, so the chapter-35 pass — which corrected the @F89 entry and refreshed the snapshot
+— rewrote one number on it and reopened its row. Read the diff before re-pointing: a
+generated chapter whose only change is a generated COUNT has not lost its review, while one
+whose entry list changed has.
+
 | chapter source | reviewed through | commit |
 |---|---|---|
 | `tests/docs/01-keywords.loft` | 2026-08-31 | `e9643ff6` |
@@ -566,7 +573,7 @@ review. Re-point the rows whenever commits are replayed; the tell is a chapter w
 | `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
 | `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
 | `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
-| `tests/docs/33-features.loft` | 2026-09-01 | `0c3d4935` |
+| `tests/docs/33-features.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 
