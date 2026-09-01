@@ -739,7 +739,7 @@ whose entry list changed has.
 | `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `57853cbc` |
 | `doc/00-vs-rust.html` | 2026-09-02 | `a41ee548` |
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
-| `doc/install.html` | 2026-09-02 | `66da3c33` |
+| `doc/install.html` | 2026-09-02 | `80568550` |
 
 ## See also
 
