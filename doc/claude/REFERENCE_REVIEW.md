@@ -713,8 +713,8 @@ whose entry list changed has.
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
 | `tests/docs/37-projects.loft` | 2026-09-02 | `7488943a` |
 | `tests/docs/38-call-it-yourself.loft` | 2026-09-02 | `57853cbc` |
-| `doc/00-vs-rust.html` | 2026-09-02 | `eb77db2f` |
-| `doc/00-vs-python.html` | 2026-09-02 | `eb77db2f` |
+| `doc/00-vs-rust.html` | 2026-09-02 | `a41ee548` |
+| `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
 
 ## See also
 
