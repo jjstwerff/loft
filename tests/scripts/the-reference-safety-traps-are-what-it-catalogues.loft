@@ -11,10 +11,12 @@
 // the opposite of what the language does:
 //
 //   * "Hash collections cannot be iterated" — `for e in h` has walked a hash in ascending
-//     key order since C60 (2026-04-13).  The page's workaround for the missing feature
-//     was a vector beside a hash over one record type, which is the LINKED GROUP: two
-//     doors into one record set, and filling both is what `linked-group-double-fill`
-//     advises against.
+//     key order since C60 (2026-04-13).  The page then offered a vector beside a hash over
+//     one record type as the substitute, and that pairing is not a substitute for anything:
+//     the store is an in-memory database and those are two INDEXES ON ONE TABLE, as
+//     ordinary here as several indexes on a table are anywhere else.  What the page did not
+//     say is that the rows live in the table, and it described filling both members — the
+//     one thing that goes wrong, and what `linked-group-double-fill` advises on.
 //   * "`lines()` and `content()` … crash on invalid UTF-8" — they warn, answer null, and
 //     the program keeps running.  `lines()` therefore hands back an EMPTY vector, which
 //     is the dangerous direction: a reader defending against a crash writes no defence at
@@ -222,7 +224,8 @@ fn a_hash_walks_the_order_its_key_declares() {
   for r in sf_up.by_team { sf_m += "{r.team}{r.name} "; }
   assert(sf_m == "aapple amango bzebra ", "a two-field key is lexicographic: {sf_m}");
 
-  // Every member is a door into ONE record set: the vector was given nothing and holds
-  // everything, which is the shape `linked-group-double-fill` advises against filling twice.
+  // Every member is an index on ONE table, which is what declaring a second one is FOR: the
+  // vector was handed nothing and holds all three rows.  Handing rows to two members is the
+  // one mistake the shape admits, and `linked-group-double-fill` advises on that literal.
   assert(len(sf_up.rows) == 3, "the empty member sees a different record set: {len(sf_up.rows)}");
 }

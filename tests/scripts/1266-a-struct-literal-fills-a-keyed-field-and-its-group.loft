@@ -83,9 +83,9 @@ struct Grp1266 {
   by_nm: trie<K1266[nm]>,
 }
 
-// A linked group's members are one record set with several doors.  Records handed to the
-// VECTOR member reach it in bulk, so the door-building that happens per record does not
-// run — and EVERY other member is owed it, not just the first.
+// A linked group's members are several indexes on one table.  Rows handed to the VECTOR
+// member arrive in bulk, so the per-row indexing does not run — and EVERY other index is
+// owed it, not just the first.
 fn a_struct_literal_indexes_the_group_it_fills() {
   g = Grp1266 { rows: rows1266(), by_k: [], by_nm: [] };
   assert(len(g.rows) == 2, "the vector member: {len(g.rows)}");
