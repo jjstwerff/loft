@@ -2442,13 +2442,34 @@ impl Stores {
             &self.types[known_type as usize].parts
         {
             rec == 0
-        } else if let Parts::Vector(_) = &self.types[known_type as usize].parts {
-            // @P375: a vector field carries no nullable flag — it is always at
-            // least the empty list, never null.  An unset handle (0) must
-            // serialise as `[]` (write_list emits `[]` for a 0 handle), not be
-            // dropped from `{x:j}` output.  (Was `handle == 0`, which omitted
-            // empty vectors and broke the save→load round-trip.)
-            false
+        } else if matches!(
+            &self.types[known_type as usize].parts,
+            Parts::Vector(_)
+                | Parts::Sorted(_, _)
+                | Parts::Array(_)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::Radix(_, _)
+        ) {
+            // @P375's rule still holds and is the first half: zero is the EMPTY
+            // collection, so an unset handle must serialise as `[]` rather than be
+            // dropped — that is what keeps a save→load round-trip whole.
+            //
+            // Its premise — *"a collection field carries no nullable flag, so it is
+            // always at least the empty list, never null"* — expired.  @PLN25 gave a
+            // collection field a declared `?`, and `mark_collection_absent` writes
+            // `DbRef::ABSENT_REC` into the handle for it (loft#917), which is a THIRD
+            // state beside "empty" and "populated".  Answering `false` for it put the
+            // renderer one step behind every other reader: `xs == null` answered true
+            // while `{x:j}` wrote `[]` for a vector (so the null did not survive its own
+            // round trip) and PANICKED for a keyed kind, dereferencing `4294967295` as a
+            // record number.
+            //
+            // `vector::is_absent_collection` is the one home for that test; the raw read
+            // here is its slot-addressed half, and it cannot confuse the two zeros
+            // because ABSENT_REC is neither.
+            store.get_u32_raw(rec, pos) == crate::keys::DbRef::ABSENT_REC
         } else {
             // A narrow integer answers from its own home; anything else is not nullable
             // in a way this walk can see.
