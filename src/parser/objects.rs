@@ -4457,6 +4457,13 @@ impl Parser {
         }
     }
 
+    // Eight with `self`, and the list is two groups that are already named: the FIELD being
+    // handled (`td_nr` / `field` / `value` / `exp_tp`) and where its output goes (`code` /
+    // `list` / `sinks`, of which `sinks` is itself the bundle for the literal-level
+    // accumulators).  There is exactly ONE call site, so a further struct would be packed
+    // once and unpacked once and name nothing that these parameters do not — the same trade
+    // `tree::range_cursors` records for its own list.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_field(
         &mut self,
         td_nr: u32,
