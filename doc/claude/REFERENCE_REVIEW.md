@@ -664,6 +664,27 @@ instead"* — `loft prog.loft` already compiles through `rustc` when it can find
 what `--help` says and what chapter 34 teaches. The flag table listed `--native` and never
 `--interpret`, so the page had no name for the thing it said you were already getting.
 
+⚠ **A roadmap page dates faster than any other, and its "planned" list is where shipped
+features go to hide.** `roadmap.html` called 0.8.4 the *current* release (shipped
+2026-04-24) and 0.8.5 *next* (shipped 2026-06-07), under a semver scheme the project left in
+2026-06 for calendar versions — `loft --version` prints `2026.8.0`. Its 0.9.0 section listed
+as future work eight things that ship today: error recovery (a two-error program reports
+both in one pass), the REPL, the lint set, the TextMate grammar, the VS Code extension, the
+`examples/` directory, `loft.lock`, and CI over package tests. **Check a roadmap's PAST
+before its future** — the version the binary reports settles where the page should start,
+and every bullet is a claim you can run.
+
+⚠ **Re-measure a caveat list rather than trusting the issue state, and re-measure the ISSUE
+rather than trusting the changelog.** `CAVEATS.md` presented #1030–#1034 as live with
+`silent-wrong` / `sev:high` labels; all five are closed. Running them anyway is what found
+loft#1296: a width type's overflowing `+=` no longer keeps `260` — the fix made every
+spelling answer **`0`**, an in-range value, while `formal/types.md` says an overflow yields
+`null` "never a wrapped / saturated / out-of-range value" and plain `integer` and a nullable
+`u8?` both do. The 2026-08 changelog also claimed "`u32` finally holding every `u32`"; `u32`
+is declared `integer limit(0, 4294967294)` with the top value reserved as the null sentinel,
+so it never held every `u32` and is not meant to. **A closed issue is a claim that something
+changed, not a claim about what it changed to.**
+
 1. **Is every claim still true?** Not "does the example run" but "does the prose
    describe what the language does now". A behaviour that changed under a chapter that
    did not is the failure this pass exists for.
@@ -740,6 +761,7 @@ whose entry list changed has.
 | `doc/00-vs-rust.html` | 2026-09-02 | `a41ee548` |
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
 | `doc/install.html` | 2026-09-02 | `80568550` |
+| `doc/roadmap.html` | 2026-09-02 | `fd271e20` |
 
 ## See also
 

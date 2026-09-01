@@ -158,12 +158,28 @@ against a uniform run — whole-program `--native`, or `--interpret` with
 
 ---
 
-## Surfaced 2026-08-20 while fixing something else — filed
+## Surfaced 2026-08-20 while fixing something else — all five CLOSED (re-measured 2026-09-02)
 
 Each was met while working a neighbouring defect and verified against the pre-fix
 binary as PRE-EXISTING, then deliberately left rather than folded into an unrelated
-change. All five are now tracked; the repro, the measured workaround and the
-both-backends result live on the issue.
+change. All five have since been fixed. The reference review re-ran every row rather
+than trusting the issue state, and two of them need a word here rather than deletion:
+
+- **#1030 / #1009 — the two spellings agree now, on an answer the rule does not name.**
+  A width type's out-of-range `+=` no longer keeps `260`; the fix made every spelling
+  answer **`0`**, deliberately and identically on both backends for
+  `u8`/`i8`/`u16`/`i16`/`i32`. `formal/types.md` says an overflow yields `null` "never a
+  wrapped / saturated / out-of-range value", and plain `integer` and a nullable `u8?` both
+  do — so `0`, a legal value of the type, is the one slot where an overflow is not
+  observable. Whether C85's sentinel reaches width types is the open question:
+  [#1296](https://github.com/loft-lang/loft/issues/1296).
+- **#1031 — the `u32` top of range is a DESIGN choice, not a leftover.** The local and
+  the field agree now. `u32 = 4294967295` is still refused, and that is deliberate:
+  `default/01_code.loft` declares `u32` as `integer limit(0, 4294967294) size(4)` and
+  reserves the top value as the null sentinel, the mirror of `i32` reserving its bottom.
+  The 2026-08 changelog line "`u32` finally holding every `u32`" overstated the fix.
+
+The rows below are kept for their repros; every issue is closed.
 
 | | issue | shape |
 |---|---|---|

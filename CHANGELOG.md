@@ -24,7 +24,8 @@ detectors that would have caught them earlier are now part of the nightly gate.
 
 Alongside that: a store can give its file back (`store_reclaim`, plus automatic
 compaction at load), `reserve(v, n)` for vectors you know the size of, a crash report
-that survives being piped somewhere, and `u32` finally holding every `u32`.
+that survives being piped somewhere, and a `u32` local and field that finally agree
+(the top of the range stays reserved as the null sentinel, by design).
 
 Late in the cycle, three more: **`loft install` no longer lets a package's own manifest
 decide where on disk it lands** (a name like `../../escaped` wrote outside `~/.loft/lib`

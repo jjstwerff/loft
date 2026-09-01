@@ -8915,11 +8915,17 @@ Resolve `target` against `self` (where self is a base directory). Strips leading
 
 = Roadmap
 
-Loft is under active development. Everything documented on the language pages works today. This page describes where the project is headed.
+Loft is under active development. Every code example on the language pages is executed by the test suite on both backends, so what they show runs today. This page describes where the project is headed.
 
 The project goal is *browser games that anyone can play via a shared link*. Native OpenGL is supported for desktop enthusiasts. Server and multiplayer features come after the single-player browser experience works.
 
-=== Current release — 0.8.4: Awesome Brick Buster
+Since *2026-06* loft ships on a calendar version: a release is named for
+its month, which `Cargo.toml` spells `2026.6.0`, `2026.7.0`,
+`2026.8.0` — `loft --version` prints the one you have. The semver
+milestones below were the plan before that switch; the two numbered ones have shipped, and
+1.0.0 is still the name of the finish line rather than a month.
+
+=== 0.8.4 (shipped 2026-04-24): Awesome Brick Buster
 
 0.8.4 turns Brick Buster from a tech demo into a game someone would actually want to share with a friend, and makes sharing trivial via single-file HTML export.
 
@@ -8948,7 +8954,7 @@ The game's WebAssembly, textures, and audio are all embedded. Host the file anyw
 - *CLI hardening* — script-level arguments, file-scope constants, and release-mode coroutine-iterator fixes (P126, P128, P131, P132).
 - *Bytecode cache* — `.loftc` files are invalidated on interpreter rebuild via the embedded git commit hash.
 
-=== Next — 0.8.5: Working Moros editor
+=== 0.8.5 (shipped 2026-06-07): Working Moros editor
 
 The Moros hex RPG scene editor runs end-to-end in the browser: load a map, paint hexes, place walls and items, see a live 3D preview, export to GLB. Web only — multiplayer comes in 1.0.0.
 
@@ -8964,9 +8970,9 @@ The language itself becomes feature-complete, well-documented, and tooling-frien
 
 ==== Language polish
 
-- *Error recovery* — the parser continues after a token-level failure and reports multiple errors in a single pass.
-- *REPL* — running `loft` with no arguments starts an interactive session; definitions persist across lines.
-- *Developer warnings* — Clippy-inspired lints for common mistakes.
+- *Error recovery* — the parser continues after a token-level failure and reports multiple errors in a single pass — *shipped* (a two-error program reports both in one pass).
+- *REPL* — running `loft` with no arguments starts an interactive session; definitions persist across lines — *shipped* (bare `loft` starts one and restores the last session).
+- *Developer warnings* — Clippy-inspired lints for common mistakes — *shipped* (a two-tier warning/advice set with `--explain` fix lines).
 - *AOT library compilation* — automatically compile libraries to native shared libs for faster startup.
 - *Stdlib hygiene* — name-clash warnings and a `std::` prefix for shadowed builtins; library enums in `match` arms without qualification.
 
@@ -8976,14 +8982,14 @@ Bytecode cache (`.loftc`) and the shared constant store are already implemented.
 
 ==== Developer experience
 
-- TextMate grammar for `.loft` syntax highlighting.
-- VS Code extension with snippets and a run task.
-- Quick-start `examples/` directory.
-- CI covering package tests and native codegen.
+- TextMate grammar for `.loft` syntax highlighting — *shipped* (`editors/vscode/syntaxes/loft.tmLanguage.json`).
+- VS Code extension with snippets and a run task — *shipped* (`editors/vscode/`, plus `loft-lsp` and `loft-dap`).
+- Quick-start `examples/` directory — *shipped* (`examples/`).
+- CI covering package tests and native codegen — *shipped* (`make ci`).
 
 ==== Packaging and FFI
 
-- *Lock file* (`loft.lock`) for reproducible builds.
+- *Lock file* (`loft.lock`) for reproducible builds — *shipped* (`loft install` writes it).
 - *Generic FFI marshaller* — zero-boilerplate native functions from a `#native` signature; generic `cdylib` loader scans exports into a hash map.
 
 === 1.0.0 — Totally sure everything works
