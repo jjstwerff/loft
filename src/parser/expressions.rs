@@ -2280,10 +2280,10 @@ use a separate collection or add after the loop"
             || var_nr == u16::MAX
             || self.rebind_lowered == var_nr
             || !matches!(to.unspan(), Value::Var(v) if *v == var_nr)
-            || !matches!(
+            || !(matches!(
                 self.vars.tp(var_nr),
                 Type::Reference(_, _) | Type::Enum(_, true, _)
-            )
+            ) || crate::parser::vectors::is_keyed(self.vars.tp(var_nr)))
             || !self.vars.is_argument(var_nr)
             || self.vars.is_compiler_generated(var_nr)
             || self.is_hidden_param(var_nr)

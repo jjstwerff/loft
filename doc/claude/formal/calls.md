@@ -256,6 +256,13 @@ is the companion [calls-history.md](calls-history.md).
   local}, both backends, in
   `tests/scripts/1290-a-heap-parameter-rebind-is-local-in-every-spelling.loft`, with a FIELD
   write (`F-ParamHeap`), a `&` parameter (`F-ParamRef`) and a plain LOCAL as the controls.
+  The COLLECTION half is
+  `tests/scripts/1294-a-keyed-parameter-rebind-is-local.loft` — all five keyed kinds
+  (`hash`, `sorted`, `index`, `spatial`, `trie` are what `is_keyed` names) crossed with the
+  same right-hand sides plus the empty literal, a CONDITIONAL rebind and a double one, with
+  the vector kind and an append (`F-ParamGrow`) as its controls. Its whole row wrote back to
+  the caller: a keyed `=` lowers to `OpReplaceKeyed`, which deep-copies into the store the
+  target's slot names, and for a parameter that is the CALLER's (loft#1294).
   ⚠ **That cross is what this line was missing, and `OPEN: 0` read green over it for a year.**
   The one-cell oracle above asked only `p = [<literal>]`, which was the one spelling with a
   lowering: `p = other` — named in the rule's own text — wrote back to the caller on BOTH
