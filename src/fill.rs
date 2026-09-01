@@ -1442,9 +1442,7 @@ fn free_ref_tag(s: &mut State) {
 fn free_ref_if_distinct(s: &mut State) {
     let v_witness = *s.get_stack::<DbRef>();
     let v_placeholder = *s.get_stack::<DbRef>();
-    if v_placeholder.store_nr != v_witness.store_nr {
-        s.database.free(&v_placeholder);
-    }
+    s.database.free_displaced(&v_placeholder, &v_witness);
 }
 
 fn free_ref_or_hand_up(s: &mut State) {

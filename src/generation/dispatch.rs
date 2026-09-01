@@ -347,11 +347,12 @@ impl Output<'_> {
                 }
                 self.output_code_inner(w, to)?;
                 if amp_owned_writeback {
-                    write!(
-                        w,
-                        "; if _old_disp.store_nr != var_{name}.store_nr {{ \
-                         OpFreeRef(cell, _old_disp, \"_old_disp\"); }} }}"
-                    )?;
+                    // Through the same helper the interpreter's `OpFreeRefIfDistinct`
+                    // reaches, so the distinctness test and the caller's
+                    // protected-from-free refusal (loft#1287) cannot drift between the
+                    // backends.  Inlining the comparison here is what let the native
+                    // side keep freeing a store the caller had marked as not its own.
+                    write!(w, "; OpFreeRefIfDistinct(cell, _old_disp, *var_{name}); }}")?;
                 } else if needs_text_coerce {
                     write!(w, ").to_string()")?;
                 } else if needs_bool_coerce {

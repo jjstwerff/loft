@@ -6972,6 +6972,8 @@ impl Scopes {
         let mut ls: Vec<Value> = Vec::new();
         // @PLN90 / loft#506 — POST-call store-backs for computed-lvalue `&`-write-back args.
         let mut postamble: Vec<Value> = Vec::new();
+        // loft#1287 — the rebind witnesses to mark protected-from-free for THIS call.
+        let mut amp_foreign: Vec<u16> = Vec::new();
         // #248 (interpreter arg-layout) — when the call's first argument is a
         // borrowed receiver pushed via `OpCreateStack(Var(_))` (a `&self` / `&T`
         // method or free-function call), a LATER argument that is an inline
@@ -7054,6 +7056,32 @@ impl Scopes {
                 Value::Span(b) if matches!(b.1, Value::Insert(_)) => b.1,
                 other => other,
             };
+            // loft#1287 — a `&` argument whose binding this frame does NOT own.  The
+            // callee's write-back releases the store the binding stopped naming, and it
+            // cannot see whose that store is: for a plain heap PARAMETER it is the store the
+            // CALLER handed down (`formal/calls.md` F-ParamHeap), owned a frame further up.
+            // Freeing it there is a use-after-free plus a double free against the real
+            // owner's own release.  The rebind witness names that store — the parameter's
+            // ENTRY store, which is the only one this frame never owns, so a REPEATED call
+            // still lets the callee release the fresh store the previous one installed.
+            // `free_displaced` honours the mark; `(F-ParamRebind)`'s function-exit
+            // `OpFreeRefIfDistinct(param, witness)` releases what the binding ends up naming.
+            if outer_call != u32::MAX
+                && let Value::Call(cs, cargs) = scanned.unspan()
+                && *cs == create_stack_nr
+                && let Some(Value::Var(v)) = cargs.first().map(Value::unspan)
+                && let Some(orig) = function.rebind_orig(*v)
+                && data
+                    .def(outer_call)
+                    .attributes()
+                    .get(arg_idx)
+                    .is_some_and(|at| {
+                        matches!(at.typedef, Type::RefVar(ref t)
+                        if matches!(**t, Type::Reference(_, _) | Type::Enum(_, true, _)))
+                    })
+            {
+                amp_foreign.push(orig);
+            }
             if let Value::Insert(ops) = scanned {
                 // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
                 let is_a56_hoisted = Self::is_null_init_preamble(&ops, function);
@@ -7271,6 +7299,19 @@ impl Scopes {
             } else {
                 ls.push(scanned);
             }
+        }
+        for (i, orig) in amp_foreign.iter().enumerate() {
+            preamble.insert(
+                i,
+                Value::Call(
+                    data.def_nr("n_protect_store_frees"),
+                    vec![Value::Var(*orig)],
+                ),
+            );
+            postamble.push(Value::Call(
+                data.def_nr("n_unprotect_store_frees"),
+                vec![Value::Var(*orig)],
+            ));
         }
         (preamble, ls, postamble)
     }

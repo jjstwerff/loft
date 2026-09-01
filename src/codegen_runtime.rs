@@ -465,9 +465,7 @@ pub fn OpFreeRefIfDistinct(
     witness: DbRef,
 ) {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    if placeholder.store_nr != witness.store_nr {
-        stores.free(&placeholder);
-    }
+    stores.free_displaced(&placeholder, &witness);
 }
 
 /// Free an `on=4` iteration scratch at loop exit — a dedicated store goes back

@@ -11253,6 +11253,42 @@ impl Parser {
                 actual.push(actual_code);
                 continue;
             }
+            // loft#1287 — a plain heap PARAMETER handed to a `&` parameter the callee
+            // REBINDS.  The write-back installs a store the callee minted and displaces the
+            // one this binding named, so BOTH ownership questions land here: a plain heap
+            // parameter aliases the caller's argument (`formal/calls.md` F-ParamHeap), so the
+            // displaced store belongs to a frame above and is not the callee's to free, while
+            // the fresh one has no owner at all until this binding takes it — which is what
+            // `(F-ParamRebind)` means by *the rebind is LOCAL*.
+            //
+            // The rebind witness answers both.  It snapshots the parameter's ENTRY store, so
+            // the call-site bracket (`scopes::scan_args`) can mark exactly the store this
+            // frame does not own, and the function-exit `OpFreeRefIfDistinct(param, witness)`
+            // releases the rebound one.  It is the same P2.1 machinery a rebind written in
+            // THIS body already gets; only the spelling of the rebind is different.
+            let mut amp_rebind_arg = u16::MAX;
+            if !self.first_pass
+                && let Type::RefVar(inner) = &tp
+                && matches!(**inner, Type::Reference(_, _) | Type::Enum(_, true, _))
+                && let Value::Var(v) = actual_code.unspan()
+                && self.vars.is_argument(*v)
+                && !matches!(self.vars.tp(*v), Type::RefVar(_))
+                && !self.vars.is_compiler_generated(*v)
+                && !self.is_hidden_param(*v)
+            {
+                let v = *v;
+                let mut cache: HashMap<u32, Vec<bool>> = HashMap::new();
+                if callee_param_rebinds_owned(d_nr, &self.data, &mut cache)
+                    .get(nr)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    amp_rebind_arg = v;
+                }
+            }
+            if amp_rebind_arg != u16::MAX {
+                self.ensure_rebind_witness(amp_rebind_arg);
+            }
             if !self.convert(&mut actual_code, actual_type, &tp) {
                 if report {
                     let context = format!(
@@ -16100,6 +16136,84 @@ fn collect_param_reassigns(
         }
     }
     code.for_each_child(&mut |child| collect_param_reassigns(child, data, n_params, out, cache));
+}
+
+/// For each parameter of `fn_nr`, does a call to it REBIND that parameter to a store the
+/// callee OWNS?
+///
+/// The narrower sibling of [`callee_param_reassigns`]: that one answers *"is the whole
+/// binding reassigned"*, which a rebind to a BORROWED value also satisfies.  Only an OWNED
+/// value displaces a store — the callee mints a new one and the binding stops naming what it
+/// named — so only that asks the ownership-transition question this answers.
+///
+/// The caller of such a function needs the answer at the CALL SITE: the write-back lands in
+/// the caller's binding, so the store the binding stopped naming and the fresh one it now
+/// names are both the caller's question to settle, and the callee cannot see which of them it
+/// owns (loft#1287).
+///
+/// Interprocedural for the same reason its sibling is — a FORWARDER never reassigns, its
+/// callee does — and it shares the recursion-breaking placeholder-then-merge.  The `cache` is
+/// its own: the two queries answer different questions about the same key.
+pub(crate) fn callee_param_rebinds_owned(
+    fn_nr: u32,
+    data: &Data,
+    cache: &mut HashMap<u32, Vec<bool>>,
+) -> Vec<bool> {
+    if let Some(v) = cache.get(&fn_nr) {
+        return v.clone();
+    }
+    let def = data.def(fn_nr);
+    let n = def.attributes().len();
+    cache.insert(fn_nr, vec![false; n]);
+    if *def.code() == Value::Null || n == 0 {
+        return vec![false; n];
+    }
+    let body = def.code().clone();
+    let mut out = vec![false; n];
+    collect_param_rebinds_owned(&body, fn_nr, data, n, &mut out, cache);
+    let prev = cache.get(&fn_nr).cloned().unwrap_or_else(|| vec![false; n]);
+    let merged: Vec<bool> = prev.iter().zip(out.iter()).map(|(a, b)| *a || *b).collect();
+    cache.insert(fn_nr, merged.clone());
+    merged
+}
+
+/// Walk `code` marking every parameter slot rebound to an OWNED value — directly by a
+/// `Value::Set`, or by being handed on to a callee that rebinds the parameter it lands in.
+fn collect_param_rebinds_owned(
+    code: &Value,
+    fn_nr: u32,
+    data: &Data,
+    n_params: usize,
+    out: &mut [bool],
+    cache: &mut HashMap<u32, Vec<bool>>,
+) {
+    if let Value::Set(v, rhs) = code.unspan()
+        && (*v as usize) < n_params
+        && !matches!(rhs.unspan(), Value::Null)
+        && matches!(
+            crate::use_analysis::ownership_of(data, fn_nr, rhs),
+            crate::use_analysis::Own::Owned
+        )
+    {
+        out[*v as usize] = true;
+    }
+    if let Value::Call(callee, args) = code.unspan()
+        && *data.def(*callee).code() != Value::Null
+    {
+        let inner = callee_param_rebinds_owned(*callee, data, cache);
+        for (i, arg) in args.iter().enumerate() {
+            if i < inner.len()
+                && inner[i]
+                && let Value::Var(v) = arg.unspan()
+                && (*v as usize) < n_params
+            {
+                out[*v as usize] = true;
+            }
+        }
+    }
+    code.for_each_child(&mut |child| {
+        collect_param_rebinds_owned(child, fn_nr, data, n_params, out, cache);
+    });
 }
 
 /// Like `find_written_vars` but only collects variables that are FIELD-written
