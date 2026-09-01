@@ -2749,6 +2749,26 @@ is checked. `make falsify` catches the commonest case — a guard that never fai
 build it was written to catch — but it only answers for the commit you name. These are the
 shapes that survive it, each one measured here rather than imagined.
 
+**An ad-hoc `--native` run LINKS `libloft.rlib`, and `cargo build --bin loft` does not
+rebuild it.** So the loop *edit → `cargo build --bin loft` → `loft --native probe.loft`*
+compiles the probe with the NEW compiler and links the OLD library, and the answer reads as a
+measurement. Measured 2026-09-01: a whole native verification of a store-lifetime fix was
+taken this way, looked green, and the regression it hid — `1114`'s named twin reading `7` from
+a recycled slot after a capture was freed — surfaced only from `make ci`.
+
+The tell is what makes it convincing rather than suspicious: **`--interpret` runs inside the
+binary and is always current, so the two backends "agree" precisely because one of them is not
+being tested.** That defeats the repo's own *"verify on BOTH backends"* rule by making the
+cheap way to obey it dishonest — an agreement oracle is only as good as the guarantee that
+both sides are live, and a stale rlib silently turns a differential test into a single-backend
+one that reports as a double.
+
+`make check-rlib` is a one-second pre-flight that says so, and it is worth running before
+treating ANY ad-hoc `--native` result as evidence, not only before a bare `cargo test`. The
+iteration loop for codegen or store-lifetime work is `cargo build --release --lib --bin loft`.
+Note this is NOT the native artifact cache, which keys on `BUILD_ID` and flips correctly on a
+source change — it is the rlib alone.
+
 **A CONTROL cell scored in the same file as the thing it controls can blank every channel
 `falsify.sh` reads.** A control usually fails on the pre-fix build too — that is what makes it a
 control — and if it fails LOUDLY it fixes the file's exit code at the same value on both trees.
