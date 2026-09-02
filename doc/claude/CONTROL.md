@@ -77,6 +77,51 @@ side**, and several cures are themselves invisible mechanics wearing a better la
 `omitted-field-zero` answered by a declared field default moves the silence from the
 literal to the declaration. The census counts mechanics, not diagnostics, for that reason.
 
+## The work queue — what to do about all of it
+
+Designed 2026-09-02 after @PLN152, which closed having found that the null capability was
+never missing (see its [MEASUREMENTS.md](plans/152-validity-flag-null-model/MEASUREMENTS.md)).
+Routed by the lightest workflow that holds each item, not swept into one plan.
+
+### Now — small, self-contained, each one commit
+
+| | item | why now |
+|---|---|---|
+| **N1** | **The implicit-narrow store message sends the author to a refusal.** `v[0] = (v[0] ?? 0) + 10` says *"cast explicitly with `as u8`"*; following it gets a SECOND refusal saying *"use `u8?` for a checked cast"*. Two hops to a cure the first message could have named. | The commonest way an author meets narrow widths, and it currently teaches the wrong move. One message, one test. |
+| **N2** | **A `??` that discharges the READ reads as if it should have helped.** In the shape above the author wrote a `??` and it did not apply, because the store's root is `+`. Either say so, or fold it into N1's wording. | Same site as N1; decide together or the two messages will disagree. |
+| **N3** | **`declared_range` cannot see narrow aliases** — it returns `None` the moment `forced_size` is set, so a guard reaching for it silently claims nothing. Cost me a wrong no-op in @PLN152 step 2. | A doc comment on both functions naming which spellings each answers. Pure prevention. |
+| **N4** | **`git checkout --theirs` takes the WHOLE file**, not the conflicted hunk — it reverted 101 lines of a chapter during this session's join, the second time that has happened here. | One paragraph in [DEVELOPMENT.md](DEVELOPMENT.md)'s join guidance. |
+| **N5** | **The sibling branch is missing four stdlib section markers** (`04_stacktrace`, `05_coroutine`, `06_json`, `07_reflect`), which renames a nav link JSON→Json across 197 pages when it merges. | Land after the in-flight PR merges, not before — moving a file inside a frozen range is the wrong order. |
+
+### Next — an `## Open work` row in the doc that owns it
+
+| | item | home |
+|---|---|---|
+| **O1** | `D-op-5` — two spellings of a following null-check still report differently. The last null-specific open deviation; `types.md` is at OPEN: 0. | [formal/operational.md](formal/operational.md) |
+| **O2** | Is `u32` a third case? Its spare code exists but sits at the top where no non-null read tests for it. Measured defaulting with the four; confirm that is deliberate and not an accident of `min < 0`. | [formal/types.md](formal/types.md) |
+| **O3** | No capacity control for `sorted`/`index`/`spatial`/`trie` — item 5 of the census, and the refusal message claims they have *"no capacity to set"* while their arena grows 7/3 and holds 43 % slack. | [STDLIB.md](STDLIB.md) § `reserve` |
+
+### The one plan-sized item
+
+**P1 — null provenance.** Item 1 of the census, unchanged all session and the largest control
+gap that survives. C80 makes null contagious and silent by design, so a null tells you where it
+SURFACED and never where it AROSE; `--dev-soft-halt` names fault sites but nothing links an
+observed null back to the fault that produced it. Everything else on this page is a message, a
+row, or a doc comment — this is the one that needs a design.
+
+Its shape is also now better understood than when this page was written: @PLN152 measured that
+a per-value bit is affordable only where it is *asked for*, and that ordinary arithmetic
+(`integer`/`float`/`single`) keeps a sentinel and needs nothing. A provenance design should
+inherit that constraint rather than rediscover it.
+
+### Deliberately NOT queued
+
+Census items 2, 3, 4, 6 and 7–9 stay as measurements, not tasks. Each is a policy question the
+owner has not asked for — whether a copy should be able to fail a build, whether a native
+optimisation should be expressible in source, whether a program may demand a backend — and
+turning a measurement into a task before that call is made is how a census becomes a backlog
+nobody agreed to.
+
 ## How to re-measure
 
 The census is meant to be re-derived, not trusted:

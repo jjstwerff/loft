@@ -396,3 +396,39 @@ Consequences:
   assignment supplies the target), but it is new syntax and was ruled out on that ground.
 - It sharpens what the adjacent form IS: not a convenience over the in-expression spelling,
   but the only spelling in which the question can be asked at all without new syntax.
+
+## The closing measurement — the capability was never missing (2026-09-02)
+
+Run on the **pre-arc-A build** (`4f229521`), before any of this plan's code:
+
+```loft
+x: u8 = 250;
+x = ((x + 10) as u8?) ?? 255;        // -> 255   choose the fallback
+f.i = 200;
+fit = (f.i + 100) as u8?;
+f.i = fit ?? 0;
+if !fit { … }                        // -> detects, f.i = 0   see the failure
+```
+
+Both halves — choose the value AND know it happened — **already worked**, using `as τ?` (the
+DN4 checked cast, shipped 2026-07-02) with `??` and `!`. This plan opened on the premise that
+an author *cannot write correct code* for the fit-failure edge. **That premise was false**, and
+it stayed unexamined for most of the plan's life because every probe tested the spellings the
+plan proposed rather than the ones that already existed.
+
+What was genuinely wrong is narrower and still worth the fix that shipped:
+
+- the narrowing refusal **advertised `?? d` as its cure** and `?? d` did not work in the
+  position it was offered — a diagnostic promising something untrue, which arc A made true;
+- the natural spelling `(x + 10) ?? 255` required an explicit `as u8?` that the author had no
+  reason to expect.
+
+So arc A closed a message/behaviour mismatch and removed a ceremony step. Arc B would have
+removed one more (the explicit `fit` temp) from a form that already works. That is ergonomics
+on a working capability, not a missing one — which is why the plan closes here rather than
+carrying arc B as an obligation.
+
+**The lesson worth keeping is the method one.** Every probe in this plan tested what the design
+proposed. None tested whether the existing surface could already express the case, and that
+question was one build away the entire time — the same cached falsify worktree that answered it
+in the end had been sitting there since step 2.
