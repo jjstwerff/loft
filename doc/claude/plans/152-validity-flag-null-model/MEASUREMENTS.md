@@ -277,3 +277,42 @@ consolidation case — the hot-path sentinel tests (A measured the saving), the 
 `Op*Nullable` duplicates, the `_nn` lattice this would make unnecessary, and provenance —
 and that is a value judgement about scope, not a defect list. **F and G should not start
 before that call is made.**
+
+## The fallback surface, measured 2026-09-02 (the rewrite's basis)
+
+The owner's ask — *"let users use the `?? 1.0` notation for the overflow case, opt-in"* —
+turned out to be half-shipped, and the missing half fails for a reason worth stating exactly.
+
+**On a type that keeps a sentinel, `??` already supplies the author's fallback**, at runtime,
+with no static knowledge:
+
+```loft
+fn bump(v: integer, d: integer) -> integer { (v + d) ?? 42 }
+fn plain(v: integer, d: integer) -> integer { v + d }
+```
+
+| call | answer |
+|---|---|
+| `bump(i64::MAX, 1)` | **42** — the author's fallback on a real overflow |
+| `plain(i64::MAX, 1)` | `null` — C85's default |
+| `bump(2, 3)` | `5` — the ordinary path is untouched |
+
+No `redundant-coalesce`, no static range knowledge needed. So for `integer` and `i32` the
+feature exists and is pinned by nothing.
+
+**The narrow widths do not fail because the `??` is missing — their fault is not a null.**
+
+| fault | null? | can a coalesce see it? |
+|---|---|---|
+| `x: integer` overflow → the sentinel | yes | yes — works today |
+| `x: u8 = 250; x += 10` → `260` | **no**, an ordinary number | **no** |
+
+`260` never becomes null, so no `??` can fire on it; the only thing that handles it is
+`OpRangeDefault`'s `dflt`, which is always compiler-chosen. That is the gap — a fallback the
+author cannot reach, not an operator that is absent.
+
+And the diagnostic already promises the cure. The narrowing refusal reads *"guard the value
+(`?? d`, mask, or an `if` range check)"*, while `a = (a + 10) ?? 255` into a `u8` is refused:
+`a + 10` has range `[10, 265]` and the `??` clamps nothing, because there is no null to
+substitute for. **The message advertises a cure that does not work in the position it is
+offered.** One of the two has to move, which is an open question of the rewritten plan.

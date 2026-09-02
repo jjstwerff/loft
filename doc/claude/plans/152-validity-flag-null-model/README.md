@@ -3,133 +3,136 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 152 — Retire the silent default: a fit-failing narrow store must be typed, not defaulted
+# 152 — Let the author choose the fallback, instead of taking the type's default
 
 ## Status
 
 **Rewritten 2026-09-02 (owner call).** The plan opened as *"carry validity beside the
-value"*; four phases of measurement retired that mechanism and left one thing genuinely
-wrong, which is now the whole plan: **a fault reaching a narrow non-null slot takes the
-type's DEFAULT — a legal, in-range value indistinguishable from a computed one.**
+value"*; four measurement phases retired that mechanism and shipped the one real defect it
+was aimed at. What is left, and is now the whole plan, is the owner's ask: **a fit-failing
+operation should be able to take a fallback the AUTHOR chose — `?? 255` — instead of
+silently taking the type's default.** Opt-in: write nothing and behaviour is unchanged.
 
-What the measurement phases settled, and why they redirected the plan, is in
-[MEASUREMENTS.md](MEASUREMENTS.md). The short version: the defect list was already banked by
-other work (B), the collapse site already existed and already reported (C), the one real hole
-closed with two lines at that site (E, shipping loft#1305 + loft#1306) — and the flag itself
-measured a **net +0.5–0.8 % slowdown**, so its performance argument is refuted by its own
-Phase A. **The flag is retired.** Phases F–H that depended on it are dropped.
+Retired: the validity flag (Phase A measured it a **net +0.5–0.8 % slowdown**, so its own
+performance argument is refuted) and phases F–H that depended on it. Shipped from the
+measurement phases: loft#1305 and loft#1306. The record is in
+[MEASUREMENTS.md](MEASUREMENTS.md).
 
 Tracker: [@PLN152](https://github.com/loft-lang/plans/issues/152).
 
 ## Goal
 
-A fit-failing operation whose target is a declared-narrow slot types `τ?` and requires
-discharge, so the language never silently substitutes a value the author did not choose.
+`?? <value>` supplies the fallback for a fit-failing operation on a declared-narrow slot,
+where today only `uncomputable_default`'s choice is possible.
 
-## The rules already prescribe this
+## Half of this already works — and the other half fails for a different reason
 
-This is not a design proposal. [`formal/types.md`](../../formal/types.md) says it:
+Measured 2026-09-02, and it decides the shape of the work:
 
-> `a op b` and `e as τ` are **non-null when the result provably fits** the target range …
-> and `τ?` only when the range could miss (a narrowing `as`, **a declared-narrow slot**, a
-> genuinely i64-overflowing product).
->
-> Overflow-to-null is therefore the *correct* runtime behavior … **the work is to type it
-> and require discharge**.
+```loft
+fn bump(v: integer, d: integer) -> integer { (v + d) ?? 42 }
 
-*A declared-narrow slot* is named explicitly. So `x: u8 = 250; x += 10` should type `u8?`
-and demand a discharge; it instead types `u8`, takes `0`, and says nothing. **That is a
-deviation from a written rule, not a decided edge** — which is what makes this plan
-obligatory rather than optional.
+bump(big, 1)   ->  42     // the author's fallback, on a RUNTIME overflow
+plain(big, 1)  ->  null   // C85's default, unchanged
+bump(2, 3)     ->  5      // the ordinary path is untouched
+```
 
-## Why the narrow case is different from C85, precisely
+So on a type that keeps a sentinel (`integer`, `i32`), `??` **already** catches an overflow
+and supplies the author's value, with no static knowledge and no `redundant-coalesce`. That
+half needs documenting and a guard, not building.
 
-[C85](../../DESIGN_DECISIONS.md) keeps `+ - *` typed non-null because forcing `integer?` on
-all arithmetic *"poisons the common path to guard a fault that essentially never fires"*.
-That is a **proportionality** argument, and it is calibrated for `i64`: overflow there needs
-operands around 3 × 10⁹.
+**The narrow widths fail for a reason that is not "the `??` is missing".** Their fault is
+not a null at all:
 
-**For a `u8` the same fault fires at 256.** The exemption's premise is simply false at narrow
-widths, so extending it there was a mis-application rather than a decision. C85 does not need
-reversing — it needs its scope stated: the exemption is an i64 judgement.
+| the fault | is it null? | can `??` see it? |
+|---|---|---|
+| `x: integer` overflows → the sentinel | yes | **yes — works today** |
+| `x: u8 = 250; x += 10` → `260`, out of range | **no** — 260 is an ordinary number | **no** |
 
-This is also why the burden stays small. Nullability is **range-driven**, so range-tracking
-already proves the fitting cases and they keep their non-null type: `(x & 255) as u8` and
-`(non-neg) % c as u8` demand nothing today and will demand nothing after.
+`260` never becomes null, so no coalesce can fire on it. The only thing that handles it is
+`OpRangeDefault`'s `dflt` argument, and that argument is always compiler-chosen. **That is
+the gap: not a missing operator, a fallback the author cannot reach.**
 
-## Scope
+## The home already exists
 
-**In** — the widths with no usable sentinel, which are exactly the ones that default:
-`u8`, `i8`, `u16`, `i16`, and `u32` (whose spare code is the top one, which no non-null read
-tests for).
+Phase E left the collapse at one site both backends share:
 
-**Out** — plain `integer` and `i32`. They keep a bottom code back, already answer `null`, and
-C85 governs them unchanged. Also out: the validity flag, and any change to `OpRangeDefault`'s
-runtime behaviour. **This plan changes what a fit-failing narrow op is TYPED, not what the
-runtime does with it.** The collapse stays where Phase E put it; it simply stops being
-reachable without the author having said what should happen.
+```
+OpRangeDefault(val, lo, hi, dflt)
+```
 
-## ⚠ Pre-freeze only
+`dflt` **is** the fallback slot. It is filled today by `uncomputable_default(nullable, spec)`.
+The whole feature is letting an author-written value fill it instead — which is why this is a
+small change with an exact home rather than a new mechanism.
 
-Requiring a discharge is **ADDING an error**, and
-[COMPATIBILITY.md](../../COMPATIBILITY.md) § *The error surface is one-directional* says loft
-may never add one after contract 1. So this lands before the freeze or not at all — and that
-asymmetry is also the argument for doing it now rather than deferring: dropping the
-requirement later is always legal, re-adding it never is.
+## Opt-in, and therefore not pre-freeze-bound
+
+Writing nothing keeps today's behaviour, so this **adds no error and changes no existing
+program**. Under [COMPATIBILITY.md](../../COMPATIBILITY.md) § *The error surface is
+one-directional* that makes it legal at any time, including after contract 1 — unlike the
+forced-discharge shape, which would have been pre-freeze-only. The opt-in framing is what
+buys that freedom, and it is the reason to prefer it beyond ergonomics.
 
 ## Composition matrix — Stage A
 
-Axes this change touches: **target width** (`u8`/`i8`/`u16`/`i16`/`u32` in; `i32`/`integer`
-as the must-not-move controls), **nullability** (`τ` vs `τ?` — the nullable spelling already
-answers null and must stay burden-free), **the seam** (local compound assign · field store ·
-element store · call argument · return · `par` merge · deserialisation), and **fit
-provability** (provably-fits must stay non-null; provably-misses and cannot-prove must type
-`τ?`). Backends: both, though this is a parse-time change and the runtime is untouched.
+Axes: **target width** (`u8`/`i8`/`u16`/`i16`/`u32` — and `integer`/`i32` as the controls
+that must not move, since they already work), **fault shape** (out-of-range vs landing on the
+sentinel — Phase B pinned this axis and Phase C showed they are different paths), **the
+seam** (local compound assign · field · element · argument · return), **fallback kind**
+(constant · variable · expression — `dflt` is `const integer` today, which bounds what is
+expressible), and **backend**.
 
-The existing probes are the before-half: [`probes/`](probes/) (19 value cells + the refusal
-and diagnostic channels) and [`probes/axis/`](probes/axis/) (overflow shape × storage kind).
-Their expectations change only in the cells this plan intends to move, which is the gate.
+The before-half exists: [`probes/`](probes/) and [`probes/axis/`](probes/axis/). A cell where
+no `??` is written must be byte-identical to today — that is the opt-in claim, and it is what
+the matrix must prove rather than assert.
 
 ## Sub-arcs
 
 | Item | Source | Verify | Status |
 |---|---|---|---|
-| **N1** — measure the real conversion set: instrument the parser to count narrow-target seams where the fit is NOT provable, and confirm range-tracking already clears the provable ones | this README | the count, plus a hand-checked sample; a burden far above the ~16 files a first grep suggests kills the clean design and routes to a narrower seam set | Open |
-| **N2** — type the result `τ?` at the compound-assign seam where the fit is not provable | § the rules | the axis matrix's narrow cells stop answering `0` and start demanding a discharge; the provably-fitting cells are UNCHANGED (the control that a blanket rule would fail) | Open |
-| **N3** — the remaining narrow-target seams: field, element, argument, return | `guard_declared_range` / `compound_range` | one cell per seam, both backends; the `i32` and `integer` controls must not move | Open |
-| **N4** — convert the in-tree sites, then the published-lib gate | `scripts/revalidate_libs_local.sh` | `make ci`, then the lib gate — a language change is not green until the published libraries build | Open |
-| **N5** — rules + decision record: close the deviation, and state C85's exemption as an i64 judgement | `formal/types.md`, `DESIGN_DECISIONS.md` | `scripts/rule_tags.py check`; the deviation register moves | Open |
+| **P1** — pin what already works: `??` on a sentinel-bearing overflow, both backends, and that it is NOT reported redundant | § half of this already works | a `tests/scripts/` guard; it must FAIL if the coalesce stops firing, which `make falsify` can answer against a build with `??` stripped | Open |
+| **P2** — decide the SPELLING for the narrow case (§ open questions), and write it down before implementing | § open questions | a design note the owner signs off; no code | Open |
+| **P3** — route an author-written fallback into `OpRangeDefault`'s `dflt` at the compound-assign seam | `parser/expressions.rs::compound_range` | the axis matrix's narrow cells answer the author's value; **every cell with no `??` is unchanged** | Open |
+| **P4** — the remaining seams: field, element, argument, return | `guard_declared_range` | one cell per seam on both backends; `integer`/`i32` controls unmoved | Open |
+| **P5** — a non-constant fallback, or a decision that it stays constant | `dflt` is `const integer` | either a cell with a variable fallback, or a recorded decision saying why not | Open |
+| **P6** — document it: the narrowing error already advertises `?? d`, so the doc and the diagnostic must agree | `DIAGNOSTICS.md`, the reference chapter | the advertised cure works when followed | Open |
 
 ## Phase ordering
 
-1. **N1 first, and it can kill the plan.** The whole case rests on the burden being
-   proportional. If the un-provable set is large, the answer is a narrower seam set, not a
-   blanket rule — and better to learn that from a count than from a converted tree.
-2. **N2 before N3**: the compound assign is the seam the defect was filed at, and it is the
-   one with an existing matrix.
-3. **N4 cannot be skipped.** `make ci` green is not the bar for a language change; the
-   published libraries are.
-4. **N5 last**, so the rules record what shipped rather than what was intended.
+1. **P1 first.** It is cheap, it protects behaviour that already ships and is currently
+   pinned by nothing, and it establishes the guard shape the later phases reuse.
+2. **P2 before any code.** The spelling is the one irreversible part — a surface, once
+   shipped, is frozen — so it is decided on paper and signed off, not discovered in a patch.
+3. **P3 → P4** widens seam by seam, each with its own cell, because a seam that silently
+   keeps the compiler's default would otherwise pass by looking unchanged.
+4. **P5** is a scope valve: if a non-constant fallback needs a new op, it may be a separate
+   plan rather than this one growing.
 
 ## Open design questions
 
-1. **What happens at a seam that cannot be typed** — a `par` merge, deserialisation, a store
-   image read. Those write a narrow slot without an expression to type. The collapse still
-   applies there; whether it should also report is N3's question, not N2's.
-2. **Does `u32` belong with the four, or with `i32`?** Its spare code exists but is at the
-   top, where no non-null read tests for it. Phase B measured it answering the default like
-   the four; the rules describe it that way. Confirm it is not a third case.
-3. **Is the discharge the right ergonomics, or should a narrow slot get a declared
-   saturating/wrapping intent?** `x: u8 = 250; x += 10` demanding `?? 0` is honest but
-   verbose where the author wanted saturation. Out of scope here — but if it is the real
-   answer, N2 is the wrong shape, so it is worth asking before N2 rather than after.
+1. **The spelling — this is the real question, and P2 exists for it.** `x += 10` has nowhere
+   obvious to hang a fallback: `x += 10 ?? 255` parses as `x += (10 ?? 255)`, which coalesces
+   the operand, not the result. Candidates: `x = (x + 10) ?? 255` (works grammatically, but
+   today it is refused by the narrowing check — so the check has to learn that a `??` supplies
+   the guard the message already asks for), a declaration-site default
+   (`x: u8 = 250 ?? 255` — reads as the wrong thing), or an attribute on the type. **None is
+   obviously right; that is why it is a phase.**
+2. **Should the narrowing error's advertised cure be made true, or the message changed?** It
+   says *"guard the value (`?? d`, mask, or an `if` range check)"* and `?? d` does not
+   currently work there. One of the two has to move.
+3. **Constant or expression?** `dflt` is `const integer`, so a constant is nearly free and an
+   expression needs the fallback evaluated at the collapse. The owner's `?? 1.0` example is a
+   literal, so P3 can ship constants and P5 decides the rest.
+4. **Does the sentinel arm want it too?** Phase E made a sentinel collapse silently to the
+   default on a narrow slot. If an author writes a fallback, it should presumably win there as
+   well — one rule for both arms, not two.
 
 ## See also
 
-- [MEASUREMENTS.md](MEASUREMENTS.md) — phases A/B/C/E: what was measured, and the two
-  corrections it forced on this plan's own premise.
-- [`formal/types.md`](../../formal/types.md) § Null-flow laws — the rule this plan makes hold.
-- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) C85 (the i64 exemption), C90 (the in-band
-  residual), C80 (the spreadsheet model, unchanged).
-- [COMPATIBILITY.md](../../COMPATIBILITY.md) § The error surface is one-directional.
+- [MEASUREMENTS.md](MEASUREMENTS.md) — phases A/B/C/E, and the two corrections they forced on
+  this plan's own premise.
+- [`formal/types.md`](../../formal/types.md) § Null-flow laws · `(E-Uncomp-NN)` in
+  [`formal/operational.md`](../../formal/operational.md) — the rule that names the default.
+- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) C85 (why arithmetic stays non-null), C80.
+- [COMPATIBILITY.md](../../COMPATIBILITY.md) — why opt-in is not pre-freeze-bound.
 - Shipped from the retired phases: loft#1305, loft#1306.
