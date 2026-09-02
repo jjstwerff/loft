@@ -414,7 +414,18 @@ needed** (the iterator cannot be partitioned natively).  Normally a
 into **contiguous index ranges** (`[start,end)` per thread) and fetches
 element `i` via `vector::get_vector(input, elem_size, i)` — i.e. it needs
 **O(1) random access by index** over a known row count with a uniform
-element size.  The parser enforces this at
+element size.
+
+⚠ **`elem_size` is the width of the SLOT the container holds, not of what
+the element points at**, and the two part company for a nested collection:
+a `vector<vector<T>>` stores a 4-byte record index per row whatever `T` is.
+`par_elem_size` reached it through `type_elm`, which resolves a
+`vector<integer>` element to `integer` and answered 8 — so the worker
+strode twice per row, saw rows 0 and 2, and then read past the end, where
+C80 hands back the element's default rather than faulting. `vector<text>`
+was the one inner type that worked, because `text`'s db size is 4 by
+coincidence. A wrong stride here is silent by construction: the runtime has
+no row identity to check the fetch against (loft#1033).  The parser enforces this at
 `src/parser/collections.rs:1855` (`"par(...) requires a vector<T> input"`).
 A `for`-iterable is otherwise one of: an index-addressable vector; a
 counted range; or a **sequential cursor** (keyed B-tree/hash `OpStep`,
