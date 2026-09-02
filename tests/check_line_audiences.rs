@@ -71,10 +71,21 @@ fn the_live_host_still_gets_the_source_and_artifact_it_parses() {
     let line = stdout.lines().find(|l| l.starts_with("ok ")).unwrap_or("");
 
     // `live_dispatch::spawn_build` strips exactly `ok <src> ` and takes the rest.
-    let src = dir.join("hello.loft");
-    let prefix = format!("ok {} ", src.display());
-    let artifact = line
-        .strip_prefix(&prefix)
+    //
+    // The source is named under BOTH spellings of the case directory, because the driver
+    // reports the path it resolved and the test built its own from `temp_dir()`. On macOS
+    // those differ: `/var` is a symlink to `/private/var`, so the driver says
+    // `/private/var/folders/…/hello.loft` where this test had `/var/folders/…/hello.loft`
+    // and the prefix matched nothing. Canonicalising is not enough on its own — on Windows
+    // it yields a `\\?\C:\…` verbatim path the driver never prints — so both spellings are
+    // offered and whichever the driver used is accepted.
+    let mut candidates = vec![dir.join("hello.loft")];
+    if let Ok(resolved) = std::fs::canonicalize(&dir) {
+        candidates.push(resolved.join("hello.loft"));
+    }
+    let artifact = candidates
+        .iter()
+        .find_map(|src| line.strip_prefix(&format!("ok {} ", src.display())))
         .unwrap_or_else(|| {
             panic!("the live host parses `ok <src> <artifact>`; the driver said {line:?}")
         })
