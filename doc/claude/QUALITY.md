@@ -2419,7 +2419,9 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 678 | 324 | 5 | **349** |
+| 679 | 326 | 5 | **348** |
+
+The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
 
 loft#1291 moved one site OFF the opaque column — the first entry here that does.
 `Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value

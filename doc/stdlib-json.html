@@ -66,7 +66,8 @@
 </div>
 <div class="item">
 <pre><code>pub fn as_text(self: JsonValue) -&gt; text</code></pre>
-<p>Typed extractor — returns `null` (empty text) on kind mismatch.</p>
+<p>Typed extractor — returns `null` on kind mismatch.</p>
+<p>The null is NOT the empty text, and only `??` tells the two apart: on a mismatch `s == &quot;&quot;` is false and `len(s)` is 1, while a field that really holds `&quot;&quot;` compares equal and measures 0.  Reach for `as_text(...) ?? fallback`, never `== &quot;&quot;`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn as_number(self: JsonValue) -&gt; float</code></pre>

@@ -11,6 +11,8 @@
 // leaf values.  Malformed input returns `JNull` rather than panicking;
 // the last parse error is retrievable via `json_errors()`.
 
+// ---  JSON  ---
+
 /// Typed union of JSON values.  The discriminant (1..6) picks the
 /// active variant; variant data lives in the variant's fields.
 /// Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an
@@ -87,8 +89,11 @@ pub fn item(self: JsonValue, index: integer) -> JsonValue;
 pub fn len(self: JsonValue) -> integer;
 #pure
 
-/// Typed extractor — returns `null` on kind mismatch.  Null and the empty text `""` are
-/// different answers: a JSON string that IS empty reads back as `""`.
+/// Typed extractor — returns `null` on kind mismatch.
+///
+/// The null is NOT the empty text, and only `??` tells the two apart: on a mismatch
+/// `s == ""` is false and `len(s)` is 1, while a field that really holds `""` compares
+/// equal and measures 0.  Reach for `as_text(...) ?? fallback`, never `== ""`.
 pub fn as_text(self: JsonValue) -> text;
 #pure
 
