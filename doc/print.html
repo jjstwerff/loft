@@ -75,7 +75,7 @@
 <li class="toc-indent"><a href="#stdlib-vector-operations">Vector operations</a></li>
 <li class="toc-indent"><a href="#stdlib-stack-traces">Stack traces</a></li>
 <li class="toc-indent"><a href="#stdlib-coroutines">Coroutines</a></li>
-<li class="toc-indent"><a href="#stdlib-json">Json</a></li>
+<li class="toc-indent"><a href="#stdlib-json">JSON</a></li>
 <li class="toc-indent"><a href="#stdlib-type-reflection">Type reflection</a></li>
 </ul>
 </nav>
@@ -2324,6 +2324,9 @@ Numeric    — `*` and the UNARY `-a`.  NOT `+`, NOT `/`
 Scalable   — the method `scale(self, factor: integer) -&gt; integer`.  Not an
              operator, and no built-in type satisfies it — it is for your own types
 Printable  — the method `to_text() -&gt; text`, and `"{x}"` interpolation
+Walkable   — the method `children() -&gt; vector&lt;Self&gt;`.  The standard library's
+             `tree_walk` is bounded by it, so defining `children` on your own
+             type gets you a breadth-first walk without writing one
 </code></pre>
 <p>Reach for <code>Ordered + Addable</code> when you want <code>+</code> and a comparison. No built-in interface offers binary SUBTRACTION: <code>Numeric</code>'s <code>-</code> is the unary negation, and <code>-</code> desugars to the same <code>OpMin</code> name at both arities, so <code>a - b</code> under a bound is refused and you write the subtraction against a concrete type.</p>
 <pre><code><span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
@@ -2367,6 +2370,7 @@ Numeric    fn OpMul(self: T, other: T) -&gt; T           (`*`)
            fn OpMin(self: T) -&gt; T                     (unary `-`)
 Scalable   fn scale(self: T, factor: integer) -&gt; integer
 Printable  fn to_text(self: T) -&gt; text
+Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
 </code></pre>
 <p>The same definition serves the bare operator: once <code>Money</code> has <code>OpLt</code>, both <code>a &lt; b</code> and <code>&lt;T: Ordered&gt;</code> work on it. Miss one and the error names it — "<code>Money</code> does not satisfy interface <code>Ordered</code>: missing OpLt" — at the CALL site, because that is where the concrete type is known.</p>
 <pre><code><span class="kw">struct</span> <span class="en">Money</span> { cents: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
@@ -2385,6 +2389,18 @@ Printable  fn to_text(self: T) -&gt; text
   total = <span class="fn-call">clamped_add</span>(cheap, cheap, <span class="en">Money</span> { cents: <span class="nm">1000</span> });
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total.cents == <span class="nm">600</span>, <span class="st">"Addable on a user type: {total.cents}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">described</span>(dear) == <span class="st">"700c"</span>, <span class="st">"Printable on a user type: {described(dear)}"</span>);
+}
+<span class="kw">struct</span> <span class="en">Crate</span> { label: <span class="ty"><a href="stdlib-types.html">text</a></span>, kids: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Crate</span>&gt; }
+<span class="kw">fn</span> <span class="fn-call">children</span>(self: <span class="en">Crate</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Crate</span>&gt; { self.kids }
+<span class="kw">fn</span> <span class="fn-call">test_walkable</span>() {</code></pre>
+<p><code>children</code> is the whole of what Walkable asks for; <code>tree_walk</code> is the stdlib's, bounded by it, and it visits the root before either child.</p>
+<pre><code>  tree = <span class="en">Crate</span> { label: <span class="st">"root"</span>, kids: [
+    <span class="en">Crate</span> { label: <span class="st">"a"</span>, kids: [] },
+    <span class="en">Crate</span> { label: <span class="st">"b"</span>, kids: [] },
+  ] };
+  seen = <span class="st">""</span>;
+  <span class="kw">for</span> node <span class="kw">in</span> <span class="fn-call"><a href="stdlib-vector-aggregates.html">tree_walk</a></span>(tree, <span class="nm">10</span>) { seen += <span class="st">"{node.label} "</span>; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(seen == <span class="st">"root a b "</span>, <span class="st">"Walkable on a user type: {seen}"</span>);
 }</code></pre>
 <h2 id="disallowed-operations">Disallowed operations</h2>
 <p>The compiler rejects operations the bound does not cover, and it says which: <code>x + y</code> on unbounded T   — "generic type T: operator <code>+</code> requires a concrete type" <code>x.field</code> on T           — "generic type T: field access requires a concrete type" The same wording covers an operator OUTSIDE a bound: <code>x + y</code> under <code>Numeric</code> and <code>x - y</code> under <code>Addable</code> are refused in exactly those words.</p>
@@ -2395,6 +2411,7 @@ Printable  fn to_text(self: T) -&gt; text
   <span class="fn-call">test_bounded</span>();
   <span class="fn-call">test_combined_bounds</span>();
   <span class="fn-call">test_user_type_bounds</span>();
+  <span class="fn-call">test_walkable</span>();
 }</code></pre>
 </section>
 <section class="print-section" id="26-closures">
@@ -3172,7 +3189,7 @@ Printable  fn to_text(self: T) -&gt; text
 <section class="print-section" id="33-features">
 <h1>Feature catalogue</h1>
 <p>Every language surface and every part of the toolchain the catalogue tracks, in one list.  Each entry has a page of its own in <code>doc/features/</code> in the repository, where <code>@F2</code> is <code>F2.md</code>.</p>
-<p>The two halves read differently.  An <code>@F</code> page says what the feature is and how it aids you, and 66 of the 82 carry a runnable example; the rest name what demonstrates them instead, because a loft program cannot run the compiler that runs it.  An <code>@I</code> page says what the part does and where it lives in the source — it describes how loft is built, not something you write.</p>
+<p>The two halves read differently.  An <code>@F</code> page says what the feature is and how it aids you, and 70 of the 86 carry a runnable example; the rest name what demonstrates them instead, because a loft program cannot run the compiler that runs it.  An <code>@I</code> page says what the part does and where it lives in the source — it describes how loft is built, not something you write.</p>
 <p>The catalogue is generated from the <code>loft-lang/features</code> issue tracker, which is the single source of truth: every entry is an issue, and <code>make features-check</code> regenerates this page and fails on any difference.  A feature you can name and cannot find below is missing from the TRACKER — that is a gap in the catalogue rather than a gap in loft, and the chapters of this reference are the wider list.</p>
 <h2 id="language-features">Language features</h2>
 <ul>
@@ -4930,7 +4947,7 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>pub fn exhausted(gen: reference) -&gt; boolean</code></pre>
 <p>CO1.6: Returns true if the coroutine has finished producing values.</p>
 </div>
-<h2 id="stdlib-json">Json</h2>
+<h2 id="stdlib-json">JSON</h2>
 <div class="item">
 <pre><code>pub enum JsonValue {
   JNull,
@@ -4941,9 +4958,7 @@ Printable  fn to_text(self: T) -&gt; text
   JObject { fields: vector&lt;JsonField&gt; },
   JInteger { value: integer },
 }</code></pre>
-<p>Copyright (c) 2026 Jurjen Stellingwerff SPDX-License-Identifier: LGPL-3.0-or-later @F42 — JSON (catalogue anchor, @PLN92)</p>
-<p>First-class JSON as a typed tree.</p>
-<p>`json_parse(text)` returns a `JsonValue` enum whose variants cover every JSON kind.  Callers match on the variant to access the payload, chain `field()` / `item()` for dynamic-shape navigation, and use the typed extractors (`as_text`, `as_number`, `as_long`, `as_bool`) for leaf values.  Malformed input returns `JNull` rather than panicking; the last parse error is retrievable via `json_errors()`. Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
+<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
 <p>`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV_DISCR_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.</p>
 </div>
 <div class="item">

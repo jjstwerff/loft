@@ -5236,6 +5236,9 @@ Numeric    — `*` and the UNARY `-a`.  NOT `+`, NOT `/`
 Scalable   — the method `scale(self, factor: integer) -> integer`.  Not an
              operator, and no built-in type satisfies it — it is for your own types
 Printable  — the method `to_text() -> text`, and `"{x}"` interpolation
+Walkable   — the method `children() -> vector<Self>`.  The standard library's
+             `tree_walk` is bounded by it, so defining `children` on your own
+             type gets you a breadth-first walk without writing one
 ```
 
 Reach for `Ordered + Addable` when you want `+` and a comparison. No built-in interface offers binary SUBTRACTION: `Numeric`'s `-` is the unary negation, and `-` desugars to the same `OpMin` name at both arities, so `a - b` under a bound is refused and you write the subtraction against a concrete type.
@@ -5292,6 +5295,7 @@ Numeric    fn OpMul(self: T, other: T) -> T           (`*`)
            fn OpMin(self: T) -> T                     (unary `-`)
 Scalable   fn scale(self: T, factor: integer) -> integer
 Printable  fn to_text(self: T) -> text
+Walkable   fn children(self: T) -> vector<T>
 ```
 
 The same definition serves the bare operator: once `Money` has `OpLt`, both `a \< b` and `\<T: Ordered\>` work on it. Miss one and the error names it — "'Money' does not satisfy interface 'Ordered': missing OpLt" — at the CALL site, because that is where the concrete type is known.
@@ -5318,6 +5322,22 @@ Bind a generic's result before reading through it — loft\#1273 retains one rec
   assert(total.cents == 600, "Addable on a user type: {total.cents}");
   assert(described(dear) == "700c", "Printable on a user type: {described(dear)}");
 }
+struct Crate { label: text, kids: vector<Crate> }
+fn children(self: Crate) -> vector<Crate> { self.kids }
+fn test_walkable() {
+```
+
+`children` is the whole of what Walkable asks for; `tree\_walk` is the stdlib's, bounded by it, and it visits the root before either child.
+
+```rust
+  tree = Crate { label: "root", kids: [
+    Crate { label: "a", kids: [] },
+    Crate { label: "b", kids: [] },
+  ] };
+  seen = "";
+  for node in tree_walk(tree, 10) { seen += "{node.label} "; }
+  assert(seen == "root a b ", "Walkable on a user type: {seen}");
+}
 ```
 
 === Disallowed operations
@@ -5339,6 +5359,7 @@ fn main() {
   test_bounded();
   test_combined_bounds();
   test_user_type_bounds();
+  test_walkable();
 }
 ```
 
@@ -6759,7 +6780,7 @@ Calling the inner function directly does the same thing, and calling it twice is
 
 Every language surface and every part of the toolchain the catalogue tracks, in one list.  Each entry has a page of its own in `doc/features/` in the repository, where `\@F2` is `F2.md`.
 
-The two halves read differently.  An `\@F` page says what the feature is and how it aids you, and 66 of the 82 carry a runnable example; the rest name what demonstrates them instead, because a loft program cannot run the compiler that runs it.  An `\@I` page says what the part does and where it lives in the source — it describes how loft is built, not something you write.
+The two halves read differently.  An `\@F` page says what the feature is and how it aids you, and 70 of the 86 carry a runnable example; the rest name what demonstrates them instead, because a loft program cannot run the compiler that runs it.  An `\@I` page says what the part does and where it lives in the source — it describes how loft is built, not something you write.
 
 The catalogue is generated from the `loft-lang/features` issue tracker, which is the single source of truth: every entry is an issue, and `make features-check` regenerates this page and fails on any difference.  A feature you can name and cannot find below is missing from the TRACKER — that is a gap in the catalogue rather than a gap in loft, and the chapters of this reference are the wider list.
 
@@ -9069,7 +9090,7 @@ pub fn exhausted(gen: reference) -> boolean
 
 CO1.6: Returns true if the coroutine has finished producing values.
 
-== Json
+== JSON
 
 ```rust
 pub enum JsonValue {
@@ -9083,9 +9104,7 @@ pub enum JsonValue {
 }
 ```
 
-Copyright (c) 2026 Jurjen Stellingwerff SPDX-License-Identifier: LGPL-3.0-or-later \@F42 — JSON (catalogue anchor, \@PLN92)
-First-class JSON as a typed tree.
-`json\_parse(text)` returns a `JsonValue` enum whose variants cover every JSON kind.  Callers match on the variant to access the payload, chain `field()` / `item()` for dynamic-shape navigation, and use the typed extractors (`as\_text`, `as\_number`, `as\_long`, `as\_bool`) for leaf values.  Malformed input returns `JNull` rather than panicking; the last parse error is retrievable via `json\_errors()`. Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (\@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).
+Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (\@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).
 `JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV\_DISCR\_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.
 
 ```rust

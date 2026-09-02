@@ -763,6 +763,57 @@ tracker, so the chapter-35 pass — which corrected the @F89 entry and refreshed
 generated chapter whose only change is a generated COUNT has not lost its review, while one
 whose entry list changed has.
 
+⚠ **A re-read is not a formality: three chapters moved, and all three had lost something.**
+The 40/40 pass finished and then four commits landed under three chapters — a bound fix, a
+generated-catalogue addition, and three cherry-picks into `default/`. `make reference-review`
+reopened the rows and every one of them paid: a bound the chapter never taught, a self-count
+that had gone stale, and a section header a pick silently dropped. The rate is the finding.
+A chapter's review expires the moment its source moves, and "the commit was small" is not
+evidence, because none of these three commits SET OUT to touch documentation.
+
+⚠ **A table of "the built-in X" is a claim about the SOURCE, and counting is the whole check.**
+The Generics chapter taught six built-in interfaces in two tables. `default/01_code.loft`
+declares seven `pub interface`: `Walkable` was never in either table, and appears in no
+chapter of the reference at all. It is not obscure — the stdlib's own `tree_walk` is bounded
+by it, so a user type that defines `children()` gets a breadth-first walk for free, and a
+reader with a tree writes their own walk instead. `grep -c '^pub interface'` against the
+chapter's row count is a one-line check that nothing in the review was doing, and it is the
+same check every "here are the built-ins" list in the reference owes.
+
+⚠ **A GENERATED chapter can be committed with a STALE generated number, and only the gate
+sees it.** Chapter 33 said "66 of the 82 carry a runnable example" while the catalogue held
+86 with 70 — the four entries added a day earlier reached the LIST and not the SENTENCE
+counting it. `make features-check` was red for the whole day and nothing else was. The
+neighbouring lesson says a generated chapter whose only change is a count has not lost its
+review; the inverse is the sharper half — a generated chapter whose count DID NOT change
+when its list did has lost exactly that. Run the chapter's own drift gate before re-pointing
+its watermark, and cross-check the number against the index rather than the generator that
+wrote both (86 features, 70 with `fn main` plus 3 fragments = the 73 fenced examples in
+`index/features.json`).
+
+⚠ **A cherry-pick takes the other branch's version of the REGION, not of the change.**
+`d34b375f` is the sibling's `as_bool` fix. Taking it also deleted `// ---  JSON  ---` from
+`default/06_json.loft` — a section marker added by the Standard Library review one commit
+earlier, sitting a few lines above the doc comment they edited. Nothing in the commit's
+subject, message or diffstat mentions sections. The guard added in that same review is what
+made it visible: gendoc printed *"Json declares a public item before any `// --- Section ---`
+marker"* on every run since, and the published section fell from "JSON" to "Json". Read a
+pick's diff against the region you changed, not against its stated subject — and this is the
+second half of the lesson about a clean prose merge keeping both halves: it can also keep
+neither.
+
+⚠ **A doc comment corrected in the same commit as a real fix is the least-reviewed prose
+there is.** `d34b375f` fixed `as_bool` (loft#1302) and, in passing, wrote "returns `null`
+(empty text)" onto its sibling `as_text`. Measured on both backends: a kind mismatch does
+NOT compare equal to `""` (`false`), and `len` reads **1**, not 0, while a field that really
+holds `""` compares equal and measures 0. So the parenthetical named the one test that
+cannot see a mismatch, in a doc whose entire subject is telling a mismatch apart — the exact
+defect `as_bool` had just been fixed for, re-introduced next door as a sentence. It rode in
+under a commit whose message is about something else and whose fix was correct.
+`tests/scripts/json-extractors-say-how-a-mismatch-is-told-apart.loft` pins all four
+extractors; its `as_text` half is deliberately un-falsifiable, because no build answers
+differently and only a cell could ever have caught the claim.
+
 | chapter source | reviewed through | commit |
 |---|---|---|
 | `tests/docs/01-keywords.loft` | 2026-08-31 | `e9643ff6` |
@@ -787,14 +838,14 @@ whose entry list changed has.
 | `tests/docs/22-time.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/23-safety.loft` | 2026-09-01 | `b6dc9a61` |
 | `tests/docs/24-json.loft` | 2026-09-01 | `f21577f2` |
-| `tests/docs/25-generics.loft` | 2026-09-01 | `9764a37c` |
+| `tests/docs/25-generics.loft` | 2026-09-02 | `WMGEN` |
 | `tests/docs/26-closures.loft` | 2026-09-01 | `64808d31` |
 | `tests/docs/27-coroutines.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
 | `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
 | `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
-| `tests/docs/33-features.loft` | 2026-09-01 | `65dd5efd` |
+| `tests/docs/33-features.loft` | 2026-09-02 | `WMGEN` |
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
@@ -804,7 +855,7 @@ whose entry list changed has.
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
 | `doc/install.html` | 2026-09-02 | `80568550` |
 | `doc/roadmap.html` | 2026-09-02 | `462d42ee` |
-| `default` | 2026-09-02 | `147b7460` |
+| `default` | 2026-09-02 | `WMGEN` |
 
 ## See also
 

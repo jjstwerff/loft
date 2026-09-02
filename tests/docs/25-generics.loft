@@ -78,6 +78,9 @@ fn test_vector_generics() {
 //   Scalable   — the method `scale(self, factor: integer) -> integer`.  Not an
 //                operator, and no built-in type satisfies it — it is for your own types
 //   Printable  — the method `to_text() -> text`, and `"{x}"` interpolation
+//   Walkable   — the method `children() -> vector<Self>`.  The standard library's
+//                `tree_walk` is bounded by it, so defining `children` on your own
+//                type gets you a breadth-first walk without writing one
 //
 // Reach for `Ordered + Addable` when you want `+` and a comparison. No built-in
 // interface offers binary SUBTRACTION: `Numeric`'s `-` is the unary negation, and
@@ -127,6 +130,7 @@ fn test_combined_bounds() {
 //              fn OpMin(self: T) -> T                     (unary `-`)
 //   Scalable   fn scale(self: T, factor: integer) -> integer
 //   Printable  fn to_text(self: T) -> text
+//   Walkable   fn children(self: T) -> vector<T>
 //
 // The same definition serves the bare operator: once `Money` has `OpLt`, both
 // `a < b` and `<T: Ordered>` work on it. Miss one and the error names it —
@@ -150,6 +154,19 @@ fn test_user_type_bounds() {
   assert(total.cents == 600, "Addable on a user type: {total.cents}");
   assert(described(dear) == "700c", "Printable on a user type: {described(dear)}");
 }
+struct Crate { label: text, kids: vector<Crate> }
+fn children(self: Crate) -> vector<Crate> { self.kids }
+fn test_walkable() {
+  // `children` is the whole of what Walkable asks for; `tree_walk` is the stdlib's,
+  // bounded by it, and it visits the root before either child.
+  tree = Crate { label: "root", kids: [
+    Crate { label: "a", kids: [] },
+    Crate { label: "b", kids: [] },
+  ] };
+  seen = "";
+  for node in tree_walk(tree, 10) { seen += "{node.label} "; }
+  assert(seen == "root a b ", "Walkable on a user type: {seen}");
+}
 // ## Disallowed operations
 // The compiler rejects operations the bound does not cover, and it says which:
 //   `x + y` on unbounded T   — "generic type T: operator '+' requires a concrete type"
@@ -163,4 +180,5 @@ fn main() {
   test_bounded();
   test_combined_bounds();
   test_user_type_bounds();
+  test_walkable();
 }
