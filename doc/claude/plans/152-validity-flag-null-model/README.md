@@ -245,8 +245,8 @@ claim has the same shape of check, an `introspect` diff over a corpus that write
 | **1** | Pin the three spellings that ship today and are guarded by nothing | `tests/scripts/152-the-fallback-and-failure-spellings-that-already-work.loft`; INERT against `origin/main` by design and recorded as such — it is a LOCK, and what moves it is a change made BY this plan. | **Done** |
 | **2** | `??` reaches a non-null narrow — guard INSIDE the discharge, sentinel as its default | `tests/scripts/152-a-coalesce-chooses-the-fallback-for-a-narrow-slot.loft`, falsified at `4f229521` (the shape was refused before, so the guard cannot compile on the control) — both backends; the three probe channels unchanged. | **Done** |
 | **3** | `??` at the remaining positions: field, element, argument, return, struct literal | `tests/scripts/152-the-fallback-reaches-every-position-a-narrow-store-takes.loft`, falsified at `4f229521`, both backends. **Came free with step 2** — wiring both seams covered all five; each cell uses a distinct fallback so none can pass on a neighbour's answer. | **Done** |
-| **4** | **`!` in-expression**: `if !(x + 10) { … }`. | Answers true on a failure, false on a real value, and `redundant-null-negation` goes silent **here only**. Red if the lint goes silent generally — that is the failure that would make step 5's gate meaningless. | Open |
-| **5** | **`!` in the adjacent form**: `f.i += 100;` then `if !f.i { … }`. A statement-pair peephole, separate from step 4 because it is a different mechanism and fails differently. | The lint is silent when fused and **fires one statement later**; `probes/diag` already scores that channel. Red if fusion reaches across an intervening statement, or misses an adjacent one. | Open |
+| **4** | ~~`!` in-expression~~ | **RETIRED — not implementable.** `x + 10` widens to `integer` and `260` is a good one, so a free expression has no narrow type, no range, and no failure to read. The failure is a property of a STORE ([MEASUREMENTS.md](MEASUREMENTS.md)). Folded into step 5. | **Retired** |
+| **5** | **`!` in the adjacent form**: `f.i += 100;` then `if !f.i { … }` — now the ONLY spelling in which the question can be asked, since the assignment is what supplies the target | The lint is silent when fused and **fires one statement later**; `probes/diag` already scores that channel. Red if fusion reaches across an intervening statement, or misses an adjacent one. | Open |
 | **6** | **Cost where the bit is live** (a bound, not a gate — § Why this is worth doing). | A narrow-width benchmark, which `bench/` does not contain and this step writes. Records a number; does not block. | Open |
 | **7** | **Docs and diagnostics agree with what shipped** — the narrowing error already advertises `?? d`. | The advertised cure works when followed. Red if the message still prescribes something that does not work in the position it is offered. | Open |
 
@@ -259,10 +259,9 @@ claim has the same shape of check, an `introspect` diff over a corpus that write
 3. **Steps 2 and 3 split by seam, not by feature.** One seam proves the mechanism against an
    exact comparison; the rest are the same mechanism at more places, each with its own cell.
    Doing them together would mean a red cell could not be attributed to a seam.
-4. **Steps 4 and 5 are separate** because in-expression `!` and the adjacent peephole share a
-   consumer but not a mechanism. Step 4 also establishes the lint behaviour step 5's gate
-   depends on — if 4 makes the lint silent too broadly, 5 has nothing to measure adjacency
-   with.
+4. **Step 4 is retired into step 5.** A free expression cannot fail, so the adjacent form is
+   not one spelling of two — it is the only one in which the question can be asked without new
+   syntax. Step 5 therefore also owns the lint behaviour step 4 was to have established.
 5. **Steps 2–5 must all land before this is claimed done.** Choose-only cannot branch, log or
    count; detect-only cannot supply a value inline. Either alone leaves the case
    half-handleable, which is the state being complained about.

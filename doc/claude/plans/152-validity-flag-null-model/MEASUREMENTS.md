@@ -369,3 +369,30 @@ nowhere to live. `i32` and `integer` keep a bottom code back, which is why `if !
 reads a failure on those two and cannot on the others. This is what makes arc B's boolean
 structural rather than a preference — and it is also the bound on it: the bit is needed for
 five types, not for the type system.
+
+## A free expression cannot fail — measured 2026-09-02 (step 4 retired)
+
+Step 4 was cut as *"`!` in-expression: `if !(x + 10) { … }` on a non-null narrow"*. It is not
+implementable, and the reason is worth keeping because it also explains why `??` works.
+
+```loft
+x: u8 = 250;
+y = x + 10;      // y = 260
+```
+
+`x + 10` **widens to `integer`**, and `260` is a perfectly good one. Nothing failed. There is
+no narrow type on the expression, so there is no range for `!` to test against and no failure
+for it to read.
+
+**The failure is a property of a STORE into a narrow slot, never of a free expression.** That
+is exactly why step 2 works: `x = (x + 10) ?? 255` has a target, and the target supplies the
+`lo`/`hi` the guard needs. Strip the target and the whole question dissolves.
+
+Consequences:
+
+- **Step 4 is retired**, and folded into step 5. `!` can only read a failure where an
+  assignment names the slot — which is the adjacent form.
+- The owner's `if !(a = 300)` sketch would have worked for the same reason step 5 does (the
+  assignment supplies the target), but it is new syntax and was ruled out on that ground.
+- It sharpens what the adjacent form IS: not a convenience over the in-expression spelling,
+  but the only spelling in which the question can be asked at all without new syntax.
