@@ -153,20 +153,44 @@ The rule decides a question this plan had left open, and it decides it against o
 sketches that motivated the plan:
 
 ```loft
-x = (x + 10) ?? 255;        // ✅ the bit rides the expression, `??` consumes it
-if !(x + 10) { … }          // ✅ `!` reads the bit of the expression beside it
-a: u8 = 300;  if !a { … }   // ❌ the bit would have to SURVIVE into `a` — that is storage
+x = (x + 10) ?? 255;                  // ✅ the bit rides the expression, `??` consumes it
+if !(x + 10) { … }                    // ✅ `!` reads the bit of the expression beside it
+
+f.i += 100;                           // ✅ ADJACENT FORM — the `if` directly follows,
+if !f.i { … }                         //    so the bit lives in a temp across the pair
+
+f.i += 100;                           // ❌ a statement intervenes: nothing carries the
+log("…");  if !f.i { … }              //    status that far without storing it
 ```
 
-**The third form cannot be supported under this constraint**, because between the assignment
-and the `if` there is nothing left to carry the status but the variable itself, and the
-variable is storage. It is worth saying plainly rather than discovering it in S3: an author
-who wants to branch on the failure must ask **in the expression**, not afterwards.
+**The adjacent form is admitted**, and it is still storage-free: when an `if` testing the
+assigned place is the *very next* statement, the compiler can see both together and keep the
+bit in a temp across exactly that window. Nothing is written to a struct, an element, or a
+variable slot — the window is statically known and bounded at two statements.
 
-The upside is that everything hard about the earlier sketch disappears with it — no marker on
-`Variable`, no pass-1/pass-2 split (the hazard this tree has been bitten by), no companion
-slot, no propagation rule for `b = a`, and no way to damage layout even by mistake. The bit
-becomes an ordinary evaluation-time value, which is the smallest thing that can work.
+**Anything further apart is not**, because past the next statement there is nothing left to
+carry the status but the place itself, and the place is storage.
+
+The bit is therefore an evaluation-time value with a bounded lifetime, not a stored one — and
+everything hard about a per-variable design stays gone: no marker on `Variable`, no
+pass-1/pass-2 split (the hazard this tree has been bitten by), no companion slot, no
+propagation rule for `b = a`, and no way to damage layout even by mistake.
+
+### The adjacency rule polices itself, with a lint that already ships
+
+The obvious hazard is that adjacency is invisible: insert a line between the assignment and
+the `if`, and the check silently stops working. **It does not go silent — an existing warning
+catches it.** Measured today, on both the adjacent and the non-adjacent shape:
+
+```
+warning[redundant-null-negation]: '!' on a 'not null' integer(0, 255) is always false
+```
+
+So the design's job is to make that warning **stop firing in the fused position and keep
+firing everywhere else**. Then moving a line restores it, and an author who writes the check
+too far from the assignment is told that it is always false rather than left believing it
+works. The guard rail exists; it needs teaching, not building — and it gives S3 an exact
+gate rather than a judgement call.
 
 ## Mechanism
 
@@ -176,7 +200,9 @@ expression:
 
 - **`??`** consumes it — the author's fallback replaces the type's default, routed into
   `OpRangeDefault`'s `dflt`, which is already the fallback slot (Phase E).
-- **`!`** reads it — *did this expression fail to produce a value?*
+- **`!`** reads it — *did this fail to produce a value?* — either of the expression it is
+  applied to, or of the assignment in the immediately preceding statement when it names that
+  same place.
 
 Where neither appears, the bit is never produced and emission is byte-identical: that is the
 opt-in claim, and it is checkable with an `introspect` diff rather than argued.
@@ -204,29 +230,41 @@ One axis is not about values at all: **stored SIZE**, asserted with `store_memor
 large narrow collection, because a design that passed every value cell while doubling
 `vector<u8>` would have broken the reason the type was declared.
 
-## Sub-arcs
+## Sub-arcs — small steps, each able to go red on its own
 
-| Item | Source | Verify | Status |
+Cut against the two bounds ([loft-plan-workflow](../../../../.claude/skills/loft-plan-workflow/SKILL.md)
+§ Cutting a phase): **upper** — the old path and the new one both run and compare exactly;
+**lower** — the step can fail for a real reason without the next one. Every step's opt-in
+claim has the same shape of check, an `introspect` diff over a corpus that writes neither
+`??` nor `!`, so a step that quietly changed ordinary emission cannot pass.
+
+| # | Step | Verify — what goes red | Status |
 |---|---|---|---|
-| **S1** — pin what already works, since nothing does today: `??` on an `integer` overflow, `!` on a nullable narrow | § the two spellings | a `tests/scripts/` guard, falsified against a build with the coalesce stripped | Open |
-| **S2** — `??` reaches a non-null narrow: route the author's value into `OpRangeDefault`'s `dflt`, which is already the fallback slot | `parser/expressions.rs::compound_range` | the narrow cells answer the author's value; **every cell with no `??` unchanged**, by `introspect` diff | Open |
-| **S3** — `!` reads the bit of the expression beside it: `if !(x + 10) { … }` on a non-null narrow | § Mechanism | the narrow cells answer true on a failure and false on a real value; **every expression with no `!` and no `??` is byte-identical**, by `introspect` diff | Open |
-| **S4** — the remaining POSITIONS an expression appears in: a field store's right-hand side, an element store's, an argument, a return | `guard_declared_range` | one cell per position per spelling; the controls unmoved; **and `store_memory()` on a large `vector<u8>` unchanged to the byte** — a standing check that nothing drifted into storage | Open |
-| **S5** — cost where the bit is LIVE (a bound, not a gate — see § Blast radius) | — | a narrow-width benchmark, which `bench/` does not currently contain and S5 must write | Open |
-| **S6** — docs: the narrowing error already advertises `?? d`, so the diagnostic and the reference must agree with what ships | `DIAGNOSTICS.md` | the advertised cure works when followed | Open |
+| **0** | **Probe: is the bit free where nobody asks for it?** Emit it unconditionally in a throwaway build and diff `introspect` over the corpus. | If emission moves for programs writing no `??`/`!`, the opt-in claim is false and the bit must be gated at parse time, not at emit — **which changes every step below**. Cheapest possible falsifier; throwaway, nothing lands. | Open |
+| **1** | **Pin what already ships**, which nothing currently guards: `??` on an `integer` overflow answers the author's value; `!` on a nullable narrow answers true; `redundant-null-negation` fires on `!` over a narrow non-null. | The guard, falsified against a build with each behaviour removed. Red if any of the three stops working — today they could regress unnoticed. | Open |
+| **2** | **`??` at ONE seam**: local compound assign, constant fallback, five widths. | The narrow cells answer the author's value; the `integer`/`i32`/`float` controls unmoved; **corpus `introspect` byte-identical**. Red on a wrong value, a moved control, or any emission drift. | Open |
+| **3** | **`??` at the remaining positions**, one cell each: field store, element store, argument, return. | One cell per position, both backends; plus `store_memory()` on a large `vector<u8>` unchanged to the byte. Red if a position silently keeps the compiler's default — which looks like "unchanged" unless the cell asserts the author's value. | Open |
+| **4** | **`!` in-expression**: `if !(x + 10) { … }`. | Answers true on a failure, false on a real value, and `redundant-null-negation` goes silent **here only**. Red if the lint goes silent generally — that is the failure that would make step 5's gate meaningless. | Open |
+| **5** | **`!` in the adjacent form**: `f.i += 100;` then `if !f.i { … }`. A statement-pair peephole, separate from step 4 because it is a different mechanism and fails differently. | The lint is silent when fused and **fires one statement later**; `probes/diag` already scores that channel. Red if fusion reaches across an intervening statement, or misses an adjacent one. | Open |
+| **6** | **Cost where the bit is live** (a bound, not a gate — § Why this is worth doing). | A narrow-width benchmark, which `bench/` does not contain and this step writes. Records a number; does not block. | Open |
+| **7** | **Docs and diagnostics agree with what shipped** — the narrowing error already advertises `?? d`. | The advertised cure works when followed. Red if the message still prescribes something that does not work in the position it is offered. | Open |
 
-## Phase ordering
+## Ordering, and why each boundary is where it is
 
-1. **S1 first** — cheap, and it protects behaviour that ships today pinned by nothing.
-2. **S2 before S3.** `??` lands in the slot that already exists (`dflt`), so it proves the
-   opt-in claim — byte-identical emission where nothing is written — before `!` adds a second
-   consumer of the same bit.
-3. **S2 and S3 must both land before this is claimed done.** Choose-only cannot branch, log
-   or count; detect-only cannot supply a value inline. Either alone leaves the case
+1. **Step 0 before anything.** It is throwaway and it can invalidate the whole shape for the
+   price of one build — the cheapest phase in the plan and the one most likely to save work.
+2. **Step 1 before any change**, so the three behaviours that ship today are pinned *before*
+   the code that could break them exists. They are unguarded right now.
+3. **Steps 2 and 3 split by seam, not by feature.** One seam proves the mechanism against an
+   exact comparison; the rest are the same mechanism at more places, each with its own cell.
+   Doing them together would mean a red cell could not be attributed to a seam.
+4. **Steps 4 and 5 are separate** because in-expression `!` and the adjacent peephole share a
+   consumer but not a mechanism. Step 4 also establishes the lint behaviour step 5's gate
+   depends on — if 4 makes the lint silent too broadly, 5 has nothing to measure adjacency
+   with.
+5. **Steps 2–5 must all land before this is claimed done.** Choose-only cannot branch, log or
+   count; detect-only cannot supply a value inline. Either alone leaves the case
    half-handleable, which is the state being complained about.
-5. **S5 is a bound, not a gate.** The "no impact" claim is measured for ordinary arithmetic
-   and unmeasured where the bit is live — but almost nothing is live (§ Blast radius), so this
-   records a number rather than blocking on one.
 
 ## Open questions
 
