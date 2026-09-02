@@ -385,23 +385,83 @@ fn read_def_source(buf: &str, buf_name: &str, stdlib_dir: &str, pos: &Position) 
     std::fs::read_to_string(root.join(&pos.file)).ok()
 }
 
-/// The contiguous `///` doc block directly above the declaration on `decl_line`
+/// The contiguous comment block directly above the declaration on `decl_line`
 /// (1-based), in reading order.  Empty when there is none.
+///
+/// **Both `///` and `//` count.**  `///` is the Rust-shaped spelling and reads as a doc
+/// comment to anyone arriving from there, but the loft sources overwhelmingly use plain
+/// `//` — measured across the distribution, 936 `pub fn` are documented that way against 54
+/// with `///`.  Recognising only `///` therefore reported almost the whole public surface as
+/// undocumented: the library review counted 334 `pub fn` "carrying no doc comment" when the
+/// project's own baseline in [API_SURFACE.md] says 44 of the stdlib's user-facing functions
+/// have none — and 44 is exactly the count of `pub fn` with NO comment above them at all.
+/// The sources were right and the reader was wrong.
+///
+/// A SECTION MARKER (`// ---  JSON  ---`) is not documentation and stops the block: it names
+/// the group below it, so folding it into the first function's doc would attach a heading to
+/// one arbitrary member.  That is also the one shape a plain-`//` reading could plausibly get
+/// wrong, which is why it is excluded here rather than left to chance.
 fn doc_block_above(src: &str, decl_line: u32) -> Vec<String> {
     let lines: Vec<&str> = src.lines().collect();
     let mut doc: Vec<String> = Vec::new();
     // The line above the declaration is index `decl_line - 2`.
     let mut i = decl_line as isize - 2;
+    // A BLANK line between the comment and the declaration does not end the block.  The
+    // `///` convention forbids one, but loft sources routinely leave a blank there
+    // (`default/01_code.loft`'s `exp` is written marker / comment / blank / `pub fn`), and
+    // breaking on it silently dropped those docs the same way `//` did.  Only blanks are
+    // skipped: code, a `}` or an attribute line still ends the block, so a comment belonging
+    // to the PREVIOUS declaration can never be pulled onto this one.
+    while i >= 0 && lines[i as usize].trim().is_empty() {
+        i -= 1;
+    }
     while i >= 0 {
         let trimmed = lines[i as usize].trim_start();
-        let Some(rest) = trimmed.strip_prefix("///") else {
+        if is_section_marker(trimmed) {
+            break;
+        }
+        let Some(rest) = trimmed
+            .strip_prefix("///")
+            .or_else(|| trimmed.strip_prefix("//"))
+        else {
             break;
         };
         doc.push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
         i -= 1;
     }
     doc.reverse();
+    // A block that is only blank comment lines is not documentation, and would otherwise
+    // count as present — the exact failure this reader exists to stop, one level in.
+    while doc.first().is_some_and(|l| l.trim().is_empty()) {
+        doc.remove(0);
+    }
+    while doc.last().is_some_and(|l| l.trim().is_empty()) {
+        doc.pop();
+    }
     doc
+}
+
+/// Is this comment line a section HEADING rather than prose?
+///
+/// Two spellings are in use and both must be caught, because a heading swept into the block
+/// becomes the first sentence of one arbitrary member's documentation:
+///
+/// ```text
+/// // --- Collections ---
+/// // ── Palette ──────────────────────────────
+/// ```
+///
+/// The second is why this is a rule rather than a literal test: catching only `---` let
+/// `palette_r`'s doc begin *"── Palette ───…"*.  So the shape is **a comment that opens with
+/// a run of two or more RULE characters** — hyphen or box-drawing — which no prose sentence
+/// does and every heading here does.
+fn is_section_marker(trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix("//") else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    let rule = |c: char| matches!(c, '-' | '─' | '=' | '━' | '~' | '*' | '#');
+    rest.chars().take_while(|c| rule(*c)).count() >= 2
 }
 
 /// The 1-based column of `name` on `decl_line` (1-based) in `src`, so a jump
