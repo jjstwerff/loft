@@ -647,6 +647,57 @@ fn main() {
     }
 }
 
+/// `match x { null => … }` guards its subject, though it names a COPY of it (`D-op-5`).
+///
+/// The match has no `Value::Match` in the IR — it lowers to a nested block whose first act is
+/// `_match_subj_N = x`, so the arms test the temp and the adjacency scan, looking for an `if`
+/// testing the variable itself, saw a `Block` and gave up.
+#[test]
+fn a_match_on_null_guards_its_subject() {
+    let source = "\
+fn main() {
+  v: vector<integer> = [7];
+  x = v[5];
+  r = match x { null => \"n\", _ => \"v\" };
+  print(\"{r}\\n\");
+}
+";
+    for native in [false, true] {
+        let log = run_logged("match_null_guard", source, native);
+        assert!(
+            !log.contains("[index_out_of_bounds]"),
+            "a `null` match arm owns the null ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
+/// The control that makes the cell above sound: a match that is not on `null` guards nothing.
+///
+/// `match x { 5 => … }` lowers to the same subject copy followed by `OpEqInt(subj, 5)`. The
+/// null flows into that comparison as an ordinary operand and on into the program, so the
+/// site still owes its report — and a version of the scan that accepted any test after the
+/// copy would go quiet here.
+#[test]
+fn a_match_on_a_value_still_reports() {
+    let source = "\
+fn main() {
+  v: vector<integer> = [7];
+  x = v[5];
+  r = match x { 5 => \"five\", _ => \"other\" };
+  print(\"{r}\\n\");
+}
+";
+    for native in [false, true] {
+        let log = run_logged("match_value_reports", source, native);
+        assert!(
+            log.contains("[index_out_of_bounds]"),
+            "a non-null match arm does not own the null and must still report ({}); got {log:?}",
+            if native { "native" } else { "interp" }
+        );
+    }
+}
+
 /// The other direction, and the one that matters more: widening "guarded" SUPPRESSES a
 /// diagnostic, so these three shapes must keep reporting.
 ///

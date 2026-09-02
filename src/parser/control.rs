@@ -1400,14 +1400,15 @@ impl Parser {
             if j >= ops.len() {
                 continue;
             }
-            // The first sibling that mentions it must be an `if` TESTING it.
-            let Value::If(test, _, _) = ops[j].unspan() else {
-                continue;
-            };
-            if !test.reads_var(var) {
-                continue;
+            // The first sibling that mentions it must be an `if` TESTING it — or a `match`,
+            // which reaches the value through ONE copy and so needs following.
+            match ops[j].unspan() {
+                Value::If(test, _, _) if test.reads_var(var) => to_rewrite.push(i),
+                Value::Block(bl) if Self::block_null_tests_a_copy(&bl.operators, var) => {
+                    to_rewrite.push(i);
+                }
+                _ => {}
             }
-            to_rewrite.push(i);
         }
         for i in to_rewrite {
             if let Value::Set(_, source) = ops[i].unspan_mut() {
@@ -1425,6 +1426,61 @@ impl Parser {
                 Self::rewrite_direct_null_test(test, &self.data);
             }
         }
+    }
+
+    /// Does this block copy `var` into a temp and then NULL-TEST that temp?
+    ///
+    /// `match x { null => … }` has no `Value::Match` in the IR: it lowers to a nested block
+    /// whose first act is `_match_subj_N = x`, after which the arms test the TEMP. So the
+    /// guard names a copy and the adjacency scan above, which looks for an `if` testing the
+    /// variable itself, saw a `Block` and gave up — leaving a defended site reporting
+    /// (`D-op-5`, the half the no-binding fix did not reach).
+    ///
+    /// Exactly ONE copy is followed, and only from the block's own first statement, so this
+    /// stays adjacency rather than becoming dataflow.
+    ///
+    /// ⚠ The arm has to be a NULL test, not merely a test. `match x { 5 => … }` lowers to
+    /// the same copy followed by `OpEqInt(subj, 5)` — the null flows into that comparison as
+    /// an ordinary operand and on into the program, so that site still owes its report.
+    fn block_null_tests_a_copy(ops: &[Value], var: u16) -> bool {
+        let Some(Value::Set(tmp, source)) = ops.first().map(Value::unspan) else {
+            return false;
+        };
+        if !matches!(source.unspan(), Value::Var(v) if *v == var) {
+            return false;
+        }
+        let tmp = *tmp;
+        ops.iter().skip(1).any(
+            |op| matches!(op.unspan(), Value::If(test, _, _) if Self::is_null_test_of(test, tmp)),
+        )
+    }
+
+    /// Is `test` a null check on `var` — in either spelling the IR uses?
+    ///
+    /// `x == null` reaches the IR as an equality against the null literal, and a `match`'s
+    /// `null` arm as `OpNot(OpConvBoolFrom*(x))`. The second reads like a truthiness test and
+    /// is not one: `op_conv_bool_from_long` is `val != i64::MIN`, so it asks precisely
+    /// "is this not the null sentinel" and its negation is precisely "is this null".
+    fn is_null_test_of(test: &Value, var: u16) -> bool {
+        let Value::Call(_, args) = test.unspan() else {
+            return false;
+        };
+        // `OpNot(OpConvBoolFrom*(var))`
+        if args.len() == 1
+            && let Value::Call(_, inner) = args[0].unspan()
+            && inner.len() == 1
+            && matches!(inner[0].unspan(), Value::Var(v) if *v == var)
+        {
+            return true;
+        }
+        // `var == null` / `null == var`, in either order.
+        args.len() == 2
+            && args
+                .iter()
+                .any(|a| matches!(a.unspan(), Value::Var(v) if *v == var))
+            && args
+                .iter()
+                .any(|a| matches!(a.unspan(), Value::Call(_, inner) if inner.is_empty()))
     }
 
     /// Swap a fault-prone expression compared DIRECTLY against `null` to its silent
