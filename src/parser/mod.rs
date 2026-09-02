@@ -751,6 +751,29 @@ pub struct Parser {
     /// definition time — nullability is decided at instantiation by whatever
     /// concrete element type the caller's vector carries).  Reset per function.
     pub(crate) cur_type_var: u32,
+    /// The SOURCE spelling of the type variable [`Self::cur_type_var`] holds — `"T"` for
+    /// `fn f<T: …>`, empty outside a generic function.
+    ///
+    /// `formal/interfaces.md` `(G-Gen)`: a generic header *introduces* its type variable, so
+    /// the binding is per-header.  Two functions that both write `T` name two different
+    /// variables, and `parse_type` therefore resolves the spelling against THIS header
+    /// before it asks the global definition table (loft#1300, loft#1301).
+    pub(crate) cur_type_var_name: String,
+    /// The placeholder definition standing for a `(type-variable spelling, bound set)` pair.
+    ///
+    /// Sharing one placeholder across generic functions is what lets the stdlib's many
+    /// `<T>` templates resolve against one definition, and it stays the norm — but the
+    /// placeholder is also what KEYS the bound-method stubs (`t_<LEN>T#g_<method>`), and a
+    /// stub carries a SIGNATURE.  Two headers whose bounds require different signatures of
+    /// one method name therefore need different placeholders, or the second's calls are
+    /// checked against the first's stub and refused against a signature the reader never
+    /// wrote.  Keyed on the bound NAMES as written, which are the same on both passes even
+    /// where an interface is still a forward reference.
+    pub(crate) type_var_holders: std::collections::HashMap<(String, String), u32>,
+    /// The bound-set key each placeholder in [`Self::type_var_holders`] was claimed for, so
+    /// a header meeting an already-claimed spelling can tell "the same variable again" from
+    /// "a second variable that happens to be spelled the same".
+    pub(crate) type_var_bounds: std::collections::HashMap<u32, String>,
     // maps fn-ref variable numbers to their closure record work variable numbers.
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
     // last closure work variable created by emit_lambda_code (transient).
@@ -1239,6 +1262,9 @@ impl Parser {
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,
             cur_type_var: u32::MAX,
+            cur_type_var_name: String::new(),
+            type_var_holders: std::collections::HashMap::new(),
+            type_var_bounds: std::collections::HashMap::new(),
             closure_vars: std::collections::HashMap::new(),
             last_closure_work_var: u16::MAX,
             last_closure_alloc: None,
@@ -5043,6 +5069,26 @@ impl Parser {
             && self.data.is_type_var_placeholder(d_nr)
     }
 
+    /// Resolve a NAME the source wrote, giving the enclosing generic header first refusal.
+    ///
+    /// `formal/interfaces.md` `(G-Gen)` — a header `fn f<T: I>` *introduces* `T`, so inside
+    /// it the spelling names that header's variable and not whatever the flat namespace holds
+    /// under the same letter.  Two headers may both write `T` while binding different
+    /// placeholders, and the second's is minted under a name no source can spell, so this is
+    /// the only route back to it.
+    ///
+    /// One home, because a spelling that resolves one way in a type position and another in a
+    /// value position is two variables wearing one name.
+    pub(crate) fn def_nr_in_scope(&self, name: &str) -> u32 {
+        if !self.cur_type_var_name.is_empty()
+            && name == self.cur_type_var_name
+            && self.cur_type_var != u32::MAX
+        {
+            return self.cur_type_var;
+        }
+        self.data.def_nr(name)
+    }
+
     /// Check if a type is a generic type variable (a dummy struct used as T).
     /// Returns the type variable name if it is, None otherwise.
     pub(crate) fn generic_type_name(&self, tp: &Type) -> Option<&str> {
@@ -5547,6 +5593,7 @@ impl Parser {
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
+                let tv_name = crate::data::Data::type_var_spelling(tv_name);
                 diagnostic_at!(
                     self.lexer,
                     name_pos,
@@ -10916,7 +10963,10 @@ impl Parser {
             return Type::Unknown(0);
         }
         // generic-specific error message for operators on T.
-        let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
+        let generic_name = types
+            .iter()
+            .find_map(|t| self.generic_type_name(t))
+            .map(crate::data::Data::type_var_spelling);
         if let Some(tv_name) = generic_name {
             specific!(
                 self.lexer,

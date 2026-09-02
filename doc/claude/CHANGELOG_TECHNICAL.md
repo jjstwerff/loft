@@ -9,6 +9,50 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A generic header binds its OWN type variable (2026-09-02)
+
+Two generic functions that both wrote `T` — the universal convention — shared one type
+variable. The bound-method stubs hang off the type variable's placeholder definition and carry
+a SIGNATURE, so whichever header was declared first owned the stub and the second's calls were
+checked against a parameter list its author never wrote (loft#1301):
+
+```loft
+interface HasSize1 { fn sizer(self: Self) -> integer }
+interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }
+fn one<T: HasSize1>(x: T) -> integer { x.sizer() }
+fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }
+    ->  error: Too many parameters for T#g.sizer
+```
+
+Order-dependent: swap the two declarations and the error swapped with them. `formal/
+interfaces.md` `(G-Gen)` says a header *introduces* its type variable, so the binding is
+per-header and this was a deviation (`D-gen-3`), not a design question.
+
+The placeholder is now keyed on `(spelling, bound set)`, and the spelling resolves against the
+enclosing header before the flat namespace — `Parser::def_nr_in_scope`, read from
+`parse_type_inner` and `parse_constant_value`. Sharing stays the norm: two headers with the
+same bounds reach one placeholder and one set of stubs, which is what keeps the stdlib's many
+`<T>` templates on one definition.
+
+Four spellings were broken and two of them were unreported, because the conflict diagnostic
+loft#1301 shipped compares parameter COUNTS and a signature is not an arity: different arity;
+the two arities of `-`, which both desugar to `OpMin` (loft#1300); same arity with a different
+parameter TYPE, which failed as *"expected integer, got text"*; and same parameters with a
+different RETURN type.
+
+Two details the change carries. A second placeholder is minted under a name no source can
+spell (`T#2`), so `Type::name` and every diagnostic that prints one render the spelling
+instead, and the `x?` default — which sub-parses `T {}` as SOURCE — pins the header's binding
+over the sub-parse. And the mint asks `Data::name_taken_anywhere`, not `def_nr`: the
+placeholder is registered as a store structure under `__typevar_<name>`, a registry with no
+source in its key, so two libraries each taking the first name their own source had free
+registered the same structure twice and aborted the compiler.
+
+Still refused, and now with a message that says why: ONE bound set requiring two signatures of
+one method name — an interface declaring `-` at both arities, or `<T: A + B>` where both
+declare `sizer`. There the two requirements really are on one variable and a bound method is
+reached by NAME; that is loft#1275 (`D-gen-4`).
+
 ### A bounded generic that DELEGATES still owns the store it hands back (2026-09-01)
 
 `fn add<T: Addable>(a: T, b: T) -> T { a + b }` retained one record per call when its result

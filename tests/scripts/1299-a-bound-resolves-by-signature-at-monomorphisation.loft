@@ -32,10 +32,12 @@
 // that was already correct.  The question is right; that is the wrong place to act on the
 // answer.
 //
-// ⚠ Two things this deliberately does NOT change, both refusals and both loft#1275's design
-// half: an interface declaring BOTH arities of `-`, and two interfaces in one file each
-// declaring one, still collide on the `OpMin` stub name and are refused.  A refusal is the
-// acceptable state; the silent wrong answer was not.
+// ⚠ One thing this deliberately does NOT change, and it is loft#1275's design half: an
+// interface declaring BOTH arities of `-` still collides on the `OpMin` stub name and is
+// refused.  A refusal is the acceptable state; the silent wrong answer was not.  Two
+// interfaces in one file each declaring ONE arity used to collide the same way and no longer
+// does — a generic header binds its own type variable, so the two live on separate stubs
+// (loft#1300, guarded in `1300-a-generic-header-binds-its-own-type-variable.loft`).
 //
 // @falsified-at: 52e3c0ac — interpret exit 1 -> 0, interpret 1 assertion failures -> 0,
 //   native exit 1 -> 0, native 1 assertion failures -> 0.

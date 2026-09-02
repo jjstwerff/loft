@@ -2279,7 +2279,8 @@ use #count instead"
                     // by every built-in, and the bounded path renders correctly on both
                     // backends for every kind.
                     if !self.first_pass {
-                        let name = self.data.def(d_nr).name().to_string();
+                        let name = crate::data::Data::type_var_spelling(self.data.def(d_nr).name())
+                            .to_string();
                         diagnostic!(
                             self.lexer,
                             Level::Error,

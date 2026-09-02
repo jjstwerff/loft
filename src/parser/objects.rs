@@ -1794,7 +1794,9 @@ impl Parser {
     ) -> Type {
         let mut t;
         let mut d_nr = if source == u16::MAX {
-            self.data.def_nr(name)
+            // `(G-Gen)` — inside a generic header the spelling names THAT header's type
+            // variable, in a value position as much as in a type one.
+            self.def_nr_in_scope(name)
         } else {
             self.data.source_nr(source, name)
         };

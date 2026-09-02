@@ -2579,6 +2579,12 @@ impl Type {
             Type::Optional(tp) => format!("{}?", tp.name(data)),
             Type::Rewritten(tp) => tp.name(data),
             Type::RefVar(tp) => format!("&{}", tp.name(data)),
+            // A type-variable placeholder renders under the spelling its header wrote: two
+            // headers may both write `T` and bind different placeholders, so the second is
+            // minted as `T#2`, and a diagnostic must name what the reader wrote.
+            Type::Enum(t, _, _) | Type::Reference(t, _) if data.is_type_var_placeholder(*t) => {
+                Data::type_var_spelling(&data.def(*t).name).to_string()
+            }
             Type::Enum(t, _, _) | Type::Reference(t, _) => data.def(*t).name.clone(),
             Type::Text(_) => "text".to_string(),
             Type::Vector(tp, _) if matches!(tp as &Type, Type::Unknown(_)) => "vector".to_string(),
@@ -6403,6 +6409,31 @@ impl Data {
     pub fn bound_stub_name(holder: &str, method: &str) -> String {
         let h = format!("{holder}{}", Self::HOLDER_MARK);
         format!("t_{}{}_{method}", h.len(), h)
+    }
+
+    /// Is `name` taken by a definition in ANY source?
+    ///
+    /// [`Self::def_nr`] answers for the CURRENT source plus the stdlib, which is the right
+    /// question when resolving a name the source wrote.  It is the wrong one when MINTING an
+    /// internal name that has to be unique program-wide: a second type-variable placeholder
+    /// is registered as a store structure under `__typevar_<name>`, and that registry has no
+    /// source in its key — so two libraries each picking the first name their own source had
+    /// free registered the same structure twice and aborted the compiler.
+    #[must_use]
+    pub fn name_taken_anywhere(&self, name: &str) -> bool {
+        self.def_names.keys().any(|(n, _)| n == name)
+    }
+
+    /// The spelling a type-variable placeholder was DECLARED under.
+    ///
+    /// Two generic headers may both write `T` while binding different variables
+    /// (`formal/interfaces.md` `(G-Gen)`), so the second's placeholder is minted under an
+    /// internal name — `T#2` — that the source cannot write.  A DIAGNOSTIC has to name the
+    /// variable the reader wrote, so every message that prints a placeholder's name goes
+    /// through here; the internal name stays the key everything else looks up.
+    #[must_use]
+    pub fn type_var_spelling(name: &str) -> &str {
+        name.split_once('#').map_or(name, |(base, _)| base)
     }
 
     /// Is this mangled name a bound-method STUB?  Exact, by the marker

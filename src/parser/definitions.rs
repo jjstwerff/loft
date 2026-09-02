@@ -1201,6 +1201,7 @@ impl Parser {
         // @PLN25 E2 — clear any type-var from a previous function before parsing
         // this one; set below if this function is generic.
         self.cur_type_var = u32::MAX;
+        self.cur_type_var_name.clear();
         if !self.default && !is_lower(&fn_name) && !is_op(&fn_name) {
             diagnostic!(
                 self.lexer,
@@ -1258,6 +1259,11 @@ impl Parser {
             // resolves it to Reference(d, []).  The definition is never
             // compiled — it only exists for the template's type resolution.
             if is_generic {
+                let bounds_key = Self::type_var_bounds_key(&pending_bounds);
+                let claimed = self
+                    .type_var_holders
+                    .get(&(type_var_name.clone(), bounds_key.clone()))
+                    .copied();
                 let existing = self.data.def_nr(&type_var_name);
                 // A prior generic's type-var placeholder is an attribute-less `Struct`, safe to
                 // reuse (that is how `<T>` is shared across functions). Any OTHER existing def
@@ -1266,7 +1272,8 @@ impl Parser {
                 // name. Report it (mirroring the `type X conflicts with …` diagnostic) instead
                 // of silently binding the parameter to that def and panicking later in
                 // `predict_generic_return_type`.
-                let collision = existing != u32::MAX
+                let collision = claimed.is_none()
+                    && existing != u32::MAX
                     && !(self.data.def(existing).def_type() == DefType::Struct
                         && self.data.def(existing).attributes().is_empty());
                 if collision {
@@ -1285,22 +1292,66 @@ impl Parser {
                     // Stop treating the function as generic so the unresolved parameter never
                     // reaches the generic type-resolution path (which would panic).
                     is_generic = false;
-                } else if self.first_pass && existing == u32::MAX {
-                    // register the type variable as a struct so parse_type
-                    // resolves it to Reference(d, []).  The definition is never
-                    // compiled — it only exists for the template's type resolution.
-                    let tv_nr =
+                } else if let Some(holder) = claimed {
+                    // This exact `(spelling, bounds)` header has been seen — on the other
+                    // pass, or in another function declaring the same variable the same way.
+                    self.cur_type_var = holder;
+                } else {
+                    // `(G-Gen)`: this header INTRODUCES the variable.  It may reuse the
+                    // placeholder the spelling already names, but only while that placeholder
+                    // stands for the same bound set — a second bound set is a second variable
+                    // and needs a placeholder of its own, because the placeholder is what keys
+                    // the bound-method stubs (loft#1300, loft#1301).
+                    let reusable = existing != u32::MAX
+                        && self
+                            .type_var_bounds
+                            .get(&existing)
+                            .is_none_or(|b| *b == bounds_key);
+                    let holder = if reusable {
+                        existing
+                    } else if !self.first_pass {
+                        // Placeholders are minted on the first pass; reaching here on the
+                        // second means the first refused this header, and there is nothing
+                        // to bind.
+                        u32::MAX
+                    } else {
+                        // register the type variable as a struct so parse_type
+                        // resolves it to Reference(d, []).  The definition is never
+                        // compiled — it only exists for the template's type resolution.
+                        //
+                        // Under its own spelling while that is free; otherwise under a name
+                        // the source cannot write, since `#` is not an identifier character,
+                        // so `T#2` is reachable only through this header.
+                        //
+                        // Uniqueness is asked PROGRAM-WIDE, not of this source: the
+                        // placeholder is registered as a store structure under
+                        // `__typevar_<name>`, and that registry is not keyed by source.
+                        let mut name = type_var_name.clone();
+                        let mut n = 1;
+                        while self.data.name_taken_anywhere(&name) {
+                            n += 1;
+                            name = format!("{type_var_name}#{n}");
+                        }
+                        let tv_nr = self.data.add_def(&name, self.lexer.pos(), DefType::Struct);
                         self.data
-                            .add_def(&type_var_name, self.lexer.pos(), DefType::Struct);
-                    self.data
-                        .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+                            .set_returned(tv_nr, Type::Reference(tv_nr, crate::data::Deps::none()));
+                        tv_nr
+                    };
+                    if holder != u32::MAX {
+                        self.type_var_holders
+                            .insert((type_var_name.clone(), bounds_key.clone()), holder);
+                        self.type_var_bounds.insert(holder, bounds_key);
+                    }
+                    self.cur_type_var = holder;
                 }
             }
-            // @PLN25 E2 — record the type-var def_nr (valid in both passes: the
-            // stub was just added in the first pass, already exists in the
-            // second) so `e2_nullable_elem` leaves a generic `vector<T>` dense.
+            // @PLN25 E2 — the type-var def_nr is recorded above (valid in both passes: the
+            // placeholder is added on the first and found again on the second) so
+            // `e2_nullable_elem` leaves a generic `vector<T>` dense.  It is also what
+            // `parse_type` resolves the spelling to from here on, which is what keeps two
+            // headers writing `T` apart.
             if is_generic {
-                self.cur_type_var = self.data.def_nr(&type_var_name);
+                self.cur_type_var_name.clone_from(&type_var_name);
             }
             if !self.parse_arguments(&fn_name, &mut arguments) {
                 return true;
@@ -1340,8 +1391,10 @@ impl Parser {
         }
         // validate that the type variable appears in the first parameter.
         if is_generic && !arguments.is_empty() {
-            let tv_nr = self.data.def_nr(&type_var_name);
-            let has_tv = arguments[0].typedef.contains_def(tv_nr);
+            // The HEADER's variable, not whatever the spelling names globally: two headers
+            // writing `T` bind two placeholders, and the parameter was resolved against
+            // this one.
+            let has_tv = arguments[0].typedef.contains_def(self.cur_type_var);
             if !has_tv && !self.first_pass {
                 diagnostic!(
                     self.lexer,
@@ -1486,7 +1539,7 @@ impl Parser {
             // the body parser can emit `Value::Call(t_stub_nr, ...)` for method/op calls on T.
             // `re_resolve_call` then substitutes these with the concrete type's implementation.
             let iface_nrs: Vec<u32> = self.data.definitions[self.context as usize].bounds.clone();
-            self.create_bound_method_stubs(&type_var_name, &iface_nrs);
+            self.create_bound_method_stubs(self.cur_type_var, &iface_nrs);
         }
         let mut returned_not_null = false;
         let mut result = if self.lexer.has_token("->") {
@@ -2591,7 +2644,9 @@ impl Parser {
                 return None;
             }
         } else {
-            self.data.def_nr(type_name)
+            // `(G-Gen)` — the enclosing generic header gets first refusal on the spelling
+            // (loft#1300, loft#1301).
+            self.def_nr_in_scope(type_name)
         };
         if self.first_pass && tp_nr == u32::MAX && type_name != "spatial" {
             // @P296-sibling — for a qualified `lib::Type` reference, `tp_nr`
@@ -3730,6 +3785,18 @@ impl Parser {
         }
     }
 
+    /// The key that identifies a generic header's BOUND SET — the bound names as written,
+    /// ordered and de-duplicated so `<T: A + B>` and `<T: B + A>` are one set.
+    ///
+    /// Deliberately the spellings and not the resolved `def_nr`s: an interface may still be
+    /// a forward reference on the first pass, and the key has to answer the same on both.
+    fn type_var_bounds_key(bounds: &[String]) -> String {
+        let mut names: Vec<&str> = bounds.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        names.dedup();
+        names.join("+")
+    }
+
     /// I7/I8.1: build the `t_<LEN><Holder>_<method>` stubs that let a body call a bound
     /// interface's methods on a value whose type is not concrete yet.
     ///
@@ -3747,9 +3814,13 @@ impl Parser {
     /// pass the interface method's return type can still be an unresolved forward
     /// reference: [`Parser::refresh_bound_method_stubs`] re-derives the signature between
     /// the passes, where every type IS resolved.
-    fn create_bound_method_stubs(&mut self, holder_name: &str, bounds: &[u32]) {
-        let holder_nr = self.data.def_nr(holder_name);
-        if holder_nr == u32::MAX || holder_name.is_empty() || self.data.def_nr("Self") == u32::MAX {
+    fn create_bound_method_stubs(&mut self, holder_nr: u32, bounds: &[u32]) {
+        if holder_nr == u32::MAX || self.data.def_nr("Self") == u32::MAX {
+            return;
+        }
+        let holder_name = self.data.def(holder_nr).name().to_string();
+        let holder_name = holder_name.as_str();
+        if holder_name.is_empty() {
             return;
         }
         // loft#1153 — this is the ONE place that knows a definition is a bound HOLDER, so it is
@@ -3769,15 +3840,21 @@ impl Parser {
                 let t_stub_name = crate::data::Data::bound_stub_name(holder_name, &method_suffix);
                 let existing_stub = self.data.def_nr(&t_stub_name);
                 if existing_stub != u32::MAX {
-                    // Sharing one stub is the NORM: two generics bounded by the same interface,
-                    // or by two interfaces declaring the same method the same way, want the
-                    // same stub.  It is wrong only when the two bounds require DIFFERENT
-                    // signatures of one method name.  The stub carries a signature, so the
-                    // second is silently dropped and its calls are checked against the first's
-                    // — and the refusal that follows names something the reader never wrote
-                    // (*"Too many parameters for T#g.sizer"*, or a missing argument for a
-                    // parameter that lives in the OTHER function).  It is ORDER-DEPENDENT:
-                    // whichever generic is declared first owns the stub (loft#1301).
+                    // Sharing one stub is the NORM: two bounds declaring the same method the
+                    // same way, or the same header seen again on the second pass, want the
+                    // same stub.  It is wrong only when ONE bound set requires two DIFFERENT
+                    // signatures of one method name — either two of its interfaces declare
+                    // that name differently, or one interface declares it twice.  The stub
+                    // carries a signature, so the second requirement is silently dropped and
+                    // every call is checked against the first's, which is how a call came to
+                    // be refused against a parameter list the reader never wrote
+                    // (*"Too many parameters for T#g.sizer"*).
+                    //
+                    // A second HEADER writing the same variable spelling is no longer this
+                    // case: `(G-Gen)` binds the variable per header, so a different bound set
+                    // gets a placeholder of its own and never reaches this stub (loft#1300,
+                    // loft#1301).  What is left needs a policy — which of the two signatures
+                    // `x.m()` means — and that is loft#1275.
                     //
                     // CHILD-to-CHILD: this bound's interface method against the one the
                     // existing stub was minted FROM.  Comparing the STUB against a child is
@@ -3795,14 +3872,15 @@ impl Parser {
                         && prev != child_nr
                         && self.data.attributes(prev) != self.data.attributes(child_nr)
                     {
+                        let spelling = crate::data::Data::type_var_spelling(holder_name);
                         diagnostic!(
                             self.lexer,
                             Level::Error,
-                            "the type variable '{holder_name}' is already bound elsewhere to a \
-                             '{method_suffix}' taking {} parameter(s), and this bound needs \
-                             {} — a type variable's NAME is shared across generic functions, \
-                             so two of them cannot require different signatures of one method. \
-                             Rename this function's type variable (`<U: …>`)",
+                            "the bounds on '{spelling}' require two different \
+                             '{method_suffix}' — one taking {} parameter(s) and one taking \
+                             {} — and a bound method is reached by name, so only one of them \
+                             can be. Bound '{spelling}' by the interface that declares the \
+                             one this body calls, and give the other its own generic",
                             self.data.attributes(prev),
                             self.data.attributes(child_nr),
                         );
@@ -4112,7 +4190,8 @@ impl Parser {
                         // the associated type, so it needs the same dispatch stubs a bounded
                         // type variable gets.  This is the whole of "an associated type is a
                         // type variable owned by the interface".
-                        self.create_bound_method_stubs(&assoc_def, &resolved);
+                        let assoc_nr = self.data.def_nr(&assoc_def);
+                        self.create_bound_method_stubs(assoc_nr, &resolved);
                     }
                 }
                 self.lexer.has_token(";");

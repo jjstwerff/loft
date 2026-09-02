@@ -2994,8 +2994,23 @@ impl Parser {
             // still built underneath, because a template's IR is type-checked and
             // slot-allocated even though it never runs (loft#1016).
             Type::Reference(d_nr, _) if self.data.is_type_var_placeholder(*d_nr) => {
-                let name = self.data.def(*d_nr).name().to_string();
+                // The sub-parse is SOURCE text, so it needs the spelling the header wrote —
+                // a second header binding the same letter holds a placeholder minted as
+                // `T#2`, which no source can name.  Pinning the enclosing header's binding
+                // over the sub-parse is what makes the spelling resolve back to THIS
+                // placeholder rather than to whichever one the letter names elsewhere.
+                let d_nr = *d_nr;
+                let name =
+                    crate::data::Data::type_var_spelling(self.data.def(d_nr).name()).to_string();
+                let saved = (
+                    self.cur_type_var,
+                    std::mem::take(&mut self.cur_type_var_name),
+                );
+                self.cur_type_var = d_nr;
+                self.cur_type_var_name.clone_from(&name);
                 let (v, t) = self.subparse_default(&format!("{name} {{}}"), tp);
+                self.cur_type_var = saved.0;
+                self.cur_type_var_name = saved.1;
                 Some((v_block(vec![v], t.clone(), Self::TV_DEFAULT_BLOCK), t))
             }
             // A record defaults to `S{}` — every field defaulted, exactly the value a
