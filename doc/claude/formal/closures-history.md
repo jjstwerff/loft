@@ -12,7 +12,8 @@ captures, whose return dep names `__closure` and not which slot (D-clo-7, below;
 value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness
 and its literal-`null` argument are all closed), and the same `??` at a COLLECTION return
 leaks its mint arm because declining the unguarded lift was the only cure correct on both
-backends (D-clo-14).
+backends (D-clo-14; its cost is now measured on the PEAK, and both frees a cure must guard
+are named — see the entry).
 
 ⚠ **A rebind is not a mutation, and a capture is the one place the code could not tell them
 apart (D-clo-20, loft#1281, closed 2026-09-02).** `(L-CapHeap)` shares a captured heap value
