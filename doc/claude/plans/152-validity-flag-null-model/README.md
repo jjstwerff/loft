@@ -31,6 +31,10 @@ spellings loft already has.**
 The test of this plan is one question: **can an author who cares write a correct handler,
 without learning anything new?**
 
+Frequency does not enter it. A case a programmer cannot write correctly is worth fixing
+whether or not many programmers reach it — the limitation is arbitrary, and removing
+arbitrary limitations is the job (§ Why this is worth doing).
+
 ## What the two spellings already mean, and where they stop
 
 Both already work — on the types that keep a spare code. Measured
@@ -76,9 +80,30 @@ status the program actually observes, never for arithmetic at large.
 - **the default** — a program that observes nothing still takes the type's default, silently,
   exactly as today.
 
-## Blast radius: measured, and near zero
+## Why this is worth doing, and separately, what it risks
 
-Narrow widths are barely used for arithmetic anywhere. Counted across the tree:
+**The justification is not frequency.** A programmer who reaches for a `u8` and writes
+arithmetic on it cannot write correct code today: the failure is unobservable and the
+substituted value is not theirs. That is an **arbitrary limitation** — arbitrary because
+nothing about the language requires it, only the absence of a mechanism — and loft exists to
+carry that kind of load for the programmer, not to hand it back
+([GOALS.md](../../GOALS.md)).
+
+The doctrine is already on the record, in the maker's own words under
+[C79](../../DESIGN_DECISIONS.md), and the entry notes that it generalises:
+
+> *"If we cannot fulfil what a programmer asks for us that should be an error instead of
+> silently different semantics … otherwise we will have to support this seemingly
+> undefined/strange behaviour into our future."*
+
+`x: u8 = 250; x += 10` asked for one thing and silently got another. C79's own answer was to
+refuse rather than substitute; here refusing is not available — C80 keeps the program running
+and this plan adds no error — so the same principle takes its other form: **make the
+substitution visible and choosable.** Rare or not, that is the case being fixed.
+
+### What the rarity DOES tell us: the risk is near zero
+
+Narrow widths are barely used for arithmetic. Counted across the tree:
 
 | where narrow-typed `.loft` files live | files |
 |---|---|
@@ -88,26 +113,20 @@ Narrow widths are barely used for arithmetic anywhere. Counted across the tree:
 | `tools/` | **2** |
 | `lib/` | **0** |
 
-And the owner reports the same shape outside this repo: almost no narrow-width code in active
-use, the exception being the hex vectors, which carry many `u8` cases but as **limited
-template values without arithmetic**.
+The owner reports the same outside this repo: almost no narrow-width code in active use, the
+exception being hex vectors carrying many `u8` cases as **limited template values without
+arithmetic**. Those write no `??` and no `!`, so they stay unmarked and their emission is
+byte-identical. **The population that could be disturbed is approximately empty** — which is
+what a measured blast radius is for, and it is the only thing this count decides.
 
-That is a strong safety argument and a weak urgency argument, and both should be said:
+It also makes **S5** a bound rather than a gate: measuring the cost where the bit is live
+records a number, but little is live for it to slow down.
 
-- **Safety.** Template-value `u8` writes no `??` and no `!`, so it is unmarked, so its
-  emission is byte-identical. The population that could be disturbed by this change is
-  approximately empty, which is as good as a blast radius gets.
-- **Urgency.** The defect is rarely hit, because the construct is rarely written.
-
-**The hypothesis worth naming: the absence may be an effect of the defect.** A type family
-that cannot be used safely for arithmetic — you cannot see a failure, you cannot choose the
-fallback — gets used only for storage and template values, which is exactly the usage the
-owner describes. If that is right, this plan is not repairing a construct people use; it is
-making a construct usable. **Falsifier:** land it, and if narrow-width arithmetic still does
-not appear, the types were simply niche and the hypothesis was wrong.
-
-It also demotes **S5**: measuring the cost where the bit is live matters much less when
-almost nothing is live. Keep it, but as a bound rather than a gate.
+**And the low usage may itself be the defect's shadow.** A type family that cannot be used
+safely for arithmetic gets used only for storage and template values — exactly the usage
+described. If so, this plan does not repair a construct people use; it makes one usable.
+**Falsifier:** land it, and if narrow-width arithmetic still does not appear, the types were
+niche and this reading was wrong.
 
 ## Mechanism
 
