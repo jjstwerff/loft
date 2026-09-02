@@ -1946,7 +1946,7 @@ use #count instead"
         // loft#1153 — a HOLDER's stub and a concrete type's method have different spellings;
         // which to look up follows from which this is.  They used to collide, and a struct named
         // like a type variable then resolved to the stub and rendered EMPTY.
-        let stub_name = self.data.method_key(d_nr, "to_text");
+        let stub_name = self.data.method_key(d_nr, "to_text", 1);
         let stub_nr = self.data.def_nr(&stub_name);
         if stub_nr == u32::MAX {
             return None;

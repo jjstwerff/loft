@@ -58,13 +58,18 @@ fn test_vector_generics() {
 //   Ordered    — declares `<`; gives you <, <=, >, >=
 //   Equatable  — declares `==`; gives you == and !=
 //   Addable    — addition (+)
-//   Numeric    — multiplication (*) and UNARY negation (-a)
-//   Scalable   — `scale(self, factor: integer) -> integer`, a method rather than an operator
-//   Printable  — text conversion (to_text)
+//   Numeric      — multiplication (*) and UNARY negation (-a)
+//   Subtractable — BINARY subtraction (a - b)
+//   Scalable     — `scale(self, factor: integer) -> integer`, a method rather than an operator
+//   Printable    — text conversion (to_text)
 //
-// `Numeric`'s `-` is the unary negation `-a`, so `a - b` under a bound is refused: no
-// built-in interface offers binary subtraction, because `-` desugars to the same `OpMin`
-// name at both arities.  Write the subtraction against a concrete type.
+// `-` desugars to the same `OpMin` name at both arities, so unary negation and binary
+// subtraction are two SIGNATURES of one name.  They are two bounds: `<T: Numeric>` gives you
+// `-a`, `<T: Subtractable>` gives you `a - b`, and `<T: Numeric + Subtractable>` gives you
+// both.  A user type provides one of the two arities and so satisfies one of the two bounds —
+// a concrete method key carries no arity, so a type cannot declare `OpMin` twice.
+fn gen_diff<T: Subtractable>(gen_a: T, gen_b: T) -> T { gen_a - gen_b }
+fn gen_negdiff<T: Numeric + Subtractable>(gen_a: T, gen_b: T) -> T { -(gen_a - gen_b) }
 fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
   if gen_x > gen_y { gen_x } else { gen_y }
 }
@@ -76,6 +81,9 @@ fn test_bounded() {
   assert(gen_max(2.5, 1.5) == 2.5, "max float");
   assert(gen_min(3, 7) == 3, "min int");
   assert(gen_min("apple", "banana") == "apple", "min text");
+  assert(gen_diff(10, 3) == 7, "subtraction under a bound");
+  assert(gen_diff(2.5, 0.5) == 2.0, "subtraction under a bound, float");
+  assert(gen_negdiff(10, 3) == -7, "both arities of `-` on one variable");
 }
 // ## Combining bounds
 // Use `+` to require multiple interfaces: `<T: Ordered + Addable>`.

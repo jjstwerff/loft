@@ -35,6 +35,7 @@ const SEARCH_INDEX=[
 {name:"interface",kind:"interface",url:"stdlib-interfaces.html"},
 {name:"interface",kind:"interface",url:"stdlib-interfaces.html"},
 {name:"interface",kind:"interface",url:"stdlib-interfaces.html"},
+{name:"interface",kind:"interface",url:"stdlib-interfaces.html"},
 {name:"abs",kind:"fn",url:"stdlib-math.html"},
 {name:"floor_mod",kind:"fn",url:"stdlib-math.html"},
 {name:"abs",kind:"fn",url:"stdlib-math.html"},

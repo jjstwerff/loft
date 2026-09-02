@@ -2308,9 +2308,11 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
 }</code></pre>
 <h2 id="bounded-generics-with-interfaces">Bounded generics with interfaces</h2>
 <p>By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: <code>&lt;T: Ordered&gt;</code> means T must support <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> comparisons.</p>
-<p>Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: <code>&gt;</code>, <code>&lt;=</code> and <code>&gt;=</code> all come from <code>&lt;</code>, and <code>!=</code> comes from <code>==</code>. Ordered    — declares <code>&lt;</code>; gives you &lt;, &lt;=, &gt;, &gt;= Equatable  — declares <code>==</code>; gives you == and != Addable    — addition (+) Numeric    — multiplication (*) and UNARY negation (-a) Scalable   — <code>scale(self, factor: integer) -&gt; integer</code>, a method rather than an operator Printable  — text conversion (to_text)</p>
-<p><code>Numeric</code>'s <code>-</code> is the unary negation <code>-a</code>, so <code>a - b</code> under a bound is refused: no built-in interface offers binary subtraction, because <code>-</code> desugars to the same <code>OpMin</code> name at both arities.  Write the subtraction against a concrete type.</p>
-<pre><code><span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+<p>Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: <code>&gt;</code>, <code>&lt;=</code> and <code>&gt;=</code> all come from <code>&lt;</code>, and <code>!=</code> comes from <code>==</code>. Ordered    — declares <code>&lt;</code>; gives you &lt;, &lt;=, &gt;, &gt;= Equatable  — declares <code>==</code>; gives you == and != Addable    — addition (+) Numeric      — multiplication (*) and UNARY negation (-a) Subtractable — BINARY subtraction (a - b) Scalable     — <code>scale(self, factor: integer) -&gt; integer</code>, a method rather than an operator Printable    — text conversion (to_text)</p>
+<p><code>-</code> desugars to the same <code>OpMin</code> name at both arities, so unary negation and binary subtraction are two SIGNATURES of one name.  They are two bounds: <code>&lt;T: Numeric&gt;</code> gives you <code>-a</code>, <code>&lt;T: Subtractable&gt;</code> gives you <code>a - b</code>, and <code>&lt;T: Numeric + Subtractable&gt;</code> gives you both.  A user type provides one of the two arities and so satisfies one of the two bounds — a concrete method key carries no arity, so a type cannot declare <code>OpMin</code> twice.</p>
+<pre><code><span class="kw">fn</span> gen_diff&lt;<span class="en">T</span>: <span class="en">Subtractable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> { gen_a - gen_b }
+<span class="kw">fn</span> gen_negdiff&lt;<span class="en">T</span>: <span class="en">Numeric</span> + <span class="en">Subtractable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> { -(gen_a - gen_b) }
+<span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
   <span class="kw">if</span> gen_x &gt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
 }
 <span class="kw">fn</span> gen_min&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
@@ -2321,6 +2323,9 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_max</span>(<span class="nm">2.5</span>, <span class="nm">1.5</span>) == <span class="nm">2.5</span>, <span class="st">"max float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">3</span>, <span class="st">"min int"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="st">"apple"</span>, <span class="st">"banana"</span>) == <span class="st">"apple"</span>, <span class="st">"min text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_diff</span>(<span class="nm">10</span>, <span class="nm">3</span>) == <span class="nm">7</span>, <span class="st">"subtraction under a bound"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_diff</span>(<span class="nm">2.5</span>, <span class="nm">0.5</span>) == <span class="nm">2.0</span>, <span class="st">"subtraction under a bound, float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_negdiff</span>(<span class="nm">10</span>, <span class="nm">3</span>) == -<span class="nm">7</span>, <span class="st">"both arities of `-` on one variable"</span>);
 }</code></pre>
 <h2 id="combining-bounds">Combining bounds</h2>
 <p>Use <code>+</code> to require multiple interfaces: <code>&lt;T: Ordered + Addable&gt;</code>.</p>
@@ -2911,6 +2916,10 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
 <li><strong>@F113</strong> — Associated types — an interface names a companion type</li>
 <li><strong>@F114</strong> — <code>x[i]</code> on a library type — <code>OpIndex</code> dispatch</li>
 <li><strong>@F115</strong> — <code>OpDrop</code> — a type runs code when its scope lets it die</li>
+<li><strong>@F118</strong> — Time (now / ticks)</li>
+<li><strong>@F119</strong> — Store locks (#lock)</li>
+<li><strong>@F120</strong> — Lexer library (lib/lexer)</li>
+<li><strong>@F121</strong> — Parser library (lib/parser)</li>
 </ul>
 <h2 id="tooling-and-infrastructure">Tooling and infrastructure</h2>
 <ul>
@@ -3532,11 +3541,17 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
 </div>
 <div class="item">
 <pre><code>pub interface Numeric</code></pre>
-<p>Types that support `*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, single, float, and user types defining OpMul and OpMin.</p>
+<p>Types that support `*` and `-` (unary negation). Separate from `Addable` so a generic can ask for the fewest operators it needs. Satisfied by integer, single, float, and user types defining OpMul and OpMin.</p>
+<p>Binary subtraction is `Subtractable` below and deliberately NOT here.  Both arities of `-` CAN now be declared by one interface — that is what loft#1275 fixed, and `Subtractable` beside `Numeric` is only a choice about the shipped surface — but adding a requirement to `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary `OpMin` today, which is exactly what COMPATIBILITY.md forbids.</p>
+</div>
+<div class="item">
+<pre><code>pub interface Subtractable</code></pre>
+<p>Types that support binary `-` (subtraction), returning the same type. Satisfied by integer, single, float, and user types defining a two-operand OpMin.</p>
+<p>A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one name at two arities since loft#1275 (`-` desugars to `OpMin` either way, and the stub key carries the arity), so `&lt;T: Numeric + Subtractable&gt;` gets negation and subtraction together from two interfaces that each name `OpMin`.  Before that it could get only one of them.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Scalable</code></pre>
-<p>Types that support integer scaling via a `scale` method. Uses a method (not `op *`) to avoid stub-name collision with `Numeric`. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -&gt; integer`.</p>
+<p>Types that support integer scaling via a `scale` method. Uses a method (not `op *`) because a `&lt;T: Numeric + Scalable&gt;` would then need two signatures of one name from ONE bound set, which is still refused (loft#1275). Two SEPARATE generics may each bound their own `T` by an interface declaring the same method differently — a header binds its own type variable. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -&gt; integer`.</p>
 </div>
 <div class="item">
 <pre><code>pub interface Printable</code></pre>

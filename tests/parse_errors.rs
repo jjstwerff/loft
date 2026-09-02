@@ -3206,15 +3206,14 @@ fn keyed_collection_as_a_vector_element_is_refused() {
         );
 }
 
-/// loft#1275 — ONE bound set requiring two signatures of one method name, which is what the
-/// per-header split of loft#1300 / loft#1301 deliberately leaves refused.
+/// loft#1275 — a NAMED method required at two arities by one bound set, which stays refused
+/// after the stub key gained the arity.
 ///
-/// A generic header binds its own type variable (`formal/interfaces.md` `(G-Gen)`), so two
-/// headers writing `T` no longer share a stub. What is left is a single variable whose bounds
-/// name one method twice — here `S1` and `S2` both declare `sizer` — or one interface that
-/// declares it twice. Those two requirements really are on one variable, and a bound method is
-/// reached by NAME, so which of them `x.sizer()` means is a policy question and not a scoping
-/// one. The refusal names the two arities and the cure that works today.
+/// The key carries the arity now, so two signatures of one name are two stubs and an OPERATOR
+/// reaches both: `-` is unary or binary by its SYNTAX, so `call_op` asks for the exact one.
+/// A method call cannot: it resolves its RECEIVER before its arguments are parsed, so
+/// `x.sizer()` has no arity to ask with. Refusing at the declaration names both arities and
+/// the cure; letting it through would resolve one of them by accident.
 #[test]
 fn one_bound_set_cannot_require_two_signatures_of_one_method() {
     code!(
@@ -3227,30 +3226,30 @@ fn one_bound_set_cannot_require_two_signatures_of_one_method() {
     )
     .error(
         "the bounds on 'T' require two different 'sizer' — one taking 1 parameter(s) and one \
-         taking 2 — and a bound method is reached by name, so only one of them can be. Bound \
-         'T' by the interface that declares the one this body calls, and give the other its \
-         own generic at one_bound_set_cannot_require_two_signatures_of_one_method:5:40",
+         taking 2 — and a method call resolves its receiver before its arguments, so only one \
+         of them can be reached. Bound 'T' by the interface that declares the one this body \
+         calls, and give the other its own generic at \
+         one_bound_set_cannot_require_two_signatures_of_one_method:5:40",
     );
 }
 
-/// The other half of the same refusal: ONE interface declaring both arities of `-`.
+/// loft#1275's own reproducer, and the case that CLOSED `formal/interfaces.md` `D-gen-4`.
 ///
-/// This is loft#1275's own reproducer. `-` desugars to `OpMin` at both arities, so the
-/// interface asks for two signatures of one stub name — the same collision as the pair of
-/// bounds above, reached without writing two interfaces. The diagnostic that fires is the
-/// use-site one, because the interface's second `OpMin` child never becomes a second stub.
+/// `(G-Iface)` calls an interface a set of SIGNATURES, so declaring `-` at both arities asks
+/// for two requirements and not one. `-` desugars to `OpMin` either way, and while the stub
+/// key spelled only the NAME the second declaration was silently dropped — the interface
+/// carried one `OpMin`, and `a - b` under any bound was refused with *"operator 'Min' requires
+/// a concrete type"*. The key carries the arity now, so both are reachable and this compiles
+/// and runs.
 #[test]
-fn one_interface_declaring_both_arities_of_minus_is_refused() {
+fn one_interface_may_declare_both_arities_of_minus() {
     code!(
         "interface SubNeg { op - (self: Self, other: Self) -> Self\n\
          op - (self: Self) -> Self }\n\
-         fn both<T: SubNeg>(a: T, b: T) -> T { -(a - b) }\n\
-         fn test() { }"
+         fn both<T: SubNeg>(a: T, b: T) -> T { -(a - b) }"
     )
-    .error(
-        "generic type T: operator 'Min' requires a concrete type at \
-         one_interface_declaring_both_arities_of_minus_is_refused:3:48",
-    );
+    .expr("both(10, 3)")
+    .result(Value::Int(-7));
 }
 
 /// loft#1301 / loft#1300 — two generic headers that both write `T` bind two DIFFERENT

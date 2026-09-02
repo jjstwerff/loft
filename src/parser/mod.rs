@@ -1077,7 +1077,7 @@ impl Default for Parser {
     }
 }
 
-fn is_op(name: &str) -> bool {
+pub(crate) fn is_op(name: &str) -> bool {
     name.len() >= 3 && name.starts_with("Op") && name.chars().nth(2).unwrap().is_uppercase()
 }
 
@@ -5122,6 +5122,9 @@ impl Parser {
         let name = data.def(child_nr).name();
         let self_prefix = format!("t_{}Self_", "Self".len());
         Some(if let Some(rest) = name.strip_prefix("__iface_") {
+            // `__iface_<interface>#<arity>_<method>` — the arity keeps two signatures of one
+            // name apart (loft#1275) and sits BEFORE the underscore, on the interface's side,
+            // so what comes back here is the method name and nothing else.
             rest.split_once('_')
                 .map_or_else(|| rest.to_string(), |(_, m)| m.to_string())
         } else if let Some(rest) = name.strip_prefix(&self_prefix) {
@@ -6778,6 +6781,22 @@ impl Parser {
     /// declared on an associated type (@PLN125 A2c). Answering with the reasons rather
     /// than emitting them lets each caller say whose promise was broken; the words after
     /// the colon are the same either way.
+    /// The parameter count a SIGNATURE declares — hidden parameters excluded.
+    ///
+    /// The raw count is not the signature's: a struct-returning function carries a hidden
+    /// return buffer and a bound stub carries one too, so comparing raw counts makes a
+    /// two-operand operator look like a three-parameter function (loft#1299).
+    fn visible_arity(data: &Data, d_nr: u32) -> usize {
+        if d_nr == u32::MAX || d_nr as usize >= data.definitions.len() {
+            return usize::MAX;
+        }
+        data.definitions[d_nr as usize]
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden)
+            .count()
+    }
+
     fn satisfaction_failures(&self, iface_nr: u32, concrete_nr: u32) -> Vec<String> {
         let concrete_name = self.data.def(concrete_nr).name().to_string();
         let concrete_type = self.data.def(concrete_nr).returned().clone();
@@ -6808,6 +6827,27 @@ impl Parser {
                     let s_type = self.data.def(s_nr).returned().clone();
                     found = self.data.find_fn(u16::MAX, &method_suffix, &s_type);
                 }
+            }
+            // `(G-Sat)` satisfies a bound against the SIGNATURE `[Self ↦ C](p̄ -> R)`, and
+            // `find_fn` takes a name and a receiver and no arity.  While no interface could
+            // declare one name twice that gap was invisible; now that `Subtractable` asks for a
+            // two-operand `OpMin`, a type providing only the UNARY one answered the name and
+            // satisfied the bound, and the monomorph then called it with one operand too many
+            // and dropped the second — `diff(a, b)` computed `-a`, on both backends, with no
+            // diagnostic.  That is loft#1274's defect at the satisfaction site rather than the
+            // use site (loft#1275).
+            //
+            // Compared on the VISIBLE count on both sides: a struct-returning function carries
+            // a hidden return buffer that an interface declaration does not, so the raw counts
+            // disagree by design.  The re-ask goes through `possible_with_signature` — the same
+            // resolver `re_resolve_call` uses for the same question — so satisfaction and
+            // monomorphisation cannot disagree about which definition a signature names.
+            let want = Self::visible_arity(&self.data, child_nr);
+            if found != u32::MAX && Self::visible_arity(&self.data, found) != want {
+                found = self
+                    .data
+                    .possible_with_signature(&method_suffix, want, &concrete_type)
+                    .unwrap_or(u32::MAX);
             }
             if found == u32::MAX {
                 out.push(format!("missing {method_suffix}"));
@@ -10779,7 +10819,11 @@ impl Parser {
                 };
             }
             let op_method = format!("Op{}", rename(op));
-            let stub_name = crate::data::Data::bound_stub_name(&tv_name, &op_method);
+            // The stub is keyed per SIGNATURE, and `list.len()` is this call's arity — the
+            // same count `has_bound_for_method` compares below.  `-` reaches here at BOTH
+            // arities as `OpMin`, and picking the stub by name alone is what kept a bound from
+            // offering binary subtraction beside unary negation (loft#1275).
+            let stub_name = crate::data::Data::bound_stub_name(&tv_name, &op_method, list.len());
             let stub_nr = self.data.def_nr(&stub_name);
             // Only use the T-stub if the CURRENT function's bounds declare this method.
             // Without this check, T-stubs from unrelated bounded generics (e.g., stdlib's
@@ -10820,7 +10864,7 @@ impl Parser {
                 && self.context != u32::MAX
                 && self.has_bound_for_method("OpEq", self.data.def_nr(&tv_name), Some(2))
             {
-                let eq_stub = crate::data::Data::bound_stub_name(&tv_name, "OpEq");
+                let eq_stub = crate::data::Data::bound_stub_name(&tv_name, "OpEq", 2);
                 let eq_nr = self.data.def_nr(&eq_stub);
                 if eq_nr != u32::MAX {
                     let mut eq_code = Value::Null;
@@ -10854,7 +10898,7 @@ impl Parser {
                 && list.len() == 2
                 && self.has_bound_for_method("OpLt", self.data.def_nr(&tv_name), Some(2))
             {
-                let lt_stub = crate::data::Data::bound_stub_name(&tv_name, "OpLt");
+                let lt_stub = crate::data::Data::bound_stub_name(&tv_name, "OpLt", 2);
                 let lt_nr = self.data.def_nr(&lt_stub);
                 if lt_nr != u32::MAX {
                     // SWAPPED: `a <= b` is `!(b < a)`.

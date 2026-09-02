@@ -64,9 +64,11 @@
 }</code></pre>
 <h2 id="bounded-generics-with-interfaces">Bounded generics with interfaces</h2>
 <p>By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: <code>&lt;T: Ordered&gt;</code> means T must support <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> comparisons.</p>
-<p>Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: <code>&gt;</code>, <code>&lt;=</code> and <code>&gt;=</code> all come from <code>&lt;</code>, and <code>!=</code> comes from <code>==</code>. Ordered    — declares <code>&lt;</code>; gives you &lt;, &lt;=, &gt;, &gt;= Equatable  — declares <code>==</code>; gives you == and != Addable    — addition (+) Numeric    — multiplication (*) and UNARY negation (-a) Scalable   — <code>scale(self, factor: integer) -&gt; integer</code>, a method rather than an operator Printable  — text conversion (to_text)</p>
-<p><code>Numeric</code>'s <code>-</code> is the unary negation <code>-a</code>, so <code>a - b</code> under a bound is refused: no built-in interface offers binary subtraction, because <code>-</code> desugars to the same <code>OpMin</code> name at both arities.  Write the subtraction against a concrete type.</p>
-<pre><code><span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+<p>Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: <code>&gt;</code>, <code>&lt;=</code> and <code>&gt;=</code> all come from <code>&lt;</code>, and <code>!=</code> comes from <code>==</code>. Ordered    — declares <code>&lt;</code>; gives you &lt;, &lt;=, &gt;, &gt;= Equatable  — declares <code>==</code>; gives you == and != Addable    — addition (+) Numeric      — multiplication (*) and UNARY negation (-a) Subtractable — BINARY subtraction (a - b) Scalable     — <code>scale(self, factor: integer) -&gt; integer</code>, a method rather than an operator Printable    — text conversion (to_text)</p>
+<p><code>-</code> desugars to the same <code>OpMin</code> name at both arities, so unary negation and binary subtraction are two SIGNATURES of one name.  They are two bounds: <code>&lt;T: Numeric&gt;</code> gives you <code>-a</code>, <code>&lt;T: Subtractable&gt;</code> gives you <code>a - b</code>, and <code>&lt;T: Numeric + Subtractable&gt;</code> gives you both.  A user type provides one of the two arities and so satisfies one of the two bounds — a concrete method key carries no arity, so a type cannot declare <code>OpMin</code> twice.</p>
+<pre><code><span class="kw">fn</span> gen_diff&lt;<span class="en">T</span>: <span class="en">Subtractable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> { gen_a - gen_b }
+<span class="kw">fn</span> gen_negdiff&lt;<span class="en">T</span>: <span class="en">Numeric</span> + <span class="en">Subtractable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> { -(gen_a - gen_b) }
+<span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
   <span class="kw">if</span> gen_x &gt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
 }
 <span class="kw">fn</span> gen_min&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
@@ -77,6 +79,9 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_max</span>(<span class="nm">2.5</span>, <span class="nm">1.5</span>) == <span class="nm">2.5</span>, <span class="st">"max float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">3</span>, <span class="st">"min int"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_min</span>(<span class="st">"apple"</span>, <span class="st">"banana"</span>) == <span class="st">"apple"</span>, <span class="st">"min text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_diff</span>(<span class="nm">10</span>, <span class="nm">3</span>) == <span class="nm">7</span>, <span class="st">"subtraction under a bound"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_diff</span>(<span class="nm">2.5</span>, <span class="nm">0.5</span>) == <span class="nm">2.0</span>, <span class="st">"subtraction under a bound, float"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_negdiff</span>(<span class="nm">10</span>, <span class="nm">3</span>) == -<span class="nm">7</span>, <span class="st">"both arities of `-` on one variable"</span>);
 }</code></pre>
 <h2 id="combining-bounds">Combining bounds</h2>
 <p>Use <code>+</code> to require multiple interfaces: <code>&lt;T: Ordered + Addable&gt;</code>.</p>
@@ -171,13 +176,18 @@ fn test_vector_generics() {
 //   Ordered    — declares `&lt;`; gives you &lt;, &lt;=, &gt;, &gt;=
 //   Equatable  — declares `==`; gives you == and !=
 //   Addable    — addition (+)
-//   Numeric    — multiplication (*) and UNARY negation (-a)
-//   Scalable   — `scale(self, factor: integer) -&gt; integer`, a method rather than an operator
-//   Printable  — text conversion (to_text)
+//   Numeric      — multiplication (*) and UNARY negation (-a)
+//   Subtractable — BINARY subtraction (a - b)
+//   Scalable     — `scale(self, factor: integer) -&gt; integer`, a method rather than an operator
+//   Printable    — text conversion (to_text)
 //
-// `Numeric`'s `-` is the unary negation `-a`, so `a - b` under a bound is refused: no
-// built-in interface offers binary subtraction, because `-` desugars to the same `OpMin`
-// name at both arities.  Write the subtraction against a concrete type.
+// `-` desugars to the same `OpMin` name at both arities, so unary negation and binary
+// subtraction are two SIGNATURES of one name.  They are two bounds: `&lt;T: Numeric&gt;` gives you
+// `-a`, `&lt;T: Subtractable&gt;` gives you `a - b`, and `&lt;T: Numeric + Subtractable&gt;` gives you
+// both.  A user type provides one of the two arities and so satisfies one of the two bounds —
+// a concrete method key carries no arity, so a type cannot declare `OpMin` twice.
+fn gen_diff&lt;T: Subtractable&gt;(gen_a: T, gen_b: T) -&gt; T { gen_a - gen_b }
+fn gen_negdiff&lt;T: Numeric + Subtractable&gt;(gen_a: T, gen_b: T) -&gt; T { -(gen_a - gen_b) }
 fn gen_max&lt;T: Ordered&gt;(gen_x: T, gen_y: T) -&gt; T {
   if gen_x &gt; gen_y { gen_x } else { gen_y }
 }
@@ -189,6 +199,9 @@ fn test_bounded() {
   assert(gen_max(2.5, 1.5) == 2.5, "max float");
   assert(gen_min(3, 7) == 3, "min int");
   assert(gen_min("apple", "banana") == "apple", "min text");
+  assert(gen_diff(10, 3) == 7, "subtraction under a bound");
+  assert(gen_diff(2.5, 0.5) == 2.0, "subtraction under a bound, float");
+  assert(gen_negdiff(10, 3) == -7, "both arities of `-` on one variable");
 }
 // ## Combining bounds
 // Use `+` to require multiple interfaces: `&lt;T: Ordered + Addable&gt;`.

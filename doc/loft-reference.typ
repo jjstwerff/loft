@@ -5215,14 +5215,17 @@ Built-in interfaces.  Each names the FEWEST operators it needs, because the rest
 Ordered    — declares `<`; gives you <, <=, >, >=
 Equatable  — declares `==`; gives you == and !=
 Addable    — addition (+)
-Numeric    — multiplication (*) and UNARY negation (-a)
-Scalable   — `scale(self, factor: integer) -> integer`, a method rather than an operator
-Printable  — text conversion (to_text)
+Numeric      — multiplication (*) and UNARY negation (-a)
+Subtractable — BINARY subtraction (a - b)
+Scalable     — `scale(self, factor: integer) -> integer`, a method rather than an operator
+Printable    — text conversion (to_text)
 ```
 
-`Numeric`'s `-` is the unary negation `-a`, so `a - b` under a bound is refused: no built-in interface offers binary subtraction, because `-` desugars to the same `OpMin` name at both arities.  Write the subtraction against a concrete type.
+`-` desugars to the same `OpMin` name at both arities, so unary negation and binary subtraction are two SIGNATURES of one name.  They are two bounds: `\<T: Numeric\>` gives you `-a`, `\<T: Subtractable\>` gives you `a - b`, and `\<T: Numeric + Subtractable\>` gives you both.  A user type provides one of the two arities and so satisfies one of the two bounds — a concrete method key carries no arity, so a type cannot declare `OpMin` twice.
 
 ```rust
+fn gen_diff<T: Subtractable>(gen_a: T, gen_b: T) -> T { gen_a - gen_b }
+fn gen_negdiff<T: Numeric + Subtractable>(gen_a: T, gen_b: T) -> T { -(gen_a - gen_b) }
 fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
   if gen_x > gen_y { gen_x } else { gen_y }
 }
@@ -5234,6 +5237,9 @@ fn test_bounded() {
   assert(gen_max(2.5, 1.5) == 2.5, "max float");
   assert(gen_min(3, 7) == 3, "min int");
   assert(gen_min("apple", "banana") == "apple", "min text");
+  assert(gen_diff(10, 3) == 7, "subtraction under a bound");
+  assert(gen_diff(2.5, 0.5) == 2.0, "subtraction under a bound, float");
+  assert(gen_negdiff(10, 3) == -7, "both arities of `-` on one variable");
 }
 ```
 
@@ -6249,6 +6255,10 @@ The catalogue is generated from the `loft-lang/features` issue tracker, which is
 - \*\*\@F113\*\* — Associated types — an interface names a companion type
 - \*\*\@F114\*\* — `x\[i\]` on a library type — `OpIndex` dispatch
 - \*\*\@F115\*\* — `OpDrop` — a type runs code when its scope lets it die
+- \*\*\@F118\*\* — Time (now / ticks)
+- \*\*\@F119\*\* — Store locks (\#lock)
+- \*\*\@F120\*\* — Lexer library (lib/lexer)
+- \*\*\@F121\*\* — Parser library (lib/parser)
 
 === Tooling and infrastructure
 
@@ -6954,13 +6964,21 @@ Types that support the `+` addition operator, returning the same type. Satisfied
 pub interface Numeric
 ```
 
-Types that support `\*` and `-` (unary negation). Separate from `Addable` to allow fine-grained bounds without stub-name collisions. Satisfied by integer, single, float, and user types defining OpMul and OpMin.
+Types that support `\*` and `-` (unary negation). Separate from `Addable` so a generic can ask for the fewest operators it needs. Satisfied by integer, single, float, and user types defining OpMul and OpMin.
+Binary subtraction is `Subtractable` below and deliberately NOT here.  Both arities of `-` CAN now be declared by one interface — that is what loft\#1275 fixed, and `Subtractable` beside `Numeric` is only a choice about the shipped surface — but adding a requirement to `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary `OpMin` today, which is exactly what COMPATIBILITY.md forbids.
+
+```rust
+pub interface Subtractable
+```
+
+Types that support binary `-` (subtraction), returning the same type. Satisfied by integer, single, float, and user types defining a two-operand OpMin.
+A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one name at two arities since loft\#1275 (`-` desugars to `OpMin` either way, and the stub key carries the arity), so `\<T: Numeric + Subtractable\>` gets negation and subtraction together from two interfaces that each name `OpMin`.  Before that it could get only one of them.
 
 ```rust
 pub interface Scalable
 ```
 
-Types that support integer scaling via a `scale` method. Uses a method (not `op \*`) to avoid stub-name collision with `Numeric`. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -\> integer`.
+Types that support integer scaling via a `scale` method. Uses a method (not `op \*`) because a `\<T: Numeric + Scalable\>` would then need two signatures of one name from ONE bound set, which is still refused (loft\#1275). Two SEPARATE generics may each bound their own `T` by an interface declaring the same method differently — a header binds its own type variable. User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -\> integer`.
 
 ```rust
 pub interface Printable

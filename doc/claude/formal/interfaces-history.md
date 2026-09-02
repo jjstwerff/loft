@@ -6,8 +6,8 @@
 > past its own history stops being a contract they can skim.  The rules doc carries the CURRENT
 > state (how many are open, and which); everything below is the record behind it.
 
-OPEN: **1** — `D-gen-4`.  `D-gen-1` and `D-gen-2` were opened and closed on 2026-08-29,
-`D-gen-3` on 2026-09-02.
+OPEN: **0**.  `D-gen-1` and `D-gen-2` were opened and closed on 2026-08-29, `D-gen-3` and
+`D-gen-4` on 2026-09-02.
 
 ⚠ **This line read `OPEN: 0` because *"a rules doc adds no code deviation"* — a claim about the
 doc's GENRE, not a measurement, and the same sentence `formatting.md` carried for its whole life
@@ -15,6 +15,49 @@ until the walk that first asked found four defects there.  It has now produced o
 The oracle under it (`86-interfaces.loft`, `48-generics.loft`, and the numbered scripts) is real,
 but it is an oracle for the shapes those files happen to write; `D-gen-1` is what it could not
 see.
+
+### D-gen-4 — OPENED AND CLOSED (2026-09-02, loft#1275): the stub key spelled a NAME, not a signature
+
+`(G-Iface)` calls an interface a set of method SIGNATURES and `(G-Sat)` satisfies it per
+signature; neither rule keys a method by name alone.  The bound-method stub did —
+`t_<LEN><holder>#g_<method>` — so the two arities of `-`, both `OpMin` after the operator sugar,
+asked for one name.  The second declaration was silently dropped, no shipped bound could offer
+binary subtraction, and `a - b` under any bound was refused with *"operator '-' requires a
+concrete type"*.
+
+The arity is part of the key now, **inside the length-counted portion** beside the holder mark.
+Putting it after the method instead was built and measured and is wrong: nine sites strip `t_`
+and take what follows the first underscore, so the monomorphiser looked for a concrete `sizer#1`,
+found nothing, and a one-method `Sizable` answered garbage while the stdlib's `sum<T: Addable>`
+panicked.  The arity is part of the KEY and never part of the NAME — which is what
+`bound_stub_name`'s own doc block already said about the holder mark, one paragraph above where
+the arity was first appended.
+
+**Two things this did NOT close, both of them rules rather than deviations.**
+
+* A NAMED method required at two arities by one bound set is still refused, at the declaration.
+  An operator's arity is fixed by its SYNTAX, so `call_op` asks for the exact stub; a method call
+  resolves its RECEIVER before its arguments are parsed, so `x.sizer()` has no arity to ask with.
+  The refusal names both arities and the cure.
+* A CONCRETE receiver's method key carries no arity either, so a user type provides one arity of
+  `-` and not both.  That is why binary subtraction ships as `Subtractable` rather than as a third
+  requirement on `Numeric`: `(G-Sat)` is structural, so adding a requirement to a shipped
+  interface takes satisfaction away from every user type that already provides the other two —
+  a breaking change under COMPATIBILITY.md, and the reason the mechanism fix and the surface
+  choice are two decisions.
+
+⚠ **Closing it exposed a `(G-Sat)` hole that had been unreachable.**  Satisfaction asked
+`find_fn`, which takes a name and a receiver and no arity.  While no interface could declare one
+name twice, nothing could reach it; the moment `Subtractable` asked for a two-operand `OpMin`, a
+type providing only the UNARY one answered the name, satisfied the bound, and the monomorph
+called it with one operand too many and dropped the second — `diff(a, b)` computed `-a` on both
+backends with no diagnostic.  That is loft#1274's defect at the satisfaction site instead of the
+use site, and it was introduced and closed inside this change: satisfaction now compares the
+VISIBLE parameter count and re-asks through `possible_with_signature`, the resolver
+monomorphisation already uses.  **A gap that only a new feature can reach is not a gap the old
+oracle was wrong to miss — but it is one the feature has to bring its own cell for.**
+
+Guard: `tests/scripts/1275-a-bound-offers-both-arities-of-minus.loft`.
 
 ### D-gen-3 — OPENED AND CLOSED (2026-09-02): the type variable's binding was FILE-scoped
 
