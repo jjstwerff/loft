@@ -214,6 +214,18 @@ pub struct Parser {
     /// also take the in-place path away from a vector literal and a comprehension, which are
     /// not what broke.
     pub(crate) prefix_operand: bool,
+    /// Set while `Parser::parse_object` RE-parses a literal with the destination hint declined.
+    ///
+    /// The hint is only valid for the outermost value of a right-hand side, and whether a
+    /// literal is that can only be known once its body has been consumed and the next token
+    /// read.  So the check happens at the END — a single-token `peek_token`, which takes
+    /// `&self` and is transparent, unlike a walk past the body (loft#1304: a multi-token
+    /// look-ahead leaves `prev_end` at the end of the scan and shifts every later caret).
+    /// A literal that turns out to be a sub-expression is then parsed AGAIN from its own
+    /// `link`, through the abandon path the field loop already uses, with this set.
+    ///
+    /// One retry, never two: the flag both requests the second parse and stops it asking again.
+    pub(crate) inplace_hint_declined: bool,
     /// True while parsing the LHS of a tuple destructuring — `(a, b) = expr`.
     /// The names there are BINDINGS, exactly like the `x` in `x = expr`, so a
     /// name that also belongs to a definition must still mint a variable
@@ -1195,6 +1207,7 @@ impl Parser {
             cc_nest: 0,
             in_format_expr: false,
             prefix_operand: false,
+            inplace_hint_declined: false,
             in_tuple_lhs: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),
