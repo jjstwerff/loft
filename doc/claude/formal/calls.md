@@ -264,6 +264,26 @@ the companion [calls-history.md](calls-history.md).
   backends, `p = call()` on the interpreter, and three of the six cells DISAGREED between the
   backends against `(O-NoDiverge)` (loft#1290). A register is only as strong as the oracle
   under it; re-measure before trusting a zero.
+- **The `&` write-back leaves the CALLER owning its store (`F-ParamRef` × `B-Copy` ×
+  `O-Owner`)** — the rule above says a `&` parameter's whole-value `p = e` writes through; what
+  it installs is [binding.md](binding.md)'s question, and `(B-Copy)` answers it: a plain heap
+  whole-value source is COPIED, so the store the caller ends up owning must be one no live
+  binding in the callee still names.  A bare-VARIABLE source installed the source's own store
+  instead, and `(O-Owner)`'s single owner broke in whichever direction the other holder pointed
+  — a caller-reachable source (`x = o`, which `(F-ParamHeap)` makes an alias of the caller's
+  argument) left the caller's two bindings naming one store and orphaned the displaced one,
+  while a callee-LOCAL source (`x = m`) was freed at the callee's scope exit and every later
+  read in the caller was a use-after-free.  Both answered CORRECTLY at the call, which is why
+  the issue that found the leak scored the value ✔ and never saw the alias: it takes a later
+  mutation of the source to see one and a store-slot recycle to see the other.  The oracle is
+  `tests/scripts/1303-an-amp-write-back-leaves-the-caller-owning-its-store.loft` — the source
+  crossed with the type: {caller-reachable parameter, callee local, field} × {`hash`, `sorted`,
+  `index`, `spatial`, `trie`, struct, struct-enum}, with a minting CALL (already correct — its
+  buffer is a temp nothing else names, the transfer `(O-Move)` describes), the `vector` kind
+  (whose in-place refill is already `(B-Copy)` and has no displaced store), a plain forwarder
+  (`F-ParamRebind` — the write-back must still stop there) and a repeated call as controls.
+  `x = x` has no cell: the language refuses that spelling, and excluding it from the
+  materialisation is what keeps the refusal (loft#1303).
 - **Return independence (`F-Ret`)** — `a = mk(); a[0]=99; b = mk()` leaves `b[0]==1`.
 
 D-op-1's falsifier applies: any program where the interpreter and `--native` disagree on argument
