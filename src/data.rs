@@ -6413,6 +6413,12 @@ impl Data {
         // `type_def_nr` peel still governs LAYOUT (Optional shares the base's
         // storage); this only distinguishes the def KEY. Gate-OFF no `Optional`
         // exists, so the name is the base — byte-identical.
+        // NOT routed through `bound_stub_name` for a holder receiver, though the two spellings
+        // then differ: `Self` is itself marked a bound holder, so every interface method
+        // declaration would be renamed and no interface would resolve at all (measured — a
+        // one-method `Sizable` answered garbage and the stdlib's `sum<T: Addable>` panicked).
+        // A DECLARATION keyed here is a concrete function; only the stubs a BOUND mints are
+        // keyed per signature (loft#1275).
         let sig = Self::sig_type_name(&self.key_type_name(type_nr), &arguments[0].typedef);
         Some(format!("t_{}{}_{fn_name}", sig.len(), sig))
     }
@@ -6421,6 +6427,12 @@ impl Data {
     /// (loft#1153).  `#` cannot occur in a loft identifier, so no user type can produce it, and
     /// `generation::sanitize` maps it before anything reaches Rust.
     const HOLDER_MARK: &'static str = "#g";
+
+    /// The largest parameter count (receiver included) a bound-method stub is probed for.
+    /// `find_fn` has no arity to offer, so it sweeps this range; the `param-count` advice
+    /// already calls eight REQUIRED parameters too many, so a bound method beyond it is not a
+    /// shape the language encourages.
+    pub(crate) const MAX_BOUND_ARITY: usize = 9;
 
     /// The internal name of a BOUND-METHOD STUB for `holder` — a generic's type variable, or an
     /// interface's associated type.
@@ -6431,15 +6443,31 @@ impl Data {
     /// took that method away from every struct spelling the variable's name: the struct's own
     /// declaration was refused as a redefinition, and a value of it resolved to the stub.
     ///
-    /// The marker sits INSIDE the length-counted portion, so the `t_<LEN><Type>_<method>`
-    /// readers (`api_surface::method_name`, the `OpIndex` refusal) still split it correctly.
+    /// The marker AND the arity sit INSIDE the length-counted portion, so the
+    /// `t_<LEN><Type>_<method>` readers (`api_surface::method_name`, the `OpIndex` refusal,
+    /// `re_resolve_call`'s name extraction) still split it correctly and read the METHOD name
+    /// unchanged.  Putting the arity after the method instead was measured and is wrong: nine
+    /// sites strip `t_` and take what follows the first underscore, so the monomorphiser looked
+    /// for a concrete `sizer#1`, found nothing, and a one-method `Sizable` answered garbage
+    /// while the stdlib's `sum<T: Addable>` panicked.  The arity is part of the KEY and never
+    /// part of the NAME.
+    ///
+    /// The key carries the ARITY because `formal/interfaces.md` `(G-Iface)` calls an interface
+    /// a set of SIGNATURES, and a name is not a signature.  `-` desugars to `OpMin` at both
+    /// arities, so a name-only key let a bound set hold only one of unary negation and binary
+    /// subtraction — no built-in bound could offer `a - b`, and an interface declaring both was
+    /// refused (loft#1275, `D-gen-4`).  It is the SAME pair `has_bound_for_method` compares at
+    /// the use site, and the visible count on both sides: a stub carries hidden parameters (a
+    /// return buffer) that an interface method does not, so the raw counts disagree by design
+    /// (loft#1299).
     ///
     /// ⚠ One home, because several sites construct or look this up, and a stub minted under one
     /// spelling and sought under another is not an error — it is silently unresolvable, which
-    /// reads as *"the bound does not supply that method."*
+    /// reads as *"the bound does not supply that method."*  That is why the arity goes in the
+    /// KEY rather than into a second lookup: a caller that forgot to pass it would not fail.
     #[must_use]
-    pub fn bound_stub_name(holder: &str, method: &str) -> String {
-        let h = format!("{holder}{}", Self::HOLDER_MARK);
+    pub fn bound_stub_name(holder: &str, method: &str, arity: usize) -> String {
+        let h = format!("{holder}{}{arity}", Self::HOLDER_MARK);
         format!("t_{}{}_{method}", h.len(), h)
     }
 
@@ -6489,8 +6517,18 @@ impl Data {
 
     /// The full method key for `method` on the definition `type_nr` — the ONE spelling every
     /// site must use, whether `type_nr` is a concrete type or a bound holder.
+    ///
+    /// `arity` is the number of parameters INCLUDING the receiver.  It reaches the key only for
+    /// a bound HOLDER, whose stubs are keyed per signature ([`Self::bound_stub_name`]); a
+    /// concrete type's methods keep the `t_<LEN><Type>_<method>` spelling `CODE.md` documents,
+    /// because those are resolved by `find_fn` against the argument TYPES and never by name
+    /// alone.
     #[must_use]
-    pub fn method_key(&self, type_nr: u32, method: &str) -> String {
+    pub fn method_key(&self, type_nr: u32, method: &str, arity: usize) -> String {
+        let d = &self.definitions[type_nr as usize];
+        if d.bound_holder {
+            return Self::bound_stub_name(&d.name, method, arity);
+        }
         let n = self.key_type_name(type_nr);
         format!("t_{}{}_{method}", n.len(), n)
     }
@@ -6847,6 +6885,31 @@ impl Data {
         let type_nr = self.type_def_nr(tp);
         if type_nr == u32::MAX {
             // No method dispatch for types like Function; fall back to n_ global.
+            return self.source_nr(source, &format!("n_{fn_name}"));
+        }
+        // A bound HOLDER's stubs are keyed per SIGNATURE (loft#1275), and this entry point has
+        // no arity to offer: a method call's arguments are not parsed when its receiver is
+        // resolved.  So probe the arities the language admits and answer only when ONE bound
+        // signature carries the name — which is every shipped program, `Walkable::children`
+        // included.  Where a bound set declares one name at two arities the answer is
+        // genuinely ambiguous here, and the sites that DO know their arity — the operator
+        // paths, which read it off the syntax — ask [`Self::bound_stub_name`] directly.
+        if self.definitions[type_nr as usize].bound_holder {
+            let holder = &self.definitions[type_nr as usize].name;
+            let mut found = u32::MAX;
+            for arity in 1..=Self::MAX_BOUND_ARITY {
+                let d_nr = self.source_nr(source, &Self::bound_stub_name(holder, fn_name, arity));
+                if d_nr == u32::MAX {
+                    continue;
+                }
+                if found != u32::MAX {
+                    return u32::MAX; // two signatures, and nothing here can choose
+                }
+                found = d_nr;
+            }
+            if found != u32::MAX {
+                return found;
+            }
             return self.source_nr(source, &format!("n_{fn_name}"));
         }
         let base = self.key_type_name(type_nr);

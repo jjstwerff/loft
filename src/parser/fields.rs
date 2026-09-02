@@ -1325,7 +1325,9 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
         // loft#1153 — a HOLDER's stub and a concrete type's method are spelled differently,
         // and this site looks up BOTH: `x[0]` reaches here for a bounded type variable and for a
         // struct defining `OpIndex` alike.  `method_key` is the one home that knows which.
-        let md = self.data.def_nr(&self.data.method_key(d, "OpIndex"));
+        // `x[i]` is arity 2 — receiver plus index — which is what keys a HOLDER's stub
+        // (loft#1275); for a concrete type the arity is not part of the spelling.
+        let md = self.data.def_nr(&self.data.method_key(d, "OpIndex", 2));
         if md == u32::MAX || !matches!(self.data.def_type(md), DefType::Function | DefType::Generic)
         {
             return u32::MAX;

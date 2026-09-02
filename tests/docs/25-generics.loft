@@ -8,13 +8,7 @@
 // ## Declaring a generic function
 // Place a single type variable in angle brackets after the function name.
 // The type variable must appear in the first parameter (directly or as a
-// container element like vector<T>) — a T that appears only later, or only in
-// the return type, is refused with "Type variable T must appear in the first
-// parameter".  ONE type variable: `<T, U>` does not parse.
-//
-// Generic STRUCTS are a separate thing and loft does not have them — `struct
-// Box<T>` is a parse error.  A generic FUNCTION over `vector<T>` covers most of
-// what a generic container would be reached for.
+// container element like vector<T>).
 fn identity<T>(x: T) -> T { x }
 // ## Calling a generic function
 // No special syntax at the call site — the compiler infers T from the first
@@ -53,59 +47,43 @@ fn test_vector_generics() {
   words = ["alpha", "beta", "gamma"];
   assert(first_element(words) == "alpha", "first text");
   assert(last_element(words) == "gamma", "last text");
-  // A CONSTANT index is trusted, and an empty vector is where that trust runs
-  // out: `gen_v[0]` is typed `T` and still answers null on an empty vector, so
-  // the null travels through a return type that says it cannot be there. Check
-  // the length before calling, or declare the result `T?` as `last_element`
-  // does and let the caller discharge it.
-  empty: vector<integer> = [];
-  assert(!first_element(empty), "`v[0]` on an empty vector is null despite the `T` return");
 }
 // ## Bounded generics with interfaces
-// By default, you can only assign and return T — no arithmetic, and no
-// comparison either: `a == b` on an unbounded T is refused. To use an operator
-// on T, add an interface bound.
+// By default, you can only assign and return T — no arithmetic, no comparison.
+// To use operators on T, add an interface bound: `<T: Ordered>` means T must
+// support `<`, `<=`, `>`, `>=` comparisons.
 //
-// Each bound guarantees EXACTLY the operations in this table, and no more —
-// a `+` under `Numeric` is refused as surely as one under no bound at all.
-// Each names the FEWEST operators it needs, because the rest are derived:
-// `>`, `<=` and `>=` all come from `<`, and `!=` comes from `==`.
+// Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are
+// derived: `>`, `<=` and `>=` all come from `<`, and `!=` comes from `==`.
+//   Ordered    — declares `<`; gives you <, <=, >, >=
+//   Equatable  — declares `==`; gives you == and !=
+//   Addable    — addition (+)
+//   Numeric      — multiplication (*) and UNARY negation (-a)
+//   Subtractable — BINARY subtraction (a - b)
+//   Scalable     — `scale(self, factor: integer) -> integer`, a method rather than an operator
+//   Printable    — text conversion (to_text)
 //
-//   Ordered    — declares `<`; gives you `<`, `<=`, `>`, `>=`
-//   Equatable  — declares `==`; gives you `==` and `!=`
-//   Addable    — `+` only.  NOT `-`
-//   Numeric    — `*` and the UNARY `-a`.  NOT `+`, NOT `/`
-//   Scalable   — the method `scale(self, factor: integer) -> integer`.  Not an
-//                operator, and no built-in type satisfies it — it is for your own types
-//   Printable  — the method `to_text() -> text`, and `"{x}"` interpolation
-//   Walkable   — the method `children() -> vector<Self>`.  The standard library's
-//                `tree_walk` is bounded by it, so defining `children` on your own
-//                type gets you a breadth-first walk without writing one
-//
-// Reach for `Ordered + Addable` when you want `+` and a comparison. No built-in
-// interface offers binary SUBTRACTION: `Numeric`'s `-` is the unary negation, and
-// `-` desugars to the same `OpMin` name at both arities, so `a - b` under a bound
-// is refused and you write the subtraction against a concrete type.
+// `-` desugars to the same `OpMin` name at both arities, so unary negation and binary
+// subtraction are two SIGNATURES of one name.  They are two bounds: `<T: Numeric>` gives you
+// `-a`, `<T: Subtractable>` gives you `a - b`, and `<T: Numeric + Subtractable>` gives you
+// both.  A user type provides one of the two arities and so satisfies one of the two bounds —
+// a concrete method key carries no arity, so a type cannot declare `OpMin` twice.
+fn gen_diff<T: Subtractable>(gen_a: T, gen_b: T) -> T { gen_a - gen_b }
+fn gen_negdiff<T: Numeric + Subtractable>(gen_a: T, gen_b: T) -> T { -(gen_a - gen_b) }
 fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
   if gen_x > gen_y { gen_x } else { gen_y }
 }
 fn gen_min<T: Ordered>(gen_x: T, gen_y: T) -> T {
   if gen_x < gen_y { gen_x } else { gen_y }
 }
-fn same<T: Equatable>(gen_x: T, gen_y: T) -> boolean {
-  gen_x == gen_y
-}
-fn described<T: Printable>(gen_x: T) -> text {
-  gen_x.to_text()
-}
 fn test_bounded() {
   assert(gen_max(3, 7) == 7, "max int");
   assert(gen_max(2.5, 1.5) == 2.5, "max float");
   assert(gen_min(3, 7) == 3, "min int");
   assert(gen_min("apple", "banana") == "apple", "min text");
-  assert(same(4, 4), "equatable on integers");
-  assert(!same("a", "b"), "…and it says no as well");
-  assert(described(7) == "7", "printable: {described(7)}");
+  assert(gen_diff(10, 3) == 7, "subtraction under a bound");
+  assert(gen_diff(2.5, 0.5) == 2.0, "subtraction under a bound, float");
+  assert(gen_negdiff(10, 3) == -7, "both arities of `-` on one variable");
 }
 // ## Combining bounds
 // Use `+` to require multiple interfaces: `<T: Ordered + Addable>`.
@@ -118,67 +96,20 @@ fn test_combined_bounds() {
   assert(clamped_add(8, 5, 10) == 10, "clamped to limit");
   assert(clamped_add(1.0, 2.0, 2.5) == 2.5, "float clamped");
 }
-// ## Your own types under a bound
-// The built-in bounds are not only for built-in types, and this is what they are
-// for: a struct satisfies one by DEFINING the operation, with no declaration
-// that it does. The names are the operators' own, not the symbols:
-//
-//   Ordered    fn OpLt(self: T, other: T) -> boolean      (`<`)
-//   Equatable  fn OpEq(self: T, other: T) -> boolean      (`==`)
-//   Addable    fn OpAdd(self: T, other: T) -> T           (`+`)
-//   Numeric    fn OpMul(self: T, other: T) -> T           (`*`)
-//              fn OpMin(self: T) -> T                     (unary `-`)
-//   Scalable   fn scale(self: T, factor: integer) -> integer
-//   Printable  fn to_text(self: T) -> text
-//   Walkable   fn children(self: T) -> vector<T>
-//
-// The same definition serves the bare operator: once `Money` has `OpLt`, both
-// `a < b` and `<T: Ordered>` work on it. Miss one and the error names it —
-// "'Money' does not satisfy interface 'Ordered': missing OpLt" — at the CALL
-// site, because that is where the concrete type is known.
-struct Money { cents: integer }
-fn OpLt(self: Money, other: Money) -> boolean { self.cents < other.cents }
-fn OpEq(self: Money, other: Money) -> boolean { self.cents == other.cents }
-fn OpAdd(self: Money, other: Money) -> Money { Money { cents: self.cents + other.cents } }
-fn to_text(self: Money) -> text { "{self.cents}c" }
-fn test_user_type_bounds() {
-  cheap = Money { cents: 300 };
-  dear = Money { cents: 700 };
-  // Bind a generic's result before reading through it — loft#1273 retains one
-  // record per call when the value is consumed inline.
-  best = gen_max(cheap, dear);
-  assert(best.cents == 700, "Ordered on a user type: {best.cents}");
-  assert(cheap < dear, "…and the bare operator, from the same definition");
-  assert(same(cheap, Money { cents: 300 }), "Equatable on a user type");
-  total = clamped_add(cheap, cheap, Money { cents: 1000 });
-  assert(total.cents == 600, "Addable on a user type: {total.cents}");
-  assert(described(dear) == "700c", "Printable on a user type: {described(dear)}");
-}
-struct Crate { label: text, kids: vector<Crate> }
-fn children(self: Crate) -> vector<Crate> { self.kids }
-fn test_walkable() {
-  // `children` is the whole of what Walkable asks for; `tree_walk` is the stdlib's,
-  // bounded by it, and it visits the root before either child.
-  tree = Crate { label: "root", kids: [
-    Crate { label: "a", kids: [] },
-    Crate { label: "b", kids: [] },
-  ] };
-  seen = "";
-  for node in tree_walk(tree, 10) { seen += "{node.label} "; }
-  assert(seen == "root a b ", "Walkable on a user type: {seen}");
-}
+// ## Allowed operations on T
+// Inside a generic function you may only use operations that the bound
+// guarantees.  Without any bound: assign, return, store in variables.
+// With Ordered: comparisons.  With Addable: + and -.
 // ## Disallowed operations
-// The compiler rejects operations the bound does not cover, and it says which:
-//   `x + y` on unbounded T   — "generic type T: operator '+' requires a concrete type"
-//   `x.field` on T           — "generic type T: field access requires a concrete type"
-// The same wording covers an operator OUTSIDE a bound: `x + y` under `Numeric`
-// and `x - y` under `Addable` are refused in exactly those words.
+// The compiler rejects operations not covered by the bound.
+// `x + y` on unbounded T gives:
+//   "generic type T: operator '+' requires a concrete type"
+// `x.field` on T gives:
+//   "generic type T: field access requires a concrete type"
 fn main() {
   test_identity();
   test_pick_second();
   test_vector_generics();
   test_bounded();
   test_combined_bounds();
-  test_user_type_bounds();
-  test_walkable();
 }

@@ -829,6 +829,11 @@ pub interface Numeric {
   op - (self: Self) -> Self
 }
 
+// BINARY subtraction — a bound of its own, see the note below.
+pub interface Subtractable {
+  op - (self: Self, other: Self) -> Self
+}
+
 // Integer scaling, as a METHOD rather than `op *` — see the note below.
 pub interface Scalable {
   fn scale(self: Self, factor: integer) -> integer
@@ -848,26 +853,43 @@ operators the derivations need: `Ordered` carries only `<` because `>`, `<=` and
 derived from it, and `Equatable` only `==` for the same reason. An interface demanding every
 spelling would break every user type that implements the minimum.
 
-⚠ **`Numeric`'s `-` is UNARY negation, and no bound offers binary subtraction.** The two
-share one desugared name — `-` becomes `OpMin` at either arity. So `a - b` inside a
-`<T: Numeric>` body is refused with *"generic type T: operator '-' requires a concrete
-type"*, exactly as it is under `Addable`. It used to bind to the unary op, drop the second
-operand and compute `-a` on both backends with no diagnostic; bound satisfaction now compares
-the SIGNATURE rather than the name (`formal/interfaces.md` (G-Sat), loft#1274). Whether a
-bound SHOULD offer binary subtraction is open — it needs the two arities of `OpMin` to
-coexist in ONE interface — and is loft#1275.
+⚠ **`Numeric`'s `-` is UNARY negation; binary subtraction is `Subtractable`.** The two share
+one desugared name — `-` becomes `OpMin` at either arity — so they are two SIGNATURES of one
+name, and a bound-method stub is keyed by `(name, arity)` to keep them apart. Write
+`<T: Subtractable>` for `a - b`, `<T: Numeric>` for `-a`, and `<T: Numeric + Subtractable>`
+for both; the last is two interfaces on one variable that each name `OpMin`, which is the
+shape that needed the arity in the key (loft#1275).
 
-**Your own interfaces may declare both arities, one per interface.** Two interfaces in one
-file, one requiring `op - (self: Self, other: Self)` and one requiring `op - (self: Self)`,
-each bounding a generic, both work — including when both generics spell their type variable
-`T`. A generic header binds its own type variable (`(G-Gen)`), so the two get their own
-bound-method stubs and neither is checked against the other's signature. Until 2026-09-02 the
-spelling had file scope and the second header was refused against the first's parameter list,
-order-dependently (loft#1300, loft#1301). What remains refused is one BOUND SET wanting two
-signatures of one name — the interface declaring both arities above, or `<T: A + B>` where
-`A` and `B` both declare `sizer`. That is also what "avoid stub-name collision" means in
-`Scalable`'s comment, and why `Scalable` scales through a method instead of `op *`: it shares
-`Numeric`'s `*`, and a `<T: Numeric + Scalable>` would want both.
+Subtraction is a separate bound rather than a third requirement on `Numeric` because adding
+one would take satisfaction away from every user type that provides `OpMul` and unary `OpMin`
+today — `(G-Sat)` is structural, so a new requirement is a breaking change
+([COMPATIBILITY.md](COMPATIBILITY.md)).
+
+**Your own interfaces may declare both arities, in ONE interface or one per interface.** An
+interface is a set of SIGNATURES (`(G-Iface)`), so
+
+```loft
+interface SubNeg {
+  op - (self: Self, other: Self) -> Self
+  op - (self: Self) -> Self
+}
+```
+
+compiles and both arities are reachable from a `<T: SubNeg>` body. Two interfaces each
+declaring one arity work too, including when both generics spell their type variable `T` — a
+generic header binds its own type variable (`(G-Gen)`, loft#1300 / loft#1301).
+
+⚠ **A CONCRETE type still provides one arity of a name, not both.** A method key carries the
+receiver and the method name and no arity, so `fn OpMin(self: Money)` and
+`fn OpMin(self: Money, other: Money)` collide as a redefinition. A user type therefore
+satisfies `Numeric` or `Subtractable`, not both — which is the other half of why they are
+separate bounds. Asking a type for the arity it does not have is a compile error naming the
+interface (*"'Money' does not satisfy interface 'Subtractable': missing OpMin"*), not a
+silently dropped operand.
+
+`Scalable` scales through a `scale` METHOD rather than `op *` for the neighbouring reason: it
+would share `Numeric`'s `*` at the SAME arity, and same-name same-arity requirements from two
+interfaces are one stub, so the second is taken to agree with the first.
 `text` satisfies `Ordered` and `Equatable`. No extra declarations are needed.
 
 **Stdlib functions converted from native to bounded-generic loft** (depends on I8):

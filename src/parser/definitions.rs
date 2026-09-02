@@ -3837,55 +3837,63 @@ impl Parser {
                 let Some(method_suffix) = Self::interface_method_name(&self.data, child_nr) else {
                     continue;
                 };
-                let t_stub_name = crate::data::Data::bound_stub_name(holder_name, &method_suffix);
+                // The stub is keyed per SIGNATURE, so the arity is part of the name.  Two
+                // requirements of one name at different arities are two stubs, which is what
+                // lets `Numeric` declare unary negation beside binary subtraction — both
+                // desugar to `OpMin` (loft#1275, `formal/interfaces.md` `D-gen-4`).
+                let t_stub_name = crate::data::Data::bound_stub_name(
+                    holder_name,
+                    &method_suffix,
+                    self.data.attributes(child_nr),
+                );
                 let existing_stub = self.data.def_nr(&t_stub_name);
+                // Two arities of one NAMED method cannot both be reached, and this is the only
+                // place that can say so.  An OPERATOR's arity is fixed by its syntax — `-a` is
+                // one operand and `a - b` is two — so `call_op` asks for the exact stub and
+                // both are usable, which is what loft#1275 opened up.  A method call resolves
+                // its RECEIVER before its arguments are parsed, so `x.sizer()` has no arity to
+                // ask with; `find_fn` answers "ambiguous" and the caller can only report a
+                // field it could not resolve.  Refusing at the DECLARATION names both arities
+                // and the cure instead.
+                if self.first_pass
+                    && existing_stub == u32::MAX
+                    && !crate::parser::is_op(&method_suffix)
+                    && let Some(other) = (1..=crate::data::Data::MAX_BOUND_ARITY)
+                        .filter(|a| *a != self.data.attributes(child_nr))
+                        .find(|a| {
+                            self.data.def_nr(&crate::data::Data::bound_stub_name(
+                                holder_name,
+                                &method_suffix,
+                                *a,
+                            )) != u32::MAX
+                        })
+                {
+                    let spelling = crate::data::Data::type_var_spelling(holder_name);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "the bounds on '{spelling}' require two different '{method_suffix}' — \
+                         one taking {} parameter(s) and one taking {} — and a method call \
+                         resolves its receiver before its arguments, so only one of them can \
+                         be reached. Bound '{spelling}' by the interface that declares the one \
+                         this body calls, and give the other its own generic",
+                        other,
+                        self.data.attributes(child_nr),
+                    );
+                }
                 if existing_stub != u32::MAX {
-                    // Sharing one stub is the NORM: two bounds declaring the same method the
-                    // same way, or the same header seen again on the second pass, want the
-                    // same stub.  It is wrong only when ONE bound set requires two DIFFERENT
-                    // signatures of one method name — either two of its interfaces declare
-                    // that name differently, or one interface declares it twice.  The stub
-                    // carries a signature, so the second requirement is silently dropped and
-                    // every call is checked against the first's, which is how a call came to
-                    // be refused against a parameter list the reader never wrote
-                    // (*"Too many parameters for T#g.sizer"*).
+                    // Sharing one stub is the NORM and now the only case that reaches here:
+                    // two bounds declaring the same method the SAME way, or the same header
+                    // seen again on the second pass, want the same stub.  A pair that
+                    // disagreed on ARITY used to land here too and had to be refused, because
+                    // one name could hold only one signature; the key carries the arity now,
+                    // so they are two stubs and never meet (loft#1275).
                     //
-                    // A second HEADER writing the same variable spelling is no longer this
-                    // case: `(G-Gen)` binds the variable per header, so a different bound set
-                    // gets a placeholder of its own and never reaches this stub (loft#1300,
-                    // loft#1301).  What is left needs a policy — which of the two signatures
-                    // `x.m()` means — and that is loft#1275.
-                    //
-                    // CHILD-to-CHILD: this bound's interface method against the one the
-                    // existing stub was minted FROM.  Comparing the STUB against a child is
-                    // what two earlier attempts did, and both refused `default/01_code.loft`
-                    // itself — a stub carries parameters an interface method does not, so
-                    // `assert_eq` / `assert_ne`, which share legitimately, read as a conflict.
-                    // The stdlib is the control that catches that in one build.
-                    //
-                    // Reported on PASS 1 because that is the only pass that reaches here: the
-                    // stub is minted once, and pass 2 finds it already made.  It is also where
-                    // the neighbouring "generic type parameter conflicts with a …" diagnostic
-                    // reports, for the same reason.
-                    if self.first_pass
-                        && let Some(prev) = self.stub_origin.get(&existing_stub).copied()
-                        && prev != child_nr
-                        && self.data.attributes(prev) != self.data.attributes(child_nr)
-                    {
-                        let spelling = crate::data::Data::type_var_spelling(holder_name);
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "the bounds on '{spelling}' require two different \
-                             '{method_suffix}' — one taking {} parameter(s) and one taking \
-                             {} — and a bound method is reached by name, so only one of them \
-                             can be. Bound '{spelling}' by the interface that declares the \
-                             one this body calls, and give the other its own generic",
-                            self.data.attributes(prev),
-                            self.data.attributes(child_nr),
-                        );
-                    }
-                    continue; // already created (e.g. multiple bounds share a method)
+                    // Two bounds agreeing on the arity and disagreeing on the parameter TYPES
+                    // still share, and still silently take the first.  That was true before
+                    // this change as well — the check it replaces compared arities only — so
+                    // it is an unclosed gap and not a regression.
+                    continue;
                 }
                 let t_stub_nr =
                     self.data
@@ -4258,7 +4266,13 @@ impl Parser {
             // `children_of(d_nr)` enumerates them for satisfaction checking;
             // T-stub creation strips the prefix to extract the method name.
             if self.first_pass && d_nr != u32::MAX {
-                let stub_name = format!("__iface_{d_nr}_{method_name}");
+                // The arity is part of the name for the same reason it keys a BOUND stub:
+                // `(G-Iface)` calls an interface a set of SIGNATURES, and a name is not one.
+                // Without it a second `op -` — binary subtraction beside unary negation, both
+                // spelled `OpMin` — collided with the first and the `def_nr` guard below
+                // silently dropped it, so the interface never carried two requirements and no
+                // bound could offer `a - b` (loft#1275, `D-gen-4`).
+                let stub_name = format!("__iface_{d_nr}#{}_{method_name}", args.len());
                 if self.data.def_nr(&stub_name) == u32::MAX {
                     let stub_nr =
                         self.data

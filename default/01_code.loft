@@ -75,9 +75,26 @@ pub interface Addable {
 // Types that support `*` and `-` (unary negation).
 // Separate from `Addable` so a generic can ask for the fewest operators it needs.
 // Satisfied by integer, single, float, and user types defining OpMul and OpMin.
+//
+// Binary subtraction is `Subtractable` below and deliberately NOT here.  Both arities of `-`
+// CAN now be declared by one interface — that is what loft#1275 fixed, and `Subtractable`
+// beside `Numeric` is only a choice about the shipped surface — but adding a requirement to
+// `Numeric` would take satisfaction away from every user type that provides `OpMul` and unary
+// `OpMin` today, which is exactly what COMPATIBILITY.md forbids.
 pub interface Numeric {
   op * (self: Self, other: Self) -> Self
   op - (self: Self) -> Self
+}
+
+// Types that support binary `-` (subtraction), returning the same type.
+// Satisfied by integer, single, float, and user types defining a two-operand OpMin.
+//
+// A bound of its own rather than a third requirement on `Numeric`: a bound set may declare one
+// name at two arities since loft#1275 (`-` desugars to `OpMin` either way, and the stub key
+// carries the arity), so `<T: Numeric + Subtractable>` gets negation and subtraction together
+// from two interfaces that each name `OpMin`.  Before that it could get only one of them.
+pub interface Subtractable {
+  op - (self: Self, other: Self) -> Self
 }
 
 // Types that support integer scaling via a `scale` method.
