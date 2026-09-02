@@ -218,4 +218,8 @@ sentinel*, which is a different path through the guard. Crossing overflow-shape 
   sentinel tests from the hot path (measured in A), collapsing the 14 `Op*Nullable`
   duplicates, and provenance. None of those is a correctness argument any more.
 
+Both reproduce on `main` (e9643ff6), verified against a worktree build — so they are
+mainline defects, not this branch's, and both are filed with a verified workaround:
+**loft#1305** (the sentinel exemption) and **loft#1306** (the return-width divergence).
+
 Probes: [`probes/axis/`](probes/axis/).
