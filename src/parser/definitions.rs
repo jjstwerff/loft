@@ -2936,9 +2936,15 @@ impl Parser {
                         // default) as a no-op, for back-compat with existing source.
                         self.has_deprecated_not_null();
                         self.lexer.closing_angle();
-                        // loft#923 — a KEYED collection is not a vector element, and
-                        // saying so here is the whole of it: this is the one
-                        // chokepoint every `vector<…>` element passes through.
+                        // loft#923 — a KEYED collection is not a vector element.
+                        //
+                        // ⚠ This is the chokepoint every WRITTEN `vector<…>` element passes
+                        // through, and that is not every vector: an INFERRED literal
+                        // (`hs = [mk(1), mk(2)]`) never writes the type, so it reached no
+                        // check here and panicked the interpreter instead — the copy landed
+                        // on `u16::MAX`, which the source-free bit masks to `0x7FFF`, an
+                        // index into an 85-row table (loft#1298).  `parse_vector` asks
+                        // `refuse_keyed_vector_element` for the same refusal.
                         //
                         // Nothing could ever fill one. A literal element types as the
                         // CONTENT struct ("cannot store vector<E> elements in a
@@ -2957,25 +2963,7 @@ impl Parser {
                         // registered name carries its key list in the schema's own
                         // spelling (`sorted<E,[("k", true)]>`), which is not what the
                         // author wrote and not something to hand back to them.
-                        let kind = match tp.base() {
-                            Type::Hash(_, _, _) => Some("hash"),
-                            Type::Sorted(_, _, _) => Some("sorted"),
-                            Type::Index(_, _, _) => Some("index"),
-                            Type::Radix(_, _, _) => Some("spatial"),
-                            Type::Trie(_, _, _) => Some("trie"),
-                            _ => None,
-                        };
-                        if let Some(kind) = kind {
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "a `{kind}` cannot be a vector ELEMENT — a keyed \
-                                 collection has no element form anything can write, so \
-                                 `vector<{kind}<…>>` could only ever be declared and \
-                                 stay empty. Hold it in a struct and make a vector of \
-                                 THAT: the extra record is what the element would have \
-                                 been anyway."
-                            );
+                        if self.refuse_keyed_vector_element(&tp) {
                             return Some(Type::Unknown(0));
                         }
                         // @PLN25 storage-vs-access-nullability: DENSE by default; the
