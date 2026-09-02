@@ -838,14 +838,14 @@ differently and only a cell could ever have caught the claim.
 | `tests/docs/22-time.loft` | 2026-09-01 | `e9643ff6` |
 | `tests/docs/23-safety.loft` | 2026-09-01 | `b6dc9a61` |
 | `tests/docs/24-json.loft` | 2026-09-01 | `f21577f2` |
-| `tests/docs/25-generics.loft` | 2026-09-02 | `WMGEN` |
+| `tests/docs/25-generics.loft` | 2026-09-02 | `951d6a3a` |
 | `tests/docs/26-closures.loft` | 2026-09-01 | `64808d31` |
 | `tests/docs/27-coroutines.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/28-tuples.loft` | 2026-09-01 | `320949cb` |
 | `tests/docs/29-match.loft` | 2026-09-01 | `dac44e52` |
 | `tests/docs/30-formatting.loft` | 2026-09-01 | `6686e0d9` |
 | `tests/docs/31-ref-forward.loft` | 2026-09-01 | `6de316c9` |
-| `tests/docs/33-features.loft` | 2026-09-02 | `WMGEN` |
+| `tests/docs/33-features.loft` | 2026-09-02 | `951d6a3a` |
 | `tests/docs/34-running.loft` | 2026-09-01 | `1c5e7b17` |
 | `tests/docs/35-testing.loft` | 2026-09-01 | `65dd5efd` |
 | `tests/docs/36-debugging.loft` | 2026-09-02 | `9e79234c` |
@@ -855,7 +855,7 @@ differently and only a cell could ever have caught the claim.
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
 | `doc/install.html` | 2026-09-02 | `80568550` |
 | `doc/roadmap.html` | 2026-09-02 | `462d42ee` |
-| `default` | 2026-09-02 | `WMGEN` |
+| `default` | 2026-09-02 | `951d6a3a` |
 
 ## See also
 
