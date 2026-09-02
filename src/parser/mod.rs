@@ -7032,6 +7032,32 @@ impl Parser {
             name
         };
         let mut resolved = data.find_fn(u16::MAX, fn_name, &concrete_arg);
+        // `formal/interfaces.md` `(G-Sat)` judges a bound against the SIGNATURE
+        // `[Self ↦ C](p̄ -> R)` — the parameter list included — and `find_fn` takes a name and
+        // a receiver and no arity.  `-` desugars to `OpMin` at BOTH arities, so an interface
+        // declaring `op - (self: Self, other: Self)` resolved to the UNARY `OpMinSingleInt`
+        // and the monomorph dropped the second operand: `diff(10, 3)` answered `-10`, on both
+        // backends with no diagnostic (loft#1299).
+        //
+        // The stub's VISIBLE parameter count is the comparand — a stub carries hidden ones (a
+        // return buffer), so its raw count is 3 where the operator takes 2.  Measured: the `+`
+        // stub is 3 raw / 2 visible against `OpAddInt` (2) and the unary `-` stub is 2 raw / 1
+        // visible against `OpMinSingleInt` (1); only binary `-` disagreed.
+        //
+        // Re-asked of the `possible` map rather than refused, because the right definition IS
+        // there — `integer` has `OpMinInt` beside `OpMinSingleInt` — and it is the same list
+        // `call_op` resolves a concrete `a - b` from, so the two paths cannot drift about
+        // which definitions an operator has.  (Unresolving instead was tried and is worse: the
+        // stub reaches runtime with no diagnostic to attach.)
+        if resolved != u32::MAX {
+            let want = def.attributes().iter().filter(|a| !a.hidden).count();
+            if data.attributes(resolved) != want
+                && let Some(by_signature) =
+                    data.possible_with_signature(fn_name, want, &concrete_arg)
+            {
+                resolved = by_signature;
+            }
+        }
         // @PLN25 E2 — a bounded-generic method call whose receiver monomorphises to a synth
         // `__nullable<S>` (a nullable vector element, e.g. `for x in v: vector<T>` where
         // `T = IfItem` → `__nullable<IfItem>`, then `x.is_valid()`) must resolve to S's CONCRETE

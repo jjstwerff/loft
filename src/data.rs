@@ -5870,6 +5870,33 @@ impl Data {
         &self.possible[start]
     }
 
+    /// The operator definition whose SIGNATURE matches — same candidate list the concrete
+    /// path walks, asked with the arity and receiver instead of the name alone.
+    ///
+    /// `formal/interfaces.md` `(G-Sat)` satisfies a bound with a function of signature
+    /// `[Self ↦ C](p̄ -> R)`, the parameter list included, and `-` desugars to `OpMin` at BOTH
+    /// arities.  [`Self::find_fn`] takes a name and a receiver and no arity, so for a bound
+    /// requiring binary `-` it answered the UNARY `OpMinSingleInt` and the call bound one
+    /// operand too many — `diff(10, 3)` computed `-10` (loft#1299).
+    ///
+    /// Deliberately the `possible` map and not a fresh scan: it is where `call_op` finds the
+    /// concrete operator, so the two paths cannot come to disagree about which definitions
+    /// exist for an operator. `call_op` picks among them by TRYING each (`call_nr` answers
+    /// `Type::Null` on a mismatch); this is that question asked statically, which is all a
+    /// `&Data` resolver can do.
+    #[must_use]
+    pub fn possible_with_signature(&self, start: &str, arity: usize, first: &Type) -> Option<u32> {
+        let want = self.type_def_nr(first);
+        self.possible.get(start)?.iter().copied().find(|&d| {
+            let def = &self.definitions[d as usize];
+            def.attributes().len() == arity
+                && def
+                    .attributes()
+                    .first()
+                    .is_some_and(|a| self.type_def_nr(&a.typedef) == want)
+        })
+    }
+
     /// @PLN99 Arc C — register `d_nr` into the `possible[prefix]` operator map.
     /// A user-defined conversion (`fn OpConvXFromY`) is a global stored `n_OpConv…`,
     /// so it skips `add_op`'s name-gated registration and never entered `possible` —
