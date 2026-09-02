@@ -1,0 +1,13 @@
+// The shape step 5's peephole must EMIT, hand-written to prove it runs today.
+struct F { i: u8 }
+fn main() {
+  f = F { i: 200 };
+  fit = (f.i + 100) as u8?;     // null when it does not fit
+  f.i = fit ?? 0;               // the slot still takes the type's default
+  if !fit { println("detected: f.i={f.i}"); } else { println("fits: f.i={f.i}"); }
+
+  g = F { i: 100 };
+  gfit = (g.i + 100) as u8?;
+  g.i = gfit ?? 0;
+  if !gfit { println("CONTROL wrong"); } else { println("CONTROL fits: g.i={g.i}"); }
+}

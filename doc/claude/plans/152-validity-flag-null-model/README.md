@@ -250,6 +250,38 @@ claim has the same shape of check, an `introspect` diff over a corpus that write
 | **6** | **Cost where the bit is live** (a bound, not a gate — § Why this is worth doing). | A narrow-width benchmark, which `bench/` does not contain and this step writes. Records a number; does not block. | Open |
 | **7** | **Docs and diagnostics agree with what shipped** — the narrowing error already advertises `?? d`. | The advertised cure works when followed. Red if the message still prescribes something that does not work in the position it is offered. | Open |
 
+## Step 5's target shape — proven, so the peephole is translation not invention
+
+The loft-codegen gate is *do not edit the compiler until you can point at the working form*.
+Here it is, hand-written and running today ([`probes/step5-target-shape.loft`](probes/step5-target-shape.loft)):
+
+```loft
+fit = (f.i + 100) as u8?;   // null when it does not fit — the CHECKED cast already does this
+f.i = fit ?? 0;             // the slot still takes the type's default, exactly as now
+if !fit { … }               // and `!` reads the failure
+```
+
+`f.i = 200` plus 100 does not fit, so `fit` is null, `!fit` is true, and `f.i` is `0` — the
+same value the slot takes today. `g.i = 100` plus 100 fits, so the control branch runs and
+`g.i` is `200`.
+
+**Every construct in it already exists.** `as τ?` is the checked cast, `??` the discharge, `!`
+the presence test. No new op, no new runtime, nothing stored — `fit` is an ordinary
+`integer?` temp, which is the plan's constraint satisfied by construction.
+
+So step 5 is a mechanical rewrite of an adjacent pair:
+
+```
+place op= expr;            __fit_N = (place op expr) as <narrow>?;
+if !place { … }      ⟹     place    = __fit_N ?? <type default>;
+                           if !__fit_N { … }
+```
+
+What remains genuinely open in it: where the peephole runs (a post-pass over the completed
+statement list is cleanest — the list is built in `parse_block_inner` with `Value::Line`
+markers interleaved, which the pair-matching must skip), minting `__fit_N` safely on both
+passes, and teaching `redundant-null-negation` to go silent for the fused `!` only.
+
 ## Ordering, and why each boundary is where it is
 
 1. **Step 0 before anything.** It is throwaway and it can invalidate the whole shape for the
