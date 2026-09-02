@@ -2326,6 +2326,8 @@ fn no_stdlib_section_shows_the_reader_a_tracker_tag_or_a_private_name() {
          `default/*.loft`:\n  {}",
         bad.join("\n  ")
     );
+}
+
 /// loft#1293 — the corpus is a DIFFERENTIAL, so its two halves must run the same SET.
 ///
 /// `tests/wrap.rs` (interpreter) and `tests/native.rs` (native) each pick the entry points of

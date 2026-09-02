@@ -2421,11 +2421,12 @@ and who does not.
 |---:|---:|---:|---:|
 | 677 | 322 | 5 | **350** |
 
-loft#1286 added `parser::operators::passes_to_ref_parameter` on the OPAQUE side: it asks
-whether a callee's parameter `i` is a `&` by matching `Type::RefVar(Type::Reference(..))`
-on the raw `typedef`, with no `.base()` peel. That is right for the question — a `&τ?`
-parameter is still the write-back channel the lint must not advise away, so peeling would
-not change the answer — but it is one more site that names the wrapper by hand.
+loft#1286's first fix added a site on the OPAQUE side that matched
+`Type::RefVar(Type::Reference(..))` on the raw `typedef` to ask whether a callee's parameter
+was a `&`. It did not survive: the fix that ships asks the interprocedural question instead
+(`callee_param_reassigns` — does the callee REASSIGN it), which needs no wrapper match at
+all. Worth recording as a shape rather than a count: a question asked about a TYPE tends to
+add an opaque site, and the same question asked about BEHAVIOUR did not need one.
 
 loft#1245 added `use_analysis::callref_captures` on the seeing-through side (the opaque
 column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function` through

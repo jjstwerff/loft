@@ -6849,6 +6849,10 @@ The catalogue is generated from the `loft-lang/features` issue tracker, which is
 - \*\*\@F113\*\* — Associated types — an interface names a companion type
 - \*\*\@F114\*\* — `x\[i\]` on a library type — `OpIndex` dispatch
 - \*\*\@F115\*\* — `OpDrop` — a type runs code when its scope lets it die
+- \*\*\@F118\*\* — Time (now / ticks)
+- \*\*\@F119\*\* — Store locks (\#lock)
+- \*\*\@F120\*\* — Lexer library (lib/lexer)
+- \*\*\@F121\*\* — Parser library (lib/parser)
 
 === Tooling and infrastructure
 
@@ -9067,7 +9071,7 @@ pub fn exhausted(gen: reference) -> boolean
 
 CO1.6: Returns true if the coroutine has finished producing values.
 
-== JSON
+== Json
 
 ```rust
 pub enum JsonValue {
@@ -9081,7 +9085,9 @@ pub enum JsonValue {
 }
 ```
 
-Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (\@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).
+Copyright (c) 2026 Jurjen Stellingwerff SPDX-License-Identifier: LGPL-3.0-or-later \@F42 — JSON (catalogue anchor, \@PLN92)
+First-class JSON as a typed tree.
+`json\_parse(text)` returns a `JsonValue` enum whose variants cover every JSON kind.  Callers match on the variant to access the payload, chain `field()` / `item()` for dynamic-shape navigation, and use the typed extractors (`as\_text`, `as\_number`, `as\_long`, `as\_bool`) for leaf values.  Malformed input returns `JNull` rather than panicking; the last parse error is retrievable via `json\_errors()`. Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (\@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).
 `JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV\_DISCR\_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.
 
 ```rust
@@ -9128,7 +9134,7 @@ Length of a JArray's items vector or a JObject's fields vector. Returns `null` (
 pub fn as_text(self: JsonValue) -> text
 ```
 
-Typed extractor — returns `null` on kind mismatch.
+Typed extractor — returns `null` (empty text) on kind mismatch.
 
 ```rust
 pub fn as_number(self: JsonValue) -> float
@@ -9143,10 +9149,11 @@ pub fn as_long(self: JsonValue) -> integer
 Typed extractor — returns `null` on kind mismatch.  Truncates the underlying `float` toward zero before converting.
 
 ```rust
-pub fn as_bool(self: JsonValue) -> boolean
+pub fn as_bool(self: JsonValue) -> boolean?
 ```
 
-Typed extractor. Unlike its three siblings this one never answers `null`: every kind mismatch answers `false` — a missing field, a number, the string `"true"` — which cannot be told from a field that really says `false`. Test `kind()` or `has\_field()` first where that distinction matters (loft\#1302).
+Typed extractor — returns `null` on kind mismatch.
+Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `"true"`, and for `1` — indistinguishably from a field that really says `false` (loft\#1302).
 
 ```rust
 pub fn kind(self: JsonValue) -> text

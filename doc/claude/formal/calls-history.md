@@ -19,11 +19,17 @@ program had answered `[9,9]`, with nothing reporting the change, and the lint fi
 on the correct spelling**.
 
 `(F-ParamRef)` is transitive and the rule now says so; the lint asks the transitive question
-too (`passes_to_ref_parameter`). Measured across `tests/scripts` + `tests/docs`: 31 firings
-before, 23 after, and every one of the eight suppressed is a function whose own fixture
-calls it a forwarder. Guard `tests/ref_forward_lint.rs`, which counts notices on stderr
-because `make falsify` has no channel for a diagnostic that must NOT fire, and carries two
-true-positive controls so a deleted lint cannot pass it.
+too. Two implementations of that question were written independently in the two checkouts,
+and the one that ships is `callee_param_reassigns` (memoised, per callee parameter): it asks
+whether the callee REASSIGNS the argument, where the first version asked only whether the
+callee's parameter was declared `&`. The difference is not cosmetic — a `&` parameter the
+callee only writes a FIELD through is precisely the case this advice exists to flag, and the
+declaration-shaped question suppressed it. Guard `tests/ref_forward_lint.rs` holds either
+way: it counts notices on stderr, because `make falsify` has no channel for a diagnostic
+that must NOT fire, and carries two true-positive controls so a deleted lint cannot pass it.
+The corpus firing counts recorded here earlier are dropped rather than restated: they were
+measured on a build that no longer exists, and a count is only comparable against its own
+before-half.
 
 ### D-call-7 — OPEN (2026-09-01, loft#1287): a forwarded plain parameter leaks the replaced store
 

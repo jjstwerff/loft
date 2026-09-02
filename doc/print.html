@@ -75,7 +75,7 @@
 <li class="toc-indent"><a href="#stdlib-vector-operations">Vector operations</a></li>
 <li class="toc-indent"><a href="#stdlib-stack-traces">Stack traces</a></li>
 <li class="toc-indent"><a href="#stdlib-coroutines">Coroutines</a></li>
-<li class="toc-indent"><a href="#stdlib-json">JSON</a></li>
+<li class="toc-indent"><a href="#stdlib-json">Json</a></li>
 <li class="toc-indent"><a href="#stdlib-type-reflection">Type reflection</a></li>
 </ul>
 </nav>
@@ -3259,6 +3259,10 @@ Printable  fn to_text(self: T) -&gt; text
 <li><strong>@F113</strong> — Associated types — an interface names a companion type</li>
 <li><strong>@F114</strong> — <code>x[i]</code> on a library type — <code>OpIndex</code> dispatch</li>
 <li><strong>@F115</strong> — <code>OpDrop</code> — a type runs code when its scope lets it die</li>
+<li><strong>@F118</strong> — Time (now / ticks)</li>
+<li><strong>@F119</strong> — Store locks (#lock)</li>
+<li><strong>@F120</strong> — Lexer library (lib/lexer)</li>
+<li><strong>@F121</strong> — Parser library (lib/parser)</li>
 </ul>
 <h2 id="tooling-and-infrastructure">Tooling and infrastructure</h2>
 <ul>
@@ -4927,7 +4931,7 @@ Printable  fn to_text(self: T) -&gt; text
 <pre><code>pub fn exhausted(gen: reference) -&gt; boolean</code></pre>
 <p>CO1.6: Returns true if the coroutine has finished producing values.</p>
 </div>
-<h2 id="stdlib-json">JSON</h2>
+<h2 id="stdlib-json">Json</h2>
 <div class="item">
 <pre><code>pub enum JsonValue {
   JNull,
@@ -4938,7 +4942,9 @@ Printable  fn to_text(self: T) -&gt; text
   JObject { fields: vector&lt;JsonField&gt; },
   JInteger { value: integer },
 }</code></pre>
-<p>Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
+<p>Copyright (c) 2026 Jurjen Stellingwerff SPDX-License-Identifier: LGPL-3.0-or-later @F42 — JSON (catalogue anchor, @PLN92)</p>
+<p>First-class JSON as a typed tree.</p>
+<p>`json_parse(text)` returns a `JsonValue` enum whose variants cover every JSON kind.  Callers match on the variant to access the payload, chain `field()` / `item()` for dynamic-shape navigation, and use the typed extractors (`as_text`, `as_number`, `as_long`, `as_bool`) for leaf values.  Malformed input returns `JNull` rather than panicking; the last parse error is retrievable via `json_errors()`. Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).</p>
 <p>`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV_DISCR_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.</p>
 </div>
 <div class="item">
@@ -4971,7 +4977,7 @@ Printable  fn to_text(self: T) -&gt; text
 </div>
 <div class="item">
 <pre><code>pub fn as_text(self: JsonValue) -&gt; text</code></pre>
-<p>Typed extractor — returns `null` on kind mismatch.</p>
+<p>Typed extractor — returns `null` (empty text) on kind mismatch.</p>
 </div>
 <div class="item">
 <pre><code>pub fn as_number(self: JsonValue) -&gt; float</code></pre>
@@ -4982,8 +4988,9 @@ Printable  fn to_text(self: T) -&gt; text
 <p>Typed extractor — returns `null` on kind mismatch.  Truncates the underlying `float` toward zero before converting.</p>
 </div>
 <div class="item">
-<pre><code>pub fn as_bool(self: JsonValue) -&gt; boolean</code></pre>
-<p>Typed extractor. Unlike its three siblings this one never answers `null`: every kind mismatch answers `false` — a missing field, a number, the string `&quot;true&quot;` — which cannot be told from a field that really says `false`. Test `kind()` or `has_field()` first where that distinction matters (loft#1302).</p>
+<pre><code>pub fn as_bool(self: JsonValue) -&gt; boolean?</code></pre>
+<p>Typed extractor — returns `null` on kind mismatch.</p>
+<p>Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `&quot;true&quot;`, and for `1` — indistinguishably from a field that really says `false` (loft#1302).</p>
 </div>
 <div class="item">
 <pre><code>pub fn kind(self: JsonValue) -&gt; text</code></pre>

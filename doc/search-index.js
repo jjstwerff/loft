@@ -19,7 +19,7 @@ const SEARCH_INDEX=[
 {name:"Vector operations",kind:"section",url:"stdlib-vector-operations.html"},
 {name:"Stack traces",kind:"section",url:"stdlib-stack-traces.html"},
 {name:"Coroutines",kind:"section",url:"stdlib-coroutines.html"},
-{name:"JSON",kind:"section",url:"stdlib-json.html"},
+{name:"Json",kind:"section",url:"stdlib-json.html"},
 {name:"Type reflection",kind:"section",url:"stdlib-type-reflection.html"},
 {name:"boolean",kind:"type",url:"stdlib-types.html"},
 {name:"integer",kind:"type",url:"stdlib-types.html"},
