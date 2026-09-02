@@ -9,6 +9,8 @@
 //! for integration tests).
 
 use std::process::Command;
+#[cfg(unix)]
+use std::process::Stdio;
 
 fn loft_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft"))
@@ -1214,4 +1216,227 @@ fn verify_self_exits_two_when_it_verified_nothing() {
         !out.status.success(),
         "`loft verify-self && deploy` must not proceed on an install it could not examine"
     );
+}
+
+// loft#1289 — a reader that stops reading ends a pipeline; it does not fault the writer.
+//
+// `print!` panics on any write error, so `prog | head` ended in a Rust panic naming a `std`
+// source line, and when stderr shared the closed pipe the panic PRINTER failed too and the
+// process ABORTED — leaving `.loft/loft-crash-<pid>.txt` blaming a line of
+// `default/01_code.loft` that has nothing wrong with it.  Both symptoms are one cause.
+//
+// These run the BINARY through a real pipe, because that is the only place the fault exists:
+// the write only fails once an OS pipe has a closed read end, and no library-level harness
+// has one.
+
+/// A `.loft` file in a scratch directory of its own, so the `.loft/` cache a run may create
+/// cannot collide with another test's.
+fn epipe_fixture(name: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("loft-epipe-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let script = dir.join(format!("{name}.loft"));
+    std::fs::write(&script, body).expect("write fixture");
+    (dir, script)
+}
+
+/// More output than a pipe buffer holds (~64 KiB), so a write really does meet the closed
+/// read end instead of landing in the buffer while the child runs to completion.
+const EPIPE_MANY: &str = "fn main() { for i in 0..20000 { println(\"line {i} padded to make the pipe buffer overflow\"); } }\n";
+
+/// Enough output to outlive the reader, and the reader takes three lines.
+///
+/// The child's stdout handle is dropped after the third line, which closes the read end —
+/// the same thing `| head -3` does, without needing a shell.
+#[cfg(unix)]
+fn run_until_reader_leaves(script: &std::path::Path, dir: &std::path::Path, mode: &str) -> String {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    let mut child = Command::new(loft_bin())
+        .arg(mode)
+        .arg(script)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to invoke loft binary");
+    {
+        let out = child.stdout.take().expect("piped stdout");
+        let mut reader = BufReader::new(out);
+        let mut line = String::new();
+        for _ in 0..3 {
+            line.clear();
+            let _ = reader.read_line(&mut line);
+        }
+        // Dropping the reader closes this end of the pipe — from here the child's next
+        // write gets EPIPE.
+    }
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        out.status.success(),
+        "a closed stdout is the ordinary end of `prog | head`, not a fault: got {:?} \
+         on {mode}; stderr={stderr:?}",
+        out.status.code()
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "the writer must not panic when its reader leaves ({mode}); stderr={stderr:?}"
+    );
+    stderr
+}
+
+#[test]
+#[cfg(unix)]
+fn a_reader_that_stops_reading_does_not_fault_the_interpreter() {
+    let (dir, script) = epipe_fixture("many-interp", EPIPE_MANY);
+    run_until_reader_leaves(&script, &dir, "--interpret");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_reader_that_stops_reading_does_not_fault_the_native_backend() {
+    let (dir, script) = epipe_fixture("many-native", EPIPE_MANY);
+    run_until_reader_leaves(&script, &dir, "--native");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Run `script` with stdout AND stderr on ONE pipe, read `keep` lines, then close the read
+/// end — `prog 2>&1 | head -N` without a shell.
+///
+/// Built from `libc::pipe` rather than `sh -c … PIPESTATUS`: `PIPESTATUS` is a bash array
+/// and `/bin/sh` here is dash, where it expands to nothing — the first version of this test
+/// compared that empty string against "134" and passed while measuring nothing.
+#[cfg(unix)]
+fn run_with_merged_pipe(
+    script: &std::path::Path,
+    dir: &std::path::Path,
+    keep: usize,
+) -> std::process::ExitStatus {
+    use std::io::{BufRead, BufReader};
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut fds = [0 as libc::c_int; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe");
+    // CLOSE-ON-EXEC on BOTH originals.  `Command` DUPS them onto the child's 0/1/2, and
+    // without this the originals are inherited too — so the child holds its own READ end,
+    // the pipe never reports a closed reader, and once the buffer fills the child blocks
+    // forever.  Measured: the first version of this helper hung for twenty minutes in
+    // `anon_pipe_write` with `fd 3 -> pipe` in its own `/proc/<pid>/fd`.
+    for fd in fds {
+        assert_ne!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+            -1,
+            "FD_CLOEXEC"
+        );
+    }
+    // SAFETY: both ends come from a successful `pipe` and are owned from here on.
+    let (read_end, write_end) =
+        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    let write_dup = write_end.try_clone().expect("dup the write end");
+    let mut child = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(script)
+        .current_dir(dir)
+        .stdout(Stdio::from(write_end))
+        .stderr(Stdio::from(write_dup))
+        .spawn()
+        .expect("failed to invoke loft binary");
+    {
+        let mut reader = BufReader::new(std::fs::File::from(read_end));
+        let mut line = String::new();
+        for _ in 0..keep {
+            line.clear();
+            let _ = reader.read_line(&mut line);
+        }
+        // Dropping the reader closes the last read end; the child's next write meets EPIPE.
+    }
+    child.wait().expect("wait")
+}
+
+/// The worse half: stderr sharing the closed pipe turned the panic into a SIGABRT, and the
+/// crash reporter then wrote a report naming a stdlib line.
+///
+/// Verified to FIRE by injection (the `BrokenPipe` arm disabled): `status=ExitStatus(
+/// unix_wait_status(134))`, signal 6, which is the filed symptom exactly.
+#[test]
+#[cfg(unix)]
+fn stderr_sharing_a_closed_pipe_does_not_abort_or_write_a_crash_report() {
+    use std::os::unix::process::ExitStatusExt;
+    // A `never-read` warning goes to stderr BEFORE the program runs, so one line is
+    // satisfied by the diagnostic and every later write — diagnostic or program output —
+    // meets the closed pipe.
+    let (dir, script) = epipe_fixture(
+        "warn",
+        // Far more than a pipe buffer holds (~64 KiB): with too little output the child
+        // writes everything into the buffer and EXITS before the reader closes, so no write
+        // ever meets a closed pipe and the test measures nothing.  Verified by injection —
+        // at 500 lines this cell passed with the cure removed.
+        "fn main() { unused = 1; for i in 0..20000 { println(\"line {i} padded to make the pipe buffer overflow\"); } }\n",
+    );
+    // `.loft/` must EXIST or the reporter has nowhere to write and the test would pass
+    // for the wrong reason.
+    std::fs::create_dir_all(dir.join(".loft")).expect("cache dir");
+    let status = run_with_merged_pipe(&script, &dir, 1);
+    assert_eq!(
+        status.signal(),
+        None,
+        "`prog 2>&1 | head` must not die by signal (SIGABRT was 6); status={status:?}"
+    );
+    assert!(
+        status.success(),
+        "a closed pipe is the ordinary end of the run; got {:?}",
+        status.code()
+    );
+    let reports: Vec<_> = std::fs::read_dir(dir.join(".loft"))
+        .expect("read cache dir")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("loft-crash-"))
+        .collect();
+    assert!(
+        reports.is_empty(),
+        "a broken pipe is not a crash and must leave no report; found {reports:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The CONTROL that keeps the cure honest: a write error that is NOT a broken pipe is a real
+/// fault and stays loud.  Exiting 0 on every failed write would pass every test above.
+#[test]
+#[cfg(unix)]
+fn a_full_disk_is_still_a_failure() {
+    if !std::path::Path::new("/dev/full").exists() {
+        return;
+    }
+    let (dir, script) = epipe_fixture("full", EPIPE_MANY);
+    let full = std::fs::File::create("/dev/full").expect("open /dev/full");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&script)
+        .current_dir(&dir)
+        .stdout(Stdio::from(full))
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to invoke loft binary");
+    assert!(
+        !out.status.success(),
+        "ENOSPC on stdout is a genuine failure and must not be reported as success"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The second CONTROL: a program that FAILS still reports its failure through a pipe the
+/// reader left early.  The broken-pipe exit must not mask a compile error.
+#[test]
+#[cfg(unix)]
+fn a_compile_error_still_exits_nonzero_through_a_closed_pipe() {
+    let (dir, script) = epipe_fixture("bad", "fn main() { qqq(); }\n");
+    let status = run_with_merged_pipe(&script, &dir, 1);
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "a program that does not compile still fails, whatever the reader did; got {status:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
