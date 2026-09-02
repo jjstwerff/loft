@@ -120,8 +120,11 @@ decided boundary, so it belongs here as a scope rule, not as a deviation to clos
 
 ## Deviations
 
-**OPEN: 0.**  Every deviation this doc has carried is closed; the record is in
-the companion [interfaces-history.md](interfaces-history.md).
+**OPEN: 1** — `D-gen-4`: one bound set cannot require two SIGNATURES of one method name, so an
+interface declaring `-` at both arities (`(G-Iface)` calls an interface a set of signatures) is
+refused.  A bound method is reached by NAME and the key carries no arity; loft#1275 holds the
+cost.  The record, and the three closed deviations, are in the companion
+[interfaces-history.md](interfaces-history.md).
 
 ## Conformance
 
@@ -134,6 +137,12 @@ the companion [interfaces-history.md](interfaces-history.md).
   Bare` lacking `size` fails to compile: `'Bare' does not satisfy interface 'Sizable': missing size`.
 - **No dynamic dispatch (`G-Scope`)** — `x: Sizable = Box{…}` is rejected; an interface names a
   generic bound, never a variable's type.
+- **A header binds its OWN variable (`G-Gen`)** — `fn one<T: HasSize1>(x: T)` beside
+  `fn two<T: HasSize2>(x: T)`, where the two interfaces declare `sizer` with different
+  signatures, compiles and each call resolves against its own bound.  The spelling is shared;
+  the variable is not.  (Until 2026-09-02 one placeholder — and so one bound-method stub —
+  stood for every `T` in the program, and the second header's calls were checked against the
+  first's signatures; `D-gen-3`.)
 
 D-op-1's falsifier applies: any program a monomorphized generic evaluates differently on the two
 backends — or that one driver accepts and another rejects — is the definitional error this doc names.

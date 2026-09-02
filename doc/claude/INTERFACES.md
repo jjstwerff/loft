@@ -812,14 +812,25 @@ derived from it, and `Equatable` only `==` for the same reason. An interface dem
 spelling would break every user type that implements the minimum.
 
 ⚠ **`Numeric`'s `-` is UNARY negation, and no bound offers binary subtraction.** The two
-share one desugared name — `-` becomes `OpMin` at either arity — which is what "avoid
-stub-name collision" means in `Scalable`'s comment and why `Scalable` scales through a method
-instead of `op *`. So `a - b` inside a `<T: Numeric>` body is refused with *"generic type T:
-operator '-' requires a concrete type"*, exactly as it is under `Addable`. It used to bind to
-the unary op, drop the second operand and compute `-a` on both backends with no diagnostic;
-bound satisfaction now compares the SIGNATURE rather than the name (`formal/interfaces.md`
-(G-Sat), loft#1274). Whether a bound SHOULD offer binary subtraction is open — it needs the
-two arities of `OpMin` to coexist in one interface — and is loft#1275.
+share one desugared name — `-` becomes `OpMin` at either arity. So `a - b` inside a
+`<T: Numeric>` body is refused with *"generic type T: operator '-' requires a concrete
+type"*, exactly as it is under `Addable`. It used to bind to the unary op, drop the second
+operand and compute `-a` on both backends with no diagnostic; bound satisfaction now compares
+the SIGNATURE rather than the name (`formal/interfaces.md` (G-Sat), loft#1274). Whether a
+bound SHOULD offer binary subtraction is open — it needs the two arities of `OpMin` to
+coexist in ONE interface — and is loft#1275.
+
+**Your own interfaces may declare both arities, one per interface.** Two interfaces in one
+file, one requiring `op - (self: Self, other: Self)` and one requiring `op - (self: Self)`,
+each bounding a generic, both work — including when both generics spell their type variable
+`T`. A generic header binds its own type variable (`(G-Gen)`), so the two get their own
+bound-method stubs and neither is checked against the other's signature. Until 2026-09-02 the
+spelling had file scope and the second header was refused against the first's parameter list,
+order-dependently (loft#1300, loft#1301). What remains refused is one BOUND SET wanting two
+signatures of one name — the interface declaring both arities above, or `<T: A + B>` where
+`A` and `B` both declare `sizer`. That is also what "avoid stub-name collision" means in
+`Scalable`'s comment, and why `Scalable` scales through a method instead of `op *`: it shares
+`Numeric`'s `*`, and a `<T: Numeric + Scalable>` would want both.
 `text` satisfies `Ordered` and `Equatable`. No extra declarations are needed.
 
 **Stdlib functions converted from native to bounded-generic loft** (depends on I8):

@@ -3206,56 +3206,109 @@ fn keyed_collection_as_a_vector_element_is_refused() {
         );
 }
 
-/// loft#1301 — two generic functions that both name their type variable `T` share one
-/// bound-method stub, and the refusal must say so.
+/// loft#1275 — ONE bound set requiring two signatures of one method name, which is what the
+/// per-header split of loft#1300 / loft#1301 deliberately leaves refused.
 ///
-/// The stub is keyed on `(type-variable NAME, method name)` and the placeholder is
-/// deliberately one shared definition — *"that is how `<T>` is shared across functions"*.
-/// Sharing is sound for TYPE RESOLUTION, which that decision was about; the STUBS hanging off
-/// it carry a SIGNATURE, and two bounds may want different ones of the same name. The second
-/// is then dropped and its calls checked against the first's, so the refusal named a
-/// parameter from the OTHER function — order-dependently, since whichever generic is declared
-/// first owns the stub.
-///
-/// The program is refused either way and was before this: what changed is that the true cause
-/// leads, and it names the cure that works (rename the variable — verified: `<U: …>` compiles
-/// and both answer correctly).
+/// A generic header binds its own type variable (`formal/interfaces.md` `(G-Gen)`), so two
+/// headers writing `T` no longer share a stub. What is left is a single variable whose bounds
+/// name one method twice — here `S1` and `S2` both declare `sizer` — or one interface that
+/// declares it twice. Those two requirements really are on one variable, and a bound method is
+/// reached by NAME, so which of them `x.sizer()` means is a policy question and not a scoping
+/// one. The refusal names the two arities and the cure that works today.
 #[test]
-fn a_shared_type_variable_with_conflicting_bounds_says_so() {
+fn one_bound_set_cannot_require_two_signatures_of_one_method() {
     code!(
         "interface HasSize1 { fn sizer(self: Self) -> integer }\n\
          interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }\n\
          struct A1301 { v: integer }\n\
          fn sizer(self: A1301) -> integer { self.v }\n\
-         fn one<T: HasSize1>(x: T) -> integer { x.sizer() }\n\
-         fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }\n\
+         fn one<T: HasSize1 + HasSize2>(x: T) -> integer { x.sizer() }\n\
          fn test() { }"
     )
-    // BOTH errors are pinned. The old message still follows — the call site reaches its own
-    // arity check regardless — and that is left alone deliberately: suppressing it needs the
-    // later site to know a conflict was already reported, which is more machinery than a
-    // second line is worth. What matters is that the true cause now comes FIRST and names a
-    // cure that works.
     .error(
-        "the type variable 'T' is already bound elsewhere to a 'sizer' taking 1 parameter(s), \
-         and this bound needs 2 — a type variable's NAME is shared across generic functions, \
-         so two of them cannot require different signatures of one method. Rename this \
-         function's type variable (`<U: …>`) at \
-         a_shared_type_variable_with_conflicting_bounds_says_so:6:29",
+        "the bounds on 'T' require two different 'sizer' — one taking 1 parameter(s) and one \
+         taking 2 — and a bound method is reached by name, so only one of them can be. Bound \
+         'T' by the interface that declares the one this body calls, and give the other its \
+         own generic at one_bound_set_cannot_require_two_signatures_of_one_method:5:40",
+    );
+}
+
+/// The other half of the same refusal: ONE interface declaring both arities of `-`.
+///
+/// This is loft#1275's own reproducer. `-` desugars to `OpMin` at both arities, so the
+/// interface asks for two signatures of one stub name — the same collision as the pair of
+/// bounds above, reached without writing two interfaces. The diagnostic that fires is the
+/// use-site one, because the interface's second `OpMin` child never becomes a second stub.
+#[test]
+fn one_interface_declaring_both_arities_of_minus_is_refused() {
+    code!(
+        "interface SubNeg { op - (self: Self, other: Self) -> Self\n\
+         op - (self: Self) -> Self }\n\
+         fn both<T: SubNeg>(a: T, b: T) -> T { -(a - b) }\n\
+         fn test() { }"
     )
     .error(
-        "Too many parameters for T#g.sizer at \
-         a_shared_type_variable_with_conflicting_bounds_says_so:6:53",
+        "generic type T: operator 'Min' requires a concrete type at \
+         one_interface_declaring_both_arities_of_minus_is_refused:3:48",
     );
+}
+
+/// loft#1301 / loft#1300 — two generic headers that both write `T` bind two DIFFERENT
+/// variables, and each is judged against its own bounds.
+///
+/// `formal/interfaces.md` `(G-Gen)` says a header *introduces* its type variable, so the
+/// binding is per-header. The implementation gave the spelling file scope: one placeholder
+/// stood for every `T`, and the bound-method stubs hang off that placeholder. A stub carries a
+/// SIGNATURE, so whichever header was declared first owned it and the second's calls were
+/// checked against a parameter list its author never wrote — order-dependently. Renaming one
+/// variable to `U` cured it, which is what named the axis.
+///
+/// The pair below is the reported reproducer; the full matrix — the two arities of `-`, a
+/// same-arity different-parameter-type pair, a same-parameters different-return pair, and the
+/// sharing that must survive — is
+/// `tests/scripts/1300-a-generic-header-binds-its-own-type-variable.loft`.
+#[test]
+fn two_headers_writing_the_same_type_variable_are_two_variables() {
+    code!(
+        "interface HasSize1 { fn sizer(self: Self) -> integer }\n\
+         interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }\n\
+         struct A1301 { v: integer }\n\
+         struct B1301 { v: integer }\n\
+         fn sizer(self: A1301) -> integer { self.v }\n\
+         fn sizer(self: B1301, scale: integer) -> integer { self.v * scale }\n\
+         fn one<T: HasSize1>(x: T) -> integer { x.sizer() }\n\
+         fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }\n\
+         fn test() -> integer { return one(A1301 { v: 7 }) + two(B1301 { v: 7 }); }"
+    )
+    .result(Value::Int(77));
+    // The declaration ORDER was what decided which header owned the stub, so the swap is the
+    // cell that says the cure is not order-sensitive either.
+    code!(
+        "interface HasSize1 { fn sizer(self: Self) -> integer }\n\
+         interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }\n\
+         struct A1301 { v: integer }\n\
+         struct B1301 { v: integer }\n\
+         fn sizer(self: A1301) -> integer { self.v }\n\
+         fn sizer(self: B1301, scale: integer) -> integer { self.v * scale }\n\
+         fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }\n\
+         fn one<T: HasSize1>(x: T) -> integer { x.sizer() }\n\
+         fn test() -> integer { return one(A1301 { v: 7 }) + two(B1301 { v: 7 }); }"
+    )
+    .result(Value::Int(77));
 }
 
 /// The CONTROLS, and they are what two earlier attempts at this diagnostic failed.
 ///
 /// Sharing a stub is the NORM: same interface twice, or two interfaces declaring the same
-/// method the SAME way, legitimately share. A predicate that compared the STUB against an
-/// interface method rather than child-to-child reported a conflict on `default/01_code.loft`
-/// itself — `assert_eq` and `assert_ne` share `AssertValue: Equatable + Printable` — and
-/// refused every program. Different method NAMES never collide at all.
+/// method the SAME way, legitimately share one placeholder and one stub. A predicate that
+/// compared the STUB against an interface method rather than child-to-child reported a
+/// conflict on `default/01_code.loft` itself — `assert_eq` and `assert_ne` share
+/// `AssertValue: Equatable + Printable` — and refused every program. Different method NAMES
+/// never collide at all.
+///
+/// The third cell below was the WORKAROUND while two headers writing `T` shared a stub; it
+/// now answers the same as writing `T` twice, and stays as the control that says a renamed
+/// variable did not become a second class of thing.
 #[test]
 fn legitimate_stub_sharing_is_not_a_conflict() {
     // Same method name, same signature, two generics both using `T`.

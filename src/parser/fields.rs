@@ -414,6 +414,7 @@ impl Parser {
             } else if !self.first_pass {
                 // generic-specific error for field access on T.
                 if let Some(tv_name) = self.generic_type_name(&t) {
+                    let tv_name = crate::data::Data::type_var_spelling(tv_name);
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -1447,7 +1448,8 @@ Reach it per-variant: `if {subject} is {first} {{ {field} }} {{ … }}`, or `mat
                 Type::Reference(d, _) | Type::Enum(d, _, _)
                     if self.data.is_type_var_placeholder(*d) =>
                 {
-                    let name = self.data.def(*d).name().to_string();
+                    let name =
+                        crate::data::Data::type_var_spelling(self.data.def(*d).name()).to_string();
                     diagnostic!(
                         self.lexer,
                         Level::Error,

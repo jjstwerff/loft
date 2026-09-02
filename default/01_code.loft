@@ -73,7 +73,7 @@ pub interface Addable {
 }
 
 // Types that support `*` and `-` (unary negation).
-// Separate from `Addable` to allow fine-grained bounds without stub-name collisions.
+// Separate from `Addable` so a generic can ask for the fewest operators it needs.
 // Satisfied by integer, single, float, and user types defining OpMul and OpMin.
 pub interface Numeric {
   op * (self: Self, other: Self) -> Self
@@ -81,7 +81,10 @@ pub interface Numeric {
 }
 
 // Types that support integer scaling via a `scale` method.
-// Uses a method (not `op *`) to avoid stub-name collision with `Numeric`.
+// Uses a method (not `op *`) because a `<T: Numeric + Scalable>` would then need two
+// signatures of one name from ONE bound set, which is still refused (loft#1275).
+// Two SEPARATE generics may each bound their own `T` by an interface declaring the same
+// method differently — a header binds its own type variable.
 // User types satisfy Scalable by defining `fn scale(self: T, factor: integer) -> integer`.
 pub interface Scalable {
   fn scale(self: Self, factor: integer) -> integer
