@@ -2306,6 +2306,26 @@ use a separate collection or add after the loop"
         *code = Value::Insert(vec![free, detach, assign]);
     }
 
+    /// Record that this lambda rebinds a captured name whole-value.
+    ///
+    /// Only the FACT is recorded here; whether it is legal depends on what the name is
+    /// bound to in the enclosing scope, which this frame cannot see — the lambda's own
+    /// variable table holds a placeholder. `reject_rebound_heap_parameter_captures` asks
+    /// that question at the lambda's exit.
+    fn note_captured_rebind(&mut self, var_nr: u16, op: &str) {
+        if op != "=" || var_nr == u16::MAX || self.captured_names.is_empty() {
+            return;
+        }
+        let name = self.vars.name(var_nr).to_string();
+        if !self.captured_names.iter().any(|(n, _)| *n == name) {
+            return;
+        }
+        let noted = self.rebound_captures.entry(self.context).or_default();
+        if !noted.contains(&name) {
+            noted.push(name);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)] // the wrapper's list, unchanged from before the split
     fn parse_assign_op_inner(
         &mut self,
@@ -2324,6 +2344,11 @@ use a separate collection or add after the loop"
         // as that route's target-shape test and every shape it declines falls through
         // unchecked.  Two did.
         self.guard_const_write(var_nr, op);
+        // …and note a whole-value rebind of a CAPTURE here for the same reason: this is the
+        // point that still knows the assignment replaces the whole binding.  By the time the
+        // lambda closes, a vector rebind is a clear plus appends and the `Value::Set` that
+        // said so is gone (loft#1281).
+        self.note_captured_rebind(var_nr, op);
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         // …and, for the same reason, the attribute a `fn(…)` field read on the LEFT came

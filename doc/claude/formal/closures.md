@@ -99,7 +99,7 @@ with the closure's environment in scope.
 
 ## Deviations
 
-**OPEN: 4.**
+**OPEN: 3.**
 - **D-clo-18** — a `&` SCALAR parameter written from inside a closure is REFUSED, where
   `(L-CapRef)` + `(F-ParamRef)` together say the write should reach the caller. The value
   lives in the caller's slot and `(L-CapScalar)` gives the closure a copy of it, so there is
@@ -112,17 +112,38 @@ with the closure's environment in scope.
   answered 15 where 16 is correct — the closure's increment dropped through a parameter whose
   whole purpose is the write-back). Every other `&` capture shape is closed. Reject twin
   `tests/scripts/1276-reject-a-ref-parameter-a-closure-cannot-write.loft`
-- **D-clo-20** — `(F-ParamHeap)` makes a whole-value rebind of a heap PARAMETER local to the
-  callee, and a rebind written inside a CLOSURE that captures that parameter reaches the
-  CALLER instead: `fn repl(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` leaves the
-  caller's `[1,2]` as `[7,7]`, while the identical rebind written without the closure
-  correctly leaves it alone. The two rules meet here and the code follows only one:
-  `(L-CapHeap)` is right that the closure and the callee body see one collection, and what
-  does not follow is that the caller does — a capture has no route back to the parameter
-  SLOT, which is the binding `(F-ParamHeap)` rebinds. Untouched by loft#1279, which made the
-  VALUE correct everywhere and left the question of WHICH BINDING a captured rebind names;
-  before it the same leak was there in the append spelling. A captured LOCAL is unaffected —
-  there is no caller to leak to (loft#1281)
+- **D-clo-20 — CLOSED 2026-09-02 (loft#1281), as a REFUSAL.** `(F-ParamHeap)` makes a
+  whole-value rebind of a heap PARAMETER local to the callee, and a rebind written inside a
+  CLOSURE that captures that parameter reached the CALLER instead:
+  `fn repl(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]`
+  as `[7,7]`, on both backends, with nothing reported, while the identical rebind written
+  without the closure correctly left it alone. Every heap kind did it — vector, keyed and
+  struct alike — and every right-hand side: a literal, a call, another local.
+
+  The two rules meet here and the code followed only one. `(L-CapHeap)` is right that the
+  closure and the callee body see one collection; what does not follow is that the caller
+  does. The closure record holds a COPY of the parameter's DbRef, so the rebind lowered to a
+  clear plus a refill of the store that copy names — and `(F-ParamHeap)` makes that store the
+  caller's. A capture has no route back to the parameter SLOT, which is the binding
+  `(F-ParamRebind)` rebinds.
+
+  It is REFUSED now, which is the call `D-clo-18` makes for the `&`-scalar shape and for the
+  same reason: making it mean what it says needs the binding reachable from inside the
+  closure PLUS a write-back, and the cell machinery that gives a mutated captured SCALAR
+  exactly that cannot serve a heap value — reads in the enclosing body would then see the
+  cell while the caller still sees its own slot. Measured rather than assumed: repointing
+  the capture slot alone does not fix it, because the callee reads its own slot directly
+  (`t_6vector_len(p(0))`, not a read through the record), so a repoint moves the wrong answer
+  from the caller to the callee instead of removing it.
+
+  The refusal is narrow, and each exclusion still works: a captured LOCAL (no caller to reach
+  past), a `&` parameter (`(L-CapRef)`, where the write-back is the point), a scalar or text
+  parameter (the cell machinery), and every mutation-THROUGH — `p += [x]`, `p[i] = v`,
+  `p.clear()`, a field write — which `(L-CapHeap)` and `(F-ParamGrow)` require to reach the
+  caller. Reject twin `tests/parse_errors.rs::a_closure_cannot_replace_a_captured_heap_parameter`
+  (all three right-hand sides, vector + hash + struct); the shapes it must not reach are
+  `tests/scripts/1281-a-closure-cannot-replace-a-captured-parameter.loft`, which cannot hold
+  the refused spelling because the fixed compiler will not parse it
 - **D-clo-7** — a lambda's `??`-default store leaks one store per call where the borrow arm's witness cannot be NAMED and the call has nothing to witness either: TWO store-bearing captures, whose return dep names `__closure` and not which slot; that entry's value half, its BOUND-return leak half, its ARGUMENT-witness half, its single-CAPTURE witness and its literal-`null` argument are all closed (loft#1248, loft#1245)
 - **D-clo-14** — a closure's `??` at a COLLECTION return leaks its mint arm; the over-free half (the lift emptied the caller's own vector) is closed, and declining the unguarded lift was the only cure correct on both backends (loft#1257)
 

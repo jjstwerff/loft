@@ -14,6 +14,32 @@ and its literal-`null` argument are all closed), and the same `??` at a COLLECTI
 leaks its mint arm because declining the unguarded lift was the only cure correct on both
 backends (D-clo-14).
 
+⚠ **A rebind is not a mutation, and a capture is the one place the code could not tell them
+apart (D-clo-20, loft#1281, closed 2026-09-02).** `(L-CapHeap)` shares a captured heap value
+so a mutation-through is visible both ways; `(F-ParamRebind)` makes a whole-value REPLACE of
+a heap parameter local to the callee. Written inside a closure, the replace took the
+mutation's route: the closure record holds a COPY of the parameter's DbRef, the rebind
+lowered to a clear plus a refill of the store that copy names, and `(F-ParamHeap)` makes that
+store the CALLER's. So `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` replaced
+the caller's collection, on both backends, silently — every heap kind and every right-hand
+side.
+
+The cure is a refusal, and the measurement is why. Repointing the capture slot — the obvious
+fix, and the one the keyed kinds appear to model — does not work HERE, because the callee
+reads its own slot directly (`t_6vector_len(p(0))`, not a read through the closure record).
+Two readers, one binding: a repoint moves the wrong answer from the caller to the callee
+rather than removing it. Making it mean what it says needs the binding reachable from inside
+the closure plus a write-back, which is precisely what `D-clo-18` records as unavailable for
+the `&`-scalar shape — the cell machinery that gives a mutated captured SCALAR that channel
+cannot serve a heap value, because reads in the enclosing body would then see the cell while
+the caller still sees its own slot. Same wall, one rule over, so the same answer.
+
+Worth keeping for the next reader: the emitter was already building the fresh backing the
+correct lowering would need (`__vdb_1`, `var__vec_1`), writing its length, pre-allocating it —
+and then appending into the shared store instead and abandoning it. It does not leak (the
+wrapper is freed at lambda exit), so it was wasted work rather than a second defect, but it
+means the missing piece was never the allocation.
+
 ⚠ **Three entries had ONE cure between them, and it was not another ownership predicate.**
 Each was a call site that allocated a return buffer and could not say whether what came back
 IS that buffer: D-clo-13 across the two arms of a `??`, D-clo-12 across the frame a

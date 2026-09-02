@@ -1123,6 +1123,66 @@ impl Parser {
         )
     }
 
+    /// Refuse a whole-value rebind, made inside a closure, of a captured heap PARAMETER
+    /// (loft#1281, `D-clo-20`).
+    ///
+    /// `(F-ParamRebind)` makes such a rebind local to the callee, and the capture has no
+    /// route back to the parameter's SLOT — which is the binding it would have to rebind.
+    /// The closure record holds a COPY of the parameter's DbRef, so the write lands in the
+    /// store that copy points at, and `(F-ParamHeap)` makes that store the CALLER's: the
+    /// caller sees a replacement the rules say is local. Measured before this refusal:
+    /// `fn f(p: vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's
+    /// `[1,2]` as `[7,7]`, on both backends, with nothing reported.
+    ///
+    /// Refusing rather than lowering it is the same call `D-clo-18` makes one rule over,
+    /// and for the same reason: making it MEAN what it says needs the binding reachable
+    /// from inside the closure plus a write-back, and the cell machinery that gives a
+    /// mutated captured SCALAR exactly that cannot serve a heap value — reads in the
+    /// enclosing body would see the cell while the caller still sees its own slot.
+    ///
+    /// Deliberately narrow, and each exclusion is a shape that works today:
+    /// * a captured LOCAL — there is no caller for the rebind to reach past;
+    /// * a `&` parameter — `(L-CapRef)` captures the pointee and the write-back to the
+    ///   caller is the whole point of the annotation;
+    /// * a scalar or text parameter — the cell machinery boxes it and the write reaches
+    ///   the enclosing slot correctly;
+    /// * every MUTATION-through — `p += [x]`, `p[i] = v`, `p.clear()` — which
+    ///   `(L-CapHeap)` and `(F-ParamGrow)` say must reach the caller, and which do.
+    fn reject_rebound_heap_parameter_captures(&mut self, lambda: u32) {
+        let Some(names) = self.rebound_captures.remove(&lambda) else {
+            return;
+        };
+        for name in names {
+            let v_nr = self.vars.var(&name);
+            if v_nr == u16::MAX || !self.vars.is_argument(v_nr) {
+                continue;
+            }
+            let tp = self.vars.tp(v_nr).clone();
+            if !matches!(
+                tp.base(),
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
+                    | Type::Trie(_, _, _)
+                    | Type::Reference(_, _)
+            ) {
+                continue;
+            }
+            self.lexer.to(self.vars.var_source(v_nr));
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot replace the whole value of the captured parameter '{name}' from a \
+closure — the closure shares the caller's storage, so the replacement would reach the \
+caller, where a rebind of a parameter is local to this function. Change it in place if the \
+caller should see it (`{name}.clear()`, `{name} += [...]`, `{name}[i] = ...`), \
+or build a local and use that."
+            );
+        }
+    }
+
     /// Take, in THIS scope, every capture the lambda just parsed reaches past it for.
     ///
     /// A closure record is filled by the scope that BUILDS it, from what that scope can name.
@@ -1315,6 +1375,9 @@ impl Parser {
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
         self.capture_owner = outer_owner;
+        // The enclosing table is back, so a captured name can finally be asked what it is
+        // bound to out here (loft#1281).
+        self.reject_rebound_heap_parameter_captures(d_nr);
         self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);
@@ -1622,6 +1685,9 @@ impl Parser {
         self.in_loop = outer_loop;
         self.capture_context = outer_capture;
         self.capture_owner = outer_owner;
+        // The enclosing table is back, so a captured name can finally be asked what it is
+        // bound to out here (loft#1281).
+        self.reject_rebound_heap_parameter_captures(d_nr);
         self.relay_nested_captures(&captured);
 
         self.data.def_used(d_nr);

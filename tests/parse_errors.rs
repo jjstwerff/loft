@@ -3567,3 +3567,61 @@ fn binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op() {
              binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op:1:46",
         );
 }
+
+/// A closure may not replace the whole value of a captured heap PARAMETER (loft#1281).
+///
+/// `(F-ParamRebind)` makes that rebind local to the callee and the capture has no route back
+/// to the parameter's SLOT, so before the refusal the write went to the store the closure
+/// record's DbRef copy names — which `(F-ParamHeap)` makes the CALLER's. `fn f(p:
+/// vector<integer>) { g = fn() { p = [7,7]; }; g(); }` left the caller's `[1,2]` as `[7,7]`
+/// on both backends with nothing reported.
+///
+/// Refusing is the call `D-clo-18` makes for the `&`-scalar shape one rule over: making it
+/// mean what it says needs the binding reachable from the closure plus a write-back, which
+/// the cell machinery cannot supply for a heap value.
+///
+/// The shapes it must NOT reach — a mutation through the capture, a captured LOCAL, a
+/// captured scalar parameter, a `&` parameter — are
+/// `tests/scripts/1281-a-closure-cannot-replace-a-captured-parameter.loft`, which cannot
+/// hold these cells because the fixed compiler refuses to parse them.
+#[test]
+fn a_closure_cannot_replace_a_captured_heap_parameter() {
+    // The cure the message names is the whole of the diagnostic's value, so it is matched in
+    // full rather than by a prefix: a reader who is told only "you cannot" rewrites the
+    // wrong half.
+    let msg = |col: &str| {
+        format!(
+            "Cannot replace the whole value of the captured parameter 'p' from a closure — \
+             the closure shares the caller's storage, so the replacement would reach the \
+             caller, where a rebind of a parameter is local to this function. Change it in \
+             place if the caller should see it (`p.clear()`, `p += [...]`, `p[i] = ...`), or \
+             build a local and use that. at \
+             a_closure_cannot_replace_a_captured_heap_parameter:{col}"
+        )
+    };
+    // every right-hand side, since the defect was in the destination and not the source
+    code!("fn f(p: vector<integer>) { g = fn() { p = [7, 7]; }; g(); }\nfn run() -> integer { 1 }")
+        .error(&msg("1:27"));
+    code!(
+        "fn mk() -> vector<integer> { v: vector<integer> = []; v += [7]; v }\n\
+         fn f(p: vector<integer>) { g = fn() { p = mk(); }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("2:27"));
+    code!(
+        "fn f(p: vector<integer>) { o: vector<integer> = []; o += [7]; \
+         g = fn() { p = o; }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("1:27"));
+    // and every heap KIND, since the leak was not vector-specific
+    code!(
+        "struct R { k: integer, v: integer }\n\
+         fn mkh() -> hash<R[k]> { h: hash<R[k]> = []; h += [R { k: 9, v: 9 }]; h }\n\
+         fn f(p: hash<R[k]>) { g = fn() { p = mkh(); }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("3:22"));
+    code!(
+        "struct S { n: integer }\n\
+         fn f(p: S) { g = fn() { p = S { n: 9 }; }; g(); }\nfn run() -> integer { 1 }"
+    )
+    .error(&msg("2:13"));
+}

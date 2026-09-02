@@ -738,6 +738,14 @@ pub struct Parser {
     /// minted in the frame that holds the variable, not in the closure that passes it along
     /// (loft#1236).
     pub(crate) capture_owner: std::collections::HashMap<String, u32>,
+    /// Captures a lambda REBINDS whole-value (`p = [..]`), keyed by the lambda's def.
+    ///
+    /// Recorded where the assignment is parsed, because by the time the lambda closes its
+    /// body is already lowered — a vector rebind is a clear plus appends by then, and the
+    /// `Value::Set` that says "whole value" is gone. Judged at the lambda's exit, which is
+    /// the first point that has the ENCLOSING variable table back and can ask whether the
+    /// captured name is a parameter (loft#1281).
+    pub(crate) rebound_captures: std::collections::HashMap<u32, Vec<String>>,
     /// Accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
@@ -1258,6 +1266,7 @@ impl Parser {
             fields_of: u32::MAX,
             capture_context: Vec::new(),
             capture_owner: std::collections::HashMap::new(),
+            rebound_captures: std::collections::HashMap::new(),
             captured_names: Vec::new(),
             fn_lambdas: std::collections::HashMap::new(),
             closure_param: u16::MAX,

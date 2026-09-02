@@ -2419,7 +2419,15 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 677 | 322 | 5 | **350** |
+| 678 | 323 | 5 | **350** |
+
+loft#1281's refusal added a site on the SEEING-THROUGH side and left the opaque column
+alone: `reject_rebound_heap_parameter_captures` asks whether a captured parameter is a heap
+kind, and asks it of `tp.base()` — so a `vector<T>?` answers the same as a `vector<T>`, which
+is what the question wants, since nullability has nothing to do with whether a rebind can
+reach the caller. It is the counterpart of the loft#1286 note below: a question asked about a
+TYPE need not add an opaque site if it peels, and peeling was the correct reading here rather
+than a concession.
 
 loft#1286's first fix added a site on the OPAQUE side that matched
 `Type::RefVar(Type::Reference(..))` on the raw `typedef` to ask whether a callee's parameter
