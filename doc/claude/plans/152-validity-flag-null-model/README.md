@@ -128,6 +128,40 @@ described. If so, this plan does not repair a construct people use; it makes one
 **Falsifier:** land it, and if narrow-width arithmetic still does not appear, the types were
 niche and this reading was wrong.
 
+## Hard constraint: the bit is per-OBSERVATION, never per stored element
+
+Narrow types exist for **density**. They are reached for when a structure is large enough
+that encoding it at `i64` would run to hundreds of MB, and the saving is real — measured on
+200 000 elements:
+
+| | store capacity | per element |
+|---|---|---|
+| `vector<u8>` | **0.362 MB** | 1 byte |
+| `vector<integer>` | **5.909 MB** | 8 bytes |
+
+**16×.** At the scale these types are chosen for, that is 20 MB against 320 MB.
+
+So a status bit stored **beside every element or field would defeat the entire purpose** —
+a `vector<u8>` at 2 bytes per element gives back half of why it was declared `u8`. That
+must not happen, and it is the tempting mistake in S4, which widens the design to fields and
+elements.
+
+**It does not have to happen, because the status is a property of an OPERATION'S RESULT, not
+of stored data.** An author observes `!x` at a use site, on a variable; a million stored
+elements do not need a million status bits. Concretely:
+
+- **stored data keeps its exact width, always** — `vector<u8>` stays 1 byte per element,
+  a `u8` field stays a byte, and the layout is untouched, which also means no store-format
+  change and nothing for @PLN97's layout hash to notice;
+- **the bit lives with the OBSERVATION** — one companion slot per marked variable, which is
+  a frame slot on the interpreter and a Rust local on native;
+- **an element or field read that is observed** materialises into a marked variable at the
+  use site, and the bit rides that variable — not the container.
+
+This is also why Phase E's collapse-at-the-store is the right shape underneath: what gets
+stored is always a legitimate value of the declared type. The status is transient, and it
+belongs where the question is asked.
+
 ## Mechanism
 
 A **per-variable marker**, which is a shape this codebase already uses: `Variable::amp_link`
@@ -158,6 +192,9 @@ element · argument · return), **fault shape** (out-of-range vs landing on the 
 different paths, per Phase C), and **backend**. The before-half exists as
 [`probes/`](probes/) and [`probes/axis/`](probes/axis/); a cell with no spelling written must
 be byte-identical to today, which is the opt-in claim and the thing the matrix must prove.
+One axis is not about values at all: **stored SIZE**, asserted with `store_memory()` on a
+large narrow collection, because a design that passed every value cell while doubling
+`vector<u8>` would have broken the reason the type was declared.
 
 ## Sub-arcs
 
@@ -166,7 +203,7 @@ be byte-identical to today, which is the opt-in claim and the thing the matrix m
 | **S1** — pin what already works, since nothing does today: `??` on an `integer` overflow, `!` on a nullable narrow | § the two spellings | a `tests/scripts/` guard, falsified against a build with the coalesce stripped | Open |
 | **S2** — `??` reaches a non-null narrow: route the author's value into `OpRangeDefault`'s `dflt`, which is already the fallback slot | `parser/expressions.rs::compound_range` | the narrow cells answer the author's value; **every cell with no `??` unchanged**, by `introspect` diff | Open |
 | **S3** — `!` reaches a non-null narrow: the per-variable marker, set in pass 1, emitted in pass 2 | § Mechanism | a variable whose test appears textually AFTER its last store still answers, both backends, both passes; unmarked variables byte-identical | Open |
-| **S4** — the remaining seams for both spellings: field, element, argument, return | `guard_declared_range` | one cell per seam per spelling; the controls unmoved | Open |
+| **S4** — the remaining seams for both spellings: field, element, argument, return | `guard_declared_range` | one cell per seam per spelling; the controls unmoved; **and `store_memory()` on a large `vector<u8>` is unchanged to the byte** — the seam where the density constraint would be broken | Open |
 | **S5** — cost where the bit is LIVE (a bound, not a gate — see § Blast radius) | — | a narrow-width benchmark, which `bench/` does not currently contain and S5 must write | Open |
 | **S6** — docs: the narrowing error already advertises `?? d`, so the diagnostic and the reference must agree with what ships | `DIAGNOSTICS.md` | the advertised cure works when followed | Open |
 

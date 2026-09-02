@@ -120,6 +120,17 @@ bounds the impact on ordinary arithmetic; it says nothing about the cost where t
 live, and B1/B2 owe that number before shipping — with a benchmark that actually contains a
 narrow width, which `bench/` currently does not.
 
+### The density constraint bounds where the bit may live
+
+Narrow types are a density tool — 1 byte per element against 8, measured at 16× on store
+capacity for a 200 000-element vector. A per-element or per-field status bit would give back
+half of that, so the bit must never touch stored layout. It lives with the OBSERVATION: one
+companion slot per marked variable. See README § Hard constraint.
+
+That also rules out one implementation that would otherwise look natural — widening the
+slot's type to a pair — for anything reachable from a container. A marked LOCAL may widen; a
+`vector<u8>`'s element may not.
+
 ### Where the difficulty actually is
 
 The owner is right that it is harder, and it is worth naming where, because it is not evenly
