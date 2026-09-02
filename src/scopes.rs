@@ -7075,10 +7075,7 @@ impl Scopes {
                     .def(outer_call)
                     .attributes()
                     .get(arg_idx)
-                    .is_some_and(|at| {
-                        matches!(at.typedef, Type::RefVar(ref t)
-                        if matches!(**t, Type::Reference(_, _) | Type::Enum(_, true, _)))
-                    })
+                    .is_some_and(|at| at.typedef.is_amp_rebindable_heap())
             {
                 amp_foreign.push(orig);
             }
