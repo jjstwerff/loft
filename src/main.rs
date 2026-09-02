@@ -3290,17 +3290,22 @@ fn publish_package(pkg_path: &std::path::Path, dry_run: bool) -> i32 {
     if registry_deps.is_empty() {
         println!("  \"deps\": {{}},");
         if !undeclared.is_empty() {
-            println!(
-                "  # ^^ INCOMPLETE — this package's source uses {}, and `loft.toml` declares",
+            // On STDERR, beside the other `[publish]` status: stdout is the entry a
+            // script parses as JSON, and JSON has no comment syntax — a note written
+            // between the members made the whole entry unparseable, which is how a
+            // publish run died after it had already cut the GitHub release.  The
+            // first line is the machine-readable half (`registry_maintain.sh` reads
+            // it to reconcile `deps` against the previous entry); the rest is for
+            // whoever is pasting by hand.
+            eprintln!("[publish] deps-incomplete: {}", undeclared.join(", "));
+            eprintln!(
+                "  `deps` above is `{{}}`, but this package's source uses {}, and `loft.toml`",
                 undeclared.join(", ")
             );
-            println!("  #    none of them, so there was nothing here to read the versions from.");
-            println!(
-                "  #    Copy `deps` from this package's existing index entries before pasting;"
-            );
-            println!(
-                "  #    an entry with empty deps installs a version that resolves none of them."
-            );
+            eprintln!("  declares none of them, so there was nothing here to read the versions");
+            eprintln!("  from.  Copy `deps` from this package's existing index entries before");
+            eprintln!("  pasting; an entry with empty deps installs a version that resolves none");
+            eprintln!("  of them.");
         }
     } else {
         let mut deps_lines: Vec<String> = Vec::new();
