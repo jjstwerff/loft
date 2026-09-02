@@ -126,6 +126,14 @@ fn uncomputable_default(nullable: bool, spec: &crate::data::IntegerSpec) -> i64 
 ///
 /// `None` when the question does not arise — the target declares no range of its own (the
 /// plain `integer` / i32 templates), or it is not an integer at all.
+///
+/// ⚠ **It answers the `limit(lo, hi)` spelling and NOT the narrow ALIASES.** It returns `None`
+/// the moment `forced_size` is set, which is exactly what `u8` / `i8` / `u16` / `i16` / `u32`
+/// are — so a caller reaching for this to guard a narrow width silently guards nothing, with
+/// no error to notice. [`Parser::compound_range`] is the one that partitions both, and is what
+/// a caller wanting *"whatever range this target declares, however it was spelled"* must use.
+/// Measured: a guard written against this function claimed no store at all until it was
+/// switched (@PLN152 step 2).
 fn declared_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
     let Type::Integer(spec) = tp.base() else {
         return None;
@@ -4696,10 +4704,11 @@ use a separate collection or add after the loop"
                 diagnostic!(self.lexer, Level::Error, "{hint}");
             } else if !self.int_value_fits(code, f_type) {
                 let src = self.int_type_name(&s_type);
+                let cures = Self::narrowing_cures(code, &dst);
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
+                    "cannot implicitly narrow {src} to {dst} (may lose data) — {cures}"
                 );
             }
         }
@@ -6095,6 +6104,14 @@ use a separate collection or add after the loop"
     /// function's: @FR-E-Uncomp for a slot that can hold null and @FR-E-Uncomp-NN for one
     /// that cannot.  Both arms ask it, so the two spellings of one range cannot answer
     /// differently.
+    /// The range a compound-assignment target declares, in EITHER spelling: the
+    /// `limit(lo, hi)` form via [`declared_range`], and the narrow ALIASES (`u8`, `i8`, `u16`,
+    /// `i16`, `u32`, `i32`) that `declared_range` deliberately cannot see because it stops at
+    /// `forced_size`.
+    ///
+    /// Reach for THIS when the question is *"whatever range this target declares"*; reach for
+    /// [`declared_range`] only when the `limit(...)` spelling is specifically what is meant.
+    /// Getting that backwards is silent — the guard simply never fires (@PLN152 step 2).
     fn compound_range(tp: &Type, nullable: bool) -> Option<(i64, i64, i64)> {
         // `declared_range` answers the `limit(lo, hi)` spelling and deliberately nothing
         // else — it returns `None` the moment `forced_size` is set.  So the two arms
@@ -6147,6 +6164,43 @@ use a separate collection or add after the loop"
     ///
     /// Returns true when it claimed the store, so the caller skips both the narrowing
     /// refusal and the ordinary outside-the-expression guard.
+    /// The cures for an implicit narrowing store that does not provably fit — @PLN152 N1.
+    ///
+    /// `as <dst>` is deliberately NOT among them, and it used to be the only thing offered.
+    /// This error fires exactly when the value does not provably fit, which is also exactly
+    /// when the explicit cast is refused (*"narrowing cast ... may not fit at runtime; use
+    /// `<dst>?` for a checked cast"*). So the old advice cost the reader a second refusal to
+    /// discover the first was unusable — two hops to a cure the first message could name.
+    ///
+    /// The `??` cure is real rather than aspirational: a discharge at the ROOT of the stored
+    /// expression supplies the fallback (`range_guard_inside_discharge`), so the position it
+    /// is offered in is the position it works in.
+    pub(crate) fn narrowing_cures(code: &Value, dst: &str) -> String {
+        let mut out = format!(
+            "give it a fallback with `?? <value>`, take the checked cast `as {dst}?` (value or \
+             null), or make the value provably fit (a mask, or an `if` range check)"
+        );
+        // @PLN152 N2 — a `??` that discharges a SUB-expression reads, to its author, as if it
+        // should have covered the store. Only a discharge at the root does. Shallow on
+        // purpose: the shape this is for is `(v[0] ?? 0) + 10`, where the discharge is a direct
+        // operand of the root, and a deeper walk would start claiming coincidences.
+        if !Self::is_root_discharge(code)
+            && let Value::Call(_, args) = code.unspan()
+            && args.iter().any(Self::is_root_discharge)
+        {
+            out.push_str(
+                " — the `??` already here discharges a value INSIDE the expression, not the \
+                 store, so it cannot supply the fallback; move it outside",
+            );
+        }
+        out
+    }
+
+    /// Is this expression itself a null discharge (`a ?? b`)?
+    fn is_root_discharge(v: &Value) -> bool {
+        matches!(v.unspan(), Value::Block(bl) if bl.name == "ncc")
+    }
+
     pub(crate) fn range_guard_inside_discharge(&mut self, code: &mut Value, target: &Type) -> bool {
         // A nullable target already answers null for a value that does not fit, and its own
         // `??` reads that today — there is nothing here to add and claiming it would move a
@@ -6157,41 +6211,75 @@ use a separate collection or add after the loop"
         // `compound_range`, not `declared_range`: the latter answers the `limit(lo, hi)`
         // spelling and returns None the moment `forced_size` is set, which is exactly what a
         // narrow ALIAS is — so it cannot see the five widths this exists for.
-        let Some((lo, hi, _)) = Self::compound_range(target, false) else {
+        if Self::compound_range(target, false).is_none() {
+            return false;
+        }
+        let Type::Integer(spec) = *target.base() else {
             return false;
         };
         // Only the block-shaped discharge carries a subject that can be guarded once. A bare
         // variable subject lowers to a plain `if` that reads it twice (see
         // `null_discharge_subject`), and guarding there would evaluate the range test on one
         // read and not the other.
-        let Value::Block(bl) = code.unspan_mut() else {
-            return false;
-        };
-        if bl.name != "ncc" {
-            return false;
-        }
-        let Some(Value::Set(_, subject)) = bl.operators.first_mut().map(Value::unspan_mut) else {
-            return false;
+        // A discharge reaches here in TWO shapes, and taking only the first is why an
+        // author's `b ?? 255` on a bare variable stayed refused while `(b + 1) ?? 255`
+        // worked.  `null_discharge_subject` above is the one home for what they look like:
+        // a non-trivial subject is bound to an `__ncc_N` temp by the block's head statement,
+        // while a bare VARIABLE subject can be read twice for free and so lowers to a plain
+        // `if` with the subject standing in the condition AND the then arm.
+        //
+        // Both reads are guarded in the second shape.  That is sound because the checked cast
+        // is PURE and SILENT — it raises nothing, so evaluating it twice costs a range test
+        // and reports nothing twice.  With `OpRangeDefault` it would have reported the same
+        // store twice, which is one more reason this path does not use it.
+        let subjects: Vec<Value> = match code.unspan() {
+            Value::Block(bl) if bl.name == "ncc" => match bl.operators.first().map(Value::unspan) {
+                Some(Value::Set(_, subject)) => vec![(**subject).clone()],
+                _ => return false,
+            },
+            Value::If(cond, then, _) => {
+                let mut v = vec![(**then).clone()];
+                // the condition is `OpConvBoolFromInt(subject)` — guard the read inside it too
+                if let Value::Call(_, args) = cond.unspan()
+                    && let Some(first) = args.first()
+                {
+                    v.push(first.clone());
+                }
+                v
+            }
+            _ => return false,
         };
         // Already guarded — the two seams that reach one store must not judge it twice.
-        if let Value::Call(d, _) = subject.unspan()
-            && self.data.def(*d).name() == "OpRangeDefault"
-        {
+        if subjects.iter().any(|sub| {
+            matches!(sub.unspan(), Value::Call(d, _) if self.data.def(*d).name() == "OpRangeDefault")
+        }) {
             return true;
         }
-        let guarded = self.cl(
-            "OpRangeDefault",
-            &[
-                (**subject).clone(),
-                Value::Long(lo),
-                Value::Long(hi),
-                Value::Long(i64::MIN),
-            ],
-        );
-        if let Value::Block(bl) = code.unspan_mut()
-            && let Some(Value::Set(_, subject)) = bl.operators.first_mut().map(Value::unspan_mut)
-        {
-            **subject = guarded;
+        let guarded: Vec<Value> = subjects
+            .into_iter()
+            .map(|mut sub| {
+                self.dn4_checked_cast(&mut sub, &Type::Integer(spec), &crate::data::I64);
+                sub
+            })
+            .collect();
+        match code.unspan_mut() {
+            Value::Block(bl) => {
+                if let Some(Value::Set(_, subject)) =
+                    bl.operators.first_mut().map(Value::unspan_mut)
+                {
+                    **subject = guarded[0].clone();
+                }
+            }
+            Value::If(cond, then, _) => {
+                **then = guarded[0].clone();
+                if let Some(g) = guarded.get(1)
+                    && let Value::Call(_, args) = cond.unspan_mut()
+                    && let Some(first) = args.first_mut()
+                {
+                    *first = g.clone();
+                }
+            }
+            _ => return false,
         }
         true
     }

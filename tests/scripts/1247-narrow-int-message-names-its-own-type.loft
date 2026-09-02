@@ -5,7 +5,7 @@
 //
 // `int_type_name` picks the spelling from the sign of the declared range, and the
 // four-byte case was the one arm that did not consult it: every `u32` reported itself
-// as `i32`, and the message's own cure (`cast explicitly with `as i32``) named a type
+// as `i32`, and the message's own cure (then `cast explicitly with `as i32``) named a type
 // with a different range than the one on the line above it. Following that advice
 // silently changes what the program means, which is why a wrong type NAME here is worth
 // a guard and not just a nicer string.

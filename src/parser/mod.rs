@@ -4246,10 +4246,11 @@ impl Parser {
         if !discharged && !self.first_pass && narrows && !self.int_value_fits(code, should) {
             let src = self.int_type_name(is_type);
             let dst = self.int_type_name(should);
+            let cures = Self::narrowing_cures(code, &dst);
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "cannot implicitly narrow {src} to {dst} (may lose data) — cast explicitly with `as {dst}`"
+                "cannot implicitly narrow {src} to {dst} (may lose data) — {cures}"
             );
         }
         // loft#984 — a value meeting a slot that DECLARES a range is guarded here, which

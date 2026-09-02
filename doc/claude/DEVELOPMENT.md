@@ -65,6 +65,21 @@ plus any bugs found along the way.  Two consequences:
   `origin/main` in** (rebase conflicts against squash-merged duplicates), reconciling
   conflicts to keep both sides' features; where both branches converged on the same fix,
   take the mainline's canonical form and keep any local improvement on top.
+- ⚠ **`git checkout --theirs <file>` takes the WHOLE FILE, not the conflicted hunk.**  Every
+  other change your side made to that file is reverted with it, silently, and the diff you
+  review afterwards looks like a resolution rather than a loss.  Measured twice here: a
+  2026-09-02 join resolved `tests/docs/25-generics.loft` that way and dropped 101 lines of
+  chapter for 32 — the `<T, U>` restriction, the note that generic structs do not exist, an
+  empty-vector caveat and its assertion — and the branch's own log already carried the same
+  lesson from an earlier pick (*"Three chapters re-read after the release picks moved them,
+  and all three had lost something"*).  Resolve a conflicted SOURCE file by editing the
+  markers and keeping both halves; reserve `--ours`/`--theirs` for generated artefacts, which
+  you then REGENERATE rather than trusting either side.  The tell that you took a whole file
+  by accident is a diff far larger than the conflict was.
+- **A count that both sides changed is a MEASUREMENT, not a merge.**  Where a conflict is a
+  tracked number — an audit row, a site census — re-run the tool on the merged tree instead of
+  picking a side or splitting the difference.  The same join found `678 | 324 | 5 | 349` and
+  `678 | 325 | 5 | 348`, and the merged tree was neither.
 
 ---
 

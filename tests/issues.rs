@@ -374,7 +374,9 @@ fn d2_signed_narrowing_i8_to_u8_needs_cast() {
 }"
     )
     .error(
-        "cannot implicitly narrow i8 to u8 (may lose data) — cast explicitly with `as u8` \
+        "cannot implicitly narrow i8 to u8 (may lose data) — \
+give it a fallback with `?? <value>`, take the checked cast `as u8?` (value or null), \
+or make the value provably fit (a mask, or an `if` range check) \
 at d2_signed_narrowing_i8_to_u8_needs_cast:3:15",
     );
 }

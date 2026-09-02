@@ -2123,11 +2123,11 @@ fn test() {
 }"
     )
     // the return tail — the one that landed on the closing brace
-    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:4:3")
+    .error("cannot implicitly narrow integer to i32 (may lose data) — give it a fallback with `?? <value>`, take the checked cast `as i32?` (value or null), or make the value provably fit (a mask, or an `if` range check) at a_narrowing_names_its_own_line_in_every_position:4:3")
     // the three that always worked, pinned so the fix cannot quietly move them
-    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:8:14")
-    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:9:16")
-    .error("cannot implicitly narrow integer to i32 (may lose data) — cast explicitly with `as i32` at a_narrowing_names_its_own_line_in_every_position:10:20")
+    .error("cannot implicitly narrow integer to i32 (may lose data) — give it a fallback with `?? <value>`, take the checked cast `as i32?` (value or null), or make the value provably fit (a mask, or an `if` range check) at a_narrowing_names_its_own_line_in_every_position:8:14")
+    .error("cannot implicitly narrow integer to i32 (may lose data) — give it a fallback with `?? <value>`, take the checked cast `as i32?` (value or null), or make the value provably fit (a mask, or an `if` range check) at a_narrowing_names_its_own_line_in_every_position:9:16")
+    .error("cannot implicitly narrow integer to i32 (may lose data) — give it a fallback with `?? <value>`, take the checked cast `as i32?` (value or null), or make the value provably fit (a mask, or an `if` range check) at a_narrowing_names_its_own_line_in_every_position:10:20")
     .warning("Parameter v is never read at a_narrowing_names_its_own_line_in_every_position:2:30");
 }
 
