@@ -418,7 +418,9 @@ fn range_default(s: &mut State) {
     let v_val = *s.get_stack::<i64>();
     let new_value = {
         let _rv = v_val;
-        if _rv == i64::MIN || (_rv >= v_lo && _rv <= v_hi) {
+        if _rv == i64::MIN {
+            if v_dflt == i64::MIN { _rv } else { v_dflt }
+        } else if _rv >= v_lo && _rv <= v_hi {
             _rv
         } else {
             s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {

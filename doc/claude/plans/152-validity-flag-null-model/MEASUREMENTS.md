@@ -223,3 +223,57 @@ mainline defects, not this branch's, and both are filed with a verified workarou
 **loft#1305** (the sentinel exemption) and **loft#1306** (the return-width divergence).
 
 Probes: [`probes/axis/`](probes/axis/).
+
+## Phase E result — the fix, 2026-09-02
+
+**Both defects closed at one site, with no new argument.** Phase C found the collapse site
+(`OpRangeDefault`) missing the input `(E-Collapse)` branches on. It turned out the input was
+already there: `parser/expressions.rs::uncomputable_default` sets `dflt` to `i64::MIN` exactly
+when the slot can read back null, so the guard reads the target's nullability off an argument
+it already receives.
+
+```rust
+// before — the sentinel is exempted whatever the target is
+if _rv == i64::MIN || (_rv >= @lo && _rv <= @hi) { _rv } else { …raise…; @dflt }
+
+// after — pass it through only where null is representable
+if _rv == i64::MIN { if @dflt == i64::MIN { _rv } else { @dflt } }
+else if _rv >= @lo && _rv <= @hi { _rv }
+else { …raise…; @dflt }
+```
+
+One template, both backends, because `src/fill.rs` is generated from it and the native
+emitter substitutes the same body.
+
+### Measured against a prediction written first
+
+| cell | before | after | predicted |
+|---|---|---|---|
+| `sent_local` (non-null `u8`) | `null` | **`0`** | changes ✓ |
+| `sent_ret` | interpret `null` / native `0` | **`0` on both** | changes ✓ |
+| `sent_field`, `sent_elem` | `0` | `0` | unchanged ✓ |
+| `oor_*` (260) | `0` | `0` | unchanged ✓ |
+| `a02` `i32`, `a08`–`a10` nullable | `null` | `null` | unchanged ✓ |
+| refusal channel (5 cells) | — | — | unchanged ✓ |
+| diagnostic channel (9 cells) | — | — | unchanged ✓ |
+
+All eight axis cells now AGREE across backends, where two did not.
+
+The controls are what make that a result rather than a coincidence: a fix that collapsed
+*every* sentinel would satisfy both changed cells. `i32` and the nullable spellings must
+still answer `null`, and they do — which is why the guard reads `dflt` and not the width.
+
+The sentinel arm is silent by design. The overflow that produced it reported at its own site;
+reporting again would name `-9223372036854775808` as out of range, a value the program never
+computed. The merely-out-of-range arm still reports, pinned by the guard's `c_` cell.
+
+Guard: `tests/scripts/1305-a-sentinel-collapses-where-null-is-not-representable.loft`,
+falsified at `214f88b6` — exit 1 → 0 and one assertion failure → 0 on **both** backends.
+
+### What is left of this plan
+
+The flag is not needed for correctness anywhere the three phases looked. What remains is the
+consolidation case — the hot-path sentinel tests (A measured the saving), the 14
+`Op*Nullable` duplicates, the `_nn` lattice this would make unnecessary, and provenance —
+and that is a value judgement about scope, not a defect list. **F and G should not start
+before that call is made.**

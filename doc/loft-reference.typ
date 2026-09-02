@@ -7716,7 +7716,11 @@ It guards the VALUE rather than the store, which is what lets one op reach both 
 
 A null passes straight through: whether a null may land in this slot is `(N-Store)`'s question, answered at compile time, and substituting `lo` for it here would quietly invent a value the program never computed.
 
-Emitted only where the value is NOT provably in range, so ordinary in-range code pays nothing (`parser::expressions::range\_guard`).
+Emitted only where the value is NOT provably in range, so ordinary in-range code pays nothing (`parser::expressions::range\_guard`). \@FR-E-Uncomp-NN — the collapse: a value that does not fit the target's declared range takes the type's DEFAULT, and the sentinel is a value that does not fit either.
+
+Whether the sentinel is a legal ANSWER depends on the target, and `dflt` already carries that fact: `uncomputable\_default` sets it to `i64::MIN` exactly when the slot can read back null (a nullable target, or `i32`/`i64` whose spare code is the bottom one) and to the type's default otherwise.  So a sentinel is passed through where null is representable and collapsed to the default where it is not — `u8`/`i8`/`u16`/`i16` fill their width and `u32`'s spare is at the top, which no non-null read tests for.
+
+The sentinel arm is SILENT on purpose.  It is not a fault of this store: the operation that produced the sentinel reported at its own site, and reporting again would name `-9223372036854775808` as a value outside the range, which is not a number the program ever computed.
 
 ```rust
 pub fn abs(both: integer) -> integer

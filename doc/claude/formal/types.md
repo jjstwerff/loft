@@ -193,6 +193,18 @@ fake non-null on an op that can miss.
 > a non-`τ` value — but it is indistinguishable from a computed one, which is the price of a
 > width with no code to spare. `τ?` is the spelling that always answers `null`, because a
 > nullable narrow alias sacrifices an edge value to reserve one (`(N-Reserve)`). loft#1296.
+>
+> **And the answer does not depend on where the slot lives.** The collapse site
+> (`OpRangeDefault`, shared by both backends) exempted the sentinel unconditionally, so a
+> non-null narrow LOCAL — an `i64` until it is materialised — held it and read back `null`,
+> while the same overflow reaching a FIELD or an ELEMENT narrowed to the default. One
+> declared type, two answers, decided by whether the arithmetic landed exactly on the
+> sentinel. The guard now reads the target's nullability off `dflt`, which
+> `uncomputable_default` already sets to `i64::MIN` exactly when the slot can read back null,
+> so a sentinel is passed through where null is representable and collapsed where it is not
+> (loft#1305). The RETURN divergence closed with it — the interpreter kept the sentinel in an
+> 8-byte slot and native emitted `as u8` — because the sentinel no longer survives the store
+> (loft#1306).
 
 Nullability is **range-driven**, so the discharge burden is proportional to *real* risk,
 not theoretical: `a op b` and `e as τ` are **non-null when the result provably fits** the

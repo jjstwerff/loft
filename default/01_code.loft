@@ -171,8 +171,22 @@ fn OpNot(v1: boolean) -> boolean;
 //
 // Emitted only where the value is NOT provably in range, so ordinary in-range code pays
 // nothing (`parser::expressions::range_guard`).
+// @FR-E-Uncomp-NN — the collapse: a value that does not fit the target's declared range
+// takes the type's DEFAULT, and the sentinel is a value that does not fit either.
+//
+// Whether the sentinel is a legal ANSWER depends on the target, and `dflt` already carries
+// that fact: `uncomputable_default` sets it to `i64::MIN` exactly when the slot can read
+// back null (a nullable target, or `i32`/`i64` whose spare code is the bottom one) and to
+// the type's default otherwise.  So a sentinel is passed through where null is
+// representable and collapsed to the default where it is not — `u8`/`i8`/`u16`/`i16` fill
+// their width and `u32`'s spare is at the top, which no non-null read tests for.
+//
+// The sentinel arm is SILENT on purpose.  It is not a fault of this store: the operation
+// that produced the sentinel reported at its own site, and reporting again would name
+// `-9223372036854775808` as a value outside the range, which is not a number the program
+// ever computed.
 fn OpRangeDefault(val: integer, lo: const integer, hi: const integer, dflt: const integer) -> integer;
-#rust"{{ let _rv = @val; if _rv == i64::MIN || (_rv >= @lo && _rv <= @hi) {{ _rv }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {{ value: _rv, lo: @lo, hi: @hi }}); @dflt }} }}"
+#rust"{{ let _rv = @val; if _rv == i64::MIN {{ if @dflt == i64::MIN {{ _rv }} else {{ @dflt }} }} else if _rv >= @lo && _rv <= @hi {{ _rv }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::RangeDefaulted {{ value: _rv, lo: @lo, hi: @hi }}); @dflt }} }}"
 fn OpConstInt(val: const integer) -> integer;
 #rust"@val"
 fn OpConstShort(val: const i16) -> integer;
