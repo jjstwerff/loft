@@ -472,9 +472,13 @@ pub fn host_env_variable(name: &str) -> String {
     #[cfg(feature = "wasm")]
     {
         let args = js_sys::Array::of1(&name.into());
+        // Text-null, not `""`, when the host has no such variable — the same answer
+        // `Stores::os_variable` gives on native, so the two backends cannot disagree about
+        // what "not set" is (loft#1302).  A host that deliberately answers `""` still gets
+        // `""`, exactly as `var_os` returning `Some("")` does natively.
         host_call("env_variable", &args)
             .as_string()
-            .unwrap_or_default()
+            .unwrap_or_else(|| crate::state::STRING_NULL.to_string())
     }
     #[cfg(not(feature = "wasm"))]
     {

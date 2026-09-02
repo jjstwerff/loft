@@ -65,9 +65,9 @@ fn drain_phase(h: web::WsHandler, seen: vector<integer>, expected: integer, labe
 }
 
 fn main() {
-  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port_raw = env_variable("LOFT_TICTACTOE_PORT") ?? "";
   port = if port_raw == "" { 18094 } else { port_raw as integer? ?? 18094 };
-  total_raw = env_variable("LOFT_T4_SESSIONS");
+  total_raw = env_variable("LOFT_T4_SESSIONS") ?? "";
   total = if total_raw == "" { 5 } else { total_raw as integer? ?? 5 };
   initial = total / 2; // half on phase A, half on phase B
   if initial < 1 { initial = 1; }

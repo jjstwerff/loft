@@ -556,20 +556,31 @@ impl Stores {
     }
 
     /**
-    Get the value of an environment variable as an owned `String` ("" if unset).
+    Get the value of an environment variable as an owned `String`, or text-null when the
+    variable is not set.
 
     @PLN10 (Phase 2): returns owned `String` instead of a scratch-backed `Str`.
     The interpreter caller (`n_env_variable`) and its dest-passing variant own the
     String (push to a dest / scratch fallback); the native `#rust` template
     bridges `String` → `Str` via `Deref` (the @P304 path, like `to_lowercase`).
-    Always non-null (empty for an unset variable).
+
+    **Unset and set-to-empty are different answers**, which is the whole point of the
+    distinction: an unset variable is `STRING_NULL` and an empty one is `""`.  This returned
+    `""` for both, so the `== null` test its own documentation invited could never fire and
+    a program could not tell a variable it must supply from one deliberately blanked
+    (loft#1302).  `text` carries null in-band, so the signature never stood in the way —
+    only the `unwrap_or_default()` did.
+
+    ONE home: the interpreter's `n_env_variable` / `n_env_variable_dest` and the `#rust`
+    body on the declaration in `default/02_files.loft` both come through here, so the two
+    backends cannot disagree about what "not set" answers.
     */
     #[cfg(not(feature = "wasm"))]
     #[must_use]
     pub fn os_variable(&mut self, name: &str) -> String {
         std::env::var_os(name)
             .and_then(|s| s.into_string().ok())
-            .unwrap_or_default()
+            .unwrap_or_else(|| crate::state::STRING_NULL.to_string())
     }
 
     /**

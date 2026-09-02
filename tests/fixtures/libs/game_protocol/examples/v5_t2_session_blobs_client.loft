@@ -37,7 +37,7 @@ fn flush_session(session: integer, count: integer) {
 }
 
 fn main() {
-  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port_raw = env_variable("LOFT_TICTACTOE_PORT") ?? "";
   port = if port_raw == "" { 18092 } else { port_raw as integer };
   url = "ws://127.0.0.1:{port}";
 

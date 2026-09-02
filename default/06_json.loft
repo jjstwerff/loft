@@ -87,7 +87,8 @@ pub fn item(self: JsonValue, index: integer) -> JsonValue;
 pub fn len(self: JsonValue) -> integer;
 #pure
 
-/// Typed extractor — returns `null` (empty text) on kind mismatch.
+/// Typed extractor — returns `null` on kind mismatch.  Null and the empty text `""` are
+/// different answers: a JSON string that IS empty reads back as `""`.
 pub fn as_text(self: JsonValue) -> text;
 #pure
 

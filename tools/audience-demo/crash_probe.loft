@@ -17,7 +17,7 @@
 use web;
 
 fn env_int(name: text, dflt: integer) -> integer {
-  raw = env_variable(name);
+  raw = env_variable(name) ?? "";
   if raw == "" { dflt } else { raw as integer }
 }
 

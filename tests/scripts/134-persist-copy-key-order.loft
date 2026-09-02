@@ -83,8 +83,8 @@ fn digest(t: trie<PWord[w]>, tag: text) {
 }
 
 fn main() {
-  path = env_variable("LOFT_PERSIST_TEST_PATH");
-  copy = env_variable("LOFT_PERSIST_TEST_COPY");
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
+  copy = env_variable("LOFT_PERSIST_TEST_COPY") ?? "";
   mode = env_variable("LOFT_PERSIST_TEST_MODE");
   // The suite runs every script in this directory with no environment; this one
   // is driven by `tests/store_persist_loft.rs` and has nothing to say without a

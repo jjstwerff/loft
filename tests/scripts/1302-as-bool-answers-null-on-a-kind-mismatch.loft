@@ -23,11 +23,12 @@
 // exists to return.
 //
 // ⚠ Its sibling half of loft#1302 is NOT fixed and the issue stays open: `env_variable` is
-// documented to answer null for an unset variable and answers `""`. The one-line fix works on
-// both backends and then 71 call sites across `tools/`, `tests/`, `lib/` and `default/` break,
-// because `env_variable(…) != ""` is a live idiom that the sentinel inverts. Which of the doc
-// and the code moves is a compatibility decision, not a bug fix. `as_bool` has six call sites,
-// all tests, which is why this half could land and that one could not.
+// documented to answer null for an unset variable and answered `""`. That half landed too, at
+// the following commit: the code moved, not the doc, because `CONTRACT_VERSION` is still 0 and
+// COMPATIBILITY.md's pre-freeze audit exists to fix exactly this before the flip makes it
+// permanent. Its cells and the runner that supplies their environment are
+// `tests/fixtures/1302-env-variable-answers-null-when-unset.loft` and
+// `tests/env_variable_null.rs`.
 //
 // @falsified-at: b29f198b — interpret exit 1 -> 0, interpret 1 assertion failures -> 0,
 //   native exit 1 -> 0, native 1 assertion failures -> 0.

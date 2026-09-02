@@ -123,9 +123,14 @@ fn main() {
   assert(t1 >= 0, "ticks() returns non-negative value");
   t2 = ticks();
   assert(t2 >= t1, "ticks() is monotonically non-decreasing");
-  // === env_variable: returns empty text for unknown variable ===
+  // === env_variable: returns NULL for an unknown variable (loft#1302) ===
+  // It answered `""` until 2026-09-02, which made an unset variable and one set to the empty
+  // string the same answer.  `?? ""` is how a caller that wants the old value asks for it, and
+  // both spellings are pinned here because the second is what ~25 call sites in this repo were
+  // rewritten to.
   missing = env_variable("LOFT_TEST_NONEXISTENT_VAR_XYZ");
-  assert(missing == "", "env_variable of unknown name returns empty string");
+  assert(missing == null, "env_variable of unknown name returns null");
+  assert((env_variable("LOFT_TEST_NONEXISTENT_VAR_XYZ") ?? "") == "", "…and ?? \"\" is empty");
   // === mkdir and mkdir_all ===
   // Use a file inside the dir to verify existence, since delete() only removes files.
   mkdir("test_loft_dir_xyz"); // idempotent pre-clean: ignore result

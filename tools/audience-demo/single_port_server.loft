@@ -208,7 +208,7 @@ ACTIVE_HEARTBEAT_US  = 1000000;       // 1 s — active-player signal cadence (1
 REPLAY_BUDGET = 64;
 
 fn env_int(name: text, dflt: integer) -> integer {
-  raw = env_variable(name);
+  raw = env_variable(name) ?? "";
   if raw == "" { dflt } else { raw as integer? ?? dflt }
 }
 

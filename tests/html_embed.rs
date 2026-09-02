@@ -107,7 +107,7 @@ fn page_output(url: &str, port: u16) -> String {
 const PROGRAM: &str = "struct Rec { r_key: text, r_n: integer }\n\
      \n\
      fn main() {\n\
-     \x20 if env_variable(\"MAKE_STORE\") != \"\" {\n\
+     \x20 if (env_variable(\"MAKE_STORE\") ?? \"\") != \"\" {\n\
      \x20   h: hash<Rec[r_key]> = [];\n\
      \x20   h[\"a\"] = Rec { r_key: \"a\", r_n: 7 };\n\
      \x20   h[\"b\"] = Rec { r_key: \"b\", r_n: 41 };\n\

@@ -108,9 +108,9 @@ fn handle_catch_up(srv: server::Server, cache: Cache, cid: integer, payload: tex
 }
 
 fn main() {
-  port_raw = env_variable("LOFT_TICTACTOE_PORT");
+  port_raw = env_variable("LOFT_TICTACTOE_PORT") ?? "";
   port = if port_raw == "" { 18094 } else { port_raw as integer? ?? 18094 };
-  total_raw = env_variable("LOFT_T4_SESSIONS");
+  total_raw = env_variable("LOFT_T4_SESSIONS") ?? "";
   total = if total_raw == "" { 5 } else { total_raw as integer? ?? 5 };
 
   srv = server::listen(port);

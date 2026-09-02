@@ -36,7 +36,7 @@ fn readc(path: text) -> integer {
 }
 
 fn main() {
-  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  path = env_variable("LOFT_PERSIST_TEST_PATH") ?? "";
   if path == "" { return } // argless run (loft_suite) → no-op
   build(path);
   // Three independent binds after the first bound store's frame dropped.

@@ -20,7 +20,7 @@ struct PWord {
 }
 
 fn main() {
-  img = env_variable("LOFT_PERSIST_TEST_IMG");
+  img = env_variable("LOFT_PERSIST_TEST_IMG") ?? "";
   if img == "" { return }
 
   for pre in ["aa", "cr", "gi", "mo", "pu", "st", "wa", "zu"] {
