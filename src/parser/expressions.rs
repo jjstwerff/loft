@@ -4679,7 +4679,16 @@ use a separate collection or add after the loop"
         // in `forced_size` alone, so range containment saw nothing here either and this
         // site — which covers both the annotated local and the field WRITE — was the last
         // place `b.v = n` could be caught before it silently stored 705032704.
-        if op == "=" && !self.first_pass && Self::is_narrowing_int_store(&s_type, f_type) {
+        // @PLN152 — a `??` in the stored expression names what happens when the value does
+        // not fit, so guard inside the discharge and leave this store alone: neither the
+        // refusal below nor the outside-the-expression guard after it applies.
+        let discharged =
+            op == "=" && !self.first_pass && self.range_guard_inside_discharge(code, f_type);
+        if !discharged
+            && op == "="
+            && !self.first_pass
+            && Self::is_narrowing_int_store(&s_type, f_type)
+        {
             let dst = self.int_type_name(f_type);
             if let Some(hint) = self.nullable_sentinel_hint(code, f_type, &dst) {
                 // The literal fits the type but lands on the reserved null
@@ -4701,7 +4710,7 @@ use a separate collection or add after the loop"
         // local and the field WRITE".  A `limit(...)` slot never sets `forced_size`, so
         // `is_narrowing_int_store` above cannot see it — which is why a declared range on
         // a LOCAL went unenforced entirely, not merely mis-stored.
-        if op == "=" && !self.first_pass {
+        if !discharged && op == "=" && !self.first_pass {
             let holds_null = target_holds_null(f_type, &lhs_parent_tp);
             self.guard_declared_range(code, f_type, &s_type, holds_null);
         }
@@ -6119,6 +6128,76 @@ use a separate collection or add after the loop"
         // Asking it HERE rather than answering `range_default` directly is what makes a
         // nullable narrow alias answer null: this arm is the only one a `u8?` reaches.
         Some((lo, hi, uncomputable_default(nullable, spec)))
+    }
+
+    /// @PLN152 — an author-written `??` IS the answer for a value that does not fit, so
+    /// guard INSIDE the discharge rather than around it, and report nothing.
+    ///
+    /// `x = (x + 10) ?? 255` into a `u8` is refused today as a narrowing that may lose data,
+    /// which is true of the coalesce's RESULT — `x + 10` can be 265 — and false of what the
+    /// author wrote: the `??` names exactly what happens when it does not fit. Wrapping the
+    /// whole discharge cannot express that, because by then the out-of-range value has
+    /// already been chosen as the coalesce's non-null answer.
+    ///
+    /// So the guard goes on the discharge's SUBJECT, with the SENTINEL as its default rather
+    /// than the type's: an out-of-range subject then reads null, the existing coalesce
+    /// supplies the author's value, and what reaches the slot is always in range. The
+    /// sentinel never lands anywhere — it lives in the `__ncc_N` temp, which is a full
+    /// `integer` — so no narrow storage is asked to hold a value it has no code for.
+    ///
+    /// Returns true when it claimed the store, so the caller skips both the narrowing
+    /// refusal and the ordinary outside-the-expression guard.
+    pub(crate) fn range_guard_inside_discharge(
+        &mut self,
+        code: &mut Value,
+        target: &Type,
+    ) -> bool {
+        // A nullable target already answers null for a value that does not fit, and its own
+        // `??` reads that today — there is nothing here to add and claiming it would move a
+        // shape that works.
+        if matches!(target, Type::Optional(_)) {
+            return false;
+        }
+        // `compound_range`, not `declared_range`: the latter answers the `limit(lo, hi)`
+        // spelling and returns None the moment `forced_size` is set, which is exactly what a
+        // narrow ALIAS is — so it cannot see the five widths this exists for.
+        let Some((lo, hi, _)) = Self::compound_range(target, false) else {
+            return false;
+        };
+        // Only the block-shaped discharge carries a subject that can be guarded once. A bare
+        // variable subject lowers to a plain `if` that reads it twice (see
+        // `null_discharge_subject`), and guarding there would evaluate the range test on one
+        // read and not the other.
+        let Value::Block(bl) = code.unspan_mut() else {
+            return false;
+        };
+        if bl.name != "ncc" {
+            return false;
+        }
+        let Some(Value::Set(_, subject)) = bl.operators.first_mut().map(Value::unspan_mut) else {
+            return false;
+        };
+        // Already guarded — the two seams that reach one store must not judge it twice.
+        if let Value::Call(d, _) = subject.unspan()
+            && self.data.def(*d).name() == "OpRangeDefault"
+        {
+            return true;
+        }
+        let guarded = self.cl(
+            "OpRangeDefault",
+            &[
+                (**subject).clone(),
+                Value::Long(lo),
+                Value::Long(hi),
+                Value::Long(i64::MIN),
+            ],
+        );
+        if let Value::Block(bl) = code.unspan_mut()
+            && let Some(Value::Set(_, subject)) = bl.operators.first_mut().map(Value::unspan_mut)
+        {
+            **subject = guarded;
+        }
+        true
     }
 
     pub(crate) fn guard_declared_range(

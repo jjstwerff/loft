@@ -4231,12 +4231,18 @@ impl Parser {
         // here typed as the full `integer` — a nullable narrow field left out of a struct
         // literal takes its default this way — so the widened width test (loft#931) would
         // otherwise refuse `n.c = null` and `N { t: 1 }` on an `i32?` field.
+        // @PLN152 — an author-written `??` names what happens when the value does not fit,
+        // so a discharged store is not an unanswered narrowing.  The guard goes inside the
+        // discharge and this seam then leaves the store alone: no refusal, and no second
+        // guard around the outside.
+        let discharged =
+            !self.first_pass && !self.in_explicit_cast && self.range_guard_inside_discharge(code, should);
         let narrows = if self.in_explicit_cast {
             Self::is_narrowing_int(is_type, should)
         } else {
             Self::is_narrowing_int_store(is_type, should)
         } && !self.is_null_source(code);
-        if !self.first_pass && narrows && !self.int_value_fits(code, should) {
+        if !discharged && !self.first_pass && narrows && !self.int_value_fits(code, should) {
             let src = self.int_type_name(is_type);
             let dst = self.int_type_name(should);
             diagnostic!(
@@ -4250,7 +4256,7 @@ impl Parser {
         // field, a call ARGUMENT, a return.  An explicit `as` is excluded — a cast has its
         // own answer for a value that does not fit (`400 as u8` is null), and folding the
         // default in would silently change it.
-        if !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
+        if !discharged && !self.first_pass && !self.in_explicit_cast && !self.is_null_source(code) {
             // A struct LITERAL's field, an ARGUMENT and a RETURN all name a DECLARED type,
             // so the wrapper is the answer here — the element-write ambiguity
             // `target_holds_null` exists for cannot arise at this seam.
