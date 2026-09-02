@@ -9,6 +9,74 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### A keyed `&` write-back does not release the caller's collection (2026-09-02)
+
+loft#1287 settled that a `&` parameter's whole-value write-back may release the store it
+displaced only where the caller's binding OWNS it, and through a plain forwarder it does not —
+`formal/calls.md` `(F-ParamHeap)` makes a plain heap parameter alias ITS caller's argument, so
+the store belongs two frames down.  The rebind WITNESS carries that fact: it names the
+parameter's ENTRY store, `scopes::scan_args` marks that store free-protected for the call, and
+`Stores::free_displaced` refuses it.
+
+The witness was minted behind an ALLOW-LIST written TWICE — `Type::Reference |
+Type::Enum(_, true, _)`, once in `parser/mod.rs` and once in `scopes.rs` — so it covered a
+struct and a struct-enum and nothing else.  Every KEYED collection fell through both:
+
+```loft
+fn set_h(x: &hash<E[k]>) { x = mk(); }
+fn fwd_h(x: hash<E[k]>)  { set_h(x); }
+```
+
+and the callee released the caller's collection.  **The value read back CORRECTLY**, which is
+why two independent boundary matrices scored this row as passing.  A freed store keeps its bytes
+until its slot is handed out; put one allocation between the call and the read and the
+interpreter panics on a corrupt reference, with `LOFT_STRICT_STORES=1` reporting seven
+lifetime violations and one store never freed.  `sev:high`, `silent-wrong`.
+
+The predicate has one home now — `Type::is_amp_rebindable_heap` — because its two askers must
+agree: one mints the witness and the other uses it, and a site that said yes while the other
+said no would either free a store belonging to a frame below or leak the fresh one.
+
+### A `&sorted` write-back reaches the caller, where the write used to vanish (2026-09-02)
+
+`formal/calls.md` `(F-ParamRef)` makes a `&` parameter the explicit write-back channel.  A
+`&sorted<T[k]>` was refused instead — *"Parameter 'x' has & but is never modified"* — and that
+refusal was the only thing stopping a lost write.  Give the body any other write and the program
+compiles, and the assignment is silently discarded with the callee's collection leaked:
+
+```loft
+fn set_s(x: &sorted<E[k]>) { x = mks(); for e in x { e.v = e.v; } }
+    IR:  [3] n_mk();          // no Set at all; the result is thrown away
+```
+
+`&hash` and `&index` were correct in the same position, and `is_keyed`, `keyed_type_id` and
+`base()` treat the three alike — so the difference had to be a site that names ONE kind.
+`collections.rs::towards_set` returned the right-hand side alone for `RefVar(Vector | Sorted)`.
+That is right for a vector: `assign_refvar_vector` has by then lowered the write into ops that
+fill the target in place, and the shapes it declines — a bracket literal, a comprehension —
+carry their own appends.  A `sorted` never had that lowering, so its right-hand side was a bare
+VALUE and returning it dropped the write.  The condition now names the fact (*the right-hand
+side has already written the target*) instead of the type former, and the arm has read this way
+since the initial commit, so a `&sorted` whole-value write-back has never worked.
+
+⚠ Two things this leaves, both uniform across the keyed kinds and neither this fix's doing.
+NO `+=` spelling works on a `&` keyed parameter — bracketed literal, bare element and whole
+collection alike are refused with *"cannot change type from `&hash<…>` to `vector<E>`"*, a type
+the program never wrote, because @P277's interception asks `is_keyed`, which peels `Optional`
+and not `RefVar` (the remaining half of loft#1292). And a bare-VAR right-hand side mismanages
+the store in both directions: from a caller-reachable value the displaced store LEAKS, from a
+callee-local one the callee's scope-exit free makes it a USE-AFTER-FREE in the caller
+(loft#1303, filed — one question, since `(O-Latest)` puts ownership on the binding that ends up
+naming the store and nothing moves it).
+
+⚠ The VECTOR half of loft#1291 is NOT closed.  A `&vector<T>` write-back is `OpClearVector` plus
+a refill of the SHARED backing, so it never repoints and there is no displaced store to protect:
+it answers WRONG where the keyed kinds corrupted quietly.  Letting it take the fresh-backing
+rebind `vectors.rs::vector_db_init` already builds was measured and BACKED OUT — it does not
+compile on `--native`, it turns two previously-compiling right-hand sides into refusals, and the
+interpreter's `OpCreateStack` did not isolate the forwarder's frame the way the struct and keyed
+kinds do.  The cells are on the issue.
+
 ### A generic header binds its OWN type variable (2026-09-02)
 
 Two generic functions that both wrote `T` — the universal convention — shared one type

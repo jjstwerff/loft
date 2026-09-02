@@ -1797,6 +1797,38 @@ impl Type {
         self.peel_optional().0
     }
 
+    /// Is this a `&` parameter whose whole-value write-back INSTALLS a store the callee
+    /// minted and DISPLACES whatever the caller's binding named?
+    ///
+    /// That is the question loft#1287's rebind witness answers, and it has two askers that
+    /// must agree: `Parser::call_arguments` mints the witness, and `scopes::scan_args` uses it
+    /// to mark the parameter's ENTRY store free-protected for the duration of the call.  A
+    /// site that said yes while the other said no would either free a store belonging to a
+    /// frame below (a use-after-free plus a double free) or leak the fresh one — so this is
+    /// one home rather than two `matches!` arms, which is how the keyed kinds came to be
+    /// missing from both (loft#1291).
+    ///
+    /// The set is every HEAP kind a binding can be repointed at: a struct, a struct-enum, a
+    /// vector, and the five keyed collections.  A scalar is copied and a `&`-tuple's elements
+    /// are stack values, so neither displaces a store.
+    #[must_use]
+    pub fn is_amp_rebindable_heap(&self) -> bool {
+        let Type::RefVar(inner) = self else {
+            return false;
+        };
+        matches!(
+            inner.base(),
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Hash(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Trie(_, _, _)
+        )
+    }
+
     /// The type the return-buffer machinery should treat this return as (loft#938).
     ///
     /// `Optional(Vector(τ))` peels to `Vector(τ)`: a nullable COLLECTION return lays out

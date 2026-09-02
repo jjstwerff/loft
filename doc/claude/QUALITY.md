@@ -2419,12 +2419,20 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 677 | 322 | 5 | **350** |
+| 677 | 323 | 5 | **349** |
 
 loft#1245 added `use_analysis::callref_captures` on the seeing-through side (the opaque
 column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function` through
 `.base()`, because the same fn-ref reaches it as `fn(τ) -> ρ` and as `fn(τ) -> ρ?` and a
 capture is a capture either way.
+
+loft#1291 moved one site OFF the opaque column — the first entry here that does.
+`Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value
+write-back displaces a store?"*, and it asks `inner.base()` because a `&hash<T[k]>?` parameter is
+rebindable exactly as its dense twin is: @FR-L-Null says the storage is the same, and it is the
+storage that gets displaced. It replaced two `matches!` arms that named variants bare, in
+`parser/mod.rs` and `scopes.rs` — the two sites that must agree about it, one minting the rebind
+witness and the other using it.
 
 loft#1254 added the empty-stub return classifier on the same side, and the opaque column again
 did not move: it asks whether a stub's return is HANDLE-carried, peeling first for the same

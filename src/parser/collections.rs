@@ -1443,8 +1443,23 @@ impl Parser {
             // codegen).  Empty literal `[]` is also handled there.
             return val.clone();
         }
+        // A right-hand side that has ALREADY written the target leaves nothing to assign, and
+        // wrapping it in a `Set` would build a second, empty collection over the top of it.
+        // That is what a `&`-vector `=` looks like by the time it arrives: `assign_refvar_vector`
+        // lowers the write into ops that fill the target in place, and the shapes it declines —
+        // a bracket literal, a comprehension — carry their own appends in an `Insert` / `Block`.
+        //
+        // loft#1292 — the condition used to name the FORMER (`Vector | Sorted`) instead of the
+        // fact.  A `sorted` has no such lowering, so its right-hand side is a bare VALUE and
+        // returning it alone DROPPED the write: `fn f(x: &sorted<E[k]>) { x = mks(); }` left the
+        // caller's collection untouched and leaked the one the callee minted.  The refusal
+        // beside it (*"has & but is never modified"*) was the only thing stopping that, since
+        // the write it could not see is the write that never happened.  `&hash` and `&index`
+        // were correct all along, which is what said the difference had to be a site naming one
+        // kind rather than anything about keyed collections.
         if let Type::RefVar(tp) = f_type
             && matches!(**tp, Type::Vector(_, _) | Type::Sorted(_, _, _))
+            && matches!(val.unspan(), Value::Insert(_) | Value::Block(_))
         {
             if let Value::Var(nr) = to.unspan() {
                 if self.vars.uses(*nr) > 0 {

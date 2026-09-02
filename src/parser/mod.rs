@@ -11363,8 +11363,7 @@ impl Parser {
             // THIS body already gets; only the spelling of the rebind is different.
             let mut amp_rebind_arg = u16::MAX;
             if !self.first_pass
-                && let Type::RefVar(inner) = &tp
-                && matches!(**inner, Type::Reference(_, _) | Type::Enum(_, true, _))
+                && tp.is_amp_rebindable_heap()
                 && let Value::Var(v) = actual_code.unspan()
                 && self.vars.is_argument(*v)
                 && !matches!(self.vars.tp(*v), Type::RefVar(_))
