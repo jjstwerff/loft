@@ -61,10 +61,21 @@ and can emit Rust code for host integration.
 | `character` | A single Unicode character                       |
 | `text`      | A UTF-8 string; `len()` counts bytes             |
 
-A type is **non-null by default** — a plain `integer` / `text` / `Row` never holds
-`null`. Add `?` to make it nullable: `integer?` holds a value or `null`. (The old
-`not null` modifier is now the default and is **deprecated** — it parses as a no-op
-and warns; delete it. See "Fields" below.)
+A type is **non-null by default**: you cannot *store* a `null` into a plain
+`integer` / `text` / `Row` — the compiler stops the write and asks you to discharge
+it (`??`, `?`, `match`) or to declare the slot `integer?`. Add `?` to make it
+nullable: `integer?` holds a value or `null`. (The old `not null` modifier is now
+the default and is **deprecated** — it parses as a no-op and warns; delete it.
+See "Fields" below.)
+
+**Non-null is a rule about writes, not a guarantee about reads.** A *fault* can still
+leave the reserved pattern in a non-null slot: an integer overflow writes the sentinel
+and the slot then reads `null`, and a non-null `float` can hold a `NaN` the same way
+(the deliberate, bounded edge in
+[DESIGN_DECISIONS C85](DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)).
+A width with no code to spare — `u8`, `i8`, `u16`, `i16` — cannot hold the pattern at
+all, so the same fault leaves the type's default there instead. So `x == null` on a
+non-null slot is not dead code.
 
 #### Null representation
 
