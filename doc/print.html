@@ -2273,7 +2273,8 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
 <h1>Generics</h1>
 <p>A generic function uses a type variable to work with any type. Write the function once; the compiler creates a specialised copy for each concrete type you call it with.</p>
 <h2 id="declaring-a-generic-function">Declaring a generic function</h2>
-<p>Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector&lt;T&gt;).</p>
+<p>Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector&lt;T&gt;) — a T that appears only later, or only in the return type, is refused with "Type variable T must appear in the first parameter".  ONE type variable: <code>&lt;T, U&gt;</code> does not parse.</p>
+<p>Generic STRUCTS are a separate thing and loft does not have them — <code>struct Box&lt;T&gt;</code> is a parse error.  A generic FUNCTION over <code>vector&lt;T&gt;</code> covers most of what a generic container would be reached for.</p>
 <pre><code><span class="kw">fn</span> identity&lt;<span class="en">T</span>&gt;(x: <span class="en">T</span>) -&gt; <span class="en">T</span> { x }</code></pre>
 <h2 id="calling-a-generic-function">Calling a generic function</h2>
 <p>No special syntax at the call site — the compiler infers T from the first argument's type and creates a specialised copy automatically.</p>
@@ -2308,19 +2309,41 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">last_element</span>(ints) == <span class="nm">30</span>, <span class="st">"last int"</span>);
   words = [<span class="st">"alpha"</span>, <span class="st">"beta"</span>, <span class="st">"gamma"</span>];
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">first_element</span>(words) == <span class="st">"alpha"</span>, <span class="st">"first text"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">last_element</span>(words) == <span class="st">"gamma"</span>, <span class="st">"last text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">last_element</span>(words) == <span class="st">"gamma"</span>, <span class="st">"last text"</span>);</code></pre>
+<p>A CONSTANT index is trusted, and an empty vector is where that trust runs out: <code>gen_v[0]</code> is typed <code>T</code> and still answers null on an empty vector, so the null travels through a return type that says it cannot be there. Check the length before calling, or declare the result <code>T?</code> as <code>last_element</code> does and let the caller discharge it.</p>
+<pre><code>  empty: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="ty"><a href="stdlib-types.html">integer</a></span>&gt; = [];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">first_element</span>(empty), <span class="st">"`v[0]` on an empty vector is null despite the `T` return"</span>);
 }</code></pre>
 <h2 id="bounded-generics-with-interfaces">Bounded generics with interfaces</h2>
-<p>By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: <code>&lt;T: Ordered&gt;</code> means T must support <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> comparisons.</p>
-<p>Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: <code>&gt;</code>, <code>&lt;=</code> and <code>&gt;=</code> all come from <code>&lt;</code>, and <code>!=</code> comes from <code>==</code>. Ordered    — declares <code>&lt;</code>; gives you &lt;, &lt;=, &gt;, &gt;= Equatable  — declares <code>==</code>; gives you == and != Addable    — addition (+) Numeric      — multiplication (*) and UNARY negation (-a) Subtractable — BINARY subtraction (a - b) Scalable     — <code>scale(self, factor: integer) -&gt; integer</code>, a method rather than an operator Printable    — text conversion (to_text)</p>
-<p><code>-</code> desugars to the same <code>OpMin</code> name at both arities, so unary negation and binary subtraction are two SIGNATURES of one name.  They are two bounds: <code>&lt;T: Numeric&gt;</code> gives you <code>-a</code>, <code>&lt;T: Subtractable&gt;</code> gives you <code>a - b</code>, and <code>&lt;T: Numeric + Subtractable&gt;</code> gives you both.  A user type provides one of the two arities and so satisfies one of the two bounds — a concrete method key carries no arity, so a type cannot declare <code>OpMin</code> twice.</p>
+<p>By default, you can only assign and return T — no arithmetic, and no comparison either: <code>a == b</code> on an unbounded T is refused. To use an operator on T, add an interface bound.</p>
+<p>Each bound guarantees EXACTLY the operations in this table, and no more — a <code>+</code> under <code>Numeric</code> is refused as surely as one under no bound at all. Each names the FEWEST operators it needs, because the rest are derived: <code>&gt;</code>, <code>&lt;=</code> and <code>&gt;=</code> all come from <code>&lt;</code>, and <code>!=</code> comes from <code>==</code>.</p>
+<pre><code>Ordered    — declares `&lt;`; gives you `&lt;`, `&lt;=`, `&gt;`, `&gt;=`
+Equatable  — declares `==`; gives you `==` and `!=`
+Addable      — `+` only.  NOT `-`
+Numeric      — `*` and the UNARY `-a`.  NOT `+`, NOT `/`
+Subtractable — the BINARY `a - b`
+Scalable   — the method `scale(self, factor: integer) -&gt; integer`.  Not an
+             operator, and no built-in type satisfies it — it is for your own types
+Printable  — the method `to_text() -&gt; text`, and `"{x}"` interpolation
+Walkable   — the method `children() -&gt; vector&lt;Self&gt;`.  The standard library's
+             `tree_walk` is bounded by it, so defining `children` on your own
+             type gets you a breadth-first walk without writing one
+</code></pre>
+<p>Reach for <code>Ordered + Addable</code> when you want <code>+</code> and a comparison.</p>
+<p><code>-</code> desugars to the same <code>OpMin</code> name at BOTH arities, so unary negation and binary subtraction are two SIGNATURES of one name — and therefore two bounds: <code>&lt;T: Numeric&gt;</code> gives you <code>-a</code>, <code>&lt;T: Subtractable&gt;</code> gives you <code>a - b</code>, and <code>&lt;T: Numeric + Subtractable&gt;</code> gives you both.  A user type provides one of the two arities and so satisfies one of the two bounds — a concrete method key carries no arity, so a type cannot declare <code>OpMin</code> twice.</p>
 <pre><code><span class="kw">fn</span> gen_diff&lt;<span class="en">T</span>: <span class="en">Subtractable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> { gen_a - gen_b }
-<span class="kw">fn</span> gen_negdiff&lt;<span class="en">T</span>: <span class="en">Numeric</span> + <span class="en">Subtractable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> { -(gen_a - gen_b) }
-<span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
+<span class="kw">fn</span> gen_negdiff&lt;<span class="en">T</span>: <span class="en">Numeric</span> + <span class="en">Subtractable</span>&gt;(gen_a: <span class="en">T</span>, gen_b: <span class="en">T</span>) -&gt; <span class="en">T</span> { -(gen_a - gen_b) }</code></pre>
+<pre><code><span class="kw">fn</span> gen_max&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
   <span class="kw">if</span> gen_x &gt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
 }
 <span class="kw">fn</span> gen_min&lt;<span class="en">T</span>: <span class="en">Ordered</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="en">T</span> {
   <span class="kw">if</span> gen_x &lt; gen_y { gen_x } <span class="kw">else</span> { gen_y }
+}
+<span class="kw">fn</span> same&lt;<span class="en">T</span>: <span class="en">Equatable</span>&gt;(gen_x: <span class="en">T</span>, gen_y: <span class="en">T</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> {
+  gen_x == gen_y
+}
+<span class="kw">fn</span> described&lt;<span class="en">T</span>: <span class="en">Printable</span>&gt;(gen_x: <span class="en">T</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  gen_x.<span class="fn-call"><a href="stdlib-field-iteration-support-types.html">to_text</a></span>()
 }
 <span class="kw">fn</span> <span class="fn-call">test_bounded</span>() {
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_max</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">7</span>, <span class="st">"max int"</span>);
@@ -2330,6 +2353,9 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_diff</span>(<span class="nm">10</span>, <span class="nm">3</span>) == <span class="nm">7</span>, <span class="st">"subtraction under a bound"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_diff</span>(<span class="nm">2.5</span>, <span class="nm">0.5</span>) == <span class="nm">2.0</span>, <span class="st">"subtraction under a bound, float"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">gen_negdiff</span>(<span class="nm">10</span>, <span class="nm">3</span>) == -<span class="nm">7</span>, <span class="st">"both arities of `-` on one variable"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">same</span>(<span class="nm">4</span>, <span class="nm">4</span>), <span class="st">"equatable on integers"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call">same</span>(<span class="st">"a"</span>, <span class="st">"b"</span>), <span class="st">"…and it says no as well"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">described</span>(<span class="nm">7</span>) == <span class="st">"7"</span>, <span class="st">"printable: {described(7)}"</span>);
 }</code></pre>
 <h2 id="combining-bounds">Combining bounds</h2>
 <p>Use <code>+</code> to require multiple interfaces: <code>&lt;T: Ordered + Addable&gt;</code>.</p>
@@ -2342,16 +2368,58 @@ User.parse(json_parse(text))   -&gt;  Addr.zip: expected JNumber, got JString
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">8</span>, <span class="nm">5</span>, <span class="nm">10</span>) == <span class="nm">10</span>, <span class="st">"clamped to limit"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">clamped_add</span>(<span class="nm">1.0</span>, <span class="nm">2.0</span>, <span class="nm">2.5</span>) == <span class="nm">2.5</span>, <span class="st">"float clamped"</span>);
 }</code></pre>
-<h2 id="allowed-operations-on-t">Allowed operations on T</h2>
-<p>Inside a generic function you may only use operations that the bound guarantees.  Without any bound: assign, return, store in variables. With Ordered: comparisons.  With Addable: + and -.</p>
+<h2 id="your-own-types-under-a-bound">Your own types under a bound</h2>
+<p>The built-in bounds are not only for built-in types, and this is what they are for: a struct satisfies one by DEFINING the operation, with no declaration that it does. The names are the operators' own, not the symbols:</p>
+<pre><code>Ordered    fn OpLt(self: T, other: T) -&gt; boolean      (`&lt;`)
+Equatable  fn OpEq(self: T, other: T) -&gt; boolean      (`==`)
+Addable    fn OpAdd(self: T, other: T) -&gt; T           (`+`)
+Numeric    fn OpMul(self: T, other: T) -&gt; T           (`*`)
+           fn OpMin(self: T) -&gt; T                     (unary `-`)
+Subtractable fn OpMin(self: T, other: T) -&gt; T        (binary `-`)
+Scalable   fn scale(self: T, factor: integer) -&gt; integer
+Printable  fn to_text(self: T) -&gt; text
+Walkable   fn children(self: T) -&gt; vector&lt;T&gt;
+</code></pre>
+<p>The same definition serves the bare operator: once <code>Money</code> has <code>OpLt</code>, both <code>a &lt; b</code> and <code>&lt;T: Ordered&gt;</code> work on it. Miss one and the error names it — "<code>Money</code> does not satisfy interface <code>Ordered</code>: missing OpLt" — at the CALL site, because that is where the concrete type is known.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Money</span> { cents: <span class="ty"><a href="stdlib-types.html">integer</a></span> }
+<span class="kw">fn</span> <span class="en">OpLt</span>(self: <span class="en">Money</span>, other: <span class="en">Money</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.cents &lt; other.cents }
+<span class="kw">fn</span> <span class="en">OpEq</span>(self: <span class="en">Money</span>, other: <span class="en">Money</span>) -&gt; <span class="ty"><a href="stdlib-types.html">boolean</a></span> { self.cents == other.cents }
+<span class="kw">fn</span> <span class="en">OpAdd</span>(self: <span class="en">Money</span>, other: <span class="en">Money</span>) -&gt; <span class="en">Money</span> { <span class="en">Money</span> { cents: self.cents + other.cents } }
+<span class="kw">fn</span> <span class="fn-call"><a href="stdlib-field-iteration-support-types.html">to_text</a></span>(self: <span class="en">Money</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> { <span class="st">"{self.cents}c"</span> }
+<span class="kw">fn</span> <span class="fn-call">test_user_type_bounds</span>() {
+  cheap = <span class="en">Money</span> { cents: <span class="nm">300</span> };
+  dear = <span class="en">Money</span> { cents: <span class="nm">700</span> };</code></pre>
+<p>Bind a generic's result before reading through it — loft#1273 retains one record per call when the value is consumed inline.</p>
+<pre><code>  best = <span class="fn-call">gen_max</span>(cheap, dear);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(best.cents == <span class="nm">700</span>, <span class="st">"Ordered on a user type: {best.cents}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cheap &lt; dear, <span class="st">"…and the bare operator, from the same definition"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">same</span>(cheap, <span class="en">Money</span> { cents: <span class="nm">300</span> }), <span class="st">"Equatable on a user type"</span>);
+  total = <span class="fn-call">clamped_add</span>(cheap, cheap, <span class="en">Money</span> { cents: <span class="nm">1000</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total.cents == <span class="nm">600</span>, <span class="st">"Addable on a user type: {total.cents}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">described</span>(dear) == <span class="st">"700c"</span>, <span class="st">"Printable on a user type: {described(dear)}"</span>);
+}
+<span class="kw">struct</span> <span class="en">Crate</span> { label: <span class="ty"><a href="stdlib-types.html">text</a></span>, kids: <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Crate</span>&gt; }
+<span class="kw">fn</span> <span class="fn-call">children</span>(self: <span class="en">Crate</span>) -&gt; <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Crate</span>&gt; { self.kids }
+<span class="kw">fn</span> <span class="fn-call">test_walkable</span>() {</code></pre>
+<p><code>children</code> is the whole of what Walkable asks for; <code>tree_walk</code> is the stdlib's, bounded by it, and it visits the root before either child.</p>
+<pre><code>  tree = <span class="en">Crate</span> { label: <span class="st">"root"</span>, kids: [
+    <span class="en">Crate</span> { label: <span class="st">"a"</span>, kids: [] },
+    <span class="en">Crate</span> { label: <span class="st">"b"</span>, kids: [] },
+  ] };
+  seen = <span class="st">""</span>;
+  <span class="kw">for</span> node <span class="kw">in</span> <span class="fn-call"><a href="stdlib-vector-aggregates.html">tree_walk</a></span>(tree, <span class="nm">10</span>) { seen += <span class="st">"{node.label} "</span>; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(seen == <span class="st">"root a b "</span>, <span class="st">"Walkable on a user type: {seen}"</span>);
+}</code></pre>
 <h2 id="disallowed-operations">Disallowed operations</h2>
-<p>The compiler rejects operations not covered by the bound. <code>x + y</code> on unbounded T gives: "generic type T: operator <code>+</code> requires a concrete type" <code>x.field</code> on T gives: "generic type T: field access requires a concrete type"</p>
+<p>The compiler rejects operations the bound does not cover, and it says which: <code>x + y</code> on unbounded T   — "generic type T: operator <code>+</code> requires a concrete type" <code>x.field</code> on T           — "generic type T: field access requires a concrete type" The same wording covers an operator OUTSIDE a bound: <code>x + y</code> under <code>Numeric</code> and <code>x - y</code> under <code>Addable</code> are refused in exactly those words.</p>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
   <span class="fn-call">test_identity</span>();
   <span class="fn-call">test_pick_second</span>();
   <span class="fn-call">test_vector_generics</span>();
   <span class="fn-call">test_bounded</span>();
   <span class="fn-call">test_combined_bounds</span>();
+  <span class="fn-call">test_user_type_bounds</span>();
+  <span class="fn-call">test_walkable</span>();
 }</code></pre>
 </section>
 <section class="print-section" id="26-closures">
