@@ -3912,11 +3912,7 @@ fn mark_borrowed_captures(data: &mut Data) {
                 continue;
             }
             for a in 0..data.attributes(record) {
-                // Only the two share markers are cascade-relevant; an
-                // inline-bytes capture (empty deps, e.g. a `text` copy) holds no
-                // DbRef for the cascade to follow.
-                if !matches!(data.attr_type(record, a), Type::Reference(_, ref deps) if !deps.is_empty())
-                {
+                if !capture_attr_is_cascade_relevant(data, record, a) {
                     continue;
                 }
                 if !record_adopts_capture(data, function, record, a) {
@@ -3928,6 +3924,99 @@ fn mark_borrowed_captures(data: &mut Data) {
     for (record, a) in borrowed {
         data.mark_capture_borrowed(record, a);
     }
+}
+
+/// Is `v` the store behind a capture whose closure record ADOPTS it?
+///
+/// `get_free_vars` suppresses a captured local's scope-exit free by asking `is_captured` of
+/// the local it is about to free — but a collection capture names a VIEW, and the local
+/// holding the store is the backing one, which no closure captured by name. This asks the
+/// question the other way round: does some captured local in this frame reach `v`?
+///
+/// ⚠ It gates on `frame_owns_capture_store`, the SAME predicate `record_adopts_capture`
+/// uses, and that is the whole point. Suppressing the free and adopting the store have to be
+/// one decision: suppress without adopting and the store is never freed at all, adopt without
+/// suppressing and it is freed twice. An earlier cut answered them in two places — a parse-time
+/// mark for the free and this pass for the verdict — and a capture the verdict called BORROWED
+/// had already had its backing free suppressed, so it leaked
+/// (`1248-a-capture-that-cannot-be-borrowed-from`). Asking one function keeps them from
+/// disagreeing by construction.
+pub(crate) fn backs_an_adopted_capture(data: &Data, function: &Function, v: u16) -> bool {
+    (0..function.next_var()).any(|c| {
+        c != v
+            && function.is_captured(c)
+            && backing_chain(function, c).contains(&v)
+            && capture_is_adopted(data, function, c)
+    })
+}
+
+/// Would [`mark_borrowed_captures`] ADOPT the capture named by local `c`?
+///
+/// Asked through the record rather than off `c` alone, because that pass declines captures
+/// this frame nonetheless owns: its attribute filter admits only a `Reference` attribute with
+/// non-empty deps — the cascade-relevant share marker — and a capture outside that class keeps
+/// its frame-exit free. `test_a_store_backed_capture_still_declines_and_still_answers` is one
+/// on purpose (loft#1248's minting capture, which still declines the lift), and reading only
+/// `frame_owns_capture_store` here suppressed its free while the record declined to adopt it,
+/// so the store leaked at program exit.
+fn capture_is_adopted(data: &Data, function: &Function, c: u16) -> bool {
+    let name = function.name(c);
+    for w in 0..function.next_var() {
+        if function.is_argument(w) {
+            continue;
+        }
+        let Type::Reference(record, _) = function.tp(w) else {
+            continue;
+        };
+        let record = *record;
+        if !data.def(record).name.starts_with("__closure_") {
+            continue;
+        }
+        for a in 0..data.attributes(record) {
+            if data.attr_name(record, a) != name {
+                continue;
+            }
+            if !capture_attr_is_cascade_relevant(data, record, a) {
+                return false;
+            }
+            return record_adopts_capture(data, function, record, a);
+        }
+    }
+    false
+}
+
+/// Is capture attribute `a` of `record` one the record's death CASCADES through?
+///
+/// Only the two share markers are: the attribute holds a 12-byte DbRef for `free_named` to
+/// follow. An inline-bytes capture — a `text` copy, empty deps — holds no reference, so there
+/// is nothing to reclaim and nothing to suppress.
+///
+/// One home because two callers must agree exactly. `mark_borrowed_captures` uses it to decide
+/// which captures get a verdict at all, and `capture_is_adopted` to decide whether a frame-exit
+/// free may be suppressed; a capture the first skips must not be one the second adopts, or the
+/// store is freed twice. Restating it in the second place is how loft#1308 was written the
+/// first time.
+fn capture_attr_is_cascade_relevant(data: &Data, record: u32, a: usize) -> bool {
+    matches!(data.attr_type(record, a).base(), Type::Reference(_, deps) if !deps.is_empty())
+}
+
+/// The locals that BACK `start`, nearest first — the chain `frame_owns_capture_store` walks
+/// to reach the one that owns the store.
+///
+/// Empty when `start` owns its store directly, which is the struct case: there is nothing
+/// behind it to mark.
+fn backing_chain(function: &Function, start: u16) -> Vec<u16> {
+    let mut chain = Vec::new();
+    let mut v = start;
+    for _ in 0..8 {
+        let dep = function.tp(v).depend();
+        if dep.len() != 1 || dep[0] == v || function.is_argument(dep[0]) {
+            break;
+        }
+        v = dep[0];
+        chain.push(v);
+    }
+    chain
 }
 
 /// Does the closure record own the store behind capture `a` of `record`, as seen
@@ -3959,10 +4048,50 @@ fn record_adopts_capture(data: &Data, function: &Function, record: u32, a: usize
     }
     // The same test as `get_free_vars`' `owns`, so the two cannot drift: empty
     // deps means owned, and a keyed collection's self-dep is an ownership marker
-    // rather than a borrow (@P302).
-    let tp = function.tp(v);
-    let dep = tp.depend();
-    dep.is_empty() || (dep.len() == 1 && dep[0] == v && crate::parser::vectors::is_keyed(tp))
+    // rather than a borrow (@P302) — asked of the local the capture NAMES, and
+    // then of whatever backs it.
+    frame_owns_capture_store(function, v)
+}
+
+/// Does the defining frame own the store behind local `v` — directly, or through the
+/// backing local a collection VIEW depends on?  See [`mark_borrowed_captures`].
+///
+/// A struct local owns its store outright (`s: ref(726) OWNS`, empty deps) and the plain
+/// `dep.is_empty()` test saw that.  A vector local does not: `v = [7,2,3]` compiles to a
+/// VIEW whose deps name a separate `__vdb_N` local — `v: vec<int> deps=[__vdb_1(2)]`
+/// beside `__vdb_1: ref(467) OWNS` — and the frame frees the BACKING local at scope exit.
+/// Reading only `v`'s own deps therefore answered "borrow" for a store this frame really
+/// does own and really does free, so the record declined the handover and the escaped
+/// closure read a released store (loft#1308).
+///
+/// Ownership is what is being followed, not merely a dep edge: the walk stops at an
+/// ARGUMENT, whose store belongs to the caller and outlives this frame, so a capture that
+/// projects into a parameter stays the BORROW that #682 made it. The bound is a guard
+/// against a cyclic dep chain, not a depth the language imposes.
+fn frame_owns_capture_store(function: &Function, start: u16) -> bool {
+    let mut v = start;
+    for _ in 0..8 {
+        let tp = function.tp(v);
+        let dep = tp.depend();
+        if dep.is_empty() {
+            return true;
+        }
+        // A keyed collection's self-dep is an ownership marker, not a borrow (@P302).
+        if dep.len() == 1 && dep[0] == v && crate::parser::vectors::is_keyed(tp) {
+            return true;
+        }
+        // More than one dep names no single backing store to follow, and a self-dep that
+        // is not the keyed marker is not one either.
+        if dep.len() != 1 || dep[0] == v {
+            return false;
+        }
+        // The caller owns a parameter's store and outlives this frame: no free to hand over.
+        if function.is_argument(dep[0]) {
+            return false;
+        }
+        v = dep[0];
+    }
+    false
 }
 
 /// Walk `ir` and panic if any `Call` or `CallRef` argument directly contains a
@@ -6592,8 +6721,17 @@ impl Scopes {
                 // caller's store.  `mark_borrowed_captures` recomputes this same
                 // verdict once every function is scanned and marks those captures
                 // borrowed on the record, which is what stops the cascade.
-                let captured_ref =
-                    function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _));
+                // `is_dbref(.base())`, not a bare `Type::Reference` match.  The store a
+                // capture holds lives in whichever heap kind the local is — a struct local
+                // is a `Reference`, but a vector from a call is a `Vector` and a keyed
+                // collection is a `Hash`, and asked bare those two failed the test and were
+                // freed under a live escaped closure (loft#1308).  This is the SIXTH site in
+                // the drifted-list family the loft#1150 note above enumerates (`is_dbref`
+                // here and at D-own-13, `deps_mut`, `is_keyed`, `depend`); `is_dbref`'s own
+                // doc records that it drifts when restated, and this one restated it.
+                let captured_ref = (function.is_captured(v)
+                    || backs_an_adopted_capture(data, function, v))
+                    && crate::data::is_dbref(function.tp(v).base());
                 // @PLN94 TEST-ONLY over-free injection (never set in production): force the scope-exit
                 // free of a NAMED borrowed var (owns=false) so the over-free check has a firing
                 // true-positive. Subject to the same !in_ret/!skip_free/!captured guards as a real free.
@@ -10006,12 +10144,16 @@ fn check_ref_leaks(
         if function.is_skip_free(v) {
             continue;
         }
-        // #323: a Reference-typed capture is owned by the closure record
-        // (the record stores its 12-byte DbRef; `free_named`'s cascade
-        // frees it when the record dies), so `get_free_vars` emits no
-        // frame-exit OpFreeRef for it — mirror that exemption here or
-        // every capturing closure false-positives this assert.
-        if function.is_captured(v) && matches!(function.tp(v), Type::Reference(_, _)) {
+        // #323: a captured heap local is owned by the closure record (the record
+        // stores its 12-byte DbRef; `free_named`'s cascade frees it when the
+        // record dies), so `get_free_vars` emits no frame-exit free for it —
+        // mirror that exemption here or every capturing closure false-positives
+        // this assert.
+        //
+        // `is_dbref(.base())`, matching the suppression it mirrors: a capture's store
+        // may be a `Vector` or a keyed collection, not only a `Reference`, and the two
+        // tests going out of step is exactly how loft#1308 stayed hidden.
+        if function.is_captured(v) && crate::data::is_dbref(function.tp(v).base()) {
             continue;
         }
         if v == direct_ret_var {

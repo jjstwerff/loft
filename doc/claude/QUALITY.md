@@ -2419,9 +2419,31 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 680 | 327 | 5 | **348** |
+| 682 | 329 | 5 | **348** |
 
 The row is re-measured after each join rather than reconciled by arithmetic: the two checkouts had `678 | 324 | 5 | 349` and `678 | 325 | 5 | 348`, and the merged tree is neither.
+
+loft#1308 moved two sites off the opaque column, and they are the ones this screen exists to
+catch. `get_free_vars` decided whether a captured local's scope-exit free is suppressed by
+asking `matches!(function.tp(v), Type::Reference(_, _))` — bare, so a capture whose store is a
+`Vector` or a keyed collection failed the test and the frame freed it under a live escaped
+closure. It now asks `is_dbref(.base())`, and `check_ref_leaks`' mirror of the same exemption
+asks it identically, because the two going out of step is what kept the defect hidden: the leak
+checker agreed the store needed no free, so nothing contradicted the suppression. That is the
+sixth and seventh entry in the drifted-list family the loft#1150 note records (`is_dbref` here
+and at D-own-13, `deps_mut`, `is_keyed`, `depend`).
+
+The TOTAL rises by two on the same change, which is the honest direction: the fix needs a
+predicate that says which captures the record's death cascades through, and giving it a name
+(`capture_attr_is_cascade_relevant`) makes it a function this screen can see, where before it
+was an inline `matches!` inside a larger body and invisible here. It reads `.base()`, so it
+lands in the see-through column rather than the opaque one — `@FR-L-Null` gives a `τ?` capture
+the same storage as its dense twin, so an `Optional(Reference)` attribute is exactly as
+cascade-relevant. Measured both ways: bare, the row is `682 | 328 | 5 | 349`, and peeling moves
+that site across with every capture guard, the ownership oracle and the leak sweep unchanged.
+Two callers now share it — `mark_borrowed_captures`, deciding which captures get a verdict, and
+`capture_is_adopted`, deciding whether a frame-exit free may be suppressed — and a capture the
+first skips must not be one the second adopts, or the store is freed twice.
 
 loft#1291 moved one site OFF the opaque column — the first entry here that does.
 `Type::is_amp_rebindable_heap` is the one home for *"is this a `&` parameter whose whole-value

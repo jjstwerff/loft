@@ -1072,6 +1072,18 @@ fn run_leak_scan(name: &str, body: &Value, data: &Data, d_nr: u32) -> usize {
             && !func.skip_free(v)
             && !freed.contains(&v)
             && !closed.contains(&v)
+            // A local the closure record ADOPTS is transferred to it and reclaimed by
+            // `free_named`'s cascade when the record dies, so no frame-exit free is emitted
+            // and "unfreed" is not "leaked".  Both spellings are needed: the capture itself,
+            // and — since a collection capture names a VIEW — the backing local that actually
+            // holds the store.
+            //
+            // `scopes::backs_an_adopted_capture` rather than a fourth restatement of the
+            // rule.  This same fact has three consumers (the free emitter, `check_ref_leaks`,
+            // and this oracle), they must agree, and every time one of them has been written
+            // out longhand they have drifted — which is the whole of loft#1308.
+            && !func.is_captured(v)
+            && !crate::scopes::backs_an_adopted_capture(data, func, v)
         {
             eprintln!(
                 "RED {name}: leak {} (v{v}) Owned heap, unfreed/untransferred",
