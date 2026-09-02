@@ -3936,6 +3936,53 @@ pub struct Definition {
 }
 
 impl Definition {
+    /// Is `def` a CORPUS ENTRY POINT — a function a `tests/scripts/` harness may call on its own
+    /// in a file that declares no `main`?
+    ///
+    /// The corpus is a DIFFERENTIAL: the same file, both backends, the same answer.  That holds
+    /// only while both halves run the same SET of functions, so the question has to have ONE
+    /// answer.  It did not: `tests/wrap.rs` excluded value-returning helpers and `tests/native.rs`
+    /// did not, so 165 zero-parameter value-returning functions across 66 corpus files were
+    /// executed on the native pass and on no other — and a differential that runs different code
+    /// on its two sides cannot report a divergence (loft#1293).
+    ///
+    /// The three exclusions, and why each is not a style rule:
+    ///
+    /// * a **parameter** cannot be supplied, so the call cannot be made at all — hidden
+    ///   `__work_` / `__ref_` buffers are the compiler's, not the author's, and do not count;
+    /// * a **generator** (`-> iterator<T>`) must be driven by a `for`, and calling one standalone
+    ///   runs none of its body;
+    /// * a **value-returning** helper hands back a store the call then throws away, which leaks
+    ///   it — and the convention the corpus is written to is that entry points return `Void` and
+    ///   helpers return values for assignment.
+    ///
+    /// `src/main.rs`'s shipped native entry-point generator asks the same question about the
+    /// `test_*` naming rule and says so in as many words: *"a generated entry point that runs a
+    /// different SET than the interpreter is a backend divergence the suite reads as a wrong
+    /// answer."*  This is that sentence applied to the two TEST harnesses.
+    #[must_use]
+    pub fn is_corpus_entry_point(&self) -> bool {
+        if !matches!(self.def_type, DefType::Function) {
+            return false;
+        }
+        if !self.name.starts_with("n_") || self.name.starts_with("n___lambda_") {
+            return false;
+        }
+        if self.position.file.starts_with("default/") || self.position.file.starts_with("default\\")
+        {
+            return false;
+        }
+        // Only the AUTHOR's parameters count: `text_return` / `ref_return` add hidden buffers.
+        if self
+            .attributes
+            .iter()
+            .any(|a| !a.name.starts_with("__work_") && !a.name.starts_with("__ref_"))
+        {
+            return false;
+        }
+        matches!(self.returned, Type::Void)
+    }
+
     // ─── @PLN11 arc C — store-backed-field read seam ───────────────────────
     //
     // Read accessors for the `Definition` fields that live in the store schema

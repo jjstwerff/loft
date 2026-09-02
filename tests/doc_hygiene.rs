@@ -2326,4 +2326,34 @@ fn no_stdlib_section_shows_the_reader_a_tracker_tag_or_a_private_name() {
          `default/*.loft`:\n  {}",
         bad.join("\n  ")
     );
+/// loft#1293 — the corpus is a DIFFERENTIAL, so its two halves must run the same SET.
+///
+/// `tests/wrap.rs` (interpreter) and `tests/native.rs` (native) each pick the entry points of
+/// a corpus file that declares no `main`.  They asked different questions: wrap excluded
+/// value-returning helpers, native did not, so 165 zero-parameter value-returning functions
+/// across 66 files ran on the native pass and on no other — and a differential whose two
+/// sides run different code cannot report a divergence between them.
+///
+/// Both now read `Definition::is_corpus_entry_point`.  This guard is what keeps that true:
+/// the drift it replaces was two copies of one rule, and a copy is exactly what a reader
+/// adds back when a harness needs "just one more" exclusion.
+#[test]
+fn both_corpus_halves_pick_entry_points_through_one_predicate() {
+    for harness in ["tests/wrap.rs", "tests/native.rs"] {
+        let src = std::fs::read_to_string(harness).expect("read the harness");
+        assert!(
+            src.contains("is_corpus_entry_point()"),
+            "{harness} must select corpus entry points through \
+             `Definition::is_corpus_entry_point`, so both halves of the differential run the \
+             same set (loft#1293)"
+        );
+        // The rule's own tests, restated locally, are what the drift looked like.
+        for restated in ["starts_with(\"n___lambda_\")", "Type::Iterator("] {
+            assert!(
+                !src.contains(restated),
+                "{harness} restates `{restated}` — the entry-point rule has ONE home, and a \
+                 second copy is how the two halves came apart (loft#1293)"
+            );
+        }
+    }
 }

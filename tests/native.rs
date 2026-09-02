@@ -334,22 +334,13 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     let mut test_fns: Vec<(u32, String)> = Vec::new();
     for d_nr in start_def..end_def {
         let def = p.data.def(d_nr);
-        if !matches!(def.def_type, loft::data::DefType::Function) {
-            continue;
-        }
-        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
-            continue;
-        }
-        // Only count user-visible parameters (skip hidden __work_* and
-        // __ref_* arguments added by text_return / ref_return).
-        let has_user_params = def
-            .attributes
-            .iter()
-            .any(|a| !a.name.starts_with("__work_") && !a.name.starts_with("__ref_"));
-        if has_user_params {
-            continue;
-        }
-        if def.position.file.starts_with("default/") {
+        // `Definition::is_corpus_entry_point` is the ONE answer, shared with
+        // `tests/wrap.rs`.  This side used to ask a WIDER question — no return filter — so
+        // every zero-parameter value-returning function in a main-less corpus file ran here
+        // and nowhere else: 165 of them across 66 files, each discarding the store it
+        // answers.  A differential whose two halves run different code cannot report a
+        // divergence, which is the whole reason the corpus is run twice (loft#1293).
+        if !def.is_corpus_entry_point() {
             continue;
         }
         test_fns.push((d_nr, def.name.clone()));
