@@ -3206,6 +3206,94 @@ fn keyed_collection_as_a_vector_element_is_refused() {
         );
 }
 
+/// loft#1301 — two generic functions that both name their type variable `T` share one
+/// bound-method stub, and the refusal must say so.
+///
+/// The stub is keyed on `(type-variable NAME, method name)` and the placeholder is
+/// deliberately one shared definition — *"that is how `<T>` is shared across functions"*.
+/// Sharing is sound for TYPE RESOLUTION, which that decision was about; the STUBS hanging off
+/// it carry a SIGNATURE, and two bounds may want different ones of the same name. The second
+/// is then dropped and its calls checked against the first's, so the refusal named a
+/// parameter from the OTHER function — order-dependently, since whichever generic is declared
+/// first owns the stub.
+///
+/// The program is refused either way and was before this: what changed is that the true cause
+/// leads, and it names the cure that works (rename the variable — verified: `<U: …>` compiles
+/// and both answer correctly).
+#[test]
+fn a_shared_type_variable_with_conflicting_bounds_says_so() {
+    code!(
+        "interface HasSize1 { fn sizer(self: Self) -> integer }\n\
+         interface HasSize2 { fn sizer(self: Self, scale: integer) -> integer }\n\
+         struct A1301 { v: integer }\n\
+         fn sizer(self: A1301) -> integer { self.v }\n\
+         fn one<T: HasSize1>(x: T) -> integer { x.sizer() }\n\
+         fn two<T: HasSize2>(x: T) -> integer { x.sizer(10) }\n\
+         fn test() { }"
+    )
+    // BOTH errors are pinned. The old message still follows — the call site reaches its own
+    // arity check regardless — and that is left alone deliberately: suppressing it needs the
+    // later site to know a conflict was already reported, which is more machinery than a
+    // second line is worth. What matters is that the true cause now comes FIRST and names a
+    // cure that works.
+    .error(
+        "the type variable 'T' is already bound elsewhere to a 'sizer' taking 1 parameter(s), \
+         and this bound needs 2 — a type variable's NAME is shared across generic functions, \
+         so two of them cannot require different signatures of one method. Rename this \
+         function's type variable (`<U: …>`) at \
+         a_shared_type_variable_with_conflicting_bounds_says_so:6:29",
+    )
+    .error(
+        "Too many parameters for T#g.sizer at \
+         a_shared_type_variable_with_conflicting_bounds_says_so:6:53",
+    );
+}
+
+/// The CONTROLS, and they are what two earlier attempts at this diagnostic failed.
+///
+/// Sharing a stub is the NORM: same interface twice, or two interfaces declaring the same
+/// method the SAME way, legitimately share. A predicate that compared the STUB against an
+/// interface method rather than child-to-child reported a conflict on `default/01_code.loft`
+/// itself — `assert_eq` and `assert_ne` share `AssertValue: Equatable + Printable` — and
+/// refused every program. Different method NAMES never collide at all.
+#[test]
+fn legitimate_stub_sharing_is_not_a_conflict() {
+    // Same method name, same signature, two generics both using `T`.
+    code!(
+        "interface Q1 { fn gamma(self: Self) -> integer }\n\
+         interface Q2 { fn gamma(self: Self) -> integer }\n\
+         struct B1301 { v: integer }\n\
+         fn gamma(self: B1301) -> integer { self.v }\n\
+         fn one<T: Q1>(x: T) -> integer { x.gamma() }\n\
+         fn two<T: Q2>(x: T) -> integer { x.gamma() + 1 }\n\
+         fn test() -> integer { return one(B1301 { v: 7 }) + two(B1301 { v: 7 }); }"
+    )
+    .result(Value::Int(15));
+    // Different method names, two generics both using `T`.
+    code!(
+        "interface P1 { fn alpha(self: Self) -> integer }\n\
+         interface P2 { fn beta(self: Self, n: integer) -> integer }\n\
+         struct C1301 { v: integer }\n\
+         fn alpha(self: C1301) -> integer { self.v }\n\
+         fn beta(self: C1301, n: integer) -> integer { self.v * n }\n\
+         fn one<T: P1>(x: T) -> integer { x.alpha() }\n\
+         fn two<T: P2>(x: T) -> integer { x.beta(10) }\n\
+         fn test() -> integer { return one(C1301 { v: 7 }) + two(C1301 { v: 7 }); }"
+    )
+    .result(Value::Int(77));
+    // And the cure the message names actually works.
+    code!(
+        "interface R1 { fn delta(self: Self) -> integer }\n\
+         interface R2 { fn delta(self: Self, n: integer) -> integer }\n\
+         struct D1301 { v: integer }\n\
+         fn delta(self: D1301) -> integer { self.v }\n\
+         fn one<T: R1>(x: T) -> integer { x.delta() }\n\
+         fn two<U: R2>(x: U) -> integer { x.delta(1) }\n\
+         fn test() -> integer { return one(D1301 { v: 7 }); }"
+    )
+    .result(Value::Int(7));
+}
+
 /// loft#1298 — the same refusal for the spelling that writes NO type.
 ///
 /// The declaration check above was described as *"the one chokepoint every `vector<…>`
