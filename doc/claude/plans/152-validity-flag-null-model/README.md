@@ -103,47 +103,20 @@ nullable slot. The gap is the **non-null narrow slot**, which by construction ha
 null to occupy, so there is nothing for `!a` to observe. `x = 0` (fabricated) and `y = 210`
 (computed) differ in nothing the program can reach.
 
-## Why arc B needs a bit — and how much of one
+## Why arc B needs a bit
 
-Five of the seven scalar widths **cannot encode their own failure**. Measured:
+**Five of the seven scalar widths cannot encode their own failure** — `u8`/`i8`/`u16`/`i16`/
+`u32` answer `0`, where `i32` and `integer` answer `null` because they keep a bottom code back
+([MEASUREMENTS.md](MEASUREMENTS.md)). On those five every code is a legitimate datum, so there
+is no value that can mean *"this did not happen"*. Arc B needs a channel that is not the
+value's own bits: the requirement is structural, not a preference.
 
-| | `u8` | `i8` | `u16` | `i16` | `u32` | `i32` | `integer` |
-|---|---|---|---|---|---|---|---|
-| overflow answers | `0` | `0` | `0` | `0` | `0` | `null` | `null` |
+It is **not** Phase A's bit, which sat beside every eval-stack slot, cost +0.5–0.8 %, and has
+no native analogue. It is selective — introduced only in the expressions that need it — and
+per-variable, which is a thing both backends already have.
 
-`i32` and `integer` keep a bottom code back, so their failure IS a value and `if !x` reads
-it. The other five fill their width — every code is a legitimate datum — so **there is no
-value that can mean "this did not happen"**. No amount of cleverness at the collapse changes
-that: arc B needs a channel that is not the value's own bits. That is the boolean, and the
-requirement is structural rather than a preference.
-
-**But it is not Phase A's boolean.** That prototype put a bit beside *every eval-stack slot*
-and paid for it on every arithmetic op — which is where the +0.5–0.8 % came from, and which
-Phase C showed has no native analogue at all (native emits Rust over real locals; there is no
-stack to shadow). What arc B needs is far smaller: a bit produced **at the collapse**, for
-the five types that cannot represent their own failure, carried only as far as the author's
-test.
-
-### The spelling decides how far it must be carried — and that is the design lever
-
-The owner's two sketches differ in cost, and the difference is the whole of P2:
-
-```loft
-if !(a = 300) { … }      // the test is AT the store
-a: u8 = 300; if !a { … } // the test is AFTER the store
-```
-
-- **At the store**, the operands are still in scope, so the fit predicate is an expression
-  evaluated where the facts are — **no bit has to persist**. This may be buildable with no IR
-  change at all.
-- **After the store**, the status must outlive the assignment, and by then the inputs are
-  gone and `a` is an ordinary `0`. **That is where a stored bit is unavoidable** — and where
-  the open question becomes where it lives: a companion local minted beside the declaration,
-  a per-slot bit in the frame, or the slot's type widening to a pair.
-
-So the two spellings are not stylistic alternatives; one may be nearly free and the other
-needs new machinery. **P2 decides the spelling knowing that**, rather than picking a surface
-and discovering the cost afterwards.
+How that is built, why the two candidate spellings differ in cost, and which existing
+predicate it must extend rather than duplicate: [ARC-B-DESIGN.md](ARC-B-DESIGN.md).
 
 ## The home already exists
 
@@ -188,7 +161,7 @@ the matrix must prove rather than assert.
 | **P4** — the remaining seams: field, element, argument, return | `guard_declared_range` | one cell per seam on both backends; `integer`/`i32` controls unmoved | Open |
 | **P5** — a non-constant fallback, or a decision that it stays constant | `dflt` is `const integer` | either a cell with a variable fallback, or a recorded decision saying why not | Open |
 | **B1** — the at-the-store test, if P2 picks it: the fit predicate as an expression where the operands are still in scope | § the spelling decides | a cell per width; the five that cannot represent failure must answer, and `i32`/`integer` must be unchanged (they already do) | Open |
-| **B2** — the after-the-store test, if P2 picks it: where the bit LIVES so the status outlives the assignment | § the spelling decides | a cell that binds the status, reads it after other statements, and still answers — plus a cost measurement, because this is the arm Phase A's number applies to | Open |
+| **B2** — the after-the-store test, if P2 picks it: a per-variable marker set in pass 1, emitted in pass 2, with the bit in a companion slot | § Selective, not blanket | a cell whose status test appears textually AFTER the last store still answers, on both backends and both passes; and every unmarked variable emits byte-identically (`introspect` diff), which is the whole claim of "selective" | Open |
 | **P6** — document it: the narrowing error already advertises `?? d`, so the doc and the diagnostic must agree | `DIAGNOSTICS.md`, the reference chapter | the advertised cure works when followed | Open |
 
 ## Phase ordering

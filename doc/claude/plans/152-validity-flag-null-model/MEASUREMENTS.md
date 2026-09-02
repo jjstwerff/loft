@@ -350,3 +350,22 @@ Note the literal case is refused with a NARROWING message (*"cannot implicitly n
 rather than a doesn't-fit one, though `cast-constant-out-of-range` exists for exactly *"a
 constant does not fit the type it is bare-cast to"*. Worth checking whether the constant
 initialiser should route to that code instead — a smaller, separate question.
+
+## Which widths can encode their own failure, measured 2026-09-02
+
+```loft
+a: u8  = 250;        a += 10;   b: i8  = 120;        b += 10;
+c: u16 = 65530;      c += 10;   d: i16 = 32760;      d += 10;
+e: u32 = 4294967290; e += 10;   f: i32 = 2147483640; f += 10;
+g: integer = 9223372036854775807; g += 1;
+```
+
+| | `u8` | `i8` | `u16` | `i16` | `u32` | `i32` | `integer` |
+|---|---|---|---|---|---|---|---|
+| overflow answers | `0` | `0` | `0` | `0` | `0` | `null` | `null` |
+
+Five of seven fill their width, so every code is a legitimate datum and the failure has
+nowhere to live. `i32` and `integer` keep a bottom code back, which is why `if !x` already
+reads a failure on those two and cannot on the others. This is what makes arc B's boolean
+structural rather than a preference — and it is also the bound on it: the bit is needed for
+five types, not for the type system.
