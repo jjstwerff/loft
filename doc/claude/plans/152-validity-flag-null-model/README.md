@@ -7,7 +7,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design settled in shape, spelling constrained, nothing built. Shipped along the way:
+**Steps 0–2 are DONE and `??` now reaches the narrow widths** — `x = (x + 10) ?? 255` into a
+`u8` answers `255` on both backends, where it was refused before. Steps 3–7 open. Shipped along the way:
 loft#1305 and loft#1306. The measurement record that redirected this plan three times is in
 [MEASUREMENTS.md](MEASUREMENTS.md); the arc-B design detail is in
 [ARC-B-DESIGN.md](ARC-B-DESIGN.md).
@@ -240,9 +241,9 @@ claim has the same shape of check, an `introspect` diff over a corpus that write
 
 | # | Step | Verify — what goes red | Status |
 |---|---|---|---|
-| **0** | **Probe: is the bit free where nobody asks for it?** Emit it unconditionally in a throwaway build and diff `introspect` over the corpus. | If emission moves for programs writing no `??`/`!`, the opt-in claim is false and the bit must be gated at parse time, not at emit — **which changes every step below**. Cheapest possible falsifier; throwaway, nothing lands. | Open |
-| **1** | **Pin what already ships**, which nothing currently guards: `??` on an `integer` overflow answers the author's value; `!` on a nullable narrow answers true; `redundant-null-negation` fires on `!` over a narrow non-null. | The guard, falsified against a build with each behaviour removed. Red if any of the three stops working — today they could regress unnoticed. | Open |
-| **2** | **`??` at ONE seam**: local compound assign, constant fallback, five widths. | The narrow cells answer the author's value; the `integer`/`i32`/`float` controls unmoved; **corpus `introspect` byte-identical**. Red on a wrong value, a moved control, or any emission drift. | Open |
+| **0** | Probe: where must the opt-in gate live? | **DONE by inspection, no build needed** — `guard_declared_range` / `guard_compound_range` already receive the whole stored expression, so the gate lives at the store guard and needs no parse-time flag. | **Done** |
+| **1** | Pin the three spellings that ship today and are guarded by nothing | `tests/scripts/152-the-fallback-and-failure-spellings-that-already-work.loft`; INERT against `origin/main` by design and recorded as such — it is a LOCK, and what moves it is a change made BY this plan. | **Done** |
+| **2** | `??` reaches a non-null narrow — guard INSIDE the discharge, sentinel as its default | `tests/scripts/152-a-coalesce-chooses-the-fallback-for-a-narrow-slot.loft`, falsified at `4f229521` (the shape was refused before, so the guard cannot compile on the control) — both backends; the three probe channels unchanged. | **Done** |
 | **3** | **`??` at the remaining positions**, one cell each: field store, element store, argument, return. | One cell per position, both backends; plus `store_memory()` on a large `vector<u8>` unchanged to the byte. Red if a position silently keeps the compiler's default — which looks like "unchanged" unless the cell asserts the author's value. | Open |
 | **4** | **`!` in-expression**: `if !(x + 10) { … }`. | Answers true on a failure, false on a real value, and `redundant-null-negation` goes silent **here only**. Red if the lint goes silent generally — that is the failure that would make step 5's gate meaningless. | Open |
 | **5** | **`!` in the adjacent form**: `f.i += 100;` then `if !f.i { … }`. A statement-pair peephole, separate from step 4 because it is a different mechanism and fails differently. | The lint is silent when fused and **fires one statement later**; `probes/diag` already scores that channel. Red if fusion reaches across an intervening statement, or misses an adjacent one. | Open |
