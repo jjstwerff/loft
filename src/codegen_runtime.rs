@@ -2993,17 +2993,18 @@ pub fn t_9JsonValue_as_number(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) ->
     }
 }
 
-/// JsonValue.as_bool() — return the JBool payload, or false for any
-/// other variant.  Mirrors interp `n_as_bool`.
-pub fn t_9JsonValue_as_bool(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> bool {
+/// JsonValue.as_bool() — the JBool payload, or the tri-state NULL byte for any other
+/// variant, which is what the declaration's `boolean?` promises.  Mirrors interp `n_as_bool`.
+pub fn t_9JsonValue_as_bool(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> u8 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
     if discr == crate::native::JV_DISCR_BOOL {
         let bool_tp = stores.name("JBool");
         let value_pos = u32::from(stores.position(bool_tp, "value")) + v.pos;
-        stores.store(&v).get_byte(v.rec, value_pos, 0) != 0
+        u8::from(stores.store(&v).get_byte(v.rec, value_pos, 0) != 0)
     } else {
-        false
+        // The tri-state null (C73 / @PLN17), which the `boolean?` return renders as `u8`.
+        255
     }
 }
 

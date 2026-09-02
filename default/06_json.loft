@@ -101,7 +101,14 @@ pub fn as_long(self: JsonValue) -> integer;
 #pure
 
 /// Typed extractor — returns `null` on kind mismatch.
-pub fn as_bool(self: JsonValue) -> boolean;
+///
+/// Declared `boolean?` and not `boolean`: the doc has always promised the null and the
+/// signature could not carry it.  Its three siblings keep the promise because `text`, `float`
+/// and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust
+/// `bool` has none, so this one answered `false` for every mismatching kind — for an absent
+/// field, for the string `"true"`, and for `1` — indistinguishably from a field that really
+/// says `false` (loft#1302).
+pub fn as_bool(self: JsonValue) -> boolean?;
 #pure
 
 /// Q2 introspection — returns the variant name as text:
