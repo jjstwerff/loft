@@ -316,3 +316,37 @@ And the diagnostic already promises the cure. The narrowing refusal reads *"guar
 `a + 10` has range `[10, 265]` and the `??` clamps nothing, because there is no null to
 substitute for. **The message advertises a cure that does not work in the position it is
 offered.** One of the two has to move, which is an open question of the rewritten plan.
+
+## What a failing narrow store can be TESTED for, measured 2026-09-02
+
+The owner's second ask — *"it should be possible to test if that fails and do something
+useful with the result … I think we currently drop that one on the floor"* — is right for one
+of the three shapes and already satisfied for the other two.
+
+```loft
+x: u8  = 250;  x += 10;   // x=0     !x=false   x==null false
+y: u8  = 200;  y += 10;   // y=210   !y=false
+z: u8? = 250;  z += 10;   // z=null  !z=true
+```
+
+| shape | today | testable? |
+|---|---|---|
+| `a: u8 = 300` — a literal that cannot fit | **compile error** (*"cannot implicitly narrow integer to u8"*) | n/a — caught, not dropped |
+| `x: u8` — a RUNTIME fit-failure | `0`, and every test an author can write says *ordinary zero*: `!x` is false, `x == null` is false, `x == 0` is true exactly as it is for a real `0` | **no — dropped on the floor** |
+| `z: u8?` | `null` | **yes — `if !z` already works** |
+
+So the owner's `if !a { … }` sketch is already the right spelling and already works; what it
+cannot reach is the NON-NULL narrow slot, which by construction has no code for null to
+occupy. `x=0` and `y=210` differ only in that one of them is a fabricated answer, and nothing
+in the program can tell.
+
+**This is the same root as the `??` gap and should share its cure.** A fallback the author
+chooses (`?? 255`) removes the surprise by making the substituted value deliberate; a
+testable outcome removes it by making the substitution visible. They are two answers to
+*"the language picked a value and did not say so"*, and a design that gives one should say
+why it does not give the other.
+
+Note the literal case is refused with a NARROWING message (*"cannot implicitly narrow"*)
+rather than a doesn't-fit one, though `cast-constant-out-of-range` exists for exactly *"a
+constant does not fit the type it is bare-cast to"*. Worth checking whether the constant
+initialiser should route to that code instead — a smaller, separate question.

@@ -3,15 +3,16 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# 152 — Let the author choose the fallback, instead of taking the type's default
+# 152 — A fit-failure the author can choose, and can see
 
 ## Status
 
 **Rewritten 2026-09-02 (owner call).** The plan opened as *"carry validity beside the
 value"*; four measurement phases retired that mechanism and shipped the one real defect it
-was aimed at. What is left, and is now the whole plan, is the owner's ask: **a fit-failing
-operation should be able to take a fallback the AUTHOR chose — `?? 255` — instead of
-silently taking the type's default.** Opt-in: write nothing and behaviour is unchanged.
+was aimed at. What is left, and is now the whole plan, is the owner's ask: **let an author opt in to
+correct code for the fit-failure edge**, which is currently hard or impossible to get right.
+Opt-in throughout — write nothing and behaviour is unchanged, so no existing program moves
+and no error is added.
 
 Retired: the validity flag (Phase A measured it a **net +0.5–0.8 % slowdown**, so its own
 performance argument is refuted) and phases F–H that depended on it. Shipped from the
@@ -22,8 +23,37 @@ Tracker: [@PLN152](https://github.com/loft-lang/plans/issues/152).
 
 ## Goal
 
-`?? <value>` supplies the fallback for a fit-failing operation on a declared-narrow slot,
-where today only `uncomputable_default`'s choice is possible.
+**Make the fit-failure edge handleable, without changing what happens when nobody handles
+it.** This is not new semantics: C80 and C85 stand, the default stays the default, and a
+program that says nothing behaves exactly as it does today. What is added is a way for an
+author who *cares* about the edge to write correct code for it — which today is hard or
+impossible.
+
+That is the whole test of this plan. Not *"does the language do something better by
+default"* — it should not — but: **can an author who cares write a correct handler?**
+
+### What "a correct handler" needs, and why today's answer is no
+
+Writing one takes two things, and the narrow non-null slot supplies neither:
+
+| the author needs to… | today |
+|---|---|
+| **know it happened** | impossible — `x = 0` after a failure is indistinguishable from a computed `0`; `!x` false, `x == null` false |
+| **choose what happens instead** | not reachable — `uncomputable_default` picks it, and `??` cannot see the failure because `260` is not a null |
+
+Either one alone is insufficient, which is why this plan carries both arcs rather than
+picking the cheaper. Detect-only cannot supply a value inline; choose-only cannot branch,
+log, or count. **A design that answers one and not the other has not made the case
+handleable** — it has made it half-handleable, which is the state that is hard to get right
+today.
+
+- **A — choose it.** `?? <value>` supplies the fallback where only the type's default is
+  possible now.
+- **B — see it.** A fit-failure on a non-null narrow slot can be tested for.
+
+The escape that already exists is *declare it `u8?`*, and it is a real answer — but it is an
+up-front decision that changes the type for every downstream reader, which is the "hard"
+half of the owner's complaint rather than a refutation of it.
 
 ## Half of this already works — and the other half fails for a different reason
 
@@ -52,6 +82,21 @@ not a null at all:
 `260` never becomes null, so no coalesce can fire on it. The only thing that handles it is
 `OpRangeDefault`'s `dflt` argument, and that argument is always compiler-chosen. **That is
 the gap: not a missing operator, a fallback the author cannot reach.**
+
+## B — what can be tested today, and the one shape that cannot
+
+Measured ([MEASUREMENTS.md](MEASUREMENTS.md)):
+
+| shape | today | testable? |
+|---|---|---|
+| `a: u8 = 300` — a literal that cannot fit | **compile error** | n/a — caught, not dropped |
+| `x: u8 = 250; x += 10` | `x = 0`; `!x` false, `x == null` false, `x == 0` true — identical to a real zero | **no** |
+| `z: u8? = 250; z += 10` | `z = null` | **yes — `if !z` already works** |
+
+So the owner's `if !a { … }` sketch is already the right spelling and already works — on a
+nullable slot. The gap is the **non-null narrow slot**, which by construction has no code for
+null to occupy, so there is nothing for `!a` to observe. `x = 0` (fabricated) and `y = 210`
+(computed) differ in nothing the program can reach.
 
 ## The home already exists
 
@@ -91,7 +136,7 @@ the matrix must prove rather than assert.
 | Item | Source | Verify | Status |
 |---|---|---|---|
 | **P1** — pin what already works: `??` on a sentinel-bearing overflow, both backends, and that it is NOT reported redundant | § half of this already works | a `tests/scripts/` guard; it must FAIL if the coalesce stops firing, which `make falsify` can answer against a build with `??` stripped | Open |
-| **P2** — decide the SPELLING for the narrow case (§ open questions), and write it down before implementing | § open questions | a design note the owner signs off; no code | Open |
+| **P2** — decide BOTH surfaces together: the `??` spelling (arc A) and how a failure is made visible (arc B) | § open questions 1 and 5 | a design note the owner signs off; no code. The gate is that the two compose — a fallback and a test for it must not be two unrelated features | Open |
 | **P3** — route an author-written fallback into `OpRangeDefault`'s `dflt` at the compound-assign seam | `parser/expressions.rs::compound_range` | the axis matrix's narrow cells answer the author's value; **every cell with no `??` is unchanged** | Open |
 | **P4** — the remaining seams: field, element, argument, return | `guard_declared_range` | one cell per seam on both backends; `integer`/`i32` controls unmoved | Open |
 | **P5** — a non-constant fallback, or a decision that it stays constant | `dflt` is `const integer` | either a cell with a variable fallback, or a recorded decision saying why not | Open |
@@ -126,6 +171,22 @@ the matrix must prove rather than assert.
 4. **Does the sentinel arm want it too?** Phase E made a sentinel collapse silently to the
    default on a narrow slot. If an author writes a fallback, it should presumably win there as
    well — one rule for both arms, not two.
+5. **How is a non-null fit-failure made VISIBLE (arc B)?** The owner has not picked a
+   notation, and neither has this plan. Three directions, none free:
+   - **"declare it `u8?`"** — costs nothing, works today, and the diagnostic could simply
+     advertise it. But it says a non-null narrow slot is *never* testable, which is a real
+     answer only if that is acceptable.
+   - **The fallback subsumes it** — with `?? 255` the author chose the value, so there is
+     nothing to detect. This covers *do something useful* but not *know that it happened*,
+     and it cannot express "I want to branch on the failure".
+   - **A failing store yields a testable outcome** — the owner's `if !a = 300 { … }` sketch,
+     i.e. an assignment that reports whether it fit. This is the only direction that answers
+     the question as asked, and it is also the largest: it needs a place to carry the fact
+     that is not the value's own bits, which is where the retired validity flag would have
+     been — scoped to a STORE rather than to every operation, which is a far smaller thing
+     than Phase A prototyped.
+   Deciding this is P2's job, alongside the `??` spelling, because the two surfaces should be
+   designed together or they will not compose.
 
 ## See also
 
