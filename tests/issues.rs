@@ -11779,7 +11779,7 @@ fn test() {
     if g.name == null { assert(false, \"unreachable\"); }
 }"
     )
-    .warning("Redundant null check — 'name' is 'not null', comparison is always false at p285_genuine_redundant_check_still_warns:4:24")
+    .warning("Redundant null check — 'name' is 'not null', so this is false unless a null reached the slot anyway (an overflow, a NaN, or an out-of-range read) at p285_genuine_redundant_check_still_warns:4:24")
     .result(Value::Null);
 }
 

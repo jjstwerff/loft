@@ -3504,12 +3504,22 @@ impl Parser {
                         self.lexer,
                         Level::Warning,
                         code = "redundant-null-check",
-                        "Redundant null check — '{lhs_not_null_name}' is 'not null', comparison is always {always}",
+                        "Redundant null check — '{lhs_not_null_name}' is 'not null', so this is {always} unless a null reached the slot anyway (an overflow, a NaN, or an out-of-range read)",
                     );
+                    // CONDITIONAL, not mechanical.  A non-null slot CAN observably hold null:
+                    // `formal/types.md` C85 writes the reserved sentinel there on an integer
+                    // overflow (and names a `float` holding `NaN` as the parallel), and C80
+                    // answers an out-of-range read with null while the index expression stays
+                    // typed non-null.  So `s.a == null` on a non-null `integer` field is TRUE
+                    // after `s.a = big * big`, and deleting it removes the one test that
+                    // catches that (loft#1297).
                     self.lexer.fix_last(crate::diagnostics::Fix {
-                        kind: crate::diagnostics::FixKind::Mechanical,
-                        title: "delete the check — its answer is already known".to_string(),
-                        condition: None,
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "delete the check".to_string(),
+                        condition: Some(
+                            "no overflow, NaN or out-of-range read can have reached this slot"
+                                .to_string(),
+                        ),
                         edit: None,
                         concept: "nullable values",
                         concept_ref: "@F1",
@@ -3535,13 +3545,17 @@ impl Parser {
                         self.lexer,
                         Level::Warning,
                         code = "redundant-null-check",
-                        "Redundant null check — '{}' is 'not null', comparison is always {always}",
+                        "Redundant null check — '{}' is 'not null', so this is {always} unless a null reached the slot anyway (an overflow, a NaN, or an out-of-range read)",
                         self.expr_not_null_name,
                     );
+                    // Conditional for the reason the mirrored arm above gives (loft#1297).
                     self.lexer.fix_last(crate::diagnostics::Fix {
-                        kind: crate::diagnostics::FixKind::Mechanical,
-                        title: "delete the check — its answer is already known".to_string(),
-                        condition: None,
+                        kind: crate::diagnostics::FixKind::Conditional,
+                        title: "delete the check".to_string(),
+                        condition: Some(
+                            "no overflow, NaN or out-of-range read can have reached this slot"
+                                .to_string(),
+                        ),
                         edit: None,
                         concept: "nullable values",
                         concept_ref: "@F1",
