@@ -3766,7 +3766,8 @@ use a separate collection or add after the loop"
         }
         // Rewrites `code` into an owned copy and returns false, so the general path
         // still emits the `Set(out, …)` that transfers it (loft#775).
-        self.assign_refvar_reference(code, f_type, op);
+        self.assign_refvar_reference(code, f_type, op, var_nr);
+        self.assign_refvar_keyed(code, f_type, op, var_nr);
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
@@ -6460,25 +6461,61 @@ use a separate collection or add after the loop"
         code: &mut Value,
         f_type: &Type,
         op: &str,
+        var_nr: u16,
     ) -> bool {
         let Type::RefVar(inner) = f_type else {
             return false;
         };
-        let Type::Reference(td, _) = inner.as_ref() else {
-            return false;
+        // A struct-ENUM is the same record shape one former over — `Type::Enum(_, true, _)` is
+        // exactly what the write-back emitter's own allow-list names beside `Type::Reference`
+        // — and it reached the identical defect: `x = o` left the caller aliasing the source
+        // and, from a callee local, reading a freed record (loft#1303).  A PLAIN enum
+        // (`Enum(_, false, _)`) is a byte with no store and is not here.
+        // `base()` rather than the bare inner: @FR-L-Null gives `layout(τ) = layout(τ?)`, so a
+        // `&S?` displaces a store exactly as its dense twin does.  It is the peel
+        // `Type::is_amp_rebindable_heap` — the one home for *which heap kinds does the `&`
+        // write-back repoint?* — already uses to answer the same question (loft#1291).
+        let (td, is_senum) = match inner.base() {
+            Type::Reference(td, _) => (*td, false),
+            Type::Enum(td, true, _) => (*td, true),
+            _ => return false,
         };
-        if op != "=" || !self.is_field(code) {
+        let record_tp = |td: u32, deps: Deps| {
+            if is_senum {
+                Type::Enum(td, true, deps)
+            } else {
+                Type::Reference(td, deps)
+            }
+        };
+        // A bare VARIABLE right-hand side needs the same materialisation as a field, and
+        // for the same reason one level up: @FR-B-Copy makes a plain heap whole-value bind
+        // a COPY, so the caller's binding must end up owning a store no live binding in
+        // the callee still names.  Installing the source's own store instead gives one
+        // store two owners — @FR-O-Owner — and which half breaks depends only on who else
+        // holds it: a caller-reachable source (`x = o`) leaves the caller aliasing its own
+        // argument and orphans the displaced store, while a callee-LOCAL one (`x = m`) is
+        // freed at the callee's scope exit and the caller reads a freed store (loft#1303).
+        // `x = x` is excluded: it would copy a store onto itself and free the original.
+        //
+        // ⚠ Only for a `&` PARAMETER.  This function serves two constructs, and they want
+        // opposite things from a bare-var right-hand side: @FR-F-ParamRef makes a parameter's
+        // whole-value `x = e` a WRITE-BACK, which installs a store, while `(B-Ref-Alias)`
+        // makes a `&` LOCAL bind (`q = &p`) a live LINK to the source, which must not copy.
+        // The field arm above is unrestricted because it materialises a VIEW rather than a
+        // link, which is right for both (loft#775).
+        let bare_var_rhs = self.vars.is_argument(var_nr)
+            && matches!(code.unspan(), Value::Var(rv) if *rv != var_nr);
+        if op != "=" || !(self.is_field(code) || bare_var_rhs) {
             return false;
         }
         // Keyed on the IR SHAPE, not on the right-hand side's deps: deps accumulate
         // while a body parses, so a deps test would mint the work-ref on pass 2 only
         // and shift every later `__ref_N` — the cross-pass divergence the H5 contract
-        // catches.  A field read is a field read on both passes.
-        let td = *td;
+        // catches.  A field read is a field read on both passes, and so is a bare var.
         let kt = self.data.def(td).known_type();
         let w = self
             .vars
-            .work_refs(&Type::Reference(td, Deps::none()), &mut self.lexer);
+            .work_refs(&record_tp(td, Deps::none()), &mut self.lexer);
         self.vars.set_skip_free(w);
         if self.first_pass {
             return false;
@@ -6492,7 +6529,7 @@ use a separate collection or add after the loop"
                 Value::Call(copy_d, vec![view, Value::Var(w), Value::Int(i32::from(kt))]),
                 Value::Var(w),
             ],
-            Type::Reference(td, Deps::frame1(w)),
+            record_tp(td, Deps::frame1(w)),
             "materialized_amp_field",
         );
         // @PLN130 — a NECESSARY copy that was nonetheless invisible: a program whose only
@@ -6503,6 +6540,106 @@ use a separate collection or add after the loop"
             w,
             kt,
             crate::copy_manifest::Origin::ParserMaterialise,
+        );
+        false
+    }
+
+    /// Materialise a `&`-KEYED-parameter write-back's right-hand side into its own store.
+    ///
+    /// The keyed sibling of [`Self::assign_refvar_reference`], and the same rule: a
+    /// whole-value `x = e` on a `&hash<T[k]>` (or `sorted`/`index`/`spatial`/`trie`)
+    /// REPOINTS the caller's slot (@FR-F-ParamRef), so whatever store it installs the caller
+    /// now owns.  @FR-B-Copy makes a plain heap whole-value bind a COPY, so that store has to
+    /// be one no live binding in the callee still names — otherwise @FR-O-Owner's single owner
+    /// is violated and one of two things goes wrong, depending only on who else holds it:
+    ///
+    /// * a source the CALLER can still reach (`x = o`, a plain heap parameter, which
+    ///   `(F-ParamHeap)` makes an alias of the caller's argument) leaves the caller's two
+    ///   bindings naming one store — mutating one is visible through the other — and
+    ///   orphans the store the write-back displaced;
+    /// * a source the CALLEE owns (`x = m`, its own minted local) is freed at the callee's
+    ///   scope exit, and every later read in the caller is a use-after-free that answers
+    ///   correctly until the slot is handed out again (loft#1303).
+    ///
+    /// The cure is the one the caller's frame needs either way: mint a fresh store, deep-copy
+    /// the source into it, and let the general path install THAT — after which codegen's
+    /// `amp_owned_writeback` leg sees an owned value and releases the displaced store, guarded
+    /// by `Stores::free_displaced` where the caller's binding does not own it (loft#1287).
+    ///
+    /// Copying INTO the target's existing store instead — the in-place refill a `&vector`
+    /// takes — is not available here: it never repoints, so through a plain forwarder the
+    /// write reaches the caller's CALLER, which `(F-ParamRebind)` forbids (loft#1291's
+    /// vector half, measured and backed out).
+    ///
+    /// Keyed on the IR SHAPE for [`Self::assign_refvar_reference`]'s reason — deps accumulate
+    /// as a body parses, so a deps test would mint the work-ref on pass 2 alone and shift
+    /// every later `__ref_N`. A field read and a bare variable are both the same shape on
+    /// both passes. `x = x` is excluded: it would copy a store onto itself and then free the
+    /// original as the displaced one.
+    ///
+    /// Answers `false` like its sibling, so the general path still emits the `Set(x, …)`
+    /// that installs the materialised store.
+    pub(crate) fn assign_refvar_keyed(
+        &mut self,
+        code: &mut Value,
+        f_type: &Type,
+        op: &str,
+        var_nr: u16,
+    ) -> bool {
+        let Type::RefVar(inner) = f_type else {
+            return false;
+        };
+        // `base()` for the sibling's reason: @FR-L-Null makes a `&hash<T[k]>?` the same
+        // question as its dense twin — the storage is what gets displaced.
+        let inner = inner.base();
+        if !crate::parser::vectors::is_keyed(inner) {
+            return false;
+        }
+        // The `&` PARAMETER write-back only — `(B-Ref-Alias)` makes a `&` local bind a live
+        // link to its source, which a copy would break.  See the sibling's gate.
+        //
+        // A FIELD right-hand side (`x = h.hs`) is the same defect and is measured: it left the
+        // caller aliasing the holder's collection, so `h.hs += …` was visible through `x`'s
+        // caller and the displaced store leaked.  The struct sibling has materialised a field
+        // since loft#775; no keyed site ever did.
+        let materialisable =
+            self.is_field(code) || matches!(code.unspan(), Value::Var(rv) if *rv != var_nr);
+        if op != "=" || !self.vars.is_argument(var_nr) || !materialisable {
+            return false;
+        }
+        let mut dep_free = inner.clone();
+        if let Some(d) = dep_free.deps_mut() {
+            *d = Deps::none();
+        }
+        let w = self.vars.work_refs(&dep_free, &mut self.lexer);
+        self.vars.set_skip_free(w);
+        if self.first_pass {
+            return false;
+        }
+        let Some(kt) = self.keyed_type_id(&dep_free) else {
+            return false;
+        };
+        let kt = i32::from(kt);
+        // No `0x8000` source-free bit: the source is a live binding — the caller's, or the
+        // callee's own local — and its own scope frees it.  That is the same reading
+        // `OpReplaceKeyed`'s local-assignment site gives the bit (@FR-O-Move: a store the
+        // callee only BORROWED is not the callee's to give away).
+        let src = std::mem::replace(code, Value::Null);
+        *code = v_block(
+            vec![
+                v_set(w, Value::Null),
+                self.cl("OpDatabase", &[Value::Var(w), Value::Int(kt)]),
+                self.cl("OpReplaceKeyed", &[src, Value::Var(w), Value::Int(kt)]),
+                Value::Var(w),
+            ],
+            {
+                let mut t = dep_free.clone();
+                if let Some(d) = t.deps_mut() {
+                    *d = Deps::frame1(w);
+                }
+                t
+            },
+            "materialized_amp_keyed",
         );
         false
     }

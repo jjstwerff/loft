@@ -2457,6 +2457,15 @@ storage that gets displaced. It replaced two `matches!` arms that named variants
 `parser/mod.rs` and `scopes.rs` — the two sites that must agree about it, one minting the rebind
 witness and the other using it.
 
+loft#1303 moved a second site off the opaque column and added its sibling already transparent —
+the only entry so far to do both, and the reason is that it followed loft#1291's peel rather than
+re-deriving one.  `assign_refvar_reference` materialises a `&` parameter's write-back source into
+its own store, and it named `Type::Reference` bare; the keyed sibling it needed
+(`assign_refvar_keyed`) would have been a second such site.  Both now ask `inner.base()`, which is
+the peel `Type::is_amp_rebindable_heap` above already uses for the SAME question — what does this
+`&` write-back displace — so a `&hash<T[k]>?` reaches the materialiser exactly as its dense twin
+does.
+
 loft#1254 added the empty-stub return classifier on the same side, and the opaque column again
 did not move: it asks whether a stub's return is HANDLE-carried, peeling first for the same
 reason — a stub declared `-> P?` needs the twelve-byte null exactly as `-> P` does, so the

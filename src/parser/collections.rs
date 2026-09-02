@@ -1457,8 +1457,16 @@ impl Parser {
         // the write it could not see is the write that never happened.  `&hash` and `&index`
         // were correct all along, which is what said the difference had to be a site naming one
         // kind rather than anything about keyed collections.
+        //
+        // loft#1303 — and `Sorted` had to leave the list for the fact to be named ONCE rather
+        // than twice.  `assign_refvar_vector` is the only lowering that fills the target in
+        // place, and it fires for `Vector` alone, so a `Vector` target is what "the right-hand
+        // side has already written the target" means.  A keyed target's block is
+        // `assign_refvar_keyed`'s materialisation, which fills a fresh WORK-REF that the `Set`
+        // still has to install; matching it here dropped the write and re-raised the refusal
+        // the line above describes.
         if let Type::RefVar(tp) = f_type
-            && matches!(**tp, Type::Vector(_, _) | Type::Sorted(_, _, _))
+            && matches!(**tp, Type::Vector(_, _))
             && matches!(val.unspan(), Value::Insert(_) | Value::Block(_))
         {
             if let Value::Var(nr) = to.unspan() {
