@@ -153,7 +153,17 @@ mod tests {
                     && let Ok(text) = std::fs::read_to_string(&p)
                 {
                     for (n, line) in text.lines().enumerate() {
-                        if line.contains(r#"replace('\\', "/")"#) {
+                        // Two shapes, and the second is the one that got away.  The literal
+                        // `replace('\\', "/")` is the WRONG conversion; `replace(MAIN_SEPARATOR,
+                        // …)` is the RIGHT one written a second time.  Catching only the wrong
+                        // shape let a correct copy land in `logger.rs`, which is how a fifth
+                        // hand-roll appeared in the module whose whole purpose is to prevent
+                        // a fourth.  A duplicate that is correct today still has to be found
+                        // and re-fixed when the rule changes.
+                        if line.contains(r#"replace('\\', "/")"#)
+                            || line.contains("replace(std::path::MAIN_SEPARATOR")
+                            || line.contains("replace(MAIN_SEPARATOR")
+                        {
                             offenders.push(format!("{}:{}", p.display(), n + 1));
                         }
                     }
