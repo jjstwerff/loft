@@ -14,10 +14,15 @@ correct code for the fit-failure edge**, which is currently hard or impossible t
 Opt-in throughout — write nothing and behaviour is unchanged, so no existing program moves
 and no error is added.
 
-Retired: the validity flag (Phase A measured it a **net +0.5–0.8 % slowdown**, so its own
-performance argument is refuted) and phases F–H that depended on it. Shipped from the
-measurement phases: loft#1305 and loft#1306. The record is in
+Shipped from the measurement phases: loft#1305 and loft#1306. The record is in
 [MEASUREMENTS.md](MEASUREMENTS.md).
+
+**The validity boolean is back, scoped.** It was retired on two grounds; one still holds and
+one did not survive arc B. Its PERFORMANCE argument is still refuted — Phase A measured the
+carry at a net **+0.5–0.8 % slowdown**, so it is not an optimisation. But *"correctness does
+not need it"* was true only of the defects known then. **Arc B cannot be built without an
+out-of-band bit**, by construction, and § Why arc B needs a bit says exactly why and exactly
+how much.
 
 Tracker: [@PLN152](https://github.com/loft-lang/plans/issues/152).
 
@@ -98,6 +103,48 @@ nullable slot. The gap is the **non-null narrow slot**, which by construction ha
 null to occupy, so there is nothing for `!a` to observe. `x = 0` (fabricated) and `y = 210`
 (computed) differ in nothing the program can reach.
 
+## Why arc B needs a bit — and how much of one
+
+Five of the seven scalar widths **cannot encode their own failure**. Measured:
+
+| | `u8` | `i8` | `u16` | `i16` | `u32` | `i32` | `integer` |
+|---|---|---|---|---|---|---|---|
+| overflow answers | `0` | `0` | `0` | `0` | `0` | `null` | `null` |
+
+`i32` and `integer` keep a bottom code back, so their failure IS a value and `if !x` reads
+it. The other five fill their width — every code is a legitimate datum — so **there is no
+value that can mean "this did not happen"**. No amount of cleverness at the collapse changes
+that: arc B needs a channel that is not the value's own bits. That is the boolean, and the
+requirement is structural rather than a preference.
+
+**But it is not Phase A's boolean.** That prototype put a bit beside *every eval-stack slot*
+and paid for it on every arithmetic op — which is where the +0.5–0.8 % came from, and which
+Phase C showed has no native analogue at all (native emits Rust over real locals; there is no
+stack to shadow). What arc B needs is far smaller: a bit produced **at the collapse**, for
+the five types that cannot represent their own failure, carried only as far as the author's
+test.
+
+### The spelling decides how far it must be carried — and that is the design lever
+
+The owner's two sketches differ in cost, and the difference is the whole of P2:
+
+```loft
+if !(a = 300) { … }      // the test is AT the store
+a: u8 = 300; if !a { … } // the test is AFTER the store
+```
+
+- **At the store**, the operands are still in scope, so the fit predicate is an expression
+  evaluated where the facts are — **no bit has to persist**. This may be buildable with no IR
+  change at all.
+- **After the store**, the status must outlive the assignment, and by then the inputs are
+  gone and `a` is an ordinary `0`. **That is where a stored bit is unavoidable** — and where
+  the open question becomes where it lives: a companion local minted beside the declaration,
+  a per-slot bit in the frame, or the slot's type widening to a pair.
+
+So the two spellings are not stylistic alternatives; one may be nearly free and the other
+needs new machinery. **P2 decides the spelling knowing that**, rather than picking a surface
+and discovering the cost afterwards.
+
 ## The home already exists
 
 Phase E left the collapse at one site both backends share:
@@ -140,6 +187,8 @@ the matrix must prove rather than assert.
 | **P3** — route an author-written fallback into `OpRangeDefault`'s `dflt` at the compound-assign seam | `parser/expressions.rs::compound_range` | the axis matrix's narrow cells answer the author's value; **every cell with no `??` is unchanged** | Open |
 | **P4** — the remaining seams: field, element, argument, return | `guard_declared_range` | one cell per seam on both backends; `integer`/`i32` controls unmoved | Open |
 | **P5** — a non-constant fallback, or a decision that it stays constant | `dflt` is `const integer` | either a cell with a variable fallback, or a recorded decision saying why not | Open |
+| **B1** — the at-the-store test, if P2 picks it: the fit predicate as an expression where the operands are still in scope | § the spelling decides | a cell per width; the five that cannot represent failure must answer, and `i32`/`integer` must be unchanged (they already do) | Open |
+| **B2** — the after-the-store test, if P2 picks it: where the bit LIVES so the status outlives the assignment | § the spelling decides | a cell that binds the status, reads it after other statements, and still answers — plus a cost measurement, because this is the arm Phase A's number applies to | Open |
 | **P6** — document it: the narrowing error already advertises `?? d`, so the doc and the diagnostic must agree | `DIAGNOSTICS.md`, the reference chapter | the advertised cure works when followed | Open |
 
 ## Phase ordering
@@ -152,6 +201,12 @@ the matrix must prove rather than assert.
    keeps the compiler's default would otherwise pass by looking unchanged.
 4. **P5** is a scope valve: if a non-constant fallback needs a new op, it may be a separate
    plan rather than this one growing.
+5. **B1 or B2, not both** — P2 chooses. B1 may need no IR change; B2 needs the stored bit and
+   is the only arm to which Phase A's +0.5–0.8 % measurement transfers, so if P2 picks it,
+   measure before building, the way A did.
+6. **A and B ship together or the case stays half-handleable** (§ Goal). Landing the fallback
+   without the test, or the test without the fallback, leaves exactly the state the owner is
+   complaining about.
 
 ## Open design questions
 
@@ -179,12 +234,11 @@ the matrix must prove rather than assert.
    - **The fallback subsumes it** — with `?? 255` the author chose the value, so there is
      nothing to detect. This covers *do something useful* but not *know that it happened*,
      and it cannot express "I want to branch on the failure".
-   - **A failing store yields a testable outcome** — the owner's `if !a = 300 { … }` sketch,
-     i.e. an assignment that reports whether it fit. This is the only direction that answers
-     the question as asked, and it is also the largest: it needs a place to carry the fact
-     that is not the value's own bits, which is where the retired validity flag would have
-     been — scoped to a STORE rather than to every operation, which is a far smaller thing
-     than Phase A prototyped.
+   - **A failing store yields a testable outcome** — the owner's `if !a = 300 { … }` sketch.
+     This is the only direction that answers the question as asked, and § Why arc B needs a
+     bit shows it is unavoidable for the five widths that cannot represent their own failure.
+     Its cost splits by spelling: tested AT the store it may need no IR change; tested AFTER
+     the store it needs a bit that persists.
    Deciding this is P2's job, alongside the `??` spelling, because the two surfaces should be
    designed together or they will not compose.
 
