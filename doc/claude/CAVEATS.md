@@ -158,28 +158,24 @@ against a uniform run — whole-program `--native`, or `--interpret` with
 
 ---
 
-## Surfaced 2026-08-20 while fixing something else — filed
+## Surfaced 2026-08-20 while fixing something else — closed 2026-09-02
 
-Each was met while working a neighbouring defect and verified against the pre-fix
-binary as PRE-EXISTING, then deliberately left rather than folded into an unrelated
-change. All five are now tracked; the repro, the measured workaround and the
-both-backends result live on the issue.
-
-| | issue | shape |
-|---|---|---|
-| a generic function inside a `par` worker answers **`null`** | [#1033](https://github.com/loft-lang/loft/issues/1033) | `silent-wrong` |
-
-**Four of the five are gone because they are FIXED** — re-verified on 2026-09-02 by running
-each repro on this tree, which is the reason this table says to re-run rather than trust a
-note. `#1030` (`integer limit(0,255) += 10` → `0`, not `260`), `#1031` (a `u32` local and
-field now agree), `#1032` (a generic returning `iterator<T>` walks), `#1034` (a declared
+**All five are gone**, re-verified on 2026-09-02 by running each repro on this tree rather
+than reading the row — which is the whole reason this document says to re-verify a caveat.
+`#1030` (`integer limit(0,255) += 10` → `0`, not `260`), `#1031` (a `u32` local and field now
+agree), `#1032` (a generic returning `iterator<T>` walks), `#1034` (a declared
 `(text?, integer)` local is accepted).
 
-**#1033 stayed, and it CHANGED SHAPE under the same re-verification**, which is why it is
-worth the row: it no longer refuses the program, it compiles and answers `null` with no
-diagnostic, so it moved from `sev:low` to `silent-wrong`. Both controls pass — the generic
-without `par` answers `6`, and `par` with a plain function answers `9` — so it is the pairing
-and neither half alone. Reopened.
+**#1033 is the one that repaid the re-verification**, and it repaid it twice. It had been
+CLOSED, and it still reproduced — no longer as the refusal it was filed as, but as a `null`
+answer with no diagnostic, so it had moved from `sev:low` to `silent-wrong` while nobody was
+looking. And its title was wrong: a plain `fn f(v: vector<integer>)` was affected identically
+and a generic over a STRUCT element was fine, so the axis was never the generic. It was the
+`par` element STRIDE for a nested vector, computed from the inner element's type — fixed the
+same day, guard `tests/scripts/1033-a-par-worker-gets-the-right-nested-vector.loft`.
+
+The lesson the row leaves behind: a closed issue is a claim about a build, and the build has
+moved.
 
 **Two entries that were here are gone because they are FIXED**, both confirmed by
 re-running their repros on both backends before filing anything — which is the reason
