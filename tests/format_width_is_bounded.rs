@@ -73,6 +73,19 @@ fn run_capped(source: &str) -> String {
 /// Each pairs the program with the string it must produce, so the test states the padding
 /// as well as bounding it — a cell that merely completed would pass on `-1` rendered as an
 /// empty string.
+/// ⚠ Windows has no `ulimit -v`, so this guard cannot be run there.
+///
+/// The bound IS the guard — the header above says so: a cell that checks the rendered string
+/// is a different test, and this one exists to fail in milliseconds instead of OOM-killing the
+/// box. Git Bash accepts `ulimit -v` and does not enforce it, so pointing this at a working
+/// shell on Windows would make it pass while measuring nothing, which is worse than not running
+/// it. `ignore` rather than `#[cfg]` so the Windows report SAYS it was skipped instead of
+/// silently listing one test fewer.
+///
+/// (Before this, the Windows leg failed for an unrelated reason: a bare `bash` resolves to
+/// `C:\Windows\System32\bash.exe`, the WSL launcher, which has no distribution installed —
+/// so the test reported a memory-cap failure that was really a missing shell.)
+#[cfg_attr(windows, ignore = "no `ulimit -v` on Windows; the cap is the guard")]
 #[test]
 fn a_width_below_zero_pads_nothing() {
     for (source, want) in [
@@ -99,6 +112,19 @@ fn a_width_below_zero_pads_nothing() {
 ///
 /// Without this row the test above passes on a renderer that ignores every width, which is
 /// the cheapest wrong way to stop an over-long pad.
+/// ⚠ Windows has no `ulimit -v`, so this guard cannot be run there.
+///
+/// The bound IS the guard — the header above says so: a cell that checks the rendered string
+/// is a different test, and this one exists to fail in milliseconds instead of OOM-killing the
+/// box. Git Bash accepts `ulimit -v` and does not enforce it, so pointing this at a working
+/// shell on Windows would make it pass while measuring nothing, which is worse than not running
+/// it. `ignore` rather than `#[cfg]` so the Windows report SAYS it was skipped instead of
+/// silently listing one test fewer.
+///
+/// (Before this, the Windows leg failed for an unrelated reason: a bare `bash` resolves to
+/// `C:\Windows\System32\bash.exe`, the WSL launcher, which has no distribution installed —
+/// so the test reported a memory-cap failure that was really a missing shell.)
+#[cfg_attr(windows, ignore = "no `ulimit -v` on Windows; the cap is the guard")]
 #[test]
 fn a_positive_width_still_pads() {
     for (source, want) in [
