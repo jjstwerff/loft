@@ -3823,8 +3823,21 @@ impl State {
             };
         }
         if name == "OpCoroutineExhausted" && !parameters.is_empty() {
-            // parameters[0] is the gen expression — generate it (pushes DbRef, +12).
-            self.generate(&parameters[0], stack, false);
+            // parameters[0] — the gen expression — is ALREADY on the stack: `gen` is a real
+            // parameter (`fn OpCoroutineExhausted(gen: reference) -> boolean`), so the
+            // mutable-argument loop above generated it.  Generating it here as well pushed
+            // the DbRef TWICE and only one was consumed, stranding 16 bytes on the eval stack
+            // at every call (loft#1309).
+            //
+            // The header above says these ops "have only const params", and that is why the
+            // second push looked necessary.  It is true of `OpCoroutineNext`, whose
+            // `value_size: const u16` the loop skips — which is exactly why `next` was never
+            // affected and `exhausted` always was.
+            //
+            // Silent in release: the surplus is only NOTICED where a caller measures an
+            // argument's width, so `assert(exhausted(g), …)` reported it as a 24B-vs-8B
+            // mismatch under debug assertions while `d = exhausted(g)` leaked the same 16
+            // bytes with nothing to object.
             self.remember_stack(stack.position);
             super::emit_op(stack.data.def(op).op_code(), self);
             // Stack: -12 (DbRef consumed) + 1 (bool pushed).
