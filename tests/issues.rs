@@ -6679,12 +6679,16 @@ fn q4_constructor_to_json_cross_check_string() {
 /// extractor's read position for each primitive variant.
 #[test]
 fn q4_constructor_as_bool_round_trips() {
+    // `-> boolean?`, because `as_bool` is declared nullable now (loft#1302) and returning it
+    // through a non-null `boolean` is what `(N-Store)` exists to catch — the warning it
+    // raises here is correct, and silencing it by keeping the old signature would be pinning
+    // the defect. The round trip is unchanged: the value still comes back.
     code!(
-        "fn run_q4cab() -> boolean {
+        "fn run_q4cab() -> boolean? {
     json_bool(true).as_bool()
 }"
     )
-    .expr("run_q4cab()")
+    .expr("run_q4cab() == true")
     .result(Value::Boolean(true));
 }
 
@@ -6964,17 +6968,40 @@ fn p54_as_text_on_jnumber_returns_null() {
     .result(Value::Boolean(true));
 }
 
-/// Extractor null-on-mismatch — `as_bool()` on a JNull returns
-/// `false` (the boolean null sentinel).
+/// Extractor null-on-mismatch — `as_bool()` on a JNull answers NULL, like its three
+/// siblings and like its own documentation.
+///
+/// It used to answer `false`, and this test used to pin that — its own comment called `false`
+/// *"the boolean null sentinel"*, which it is not (255 is). Written to the documented intent
+/// and then asserting whatever was there, with a parenthetical over the gap: `false` is a
+/// value a caller cannot tell from a field that really says false, which is the whole defect
+/// (loft#1302).
+///
+/// The declaration is `-> boolean?` now, because that is what carries the sentinel out; the
+/// test's own signature moves with it.
 #[test]
-fn p54_as_bool_on_jnull_returns_false() {
+fn p54_as_bool_on_jnull_is_null() {
     code!(
-        "fn run_abon() -> boolean {
+        "fn run_abon() -> boolean? {
     json_null().as_bool()
 }"
     )
-    .expr("run_abon()")
-    .result(Value::Boolean(false));
+    .expr("run_abon() == null")
+    .result(Value::Boolean(true));
+}
+
+/// The CONTROL for the cell above: a JBool that really says `false` still answers `false`.
+/// A cure that answered null for every falsey reading would satisfy the null test and destroy
+/// the only value `as_bool` exists to return.
+#[test]
+fn p54_as_bool_on_a_real_false_is_false() {
+    code!(
+        "fn run_abf() -> boolean? {
+    json_parse(\"{{\\\"b\\\":false}}\").field(\"b\").as_bool()
+}"
+    )
+    .expr("run_abf() == false")
+    .result(Value::Boolean(true));
 }
 
 /// Extractor `as_long()` truncates float toward zero (NOT round,

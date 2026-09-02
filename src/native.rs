@@ -4118,10 +4118,12 @@ fn n_as_bool(stores: &mut Stores, stack: &mut DbRef) {
     if discr == JV_DISCR_BOOL {
         let bool_tp = stores.name("JBool");
         let value_pos = u32::from(stores.position(bool_tp, "value")) + v.pos;
-        let b = stores.store(&v).get_byte(v.rec, value_pos, 0) != 0;
+        let b = u8::from(stores.store(&v).get_byte(v.rec, value_pos, 0) != 0);
         stores.put(stack, b);
     } else {
-        stores.put(stack, false);
+        // The tri-state null byte (C73 / @PLN17) the `boolean?` declaration promises — not
+        // `false`, which a caller cannot tell from a field that really says false.
+        stores.put(stack, 255u8);
     }
 }
 
