@@ -12,6 +12,89 @@ invariants, internal phase numbers)?  See
 
 ---
 
+## 2026-09
+
+The **say-what-you-do** release. Two threads, and they turned out to be one: every page of
+the language reference was read against the compiler that ships, and most of what came back
+was not a wrong sentence but a promise nothing was keeping.
+
+**The reference is now read end to end — 40 chapters of 40.** The Standard Library section
+was the last and the worst: its generator read three of the seven `default/*.loft` files, so
+the entire JSON and reflection API — `json_parse`, `to_json`, `json_errors`, `reflect_type`,
+`stack_trace` — was absent from the published reference while the JSON chapter and the
+feature catalogue documented it. Forty-three more entries shipped as a bare signature,
+`sin`, `sqrt`, `floor` and `split` among them, because a blank line between a doc comment
+and its declaration silently orphaned the doc. All 214 public functions are published now,
+every one with its documentation, in four new sections.
+
+Elsewhere the pass found a first-run page telling new users to pretend `.loft` is Rust while
+the repository ships a VS Code extension and a language server; a roadmap calling a release
+from four months earlier "current"; two comparison pages that told Rust and Python
+programmers loft lacks features it has; and, on the pages that DO run their examples, cells
+that could not fail — a debugger transcript whose expected output was already in the prompt
+above it, and an `--explain` demonstration on a program with no diagnostics.
+
+**The other thread is what a function may do to the values you hand it.** A whole-value
+replacement of a parameter — `p = [...]` — is local to the callee; growing or writing
+through it reaches the caller. That rule held for one spelling out of six, and several of
+the rest answered one thing interpreted and the opposite thing compiled — a divergence the
+ownership rules say cannot happen. They agree now: a heap parameter's rebind is local
+however it is written, a keyed parameter's too, a `&` write-back reaches every heap kind
+rather than the two it was written for, and a rebind written inside a CLOSURE — which could
+reach past two frames and silently replace a caller's collection — is refused, because a
+capture has no route back to the binding it would have to rebind.
+
+### A JSON field that is not a boolean answers null
+
+```loft
+cfg = json_parse(raw);
+on = cfg.field("enabled").as_bool();   // null when it is absent, a number, or "true"
+if on ?? false { start(); }
+```
+
+`as_bool` is `boolean?` now. It answered `false` for every mismatching kind — an absent
+field, a number, the string `"true"` — which cannot be told from a field that really says
+`false`. Its three siblings already answered null; a two-state boolean simply had nowhere to
+put one until the return type could carry it.
+
+### Two generic functions may both call their type variable `T`
+
+```loft
+fn largest<T: Ordered>(a: T, b: T) -> T { if a > b { a } else { b } }
+fn total<T: Addable>(a: T, b: T) -> T { a + b }
+```
+
+Both compile. A header introduces its own type variable; before, one placeholder stood for
+every `T` in the program and the second header's calls were checked against a parameter list
+its author never wrote — order-dependently, so which one broke depended on which came first.
+
+### A bound gives exactly the operators it declares
+
+`a - b` under `<T: Numeric>` compiled and computed `-a`, discarding the second operand on
+both backends with no diagnostic: `-` is one name at two arities, and the bound's unary
+negation answered for the binary spelling. Bound satisfaction compares the whole signature
+now, so the binary form is refused and you write the subtraction at a concrete type.
+
+### Piping loft into `head` or `less` no longer aborts
+
+A closed pipe is the normal end of `prog | head`. It used to panic on `EPIPE`, and when
+stderr shared the pipe the panic printer failed too and the process aborted with a crash
+report naming an interpreter opcode and a stdlib line — a false trail for the most ordinary
+shell idiom there is.
+
+### Smaller things you may notice
+
+- `loft check` prints `ok`, not an absolute path and an internal cache entry.
+- `yield from` passes its arguments, and a parameterised sub-generator compiles on
+  `--native`.
+- An `i32` that overflows reads as `null`, like a plain `integer`; the reference now states
+  which widths can and which answer their type's default, and why.
+- A format hole holding an escaped quote — `"{shout("a\"b")}"` — no longer ends the
+  enclosing item early.
+- A `par` worker over nested vectors is handed its own row rather than every second one.
+
+---
+
 ## 2026-08
 
 The **heap-correctness** release. Almost everything here is one theme seen from a
