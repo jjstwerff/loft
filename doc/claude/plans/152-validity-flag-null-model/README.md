@@ -7,16 +7,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Phase A is DONE and the design PASSED its kill gate** (2026-09-02): carrying the
-flag costs **under 1 %** on integer-arithmetic-heavy interpreter workloads
-(+0.51 % `02_sum_loop`, +0.77 % `01_fibonacci`, **0.00 % on the control**) — see
-§ Phase A result. The rest is open, nothing else built. Originally: design settled, nothing built. loft encodes *"this operation could not produce a
-value"* in three parallel places that do not agree with each other, and the
-disagreements are the defect class. This plan replaces them with one mechanism: an
-operator computes **`(value, valid)`**, and the pair **collapses at named boundaries**
-under a four-row rule. Validity is out-of-band *in flight*, in-band *at rest*, so
-nothing about storage changes. Phase A is a measurement whose job is to kill the design
-if the interpreter cost is real.
+**Phases A and B are DONE; C is next.** loft encodes *"this operation could not produce a
+value"* in three parallel places that do not agree with each other. This plan replaces them
+with one mechanism: an operator computes **`(value, valid)`**, and the pair **collapses at
+named boundaries** under a four-row rule — out-of-band *in flight*, in-band *at rest*, so
+nothing about storage changes.
+
+- **A** — the interpreter cost, which was the design's kill gate: **under 1 %**. Passed.
+- **B** — the boundary matrix and the proposed rules: the value collapse is **already
+  uniform across every boundary**, and **overflow is the only fault that can reach a slot
+  with no spare code**. Both change what the remaining phases have to do; see
+  [MEASUREMENTS.md](MEASUREMENTS.md), including a correction to this plan's own premise.
 
 Tracker: [@PLN152](https://github.com/loft-lang/plans/issues/152).
 
@@ -151,8 +152,8 @@ paragraph is not an axis measured by the cells. Probes graduate to
 
 | Item | Source | Verify | Status |
 |---|---|---|---|
-| **A** — measure the interpreter cost: carry the flag on the integer arithmetic ops | § Phase A result | one binary, `LOFT_FLAG=0/1/2`, interleaved; a control that must not move and a double-traffic mode that must | **DONE — passed, <1 %** |
-| **B** — write the collapse table as proposed rules; build the boundary matrix as `/tmp` probes | § the collapse rule | the matrix's red cells match the known-issue list exactly; an unexpected red is a finding, an all-green falsifies the premise | Open |
+| **A** — measure the interpreter cost: carry the flag on the integer arithmetic ops | [MEASUREMENTS.md](MEASUREMENTS.md) | one binary, `LOFT_FLAG=0/1/2`, interleaved; a control that must not move and a double-traffic mode that must | **DONE — passed, <1 %** |
+| **B** — write the collapse table as proposed rules; build the boundary matrix | [`probes/`](probes/) | 19 value cells × 2 backends + a refusal probe and a diagnostic probe, each with its own control | **DONE — see [MEASUREMENTS.md](MEASUREMENTS.md)** |
 | **C** — carry the flag through the five integer arithmetic ops, both backends, **sentinel still decides** | `ops::checked_long!` | always-on assert `flag_invalid ⟺ value == sentinel` at every collapse point, full suite, both backends (the parallel run) | Open |
 | **D** — flip the collapse decision to the flag for the widths that already answer null | § the collapse rule | `introspect` + full suite **identical** to C; C's assert still holds | Open |
 | **E** — narrow widths: the collapse site reports (loft#1296) | § COMPATIBILITY | a Rust test counting the stderr notice — `make falsify` cannot score a diagnostic; matrix cells for `u8`/`i8`/`u16`/`i16`/`u32` flip | Open |
@@ -160,59 +161,43 @@ paragraph is not an axis measured by the cells. Probes graduate to
 | **G** — provenance: widen the flag to carry the clearing site, opt-in | `STRONG_POINTS.md` § 12 | a probe where a null born deep in a call chain is reported with its originating line | Open |
 | **H** — rewrite the formal rules, amend C85 / C90, close what closes | § Impact on the formal definition | `scripts/rule_tags.py check`; the formal conformance corpus | Open |
 
-## Phase A result — measured 2026-09-02
+## Measurements
 
-**Verdict: the clean design survives.** The gate was *"under a few percent, build it;
-around ten, fall back to computing the flag only where an op can be invalid."*
+Phases A and B are measured; the numbers, the method and the corrections they
+forced live in [MEASUREMENTS.md](MEASUREMENTS.md). Headlines: the flag costs
+**under 1 %** on the interpreter (A), the value collapse is **already uniform across
+every boundary** so Phase D is a no-op (B), and **overflow is the only fault that can
+reach a slot with no spare code** — every sibling is refused, so C85 is the single
+reachability door (B).
 
-| bench | flag off | flag on | 2× traffic | flag cost | 2× cost |
-|---|---|---|---|---|---|
-| `02_sum_loop` (treatment — `AddInt` is the hot op) | 1383 ms | 1390 ms | 1405 ms | **+0.51 %** | +1.59 % |
-| `01_fibonacci` (treatment — `MinInt`/`AddInt` + calls) | 12581 ms | 12678 ms | 12846 ms | **+0.77 %** | +2.11 % |
-| `08_word_count` (**control** — text scanning) | 332 ms | 332 ms | 337 ms | **0.00 %** | +1.51 % |
+## Proposed rules (Phase B deliverable)
 
-Medians, `--interpret`, release build, 15 interleaved reps (5 for fibonacci). That is
-**0.35 ns/op ≈ 1.1 cycles at 3 GHz** over `02_sum_loop`'s 20 M `AddInt` — physically
-credible for three L1-resident, pipelined byte accesses, which is the check that the
-number is a measurement rather than an artefact.
+Draft for `formal/operational.md`; Phase H lands them.
 
-**The mechanism is confirmed in the disassembly, not just the timing.** In the flag arm
-the operand sentinel tests are *gone* — baseline's `cmp $0x8000…,%rdx; je` (with `v1`'s
-test folded into `neg; jo`) is replaced by `add (%rax),%rbx; seto %al`. The plan's claim
-that *"the flag is a bit the CPU already sets"* is `seto`, at the instruction level.
+```
+  (E-Valid)     ⟨e, σ⟩ ⇓ (v, ok)      every operation yields a value AND a validity bit.
+                                      ok = false iff the operation could not produce a
+                                      representable result (E-Uncomp's condition).
+  (E-VProp)     (v₁,ok₁) op (v₂,ok₂) ⇒ (v, ok₁ ∧ ok₂ ∧ ok_op)
+                                      validity propagates by conjunction; an invalid
+                                      operand makes the result invalid.  In flight this
+                                      REPLACES the in-band sentinel test: the operand's
+                                      value carries no null, its bit does.
+  (E-Boundary)  a value crosses a BOUNDARY at: a store to a declared local, a struct-field
+                write, a collection-element write, a call argument, a return, a `par` merge,
+                and serialisation.  The bit does NOT cross — it collapses here.
+  (E-Collapse)  at a boundary with target τ, when ok = false:
+                  τ is nullable            ⇒ write null;                    no report
+                  τ non-null, spare code   ⇒ write the sentinel (reads null); no report
+                  τ non-null, no spare code⇒ write default(τ)              AND REPORT
+                  discharged (?? / ? / match) ⇒ bit consumed;              no report
+                A DECLARED local additionally rejects at compile time per (N-Decl); the
+                collapse rule governs the runtime answer, not that static commitment.
+```
 
-**The method matters more than the number, and phases C/D inherit it.** The first three
-attempts all failed, each for a different reason worth recording:
-
-1. **A shared box.** Another checkout ran `rustc` + six `mold` linkers mid-run; load hit
-   56 and `08_word_count` read 1017, 602, 457, 361, 340, 332, 310 across seven reps — a
-   monotone settle, not a measurement.
-2. **Separate binaries are not comparable at this effect size.** A build whose only change
-   was *adding the shadow field* — ops untouched, the new code dead — moved every
-   benchmark by **+2 to +4 %**, treatment and control alike. Later, a flag build made the
-   text control **2.6 % faster**, which no change to integer arithmetic can do. Adding
-   24 bytes to `State` shifts every field offset and the whole code layout, and that
-   swamps what is being measured.
-3. **So the measurement must be ONE binary with a runtime-selected path** — identical
-   struct, identical layout, only the executed instructions differ. That is where the
-   numbers above come from, and it is how C and D must compare before/after too.
-
-The instrument was checked in both directions rather than trusted: the **control must not
-move** (0.00 %) and a **double-traffic mode must** (+1.5 to +2.1 %). Both held. The
-double-traffic arm scaled 2.7–3.1× rather than a clean 2×, and the control moved 1.5 % in
-that arm, which bounds the residual noise at ~1.5 % — so the flag cost is quoted as
-*under 1 %*, not to two decimals.
-
-**What this does NOT measure — the honest residual.** The probe carried the flag through
-`add` / `sub` / `mul` on integers. A full implementation also needs every *value-producing*
-op to write its slot's flag (one store), because the shadow is indexed by stack position
-and would otherwise read a stale entry. Scaling from the measured per-access cost, that is
-roughly another **0.6–1 %**, putting a complete implementation near **1.5–2 %** — still
-well inside the gate, but it is an estimate, and Phase C's parallel run is where it becomes
-a measurement.
-
-Probe artefacts are throwaway and were reverted; `src/fill.rs` is generated, so the real
-change belongs in the `#rust` templates and the generator, not in that file.
+`(E-Uncomp-NN)` becomes row 3. `(E-Null)`'s in-band claim holds below `(E-Boundary)` and is
+false above it — which is what makes its "private / unobservable" wording true of the half it
+describes.
 
 ## Phase ordering
 

@@ -1,0 +1,6 @@
+// want: REFUSED
+fn main() {
+  d: integer = 0;
+  x: u8 = (10 / d) as u8;
+  println("c01 = {x}");
+}

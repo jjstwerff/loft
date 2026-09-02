@@ -1,0 +1,8 @@
+// want: WARN
+fn main() {
+  q: integer? = 9223372036854775807;
+  q += 1;
+  v: vector<integer> = [1];
+  v[0] = q;
+  println("{v[0] ?? -1}");
+}

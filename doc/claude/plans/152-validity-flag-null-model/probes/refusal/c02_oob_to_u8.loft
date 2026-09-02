@@ -1,0 +1,7 @@
+// want: REFUSED
+fn main() {
+  v = [1, 2, 3];
+  i: integer = 9;
+  x: u8 = v[i] as u8;
+  println("c02 = {x}");
+}

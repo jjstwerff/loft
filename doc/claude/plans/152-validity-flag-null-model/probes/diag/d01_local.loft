@@ -1,0 +1,8 @@
+// want: WARN
+fn main() {
+  q: integer? = 9223372036854775807;
+  q += 1;
+  x: integer = 0;
+  x = q;
+  println("{x}");
+}

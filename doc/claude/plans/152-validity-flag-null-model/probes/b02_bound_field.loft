@@ -1,0 +1,13 @@
+// @PLN152 phase B — a NULL `u8?` crossing a boundary into a NON-NULL `u8`.
+// The collapse rule says the answer must not depend on WHICH boundary.
+// u8 has no spare code, so the value must be the type default (0),
+// never the 255 sentinel (which is a real value of the type).
+// @EXPECT: b02 = 0
+struct S { n: u8 }
+fn main() {
+  q: u8? = 250;
+  q += 10;
+  s = S { n: 0 };
+  s.n = q ?? 0;
+  println("b02 = {s.n}");
+}

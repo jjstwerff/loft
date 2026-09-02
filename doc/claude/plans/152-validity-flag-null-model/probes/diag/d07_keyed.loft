@@ -1,0 +1,10 @@
+// want: WARN
+struct R { id: integer, n: integer }
+fn main() {
+  q: integer? = 9223372036854775807;
+  q += 1;
+  h: hash<R[id]> = [];
+  h += R { id: 1, n: 0 };
+  h[1].n = q;
+  println("done");
+}

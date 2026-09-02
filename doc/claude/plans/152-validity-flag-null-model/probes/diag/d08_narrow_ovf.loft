@@ -1,0 +1,6 @@
+// want: SILENT
+fn main() {
+  x: u8 = 250;
+  x += 10;
+  println("{x}");
+}

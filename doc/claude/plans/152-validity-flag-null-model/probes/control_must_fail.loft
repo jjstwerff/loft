@@ -1,0 +1,8 @@
+// @CONTROL — this cell's expectation is deliberately wrong; the runner
+// errors unless this cell FAILS.  It proves the harness detects failure
+// (a matrix whose cells are all parse errors would otherwise read green).
+// @EXPECT: control x=999
+fn main() {
+  x = 1 + 2;
+  println("control x={x}");
+}

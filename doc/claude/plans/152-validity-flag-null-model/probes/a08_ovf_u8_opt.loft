@@ -1,0 +1,8 @@
+// @PLN152 phase B — overflow into a opt slot.
+// Rule: formal/types.md spare-code table + (E-Uncomp-NN).
+// @EXPECT: a08_ovf_u8_opt = null
+fn main() {
+  x: u8? = 250;
+  x += 10;
+  println("a08_ovf_u8_opt = {x}");
+}
