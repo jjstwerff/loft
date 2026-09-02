@@ -3767,7 +3767,46 @@ impl Parser {
                     continue;
                 };
                 let t_stub_name = crate::data::Data::bound_stub_name(holder_name, &method_suffix);
-                if self.data.def_nr(&t_stub_name) != u32::MAX {
+                let existing_stub = self.data.def_nr(&t_stub_name);
+                if existing_stub != u32::MAX {
+                    // Sharing one stub is the NORM: two generics bounded by the same interface,
+                    // or by two interfaces declaring the same method the same way, want the
+                    // same stub.  It is wrong only when the two bounds require DIFFERENT
+                    // signatures of one method name.  The stub carries a signature, so the
+                    // second is silently dropped and its calls are checked against the first's
+                    // — and the refusal that follows names something the reader never wrote
+                    // (*"Too many parameters for T#g.sizer"*, or a missing argument for a
+                    // parameter that lives in the OTHER function).  It is ORDER-DEPENDENT:
+                    // whichever generic is declared first owns the stub (loft#1301).
+                    //
+                    // CHILD-to-CHILD: this bound's interface method against the one the
+                    // existing stub was minted FROM.  Comparing the STUB against a child is
+                    // what two earlier attempts did, and both refused `default/01_code.loft`
+                    // itself — a stub carries parameters an interface method does not, so
+                    // `assert_eq` / `assert_ne`, which share legitimately, read as a conflict.
+                    // The stdlib is the control that catches that in one build.
+                    //
+                    // Reported on PASS 1 because that is the only pass that reaches here: the
+                    // stub is minted once, and pass 2 finds it already made.  It is also where
+                    // the neighbouring "generic type parameter conflicts with a …" diagnostic
+                    // reports, for the same reason.
+                    if self.first_pass
+                        && let Some(prev) = self.stub_origin.get(&existing_stub).copied()
+                        && prev != child_nr
+                        && self.data.attributes(prev) != self.data.attributes(child_nr)
+                    {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "the type variable '{holder_name}' is already bound elsewhere to a \
+                             '{method_suffix}' taking {} parameter(s), and this bound needs \
+                             {} — a type variable's NAME is shared across generic functions, \
+                             so two of them cannot require different signatures of one method. \
+                             Rename this function's type variable (`<U: …>`)",
+                            self.data.attributes(prev),
+                            self.data.attributes(child_nr),
+                        );
+                    }
                     continue; // already created (e.g. multiple bounds share a method)
                 }
                 let t_stub_nr =
@@ -3775,6 +3814,9 @@ impl Parser {
                         .add_def(&t_stub_name, self.lexer.pos(), DefType::Function);
                 self.bound_method_stubs
                     .push((t_stub_nr, child_nr, holder_nr));
+                // Durable, unlike the vec above, which `refresh_bound_method_stubs` takes
+                // between the passes — leaving nothing for the conflict check to compare.
+                self.stub_origin.insert(t_stub_nr, child_nr);
                 self.set_bound_stub_signature(t_stub_nr, child_nr, holder_nr);
             }
         }

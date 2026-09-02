@@ -585,6 +585,13 @@ pub struct Parser {
     /// decided correctly. A vector rather than a set: the order is the order stubs were
     /// created, so the refresh is deterministic.
     bound_method_stubs: Vec<(u32, u32, u32)>,
+    /// Which interface METHOD each bound stub was minted from — durable across both passes.
+    ///
+    /// [`Parser::bound_method_stubs`] cannot answer this: `refresh_bound_method_stubs` takes
+    /// it between the passes, so on pass 2 — the pass that reports — it is empty.  The
+    /// conflict check in `create_bound_method_stubs` needs the ORIGIN to compare this bound's
+    /// method against the one already holding the stub name (loft#1301).
+    stub_origin: std::collections::HashMap<u32, u32>,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
@@ -1182,6 +1189,7 @@ impl Parser {
             adopted_ret_defs: std::collections::HashSet::new(),
             literal_chain_lhs: std::collections::HashSet::new(),
             bound_method_stubs: Vec::new(),
+            stub_origin: std::collections::HashMap::new(),
             reverse_iterator: false,
             iterable_context: false,
             last_range_from: None,
