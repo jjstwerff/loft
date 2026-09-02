@@ -3557,7 +3557,7 @@ impl Parser {
         // wherever the walk stopped, and three parse-error baselines moved a column even when
         // the answer was DISCARDED — and declining the hint outright loses the `&`-link
         // reshape refusal, which is derived from the in-place construction.
-        let hint_is_the_whole_value = !self.prefix_operand;
+        let hint_is_the_whole_value = !self.prefix_operand && !self.inplace_hint_declined;
         if let Value::Var(v_nr) = code
             && hint_is_the_whole_value
         {
@@ -3761,6 +3761,39 @@ impl Parser {
             }
         }
         self.lexer.token("}");
+        // Was the destination hint the right call?  Only now can it be asked: the hint is valid
+        // for `m = S { … }`, where the literal IS the whole right-hand side, and a POSTFIX turns
+        // it into a sub-expression — `m = S { … }.f(…)` built the receiver into the variable that
+        // also receives the call's RESULT, so the return buffer overwrote the receiver's store
+        // and the frame freed a reference that no longer described it (loft#1304).
+        //
+        // A single-token `peek_token` is transparent — it takes `&self` and reads the already
+        // lexed token.  Walking PAST the body to ask the same question before the fact is not:
+        // `Lexer::revert` restores `position` by replaying, but its closing `cont()` resets
+        // `prev_end` from wherever the walk stopped, and three parse-error baselines moved a
+        // column even with the answer discarded.
+        //
+        // So the answer arrives too late to have built differently, and the literal is parsed
+        // AGAIN with the hint declined — through the same abandon path the field loop below
+        // uses, which already reverts the lexer and returns the work-refs.  Declining outright
+        // instead of retrying was measured and costs the `&`-link reshape refusal, which is
+        // derived from the in-place construction.
+        if let Some(v_nr) = in_place_var
+            && !self.inplace_hint_declined
+            && !(self.lexer.peek_token(";")
+                || self.lexer.peek_token("}")
+                || self.lexer.peek_token(",")
+                || self.lexer.peek_token(")"))
+        {
+            self.lexer.revert(link);
+            self.vars.clean_work_refs(work);
+            self.vars.clean_work_refs_p2(work_p2);
+            *code = Value::Var(v_nr);
+            let outer = std::mem::replace(&mut self.inplace_hint_declined, true);
+            let tp = self.parse_object(td_nr, code);
+            self.inplace_hint_declined = outer;
+            return tp;
+        }
         // #437 splice: every vector-field header zeroed as one block, directly
         // after the prelude and before the first field's value.  loft#924's group
         // headers lead it — same position, same reason, and a member of a group is

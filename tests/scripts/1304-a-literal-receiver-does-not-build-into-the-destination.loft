@@ -1,10 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// PARTIAL: this guard covers the UNARY-PREFIX half of loft#1304.  The POSTFIX half
-// (`m = S { … }.f(…)`) is still open, and the issue carries the two cures that were built and
-// measured for it.  Every cell below is either the fixed half or a control that must not move.
-//
 // An assignment threads its DESTINATION as a hint into the right-hand side — `code` arriving
 // at `Parser::parse_object` as `Value::Var(dest)` means *"build here instead of into a temp"*.
 // The hint is valid for `m = S { … }`, where the literal IS the whole right-hand side, and
@@ -26,32 +22,37 @@
 // owning, and neither depends on how the receiver was SPELLED — which is what says the hint was
 // the defect rather than the literal or the operator.
 //
-// The hint leaks TWO ways, and only one of them is closed here.
+// The hint leaks TWO ways, and each needed its own answer.
 //
 //  * what PRECEDES the literal — a unary prefix operator (`-x`, `!x`, `~x`) hands its operand
 //    the hint directly.  `Parser::prefix_operand` is set across those three operand parses.
-//    `m = -Money { c: 10 }` is that half; it lands on the `#405` refused-free guard rather than
-//    the panic, because the store number is still in range there.  **This is what the guard
-//    below pins.**
-//  * what FOLLOWS it — `m = S { … }.f(…)`, where the literal is a call RECEIVER.  Still open.
-//    A look-ahead past the balanced body was built and is NOT transparent: `Lexer::revert`
-//    replays tokens so `position` comes back, but its closing `cont()` resets `prev_end` from
-//    wherever the walk stopped, and three parse-error baselines moved by a column even with the
-//    answer DISCARDED.  Declining the hint outright was measured too and loses the `&`-link
-//    reshape refusal, which is derived from the in-place construction.  Both are on the issue.
+//    That half lands on the `#405` refused-free guard rather than the panic, because the store
+//    number is still in range there.
+//  * what FOLLOWS it — a call receiver or a binary operand.  Answerable only AFTER the body is
+//    consumed, so `parse_object` asks then, with a single-token `peek_token` (it takes `&self`
+//    and reads the already-lexed token, so it is transparent), and re-parses the literal with
+//    the hint declined through the abandon path its field loop already uses.
+//
+// ⚠ Two cures were built for the second half and BOTH are wrong; they are on the issue so the
+// next reader does not spend the day.  A look-ahead PAST the balanced body, asking before the
+// fact, is not transparent — `Lexer::revert` replays tokens so `position` comes back, but its
+// closing `cont()` resets `prev_end` from wherever the walk stopped, and three parse-error
+// baselines moved a column **with the answer discarded**.  And declining the hint outright
+// loses the `&`-link reshape refusal, which is derived from the in-place construction.
 //
 // @falsified-at: 1053b516 — interpret exit 1 -> 0, native exit 1 -> 0, with the assertion count
-//   reading 0 on BOTH trees.  That is the shape of the defect, not a weak guard: the prefix
-//   cell's VALUE is right on the control (`-10`), so nothing asserts; what moves is the
-//   store-lifetime channel, which the harness reads as the run's exit — a refused out-of-range
-//   free (`#405`) and one store never freed.  Every value cell is paired with a `churn1304()`
-//   and asserted AFTER it, because the defect answers correctly until the store slot is handed
-//   out again (loft#1291's recycle).
+//   reading 0 on BOTH trees.  That is the shape of the defect, not a weak guard: every cell's
+//   VALUE is right on the control, so nothing asserts.  What moves is the run's fate — the
+//   receiver cells PANIC on a corrupt reference and `--native` does not compile them at all,
+//   and the prefix cell trips the `#405` refused-free guard and leaks a store.  Every value
+//   cell is asserted AFTER a 40-record `churn1304()`, because the defect answers correctly
+//   until the store slot is handed out again (loft#1291's recycle).
 
 struct Money1304 { cents: integer }
 struct Pad1304 { a: integer, b: integer, c: integer }
 struct Inner1304 { b: integer }
 struct Outer1304 { inner: Inner1304 }
+enum Sh1304 { Cir { r: integer }, Sq { r: integer } }
 
 fn churn1304(n: integer) -> integer {
   junk: vector<Pad1304> = [];
@@ -63,6 +64,11 @@ fn sub1304(self: Money1304, other: Money1304) -> Money1304 {
   Money1304 { cents: self.cents - other.cents }
 }
 fn OpMin(self: Money1304) -> Money1304 { Money1304 { cents: -self.cents } }
+fn OpAdd(self: Money1304, other: Money1304) -> Money1304 {
+  Money1304 { cents: self.cents + other.cents }
+}
+fn bump1304(self: Money1304) -> Money1304 { Money1304 { cents: self.cents + 1 } }
+fn dbl1304(self: Sh1304) -> Sh1304 { Sh1304::Cir { r: self.r * 2 } }
 fn free_sub1304(x: Money1304, y: Money1304) -> Money1304 {
   Money1304 { cents: x.cents - y.cents }
 }
@@ -70,6 +76,36 @@ fn free_sub1304(x: Money1304, y: Money1304) -> Money1304 {
 // ---------------------------------------------------------------- the defect
 
 
+
+fn a_method_on_a_literal_receiver_is_not_built_into_the_destination() {
+  // THE REPRODUCER.  Printed `7` and then panicked — *"Store access out of bounds … the
+  // reference is corrupt"* — and `--native` would not compile it.
+  m = Money1304 { cents: 10 }.sub1304(Money1304 { cents: 3 });
+  _ = churn1304(40);
+  assert(m.cents == 7, "method on a literal receiver: {m.cents}");
+}
+
+fn an_operator_on_literals_is_the_same_shape() {
+  // A binary operand is a sub-expression exactly as a receiver is; the axis is the descent,
+  // not the spelling.
+  m = Money1304 { cents: 10 } + Money1304 { cents: 3 };
+  _ = churn1304(40);
+  assert(m.cents == 13, "operator on literal operands: {m.cents}");
+}
+
+fn chaining_keeps_every_receiver_off_the_destination() {
+  // Two hops, the second of which receives a call RESULT rather than a literal — so the cure
+  // has to hold for a chain and not only for the first.
+  m = Money1304 { cents: 1 }.bump1304().bump1304();
+  _ = churn1304(40);
+  assert(m.cents == 3, "chained methods on a literal: {m.cents}");
+}
+
+fn a_struct_enum_receiver_is_covered() {
+  d = Sh1304::Cir { r: 4 }.dbl1304();
+  _ = churn1304(40);
+  assert(d.r == 8, "method on a struct-enum literal: {d.r}");
+}
 
 fn a_unary_prefix_operand_is_not_the_destination_either() {
   // The half a lookahead cannot see: the literal ENDS the statement, so what follows says
@@ -122,6 +158,10 @@ fn a_literal_inside_a_format_hole_is_read_correctly() {
 }
 
 pub fn main() {
+  a_method_on_a_literal_receiver_is_not_built_into_the_destination();
+  an_operator_on_literals_is_the_same_shape();
+  chaining_keeps_every_receiver_off_the_destination();
+  a_struct_enum_receiver_is_covered();
   a_unary_prefix_operand_is_not_the_destination_either();
   the_in_place_construction_is_still_taken();
   the_shapes_that_were_always_right();
