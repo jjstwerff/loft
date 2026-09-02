@@ -93,6 +93,33 @@ Phase E already proved it is the single home by reading its result off `dflt` in
 re-deriving it. Before adding any arm: run the audit, and read what each candidate site
 ASKS rather than which variants it lists.
 
+### The upside: ordinary arithmetic stays single-variable
+
+This is what bounds the algorithmic impact, and Phase A's own benchmarks are the evidence.
+
+`float`, `single` and `integer` **keep a sentinel**, so their failure is already a value and
+they never need a companion bit. They are also what real algorithms are written in. So under
+the selective design the hot path of ordinary code carries **no second variable at all** —
+the bit exists only for the five widths that cannot represent their own failure, and only at
+sites where a status test was written.
+
+**Phase A's +0.5–0.8 % therefore does not transfer.** That number came from a blanket design
+that put a bit beside every eval-stack slot, and it was measured on `02_sum_loop` and
+`01_fibonacci` — both of which are **plain `integer` and contain no narrow width at all**.
+Run against the selective design, those same two benchmarks would carry no bit and show no
+change. The measurement did not evaluate this design; it evaluated the one this replaces.
+
+That is the trade the owner is buying: the cost lands on the narrow widths, where the fault
+is frequent (a `u8` overflows at 256) and the author has asked to handle it — and stays off
+`integer`/`float`/`single`, where the fault is rare, already representable, and the code is
+hot. It is the same shape as C85's proportionality argument, applied to the bit instead of to
+the type.
+
+⚠ Unmeasured, and it should be: a narrow-width loop that DOES carry the bit. The claim above
+bounds the impact on ordinary arithmetic; it says nothing about the cost where the bit is
+live, and B1/B2 owe that number before shipping — with a benchmark that actually contains a
+narrow width, which `bench/` currently does not.
+
 ### Where the difficulty actually is
 
 The owner is right that it is harder, and it is worth naming where, because it is not evenly

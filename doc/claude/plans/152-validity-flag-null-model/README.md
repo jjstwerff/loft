@@ -111,9 +111,16 @@ null to occupy, so there is nothing for `!a` to observe. `x = 0` (fabricated) an
 is no value that can mean *"this did not happen"*. Arc B needs a channel that is not the
 value's own bits: the requirement is structural, not a preference.
 
-It is **not** Phase A's bit, which sat beside every eval-stack slot, cost +0.5–0.8 %, and has
-no native analogue. It is selective — introduced only in the expressions that need it — and
+It is **not** Phase A's bit, which sat beside every eval-stack slot and has no native
+analogue. It is selective — introduced only in the expressions that need it — and
 per-variable, which is a thing both backends already have.
+
+**So ordinary arithmetic stays single-variable.** `integer`, `float` and `single` keep a
+sentinel and never need a companion bit, which is what bounds the impact on real algorithms:
+the cost lands on the five narrow widths, where the fault is frequent and the author asked to
+handle it. Phase A's +0.5–0.8 % measured the blanket design on two benchmarks that are plain
+`integer` throughout — under this design they would carry no bit and show no change, so that
+number does not transfer ([ARC-B-DESIGN.md](ARC-B-DESIGN.md)).
 
 How that is built, why the two candidate spellings differ in cost, and which existing
 predicate it must extend rather than duplicate: [ARC-B-DESIGN.md](ARC-B-DESIGN.md).
