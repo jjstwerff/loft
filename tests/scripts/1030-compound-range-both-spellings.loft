@@ -20,6 +20,10 @@
 //     `set_short` carry a `min` operand, while the 4-byte setters take no range and
 //     truncate.  `i32` was wrong the same way; the issue only noticed `u32`.
 //
+// ⚠ The `i32` cells CHANGED on 2026-09-02 (loft#1296): the four-byte SIGNED alias reserves
+// `i32::MIN` in either spelling, so C85's sentinel applies to it and it reads as null.  The
+// other five keep the default — the narrow four have no spare code and `u32`'s is at the top.
+//
 // Both are now one guard on the COMPOSED value, at the one seam every compound assignment
 // passes through before the store-op dispatch — so the local, the field and the element
 // cannot disagree.  The cells are therefore written as triples: any fix that reaches one
@@ -71,18 +75,21 @@ fn test_a_four_byte_alias_bounds_a_field_and_an_element() {
   t.b += 10;
   assert(t.b == 0, "a u32 field past 4294967295, got {t.b}");
 
-  // `i32` is the other four-byte alias and wrapped in a field the same way; 447564a1
-  // recorded a field answering `null` where the narrower four answer their default
-  // (the type's DEFAULT since 2026-08-31 — (E-Uncomp-NN); it was the minimum before).
-  // Clamping happens before the store now, so `i32::MIN` is never written and the two
-  // positions agree.
+  // `i32` is the other four-byte alias, and it is the one of the six that answers NULL.
+  // 447564a1 recorded a field answering `null` and the guard was written to make the two
+  // positions agree on the DEFAULT instead; loft#1296 says the field was right and the
+  // agreement had to be reached from the other side.  `formal/types.md` C85: *"on overflow
+  // they write the reserved sentinel into that non-null slot — which then reads as null"*,
+  // and `i32` is `i32::MIN + 1 ..= i32::MAX` in either spelling, so it HAS a reserved code
+  // where the narrower four fill their width and `u32`'s spare sits at the TOP, where no
+  // non-null read looks.  The two positions still have to agree — that is what this cell is
+  // for — they now agree on `null`.
   c = S1030 { a: 0, b: 0, c: 2147483647, d: 0 };
   c.c += 10;
   k: i32 = 2147483647;
   k += 10;
-  assert(k == 0, "an i32 local past 2147483647 takes its DEFAULT, 0, got {k}");
-  assert(c.c == 0, "and the field agrees on the default, got {c.c}");
-  assert(c.c == k, "i32 field {c.c} and local {k} agree");
+  assert(k == null, "an i32 local past 2147483647 reads as null (C85), got {k}");
+  assert(c.c == null, "and the field agrees, got {c.c}");
 
   // A vector ELEMENT is the third target kind, which neither issue named.
   v: vector<u32> = [5];

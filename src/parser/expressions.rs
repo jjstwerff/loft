@@ -108,7 +108,12 @@ pub(crate) fn target_holds_null(target: &Type, parent: &Type) -> bool {
 }
 
 fn uncomputable_default(nullable: bool, spec: &crate::data::IntegerSpec) -> i64 {
-    if nullable {
+    // C85 says an overflow writes the RESERVED sentinel into a non-null slot, which then
+    // reads as null — so a non-null slot answers null exactly when its type kept a code back
+    // for one.  `i32` is `i32::MIN + 1 ..= i32::MAX` and `u32` is `0 ..= u32::MAX - 1`
+    // whatever the `?`, so both have that code; `u8`/`i8`/`u16`/`i16` fill their width and
+    // have none (loft#1296).
+    if nullable || spec.reserves_sentinel_unconditionally() {
         i64::MIN
     } else {
         spec.default_value()

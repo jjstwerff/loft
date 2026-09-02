@@ -167,11 +167,19 @@ both-backends result live on the issue.
 
 | | issue | shape |
 |---|---|---|
-| `integer limit(lo,hi)` is not bounded on `+=` — the `u8` spelling of the same range is; the local keeps `260` | [#1030](https://github.com/loft-lang/loft/issues/1030) | `silent-wrong` |
-| a `u32` local clamps to `0` where the `u32` FIELD wraps to `4294967291`, same write; and `u32 = 4294967295` is refused inside its own range | [#1031](https://github.com/loft-lang/loft/issues/1031) | `silent-wrong` |
-| a generic returning `iterator<T>` panics the interpreter and will not compile on `--native`; its element type does not monomorphise | [#1032](https://github.com/loft-lang/loft/issues/1032) | `sev:high` |
-| a generic function is not callable inside a `par` worker | [#1033](https://github.com/loft-lang/loft/issues/1033) | `sev:low` |
-| a declared `(text?, integer)` local is refused, though the same tuple type is accepted as a return | [#1034](https://github.com/loft-lang/loft/issues/1034) | `sev:low` |
+| a generic function inside a `par` worker answers **`null`** | [#1033](https://github.com/loft-lang/loft/issues/1033) | `silent-wrong` |
+
+**Four of the five are gone because they are FIXED** — re-verified on 2026-09-02 by running
+each repro on this tree, which is the reason this table says to re-run rather than trust a
+note. `#1030` (`integer limit(0,255) += 10` → `0`, not `260`), `#1031` (a `u32` local and
+field now agree), `#1032` (a generic returning `iterator<T>` walks), `#1034` (a declared
+`(text?, integer)` local is accepted).
+
+**#1033 stayed, and it CHANGED SHAPE under the same re-verification**, which is why it is
+worth the row: it no longer refuses the program, it compiles and answers `null` with no
+diagnostic, so it moved from `sev:low` to `silent-wrong`. Both controls pass — the generic
+without `par` answers `6`, and `par` with a plain function answers `9` — so it is the pairing
+and neither half alone. Reopened.
 
 **Two entries that were here are gone because they are FIXED**, both confirmed by
 re-running their repros on both backends before filing anything — which is the reason
