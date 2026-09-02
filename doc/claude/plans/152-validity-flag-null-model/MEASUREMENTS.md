@@ -140,3 +140,82 @@ INERT — there is no commit they would fail on. They are the **before-half of P
 parallel run**, not a regression guard, so they graduate to `tests/scripts/` in D with a real
 falsification answer, rather than landing now as an inert guard.
 
+
+## Phase C result — measured 2026-09-02
+
+**Phase C as cut is the wrong phase, and running it is what showed that.** The finding is
+better than the phase: the collapse site already exists on both backends, and it carries
+exactly the defect the proposed rule predicts.
+
+### Native has no eval stack, so the flag has no native analogue
+
+`loft introspect` on a minimal add:
+
+```rust
+fn n_add2(cell: …, mut var_a: i64, mut var_b: i64) -> i64 {
+  return ops::op_add_int((var_a), (var_b))
+}
+```
+
+Direct Rust over real locals. Phase A's shadow-array-indexed-by-`stack_pos` has nothing to
+attach to here — native would have to thread `(value, ok)` pairs through generated
+expressions, and the `#rust` template is an *expression* pasted into arbitrary positions, so
+a template returning a pair cannot be substituted where a scalar is expected. **The two
+backends need two different mechanisms**, which the phase's one-line description hid.
+
+### But the collapse site already exists — and already reports
+
+A narrow-width store lowers to `OpRangeDefault` on BOTH backends, from one `#rust` template
+(`default/01_code.loft:158`):
+
+```rust
+{ let _rv = @val;
+  if _rv == i64::MIN || (_rv >= @lo && _rv <= @hi) { _rv }
+  else { s.raise_recoverable(RangeDefaulted { value: _rv, lo: @lo, hi: @hi }); @dflt } }
+```
+
+That is `(E-Collapse)` row 3, already built, already reporting — and the message is the one
+the plan wanted: *"value 260 is outside the declared range 0..=255, so the slot took its
+default instead"*. It is **opt-in behind `--dev-soft-halt`, not absent.** So row 3 is a
+policy question (should this raise be default-on?), not an implementation phase.
+
+### And it has exactly the defect the rule predicts
+
+`_rv == i64::MIN` exempts the sentinel **unconditionally**. Whether the sentinel is a legal
+answer depends on the TARGET's nullability — `u8?` must keep it, `u8` cannot hold it — and
+`OpRangeDefault` is never told which. **The collapse site is missing precisely the input
+`(E-Collapse)` branches on.** That is this plan's thesis, confirmed at one line rather than
+argued.
+
+### Two defects, from an axis Phase B pinned
+
+Phase B's cells all overflowed to `260` — merely out of range. None landed *exactly on the
+sentinel*, which is a different path through the guard. Crossing overflow-shape × storage-kind:
+
+| | local | field | element | return |
+|---|---|---|---|---|
+| out of range (`+= 10` → 260) | 0 | 0 | 0 | 0 |
+| **on the sentinel** (`+= i64::MAX`) | **null** | 0 | 0 | **interpret null / native 0** |
+
+1. **A non-null `u8` LOCAL reads back `null`.** A narrow local is an `i64` until it is
+   materialised (`let mut var_x: i64` in the emitted Rust), the guard exempts the sentinel,
+   so it survives in the slot. Field, element and return materialise and narrow it to 0. The
+   same declared type answers `0` for one overflow and `null` for another, decided by whether
+   the result happens to land on the sentinel.
+2. **The return boundary DIVERGES between backends.** The interpreter returns
+   `integer(0,255)` as an 8-byte slot (`Return(value=8)`) and the sentinel survives; native
+   declares `-> u8` and emits `(var_x) as u8`, truncating it to `0`. Same IR, two lowerings —
+   the divergence class the codegen rule says is itself the bug.
+
+### What this does to the plan
+
+- **C is retired as cut.** The flag is not what the narrow-width case needs; the collapse
+  site needs ONE INPUT (the target's nullability). That is a far smaller change than
+  threading a pair through two backends.
+- **E moves up and shrinks**: give `OpRangeDefault` the target's nullability, and decide
+  whether `RangeDefaulted` is default-on. Both defects above close with that one input.
+- **What still argues for the flag** is unchanged and unproven-against: removing the operand
+  sentinel tests from the hot path (measured in A), collapsing the 14 `Op*Nullable`
+  duplicates, and provenance. None of those is a correctness argument any more.
+
+Probes: [`probes/axis/`](probes/axis/).

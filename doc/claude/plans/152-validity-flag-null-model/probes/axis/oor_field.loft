@@ -1,0 +1,4 @@
+// overflow shape: 260, merely OUT OF RANGE for u8
+// storage: field
+struct S { n: u8 }
+fn main() { big: integer = 9223372036854775807; x: u8 = 250; x += 10; s = S { n: 0 }; s.n = x; println("{s.n}"); }

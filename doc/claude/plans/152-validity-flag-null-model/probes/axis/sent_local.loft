@@ -1,0 +1,3 @@
+// overflow shape: 250 + i64::MAX -> lands ON the i64 sentinel
+// storage: local
+fn main() { big: integer = 9223372036854775807; x: u8 = 250; x += big; println("{x}"); }

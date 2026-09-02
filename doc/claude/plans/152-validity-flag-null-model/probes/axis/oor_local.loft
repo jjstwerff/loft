@@ -1,0 +1,3 @@
+// overflow shape: 260, merely OUT OF RANGE for u8
+// storage: local
+fn main() { big: integer = 9223372036854775807; x: u8 = 250; x += 10; println("{x}"); }

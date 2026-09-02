@@ -1,0 +1,3 @@
+// overflow shape: 250 + i64::MAX -> lands ON the i64 sentinel
+// storage: elem
+fn main() { big: integer = 9223372036854775807; x: u8 = 250; x += big; v: vector<u8> = [0]; v[0] = x; println("{v[0] ?? 111}"); }

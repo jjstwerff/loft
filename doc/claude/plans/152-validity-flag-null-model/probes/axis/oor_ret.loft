@@ -1,0 +1,4 @@
+// overflow shape: 260, merely OUT OF RANGE for u8
+// storage: ret
+fn mk(big: integer) -> u8 { x: u8 = 250; x += 10; x }
+fn main() { println("{mk(9223372036854775807)}"); }
