@@ -799,8 +799,11 @@ so `-` is not in `Addable`, `+` and `/` are not in `Numeric`, `Scalable` takes a
 factor through a method and answers `integer` rather than `Self`, and no built-in type
 satisfies `Scalable` at all. The derived spellings come free: `>`/`<=`/`>=` from `<`, and
 `!=` from `==`. `tests/scripts/the-reference-bounds-permit-what-it-lists.loft` holds the
-permitted half and `tests/parse_errors.rs`'s `generic_bound_*` family the refused half; a
-binary `-` under `Numeric` is loft#1274 and answers `-a`.
+permitted half and `tests/parse_errors.rs`'s `generic_bound_*` family the refused half. A
+binary `a - b` under `Numeric` is REFUSED (loft#1274, fixed): `-` desugars to the same
+`OpMin` name at both arities, and bound satisfaction now compares the SIGNATURE rather than
+the name, so the unary negation no longer answers for the binary spelling. No built-in
+interface offers binary subtraction — write it against a concrete type.
 
 The design as originally written:
 

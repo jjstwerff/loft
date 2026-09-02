@@ -41,7 +41,7 @@ Loft is a lightweight scripting language with null safety, built-in parallel exe
 
 === Prerequisites
 
-Building from source requires the Rust toolchain (Rust 1.82 or later). Install it from rustup.rs if you do not already have it:
+Building from source requires the Rust toolchain. loft is an edition-2024 crate, so that means *Rust 1.85 or later* — the same version `--native` needs to compile your programs. Install it from rustup.rs if you do not already have it:
 
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -127,7 +127,7 @@ Run `loft --help` for the full list. The most commonly used flags are:
 
 === Running your program as a native binary
 
-The interpreter runs programs immediately, but for compute-heavy work you can compile to a native binary instead. This takes a few seconds the first time (it calls `rustc` in the background) but runs 10–50× faster:
+`loft myprogram.loft` already compiles through `rustc` when it can find it, and interprets when it cannot — you do not have to choose, and the answer is the same either way. Compiling takes a few seconds the first time and then runs 20–50× faster than interpreting (see Performance for the measured table). Ask for one on purpose when you want to:
 
 ```
 loft --native myprogram.loft
@@ -140,7 +140,7 @@ loft --native-emit myprogram.rs
 cat myprogram.rs
 ```
 
-Native compilation requires Rust 1.85 or later on your PATH. If `rustc` is not found, loft prints a clear error message telling you how to install it.
+This needs `rustc` on your PATH — the same Rust 1.85 or later you built loft with. If it is not found, loft says so and interprets instead, which is why a downloaded release always interprets.
 
 === Standard library
 
@@ -165,10 +165,11 @@ See Libraries for the full search path and naming rules.
 
 === Editor setup
 
-Loft syntax highlighting extensions are planned. In the meantime:
+loft ships its own editor support, so you do not need to pretend `.loft` is Rust:
 
-- *VS Code* — use Rust syntax highlighting as a close approximation.
-- *Vim / Neovim* — associate `*.loft` with Rust via `autocmd BufRead *.loft set filetype=rust` in your `vimrc`.
+- *VS Code* — the extension in `editors/vscode/` of the repository gives syntax highlighting, snippets, and Run buttons for the interpreted (F5) and native (Ctrl+F5) paths. Build and install it with `cd editors/vscode && npm install && vsce package && code --install-extension loft-0.1.0.vsix`. It is not on the marketplace yet.
+- *Any LSP editor* — `loft-lsp` is a language server built from this repository (`cargo build --release --bin loft-lsp`). It answers diagnostics, completion, go-to-definition, references, hover, document symbols, semantic tokens, inlay hints, rename and formatting over stdio. `loft-dap` is the matching debug adapter.
+- *Vim / Neovim* — point your LSP client at the `loft-lsp` binary for `*.loft` files.
 - *Any editor* — the Web IDE (in progress) provides syntax highlighting and navigation in the browser.
 
 === Next steps
@@ -205,8 +206,8 @@ Downside Immutability is opt-in, not the default. Rust makes variables immutable
 
 ```rust
 struct Point {
-    label: text,          // nullable
-    x: integer not null,  // never null
+    label: text?,         // `?`: may be absent
+    x: integer,           // never null — the default
 }
 p = Point { x: 1 };
 assert(p.label == null, "absent");
@@ -223,18 +224,18 @@ assert!(p.label.is_none());
 
 Upside Natural for database records where fields are often absent. No Some(x)/None wrapping. Conditionals on null are concise: if v == null.
 
-Downside Null is opt-out, not opt-in. A field is nullable unless explicitly marked not null, so forgetting the annotation leaves a potential null silently. In Rust, Option is visible in the type and forces handling at every call site.
+Downside The absence is in the type, as in Rust, but nothing forces you to discharge it: label can be read straight and answers null, where Rust's Option makes every call site say what it does about None. What loft gives you instead is ?? and ? at the point of use, plus a warning when a nullable value flows into a slot that cannot hold one. (Older code may carry not null on a field; it is deprecated and has no effect, because a type is non-null by default now.)
 
 === Parameter mutability — const and & instead of ownership
 
 ```rust
-// &: vector growth (append) is visible to caller
+// a plain collection parameter is already shared — the append reaches the caller
 fn push_two(v: &vector<integer>) {
     v += [1, 2];  // caller sees the change
 }
 // const: read-only (locked in debug builds)
 fn count(v: const vector<integer>) - integer {
-    length(v)
+    len(v)
 }
 // &: explicit write-back for primitives
 fn add_to(n: &integer, delta: integer) {
@@ -255,7 +256,7 @@ fn add_to(n: &mut i32, delta: i32) {
 }
 ```
 
-Upside No borrow-checker errors. No lifetime annotations. No ownership transfer to reason about. Struct field mutations through a parameter are always visible to the caller. Use & on a collection parameter to allow vector growth (append) to propagate back. const parameters signal read-only intent, and in debug builds the runtime locks the store for the duration of the call — enough to catch most accidents during development.
+Upside No borrow-checker errors. No lifetime annotations. No ownership transfer to reason about. Struct field mutations through a parameter are always visible to the caller. A collection parameter is SHARED with no annotation at all — field writes, element writes, appends, removes and clears all reach the caller. & adds exactly one thing on top of that: whole-value replacement, v = \[...\], seen by the caller. const parameters signal read-only intent, and in debug builds the runtime locks the store for the duration of the call — enough to catch most accidents during development.
 
 Downside The compile-time guarantees are much weaker. Rust's borrow checker statically proves no aliased mutations, no dangling references, and no data races — before the program ever runs. Loft's const is a debug-only runtime check. Aliasing is unchecked at compile time, and the engine's Rust runtime is what truly enforces memory safety.
 
@@ -373,7 +374,7 @@ fn greet(self: Person) - text {
     "Hello, {self.name}!"
 }
 fn name_len(self: const Person) - integer {
-    length(self.name)  // const: read-only access guaranteed
+    len(self.name)  // const: read-only access guaranteed
 }
 p.greet()     // dot syntax
 greet(p)      // free-function call — identical
@@ -433,8 +434,8 @@ offset = 10;
 shift = fn(x: integer) - integer { x + offset };
 assert(shift(5) == 15, "shift");
 
-// Non-capturing lambdas work with map/filter/reduce:
-doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
+// Capturing and non-capturing lambdas both work with map/filter/reduce:
+shifted = map([1, 2, 3], shift);   // carries `offset` with it
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
 // Cross-scope: returning a capturing lambda works:
@@ -460,11 +461,11 @@ fn make_adder(n: i32) -> impl Fn(i32) -> i32 {
 }
 ```
 
-Upside Same-scope capture works for integers, text, and mutable variables — no capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, no lifetime annotations. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked.
+Upside Capture works for every type — scalars, text, structs and every collection kind — with no capture modes (move vs borrow), no Fn/FnMut/FnOnce trait bounds, and no lifetime annotations. The compiler picks the mode from the type: a scalar or text is copied at definition time, a struct or collection is shared with the enclosing scope, and a scalar the closure writes to is shared as well, so an accumulator needs no declaration. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked.
 
-Downside Capture is always by value (like Rust move). Rust's Fn/FnMut/FnOnce traits give more flexibility: closures can borrow by reference, be stored in structs, and passed freely across scopes. Loft captures at definition time only — no borrow-based captures.
+Downside You do not choose the capture mode, so a case Rust expresses by picking one has no spelling here. Three limits have no Rust counterpart: a capturing closure cannot be stored in a collection (a struct field holds one fine), a & parameter cannot be captured at all, and a scalar the closure writes to may be captured by only one closure — the cure for the last two is to hold the state in a struct and capture that.
 
-=== Generic functions — pass-through only, no trait bounds
+=== Generic functions — inferred, with structural interface bounds
 
 ```rust
 // Pass-through generics work:
@@ -472,9 +473,12 @@ fn identity<T>(x: T) - T { x }
 identity(42)        // integer
 identity("hello")  // text
 
-// Trait-bounded generics are not supported:
-// fn max<T: PartialOrd>(a: T, b: T) -> T { ... }  // not valid
-// Must write a version per type:
+// Interface bounds work, and are satisfied structurally:
+fn largest<T: Ordered>(a: T, b: T) -> T { if a > b { a } else { b } }
+largest(3, 9)        // 9
+largest("ada", "bob")  // "bob" — same function
+
+// A per-type version is still what you write when the bound does not fit:
 fn max_int(a: integer, b: integer) - integer {
     if a  b { a } else { b }
 }
@@ -513,7 +517,7 @@ let hex  = format!("{:#x}", n);
 // nested string literals in format args are fine in Rust
 ```
 
-Upside Concise — no format!() call, no separate variable. Full format expressions (arithmetic, slices, for comprehensions) can appear directly inside {}. Specifiers mirror Rust: :width, :.precision, :width.precision, sign (+), radix (\#x, \#o, b), alignment (\<, \>, ^), and zero-padding (0N) all work. Note that the sign (+) and zero-pad (0N) flags apply to integer output only — they are dropped for floats.
+Upside Concise — no format!() call, no separate variable. Full format expressions (arithmetic, slices, for comprehensions) can appear directly inside {}. Specifiers mirror Rust: :width, :.precision, :width.precision, sign (+), radix (\#x, \#o, b), alignment (\<, \>, ^), and zero-padding (0N) all work. The sign (+) and zero-pad (0N) flags apply to floats too: {5.25:+} is +5.25 and {5.25:08} is 00005.25.
 
 Downside Unknown radix letters in specifiers are compile-time errors (e.g. :5z or :5B are both rejected). Radix letters are case-sensitive: valid ones are b, o, x/X, e, and j/json — uppercase B or O produce an error. Applying a numeric specifier to an incompatible type (such as :x on a text value, or zero-padding on a boolean) is a compile-time error.
 
@@ -545,7 +549,7 @@ let sum: i32 = scores.par_iter()
 
 Upside Built into the language — no external crate, no Cargo.toml edit. The compiler validates the worker function signature at the call site. Results are delivered in the original vector order. The thread count is set per call, making it easy to tune for the hardware at hand.
 
-Downside Workers can return primitives (integer, long, float, boolean), text, and inline enums — but not struct references. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use map() / filter() / reduce() sequentially — each stage allocates a new intermediate vector.
+Downside Workers can return primitives (integer, float, single, boolean, character), text, and inline enums — but not struct references. Workers cannot capture local variables: context must be embedded as fields alongside the data in the element struct. For multi-stage transformations, use map() / filter() / reduce() sequentially — each stage allocates a new intermediate vector.
 
 
 = vs Python
@@ -576,12 +580,12 @@ Downside Types are fixed at first assignment and cannot change. Python's dynamic
 
 ```rust
 struct User {
-    email: text,             // nullable by default
-    age:   integer not null,  // can never be null
+    email: text?,            // `?`: may be absent
+    age:   integer,            // never null — the default
 }
 u = User { age: 30 };
 if u.email == null { print("no email"); }
-u.age = null;  // compile error: age is not null
+u.age = null;  // warns: the slot holds null anyway
 ```
 
 ```python
@@ -599,9 +603,9 @@ u = <span class="fn-call">User</span>(age=<span class="nm">30</span>)
 u.age = <span class="kw">None</span>  <span class="cm"># allowed at runtime; mypy catches this</span>
 ```
 
-Upside Nullability is part of the struct definition — readable at a glance. not null fields are enforced by the compiler and additionally locked at runtime in debug builds, catching accidental null writes early in development. No Optional\[T\] wrapping needed; the comparison v == null is natural.
+Upside Nullability is part of the type and readable at a glance, and the default is the safe one: a field is non-null unless it says ?, so absence is something you opt INTO. No Optional\[T\] wrapping is needed; the comparison v == null is natural, and ?? supplies a fallback at the point of use.
 
-Downside The default is nullable, not non-nullable — the safe default is backwards from what static analysis advocates recommend. Python with mypy and Optional\[T\] annotation gives static guarantees that loft's runtime checks do not. Python's None also participates in truthiness testing (if not email:), pattern matching, and or chaining in ways that loft's null does not support.
+Downside The default is the safe one — a field is non-null unless its type says ? — but nothing forces you to discharge a nullable at the point of use, and writing null into a non-null slot is a warning rather than a refusal. Python with mypy and Optional\[T\] annotation gives static guarantees that loft's runtime checks do not. Python's None also participates in truthiness testing (if not email:), pattern matching, and or chaining in ways that loft's null does not support.
 
 === Structs vs classes and dicts
 
@@ -643,9 +647,9 @@ Downside No inheritance, no \_\_repr\_\_, no operator overloading (\_\_add\_\_, 
 ```rust
 while !ready() { step(); }  // works
 
-while length(queue)  0 {
+while len(queue) > 0 {
     process(queue[0]);
-    queue#remove;
+    queue.remove(0);   // `#remove` is for a loop variable
 }
 
 // No loop keyword — infinite loop needs a large bound:
@@ -726,7 +730,7 @@ lst  = <span class="st">","</span>.<span class="fn-call">join</span>(<span class
 pad  = <span class="st">f"{count:08}"</span>
 ```
 
-Upside All loft strings are implicitly format strings — no f prefix needed. Inline for loops inside {} produce a bracketed list (\[2,4,6\]) without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (\#x, \#o, b) all work — though the sign (+) and zero-pad (0N) flags apply to integer output only, and are dropped for floats.
+Upside All loft strings are implicitly format strings — no f prefix needed. Inline for loops inside {} produce a bracketed list (\[2,4,6\]) without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (\#x, \#o, b) all work on integers and on floats alike: {5.25:+} is +5.25 and {5.25:08} is 00005.25.
 
 Downside Python f-strings accept arbitrary expressions: method calls ({obj.method():.2f}), ternary expressions ({"yes" if ok else "no"}), and join operations inline. Loft restricts what can appear inside {}. Python also supports conversion flags (!r for repr, !s for str, !a for ASCII) and the = debug specifier ({x=} prints x=42); loft has none of these.
 
@@ -768,7 +772,7 @@ offset = 10;
 shift = fn(x: integer) - integer { x + offset };
 assert(shift(5) == 15, "shift");
 
-// Non-capturing lambdas work with map/filter/reduce:
+// Lambdas work with map/filter/reduce, capturing or not:
 doubled = map([1, 2, 3], fn(x: integer) - integer { x * 2 });
 evens   = filter([1, 2, 3, 4], |x| { x % 2 == 0 });
 
@@ -790,9 +794,9 @@ evens   = <span class="bi">list</span>(<span class="bi">filter</span>(<span clas
 shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> nums]
 ```
 
-Upside Same-scope capture works for integers, text, and mutable variables — no capture modes, no scope surprises. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
+Upside Capture works for every type — scalars, text, structs and every collection kind — with no capture modes and no scope surprises. The compiler picks the mode from the type, so an accumulator needs no declaration the way Python's nonlocal does. Both long-form (fn(x: integer) -\> integer { x \* 2 }) and short-form (|x| { x \* 2 }) lambdas are supported. Named function references (fn name) are compile-checked. Higher-order functions (map, filter, reduce) accept both lambdas and fn-refs.
 
-Downside Capture is by value at definition time — later mutations to the original variable do not affect the lambda (and vice versa). Python's lambda and nested def close over variables by reference, so mutations are shared. Python's list comprehensions (\[x + offset for x in v\]) are shorter than map(v, fn(x) { x + offset }).
+Downside You do not choose the capture mode, and it is not the same for every type. A scalar or text the lambda only READS is copied at definition time, so a later mutation of the original does not reach it — where Python closes over the name and would see the new value. Structs and collections share the way Python does, and so does a scalar the lambda writes to. Three limits have no Python counterpart: a capturing closure cannot be stored in a collection (a struct field holds one fine), a & parameter cannot be captured at all, and a scalar the lambda writes to may be captured by only one lambda. Python's list comprehensions (\[x + offset for x in v\]) are shorter than map(v, fn(x) { x + offset }).
 
 === No exception handling — file errors use FileResult
 
@@ -894,7 +898,10 @@ fn identity<T>(x: T) - T { x }
 identity(42)        // integer
 identity("hello")  // text
 
-// Algorithms requiring operations on T still need per-type versions:
+// Operations on T need a bound — `<T: Ordered>` compares, `<T: Addable>` adds:
+fn largest<T: Ordered>(a: T, b: T) -> T { if a > b { a } else { b } }
+
+// A per-type version is what you write when no bound fits:
 fn max_int(a: integer, b: integer) - integer {
     if a  b { a } else { b }
 }
@@ -943,9 +950,10 @@ Downside No \*args or \*\*kwargs — variadic dispatch must use a vector paramet
 === Ecosystem — minimal standard library
 
 ```rust
-// import "mylib" loads a .loft file relative to the script.
-// The full standard library ships inside the interpreter binary;
-// there is no package manager or external dependency system.
+// `use mylib;` loads a library — a .loft file beside the script,
+// or a package the manifest declares under [dependencies].
+// The standard library ships inside the interpreter binary, and
+// `loft install` fetches the rest from a signed registry.
 
 // Built-in: text, math, file I/O, collections,
 //           logging, threading, image, lexer/parser
@@ -5145,7 +5153,9 @@ A generic function uses a type variable to work with any type. Write the functio
 
 === Declaring a generic function
 
-Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector\<T\>).
+Place a single type variable in angle brackets after the function name. The type variable must appear in the first parameter (directly or as a container element like vector\<T\>) — a T that appears only later, or only in the return type, is refused with "Type variable T must appear in the first parameter".  ONE type variable: `\<T, U\>` does not parse.
+
+Generic STRUCTS are a separate thing and loft does not have them — `struct Box\<T\>` is a parse error.  A generic FUNCTION over `vector\<T\>` covers most of what a generic container would be reached for.
 
 ```rust
 fn identity<T>(x: T) -> T { x }
@@ -5202,25 +5212,33 @@ fn test_vector_generics() {
   words = ["alpha", "beta", "gamma"];
   assert(first_element(words) == "alpha", "first text");
   assert(last_element(words) == "gamma", "last text");
+```
+
+A CONSTANT index is trusted, and an empty vector is where that trust runs out: `gen\_v\[0\]` is typed `T` and still answers null on an empty vector, so the null travels through a return type that says it cannot be there. Check the length before calling, or declare the result `T?` as `last\_element` does and let the caller discharge it.
+
+```rust
+  empty: vector<integer> = [];
+  assert(!first_element(empty), "`v[0]` on an empty vector is null despite the `T` return");
 }
 ```
 
 === Bounded generics with interfaces
 
-By default, you can only assign and return T — no arithmetic, no comparison. To use operators on T, add an interface bound: `\<T: Ordered\>` means T must support `\<`, `\<=`, `\>`, `\>=` comparisons.
+By default, you can only assign and return T — no arithmetic, and no comparison either: `a == b` on an unbounded T is refused. To use an operator on T, add an interface bound.
 
-Built-in interfaces.  Each names the FEWEST operators it needs, because the rest are derived: `\>`, `\<=` and `\>=` all come from `\<`, and `!=` comes from `==`.
+Each bound guarantees EXACTLY the operations in this table, and no more — a `+` under `Numeric` is refused as surely as one under no bound at all. Each names the FEWEST operators it needs, because the rest are derived: `\>`, `\<=` and `\>=` all come from `\<`, and `!=` comes from `==`.
 
 ```
-Ordered    — declares `<`; gives you <, <=, >, >=
-Equatable  — declares `==`; gives you == and !=
-Addable    — addition (+)
-Numeric    — multiplication (*) and UNARY negation (-a)
-Scalable   — `scale(self, factor: integer) -> integer`, a method rather than an operator
-Printable  — text conversion (to_text)
+Ordered    — declares `<`; gives you `<`, `<=`, `>`, `>=`
+Equatable  — declares `==`; gives you `==` and `!=`
+Addable    — `+` only.  NOT `-`
+Numeric    — `*` and the UNARY `-a`.  NOT `+`, NOT `/`
+Scalable   — the method `scale(self, factor: integer) -> integer`.  Not an
+             operator, and no built-in type satisfies it — it is for your own types
+Printable  — the method `to_text() -> text`, and `"{x}"` interpolation
 ```
 
-`Numeric`'s `-` is the unary negation `-a`, so `a - b` under a bound is refused: no built-in interface offers binary subtraction, because `-` desugars to the same `OpMin` name at both arities.  Write the subtraction against a concrete type.
+Reach for `Ordered + Addable` when you want `+` and a comparison. No built-in interface offers binary SUBTRACTION: `Numeric`'s `-` is the unary negation, and `-` desugars to the same `OpMin` name at both arities, so `a - b` under a bound is refused and you write the subtraction against a concrete type.
 
 ```rust
 fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
@@ -5229,11 +5247,20 @@ fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
 fn gen_min<T: Ordered>(gen_x: T, gen_y: T) -> T {
   if gen_x < gen_y { gen_x } else { gen_y }
 }
+fn same<T: Equatable>(gen_x: T, gen_y: T) -> boolean {
+  gen_x == gen_y
+}
+fn described<T: Printable>(gen_x: T) -> text {
+  gen_x.to_text()
+}
 fn test_bounded() {
   assert(gen_max(3, 7) == 7, "max int");
   assert(gen_max(2.5, 1.5) == 2.5, "max float");
   assert(gen_min(3, 7) == 3, "min int");
   assert(gen_min("apple", "banana") == "apple", "min text");
+  assert(same(4, 4), "equatable on integers");
+  assert(!same("a", "b"), "…and it says no as well");
+  assert(described(7) == "7", "printable: {described(7)}");
 }
 ```
 
@@ -5253,23 +5280,56 @@ fn test_combined_bounds() {
 }
 ```
 
-=== Allowed operations on T
+=== Your own types under a bound
 
-Inside a generic function you may only use operations that the bound guarantees.  Without any bound: assign, return, store in variables. With Ordered: comparisons.  With Addable: + and -.
+The built-in bounds are not only for built-in types, and this is what they are for: a struct satisfies one by DEFINING the operation, with no declaration that it does. The names are the operators' own, not the symbols:
+
+```
+Ordered    fn OpLt(self: T, other: T) -> boolean      (`<`)
+Equatable  fn OpEq(self: T, other: T) -> boolean      (`==`)
+Addable    fn OpAdd(self: T, other: T) -> T           (`+`)
+Numeric    fn OpMul(self: T, other: T) -> T           (`*`)
+           fn OpMin(self: T) -> T                     (unary `-`)
+Scalable   fn scale(self: T, factor: integer) -> integer
+Printable  fn to_text(self: T) -> text
+```
+
+The same definition serves the bare operator: once `Money` has `OpLt`, both `a \< b` and `\<T: Ordered\>` work on it. Miss one and the error names it — "'Money' does not satisfy interface 'Ordered': missing OpLt" — at the CALL site, because that is where the concrete type is known.
+
+```rust
+struct Money { cents: integer }
+fn OpLt(self: Money, other: Money) -> boolean { self.cents < other.cents }
+fn OpEq(self: Money, other: Money) -> boolean { self.cents == other.cents }
+fn OpAdd(self: Money, other: Money) -> Money { Money { cents: self.cents + other.cents } }
+fn to_text(self: Money) -> text { "{self.cents}c" }
+fn test_user_type_bounds() {
+  cheap = Money { cents: 300 };
+  dear = Money { cents: 700 };
+```
+
+Bind a generic's result before reading through it — loft\#1273 retains one record per call when the value is consumed inline.
+
+```rust
+  best = gen_max(cheap, dear);
+  assert(best.cents == 700, "Ordered on a user type: {best.cents}");
+  assert(cheap < dear, "…and the bare operator, from the same definition");
+  assert(same(cheap, Money { cents: 300 }), "Equatable on a user type");
+  total = clamped_add(cheap, cheap, Money { cents: 1000 });
+  assert(total.cents == 600, "Addable on a user type: {total.cents}");
+  assert(described(dear) == "700c", "Printable on a user type: {described(dear)}");
+}
+```
 
 === Disallowed operations
 
-The compiler rejects operations not covered by the bound. `x + y` on unbounded T gives:
+The compiler rejects operations the bound does not cover, and it says which:
 
 ```
-"generic type T: operator '+' requires a concrete type"
+`x + y` on unbounded T   — "generic type T: operator '+' requires a concrete type"
+`x.field` on T           — "generic type T: field access requires a concrete type"
 ```
 
-`x.field` on T gives:
-
-```
-"generic type T: field access requires a concrete type"
-```
+The same wording covers an operator OUTSIDE a bound: `x + y` under `Numeric` and `x - y` under `Addable` are refused in exactly those words.
 
 ```rust
 fn main() {
@@ -5278,13 +5338,14 @@ fn main() {
   test_vector_generics();
   test_bounded();
   test_combined_bounds();
+  test_user_type_bounds();
 }
 ```
 
 
 = Closures
 
-A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically.
+A closure is a lambda that reads variables from the function scope in which it is written.  No explicit capture list is needed — the compiler detects which outer variables the lambda body uses and packages them automatically. How a variable travels into the closure depends on what it is: a scalar or a text is COPIED, and a collection or struct is SHARED.  Both rules are below, and the difference between them is the thing to remember on this page.
 
 === Integer capture
 
@@ -5300,7 +5361,15 @@ Text values are captured by deep-copy, so they are independent of the original v
 
 === Capture timing
 
-Loft captures variables at the moment the lambda is written (definition time), not when it is called.  If a variable changes after the lambda is written, the lambda still sees the original value.
+Scalars and text are copied at the moment the lambda is written (definition time), not when it is called.  Changing such a variable afterwards does not change what the lambda sees.
+
+=== Collections and structs are shared
+
+Every collection — vector, hash, sorted, index, spatial — and every struct is captured by reference: the closure and the enclosing scope work on the same value, so changes travel BOTH ways.
+
+=== Writing to a captured variable
+
+A closure may assign to a captured scalar, and those writes are visible in the enclosing scope.
 
 === Cross-scope closures
 
@@ -5308,11 +5377,27 @@ A function can return a capturing lambda to the caller. The captured values trav
 
 === Closures with higher-order functions
 
-A capturing closure stored in a variable can be called directly.
+A capturing closure can be called directly, and it can also be handed to map or filter — the captures travel with it.
 
 === Non-capturing lambdas with higher-order functions
 
 Lambdas that use only their own parameters (no capture) also work fine.
+
+=== What a closure cannot capture
+
+Two shapes the compiler refuses, and the one that replaces them.
+
+```rust
+struct Counter {
+  hits: integer,
+}
+```
+
+```rust
+struct Stepper {
+  advance: fn(integer) -> integer,
+}
+```
 
 ```rust
 fn make_adder(base_val: integer) -> fn(integer) -> integer {
@@ -5348,22 +5433,62 @@ fn main() {
 
 === Text capture
 
+The closure holds its own copy of the text, so reassigning 'greeting' afterwards leaves the message it builds unchanged.
+
 ```rust
   greeting = "Hello";
   make_msg = fn(name: text) -> text { "{greeting}, {name}!" };
+  greeting = "Goodbye";
   assert(make_msg("World") == "Hello, World!", "greeting capture");
   assert(make_msg("Loft") == "Hello, Loft!", "greeting capture 2");
 ```
 
 === Capture timing
 
-Closures capture at definition time. 'base' is 10 when the lambda is written; reassigning 'base' to 20 afterwards does not affect the captured value.
+'base' is 10 when the lambda is written; reassigning it to 20 afterwards does not affect the captured value.
 
 ```rust
   base = 10;
   add_base = fn(n: integer) -> integer { base + n };
   base = 20;
   assert(add_base(5) == 15, "sees base=10 at definition time: {add_base(5)}");
+```
+
+=== Collections and structs are shared
+
+A collection is NOT copied the way the scalar above is: the closure works on the caller's vector.  Appending to 'items' after the lambda is written changes what the lambda counts, and a write made inside the lambda is visible outside it.  That sharing is what lets a closure gather results into a vector the enclosing function keeps.
+
+```rust
+  items = [1, 2, 3];
+  total = fn() -> integer {
+    sum = 0;
+    for e in items { sum += e; }
+    sum
+  };
+  assert(total() == 6, "before the append: {total()}");
+  items += [10];
+  assert(total() == 16, "the append reaches the closure: {total()}");
+```
+
+A struct behaves the same way, in the other direction: the closure writes through to the record the enclosing scope holds.
+
+```rust
+  tally = Counter { hits: 0 };
+  record_hit = fn() { tally.hits += 5; };
+  record_hit();
+  assert(tally.hits == 5, "the closure's write is visible outside: {tally.hits}");
+```
+
+=== Writing to a captured variable
+
+Assigning to a captured scalar shares it instead of copying it, so the closure's writes are visible for the rest of the function.  This is how an accumulator is written.  One restriction: a scalar a closure WRITES to may be captured by only one closure — two of them is refused, and the cure is to hold the shared state in a struct and capture that, as 'tally' does above.
+
+```rust
+  count = 0;
+  bump = fn() { count += 1; };
+  bump();
+  bump();
+  assert(count == 2, "the closure's writes reach the enclosing scope: {count}");
 ```
 
 === Cross-scope closures
@@ -5383,7 +5508,23 @@ make\_adder returns a lambda that captured base\_val from its parameter.
   factor = 3;
   scale = fn(x: integer) -> integer { x * factor };
   assert(scale(5) == 15, "scale(5): {scale(5)}");
-  assert(scale(10) == 30, "scale(10): {scale(10)}");
+```
+
+The same closure passed to map — 'factor' travels with it.
+
+```rust
+  scaled = map([1, 2, 3], scale);
+  assert(scaled[0] == 3, "scaled[0]: {scaled[0]}");
+  assert(scaled[2] == 9, "scaled[2]: {scaled[2]}");
+```
+
+A capturing lambda written inline works too, in filter as well as map.
+
+```rust
+  limit = 2;
+  big = filter([1, 2, 3, 4], |x| { x > limit });
+  assert(len(big) == 2, "len(big): {len(big)}");
+  assert(big[0] == 3, "big[0]: {big[0]}");
 ```
 
 === Non-capturing lambdas with higher-order functions
@@ -5401,25 +5542,37 @@ No capture needed here — the lambda uses only its own parameter.
   evens = filter(nums, |x| { x % 2 == 0 });
   assert(evens[0] == 2, "evens[0]: {evens[0]}");
   assert(evens[1] == 4, "evens[1]: {evens[1]}");
+```
+
+=== What a closure cannot capture
+
+A '&' parameter cannot be captured at all, in any shape — copy it into a local, capture the local, and write the local back before returning (loft\#1276).
+
+A capturing closure cannot be stored in a COLLECTION either: 'vector\<fn(…)\>' and the keyed collections take non-capturing lambdas only.  A struct FIELD holds one without trouble, which is the shape to reach for.
+
+```rust
+  step = 7;
+  stepper = Stepper { advance: fn(x: integer) -> integer { x + step } };
+  assert(stepper.advance(10) == 17, "a struct field holds a capturing closure: {stepper.advance(10)}");
 }
 ```
 
 
 = Coroutines
 
-\#warn Variable d is never read \@TITLE: Lazy sequences with generators and yield A generator function produces values one at a time. Declare the return type as 'iterator\<T\>' and use 'yield' to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with 'break', or chain sequences without building intermediate collections.
-
-=== Declaring a generator function
-
-A function whose return type is 'iterator\<T\>' is a generator. 'yield value' emits one item and pauses; the next call resumes from there.
+A generator function produces values one at a time. Declare the return type as 'iterator\<T\>' and use 'yield' to emit each value. The function body is suspended between yields and resumed when the next value is requested.  When the body finishes the generator is exhausted. Generators are useful when you want to produce values on demand, stop early with 'break', or chain sequences without building intermediate collections.
 
 === Iterating with a for loop
 
 A 'for' loop drives the generator forward automatically. The body runs once per yielded value. Use 'break' to stop early without consuming the rest.
 
+=== The body really is suspended
+
+Calling a generator runs none of its body; each advance runs exactly one more slice, up to the next 'yield'.  Write the loop so its body ENDS in a single 'yield' and this holds on both backends.
+
 === Manual advance with next() and exhausted()
 
-Call 'next(gen)' yourself when you need fine-grained control. 'exhausted(gen)' returns true once there are no more values.
+Call 'next(gen)' yourself when you need fine-grained control.
 
 === Generators with parameters
 
@@ -5433,6 +5586,16 @@ A generator function may take any parameters, including text. Parameter values a
 
 Stopping a 'for' loop before the generator is exhausted is safe. The abandoned generator frame is freed automatically.
 
+=== A generator runs once, and has no return
+
+Two rules a reader coming from another language will look for.
+
+```rust
+struct Trace {
+  steps: integer,
+}
+```
+
 ```rust
 fn count_up(start: integer, stop: integer) -> iterator<integer> {
   for i in start..stop {
@@ -5445,6 +5608,17 @@ fn count_up(start: integer, stop: integer) -> iterator<integer> {
 fn squares(n: integer) -> iterator<integer> {
   for i in 1..=n {
     yield i * i;
+  }
+}
+```
+
+Records one step per value produced, so the consumer can see how much of the body actually ran.
+
+```rust
+fn counted(limit: integer, t: Trace) -> iterator<integer> {
+  for i in 1..=limit {
+    t.steps += 1;
+    yield i;
   }
 }
 ```
@@ -5473,10 +5647,37 @@ fn outer_combined() -> iterator<integer> {
 }
 ```
 
+Delegating to a generator that takes an ARGUMENT is written as a plain forwarding loop rather than 'yield from' — see the note in that section.
+
+```rust
+fn scaled_by(factor: integer) -> iterator<integer> {
+  yield factor;
+  yield factor * 10;
+}
+```
+
+```rust
+fn forwards_with_argument() -> iterator<integer> {
+  for v in scaled_by(4) {
+    yield v;
+  }
+}
+```
+
 ```rust
 fn large_range(limit: integer) -> iterator<integer> {
   for i in 1..=limit {
     yield i;
+  }
+}
+```
+
+Ends early with 'break'.  A generator has no 'return', so 'break' is how a body stops before its loop would.
+
+```rust
+fn first_positive(v: vector<integer>) -> iterator<integer> {
+  for x in v {
+    if x > 0 { yield x; break; }
   }
 }
 ```
@@ -5509,7 +5710,27 @@ Squares via for loop with index tracking.
   assert(idx == 4, "squares count: {idx}");
 ```
 
+=== The body really is suspended
+
+'counted' is asked for a thousand values and the loop breaks after six. Its step counter shows the body ran six times, not a thousand — the work for the values nobody asked for was never done.
+
+⚠ That holds on BOTH backends for the shape written here: a loop whose body ends in one unconditional 'yield'.  Other shapes — a statement after the yield, a yield inside an 'if' or 'match', a nested loop, a 'continue' — still run the whole loop eagerly on --native, so their side effects happen for values the consumer never asks for (measured: 1000 steps where the interpreter does 5).  The VALUES are the same either way; it is the side effects that differ.  Keep the yield last, or do not put observable work in a generator body.  COROUTINE.md tracks this as CL-9.
+
+```rust
+  trace = Trace { steps: 0 };
+  seen = 0;
+  for n in counted(1000, trace) {
+    seen += 1;
+    if seen > 5 { break; }
+  }
+  assert(trace.steps == 6, "the body ran once per value asked for: {trace.steps}");
+```
+
 === Manual advance with next() and exhausted()
+
+'exhausted' is true once an advance has run off the END of the body — not as soon as the last value has been handed out.  After the third value here there are no more values, and 'exhausted' is still false; it takes one more 'next' to discover the end, and that call answers null.
+
+So 'while !exhausted(g)' runs one iteration too many.  Drive the generator with 'for', or stop on the null that 'next' answers.
 
 ```rust
   gen = count_up(10, 13);
@@ -5517,14 +5738,10 @@ Squares via for loop with index tracking.
   b = next(gen);
   c = next(gen);
   assert(a == 10 && b == 11 && c == 12, "manual next: {a},{b},{c}");
-```
-
-One extra advance past the last element; exhausted() is true after that.
-
-```rust
-  d = next(gen);
-  done = exhausted(gen);
-  assert(done, "exhausted after last value");
+  assert(!exhausted(gen), "not yet exhausted, though no values remain");
+  past_end = next(gen);
+  assert(past_end == null, "next past the last value answers null");
+  assert(exhausted(gen), "and now it is exhausted");
 ```
 
 === Generators with parameters
@@ -5549,6 +5766,16 @@ One extra advance past the last element; exhausted() is true after that.
   assert(yf_total == 33, "yield from: 1+10+20+2={yf_total}");
 ```
 
+⚠ 'yield from' works today only for a sub-generator that takes NO arguments; with an argument it will not compile on --native, though the interpreter runs it (loft\#1277).  Until that closes, forward such a generator with a plain loop — 'for v in sub(arg) { yield v; }', which means the same thing and works on both backends.
+
+```rust
+  fwd_total = 0;
+  for n in forwards_with_argument() {
+    fwd_total += n;
+  }
+  assert(fwd_total == 44, "forwarded with an argument: 4+40={fwd_total}");
+```
+
 === Early termination with break
 
 Stop after the first 5 values from a 1000-element generator.
@@ -5560,6 +5787,28 @@ Stop after the first 5 values from a 1000-element generator.
     limit_total += n;
   }
   assert(limit_total == 15, "early break sum 1..5: {limit_total}");
+```
+
+=== A generator runs once, and has no return
+
+A generator is single-pass.  Once it is exhausted it stays exhausted, so a second 'for' over the same generator value runs its body zero times — quietly, because an exhausted iterator is empty rather than an error.  Call the generator function again when you need the sequence again.
+
+```rust
+  once = count_up(1, 4);
+  first_pass = 0;
+  for n in once { first_pass += n; }
+  second_pass = 0;
+  for n in once { second_pass += n; }
+  assert(first_pass == 6, "first pass: {first_pass}");
+  assert(second_pass == 0, "the same generator a second time is empty: {second_pass}");
+```
+
+And a generator has no 'return': values leave it only through 'yield', so 'return', 'return value' and a body ending in a value are all refused at compile time.  'break' is how a body ends early — 'first\_positive' yields the first positive element and stops there.
+
+```rust
+  fp_seq = 0;
+  for n in first_positive([-1, 5, 9]) { fp_seq = fp_seq * 10 + n; }
+  assert(fp_seq == 5, "first_positive stops after its one value: {fp_seq}");
 }
 ```
 
@@ -5572,9 +5821,13 @@ A tuple groups a fixed number of values of possibly different types. You do not 
 
 Write the elements in parentheses, separated by commas. The compiler infers the element types from what you put in. You can add an explicit type annotation when needed.
 
+=== Elements of different types
+
+The elements do not have to share a type — this is the usual reason to reach for a tuple instead of a vector.
+
 === Accessing elements
 
-Use '.0', '.1', '.2', ... to read individual elements.
+Use '.0', '.1', '.2', ... to read individual elements. The index is part of the program text, so it is checked when you compile: naming an element the tuple does not have is an error, never a null.
 
 === Modifying elements
 
@@ -5582,7 +5835,7 @@ Tuple elements can be reassigned like ordinary variables.
 
 === Tuples as function parameters
 
-Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter ('&') gives the function a direct link to the caller's tuple so it can modify individual elements in place.
+Pass a tuple to a function by value (a copy) or by reference. A value parameter gets its own copy — changes inside the function do not affect the caller. A reference parameter ('&') gives the function a direct link to the caller's tuple so it can modify individual elements in place. A '&' tuple holds scalar elements only.
 
 === Returning tuples
 
@@ -5591,6 +5844,10 @@ A function can return a tuple to give back more than one value at once.
 === Destructuring
 
 Assign a tuple to multiple names in one step using the '(a, b) = expr' form. This is concise when a function returns a tuple and you need both values.
+
+=== Comparing tuples
+
+Two tuples of the same shape compare element by element, left to right.
 
 === Three or more elements
 
@@ -5614,6 +5871,23 @@ fn swap_ints(pair: &(integer, integer)) {
 }
 ```
 
+Writes to its own copy.  The caller's tuple is a different tuple, so the write below is invisible outside this function.
+
+```rust
+fn doubled_first(p: (integer, integer)) -> integer {
+  p.0 = p.0 * 2;
+  p.0 + p.1
+}
+```
+
+A tuple is the natural return type when the two values have different types.
+
+```rust
+fn label_and_score(n: integer) -> (text, integer) {
+  if n >= 50 { ("pass", n) } else { ("fail", n) }
+}
+```
+
 ```rust
 fn main() {
 ```
@@ -5633,6 +5907,30 @@ Type annotation
   assert(w.0 + w.1 == 7, "annotated sum: {w.0+w.1}");
 ```
 
+=== Elements of different types
+
+Each element keeps its own type, and '.0' / '.1' read them as that type.
+
+```rust
+  entry = (1, "one");
+  assert(entry.0 == 1, "entry.0: {entry.0}");
+  assert(entry.1 == "one", "entry.1: {entry.1}");
+```
+
+```rust
+  mixed: (text, float, boolean) = ("pi", 3.5, true);
+  assert(mixed.0 == "pi", "mixed.0: {mixed.0}");
+  assert(mixed.1 == 3.5, "mixed.1: {mixed.1}");
+  assert(mixed.2, "mixed.2: {mixed.2}");
+```
+
+A tuple element may itself be a tuple.
+
+```rust
+  nested = (1, (2, 3));
+  assert(nested.1.0 == 2 && nested.1.1 == 3, "nested: {nested.1.0},{nested.1.1}");
+```
+
 === Modifying elements
 
 ```rust
@@ -5641,15 +5939,22 @@ Type annotation
   assert(v.0 + v.1 == 12, "after assign: {v.0}+{v.1}");
 ```
 
-=== Tuples as value parameters
+=== Tuples as function parameters
+
+'doubled\_first' writes to its parameter and returns what it computed. The caller's tuple still reads 10 — the parameter was a copy of it.
 
 ```rust
   p = (10, 20);
-  sum = p.0 + p.1;
-  assert(sum == 30, "sum: {sum}");
+  inner = doubled_first(p);
+  assert(inner == 40, "the function saw its own doubled copy: {inner}");
+  assert(p.0 == 10, "and the caller's tuple is untouched: {p.0}");
 ```
 
+⚠ Writing to a TEXT element of a value parameter — 'p.1 = "…"' where the parameter is '(integer, text)' — will not compile on --native today, though the interpreter runs it (loft\#1278).  Until that closes, copy the parameter into a local first and write there: 'q = p; q.1 = "…";'.
+
 === Tuples as reference parameters (swap in place)
+
+A '&' tuple holds scalar elements only.  '&(text, …)' is refused when you compile, naming the element type — text lives on the heap, and a reference tuple has nowhere to put it.
 
 ```rust
   pair = (3, 7);
@@ -5673,12 +5978,39 @@ Already in order
   assert(bounds2.1 == 9, "max2: {bounds2.1}");
 ```
 
+A returned tuple with elements of different types works the same way.
+
+```rust
+  graded = label_and_score(72);
+  assert(graded.0 == "pass" && graded.1 == 72, "graded: {graded.0},{graded.1}");
+```
+
 === Destructuring
 
 ```rust
   (lo, hi) = min_max(8, 3);
   assert(lo == 3, "destructured lo: {lo}");
   assert(hi == 8, "destructured hi: {hi}");
+```
+
+Destructuring works for mixed types too, and for more than two names.
+
+```rust
+  (name, score) = label_and_score(20);
+  assert(name == "fail" && score == 20, "destructured mixed: {name},{score}");
+```
+
+=== Comparing tuples
+
+The first element decides; later elements are consulted only while the earlier ones are equal.  Text elements compare by value.
+
+```rust
+  assert((1, 9) < (2, 0), "the first element decides");
+  assert((1, 9) < (1, 10), "it ties, so the second decides");
+  assert(!((1, 9) < (1, 9)), "identical is not strictly less");
+  assert((1, 9) <= (1, 9), "but it is less-or-equal");
+  assert((1, "abc") == (1, "abc"), "text compares by value, not identity");
+  assert((1, "abc") != (1, "abd"), "and differing text is not equal");
 ```
 
 === Three or more elements
@@ -5693,6 +6025,11 @@ Already in order
   triple.1 = 99;
   assert(triple.0 == 10 && triple.1 == 99 && triple.2 == 30,
     "triple modified: ({triple.0},{triple.1},{triple.2})");
+```
+
+```rust
+  wide = (1, 2, 3, 4, 5, 6, 7, 8);
+  assert(wide.7 == 8, "eight elements, last one reachable: {wide.7}");
 }
 ```
 
@@ -5703,7 +6040,7 @@ The `match` expression lets you compare a value against a series of patterns and
 
 === Simple enum matching
 
-The most common use: branch on an enum variant.  Every variant must be covered or a `\_` wildcard must appear — the compiler checks exhaustiveness.
+The most common use: branch on an enum variant.  Every variant must be covered or a `\_` wildcard must appear — for an ENUM the compiler checks exhaustiveness, because it knows the whole set of variants.
 
 ```rust
 enum Direction { North, South, East, West }
@@ -5725,6 +6062,19 @@ fn direction_name(d: Direction) -> text {
     South => "south",
     East  => "east",
     West  => "west",
+  }
+}
+```
+
+A guard reading the field its own pattern bound.
+
+```rust
+fn size_of(s: Shape) -> text {
+  match s {
+    Circle { radius } if radius > 10 => "big circle",
+    Circle { radius } => "small circle",
+    Rect { w, h } if w == h => "square",
+    Rect { w, h } => "rect",
   }
 }
 ```
@@ -5769,7 +6119,7 @@ The variable names must match the field names exactly.
 
 === Guards
 
-Add `if condition` after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.
+Add `if condition` after a pattern to restrict when the arm matches. A guard can reject, so a guarded arm never counts towards covering an enum: a match whose arms name every variant but guard them all is still refused.
 
 ```rust
   v = 42;
@@ -5782,9 +6132,20 @@ Add `if condition` after a pattern to restrict when the arm matches. The guard c
   assert(label == "normal", "guard: {label}");
 ```
 
+A guard can also read what the PATTERN bound, which is where guards earn their keep — the field is in scope inside the condition.
+
+```rust
+  assert(size_of(Circle { radius: 20 }) == "big circle", "guard on a binding");
+  assert(size_of(Circle { radius: 2 }) == "small circle", "guard on a binding, false");
+  assert(size_of(Rect { w: 3, h: 3 }) == "square", "guard comparing two bindings");
+  assert(size_of(Rect { w: 3, h: 4 }) == "rect", "guard comparing two bindings, false");
+```
+
 === Wildcard `\_`
 
-The underscore `\_` matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.
+The underscore `\_` matches anything, and it must be the LAST arm: it matches everything, so an arm written after it could never be selected, and the compiler says so.
+
+Whether you NEED a `\_` depends on the subject.  For an enum the compiler knows every variant, so it requires them all to be covered or a `\_` to be present, and refuses the match otherwise — naming the variants you left out. For an integer, character or text subject there is no finite set to check, so no `\_` is required and none is missed: a value that matches no arm makes the match answer null.  That is the case to watch, because nothing warns you — see "When nothing matches" below.
 
 ```rust
   x = 7;
@@ -5864,6 +6225,34 @@ Combine patterns with `|` to share the same arm body.
   assert(axis == "vertical", "multi-pattern: {axis}");
 ```
 
+=== Tuple patterns
+
+A tuple subject matches element by element.  Write `\_` for an element you do not care about.
+
+```rust
+  point = (2, "b");
+  where = match point {
+    (0, _)   => "origin row",
+    (2, "a") => "two-a",
+    (2, "b") => "two-b",
+    _        => "elsewhere",
+  };
+  assert(where == "two-b", "tuple pattern: {where}");
+```
+
+=== When nothing matches
+
+This match names no `\_`, and 7 is none of its arms.  On an enum that would not compile; on a scalar there is no finite set to check, so the match answers null and the null travels on.  Give the result a fallback with `??`, or add a `\_` arm — the compiler will not remind you.
+
+```rust
+  unmatched = match 7 {
+    1 => "one",
+    2 => "two",
+  };
+  assert(unmatched == null, "a scalar match that selects no arm answers null");
+  assert((unmatched ?? "none") == "none", "so give it a fallback");
+```
+
 === Nested match
 
 Match can appear inside other expressions, including other match arms.
@@ -5937,6 +6326,21 @@ fn main() {
   assert("1 + 2 = {1 + 2}" == "1 + 2 = 3", "expression in braces");
 ```
 
+The braces hold any expression, not just a name — a field, an index, a call, arithmetic.  Each is evaluated left to right as the text is built.
+
+```rust
+  assert("{len(name)}" == "5", "a call inside a hole");
+```
+
+=== Writing a real brace
+
+A single `{` opens a hole, so double it to mean the character itself. `{{` is `{` and `}}` is `}`.  This is why the struct examples further down compare against `"{{x:1,y:2}}"` — that is the six-character text `{x:1,y:2}`.
+
+```rust
+  assert("{{literal}}" == "{{literal}}", "doubled braces are one brace each");
+  assert(len("{{}}") == 2, "`{{}}` is two characters, not four");
+```
+
 === Width and alignment
 
 A number after `:` sets the minimum width.  The value is padded with spaces to fill the width.
@@ -5948,7 +6352,7 @@ A number after `:` sets the minimum width.  The value is padded with spaces to f
 {val:^6}  — centered
 ```
 
-For text, the default alignment is left.  For numbers, right.
+Numbers are right-aligned by default; everything else — text, booleans, characters, vectors, structs — is left-aligned.
 
 ```rust
   assert("{42:6}" == "    42", "default number align is right");
@@ -5961,6 +6365,31 @@ For text, the default alignment is left.  For numbers, right.
   assert("{s:^6}" == "  hi  ", "center-align text");
 ```
 
+A width shapes the field whatever the value is, so it pads a boolean or a vector exactly as it pads a number.
+
+```rust
+  assert("{true:6}" == "true  ", "a boolean is padded too");
+  assert("{[1,2]:8}" == "[1,2]   ", "a vector is padded too");
+```
+
+=== A fill character
+
+Put any single non-digit character before the alignment to pad with that character instead of a space.  It comes first, before the other flags.
+
+```rust
+  assert("{s:*>6}" == "****hi", "fill with `*`");
+  assert("{42:*^11}" == "****42*****", "fill and centre");
+```
+
+A digit cannot be a fill character, because a digit is how a width starts: `{n:0\>5}` is the comparison `0 \> 5`, not "pad with 0, right-align, width 5". Loft refuses that spec rather than guessing; to zero-pad, write `05`.
+
+=== The flags may be written in any order
+
+```rust
+  assert("{0.5:+<8.3}" == "+0.500  ", "sign before alignment");
+  assert("{0.5:<+8.3}" == "+0.500  ", "alignment before sign");
+```
+
 === Zero padding
 
 Prefix the width with `0` to pad with zeros instead of spaces.
@@ -5969,6 +6398,14 @@ Prefix the width with `0` to pad with zeros instead of spaces.
   assert("{7:03}" == "007", "zero-padded 3 digits");
   assert("{42:05}" == "00042", "zero-padded 5 digits");
   assert("{-1:04}" == "-001", "zero-padded negative: sign before zeros");
+```
+
+A zero pad fills the number, so the sign — and a `0x` marker — stays in front of the zeros it adds.  This holds for floats and singles too.
+
+```rust
+  assert("{3.125:08.2}" == "00003.12", "zero-padded float");
+  assert("{-3.5:08.2}" == "-0003.50", "zero-padded negative float");
+  assert("{1.5f:08.2}" == "00001.50", "zero-padded single");
 ```
 
 === Signed format
@@ -5981,20 +6418,38 @@ Prefix the width with `0` to pad with zeros instead of spaces.
   assert("{0:+}" == "+0", "sign on zero");
 ```
 
+`+` is about numbers, not about integers — a float and a single take it too.
+
+```rust
+  assert("{3.5:+}" == "+3.5", "sign on a float");
+  assert("{0.5:+.3}" == "+0.500", "sign beside a precision");
+```
+
 === Hexadecimal, binary, octal
 
-`:x` for lowercase hex, `:\#x` for hex with `0x` prefix. `:b` for binary, `:o` for octal.
+`:x` for lowercase hex, `:X` for uppercase, `:\#` adds the `0x` / `0b` / `0o` marker.  `:b` for binary, `:o` for octal, `:d` for the decimal default.
 
 ```rust
   assert("{255:x}" == "ff", "hex lowercase");
+  assert("{255:X}" == "FF", "hex uppercase");
   assert("{255:#x}" == "0xff", "hex with prefix");
   assert("{10:b}" == "1010", "binary");
   assert("{8:o}" == "10", "octal");
 ```
 
+A width goes before the base letter, and the marker keeps its place in front of a zero pad — the result is something you can paste back into a program.
+
+```rust
+  assert("{255:6x}" == "    ff", "hex in a 6-wide field");
+  assert("{255:#06x}" == "0x00ff", "the `0x` marker precedes the zeros");
+  assert("{10:#06b}" == "0b1010", "the `0b` marker precedes the zeros");
+```
+
+A base is a property of an integer, so asking for one anywhere else is a compile error rather than a spec that quietly does nothing.  `{2.5:x}` says "`x` has no effect on float".
+
 === Float precision
 
-`.N` after the colon limits decimal places.
+`.N` after the colon fixes the number of decimal places.  Only `float` and `single` have decimal places, so `.N` on any other type is a compile error: `{7:.2}` says "a precision has no effect on integer".  That matters because the mistake is easy to make and used to be silent — a `price` you thought was a float is an integer, and `{price:.2}` rendered no decimals at all.
 
 ```rust
   assert("{3.125:.1}" == "3.1", "1 decimal place");
@@ -6014,7 +6469,17 @@ Combine width and precision: `{val:W.P}` where W is total width and P is decimal
 
 === JSON format
 
-`:j` serialises a struct or value as JSON. `:j` serialises a struct as JSON.  Use it on struct values, not primitives. See the JSON documentation page for full details.
+`:j` (also spelled `:json` or `:J`) renders a struct, a vector or an enum as JSON instead of loft's own compact form: quoted keys, and nothing else changed.  See the JSON documentation page for full details.
+
+```rust
+  jp = Point { x: 1, y: 2 };
+  assert("{jp}" == "{{x:1,y:2}}", "the default form is loft's own");
+  assert("{jp:j}" == "{{\"x\":1,\"y\":2}}", "`:j` quotes the keys");
+  assert("{jp:json}" == "{{\"x\":1,\"y\":2}}", "`:json` is the same spec");
+  assert("{[jp]:j}" == "[{{\"x\":1,\"y\":2}}]", "a vector of structs");
+```
+
+`:j` is a choice between two renderings of a composite value, so it is not available on a scalar: `{7:j}` and `{"a":j}` are compile errors.  A scalar has one rendering, and inside a struct it is already the JSON one.
 
 === Vector format
 
@@ -6023,19 +6488,31 @@ Vectors are formatted as `\[a,b,c\]` by default. A format specifier inside a `fo
 ```rust
   v = [1, 2, 3];
   assert("{v}" == "[1,2,3]", "default vector format");
+  assert("{v:>10}" == "   [1,2,3]", "a vector takes a field like anything else");
+  assert("{v:#}" == "[ 1, 2, 3 ]", "`:#` spaces a vector out too");
   assert("{for fmt_n in 1..4 {fmt_n * 10}:04}" == "[0010,0020,0030]", "formatted vector elements");
 ```
 
 === Large integers and single-precision floats
 
-`integer` is a 64-bit type, so even large values format like any other number; single-precision floats use the same specifiers too.
+`integer` is a 64-bit type, so a value near its limit formats like any other number rather than losing digits.
 
 ```rust
   n = 1000000;
   assert("{n}" == "1000000", "integer default");
   assert("{n:>10}" == "   1000000", "integer right-aligned");
+  big = 9223372036854775807;
+  assert("{big}" == "9223372036854775807", "the largest integer keeps every digit");
+  assert("{big:x}" == "7fffffffffffffff", "and renders in any base");
+```
+
+A `single` is a float of half the width; every specifier above applies to it unchanged.
+
+```rust
   f = 1.5f;
   assert("{f}" == "1.5", "single default");
+  assert("{f:8.2}" == "    1.50", "single width and precision");
+  assert("{f:+}" == "+1.5", "single with a forced sign");
 ```
 
 === Pretty-printing a struct
@@ -6048,11 +6525,36 @@ The `:\#` specifier expands a struct across a spaced, readable layout instead of
   assert("{p:#}" == "{{ x: 1, y: 2 }}", "`:#` pretty-prints with spaces");
 ```
 
+=== Null, and why formatting never fails
+
+Every type has a null, and a null renders as the word `null`.  It is a value, not an error, so it pads like any other rendering.
+
+```rust
+  absent: integer? = null;
+  assert("{absent}" == "null", "a null integer renders as `null`");
+  assert("{absent:>8}" == "    null", "and takes the field it was given");
+```
+
+A zero pad is for numbers, and `null` is not one, so it pads with spaces.
+
+```rust
+  assert("{absent:08}" == "    null", "`null` is never zero-padded");
+```
+
+An operation inside a hole that cannot produce a value yields null rather than stopping the program, and the text says which fault it was.  Building a message — a log line, an error report — can therefore never itself fail.
+
+```rust
+  top = 5;
+  bottom = 0;
+  assert("{top / bottom}" == "null(/0)", "a division by zero names its cause");
+```
+
 === Character format
 
 ```rust
   c = 'A';
   assert("{c}" == "A", "character default");
+  assert("{c:>5}" == "    A", "a character takes a field like anything else");
 ```
 
 === Boolean format
@@ -6096,12 +6598,14 @@ Each kind goes to its own method, so the type sees the real type.
   assert(q3.shape() == "<id=>< name=>[7][ada]", "an integer hole calls hole_int");
 ```
 
-The database clients use this, so a query needs no placeholders to count:
+The type is taken from an annotated binding or a struct-literal field.  A call argument and a return position do NOT target — `db.db\_rows("… {name}")` is an ordinary text and reports `expected Query, got text` — so route through a local:
 
 ```
   q: SqlText = "SELECT id FROM users WHERE name = {name}";
   db.db_rows(q)
 ```
+
+A format spec on a target's hole is a compile error, because the value is handed to the type rather than rendered: there is nothing for a width to pad.
 
 ```rust
 }
@@ -6110,60 +6614,154 @@ The database clients use this, so a query needs no placeholders to count:
 
 = Reference parameter forwarding
 
-\@ARGS: --lib tests/lib When a function receives a `&Struct` (mutable reference) parameter and passes it to another function that also takes `&Struct`, the reference must be forwarded without dereferencing. This is P144.
+When you pass a value to a function, what can that function change about it?  The answer depends on the value's type and on one annotation, `&`. This chapter is about the whole of that rule, because the half of it people usually assume is the wrong half.
 
 ```rust
-use p144_entry;
+struct Item { val: integer }
+struct Box { items: vector<Item> }
+```
+
+=== A scalar argument is copied
+
+The callee gets its own number.  Nothing it does can reach the caller.
+
+```rust
+fn bump(n: integer) { n = n + 1; }
+```
+
+=== A struct or collection argument is SHARED
+
+No annotation needed.  Writing a field, writing an element, appending, removing and clearing are all done to the caller's value.
+
+```rust
+fn set_first(b: Box) { b.items[0].val = 7; }
+fn add_one(b: Box) { b.items += [Item { val: 1 }]; }
+fn empty_it(b: Box) { b.items.clear(); }
+```
+
+=== What `&` adds: REPLACEMENT
+
+Assigning the whole binding — `b = ...` — is the one operation that does NOT reach the caller through a plain parameter.  It rebinds the callee's own name and the caller keeps what it had.  Declaring the parameter `&` turns that assignment into a write-back, and that is all `&` does.
+
+```rust
+fn replace_plain(b: Box) { b = Box { items: [Item { val: 99 }] }; }
+fn replace_ref(b: &Box) { b = Box { items: [Item { val: 99 }] }; }
+```
+
+=== Forwarding
+
+A `&` parameter can be handed to another function that also takes `&`. The reference is forwarded rather than dereferenced, so the innermost function's replacement still reaches the outermost caller, at any depth.
+
+```rust
+fn forward_replace(b: &Box) { replace_ref(b); }
+```
+
+These two only append and write elements, so neither needs `&` — a plain parameter already does both to the caller's value.  The compiler says so if you add one: `advice\[slow-reference-parameter\]`.
+
+```rust
+fn ensure(b: Box) {
+  if len(b.items) == 0 { b.items += [Item { val: 0 }]; }
+}
+```
+
+```rust
+fn set_val(b: Box, val: integer) {
+  ensure(b);
+  for sv_item in b.items {
+    if sv_item.val == 0 { sv_item.val = val; return; }
+  }
+}
 ```
 
 ```rust
 fn main() {
 ```
 
-box\_set\_val calls box\_ensure(b) internally — forwarding the & param.
+=== A scalar is copied
+
+```rust
+  n = 1;
+  bump(n);
+  assert(n == 1, "a scalar argument is copied");
+```
+
+=== A struct or collection is shared — no `&` required
+
+```rust
+  shared = Box { items: [Item { val: 0 }] };
+  set_first(shared);
+  assert(shared.items[0].val == 7, "an element write reaches the caller");
+  add_one(shared);
+  assert(len(shared.items) == 2, "an append reaches the caller");
+  empty_it(shared);
+  assert(len(shared.items) == 0, "a clear reaches the caller");
+```
+
+This is the half people assume is the other way round.  `&` is NOT the permission you need in order to append to a vector parameter — a plain parameter already grows the caller's vector.
+
+=== Replacement is the one thing that needs `&`
+
+```rust
+  keep = Box { items: [Item { val: 1 }] };
+  replace_plain(keep);
+  assert(keep.items[0].val == 1, "a plain parameter cannot replace the whole value");
+  swap = Box { items: [Item { val: 1 }] };
+  replace_ref(swap);
+  assert(swap.items[0].val == 99, "a `&` parameter can");
+```
+
+So read `&` on a signature as "this function may hand you back a different value", not as "this function may modify what you give it".
+
+=== Forwarding carries it through
+
+The forwarder needs the `&` as much as the function it calls.  Its own body never assigns to the parameter, so the `&` can look unnecessary — but it is what carries the inner replacement out.  Written `fn forward\_replace(b: Box)` the assertion below fails, and nothing reports it.
+
+```rust
+  deep = Box { items: [Item { val: 1 }] };
+  forward_replace(deep);
+  assert(deep.items[0].val == 99, "the replacement survives one forward");
+```
+
+A chain of plain parameters carries the shared value just as far, which is why `set\_val` below needs no annotation at any level.
 
 ```rust
   b = Box { items: [] };
-  box_set_val(b, 42);
-  assert(b.items[0].val == 42, "P144: & forwarded — item set to 42");
+  set_val(b, 42);
+  assert(b.items[0].val == 42, "a plain parameter forwards its sharing too");
 ```
 
-Calling the inner function directly also works.
+Calling the inner function directly does the same thing, and calling it twice is harmless: it only fills an empty box.
 
 ```rust
   b2 = Box { items: [] };
-  box_ensure(b2);
+  ensure(b2);
   assert(len(b2.items) == 1, "ensure added one item");
-  assert(b2.items[0].val == 0, "default val is 0");
+  ensure(b2);
+  assert(len(b2.items) == 1, "ensure is idempotent");
 ```
 
-Multiple forwards: ensure is idempotent.
+=== A worked example
 
-```rust
-  box_ensure(b2);
-  assert(len(b2.items) == 1, "ensure idempotent");
-```
-
-Set a second value via box\_set\_val on a pre-populated box.
+`set\_val` fills the first zero slot, leaving anything already set alone.
 
 ```rust
   b3 = Box { items: [] };
-  b3.items += [Inner { val: 10 }];
-  b3.items += [Inner { val: 0 }];
-  box_set_val(b3, 99);
-  assert(b3.items[0].val == 10, "existing item preserved");
-  assert(b3.items[1].val == 99, "zero item replaced");
+  b3.items += [Item { val: 10 }];
+  b3.items += [Item { val: 0 }];
+  set_val(b3, 99);
+  assert(b3.items[0].val == 10, "an existing value is left alone");
+  assert(b3.items[1].val == 99, "the empty slot is filled");
 }
 ```
 
 
 = Feature catalogue
 
-GENERATED by tools/features/gen.loft — DO NOT EDIT. \@NAME: Feature catalogue \@TITLE: Every language and tooling feature, with what each one is for.
+Every language surface and every part of the toolchain the catalogue tracks, in one list.  Each entry has a page of its own in `doc/features/` in the repository, where `\@F2` is `F2.md`.
 
-Everything loft can do, in one list.  Each entry has a page of its own with what it is, how it aids you, and a runnable example — see `doc/features/` in the repository, where `\@F2` is `F2.md`.
+The two halves read differently.  An `\@F` page says what the feature is and how it aids you, and 66 of the 82 carry a runnable example; the rest name what demonstrates them instead, because a loft program cannot run the compiler that runs it.  An `\@I` page says what the part does and where it lives in the source — it describes how loft is built, not something you write.
 
-The catalogue is generated from the `loft-lang/features` issue tracker, which is the single source of truth: every entry is an issue, so nothing here can drift from what was decided without the drift guard failing.
+The catalogue is generated from the `loft-lang/features` issue tracker, which is the single source of truth: every entry is an issue, and `make features-check` regenerates this page and fails on any difference.  A feature you can name and cannot find below is missing from the TRACKER — that is a gap in the catalogue rather than a gap in loft, and the chapters of this reference are the wider list.
 
 === Language features
 
@@ -6249,6 +6847,10 @@ The catalogue is generated from the `loft-lang/features` issue tracker, which is
 - \*\*\@F113\*\* — Associated types — an interface names a companion type
 - \*\*\@F114\*\* — `x\[i\]` on a library type — `OpIndex` dispatch
 - \*\*\@F115\*\* — `OpDrop` — a type runs code when its scope lets it die
+- \*\*\@F118\*\* — Time (now / ticks)
+- \*\*\@F119\*\* — Store locks (\#lock)
+- \*\*\@F120\*\* — Lexer library (lib/lexer)
+- \*\*\@F121\*\* — Parser library (lib/parser)
 
 === Tooling and infrastructure
 
@@ -6333,19 +6935,30 @@ That one parameter is the only shape 'main' accepts. Any other — a plain 'text
 Type 'loft' on its own and you get a prompt where you can type one line at a time and see the answer straight away:
 
 ```
-  $ printf '2 + 3\n' | loft repl --fresh
-  5
-```
-
-Typed by hand it looks like this — start it, then type at the prompt:
-
-```
   loft
+  loft REPL — :help for commands, :quit to exit
   loft> 2 + 3
   5
 ```
 
-This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea. Your session is remembered, so you can close it and come back later — '--fresh' is how you ask for a clean one instead.
+This is called a REPL, which is short for "read, evaluate, print, loop". It is the quickest way to check what a function does or try an idea.
+
+Started by hand like that, the REPL remembers your session: the values you bound and the functions and structs you defined come back next time, and it says so as it starts.
+
+```
+  loft
+  restored 2 statement(s) from last session
+  loft>
+```
+
+'--fresh' asks for a clean one instead, and ':reset' clears it mid-session.
+
+You can also feed it from a pipe, which is handy in a script. That is a different mode: it never reads or writes the saved session, so it always starts empty. The banner and the 'loft\>' prompts go to standard error and the answers to standard output, so a script can read just the answers:
+
+```
+  $ printf '2 + 3\n' | loft repl --fresh 2>/dev/null
+  5
+```
 
 === Two ways to run, and why you usually ignore this
 
@@ -6380,18 +6993,29 @@ Sometimes you only want to know whether the program is correct so far:
   ok
 ```
 
-This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing.
+This reports mistakes and runs nothing. It is fast, and it is a good habit while you are still writing. It leaves a '.loft' folder beside your file to remember what it already worked out, which is why the second run is quicker.
 
 === When loft tells you something is wrong
 
-A message from loft names the file, the line, and what to do. Some messages can also show you the exact replacement to write:
+A message from loft names the file, the line, and what to do. Say unused.loft binds a name it never uses:
 
 ```
-  $ loft --explain --interpret hello.loft
+  $ loft --interpret unused.loft
+  warning[never-read]: Variable unused is never read
+  note: 1 diagnostic above suggests what to write instead — re-run with `--explain`
   hello, world!
 ```
 
-That prints the suggested fix under each message. It only shows you the fix; it changes nothing, so it is always safe to run.
+Between those first two lines it also prints the file and line it means, the source line itself, and a caret under the exact spot.
+
+That closing note means loft has a replacement in mind. Ask for it:
+
+```
+  $ loft --explain --interpret unused.loft
+  fix  delete `unused`   needs: computing it has no effect you are relying on   [dead-code lint · @F100]
+```
+
+The 'fix' line is the suggested replacement and 'needs' is the condition under which it applies — loft cannot know whether you meant to keep the name, so it tells you what it is assuming. The bracket names the topic to read up on; the feature catalogue has a page per tag. '--explain' only SHOWS you the fix. It changes nothing, so it is always safe to run.
 
 ```rust
 fn main() {
@@ -6415,7 +7039,7 @@ A test is a function that checks your code still does what you meant. You do not
 
 === Write a test
 
-Give a function a name starting with 'test' and put an 'assert' in it. That is all a test is:
+Give a function a name starting with 'test\_' and put an 'assert' in it. That is all a test is:
 
 ```
   fn double(n: integer) -> integer { n * 2 }
@@ -6435,17 +7059,26 @@ Point loft at the file:
 
 ```
   $ loft --tests calc.loft
+    ok    calc.loft  (2 fns: test_double_doubles, test_double_of_zero)
   test result: ok. 2 passed; 1 file
 ```
 
-and it finds every 'test' function and runs it, naming the file and the functions it found.
+It finds every function whose name starts with 'test\_', runs it, and names the file and the functions it found. That result line does not end where it does above — there is a bracket after it, which the last section on this page is about.
+
+The underscore is part of the rule. 'test\_double' is a test; 'testify', or a function called exactly 'test', is not — and nothing will tell you, because the run says ok having never called it. (A camel-case 'testDouble' cannot catch you out: loft refuses that as a function name.)
+
+There is one exception, and it is what makes a plain script runnable. If a file names NO 'test\_' function at all, loft treats every function in it that takes no parameters as something to run. That is how the pages of this reference are checked: they have a 'main' and no tests. As soon as one 'test\_' appears in a file, it and its siblings are the whole set, and the helpers beside them go back to being helpers.
 
 Give it a directory instead of a file and it looks in every '.loft' file underneath. Give it nothing and it starts from where you are:
 
 ```
-  $ loft --tests calc.loft::test_double_doubles
+  $ loft --tests greeter
+    ok    greeter/tests/greet.loft  (1 fn: test_greet_names_the_person)
+  coverage: all 1 functions were entered by these tests
   test result: ok. 1 passed; 1 file
 ```
+
+Over a whole directory it also reports coverage — how many of your functions any of the tests actually entered. One file on its own gets no such line, because a file is not the set of functions you were trying to cover.
 
 === Run just one test
 
@@ -6453,30 +7086,41 @@ While you are fixing one thing, run only that one. Put '::' and the test's name 
 
 ```
   $ loft --tests calc.loft::test_double_of_zero
+    ok    calc.loft  (1 fn: test_double_of_zero)
   test result: ok. 1 passed; 1 file
 ```
 
 === When a test fails
 
-A failure names the test and shows your message:
+A failure names the test and shows your message, once per test and once per file, and the run's exit status stops being zero — which is how a build script finds out:
 
 ```
-  FAIL  calc.loft::test_that_fails  —  assertion failed: arithmetic still works
+  $ loft --tests broken/failing.loft ; echo "exit $?"
+    FAIL  broken/failing.loft::test_double_of_two  —  assertion failed: double(2) should be 5
+    FAIL  broken/failing.loft  (1 failed, 0 passed)
   test result: FAILED. 1 failed; 0 passed; 1 total; 1 file
+  exit 1
 ```
 
 The message is the part you wrote, which is why a vague message like "it works" costs you time and a specific one saves it.
 
 === Read the line after the result
 
-The end of the report says what the run did NOT do, in square brackets — for example that it ran on the interpreter and did not try the compiled build. That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all.
+The result line ends with a bracket saying what the run did NOT do:
 
-To also run your tests the compiled way:
+```
+  $ loft --tests calc.loft
+  test result: ok. 2 passed; 1 file  [ran on the interpreter only — native not exercised: loft test --native; no [sandbox] policy — admission not exercised]
+```
+
+That is deliberate. A run that says only "ok" cannot tell you whether the other half was checked or never ran at all. Run them the compiled way and the bracket says the opposite:
 
 ```
   $ loft --tests --native calc.loft
-  test result: ok. 2 passed; 1 file
+  test result: ok. 2 passed; 1 file  [ran on native only — the interpreter not exercised: loft test; no [sandbox] policy — admission not exercised]
 ```
+
+Both halves matter, because the two ways of running your program are meant to give the same answer and a test only checks the one it ran.
 
 === Once you have a project
 
@@ -6519,20 +7163,25 @@ Say 'debug', then your file, then a colon and a line number:
 
 ```
   $ printf ':continue\n' | loft debug count.loft:4
-  paused in main | total = 0, i = 1
+  ⏸ paused in main | total = 0, i = 1   (+2 compiler temp(s) — `:vars all`)
 ```
 
-The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what every local variable holds right now.
+The program runs until it reaches line 4 and then waits for you. The line it prints tells you where you are and what your locals hold right now. The note at the end counts the variables the compiler made for itself — the loop's hidden index and a scratch slot — and ':vars all' shows those too:
+
+```
+  $ printf ':vars all\n:quit\n' | loft debug count.loft:4
+  ⏸ paused in main | total = 0, i#index = 1, i = 1, __work_1 = ""
+```
 
 Line 4 is inside a loop that goes round three times, so the program stops there three times. ':continue' means "carry on until you reach this line again", not "run to the end" — which is why the examples below say ':continue' more than once when they want the program to finish.
 
 === Look at a value
 
-Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused:
+Type the name of a variable and press enter. Any expression works, not just a name — it is worked out where the program is paused, so it can combine the locals you are looking at:
 
 ```
-  $ printf 'total\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
-  0
+  $ printf 'total + i * 111\n:quit\n' | loft debug count.loft:4
+  111
 ```
 
 This is the part that replaces printing. You do not have to guess in advance which values you will want; ask for them when you are there.
@@ -6546,12 +7195,38 @@ Four commands move the program forward:
 - ':finish' runs until the current function returns
 - ':continue' carries on to the next time this line is reached
 
+The first three only differ when there IS a call, so the program here is 'steps.loft', whose loop calls 'add\_up(i \* 2)' on line 9. Stopping on line 9 and stepping goes into it, and the paused line changes function:
+
 ```
-  $ printf ':step\ntotal\n:continue\n:continue\n:continue\n' | loft debug count.loft:4
-  1
+  $ printf ':step\n:quit\n' | loft debug steps.loft:9
+  ⏸ paused in add_up | n = 2
 ```
 
-After that single ':step' the total is 1, because the loop has now added its first number. Each stop prints the same "paused" line, so you can watch a value change as the loop goes round.
+':next' at the same place runs the whole call and stays where you are:
+
+```
+  $ printf ':next\n:quit\n' | loft debug steps.loft:9
+  ⏸ paused in main | total = 2, i = <unset>
+```
+
+'\<unset\>' is not an error. The loop variable has been consumed for this turn and the next one has not begun, so there is nothing to show.
+
+And from inside 'add\_up', ':finish' runs it out and lands back in the caller:
+
+```
+  $ printf ':finish\n:quit\n' | loft debug steps.loft:2
+  ⏸ paused in main | total = 0, i = 1
+```
+
+=== Watch a value instead of watching for it
+
+Re-reading the paused line every time round the loop works, and ':watch' does it for you: carry on, and the program stops when that value changes, saying what it changed from and to:
+
+```
+  $ printf ':watch total\n:continue\n:quit\n' | loft debug count.loft:4
+  watching total — :continue and the run stops when it changes
+  ⏯ watchpoint: total changed 0 → 1
+```
 
 === Change a value while it is running
 
@@ -6565,9 +7240,16 @@ You can write to a local, not only read it. This answers "would it work if this 
 
 The program carries on with the value you gave it. It finished with 106 instead of 6, because the loop still had 2 and 3 to add after the change.
 
+':undo' takes an edit back, and ':redo' puts it on again:
+
+```
+  $ printf 'total = 100\n:undo\ntotal + 55\n:quit\n' | loft debug count.loft:4
+  55
+```
+
 === Getting out
 
-':continue' carries on. ':quit' stops right away. ':help' lists every command if you forget one.
+':continue' carries on. ':quit' stops right away. ':help' lists every command if you forget one — including the short forms ':s', ':n', ':o' and ':c'.
 
 === Typing, or feeding it a script
 
@@ -6605,7 +7287,7 @@ A package is a folder with a 'loft.toml' file in it and two sub-folders:
     tests/greet.loft   the tests
 ```
 
-'src' is where your code lives and 'tests' is where your tests live. The names matter — loft looks in exactly those places.
+'tests' is where your tests live and the name matters — 'loft test' looks in exactly that folder, and a test file anywhere else is not found. 'src' is a habit rather than a rule: the manifest below names the entry file, and 'src/\<name\>.loft' is only what loft assumes when nothing says otherwise.
 
 === The manifest
 
@@ -6628,7 +7310,7 @@ The 'entry' file is the one that other code sees. Anything you want to share fro
   pub fn greet(who: text) -> text { "hello, {who}!" }
 ```
 
-Without 'pub' a function is private to the package, which is the default.
+Without 'pub' a function is not private — it is un-imported. 'pub' is what lets a caller write the bare name; everything else in the entry file stays reachable as 'greeter::name'. That is the difference between "you may use this" and "you cannot see this", and loft only offers the first.
 
 === Testing a package
 
@@ -6648,7 +7330,9 @@ The tests reach your code by importing the package by name:
   }
 ```
 
-'use greeter::\*;' brings in everything public. Write 'use greeter;' instead and you call it as 'greeter::greet(...)', which is longer but says where each name came from — useful once you import several packages.
+A bare 'use greeter;' already brings in every 'pub' name, and 'use greeter::\*;' says the same thing out loud — either way 'greet("Ada")' works. What the other forms buy you is a say in WHICH names arrive: 'use sums::add' takes one name from a package, and 'use sums::(add, subtract)' takes a group. Taking only what you name is the stronger position, because a package that later GROWS a name cannot then collide with one of yours.
+
+The 'greeter::' prefix is available whichever form you wrote, and it is the spelling that says where a name came from — useful once you import several packages, and the only way to reach something the package did not mark 'pub'.
 
 === Running one test while you work
 
@@ -6665,6 +7349,8 @@ Inside the package, 'loft check' compiles everything and reports problems:
 
 ```
   $ cd greeter && loft check
+  loft build: building `native` (Native) …
+  ok
   loft build: `native` ✓
 ```
 
@@ -6672,7 +7358,15 @@ A package that is only a library has no program to start, so there is nothing to
 
 === Coverage — what the tests did not reach
 
-After the result, 'loft test' tells you which of your functions no test ever entered:
+After the result, 'loft test' tells you which of your functions no test ever entered. The 'sums' package next door has two functions and a test for one of them, so it names the other:
+
+```
+  $ cd sums && loft test
+  coverage: 1 of 2 functions were never entered by these tests
+    src/sums.loft:3  subtract
+```
+
+When nothing is missing it says so in one line instead:
 
 ```
   $ cd greeter && loft test
@@ -6712,7 +7406,7 @@ The package these examples describe is `greeter`, and this is its one function �
 
 = Call it yourself
 
-Every other page here shows you loft.  This one hands it to you. The functions below are compiled and live in the panel at the bottom of the page: type a call, press enter, and loft answers.  Nothing is a transcript — the number you see is the one your browser just computed.
+Every page here has a panel at the bottom that runs its code; this is the page whose code was chosen for you to call.  The functions below are compiled and live in that panel: type a call, press enter, and loft answers.  Nothing is a transcript — the answer you see is the one your browser just computed.
 
 === What to try first
 
@@ -6761,9 +7455,15 @@ fn nth_prime(n: integer) -> integer {
 }
 ```
 
-=== Text goes in
+=== Text goes in, and text comes back
 
-`vowels("your name here")` counts the vowels in whatever you type.  The argument is a text and the answer is a number, which is the shape the panel renders today — see the note at the end of the page.
+`vowels("your name here")` counts the vowels in whatever you type, and `shout("your name here")` hands the text back changed.  A text answer arrives quoted — `shout("hi")` shows `"HI"` — which is how you can tell an empty text from nothing at all.
+
+```rust
+fn shout(s: text) -> text {
+  "{s.to_uppercase()}!"
+}
+```
 
 ```rust
 fn vowels(s: text) -> integer {
@@ -6813,9 +7513,9 @@ fn walk_to(limit: integer) -> integer {
 }
 ```
 
-=== What the panel cannot do yet
+=== When the panel says `\<unavailable\>`
 
-An expression whose value is a text or a vector answers `\<unavailable\>` rather than a value: the browser evaluator reads a result off the paused frame, and only a number, a character, a boolean or a struct survives that trip (loft\#1187).  So `vowels("hello")` answers 2 and `stats(1, 9)` answers a record, while a function returning a text does not — which is why every function on this page hands back one of the shapes that works.
+Every value shape answers now — a number, a character, a boolean, a text, a vector, a struct.  `\<unavailable\>` is what you get when the expression itself cannot be compiled where the program is paused: a typo, a name that is not in scope there, an unfinished expression.  It is the panel declining to guess rather than a value it could not carry, so read it as "say that again" and not as "this shape is not supported".  One `\<unavailable\>` does not end the session; the next expression is evaluated normally.
 
 ```rust
 fn main() {
@@ -6824,7 +7524,7 @@ fn main() {
 The demonstration comes first and the checks follow it, so a reader who presses Run sees an answer straight away — the panel stops on main's LAST line, and a program whose only print IS that line would pause with nothing shown yet.
 
 ```rust
-  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} vowels(\"hello\")={vowels(\"hello\")}\n");
+  print("fib(10)={fib(10)} nth_prime(10)={nth_prime(10)} shout(\"hi\")={shout(\"hi\")}\n");
 ```
 
 The page is a real program, so these run on both backends like every other page here, and an example that stops being true stops compiling.
@@ -6837,6 +7537,7 @@ The page is a real program, so these run on both backends like every other page 
   assert(!is_prime(1) && is_prime(2) && !is_prime(9), "is_prime edges");
   assert(vowels("hello") == 2, "hello has two vowels");
   assert(vowels("") == 0, "no text, no vowels");
+  assert(shout("hi") == "HI!", "shout answers a text, which the panel renders");
   s = stats(17, 3);
   assert(s.lo == 3 && s.hi == 17 && s.span == 14, "stats orders its arguments");
 ```
@@ -6927,13 +7628,11 @@ pub type u32 = integer limit(0, 4294967294) size(4)
 
 == Interfaces
 
-Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method.
-
 ```rust
 pub interface Ordered
 ```
 
-Types that support the `\<` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.
+Standard interfaces for bounded generic functions. A type satisfies an interface by defining the required operator or method. Types that support the `\<` comparison operator. Satisfied by integer, single, float, text, and any user type defining OpLt.
 `boolean` is NOT among them, deliberately: it satisfies Equatable below and has no ordering, so `false \< true` is a refusal rather than a convention the language picks for you.  A program that wants it says so — `(a as integer) \< (b as integer)`.  Note this is what bounds the null-ordering half of \@FR-E-NullArg, which applies to the ORDERED types only; boolean null still compares with `==` like every other scalar.
 ONE method is all a type has to define: inside a generic bounded by this, `\>`, `\<=` and `\>=` all derive from `\<` — `a \> b` is `b \< a`, `a \<= b` is `!(b \< a)`, `a \>= b` is `!(a \< b)`.  Each evaluates its operands exactly once.
 
@@ -7006,37 +7705,55 @@ Cosine. Use for circular motion: x = r \* cos(angle).
 pub fn sin(both: single) -> single
 ```
 
+Sine. Use for circular motion: y = r \* sin(angle).
+
 ```rust
 pub fn tan(both: single) -> single
 ```
+
+Tangent. Use for slopes and perspective projection.
 
 ```rust
 pub fn acos(both: single) -> single?
 ```
 
+Arc cosine. Returns the angle (in radians) whose cosine is v.
+
 ```rust
 pub fn asin(both: single) -> single?
 ```
+
+Arc sine. Returns the angle whose sine is v.
 
 ```rust
 pub fn atan(both: single) -> single
 ```
 
+Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
+
 ```rust
 pub fn ceil(both: single) -> single
 ```
+
+Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.
 
 ```rust
 pub fn floor(both: single) -> single
 ```
 
+Round down to the nearest integer value. Use to convert a float position to a tile index.
+
 ```rust
 pub fn round(both: single) -> single
 ```
 
+Round to the nearest integer value (half rounds away from zero).
+
 ```rust
 pub fn sqrt(both: single) -> single?
 ```
+
+Square root. Use for distances and normalization.
 
 ```rust
 pub fn atan2(both: single, v2: single) -> single
@@ -7047,6 +7764,8 @@ Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when yo
 ```rust
 pub fn log(both: single, v2: single) -> single?
 ```
+
+Logarithm of v in the given base. Use for converting between scales (e.g., decibels).
 
 ```rust
 pub fn pow(both: single, v2: single) -> single?
@@ -7082,37 +7801,55 @@ Cosine. Use for circular motion: x = r \* cos(angle).
 pub fn sin(both: float) -> float
 ```
 
+Sine. Use for circular motion: y = r \* sin(angle).
+
 ```rust
 pub fn tan(both: float) -> float
 ```
+
+Tangent. Use for slopes and perspective projection.
 
 ```rust
 pub fn acos(both: float) -> float?
 ```
 
+Arc cosine. Returns the angle (in radians) whose cosine is v.
+
 ```rust
 pub fn asin(both: float) -> float?
 ```
+
+Arc sine. Returns the angle whose sine is v.
 
 ```rust
 pub fn atan(both: float) -> float
 ```
 
+Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
+
 ```rust
 pub fn ceil(both: float) -> float
 ```
+
+Round up to the nearest integer value. Use to compute required buffer sizes from fractional counts.
 
 ```rust
 pub fn floor(both: float) -> float
 ```
 
+Round down to the nearest integer value. Use to convert a float position to a tile index.
+
 ```rust
 pub fn round(both: float) -> float
 ```
 
+Round to the nearest integer value (half rounds away from zero).
+
 ```rust
 pub fn sqrt(both: float) -> float?
 ```
+
+Square root. Use for distances and normalization.
 
 ```rust
 pub fn atan2(both: float, v2: float) -> float
@@ -7124,6 +7861,8 @@ Arc tangent of y/x, preserving the correct quadrant. Use instead of atan when yo
 pub fn log(both: float, v2: float) -> float?
 ```
 
+Logarithm of v in the given base. Use for converting between scales (e.g., decibels).
+
 ```rust
 pub fn pow(both: float, v2: float) -> float?
 ```
@@ -7132,11 +7871,11 @@ Raises base to the power exp. Use for exponential growth curves and scaling.
 
 == exp / ln / log2 / log10
 
-Raises E (2.71828…) to the power v. Use for exponential growth models.
-
 ```rust
 pub fn exp(both: single) -> single
 ```
+
+Raises E (2.71828…) to the power v. Use for exponential growth models.
 
 ```rust
 pub fn exp(both: float) -> float
@@ -7148,6 +7887,8 @@ Double-precision exp (e^v).
 pub fn ln(both: single) -> single?
 ```
 
+Natural logarithm (base E). Use for growth rates and information entropy.
+
 ```rust
 pub fn ln(both: float) -> float?
 ```
@@ -7158,6 +7899,8 @@ Double-precision natural logarithm.
 pub fn log2(both: single) -> single?
 ```
 
+Base-2 logarithm. Use for bit-count calculations and information theory.
+
 ```rust
 pub fn log2(both: float) -> float?
 ```
@@ -7167,6 +7910,8 @@ Double-precision base-2 logarithm.
 ```rust
 pub fn log10(both: single) -> single?
 ```
+
+Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.
 
 ```rust
 pub fn log10(both: float) -> float?
@@ -7244,7 +7989,7 @@ Approximate equality for single-precision floats (see the float overload).
 
 == Text
 
-Functions for working with text (UTF-8 strings) and character values. Read the value of a variable and put a reference to it on the stack
+Functions for working with text (UTF-8 strings) and character values.
 
 ```rust
 pub fn len(both: text) -> integer
@@ -7264,15 +8009,18 @@ pub fn len(both: character) -> integer
 
 Byte length of the character's UTF-8 encoding (1–4).
 
-Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.
-
 ```rust
 pub fn split(self: text, separator: character) -> vector<text>
 ```
 
+Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.
+
 ```rust
 pub fn split_text(self: text, separator: text) -> vector<text>
 ```
+
+Split on a multi-character text separator.  `"a, b, c".split\_text(", ")` returns `\["a", "b", "c"\]`.  Edge cases: - empty self → empty result - empty separator → returns `\[self\]` unchanged (no infinite-split) - separator never matches → returns `\[self\]` - separator at start / end → produces empty boundary entries
+Named `split\_text` (not an overload of `split`) because loft does not overload by non-self parameter type.
 
 ```rust
 pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean
@@ -7534,6 +8282,8 @@ Writes v to standard output without a newline. Use for progress output and build
 pub fn println(v1: text)
 ```
 
+Writes v followed by a newline. The standard choice for line-oriented output.
+
 ```rust
 pub fn eprint(v1: text)
 ```
@@ -7555,6 +8305,8 @@ Number of elements in a spatial (radix / Morton tree) collection.
 ```rust
 pub fn len(both: trie) -> integer
 ```
+
+Number of elements in the trie.
 
 == Vector aggregates
 
@@ -7693,6 +8445,8 @@ pub struct EnvVariable {
 }
 ```
 
+One entry of the process environment, as `env\_variables()` answers them: the variable's name and its value, both as plain text.
+
 ```rust
 pub enum Format {
   TextFile,
@@ -7702,6 +8456,8 @@ pub enum Format {
   NotExists,
 }
 ```
+
+Describes how a file is opened. TextFile: read or write as UTF-8 text (default). LittleEndian: binary mode, least-significant byte first. BigEndian: binary mode, most-significant byte first. Directory: represents a directory path. NotExists: no file or directory exist.
 
 ```rust
 pub enum FileResult {
@@ -7742,6 +8498,8 @@ pub struct File {
 }
 ```
 
+A handle to a filesystem entry. Fields: path (full path), size (file size in bytes), format (open mode), current (byte position after last read), next (byte position to read next).
+
 ```rust
 pub fn content(self: File) -> text?fs#read
 ```
@@ -7754,19 +8512,23 @@ pub fn lines(self: File) -> vector<text> fs#read
 
 Par-safe: reads the file into a worker-local store; the host bridge serialises filesystem access. Reads the file and splits it into lines. Strips trailing '\\r' so CRLF files (Windows) and LF files (Unix) produce identical results. Use when processing line-by-line (logs, CSV, etc.). Example: \@STD-011
 
-Returns the platform path separator character: '\\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.
-
 ```rust
 pub fn path_sep() -> character
 ```
+
+Returns the platform path separator character: '\\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.
 
 ```rust
 pub fn file(path: text) -> File fs#read
 ```
 
+Plan-06 phase 5a: \#impure(host\_io) — reads a host-detected constant.  Could be \#pure once detected (it's invariant for the lifetime of a process), but the runtime caches it inside Stores so the access is observable. Use as the entry point for all file I/O. A relative path resolves against the program's own directory (\#255 / \@PLN9), so `../data.txt` names the file above the script — the same file an absolute path would name, and it answers the same either way (loft\#712).
+
 ```rust
 pub fn exists(path: text) -> boolean fs#read
 ```
+
+Stat-equivalent filesystem read; par-safe. Use to check whether a path is accessible before reading or writing it. A RELATIVE path resolves against the program's own directory, or against the working directory under `\#cwd`; an absolute path is used as given, including one outside the project.  This is not an access boundary — the boundary is the `fs` capability a `\[sandbox\]` profile grants or withholds.
 
 ```rust
 pub fn exists(both: File) -> boolean fs#read
@@ -7778,17 +8540,25 @@ Filesystem stat (via file()); par-safe. Method form: f = file("path"); if f.exis
 pub fn delete(path: text) -> FileResult fs#update
 ```
 
+Use to remove a file after processing or as a cleanup step. Returns FileResult.Ok on success and FileResult.NotFound when the file did not exist.  A path outside the project is deleted like any other; withhold the `fs` capability in a `\[sandbox\]` profile to prevent that.
+
 ```rust
 pub fn move(from: text, to: text) -> FileResult fs#update
 ```
+
+Par-safe filesystem write; the host bridge serialises mutations. Use to rename or relocate a file.  The destination must not already exist (FileResult.Other if it does), and a missing source is FileResult.NotFound. Neither path is confined to the project directory.
 
 ```rust
 pub fn mkdir(path: text) -> FileResult fs#update
 ```
 
+Create a single directory level; the parent must already exist. FileResult.Other when the directory is already there.  There is no counterpart that REMOVES a directory (loft\#1256).
+
 ```rust
 pub fn mkdir_all(path: text) -> FileResult fs#update
 ```
+
+Create a directory and all missing parents (like Unix mkdir -p). Idempotent: a directory that already exists is FileResult.Ok, which is what makes it safe on the way into a run.  There is no counterpart that REMOVES a directory (loft\#1256).
 
 ```rust
 pub fn rmdir(path: text) -> FileResult fs#update
@@ -7830,7 +8600,7 @@ Writes `bytes` to file `path`, truncating any existing content.  Returns true on
 pub fn mtime(path: text) -> integer fs#read
 ```
 
-Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n\_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd\_days\_ago(N)`.
+Truncate or extend the file to exactly `size` bytes. Truncating removes bytes beyond `size`; extending fills with null bytes. Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory if the path is a directory; FileResult.Other if size is negative. Modification time of `path` as Unix epoch SECONDS (integer — same i64 representation as file.size).  Returns 0 on missing file / IO error / pre-epoch dates — caller treats 0 as "unknown" (matches scan.sh's `stat -c %Y || echo 0` fallback). Takes a path string rather than a File handle so the native + interp dispatch both use the same `n\_mtime` registration. Use for date-window filters: convert the returned seconds to YYYY-MM-DD and compare lexicographically against `ymd\_days\_ago(N)`.
 
 ```rust
 pub fn store_durable_check(path: text) -> boolean fs#read
@@ -7985,6 +8755,8 @@ Sticky and counted exactly like a Rust source's failure: the FIRST reason is kep
 pub fn store_load_key(local: reference, path: text, key: integer) -> boolean fs#read
 ```
 
+Fetch ONE integer-keyed entry from a persisted collection image into `local`, reading only the pages the lookup touches. The singular of `store\_load\_keys` and the integer form of `store\_load\_key\_text`; returns false when the key is absent or the image cannot serve this collection. \@PLN97 arc G (loft\#522). tiles: hash\<Tile\[id\]\> = \[\] store\_load\_key(tiles, "block.store", 42)
+
 ```rust
 pub fn store_load_key_text(local: reference, path: text, key: text) -> boolean fs#read
 ```
@@ -8051,9 +8823,13 @@ A file this process has not read from or written to yet has no position, and rep
 pub fn sync(self: File) -> boolean fs#update
 ```
 
+Flushes buffered bytes for self to the underlying storage so that the preceding writes are durable. Use between log records or block boundaries to guarantee that earlier appends have landed on disk before later ones are issued.
+
 ```rust
 pub fn files(self: File) -> vector<File> fs#read
 ```
+
+Returns the entries inside a directory, sorted by path — the same order as `list\_dir`, so an index into either listing means the same entry. The File must have format == Format.Directory; anything else lists as `\[\]` (where `list\_dir` answers null, because it has no format to check first). Use to iterate over all files in a folder.
 
 ```rust
 pub fn write(self: File, v: text) -> FileResult fs#update
@@ -8063,23 +8839,23 @@ Writes v as UTF-8 text to the file, overwriting existing content.  Returns FileR
 
 == Environment
 
-Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.
-
 ```rust
 pub fn env_variables() -> vector<EnvVariable> env#read
 ```
+
+Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.
 
 ```rust
 pub fn env_variable(name: text) -> text env#read
 ```
 
-Returns the value of the environment variable name, or null if it is not set. Use to read configuration from the shell environment.
-
-Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.
+Returns the value of the environment variable `name`, or `""` when it is not set. An unset variable and one set to the empty string give the same answer, so this cannot tell them apart (loft\#1302). Use to read configuration from the shell environment.
 
 ```rust
 pub fn arguments() -> vector<text>
 ```
+
+Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.
 
 ```rust
 pub fn ymd_days_ago(days: integer) -> text
@@ -8111,7 +8887,7 @@ pub fn source_dir() -> text
 
 Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.
 
-== Optional C libraries (\@PLN24 arc G)
+== Optional C libraries
 
 ```rust
 pub fn c_library_available(soname: text) -> boolean env#read
@@ -8121,9 +8897,9 @@ Returns whether the C library soname is usable right now: it loads, and every `\
 Ask this before calling into a library declared with `\[c\] optional-libs`, which is not installed on every machine and is loaded only when a binding needs it. Both halves of the answer matter — a library of the wrong version loads and then exports only some of the symbols, so "the file is there" would say yes where the call still fails.
 A library the program never declared answers false.
 
-== System directories (\#635)
+== System directories
 
-Private native: the OS temp dir, "" only where there is no filesystem.
+Where this machine keeps temporary files, the user's home, and the per-user config, cache and data directories — each answering "" where the platform has no such place.
 
 ```rust
 pub fn temp_dir() -> text?env#read
@@ -8174,15 +8950,16 @@ pub fn store_memory() -> text
 
 Returns a multi-line snapshot of all LIVE stores' internal memory utilisation: total capacity vs actual claimed data vs free space, record + free-block counts, mergeable adjacent-free pairs (free neighbours that should have coalesced), and the largest stores by capacity with their creation site (`bc:\<pos\>` — a bytecode position on the interpreter; 0 on --native) and type name.  Use to watch memory growth in a running program.
 
-== Vector operations (T2-8, T2-5)
+== Vector operations
 
-reverse(v) and sort(v) are compiler special-cased in parse\_call.
+Reordering a vector in place: `reverse(v)` turns it end for end and `sort(v)` puts it in ascending order.
 
 ```rust
 pub fn starts_with(self: text, value: text) -> boolean
 ```
 
-Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
+── Path helpers (moved from 03\_text.loft so they're available before file-I/O code that wants to compose them) ─────────
+loft treats paths as plain text; this group adds the most-needed path operations (dir\_of / basename / resolve\_relative) as methods on text. Pure-loft, slash-separated; Windows backslash normalisation is out of scope. `starts\_with` / `ends\_with` are dependencies of `join` / `resolve` so they also live here (was 03\_text.loft). Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
 
 ```rust
 pub fn ends_with(self: text, value: text) -> boolean
@@ -8214,13 +8991,474 @@ pub fn resolve(self: text, target: text) -> text
 
 Resolve `target` against `self` (where self is a base directory). Strips leading `./` repeatedly; each `../` segment trims the last component from `self`.  Mirrors scan.loft's `resolve\_link\_path`. "doc/claude".resolve("../README.md")     → "doc/README.md" "doc/claude".resolve("./PROBLEMS.md")    → "doc/claude/PROBLEMS.md" "a/b/c".resolve("../../x")               → "a/x" "".resolve("foo")                        → "foo"
 
+== Stack traces
+
+```rust
+pub enum ArgValue {
+  NullVal,
+  BoolVal { b: boolean },
+  IntVal { n: integer },
+  LongVal { n: integer },
+  FloatVal { f: float },
+  SingleVal { f: single },
+  CharVal { c: character },
+  TextVal { t: text },
+  RefVal { store: integer, rec: integer, pos: integer },
+  FnVal { d_nr: integer },
+  OtherVal { description: text },
+}
+```
+
+Typed union of inspectable argument/variable values. Each variant wraps one primitive type so that match expressions can recover the concrete value from a StackFrame's argument list.
+
+```rust
+pub struct ArgInfo {
+  name: text,
+  type_name: text,
+  value: ArgValue,
+}
+```
+
+One function argument in a stack frame.
+
+```rust
+pub struct VarInfo {
+  name: text,
+  type_name: text,
+  value: ArgValue,
+}
+```
+
+One local variable in a stack frame (populated only by stack\_trace\_full).
+
+```rust
+pub struct StackFrame {
+  function: text,
+  file: text,
+  line: integer,
+  arguments: vector<ArgInfo>,
+  variables: vector<VarInfo>,
+}
+```
+
+One call frame in the stack trace.
+
+```rust
+pub fn stack_trace() -> vector<StackFrame>
+```
+
+Return the current call stack as a vector of frames, outermost first. TR1.4: Each frame's `variables` field is populated with the live local variables at that frame's call site (typed via `ArgValue`).  Use this to inspect not only the current function's variables but also the variables of any function further up the call stack:
+```loft fn debug\_dump() { for frame in stack\_trace() { println("{frame.function}:{frame.line}"); for v in frame.variables { println("  {v.name} = {v.value}"); } } } ```
+
+== Coroutines
+
+```rust
+pub enum CoroutineStatus {
+  Created,
+  Suspended,
+  Running,
+  Exhausted,
+}
+```
+
+Lifecycle state of a coroutine frame. Transitions: Created -\> Running -\> Suspended -\> Running -\> ... -\> Exhausted.
+
+```rust
+pub fn exhausted(gen: reference) -> boolean
+```
+
+CO1.6: Returns true if the coroutine has finished producing values.
+
+== Json
+
+```rust
+pub enum JsonValue {
+  JNull,
+  JBool { value: boolean },
+  JNumber { value: float },
+  JString { value: text },
+  JArray { items: vector<JsonValue> },
+  JObject { fields: vector<JsonField> },
+  JInteger { value: integer },
+}
+```
+
+Copyright (c) 2026 Jurjen Stellingwerff SPDX-License-Identifier: LGPL-3.0-or-later \@F42 — JSON (catalogue anchor, \@PLN92)
+First-class JSON as a typed tree.
+`json\_parse(text)` returns a `JsonValue` enum whose variants cover every JSON kind.  Callers match on the variant to access the payload, chain `field()` / `item()` for dynamic-shape navigation, and use the typed extractors (`as\_text`, `as\_number`, `as\_long`, `as\_bool`) for leaf values.  Malformed input returns `JNull` rather than panicking; the last parse error is retrievable via `json\_errors()`. Typed union of JSON values.  The discriminant (1..6) picks the active variant; variant data lives in the variant's fields. Matches the RFC 8259 kinds, plus `JInteger` (\@PLN109) for an integer-shaped number preserved to an exact `integer` (i64).
+`JInteger` MUST stay the LAST variant: the store discriminant it gets (7) is hard-coded as `JV\_DISCR\_INT` in `src/native.rs`, and the existing variants' discriminants (1–6) must not shift.
+
+```rust
+pub struct JsonField {
+  name: text,
+  value: JsonValue,
+}
+```
+
+One field of a `JObject`.  Stored as a `vector\<JsonField\>` rather than a `hash\<JsonField\[name\]\>` in step 2 — the hash form is a 0.9.0 follow-up once hash iteration and nested struct-enum-in-hash layouts are exercised end-to-end.  Linear scan is fine for the object sizes typical in configuration / API responses.
+
+```rust
+pub fn json_parse(raw: text) -> JsonValue
+```
+
+Parse JSON text into a `JsonValue` tree.  Malformed input returns `JNull`; the error trail is accessible via `json\_errors()`.  All six variants materialise (primitives, arrays, objects, nested containers); the entire tree lives in one store and frees as one unit when the root `DbRef` leaves scope.
+```loft match json\_parse(raw) { JObject { fields } =\> for f in fields { handle(f) }, JArray  { items }  =\> for v in items  { handle(v) }, JNull              =\> println("parse error: {json\_errors()}"), \_                  =\> println("unexpected root kind"), } ``` Example: \@STD-007
+
+```rust
+pub fn json_errors() -> text
+```
+
+Populates the runtime's per-call json\_errors state (read by json\_errors()).  Allocates the result tree into worker-local stores → par-safe; no parent state written. Return a pipe-separated trail of JSON parse errors from the most recent `json\_parse` call.  Empty when the parse succeeded.  Each entry carries an RFC 6901 path, a `line:col` location, and a context snippet — see Q1 in `doc/claude/QUALITY.md`.
+
+```rust
+pub fn field(self: JsonValue, name: text) -> JsonValue
+```
+
+Observes the runtime's json\_errors state populated by json\_parse.  No parent writes. JObject indexer — returns the value at `name`, or `JNull` when `self` isn't a JObject or the key is missing.  Chained access like `root.field("a").field("b")` is safe — every intermediate missing produces `JNull`, never a trap.
+
+```rust
+pub fn item(self: JsonValue, index: integer) -> JsonValue
+```
+
+JArray indexer — returns the element at `index`, or `JNull` when `self` isn't a JArray or the index is out of bounds.
+
+```rust
+pub fn len(self: JsonValue) -> integer
+```
+
+Length of a JArray's items vector or a JObject's fields vector. Returns `null` (i32::MIN) for any other variant.
+
+```rust
+pub fn as_text(self: JsonValue) -> text
+```
+
+Typed extractor — returns `null` (empty text) on kind mismatch.
+
+```rust
+pub fn as_number(self: JsonValue) -> float
+```
+
+Typed extractor — returns `null` on kind mismatch.
+
+```rust
+pub fn as_long(self: JsonValue) -> integer
+```
+
+Typed extractor — returns `null` on kind mismatch.  Truncates the underlying `float` toward zero before converting.
+
+```rust
+pub fn as_bool(self: JsonValue) -> boolean?
+```
+
+Typed extractor — returns `null` on kind mismatch.
+Declared `boolean?` and not `boolean`: the doc has always promised the null and the signature could not carry it.  Its three siblings keep the promise because `text`, `float` and `integer` each have an in-band sentinel a non-null return can hold; a two-state Rust `bool` has none, so this one answered `false` for every mismatching kind — for an absent field, for the string `"true"`, and for `1` — indistinguishably from a field that really says `false` (loft\#1302).
+
+```rust
+pub fn kind(self: JsonValue) -> text
+```
+
+Q2 introspection — returns the variant name as text: `"JNull"`, `"JBool"`, `"JNumber"`, `"JString"`, `"JArray"`, or `"JObject"`.  Cheap: reads the discriminant byte, formats a literal.  Useful for logs and conditional branches that don't want to commit to a full pattern match.
+
+```rust
+pub fn keys(self: JsonValue) -> vector<text>
+```
+
+Q2 introspection — returns the field-name list of a `JObject` in insertion order, or an empty vector for any other variant. Safe idiom: `for k in v.keys() { ... }` works on any JsonValue because non-objects yield an empty walk.
+
+```rust
+pub fn fields(self: JsonValue) -> vector<JsonField>
+```
+
+Q2 introspection — returns the (name, value) entries of a `JObject` in insertion order so callers can iterate as `for entry in fields(v) { … entry.name … entry.value … }`. Values deep-copy (primitives + nested containers — full tree). Empty vector for any other variant.
+
+```rust
+pub fn has_field(self: JsonValue, name: text) -> boolean
+```
+
+Q2 introspection — returns true iff `self` is a `JObject` variant carrying a field named `name`.  All other variants (including `JNull` on a parse error) return false, so the common pattern `if v.has\_field("users") { … }` is safe to write on any JsonValue without first destructuring. Distinguishes "absent" from "present-but-null" — a field whose value is `JNull` still returns `true`.
+
+```rust
+pub fn to_json(self: JsonValue) -> text
+```
+
+Q3 serialiser — render a JsonValue to canonical RFC 8259 JSON text.  All six variants serialise; `JArray` / `JObject` recurse through their children (full tree serialisation, nested containers walk naturally).  Strings escape `"`, `\\\\`, and ASCII control bytes; UTF-8 passes through verbatim. Non-finite numbers render as `null`.
+
+```rust
+pub fn to_json_pretty(self: JsonValue) -> text
+```
+
+Q3 pretty serialiser — `to\_json\_pretty` produces 2-space indented, one-element-per-line output for non-empty `JArray` / `JObject` containers.  Empty containers render `\[\]` / `{}` (no newline padding).  Primitives are byte-identical to `to\_json` (no nested structure to indent).  After object keys the colon is followed by a single space (`"k": v`). Useful for golden-file tests and log output.
+
+```rust
+pub fn json_null() -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JNull` variant. Useful in test fixtures and reply-construction code that needs a known-null JsonValue without going through `json\_parse("null")`.
+
+```rust
+pub fn json_bool(v: boolean) -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JBool` variant carrying the supplied boolean payload.
+
+```rust
+pub fn json_number(v: float?) -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JNumber` variant carrying the supplied float payload.  Non-finite inputs (float null = NaN, or ±Inf) produce `JNull` with a diagnostic in `json\_errors()` — mirrors the RFC 8259 constraint that JSON numbers must be finite.  The parameter is `float?` because handling a null/NaN input IS its contract (→ `JNull`); a finite `float` passes as a non-null value into the nullable slot as usual.
+
+```rust
+pub fn json_string(v: text) -> JsonValue
+```
+
+Non-finite inputs touch json\_errors state.  Otherwise pure construction into worker stores. Q4 constructor — build a JsonValue set to the `JString` variant carrying the supplied text payload.  The text is copied into the JsonValue's own store, so the returned value owns the string independently of the argument's lifetime.
+
+```rust
+pub fn json_array(items: vector<JsonValue>) -> JsonValue
+```
+
+Q4 constructor — build a JsonValue set to the `JArray` variant carrying the supplied items.  Each element is deep-copied into the new tree's arena via the shared `dbref\_to\_parsed` walker, so nested containers and arena-origin subtrees (e.g. a captured `field()` result) embed correctly.  Empty input produces a real empty JArray. Example: \@STD-008
+
+```rust
+pub fn json_object(fields: vector<JsonField>) -> JsonValue
+```
+
+Build a JsonValue set to the `JObject` variant carrying the supplied fields.  Each field's value deep-copies via the same `dbref\_to\_parsed` walker as `json\_array`, so a JObject can carry captured-subtree JArray / JObject values.  Empty input produces a real empty JObject. Example: \@STD-008
+
+```rust
+pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -> JsonValue
+```
+
+Internal walker — populate a struct of the given `struct\_kt` (known-type number) from a JsonValue.  Compile-time codegen for `Struct.parse(JsonValue)` emits exactly one call to this function regardless of struct shape; the runtime walker uses `stores.types\[struct\_kt\].parts` to dispatch on each field's declared type (primitive, nested struct, JsonValue passthrough, or vector). Path-qualified schema-side diagnostics on type mismatches go to `json\_errors()`.  Users should not call this directly — write `MyStruct.parse(value)` instead.
+Return type is declared as `JsonValue` here purely because it shares the same DbRef byte layout as the actual `reference\[T\]` the walker produces — the compile-time codegen at `parse\_type\_parse` overrides the type to `reference\[T\]` for the caller while the stack accounting remains correct. Example: \@STD-009
+
+```rust
+pub fn struct_to_json(self_ref: JsonValue, struct_kt: integer) -> text
+```
+
+Populates json\_errors on type mismatches.  Allocates the result struct into worker stores → par-safe; no parent state writes. P54 Q3 second half — serialise any user struct to canonical JSON. Backs the parser-side intercept for `instance.to\_json()`; the `field == "to\_json"` rewrite in `src/parser/fields.rs` lowers the method call to `n\_struct\_to\_json(self\_ref, struct\_kt)`.  Walks `stores.types\[struct\_kt\].parts` via `Stores::show\_json` (which reuses the existing `ShowDb` schema walker) and produces RFC 8259 JSON text.  String fields are escaped (`"` / `\\` / control bytes); nested structs and vectors recurse; `JsonValue`-typed fields render their inline subtree verbatim.  The first parameter is declared as `JsonValue` purely so the parser type-system accepts the synthesised call regardless of the actual receiver's struct type — the runtime only reads the `struct\_kt` discriminant for dispatch. Example: \@STD-009
+
+```rust
+pub fn struct_to_json_pretty(self_ref: JsonValue, struct_kt: integer) -> text
+```
+
+As `struct\_to\_json` but produces a pretty (2-space-indent, one element per line) form.  Same field-type matrix.
+
+== Type reflection
+
+```rust
+pub enum TypeKind {
+  IntegerKind,
+  LongKind,
+  SingleKind,
+  FloatKind,
+  BooleanKind,
+  TextKind,
+  CharacterKind,
+  /// A struct — its fields are in `fields`.
+  RecordKind,
+  /// An enum — its variants are in `variants`.
+  EnumKind,
+  /// One variant of a struct-enum; it has fields of its own.
+  VariantKind,
+  /// A vector — `element` names what it holds.
+  VectorKind,
+  /// A keyed collection (hash / index / sorted / ordered / radix) — walked by
+  /// cursor rather than by layout, so it has no fields of its own. Which of the
+  /// five it is, and on which fields, are in `collection` and `keys`.
+  KeyedKind,
+  /// A stored reference to another record.
+  RefKind,
+  /// A kind this loft version has no name for. Never guessed at.
+  OtherKind,
+}
+```
+
+What a type IS — the discriminant a caller matches on before reading the fields that only some kinds have.
+These are STORAGE kinds, because storage is what the descriptor records. A narrow `i32` field reports `IntegerKind`; the declared width is visible in `size`, not in a separate kind.
+
+```rust
+pub struct FieldInfo {
+  name: text,
+  /// The field type's name, as the store records it.
+  type_name: text,
+  /// Byte offset of the field within its record.
+  position: integer,
+  kind: TypeKind,
+  /// Was the field DECLARED nullable (`text?` rather than `text`)?
+  ///
+  /// Not a layout fact — a nullable field occupies the same bytes and spells an
+  /// absent value with a sentinel — so nothing in the stored bytes implies it,
+  /// and it reaches you only because the compiler records it. It is what a
+  /// generated `CREATE TABLE` needs for `NOT NULL`.
+  nullable: boolean,
+}
+```
+
+One field of a record or of a struct-enum variant.
+
+```rust
+pub enum CollectionKind {
+  /// Not a keyed collection. Every other kind of type answers this, so a
+  /// caller can read `collection` without matching `kind` first.
+  NotKeyed,
+  KeyedHash,
+  KeyedIndex,
+  KeyedSorted,
+  KeyedOrdered,
+  KeyedRadix,
+  KeyedTrie,
+}
+```
+
+WHICH keyed collection a type is — the shape of its lookup.
+`KeyedKind` says a type is walked by cursor; this says what by. The distinction decides what a query over it can be: a `hash` answers equality only, `sorted` / `ordered` / `index` also answer a range in their declared direction, a `radix` is a Morton-order structure that no SQL shape means the same thing as, and a `trie` answers equality, byte order, and a PREFIX — which is `LIKE 'x%'` and nothing narrower.
+
+```rust
+pub struct KeyInfo {
+  name: text,
+  /// Byte offset of this field within the ELEMENT record — the same number the
+  /// element type's `FieldInfo.position` carries, so a caller joins the two by
+  /// VALUE rather than by matching names. A name is a display fact; the
+  /// position is what the collection actually keys on.
+  position: integer,
+  /// Does the collection order this key ascending?
+  ///
+  /// `true` for a kind that has no order of its own (`hash`, `radix`), and for a
+  /// `trie`, whose single key IS ordered ascending by byte. Only a kind that can
+  /// be declared descending ever answers `false`. Because
+  /// there is no descending answer to give. Match `collection` first where the
+  /// difference between "ascending" and "unordered" matters.
+  ascending: boolean,
+}
+```
+
+One key field of a keyed collection.
+
+```rust
+pub struct VariantInfo {
+  name: text,
+  /// The discriminant this variant is stored as. Never 0 — 0 means absent.
+  tag: integer,
+}
+```
+
+One variant of an enum.
+
+```rust
+pub struct TypeInfo {
+  name: text,
+  kind: TypeKind,
+  /// Bytes one record of this type occupies; 0 for a type with no record.
+  size: integer,
+  const fields: vector<FieldInfo>,
+  const variants: vector<VariantInfo>,
+  /// For a vector or a keyed collection, the element type's name.
+  element: text,
+  /// For a keyed collection, which of the five it is; `NotKeyed` otherwise.
+  collection: CollectionKind,
+  /// The key fields of a keyed collection, in KEY ORDER — the order a composite
+  /// lookup binds them in, which is why it is a vector and not a set.
+  ///
+  /// Empty for every type that is not keyed, and empty for the one keyed shape
+  /// whose keys are not its element's own fields: a `__nullable<S>` element
+  /// keys through its `Some` payload. Empty rather than partial is deliberate —
+  /// a query built from half a composite key is a WRONG query, not a narrower
+  /// one, so a key list is delivered whole or not at all.
+  const keys: vector<KeyInfo>,
+}
+```
+
+The declared shape of one type.
+`fields` is empty for everything but a record and a struct-enum variant; `variants` for everything but an enum; `element` is `""` unless the type holds one. Empty is the honest answer for a kind that has no such thing — a caller matches `kind` first.
+
+```rust
+pub fn reflect_type(kt: integer) -> TypeInfo
+```
+
+The declared shape of `value`'s type.
+\*\*The argument is read for its TYPE and is not evaluated\*\* — the same contract C's `sizeof` has, and for the same reason: nothing about the answer depends on the value. Pass a variable, a field or a parameter; an expression with a side effect will not have it.
+```loft t = type\_of(row); println("{t.name}:"); for f in t.fields { println("  {f.name}: {f.type\_name} \@{f.position}") } ```
+\*\*Not inside a generic.\*\* A generic body is parsed ONCE against its type variable, so `type\_of(v)` there answers `\_\_typevar\_T` — the same reason `"{v:j}"` in a generic body renders `{}`. Call it where the concrete type is known. Making it work inside a generic needs the body parsed per instantiation, which is a different plan.
+Describes a TYPE. To read what a VALUE holds at one of these positions, use `field\_value`. WRITING a value by field is a separate and larger question, deliberately still out of scope.
+`type\_of(x)` is intercepted in `src/parser/control.rs` and lowered to `n\_reflect\_type(\<type-id\>)`, so the id is a parse-time constant on both backends — the same mechanism `to\_json` uses, and the reason the answer does not depend on a runtime name lookup.
+
+```rust
+pub fn type_named(name: text) -> TypeInfo?
+```
+
+Reads the store's type table through `Stores::layout\_descriptor` and allocates the answer into the caller's own stores → par-safe. The declared shape of the type called `name`, or `null` if this program has no such type — reflection with no value in hand.
+This is what an ORM or a schema check needs: the name arrives from a config file, a database catalogue or a command line, so there is nothing to call `type\_of` on.
+```loft t = type\_named("Row"); if t == null { println("no such type") } else { println("{t.name}") } ```
+\*\*`TypeInfo?`, and null means the name is not a type here.\*\* A type that does not exist has no shape, and saying so in the type is what makes a caller handle it rather than read a plausible-looking empty answer.
+A name is matched exactly as the store records it, which is the loft type name — `Point`, `text`, `vector\<Point\>`.
+Unlike `type\_of`, no parser intercept: the name is a RUNTIME value, so the lookup is a runtime one. It works on `--native` because the generated `init()` replays the type registrations — names included — and `Stores::name` is a total lookup that answers "absent" rather than minting a type for a typo.
+
+```rust
+pub struct ValueInfo {
+  /// What the type's own descriptor says lives at that position — never what
+  /// the caller expected to find there.
+  kind: TypeKind,
+  /// The SCALAR at that position holds loft's NULL.
+  ///
+  /// Separate from the payload because a null is not a value a payload can
+  /// spell: `0`, `""` and `false` are ordinary answers a field can genuinely
+  /// hold, and an ORM that could not tell them from SQL NULL would write the
+  /// wrong row. Test this before reading `i` / `f` / `t`.
+  ///
+  /// `false` for a `kind` that has no scalar reading and for `OtherKind` — a
+  /// field that was never read is not a field that read as null, and those are
+  /// three answers rather than two.
+  is_null: boolean,
+  i: integer,
+  f: float,
+  t: text,
+}
+```
+
+One field's VALUE, read out of a record at the position reflection reported.
+`kind` says which payload carries the answer, so a caller matches it once rather than asking a different question per type:
+| `kind` | read | |---|---| | `IntegerKind` · `LongKind` | `i` | | `BooleanKind` | `i` — 1 or 0 | | `CharacterKind` | `i` — the code point | | `FloatKind` · `SingleKind` | `f` | | `TextKind` | `t` | | `OtherKind` | nothing — see `field\_value` |
+A boolean and a character ride in `i` for the reason a bound SQL value does: one integer path is one thing to get right, and the `kind` beside it is what keeps them apart.
+
+```rust
+pub fn reflect_field(value: TypeInfo, position: integer, kt: integer) -> ValueInfo
+```
+
+The value `value` holds at byte `position` — the VALUE half of reflection.
+`type\_of` says a record has a `text` at byte 16; this reads it. Together they are what a generic serialiser, an ORM write or a diff needs, and neither half is enough alone:
+```loft t = type\_of(row); for f in t.fields { v = field\_value(row, f.position); if v.is\_null { println("{f.name}=null") } else { println("{f.name}={v.t}") } } ```
+\*\*The position is CHECKED against the type's own descriptor, never trusted.\*\* A number that does not begin a field — a hand-made offset, a stale one, a position from a different type — answers `OtherKind`, which is also what a field whose type has no scalar reading (a nested record, a vector, a keyed collection, a stored reference) answers. So there is no offset a caller can pass that reads bytes belonging to something else, which is what makes this ordinary loft rather than a pointer.
+`kind` is the DESCRIPTOR's answer, not the caller's: passing the position of an `integer` field does not make the reading an integer, it makes it whatever that field is. That is why the kind is reported rather than requested.
+\*\*REFUSED inside a generic\*\*, and refused rather than merely unsupported. A generic body is parsed once against its type variable, so there is no concrete type to read positions out of — the same limit `type\_of` has. Left to answer, every call there reports `OtherKind`, which for an ORM's write half is an EMPTY ROW rather than an error: the write succeeds and the columns are missing. So it is a compile error naming the type variable. Call it one frame out, where the type is known, and pass the values in.
+`field\_value(x, position)` is intercepted in `src/parser/control.rs` and lowered to `reflect\_field(x, position, \<type-id\>)`, so the id is a parse-time constant on both backends — the same mechanism `type\_of` and `to\_json` use.
+The value parameter is declared `TypeInfo` only because loft has no way to spell "any record"; the parser substitutes the real argument, and only the reference ABI matters here. `struct\_to\_json` (06\_json.loft) does the same.
+
+```rust
+pub fn reflect_field_path(value: TypeInfo, path: vector<integer>, kt: integer) -> ValueInfo
+```
+
+Reads through the SAME `Parts::Struct` field list the store itself is walked by, and allocates the answer into the caller's own stores → par-safe. The value at the end of a PATH of positions — `field\_value(x, \[8, 0\])`.
+`type\_of` reports a nested record's fields at positions relative to THAT record, so one number cannot name `origin.x` — and reflection hands back no handle to a nested record to call `field\_value` on again. A path closes that: each element is a position in the record the previous element landed in.
+\*\*The offsets must not be added up by the caller.\*\* `field\_value(doc, 8 + 0)` asks for a field BEGINNING at byte 8 of `Doc`, which is `origin` itself — the check that makes this ordinary loft rather than a pointer is that a position must begin a field of the type it is read against. So the walk happens inside, one descriptor step per element, each checked the same way.
+```loft // Doc.origin \@8, Point.y \@8 v = field\_value(doc, \[8, 8\]);   // doc.origin.y ```
+Every step but the last must land on an INLINE record. A step onto a scalar, a vector, a keyed collection or a stored reference answers `OtherKind` and reads nothing: a stored reference names a record with its own identity, and following it would be a pointer chase rather than a field read. An empty path answers `OtherKind` for the same reason a bad position does — nothing names a field there.
+A one-element path is the single-position form, and answers identically.
+`field\_value(x, path)` is intercepted in `src/parser/control.rs` beside the single-position form and lowered to `reflect\_field\_path(x, path, \<type-id\>)`, so the type id is a parse-time constant on both backends.
+
 = Roadmap
 
-Loft is under active development. Everything documented on the language pages works today. This page describes where the project is headed.
+Loft is under active development. Every code example on the language pages is executed by the test suite on both backends, so what they show runs today. This page describes where the project is headed.
 
 The project goal is *browser games that anyone can play via a shared link*. Native OpenGL is supported for desktop enthusiasts. Server and multiplayer features come after the single-player browser experience works.
 
-=== Current release — 0.8.4: Awesome Brick Buster
+Since *2026-06* loft ships on a calendar version: a release is named for
+its month, which `Cargo.toml` spells `2026.6.0`, `2026.7.0`,
+`2026.8.0` — `loft --version` prints the one you have. The semver
+milestones below were the plan before that switch; the two numbered ones have shipped, and
+1.0.0 is still the name of the finish line rather than a month.
+
+=== 0.8.4 (shipped 2026-04-24): Awesome Brick Buster
 
 0.8.4 turns Brick Buster from a tech demo into a game someone would actually want to share with a friend, and makes sharing trivial via single-file HTML export.
 
@@ -8249,7 +9487,7 @@ The game's WebAssembly, textures, and audio are all embedded. Host the file anyw
 - *CLI hardening* — script-level arguments, file-scope constants, and release-mode coroutine-iterator fixes (P126, P128, P131, P132).
 - *Bytecode cache* — `.loftc` files are invalidated on interpreter rebuild via the embedded git commit hash.
 
-=== Next — 0.8.5: Working Moros editor
+=== 0.8.5 (shipped 2026-06-07): Working Moros editor
 
 The Moros hex RPG scene editor runs end-to-end in the browser: load a map, paint hexes, place walls and items, see a live 3D preview, export to GLB. Web only — multiplayer comes in 1.0.0.
 
@@ -8265,9 +9503,9 @@ The language itself becomes feature-complete, well-documented, and tooling-frien
 
 ==== Language polish
 
-- *Error recovery* — the parser continues after a token-level failure and reports multiple errors in a single pass.
-- *REPL* — running `loft` with no arguments starts an interactive session; definitions persist across lines.
-- *Developer warnings* — Clippy-inspired lints for common mistakes.
+- *Error recovery* — the parser continues after a token-level failure and reports multiple errors in a single pass — *shipped* (a two-error program reports both in one pass).
+- *REPL* — running `loft` with no arguments starts an interactive session; definitions persist across lines — *shipped* (bare `loft` starts one and restores the last session).
+- *Developer warnings* — Clippy-inspired lints for common mistakes — *shipped* (a two-tier warning/advice set with `--explain` fix lines).
 - *AOT library compilation* — automatically compile libraries to native shared libs for faster startup.
 - *Stdlib hygiene* — name-clash warnings and a `std::` prefix for shadowed builtins; library enums in `match` arms without qualification.
 
@@ -8277,14 +9515,14 @@ Bytecode cache (`.loftc`) and the shared constant store are already implemented.
 
 ==== Developer experience
 
-- TextMate grammar for `.loft` syntax highlighting.
-- VS Code extension with snippets and a run task.
-- Quick-start `examples/` directory.
-- CI covering package tests and native codegen.
+- TextMate grammar for `.loft` syntax highlighting — *shipped* (`editors/vscode/syntaxes/loft.tmLanguage.json`).
+- VS Code extension with snippets and a run task — *shipped* (`editors/vscode/`, plus `loft-lsp` and `loft-dap`).
+- Quick-start `examples/` directory — *shipped* (`examples/`).
+- CI covering package tests and native codegen — *shipped* (`make ci`).
 
 ==== Packaging and FFI
 
-- *Lock file* (`loft.lock`) for reproducible builds.
+- *Lock file* (`loft.lock`) for reproducible builds — *shipped* (`loft install` writes it).
 - *Generic FFI marshaller* — zero-boilerplate native functions from a `#native` signature; generic `cdylib` loader scans exports into a hash map.
 
 === 1.0.0 — Totally sure everything works

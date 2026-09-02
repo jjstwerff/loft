@@ -189,7 +189,9 @@ probe that had reported "compiled" — and asserting its VALUE showed it answers
 the second operand discarded, on both backends (loft#1274). A bound is a promise about what
 compiles, so a compile check feels like the whole of it; it is half. **Assert the value of
 every operation a bound is said to permit**, because an operator that binds to the wrong
-overload compiles perfectly.
+overload compiles perfectly. (loft#1274 is fixed — the spelling is refused now, and the
+guard's cell that pinned the wrong answer had to go with it, which is the other half of the
+same lesson: a cell written to record a defect is a cell that fails the day it is cured.)
 
 ⚠ **A chapter's general sentence is only tested at the types its examples use.** Chapter
 26 said closures capture "at the moment the lambda is written … if a variable changes after

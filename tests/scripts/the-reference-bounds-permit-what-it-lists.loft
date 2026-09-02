@@ -51,11 +51,12 @@ fn gb_eq<T: Equatable>(a: T, b: T) -> boolean { a == b }
 fn gb_ne<T: Equatable>(a: T, b: T) -> boolean { a != b }
 // `Addable` is `+` and nothing else.
 fn gb_add<T: Addable>(a: T, b: T) -> T { a + b }
-// `Numeric` is `*` and the UNARY `-`.  The binary spelling compiles under this bound and
-// answers `-a`, discarding the second operand (loft#1274) — it is pinned below rather than
-// used, because a guard that leaves a wrong answer unstated is how it stays.
+// `Numeric` is `*` and the UNARY `-`.  The binary spelling used to compile under this bound
+// and answer `-a`, discarding the second operand (loft#1274, fixed): it is REFUSED now, so it
+// cannot appear in this file at all — a source that contains it does not parse, and these
+// rows would never run.  The refusal is guarded in `tests/parse_errors.rs`
+// (`binary_minus_under_numeric_is_refused_not_bound_to_the_unary_op`).
 fn gb_mul<T: Numeric>(a: T, b: T) -> T { a * b }
-fn gb_sub<T: Numeric>(a: T, b: T) -> T { a - b }
 fn gb_neg<T: Numeric>(a: T) -> T { -a }
 // `Scalable` and `Printable` are METHODS, not operators.
 fn gb_scale<T: Scalable>(a: T) -> integer { a.scale(3) }
@@ -81,8 +82,6 @@ fn each_bound_permits_exactly_its_own_operations() {
   // loft#1274, pinned as the WRONG answer it currently gives: the binary `-` binds to the
   // unary negation and drops its second operand.  When that closes this cell fails, which
   // is the point — it is the reminder to restate the row in the chapter's table.
-  assert(gb_sub(9, 4) == -9, "loft#1274 changed: binary `-` under Numeric now gives {gb_sub(9, 4)}");
-  assert(gb_sub(3, 10) == -3, "loft#1274: the second operand is discarded, not subtracted");
   assert(gb_text(7) == "7", "Printable: `to_text`");
   assert(gb_interp(7) == "<7>", "Printable: interpolation");
   assert(gb_both(3, 4), "a combined bound permits both halves");
@@ -107,10 +106,6 @@ fn a_user_type_satisfies_a_bound_by_defining_the_operator_function() {
   assert(prod.cents == 12, "Numeric `*` on a user type: {prod.cents}");
   neg = gb_neg(small);
   assert(neg.cents == -300, "Numeric unary `-` on a user type: {neg.cents}");
-  // …and the same loft#1274 answer on a user type, which is how it is known to be the
-  // OPERATOR RESOLUTION rather than anything about the built-in scalars.
-  wrong = gb_sub(big, small);
-  assert(wrong.cents == -700, "loft#1274 on a user type: {wrong.cents}");
   assert(gb_scale(Cash { cents: 5 }) == 15, "Scalable on a user type");
   assert(gb_text(big) == "700c", "Printable on a user type: {gb_text(big)}");
 }
