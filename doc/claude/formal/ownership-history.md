@@ -473,6 +473,18 @@ assigned, so freeing the displaced store before the assignment is a use-after-fr
 that takes it, and only a per-execution comparison can tell the two apart.  That is what
 `OpBindOrCopy` exists for, and the reassignment does not reach it.
 
+⚠ **One candidate cause is ELIMINATED, measured 2026-09-02.**  `callref_join_first_bind` — the
+site that emits `OpBindOrCopy` — refuses anything that is not a `Value::CallRef`, and
+`c = mk(i) ?? c` calls a NAMED function, so the call SPELLING looked like the whole of "does
+not reach it".  It is not: admitting `Value::Call` there leaves the leak at exactly `SN×9` on
+both backends, under `LOFT_STRICT_STORES=1` as well.  So the next attempt should not spend
+itself on the spelling — the dispatch is a FIRST-BIND one and this is a reassignment, which is
+a different question from which call form produced the value.
+
+Re-measured the same day, and the entry's own numbers still hold: `c = mk(i) ?? c` over ten
+rounds leaks `kt=81 SN×9`, while the plain `c = mk(i)` — the wider half loft#1200 closed —
+is clean.
+
 **NARROWED 2026-08-30 (loft#1200): the wider half is CLOSED, and the route to it is this
 entry's own conclusion carried out.**  The entry reads as though the JOIN were the mechanism.
 It is not — the plain reassignment `c = mk(i)` leaks identically with no join anywhere, and so
