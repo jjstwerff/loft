@@ -3206,6 +3206,49 @@ fn keyed_collection_as_a_vector_element_is_refused() {
         );
 }
 
+/// loft#1298 — the same refusal for the spelling that writes NO type.
+///
+/// The declaration check above was described as *"the one chokepoint every `vector<…>`
+/// element passes through"*, and it is not: an INFERRED literal never writes the type, so
+/// `hs = [mk(1), mk(2)]` where `mk` returns a `hash<E[k]>` reached no check at all. It
+/// panicked the interpreter instead — the element copy landed on `u16::MAX`, which the
+/// source-free bit masks to `0x7FFF`, an index into an 85-row type table.
+///
+/// Refused rather than made to work, and that was MEASURED rather than assumed: giving the
+/// element the collection's own registered row gets past the type table and then corrupts
+/// the block chain (*"block chain is malformed … a block owning no words"*, then a divide by
+/// zero), so the storage has no room for a keyed element either. The message's own cure —
+/// hold it in a struct — is verified to work.
+#[test]
+fn an_inferred_keyed_vector_element_is_refused_too() {
+    code!(
+        "struct Ent { k: integer, v: integer }\n\
+         fn mk() -> hash<Ent[k]> { h: hash<Ent[k]> = []; h }\n\
+         fn test() { hs = [mk(), mk()]; }"
+    )
+    .error(
+        "a `hash` cannot be a vector ELEMENT — a keyed collection has no element form \
+         anything can write, so `vector<hash<…>>` could only ever be declared and stay \
+         empty. Hold it in a struct and make a vector of THAT: the extra record is what \
+         the element would have been anyway. at \
+         an_inferred_keyed_vector_element_is_refused_too:3:30",
+    );
+}
+
+/// The CONTROL for the refusal above: a keyed literal built THROUGH a keyed destination is
+/// a different construct (its elements are the CONTENT struct, not collections) and must
+/// still build, as must a nested VECTOR literal beside it. A refusal that fired on either
+/// would satisfy the test above and take a working spelling with it.
+#[test]
+fn a_keyed_destination_literal_and_a_nested_vector_still_build() {
+    code!(
+        "struct Ent { k: integer, v: integer }\n\
+         fn test() -> integer { h: hash<Ent[k]> = [Ent { k: 1, v: 7 }, Ent { k: 2, v: 8 }]; \
+         vv = [[1, 2], [3, 4]]; return len(h) + len(vv); }"
+    )
+    .result(Value::Int(4));
+}
+
 /// Every keyed kind, not just the one that was reported: `spatial` and `trie`
 /// reach the same dead end, and a rule that names three of five kinds is how
 /// loft#922's field-replace path left two of them broken.

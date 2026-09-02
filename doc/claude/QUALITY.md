@@ -2419,7 +2419,7 @@ and who does not.
 
 | functions discriminating on a `Type` variant | see through the wrapper | descend via the keystone | opaque |
 |---:|---:|---:|---:|
-| 676 | 322 | 5 | **349** |
+| 677 | 322 | 5 | **350** |
 
 loft#1245 added `use_analysis::callref_captures` on the seeing-through side (the opaque
 column unchanged): it asks whether a fn-ref CAPTURES by matching `Type::Function` through

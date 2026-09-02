@@ -3283,6 +3283,16 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
         // collection as a VALUE at all — only through a keyed destination that already
         // existed (a struct-literal field, or a `+=` onto a built collection).
         let keyed_dest = self.keyed_local(vec);
+        // The INFERRED half of loft#923's refusal: this literal's element type was never
+        // written, so the declaration chokepoint in `definitions.rs` never saw it.  A keyed
+        // destination is a different construct — `h = [K { … }]` builds THROUGH `h`
+        // (loft#703) and its elements are `K`, not collections — so it is excluded here the
+        // same way it is below.
+        if !keyed_dest && self.refuse_keyed_vector_element(&in_t) {
+            self.lexer.token("]");
+            *val = Value::Insert(Vec::new());
+            return Type::Unknown(0);
+        }
         let struct_tp = Type::Vector(Box::new(in_t.clone()), Deps::frame(parent_tp.depend()));
         if !is_field && !keyed_dest {
             self.vars
@@ -5320,6 +5330,43 @@ local copy and write it back after the closure runs: `local = {name}; …; {name
 /// [`is_collection`] must peel on BOTH of its arms for the same reason.  The two differ by
 /// the `Vector` variant and by nothing else — a difference on the nullability axis makes a
 /// `vector<τ>?` the one collection `is_collection` denies, which is loft#1207.
+impl Parser {
+    /// Refuse a KEYED collection in a vector ELEMENT position, and say so once.
+    ///
+    /// `true` when it fired, so the caller can abandon the construction.
+    ///
+    /// One home for a refusal two sites have to make: the DECLARED spelling
+    /// (`vector<hash<E[k]>>`, caught while the type is parsed) and the INFERRED one
+    /// (`hs = [mk(1), mk(2)]`, which writes no type and so passed the first site by).  A
+    /// keyed collection has no element form anything can write — measured: giving the
+    /// element the collection's own registered row gets past the type table and then
+    /// corrupts the block chain, so the storage has no room for one either (loft#923,
+    /// loft#1298).
+    ///
+    /// Named by its KIND, not by `Type::name`: a keyed type's registered name carries its
+    /// key list in the schema's own spelling (`sorted<E,[("k", true)]>`), which is not what
+    /// the author wrote and not something to hand back to them.
+    pub(crate) fn refuse_keyed_vector_element(&mut self, tp: &Type) -> bool {
+        let kind = match tp.base() {
+            Type::Hash(_, _, _) => "hash",
+            Type::Sorted(_, _, _) => "sorted",
+            Type::Index(_, _, _) => "index",
+            Type::Radix(_, _, _) => "spatial",
+            Type::Trie(_, _, _) => "trie",
+            _ => return false,
+        };
+        diagnostic!(
+            self.lexer,
+            Level::Error,
+            "a `{kind}` cannot be a vector ELEMENT — a keyed collection has no element \
+             form anything can write, so `vector<{kind}<…>>` could only ever be declared \
+             and stay empty. Hold it in a struct and make a vector of THAT: the extra \
+             record is what the element would have been anyway."
+        );
+        true
+    }
+}
+
 pub(crate) fn is_keyed(tp: &Type) -> bool {
     matches!(
         tp.base(),
