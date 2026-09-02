@@ -802,7 +802,7 @@ whose entry list changed has.
 | `doc/00-vs-python.html` | 2026-09-02 | `a41ee548` |
 | `doc/install.html` | 2026-09-02 | `80568550` |
 | `doc/roadmap.html` | 2026-09-02 | `462d42ee` |
-| `default` | 2026-09-02 | `86f0423e` |
+| `default` | 2026-09-02 | `147b7460` |
 
 ## See also
 
