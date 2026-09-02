@@ -1209,36 +1209,13 @@ fn check_diagnostics(
 /// `fn test_*()` style entry points are exercised by `cargo test`, not only by
 /// `loft --tests`.
 fn entry_point_names(data: &Data, start_def: u32) -> Vec<String> {
-    use loft::data::DefType;
     let mut names = Vec::new();
     for d_nr in start_def..data.definitions() {
         let def = data.def(d_nr);
-        if !matches!(def.def_type, DefType::Function) {
-            continue;
-        }
-        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
-            continue;
-        }
-        if def.position.file.starts_with("default/") || def.position.file.starts_with("default\\") {
-            continue;
-        }
-        // Only zero-parameter functions are entry points.
-        if !def.attributes.is_empty() {
-            continue;
-        }
-        // Skip coroutine generators (return iterator<T>) — they must be called
-        // from a for-loop, not as standalone entry points.
-        if matches!(def.returned, loft::data::Type::Iterator(_, _)) {
-            continue;
-        }
-        // P147: skip value-returning helpers (e.g. `fn svr_identity() ->
-        // SvMat`) that happen to be zero-param.  Convention in
-        // tests/scripts/ is that entry-points return Void; helpers return
-        // values for assignment.  Calling a value-returning helper here
-        // throws away the returned store, leaking it.  None of the
-        // existing scripts have a `fn main()` / `fn test_*()` returning
-        // a value, so this filter only excludes accidental sweeps.
-        if !matches!(def.returned, loft::data::Type::Void) {
+        // `Definition::is_corpus_entry_point` is the ONE answer, shared with
+        // `tests/native.rs` — the two halves of a differential that run different sets of
+        // functions cannot report a divergence between them (loft#1293).
+        if !def.is_corpus_entry_point() {
             continue;
         }
         let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
