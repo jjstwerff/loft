@@ -128,61 +128,69 @@ described. If so, this plan does not repair a construct people use; it makes one
 **Falsifier:** land it, and if narrow-width arithmetic still does not appear, the types were
 niche and this reading was wrong.
 
-## Hard constraint: the bit is per-OBSERVATION, never per stored element
+## Hard constraint: the bit lives BESIDE THE EXPRESSION, and is never stored
 
-Narrow types exist for **density**. They are reached for when a structure is large enough
-that encoding it at `i64` would run to hundreds of MB, and the saving is real — measured on
-200 000 elements:
+**Nothing is stored anywhere.** Not in a struct, not in a collection element, not in a
+variable's slot. The bit exists while an expression is being evaluated, is consumed by the
+thing that validates it, and is gone. Storage layout is untouched by construction — no
+store-format change, nothing for @PLN97's layout hash to notice, and no way for an
+implementation to drift into widening anything.
+
+That matters because narrow types exist for **density**, measured on 200 000 elements:
 
 | | store capacity | per element |
 |---|---|---|
 | `vector<u8>` | **0.362 MB** | 1 byte |
 | `vector<integer>` | **5.909 MB** | 8 bytes |
 
-**16×.** At the scale these types are chosen for, that is 20 MB against 320 MB.
+**16×** — 20 MB against 320 MB at the scale these types are chosen for. A bit stored beside
+every element would give back half of that, so the constraint is not a preference; it is the
+reason the types exist.
 
-So a status bit stored **beside every element or field would defeat the entire purpose** —
-a `vector<u8>` at 2 bytes per element gives back half of why it was declared `u8`. That
-must not happen, and it is the tempting mistake in S4, which widens the design to fields and
-elements.
+### What this permits, and what it forbids
 
-**It does not have to happen, because the status is a property of an OPERATION'S RESULT, not
-of stored data.** An author observes `!x` at a use site, on a variable; a million stored
-elements do not need a million status bits. Concretely:
+The rule decides a question this plan had left open, and it decides it against one of the
+sketches that motivated the plan:
 
-- **stored data keeps its exact width, always** — `vector<u8>` stays 1 byte per element,
-  a `u8` field stays a byte, and the layout is untouched, which also means no store-format
-  change and nothing for @PLN97's layout hash to notice;
-- **the bit lives with the OBSERVATION** — one companion slot per marked variable, which is
-  a frame slot on the interpreter and a Rust local on native;
-- **an element or field read that is observed** materialises into a marked variable at the
-  use site, and the bit rides that variable — not the container.
+```loft
+x = (x + 10) ?? 255;        // ✅ the bit rides the expression, `??` consumes it
+if !(x + 10) { … }          // ✅ `!` reads the bit of the expression beside it
+a: u8 = 300;  if !a { … }   // ❌ the bit would have to SURVIVE into `a` — that is storage
+```
 
-This is also why Phase E's collapse-at-the-store is the right shape underneath: what gets
-stored is always a legitimate value of the declared type. The status is transient, and it
-belongs where the question is asked.
+**The third form cannot be supported under this constraint**, because between the assignment
+and the `if` there is nothing left to carry the status but the variable itself, and the
+variable is storage. It is worth saying plainly rather than discovering it in S3: an author
+who wants to branch on the failure must ask **in the expression**, not afterwards.
+
+The upside is that everything hard about the earlier sketch disappears with it — no marker on
+`Variable`, no pass-1/pass-2 split (the hazard this tree has been bitten by), no companion
+slot, no propagation rule for `b = a`, and no way to damage layout even by mistake. The bit
+becomes an ordinary evaluation-time value, which is the smallest thing that can work.
 
 ## Mechanism
 
-A **per-variable marker**, which is a shape this codebase already uses: `Variable::amp_link`
-carries a compile-time fact about one variable rather than changing the representation of
-every access, and records that rationale in its own doc comment. `Variable` already holds
-`const_binding`, `value_const`, `amp_link`, `uses` — *"is this variable's fit status
-observed?"* is another fact of that kind.
+A fit-failing operation evaluates to its value **and** a validity bit, for the five widths
+that cannot represent their own failure. The bit is available only to a validator in the same
+expression:
 
-1. Pass 1 observes that a `??` or a `!`/`== null` names a narrow non-null variable.
-2. That variable is marked.
-3. Pass 2 emits the status-carrying form **for marked variables only**; the bit lives in a
-   companion slot — a frame slot on the interpreter, a Rust local on native. Both are
-   per-variable, which is why both backends can carry it and why Phase A's stack shadow
-   (which native had nowhere to put) is not what this is.
+- **`??`** consumes it — the author's fallback replaces the type's default, routed into
+  `OpRangeDefault`'s `dflt`, which is already the fallback slot (Phase E).
+- **`!`** reads it — *did this expression fail to produce a value?*
 
-The predicate it hangs off already exists and must be extended rather than re-spelled:
+Where neither appears, the bit is never produced and emission is byte-identical: that is the
+opt-in claim, and it is checkable with an `introspect` diff rather than argued.
+
+Ordinary arithmetic is untouched. `integer`, `float` and `single` keep a sentinel, so their
+failure is already a value and they never produce a bit — which is what bounds the cost, and
+why Phase A's +0.5–0.8 % (measured on two benchmarks that are plain `integer` throughout)
+does not transfer ([ARC-B-DESIGN.md](ARC-B-DESIGN.md)).
+
+The predicate this hangs off already exists and must be extended rather than re-spelled:
 `IntegerSpec::reserves_sentinel_unconditionally`, reached through `uncomputable_default`, is
 exactly *"can this type represent its own failure?"* — Phase E proved it is the single home by
-reading its answer off `dflt` instead of re-deriving it. 173 sites already ask a
-narrow-width question, so the hazard here is a duplicate list, not the branch
-([ARC-B-DESIGN.md](ARC-B-DESIGN.md)).
+reading its answer off `dflt`. 173 sites already ask a narrow-width question, so the hazard
+is a duplicate list, not the branch ([ARC-B-DESIGN.md](ARC-B-DESIGN.md)).
 
 ## Composition matrix — Stage A
 
@@ -202,20 +210,18 @@ large narrow collection, because a design that passed every value cell while dou
 |---|---|---|---|
 | **S1** — pin what already works, since nothing does today: `??` on an `integer` overflow, `!` on a nullable narrow | § the two spellings | a `tests/scripts/` guard, falsified against a build with the coalesce stripped | Open |
 | **S2** — `??` reaches a non-null narrow: route the author's value into `OpRangeDefault`'s `dflt`, which is already the fallback slot | `parser/expressions.rs::compound_range` | the narrow cells answer the author's value; **every cell with no `??` unchanged**, by `introspect` diff | Open |
-| **S3** — `!` reaches a non-null narrow: the per-variable marker, set in pass 1, emitted in pass 2 | § Mechanism | a variable whose test appears textually AFTER its last store still answers, both backends, both passes; unmarked variables byte-identical | Open |
-| **S4** — the remaining seams for both spellings: field, element, argument, return | `guard_declared_range` | one cell per seam per spelling; the controls unmoved; **and `store_memory()` on a large `vector<u8>` is unchanged to the byte** — the seam where the density constraint would be broken | Open |
+| **S3** — `!` reads the bit of the expression beside it: `if !(x + 10) { … }` on a non-null narrow | § Mechanism | the narrow cells answer true on a failure and false on a real value; **every expression with no `!` and no `??` is byte-identical**, by `introspect` diff | Open |
+| **S4** — the remaining POSITIONS an expression appears in: a field store's right-hand side, an element store's, an argument, a return | `guard_declared_range` | one cell per position per spelling; the controls unmoved; **and `store_memory()` on a large `vector<u8>` unchanged to the byte** — a standing check that nothing drifted into storage | Open |
 | **S5** — cost where the bit is LIVE (a bound, not a gate — see § Blast radius) | — | a narrow-width benchmark, which `bench/` does not currently contain and S5 must write | Open |
 | **S6** — docs: the narrowing error already advertises `?? d`, so the diagnostic and the reference must agree with what ships | `DIAGNOSTICS.md` | the advertised cure works when followed | Open |
 
 ## Phase ordering
 
 1. **S1 first** — cheap, and it protects behaviour that ships today pinned by nothing.
-2. **S2 before S3.** `??` needs no new storage (the `dflt` slot exists), so it is the half
-   that can land on its own and prove the opt-in claim before any marker machinery.
-3. **S3 is the one with new machinery**, and the pass split is its hazard: the marker records
-   a fact OBSERVED in pass 1, never a prediction about pass 2 — pass-stable data, which is
-   what `amp_link` is, and a shape this tree has been bitten by before.
-4. **S2 and S3 must both land before this is claimed done.** Choose-only cannot branch, log
+2. **S2 before S3.** `??` lands in the slot that already exists (`dflt`), so it proves the
+   opt-in claim — byte-identical emission where nothing is written — before `!` adds a second
+   consumer of the same bit.
+3. **S2 and S3 must both land before this is claimed done.** Choose-only cannot branch, log
    or count; detect-only cannot supply a value inline. Either alone leaves the case
    half-handleable, which is the state being complained about.
 5. **S5 is a bound, not a gate.** The "no impact" claim is measured for ordinary arithmetic
@@ -224,17 +230,23 @@ large narrow collection, because a design that passed every value cell while dou
 
 ## Open questions
 
-1. **Does `!x` on a marked variable read the bit, or does the marked variable's null become
-   representable?** They differ observably: the second makes `x == null` true and changes what
-   `{x}` prints. The first is narrower and probably right, but it means `!x` and `x == null`
-   could disagree on a marked variable, which is its own surprise.
-2. **How far does the mark propagate?** `a: u8 = …; b = a; if !b { … }` — is `b` marked, and
-   does assigning a marked variable carry the status? A rule that stops at the declaration is
-   simple; one that follows the value is what an author would expect.
-3. **Constant or expression fallback?** `dflt` is `const integer` today, so a constant is
+1. **Constant or expression fallback?** `dflt` is `const integer` today, so a constant is
    nearly free and an expression needs evaluating at the collapse.
-4. **`u32`** — its spare code exists but sits at the top where no non-null read tests for it.
+2. **`u32`** — its spare code exists but sits at the top where no non-null read tests for it.
    Phase B measured it defaulting with the four; confirm it is not a third case.
+3. **Does `!` on an expression conflict with its existing meaning?** `!` tests presence today,
+   and on a non-null narrow expression it is currently always false — `redundant-null-negation`
+   says so and would have to learn this case. Check that the lint and the new reading agree
+   rather than one silently outranking the other.
+4. **Double evaluation.** `if !(x + 10) { … } else { x = (x + 10) ?? 0; }` writes the
+   expression twice, which C92 made *"evaluate the place exactly once"* for compound
+   assignment precisely because double evaluation is a silent-wrong when the expression has
+   effects. If that shape is the one authors will write, it wants a form that does not repeat
+   the expression — which is a surface question for S2/S3, not an implementation detail.
+
+**Resolved by the expression-local constraint** (recorded so they are not re-opened): whether
+a marked variable's null becomes representable — there are no marked variables; and how far a
+mark propagates through `b = a` — nothing propagates, because nothing is stored.
 
 ## See also
 

@@ -120,6 +120,32 @@ bounds the impact on ordinary arithmetic; it says nothing about the cost where t
 live, and B1/B2 owe that number before shipping — with a benchmark that actually contains a
 narrow width, which `bench/` currently does not.
 
+### SUPERSEDED — the bit is expression-local (owner ruling, 2026-09-02)
+
+Everything below this line described a per-VARIABLE marker: a flag on `Variable`, set in
+pass 1 and emitted in pass 2, with the status carried in a companion slot so it could outlive
+the statement that produced it. **That design is withdrawn.** The owner's constraint is that
+the bit is never stored anywhere — not in a struct, not in an element, not in a variable slot
+— and lives only beside the expression being validated.
+
+What that removes, all of it risk this plan no longer carries:
+
+- no marker on `Variable`, and no propagation rule for `b = a`;
+- **no pass-1/pass-2 split**, which was this design's sharpest hazard and a shape this tree
+  has been bitten by repeatedly;
+- no companion slot on either backend;
+- no way for an implementation to drift into widening stored layout, because there is no
+  storage in the design at all.
+
+What it costs: `a: u8 = 300; … if !a { … }` cannot work, because between the two statements
+only the variable could carry the status and the variable is storage. The test has to be
+asked **in the expression** — `if !(x + 10) { … }`.
+
+The density measurement below still stands and is why the constraint is right; the
+implementation notes after it are kept only as the record of a rejected design.
+
+---
+
 ### The density constraint bounds where the bit may live
 
 Narrow types are a density tool — 1 byte per element against 8, measured at 16× on store
