@@ -200,6 +200,20 @@ pub struct Parser {
     /// True while parsing an expression inside a format string `{…}`.
     /// Prevents the `v: type = expr` annotation from consuming `:`.
     pub(crate) in_format_expr: bool,
+    /// Is the value being parsed the OPERAND of a unary prefix operator (`-x`, `!x`, `~x`)?
+    ///
+    /// The assignment's destination hint — `code` arriving as `Value::Var(dest)`, meaning
+    /// "build here instead of into a temp" — is valid only for the OUTERMOST value of a
+    /// right-hand side, and the three prefix handlers pass it straight into their operand.
+    /// `m = -S { … }` therefore built the literal into `m`, which is also where the NEGATION's
+    /// result lands, and the frame then freed a reference that no longer described it
+    /// (loft#1304).  `Parser::parse_object` declines the hint while this is set.
+    ///
+    /// A flag rather than a fresh `Value` for the operand: the hint reaches `parse_object`
+    /// through a `&mut Value` threaded down several frames, and swapping it out here would
+    /// also take the in-place path away from a vector literal and a comprehension, which are
+    /// not what broke.
+    pub(crate) prefix_operand: bool,
     /// True while parsing the LHS of a tuple destructuring — `(a, b) = expr`.
     /// The names there are BINDINGS, exactly like the `x` in `x = expr`, so a
     /// name that also belongs to a definition must still mint a variable
@@ -1180,6 +1194,7 @@ impl Parser {
             cc_deepest: HashMap::new(),
             cc_nest: 0,
             in_format_expr: false,
+            prefix_operand: false,
             in_tuple_lhs: false,
             sandbox: crate::sandbox::SandboxConfig::default(),
             def_sandbox: HashMap::new(),

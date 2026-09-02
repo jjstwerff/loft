@@ -3555,7 +3555,27 @@ impl Parser {
         // `__ref_p2_N` one (loft#848), and an abandoned construction must clean
         // whichever it took.
         let work_p2 = self.vars.work_ref_p2();
-        if let Value::Var(v_nr) = code {
+        // `code` arriving as `Value::Var(dest)` is the assignment's destination HINT — build
+        // here instead of into a temp.  It is valid for `m = S { … }`, where the literal IS the
+        // whole right-hand side, and invalid the moment the parser descends into a
+        // sub-expression: the hint is threaded down as one `&mut Value` and nothing clears it
+        // on the way (loft#1304).
+        //
+        // A unary prefix operator is the descent this DOES cover — `Parser::prefix_operand` is
+        // set across `-x` / `!x` / `~x`'s operand parse, so `m = -S { … }` no longer builds the
+        // literal into the variable that receives the NEGATION's result.
+        //
+        // ⚠ The POSTFIX descent (`m = S { … }.f(…)`, `m = S { … } + S { … }`) is NOT covered
+        // and stays open on loft#1304.  Two cures were built and measured, and both are
+        // recorded on the issue: a look-ahead past the balanced body is NOT transparent —
+        // `Lexer::revert` replays tokens but its closing `cont()` resets `prev_end` from
+        // wherever the walk stopped, and three parse-error baselines moved a column even when
+        // the answer was DISCARDED — and declining the hint outright loses the `&`-link
+        // reshape refusal, which is derived from the in-place construction.
+        let hint_is_the_whole_value = !self.prefix_operand;
+        if let Value::Var(v_nr) = code
+            && hint_is_the_whole_value
+        {
             let var_tp = self.vars.tp(*v_nr).clone();
             let type_matches =
                 var_tp.is_unknown() || matches!(&var_tp, Type::Reference(d, _) if *d == td_nr);

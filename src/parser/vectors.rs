@@ -450,7 +450,11 @@ impl Parser {
         }
         if self.lexer.has_token("!") {
             let operand_pos = self.lexer.peek_pos().clone();
+            // The operand is a SUB-expression, so the assignment's destination hint does not
+            // reach it (loft#1304 — see `Parser::prefix_operand`).
+            let outer_prefix = std::mem::replace(&mut self.prefix_operand, true);
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.prefix_operand = outer_prefix;
             // A unary prefix operator must validate its operand like a binary
             // one does, else an undefined name (a pass-1 placeholder Var with no
             // slot) reaches codegen and panics instead of a clean "Unknown
@@ -510,13 +514,21 @@ impl Parser {
             self.call_op(val, "Not", &[arg], &[t])
         } else if self.lexer.has_token("~") {
             let operand_pos = self.lexer.peek_pos().clone();
+            // The operand is a SUB-expression, so the assignment's destination hint does not
+            // reach it (loft#1304 — see `Parser::prefix_operand`).
+            let outer_prefix = std::mem::replace(&mut self.prefix_operand, true);
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.prefix_operand = outer_prefix;
             self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
             let arg = val.clone();
             self.call_op(val, "BitNot", &[arg], &[t])
         } else if self.lexer.has_token("-") {
             let operand_pos = self.lexer.peek_pos().clone();
+            // The operand is a SUB-expression, so the assignment's destination hint does not
+            // reach it (loft#1304 — see `Parser::prefix_operand`).
+            let outer_prefix = std::mem::replace(&mut self.prefix_operand, true);
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.prefix_operand = outer_prefix;
             self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
             // @PLN102 pre-freeze — the leading `-` binds tighter than `**` (loft's uniform
             // rule: a unary prefix binds tighter than any binary op — the `-` is the sign of
