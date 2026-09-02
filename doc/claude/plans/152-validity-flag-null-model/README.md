@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Steps 0–2 are DONE and `??` now reaches the narrow widths** — `x = (x + 10) ?? 255` into a
+**Steps 0–3 are DONE and `??` now reaches the narrow widths** — `x = (x + 10) ?? 255` into a
 `u8` answers `255` on both backends, where it was refused before. Steps 3–7 open. Shipped along the way:
 loft#1305 and loft#1306. The measurement record that redirected this plan three times is in
 [MEASUREMENTS.md](MEASUREMENTS.md); the arc-B design detail is in
@@ -244,7 +244,7 @@ claim has the same shape of check, an `introspect` diff over a corpus that write
 | **0** | Probe: where must the opt-in gate live? | **DONE by inspection, no build needed** — `guard_declared_range` / `guard_compound_range` already receive the whole stored expression, so the gate lives at the store guard and needs no parse-time flag. | **Done** |
 | **1** | Pin the three spellings that ship today and are guarded by nothing | `tests/scripts/152-the-fallback-and-failure-spellings-that-already-work.loft`; INERT against `origin/main` by design and recorded as such — it is a LOCK, and what moves it is a change made BY this plan. | **Done** |
 | **2** | `??` reaches a non-null narrow — guard INSIDE the discharge, sentinel as its default | `tests/scripts/152-a-coalesce-chooses-the-fallback-for-a-narrow-slot.loft`, falsified at `4f229521` (the shape was refused before, so the guard cannot compile on the control) — both backends; the three probe channels unchanged. | **Done** |
-| **3** | **`??` at the remaining positions**, one cell each: field store, element store, argument, return. | One cell per position, both backends; plus `store_memory()` on a large `vector<u8>` unchanged to the byte. Red if a position silently keeps the compiler's default — which looks like "unchanged" unless the cell asserts the author's value. | Open |
+| **3** | `??` at the remaining positions: field, element, argument, return, struct literal | `tests/scripts/152-the-fallback-reaches-every-position-a-narrow-store-takes.loft`, falsified at `4f229521`, both backends. **Came free with step 2** — wiring both seams covered all five; each cell uses a distinct fallback so none can pass on a neighbour's answer. | **Done** |
 | **4** | **`!` in-expression**: `if !(x + 10) { … }`. | Answers true on a failure, false on a real value, and `redundant-null-negation` goes silent **here only**. Red if the lint goes silent generally — that is the failure that would make step 5's gate meaningless. | Open |
 | **5** | **`!` in the adjacent form**: `f.i += 100;` then `if !f.i { … }`. A statement-pair peephole, separate from step 4 because it is a different mechanism and fails differently. | The lint is silent when fused and **fires one statement later**; `probes/diag` already scores that channel. Red if fusion reaches across an intervening statement, or misses an adjacent one. | Open |
 | **6** | **Cost where the bit is live** (a bound, not a gate — § Why this is worth doing). | A narrow-width benchmark, which `bench/` does not contain and this step writes. Records a number; does not block. | Open |
