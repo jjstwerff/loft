@@ -406,7 +406,8 @@ drift apart; verified both backends —
 **OPEN: 3.**
 - **D-op-1** — there is no shared operational semantics — the interpreter is the spec
 - **D-op-2** — interpreter/native divergences are test-caught, not definition-caught
-- **D-op-5** — two spellings of a following null-check still report differently
+- **D-op-5** — ONE spelling of a following null-check still reports (the `match` form; the
+  no-binding form closed 2026-09-02)
 
 D-op-9 was listed here as a fourth while the paragraph below already recorded it CLOSED
 (2026-09-01) — the count and the prose disagreed, and the count is the half a reader trusts.

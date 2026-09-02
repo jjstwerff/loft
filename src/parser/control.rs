@@ -1414,6 +1414,80 @@ impl Parser {
                 Self::rewrite_outer_arith_to_nullable(source, &self.data);
             }
         }
+        // The spelling with no binding at all — `if v[i] == null { … }`.  The loop above
+        // keys on a `Set`, and here the fault site sits INSIDE the test rather than before
+        // it, so there is nothing for it to hook and the site kept reporting a fault the
+        // program had already defended (`D-op-5`).
+        //
+        // This needs no adjacency window and no dataflow: the guard is the SAME expression.
+        for op in ops.iter_mut() {
+            if let Value::If(test, _, _) = op.unspan_mut() {
+                Self::rewrite_direct_null_test(test, &self.data);
+            }
+        }
+    }
+
+    /// Swap a fault-prone expression compared DIRECTLY against `null` to its silent
+    /// Nullable peer, and answer whether one was found.
+    ///
+    /// `(E-Report)` gives the null to whatever guards it, and a test of the form
+    /// `<expr> == null` guards `<expr>` completely: the null it produces is consumed by
+    /// this comparison and nothing else can observe it. So the site owes no report.
+    ///
+    /// ⚠ Narrow deliberately, because widening "guarded" SUPPRESSES a diagnostic — an
+    /// over-approximation goes quiet on real faults, while an under-approximation is only
+    /// noisy. The test must be an equality against the null LITERAL (`OpConv*FromNull`,
+    /// which is how a written `null` reaches the IR), so `if v[i] > 3` — which lowers to
+    /// `OpLtInt(3, …)` with no such operand — cannot match it and still reports, as does a
+    /// null that escapes to any other reader before its check.
+    fn rewrite_direct_null_test(test: &mut Value, data: &crate::data::Data) -> bool {
+        // `a || b` and `a && b` SHORT-CIRCUIT, so they reach the IR as a nested `if`
+        // (`if a true else b`) rather than as a call — descend all three limbs, or a null
+        // test in the second operand of an `||` is never seen.
+        if let Value::If(cond, then, els) = test.unspan_mut() {
+            let mut found = Self::rewrite_direct_null_test(cond, data);
+            found |= Self::rewrite_direct_null_test(then, data);
+            found |= Self::rewrite_direct_null_test(els, data);
+            return found;
+        }
+        let Value::Call(def_nr, args) = test.unspan_mut() else {
+            return false;
+        };
+        let name = data.def(*def_nr).original_name();
+        // A condition is a tree, and the null test can sit anywhere in it —
+        // `if v[i] == null || …` puts an `OpOr` on top.  Descend to FIND the comparison,
+        // but rewrite only its DIRECT operand below, so a site whose null is consumed by
+        // something else on the way (`f(v[i]) == null`, where `f` sees it) is not touched.
+        if !(name.starts_with("Eq") || name.starts_with("Ne")) || args.len() != 2 {
+            let mut found = false;
+            for arg in args.iter_mut() {
+                found |= Self::rewrite_direct_null_test(arg, data);
+            }
+            return found;
+        }
+        // A written `null` reaches the IR as a nullary `OpConv<Type>FromNull`, one per
+        // scalar type — matched as the family so a new type joins without a list to update.
+        let is_null_literal = |v: &Value| {
+            matches!(v.unspan(), Value::Call(d, a) if a.is_empty() && {
+                let n = data.def(*d).original_name();
+                n.starts_with("Conv") && n.ends_with("FromNull")
+            })
+        };
+        let guarded = if is_null_literal(&args[1]) {
+            0
+        } else if is_null_literal(&args[0]) {
+            1
+        } else {
+            // An equality that is not against `null` guards nothing, but a null test may
+            // still sit deeper inside its operands.
+            let mut found = false;
+            for arg in args.iter_mut() {
+                found |= Self::rewrite_direct_null_test(arg, data);
+            }
+            return found;
+        };
+        Self::rewrite_outer_arith_to_nullable(&mut args[guarded], data);
+        true
     }
 
     pub(crate) fn un_ref(&mut self, t: &mut Type, code: &mut Value) {
